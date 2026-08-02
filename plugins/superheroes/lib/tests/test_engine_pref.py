@@ -1393,6 +1393,7 @@ def test_load_builder_dispatch_tier_fail_closed_on_structural_refusal_multiple_b
     assert tier["tier"] == "opus"
     assert tier["source"] == "unreadable-default"
     assert tier["reason"].startswith("multiple-core-blocks:")
+    assert tier["display"] == "multiple-core-blocks"
 
 
 def test_load_builder_dispatch_tier_fail_closed_on_newer_schema(tmp_path):
@@ -1425,6 +1426,7 @@ def test_load_builder_dispatch_tier_fail_closed_on_newer_schema(tmp_path):
         "tier": "opus",
         "source": "unreadable-default",
         "reason": "core-schema-newer",
+        "display": "core-schema-newer",
     }
 
 
@@ -1432,7 +1434,67 @@ def test_load_builder_dispatch_tier_current_schema_still_resolves_configured(tmp
     repo = str(tmp_path)
     _write_core_with_prefs(repo, {"builderDispatchTier": "sonnet"})
     tier = EP.load_builder_dispatch_tier(repo, root=os.path.join(repo, "store"))
-    assert tier == {"tier": "sonnet", "source": "configured", "reason": None}
+    assert tier == {
+        "tier": "sonnet",
+        "source": "configured",
+        "reason": None,
+        "display": None,
+    }
+
+
+def test_safe_config_echo_escapes_and_truncates():
+    assert EP.safe_config_echo("") == ""
+    assert EP.safe_config_echo("a\\b") == "a\\\\b"
+    assert EP.safe_config_echo("a\nb\rc\t") == "a\\x0ab\\x0dc\\x09"
+    long_val = "x" * 200
+    echoed = EP.safe_config_echo(long_val, limit=10)
+    assert echoed == ("x" * 10) + "\u2026"
+    assert len(echoed) == 11
+
+
+def test_builder_tier_reason_display_preserves_safe_detail():
+    assert EP.builder_tier_reason_display(
+        "builder-tier-not-sanctioned:some-tier"
+    ) == "builder-tier-not-sanctioned: some-tier"
+
+
+def test_builder_tier_reason_display_redacts_path_tail():
+    out = EP.builder_tier_reason_display("multiple-core-blocks:/abs/path/core.md")
+    assert out == "multiple-core-blocks"
+    assert "/abs/path" not in out
+
+
+def test_builder_tier_reason_display_fail_closed_unknown_head():
+    out = EP.builder_tier_reason_display("some-future-reason:/abs/path/secret.md")
+    assert out == "some-future-reason"
+    assert "/abs/path" not in out
+    assert "secret" not in out
+
+
+def test_builder_tier_reason_display_none():
+    assert EP.builder_tier_reason_display(None) is None
+
+
+def test_normalize_codex_pin_map_legacy_alias_and_canonical_wins():
+    result = EP.normalize_codex_pin_map({"fixer": "gpt-5.6-terra"})
+    assert result["pins"] == {"code-fixer": "gpt-5.6-terra"}
+    assert result["invalid"] == {}
+    both = EP.normalize_codex_pin_map({
+        "fixer": "gpt-5.6-terra",
+        "code-fixer": "gpt-5.6-sol",
+    })
+    assert both["pins"] == {"code-fixer": "gpt-5.6-sol"}
+    assert "fixer" not in both["pins"]
+
+
+def test_normalize_seat_pin_map_vendor_only_and_empty_model_rejected():
+    ok = EP.normalize_seat_pin_map({"security": {"vendor": "cursor"}})
+    assert ok["pins"] == {"security": {"vendor": "cursor"}}
+    assert ok["invalid"] == {}
+    bad = EP.normalize_seat_pin_map({"security": {"vendor": "cursor", "model": ""}})
+    assert bad["pins"] == {}
+    assert "security" in bad["invalid"]
+    assert "model" in bad["invalid"]["security"]
 
 
 def test_builder_tier_sources_cover_all_resolution_sources():
