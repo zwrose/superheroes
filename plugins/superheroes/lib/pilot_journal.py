@@ -323,6 +323,12 @@ class _EffectHandle:
         self._end_reason = reason
         self._marked = True
 
+    def mark_indeterminate(self, *, at, reason=None):
+        self._outcome = OUTCOME_INDETERMINATE
+        self._end_at = at
+        self._end_reason = reason
+        self._marked = True
+
 
 @contextlib.contextmanager
 def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
