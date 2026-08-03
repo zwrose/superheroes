@@ -10,11 +10,16 @@
 
 # Dispatch mechanics — long dispatches you own
 
-Read this at dispatch time, before you invoke a long dispatch. **In-turn background-and-poll** is the
-normal path past the foreground Bash cap; **shell-detach** so work outlives the turn is the rare
-fallback. The **detach-and-park contract** (files not pipes, stamp and completion sentinel before
-waiting, shell-detach not harness-background, durable park, recovery rules) is **only** in the workhorse
-charter §7 (Channel-conditioned) — not restated here. Mechanics by dispatch kind:
+Read this at dispatch time, before you invoke a long dispatch. **Channel and wait are two choices.**
+A long-running external dispatch the builder invokes directly from a headless session is **awaited
+in-turn** through the **authorized entrypoint** (`dispatch-review` / `dispatch-write` with
+`--max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal) — never an
+external `setsid`/`nohup` wrapper or an exit-code sentinel. Harness-tracked background-and-poll is
+**not** the normal path for those dispatches — tracked background work dies when the turn ends. The
+**native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
+originating-verb continuation, structured terminal result as the only completion signal,
+`dispatch-poll` observational only, mid-slice-kill lock latency, durable park) is **only** in the
+workhorse charter §7 — not restated here. Mechanics by dispatch kind:
 
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
   Bash timeout. On the Claude host (harness **2.1.219**) that is **ten minutes (600 s) — a
@@ -22,18 +27,21 @@ charter §7 (Channel-conditioned) — not restated here. Mechanics by dispatch k
   `bash_timeout` hook injects 600 s **only when a call omits its own `timeout`** (an explicit one is
   never touched), and the host **converts** a foreground call whose `timeout` exceeds 600 s to
   background — it does **not** clamp-and-kill at 600 s. What kills a converted run is **the turn
-  ending**. Give the dispatch that room by **backgrounding the run and polling it** — a backgrounded
-  run is not bound by the foreground cap — never by trying to raise a foreground timeout. Redirect its
+  ending**. Give the dispatch that room by invoking through **`dispatch-review`/`dispatch-write
+  --max-wait`** (≤ 540 s) and **re-invoking the originating verb on the same `--run-dir` until
+  terminal** — never by trying to raise a foreground timeout, by wrapping in `setsid`/`nohup`, or by
+  harness-tracked background-and-poll (tracked background dies when the turn ends). Redirect its
   output to a **file, never a pipe or `| tail`** — pipes die with the reader and make a stall look
-  like progress. Watch that **output/transcript file growing as your primary stall signal**: a growing
-  file is live; use the process's **CPU-time column only as corroboration** (an engine CLI can sit at
-  ~0% CPU for minutes and still be live, so CPU alone can't separate idle-but-live from stuck). Treat
-  **elapsed time as your *runaway* bound, not a liveness signal** — a quiet run may still be live, but
-  one that has far outrun any plausible dispatch time is a runaway to kill even while its file grows.
-  Four 0.18.0-wave sessions died as **turn-end kills of converted runs** mid-dispatch — one
-  mid-review-panel — losing the run (WE review session, WE-510, sh-566, WE-484). **If the dispatch
-  cannot finish inside the turn:** follow the charter's detach-and-park fallback (§7 Channel-conditioned);
-  the output-file stall signals above still apply to the detached child.
+  like progress. Watch that
+  **output/transcript file growing as your primary stall signal**: a growing file is live; use the
+  process's **CPU-time column only as corroboration** (an engine CLI can sit at ~0% CPU for minutes
+  and still be live, so CPU alone can't separate idle-but-live from stuck). Treat **elapsed time as
+  your *runaway* bound, not a liveness signal** — a quiet run may still be live, but one that has far
+  outrun any plausible dispatch time is a runaway to kill even while its file grows. Four 0.18.0-wave
+  sessions died as **turn-end kills of converted runs** mid-dispatch — one mid-review-panel — losing
+  the run (WE review session, WE-510, sh-566, WE-484). **If the in-turn poll genuinely cannot fit
+  the turn:** park durably (charter §7); the output-file stall signals above still apply to the
+  detached child.
 - **A native subagent dispatch** has a **harness-managed lifecycle** — no `bash_timeout` floor and no
   CPU column of your own to watch — so those shell mechanics don't apply and there is **no caller-set
   ceiling to invent**; the harness manages the lifecycle and returns when the subagent completes. **No
@@ -73,6 +81,13 @@ pinned to the harness versions they were observed on.
 - The same physics catches **any** outcome that resolves outside the turn, not only dispatches: a
   harness-tracked background waiter (#600 — fired despite dual warnings) and a post-handback CI
   watch (#608) died the same way (#526 evidence trail).
+- **Headless turn-end — final act, not work in flight** (2026-08-02, three deaths in two lanes): a
+  headless `claude -p` session **exits when its turn ends** — one builder ended a turn waiting on a
+  `Monitor` (which cannot wake a headless session); two ended turns on standalone narrative messages
+  with nothing in flight at all. All three were recovered by advisor resume with zero work lost, but
+  the exits killed two live codex review seats mid-run — roughly 50 minutes of review, and the vendor
+  diversity of one panel. The prior charter phrasing missed this because it was framed as work in
+  flight; two of the three deaths had none.
 
 ## Supervised review dispatch
 

@@ -472,6 +472,17 @@ def test_premise_stamps_standing_exclusions(tmp_path):
 # --- compose -----------------------------------------------------------------
 
 
+def test_compose_await_dispatches_ruling_in_prompt(tmp_path):
+  # axis: await-dispatches ruling text reaches the composed builder prompt
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    doctrine = LD.load()
+    await_line = LD.ruling_line(doctrine, "await-dispatches")
+    assert await_line in result["prompt"]
+
+
 def test_compose_ruling_zero_absent(tmp_path):
   # axis: refusal to compose a launch whose ruling 0 it could not verify
     repo = _init_repo(tmp_path / "repo")

@@ -20,7 +20,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `base-moved` — if your base merges mid-build, rebase onto main, retarget, and disclose.
 - `no-force-push` — never force-push (it is gated); use a fresh branch if history must move.
 - `design-forks` — design forks inside ratified scope are your call with disclosure; park only genuinely consequential ones.
-- `await-dispatches` — await every dispatch in-turn; background-and-poll is fine when a dispatch cannot fit the foreground cap — the failure is ending a turn with a dispatch unawaited.
+- `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (positive, never 0 — a zero slice launches nothing) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
 <!-- launch-doctrine:rulings:end -->
 
@@ -56,6 +56,30 @@ not error, it burns a shared account's limit at multiplied cost.
 This section is the doctrine artifact's home for that rule. The operative copy an advisor session
 loads is the showrunner charter (`skills/showrunner/SKILL.md`) — do not consolidate this rule back
 into the machine-parsed blocks above; nothing at launch reads prose outside those blocks.
+
+## Headless turn-end and detached dispatch (artifact home)
+
+A headless builder session (`claude -p`) **exits when its turn ends** — so until the durable
+handback comment or a durable park is posted, every turn ends with a tool call; a standalone narrative
+message is a session exit, not a pause. **`Monitor`, harness background-run completion, and wakeup
+scheduling cannot wake a headless session** and are never a turn's exit plan. On the night of
+**2026-08-02**, three headless builder sessions died in two lanes from this class of failure (one
+waiting on `Monitor`, two on standalone narrative with nothing in flight); all were recovered with
+zero work lost, but two live codex review seats were killed mid-run.
+
+**Channel and wait are separate choices.** A long-running external dispatch the builder invokes
+directly from a headless session runs in the **detached shape** *and* is **polled in-turn** —
+detaching buys survivability; the in-turn poll is still the duty; skill-owned seats (`review-code`'s
+panel and fixer) keep that skill's own dispatch contract. Park is what happens when the in-turn poll genuinely cannot fit the
+turn; it is not the automatic consequence of detaching.
+
+This section is the doctrine artifact's home for those rules. The operative copy a builder session
+loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
+§7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
+blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
+the poll contract for external engine dispatches the builder invokes directly (skill-owned seats
+and native subagents keep their own lifecycle), and the park escape, so a launched builder receives
+them in its composed prompt.
 
 ## Recovery — taking over a build that stopped
 

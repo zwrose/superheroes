@@ -365,16 +365,25 @@ implementer that parks on a stale premise did the right thing. When you are abou
 **third** rework of the same surface in one build, park instead — a third patch is the wrong answer
 to a design signal. Say what the seam problem looks like.
 
-**Await every dispatch in-turn — the default is poll synchronously until the work resolves; do not end
-a turn with an engine in flight unless you use the sanctioned detach-and-park fallback in the
-Channel-conditioned section below.** A headless build session (`claude -p`) is not re-woken by the host's
-background-run or wakeup tools — those descriptions and success messages lie in headless mode — so
-ending a turn hoping something resumes it is a park dressed as a handoff. Independent dispatches may
-run **concurrently** (§6), but every one is **awaited in-turn** — block on it, or **background it and
-poll inside this turn** (see dispatch-mechanics) — and you **await them all before the turn ends**
-unless the dispatch truly cannot fit and you execute that fallback.
+**Headless turn-end rule — the turn's final act, not work in flight.** A headless builder session
+(`claude -p`) **exits when its turn ends**. Therefore: **until the durable handback comment — or a
+durable park — is posted on the issue or the PR, every turn this session takes ends with a tool
+call.** **Narration rides alongside a tool call, in the same message — never as the message that ends
+a turn.** A standalone narrative message is a turn-ending act, and for a headless builder that is a
+session exit, not a pause. **`Monitor`, harness background-run completion, and wakeup scheduling
+cannot wake a headless session and are never a turn's exit plan** — their tool descriptions and
+success messages promise a re-wake that does not fire headless. This rule is about the **turn's
+final act**, not about whether work is in flight; the prior phrasing missed that distinction, and it
+is why two of the three deaths on the night of **2026-08-02** happened with nothing running at all.
+Field record: three headless builder sessions died in two lanes that night — one ended a turn waiting
+on a `Monitor`, two ended turns on standalone narrative messages with nothing in flight; all three
+were recovered by advisor resume with zero work lost, but the exits **killed two live codex review
+seats mid-run** — roughly 50 minutes of review, and the vendor diversity of one panel.
 
-**Channel-conditioned — what survives a turn ending (read with the rule above).**
+**Channel and wait are two choices — read together with the turn-end rule above.** **Channel** is
+where the dispatch runs and what survives a session exit; **wait strategy** is how you stay in the
+turn until it resolves. They are not the same decision, and detaching does not license ending a turn
+without a tool call.
 
 - **Two physics, not one.** **Harness-tracked background work dies when the turn ends** — no
   completion, no orphan process; treating it like durable work is how builds orphan (#574).
@@ -383,10 +392,55 @@ unless the dispatch truly cannot fit and you execute that fallback.
   wake notification is an **optimization, never the mechanism you depend on** — with the spawning
   agent dormant it reaches the **root session**, not you, and a builder that saw a re-wake work
   early in a session has evidence about the active-task regime only (the induction trap). The
-  load-bearing wait is a **bounded poll loop on artifact files** — done-sentinel paths, progress
-  captures, heartbeat records. The harness-pinned evidence — the probe runs, the two proven
-  detached-child recoveries, the six-lane overnight stall, the induction trap — lives in
+  load-bearing wait is a **bounded poll loop on artifact files** — the runner's structured terminal
+  result, progress captures, heartbeat records. The harness-pinned evidence — the probe runs, the two
+  proven detached-child recoveries, the six-lane overnight stall, the induction trap — lives in
   dispatch-mechanics § Turn survival; the rule stands on it.
+- **Long-running external dispatches from a headless session — native shape, polled in-turn.**
+  A long-running external dispatch the builder invokes directly from a headless session — an engine
+  CLI: the implementer, the brief-check reviewer, or any engine CLI the builder hand-rolls — is
+  **awaited in-turn** through the **authorized entrypoint itself** — `dispatch-review` /
+  `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap; the slice must be **positive** — zero
+  or negative clamps to zero and returns `running` **without starting an attempt at all**, so it is
+  never a valid dispatch; a `running` result whose attempt count is **zero** means nothing was
+  launched — re-invoke with a positive slice rather than continuing to poll) — **never** wrapped in
+  `setsid`/`nohup`,
+  because the host grant matches a **prefix** and a wrapped command no longer matches it. Invoke
+  through the authorized entrypoint; redirect stdout and stderr to **files, never pipes** (a pipe
+  buffer dies with the reader and makes a stall look like progress). When a `--max-wait` slice
+  expires the call returns **non-terminal** `{"ok": false, "terminal": false, "reason": "running", …}`
+  and the engine keeps working — the run-child is its own session leader (`start_new_session=True`)
+  and survives the builder's death. The builder **re-invokes the originating verb** (`dispatch-review`
+  for a review run, `dispatch-write` for a write run) with the **same `--run-dir`** until the returned
+  structured result is **terminal** — that structured result is the **only** completion signal.
+  **Exit-code sentinels are forbidden** — measured in this PR's first segment: 6/6 dispatches wrote
+  `EXIT=0` to a done-sentinel while the runner's own result was `ok:false, reason:forfeited`. A
+  sentinel beside a forfeited runner result is a false completion signal, not a receipt.
+  **`dispatch-poll --run-dir` is the read-only diagnostic** — observational only; it reads the journal
+  and returns the folded result **only if a supervisor already folded it**; it never spawns, never
+  advances a run, and is **never** the continuation path (`dispatch-poll` never folds a run — it is
+  observational; folding is done by the **originating-verb call path**, not by poll). **Recovery
+  latency:** a dispatch whose
+  `--max-wait` slice **expired normally** has already released `run.lock` and re-attaches immediately
+  on the next originating-verb call; a builder **killed mid-slice** leaves `run.lock` held for up to
+  **1080 s** (`2 × MAX_SYNC_WAIT`) before a fresh call can take over — reclaim needs TTL expiry **and**
+  a dead holder pid. **Park is unchanged in kind:** it is what happens when the in-turn poll genuinely
+  cannot fit the turn — not ending a turn with a dispatch unawaited.
+- **Review seats — coverage and limitation.** The native-shape rule above — no `setsid`/`nohup` wrapper,
+  no exit-code sentinel, originating-verb continuation on the same `--run-dir` — binds **dispatches
+  the builder invokes directly** — its implementer orders, its brief-check reviewer, and any engine
+  CLI it hand-rolls. For **seats a skill owns and dispatches itself** — `review-code`'s panel and its
+  fixer, including its documented hand-rolled fallback — **that skill's own dispatch contract is an
+  explicit exception**: the builder does not wrap or re-channel them. `review-code` owns its seats'
+  structural-timeout and expiry contract, and its dispatch instructions still describe a foreground
+  Bash tool call (every engine dispatch — reviewer and fixer — runs as a Bash tool call with a
+  structural 600 s floor from `PreToolUse(Bash)`; see
+  `review-code/reference/auto-fix-loop.md`); the in-place fixer is explicitly not a `dispatch-write`
+  consumer. Full reconciliation of `review-code`'s own dispatch instructions with the builder's
+  native-shape rule remains **open** — a build whose review seats ran under `review-code`'s own
+  dispatch **discloses that limitation** rather than reporting the native-shape rule as satisfied for
+  those seats. The **timeout** contract stays the skill's; the **channel** duty attaches to what the
+  builder itself launches.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
   entering a phase, before and after a dispatch, on park, on handback. The contract lives in
@@ -397,41 +451,37 @@ unless the dispatch truly cannot fit and you execute that fallback.
   is **not** permission to invent an id, and **not** a build failure. A directly-invoked workhorse
   session is a normal case, not an error. **Ordering:** `parked` and `handback` are stamped **only
   after** the durable issue/PR evidence exists, never before.
-- **The sanctioned fallback** when a **shell/CLI dispatch you invoke yourself** cannot fit the turn
-  (not a native subagent — §7 long-dispatch rule): detach with durable output, then hand recovery to
-  the advisor — redirect output to **files, never pipes** (a pipe buffer dies with the reader; a piped
-  dispatch makes stall look like progress); **stamp state to disk before any wait** (what was
-  dispatched, where output lands, next step, the **child's PID**, and the **done-sentinel path**);
-  **remove any prior sentinel at that path or use a unique name before launch** — a stale sentinel
-  from an earlier run must never read as this run's completion; **shell-detach** (tracked background
-  does not survive; detached children do); the **child writes the done-sentinel on exit with its exit
-  code** — never the launcher; on resume, **output without a completion sentinel is an incomplete
-  run, not a result** — fail closed.
-- **It ends in a park, not a handoff.** End with a **durable park** — what is running, where output
-  is, what the advisor must do — **on the issue or the PR** (where the advisor will find it without
-  being told to look), never a session transcript or scratch file; an outcome that outruns any
+- **Park when the in-turn poll cannot fit.** End with a **durable park** — what is running, where
+  output is, what the advisor must do — **on the issue or the PR** (where the advisor will find it
+  without being told to look), never a session transcript or scratch file; an outcome that outruns any
   plausible resolution time is a park, not unbounded in-turn poll. **Owner-capability needs
   surfacing mid-run park the same way** — a running headless session is deaf; never improvise a
   notification channel or assume someone is watching.
 
+**Await every dispatch in-turn** — block on it, or **invoke through the authorized entrypoint with
+`--max-wait` slices and re-invoke the originating verb on the same `--run-dir` until terminal inside
+this turn** (see dispatch-mechanics). Independent dispatches may run **concurrently** (§6), but every
+one is **awaited in-turn** before the turn ends with a tool call (headless turn-end rule above), unless
+the in-turn poll genuinely cannot fit and you **park durably**.
+
 **This generalizes beyond dispatches — a headless session (`claude -p`) does not end a turn on any
-pending external outcome except via the same detach-and-park fallback when waiting truly cannot fit**
-— the same trap catches a background waiter (#600), a post-handback CI watch (#608), and anything
-else that resolves outside your turn (#526 evidence trail): **poll synchronously in-turn** until it
-resolves, or **park durably**.
+pending external outcome** — the same trap catches a background waiter (#600), a post-handback CI
+watch (#608), and anything else that resolves outside your turn (#526 evidence trail): **poll
+synchronously in-turn** until it resolves, or **park durably**.
 
 **Long dispatches you own get room to finish and a stuck/runaway monitor** — **never a borderline
 limit you expect to just barely clear**. For a **native subagent dispatch there is no detach** — the
 harness owns the lifecycle: **await it in-turn**, and if it genuinely cannot fit the turn, **do not
 dispatch it** — **park durably** on the issue or PR **with the work order ready to go**, or **split
 the work** so each dispatch is awaitable in one turn. The **concrete mechanics differ by dispatch
-kind** — the foreground Bash cap and why you background-and-poll instead of raising a timeout, the
+kind** — the foreground Bash cap, the `--max-wait` slice loop on the originating verb, the
 output-file-not-`| tail` stall signal, the CPU-vs-elapsed liveness read — so **read
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md` at dispatch
 time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
+The **timeout** contract stays the skill's; the **channel** duty attaches to what the builder itself launches.
 
 ## 8. Verify — re-run every receipt yourself
 
@@ -685,9 +735,10 @@ curation stay with the advisor.
 | "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
-| "This dispatch will finish quickly — the default timeout is fine." | A long dispatch **you own** gets room to finish — **backgrounded and polled**, never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |
+| "This dispatch will finish quickly — the default timeout is fine." | A long external dispatch **you own** is **awaited in-turn** through `dispatch-review`/`dispatch-write --max-wait` (≤ 540 s) with originating-verb re-invocation on the same `--run-dir` until terminal — never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
-| "I'll kick off the implementer and wrap up my turn." | Default: await in-turn (block or background-and-poll inside the turn). Harness-tracked background work dies with the turn; only a **shell/CLI** detach-and-park (charter §7 Channel-conditioned) outlives the turn — a **native subagent has no detach** — and it still ends in a durable park on the issue or PR, not a silent handoff. |
+| "I'll kick off the implementer and wrap up my turn." | A headless session **exits when the turn ends** — until handback or park is posted, the turn's final act is a **tool call**. Launch long external dispatches through the **authorized entrypoint** (`dispatch-review`/`dispatch-write --max-wait`) and **poll in-turn** by re-invoking the originating verb until terminal (charter §7); survivability comes from the runner's own session leadership, not a standalone narrative turn-end. A **native subagent has no detach** — await it in-turn or park. Park only when the in-turn poll genuinely cannot fit. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
+| "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |

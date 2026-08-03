@@ -266,6 +266,69 @@ def _no_mismatch_tokens(records):
     return True
 
 
+def _engine_dispatch_script():
+    return os.environ.get("ENGINE_DISPATCH_NEUTRAL_PATH") or os.path.join(
+        _HERE, "..", "engine_dispatch.py")
+
+
+def _cli_env(tmp_path):
+    """Environment for subprocess CLI invocations (matches autouse fixture pins)."""
+    base = str(tmp_path / "temp-base")
+    os.makedirs(base, exist_ok=True)
+    journal_root = os.environ.get(ED.JOURNAL_ROOT_ENV)
+    if not journal_root:
+        journal_root = str(tmp_path / "dispatch-journal-root")
+        os.makedirs(journal_root, exist_ok=True)
+    env = dict(os.environ)
+    env["TMPDIR"] = base
+    env[ED.JOURNAL_ROOT_ENV] = journal_root
+    return env
+
+
+def _parse_cli_json(stdout):
+    line = stdout.strip().splitlines()[-1]
+    return json.loads(line)
+
+
+def _invoke_cli(env, verb, args, *, timeout=None):
+    cmd = [sys.executable, "-B", _engine_dispatch_script(), verb, *args]
+    return subprocess.run(
+        cmd, capture_output=True, text=True, env=env, timeout=timeout,
+    )
+
+
+def _cli_until_terminal(env, verb, args, run_dir, *, timeout=120):
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        proc = _invoke_cli(env, verb, args)
+        assert proc.returncode == 0, proc.stderr
+        last = _parse_cli_json(proc.stdout)
+        if last.get("terminal"):
+            return last
+        if last.get("reason") != "running":
+            return last
+        time.sleep(0.2)
+    pytest.fail(
+        "timed out waiting for terminal CLI result; last=%s; journal=%s"
+        % (last, _journal_records(run_dir))
+    )
+
+
+def _drop_max_wait(args):
+    out = []
+    skip = False
+    for arg in args:
+        if skip:
+            skip = False
+            continue
+        if arg == "--max-wait":
+            skip = True
+            continue
+        out.append(arg)
+    return out
+
+
 # --- 1. Review real path terminal success -------------------------------------
 
 
@@ -668,7 +731,123 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     assert second == first
 
 
-# --- 10. PATH-independence proof ----------------------------------------------
+# --- 10. Caller exit + pgroup kill: engine survives, re-attaches via verb ---
+
+
+@pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
+def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkeypatch, verb):
+    """Prove caller exit plus caller process-group destruction leaves the engine alive.
+
+    The caller completes its positive --max-wait slice normally, its process group is
+    then killed, the detached engine survives in its own session, and a fresh process
+    re-attaches via the originating verb until the structured result is terminal.
+
+    Not covered: a caller killed mid-slice (that path holds run.lock up to 1080 s).
+    """
+    order_id = "death-reattach-1"
+    engine_sleep_s = 30
+    max_wait_s = "1"
+    timeout_args = ["--timeout", "60", "--retry-timeout", "60"]
+
+    if verb == "dispatch-review":
+        repo = str(tmp_path / "repo-death")
+        _init_repo(repo)
+        run_dir = _run_dir(tmp_path, "run-death-review")
+        prompt_path = _prompt(tmp_path, "Review this.\n")
+        _install_fake_engine(
+            tmp_path, monkeypatch, "codex",
+            stdout=_findings_stdout(), sleep_s=engine_sleep_s,
+        )
+        cli_args = [
+            "--engine", "codex", "--model", "sonnet", "--effort", "high",
+            "--prompt-path", prompt_path, "--repo-root", repo,
+            "--run-dir", run_dir, "--max-wait", max_wait_s,
+            *timeout_args,
+        ]
+    else:
+        wt, _main = _linked_worktree(tmp_path)
+        run_dir = _run_dir(tmp_path, "run-death-write")
+        prompt_path = _prompt(tmp_path)
+        _install_fake_engine(
+            tmp_path, monkeypatch, "cursor-agent",
+            stdout=_build_ok_stdout(), sleep_s=engine_sleep_s,
+        )
+        cli_args = [
+            "--engine", "cursor", "--effort", "high",
+            "--prompt-path", prompt_path, "--cwd", wt,
+            "--run-dir", run_dir, "--order-id", order_id,
+            "--max-wait", max_wait_s,
+            *timeout_args,
+        ]
+
+    env = _cli_env(tmp_path)
+    reattach_args = _drop_max_wait(cli_args) + ["--max-wait", "60"]
+    cmd = [sys.executable, "-B", _engine_dispatch_script(), verb, *cli_args]
+    wall_start = time.monotonic()
+    proc = subprocess.Popen(
+        cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        start_new_session=True,
+    )
+    caller_pgid = os.getpgid(proc.pid)
+    try:
+        _wait_until(
+            time.monotonic() + 15,
+            lambda: (
+                _count_attempt_started(run_dir) >= 1
+                and _engine_pgid(run_dir) is not None
+                and ED._process_group_alive(_engine_pgid(run_dir))
+            ),
+            "engine never became alive before caller slice expired",
+        )
+        pgid = _engine_pgid(run_dir)
+        assert pgid is not None
+        assert ED._process_group_alive(pgid), "engine must become alive for this run"
+
+        stdout, _stderr = proc.communicate(timeout=15)
+        assert proc.poll() is not None, "CLI caller must have exited after max-wait slice"
+        first = _parse_cli_json(stdout)
+        assert first["terminal"] is False
+        assert first["reason"] == "running"
+
+        try:
+            os.killpg(caller_pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        assert not ED._process_group_alive(caller_pgid), (
+            "caller's process group must be gone after killpg"
+        )
+        assert ED._process_group_alive(pgid), (
+            "engine must survive destruction of caller's process group"
+        )
+
+        terminal = _cli_until_terminal(env, verb, reattach_args, run_dir, timeout=120)
+        assert terminal["terminal"] is True
+        assert terminal["ok"] is True
+        if verb == "dispatch-review":
+            assert len(terminal.get("findings") or []) == 1
+            assert terminal["findings"][0]["id"] == "f1"
+        else:
+            assert terminal["signal"] == "ok"
+            assert terminal["evidence"]["testPassed"] is True
+        assert _count_attempt_started(run_dir) == 1
+    finally:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
+        ED.dispatch_abandon(run_dir)
+
+    wall_elapsed = time.monotonic() - wall_start
+    assert wall_elapsed < 120, "test wall time must stay modest (got %.1fs)" % wall_elapsed
+
+
+# --- 11. PATH-independence proof ----------------------------------------------
 
 
 def test_e2e_path_independence_terminal_refusal(tmp_path, monkeypatch):

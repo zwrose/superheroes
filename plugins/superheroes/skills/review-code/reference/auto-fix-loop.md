@@ -357,7 +357,12 @@ never drop a finding or a lens.
 > granularity (the band states them; it never writes the owner's settings):
 > - `Bash(python3 -B */lib/engine_dispatch.py dispatch-review:*)`
 > - `Bash(python3 -B */lib/engine_dispatch.py dispatch-write:*)`
-> The write grant is deliberately narrower so **write autonomy is revocable on its own**. Host rules
+> - `Bash(python3 -B */lib/engine_dispatch.py dispatch-poll:*)`
+> `dispatch-poll` is **observational — it never spawns an engine, never advances a run, and never
+> writes to the repository**, so the **subcommand** adds no write capability of its own; like the
+> two grants above, this grant is a **prefix** rule over a **wildcard path**, so it discriminates
+> the subcommand rather than the script's identity (owners who want script identity should pin the
+> absolute installed plugin path in their own rule). The write grant is deliberately narrower so **write autonomy is revocable on its own**. Host rules
 > match a **prefix**, so that revocability holds only at subcommand granularity — a file-level or
 > bare-`python3` rule would cover both verbs. The path wildcard (`*/lib/engine_dispatch.py`) matches
 > any install location, so the grant discriminates the **subcommand**, not the script's identity —

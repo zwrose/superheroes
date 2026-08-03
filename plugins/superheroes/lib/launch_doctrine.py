@@ -37,8 +37,13 @@ RULING_TEXT = {
         "park only genuinely consequential ones."
     ),
     "await-dispatches": (
-        "await every dispatch in-turn; background-and-poll is fine when a dispatch "
-        "cannot fit the foreground cap — the failure is ending a turn with a dispatch unawaited."
+        "until the handback or park comment is posted, every turn ends with a tool call; "
+        "await every dispatch in-turn, and run each external engine dispatch you invoke directly "
+        "through `dispatch-review`/`dispatch-write --max-wait` (positive, never 0 — a zero slice "
+        "launches nothing) re-invoked on the same `--run-dir` until the structured result is "
+        "terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; "
+        "skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll "
+        "cannot fit the turn, park durably on the issue or PR."
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
 }

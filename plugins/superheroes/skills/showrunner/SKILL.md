@@ -212,21 +212,48 @@ above).
      filed late as we#526/we#527). Complete a **two-tier disposition before you post the vet
      receipt**: **Tier 1 — record-keeping writes** (append to an owning issue, an owner-owed or
      relay memory entry, a declined-with-reason) happen **immediately**; **Tier 2 — board decisions**
-     (new issues, scope changes) are **proposed to the owner in the vet-delivery message**, and
-     **only what genuinely cannot close in this session** — typically an item awaiting the owner's
-     word — is appended to the project's **standing proposals collector**, one open issue per
-     project, filed after discussion (auto-filing per proposal was rejected as overcorrection).
-     Each entry carries **what it is**, **your recommendation**, and **the vet ordinal stamped on
-     it when it is appended**, and is **struck when the owner rules** — closing or declining an
-     item **removes it from the collector**; nothing re-numbers what remains. A
+     (new issues, scope changes) reach the project's **standing proposals collector** — one open
+     issue per project (auto-filing per proposal was rejected as overcorrection) — according to
+     **owner availability within this session**. Read availability from whether the owner is
+     actually reachable here, never inferred from who launched the advisor (duty 9's three states
+     are independent axes, not a proxy for absence):
+     - **Attended** — the owner is here now; the vet-delivery message reaches them in this session.
+       **Proposed to the owner in the vet-delivery message**; discuss; **only what genuinely cannot
+       close in this session** — typically an item awaiting the owner's word — is appended **after
+       that discussion**, **filed after discussion**. This phrase belongs **here, and only here**.
+     - **Asleep** — unreachable for this session — or **reachable-with-latency** — reachable but not
+       within this session's end. The session ends before a deferred answer arrives, so deferring the
+       append is the same failure two independent sessions made on 2026-08-02, only later. There is no
+       discussion to defer to: append what cannot close **at vet time, before the vet receipt posts**,
+       stamped with **this vet's ordinal**. **"Filed after discussion" does not license waiting for the
+       owner to reconnect** — that misreading is precisely what left collectors empty while pending items
+       lived only in individual receipts.
+     When the collector pointer **cannot be resolved** — the owner is asleep and cannot supply it, and
+     opening a second collector is forbidden (see reconcile bullet below) — record the item and the
+     **disclosed degradation** in the vet receipt; **no duplicate collector is opened**. Nothing is lost,
+     because every pending item also lives in the receipt of the vet that proposed it. An item recorded
+     in the receipt because the pointer could not be resolved **carries the ordinal of the vet that
+     proposed it**, recorded in that receipt; when the pointer is later resolved, the deferred append
+     **preserves that original proposing ordinal** and never re-stamps it with the later vet's ordinal
+     — so the item's age keeps counting from when it was actually proposed and the age-2 escalation
+     still fires on time.
+     Each entry carries **what it is**, **your recommendation**, and **the proposing vet's ordinal
+     stamped on it immutably**, and is **struck when the owner rules** — closing or declining an
+     item **removes it from the collector**; nothing re-numbers what remains. Appending stamps the
+     **proposing vet's ordinal** on it **immutably** — the current vet's in the normal case, the
+     earlier recorded one when the append was deferred — carrying an item forward **never
+     re-stamps** it. A
      vet receipt states only **completed dispositions and live proposals — never the future tense**.
      **The collector is a fallback, not the path** — *"the next vet will pick it up"* is the failure
-     this prevents, not a workflow it licenses — and **nothing fires on its own**: no cadence, no
+     this prevents, not a workflow it licenses — and an owner-absent append is the collector doing its
+     job at the only moment available, not a licence to route items there when the owner *is* present.
+     **Nothing fires on its own**: no cadence, no
      release-tied default (not every project cuts releases; a cut-tied rule silently does nothing in
      some projects, which reads as covered), no scheduled routine.
-   - **Reconcile the collector at every vet — you are the backstop's actor.** Reading it is a
-     **vet-time step**: the one moment you are already in disposition mode and the one moment
-     guaranteed to recur whatever the project's release model. **Locating it is part of the duty,
+   - **Reconcile the collector at every vet — you are the backstop's actor.** Disposition above
+     appends owner-absent items before this receipt posts; reconciliation reads what is there.
+     Reading it is a **vet-time step**: the one moment you are already in disposition mode and the
+     one moment guaranteed to recur whatever the project's release model. **Locating it is part of the duty,
      and failing to locate it is never `None`** — record its issue pointer in your durable memory
      (duty 8) the first time you open or find it; if you cannot resolve it, the pending field says
      so as a **disclosed degradation**, never a bare `None` (indistinguishable from an empty
@@ -239,7 +266,7 @@ above).
      ordinal** — one integer per vet, per project — kept in durable memory (duty 8) alongside the
      collector pointer and **also written into each receipt**, so the sequence survives a lost
      memory: the next ordinal is **one more than the highest appearing in the collector or the
-     receipts**. Appending an item **stamps the current ordinal on it, immutably** — carrying an
+     receipts**. Appending an item **stamps the proposing vet's ordinal on it, immutably** — carrying an
      item forward never re-stamps it, and nothing re-numbers on close. Age is `this vet's ordinal −
      the item's ordinal`; the escalation is owed at **2 or more**, and an item that old is evidence
      the owner batch is not happening — the receipt says so plainly rather than re-listing as though
@@ -519,7 +546,7 @@ above).
 | "I'll coordinate the owner's merge of this other PR now; their rebase order can absorb it" | An owner merge you coordinated moves the world under their live order — amend the order, don't assume they absorb it. |
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
-| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner); receipts never use the future tense. |
+| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner when **attended**, **appended to the collector at vet time** when the owner is asleep or reachable-only-with-latency); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
 | "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
 | "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |
