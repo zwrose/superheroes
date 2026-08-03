@@ -994,6 +994,302 @@ not un-touch a shared datastore or un-mint a credential on a shared service.
 
 Sub-issue **C8** renders this report to the owner.
 
+## Reclaim safety
+
+Quarantine-never-delete reclaim, sweep, deletion authorization, journal rotation, and the
+reassignment acceptance probe live in `lib/pilot_reclaim.py` and `lib/pilot_fence.py`.
+
+### On-disk layout
+
+```
+<slots_dir>/
+  <slot>/
+    journal.ndjson
+    journal.<NNNN>.ndjson
+    slot.json
+    .slot.lock
+  .pilot-quarantine/
+    <entryName>/
+      …payload…
+    <entryName>.quarantine.json
+```
+
+The quarantine directory name `.pilot-quarantine` cannot collide with a slot id: `store.SLOT_RE`
+requires a leading `[A-Za-z0-9]`, so no valid slot id begins with `.`.
+
+### Quarantine, never delete
+
+When a stale occupant is reclaimed, its payload directory is **renamed aside** into
+`.pilot-quarantine`, never deleted. A cross-device rename **refuses** (`reclaim-cross-device`)
+rather than degrading to a copy. The sidecar is written **before** the rename: a crash must
+leave an unexplained sidecar rather than an unexplained entry — the same before-and-after
+discipline the provisioning journal uses.
+
+If the rename never happened (cross-device or other `OSError` refusal), the payload remains
+**untouched at `originalPath`** and the pending sidecar is stale. Recovery: the operator
+removes the stale sidecar by hand — the framework will not, by design. The sidecar is loud
+so the operator can distinguish "payload safe at original path, sidecar stale" from a
+completed move.
+
+### The sidecar
+
+```json
+{
+  "schemaVersion": 1,
+  "entryName": "<slot>-gen<generation>-<compact-timestamp>",
+  "originalPath": "/absolute/path/to/payload",
+  "slot": "<slot-id>",
+  "slotRef": "<slot>@<generation>",
+  "generation": 1,
+  "reason": "<reclaim-reason>",
+  "quarantinedAt": "<ISO-8601-UTC-Z>",
+  "expiresAt": "<ISO-8601-UTC-Z>",
+  "move": "pending | moved",
+  "status": "quarantined | deletion-authorized | deleted",
+  "occupant": {
+    "pid": 12345,
+    "processInstance": "inst-abc",
+    "livenessSource": "heartbeat-record | mtime | process-table | lock-probe",
+    "observedAt": "<ISO-8601-UTC-Z>"
+  }
+}
+```
+
+After authorization or deletion, optional fields `terminalReceipt`, `deletionAuthorizedAt`, and
+`deletedAt` may appear.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | integer | must be `1` |
+| `entryName` | string | quarantine entry directory name |
+| `originalPath` | string | realpath of the payload before rename |
+| `slot` | string | slot id |
+| `slotRef` | string | `<slot>@<generation>` |
+| `generation` | integer | generation at quarantine time |
+| `reason` | string | caller-supplied reclaim reason (≤ 500 chars) |
+| `quarantinedAt` | string | ISO-8601 UTC timestamp with `Z` suffix |
+| `expiresAt` | string | informational only — **no predicate ever reads it**; grace is always recomputed from `quarantinedAt` |
+| `move` | string | `pending` before rename completes; `moved` after |
+| `status` | string | `quarantined`, `deletion-authorized`, or `deleted` |
+| `occupant` | object | the stale occupant's liveness binding |
+| `terminalReceipt` | object | present after deletion is authorized |
+| `deletionAuthorizedAt` | string | present after deletion is authorized |
+| `deletedAt` | string | present on the tombstone |
+
+### Deletion authorization
+
+`authorize_deletion(sidecar, receipt, *, now)` is a pure check — it touches no filesystem.
+`GRACE_HOURS` is a fixed constant (`72`) with no parameter. The occupant's `livenessSource`
+may be `heartbeat-record`, `mtime`, `process-table`, or `lock-probe`; `mtime` and
+`process-table` are **liveness** sources that can never be terminal.
+
+Authorization requires **all** of the following, checked in this order:
+
+1. Sidecar passes structural validation (`reclaim-sidecar-invalid` otherwise).
+2. `now` is a valid ISO-8601 UTC timestamp (`reclaim-now-invalid` otherwise).
+3. `move` is `moved` (`reclaim-entry-not-moved` otherwise).
+4. `status` is not `deleted` (`reclaim-status-not-deletable` otherwise).
+5. At least `GRACE_HOURS` (72) have elapsed since `quarantinedAt` (`reclaim-grace-not-elapsed`
+   otherwise).
+6. Receipt passes structural validation (`reclaim-receipt-invalid` otherwise).
+7. Receipt `source` is in `TERMINAL_SOURCES` — currently only `process-exit-status`
+   (`reclaim-receipt-source-not-terminal` otherwise).
+8. Receipt `source` differs from the occupant's `livenessSource`
+   (`reclaim-receipt-not-independent` otherwise).
+9. Occupant `pid` and `processInstance` are both non-null (`reclaim-occupant-unbound`
+   otherwise).
+10. Receipt `pid`, `processInstance`, `entryName`, and `slotRef` match the sidecar
+    (`reclaim-receipt-binding-mismatch` otherwise).
+11. Receipt `observedAt` is not before the occupant's `observedAt`
+    (`reclaim-receipt-predates-liveness` otherwise).
+
+Two properties make this fail-closed: an occupant with a null `pid` or `processInstance` can
+**never** be authorized, and there is **no disk-pressure input, no force flag, and no
+free-space read anywhere in the module** — an emergency cleanup path is how a recovery
+mechanism becomes a data-loss mechanism.
+
+### The terminal receipt
+
+```json
+{
+  "schemaVersion": 1,
+  "source": "process-exit-status",
+  "pid": 12345,
+  "processInstance": "inst-abc",
+  "waitStatus": 0,
+  "entryName": "<entryName>",
+  "slotRef": "<slot>@<generation>",
+  "observedAt": "<ISO-8601-UTC-Z>"
+}
+```
+
+The caller mints this **at its real wait/reap seam, immediately after `os.waitpid`/
+`Popen.wait()` returns, and nowhere else**.
+
+The receipt is a **caller attestation minted at the reap seam** — the framework cannot verify
+that the caller actually reaped the process. Its trustworthiness is the caller's responsibility.
+Specifically, a non-blocking `waitpid(..., WNOHANG)` that returns `(0, 0)` means the process
+has **not** exited and must never be turned into a receipt.
+
+### The sweep
+
+`sweep(slots_dir_path, *, now, receipts=None)` runs **on the next acting run, never on a
+timer**. `receipts` is a mapping keyed by `entryName` to terminal receipts.
+
+Each entry in `warned`, `retained`, and `deleted` carries a `kind` discriminator:
+
+- `"entry"` — per-quarantine-entry shapes (`entryName`, `sidecarPath`, `entryPath`, `reason`).
+- `"journal-segments"` — segment-pressure shapes (`slot`, `segmentCount`, `reason`).
+
+Per-entry classification:
+
+- Payload directory without a matching sidecar → warn `reclaim-sidecar-absent`, retain.
+- Unreadable or invalid sidecar → warn with the load reason, retain.
+- Sidecar `entryName` disagrees with its filename → warn `reclaim-sidecar-entry-name-mismatch`, retain.
+- `move` is `pending` and the payload exists → repair sidecar to `moved`, warn, retain.
+- `move` is `pending`, payload absent, but `originalPath` still exists → warn
+  `reclaim-pending-move-not-applied` (payload safe at original path; sidecar stale), retain.
+- `move` is `pending` and the payload is absent with no `originalPath` → warn
+  `reclaim-entry-not-moved`, retain.
+- `status` is `deleted` → retain (tombstone, no warn).
+- `status` is `deletion-authorized` → re-run `authorize_deletion` with the stored receipt;
+  on success resume delete if payload exists, otherwise write tombstone; on refusal retain and warn.
+- Receipt supplied for entry → `authorize_deletion`; on success delete; on refusal retain
+  (warn if grace has elapsed).
+- No receipt → retain; warn `reclaim-grace-not-elapsed` if grace has elapsed.
+
+Symlinked `.pilot-quarantine` refuses in both `quarantine_entry` and `sweep`
+(`reclaim-quarantine-dir-unsafe`). Containment checks and sweep listing are check-then-use guards
+under this project's single-user threat model — they aim at accidents and stale state, not a
+hostile local actor.
+
+Deletion order (three steps):
+
+1. Write durable `deletion-authorized` sidecar with embedded `terminalReceipt`.
+2. Remove the payload directory (`shutil.rmtree`).
+3. Write `deleted` tombstone sidecar.
+
+**The tombstone is retained forever.** An interrupted delete resumes on the next sweep when
+the sidecar is already `deletion-authorized`.
+
+### Journal rotation and retention
+
+`rotate_journal(slots_dir_path, slot, journal_path, *, now, timeout=30.0)` rotates a live
+journal into a retained segment.
+
+**State gate:** rotation is permitted only when the slot record's state is `released` or
+`retired`. `failed` refuses (`reclaim-rotate-slot-failed`) because its journal is what the
+partial-failure report reads. Active states (`provisioning`, `provisioned`, `occupied`) refuse
+(`reclaim-rotate-slot-active`).
+
+**Quiescence:** an unfiltered replay must succeed with no torn tail, no anomalies, and every
+effect in `applied` or `not-applied` state (`reclaim-rotate-not-quiescent` otherwise).
+
+**Threshold:** at least `ROTATE_MIN_RECORDS` (200) non-empty lines in the live journal
+(`reclaim-rotate-below-threshold` when below).
+
+**Segment naming:** `<stem>.<NNNN>.ndjson` where `<stem>` is the live journal basename without
+extension and `<NNNN>` is a zero-padded four-digit (or longer) sequence (`journal.0001.ndjson`,
+`journal.0002.ndjson`, …). **Segments are never deleted.**
+
+Segment-pressure warnings in `sweep` count retained segments for every `*.ndjson` live journal
+found in a slot directory (default `journal.ndjson` and any non-segment sibling such as
+`events.ndjson`), using the same stem-based derivation as `rotate_journal`.
+
+`pilot_journal`'s writers do not hold the slot lock, so the exclusion rotation relies on is
+**contract-level, not lock-level** — no provisioning attempt is live in `released` or
+`retired`. The lock does not exclude writers.
+
+Rotation **does not create a new live journal** — `pilot_journal`'s writer opens with `O_CREAT`
+and recreates the live journal on the next append.
+
+### Reclaim refusal tokens
+
+| Token | When returned |
+|---|---|
+| `reclaim-slots-dir-invalid` | `slots_dir_path` is missing, empty, or not a string |
+| `reclaim-source-invalid` | source path is not an absolute existing directory (symlinks and files refuse) |
+| `reclaim-source-inside-slot-store` | source path is inside, equal to, or an ancestor of the slot store or quarantine |
+| `reclaim-slot-ref-invalid` | `slot_ref` does not parse |
+| `reclaim-reason-invalid` | `reason` is missing, empty, not a string, or exceeds 500 characters |
+| `reclaim-occupant-invalid` | occupant block shape or field values fail validation |
+| `reclaim-now-invalid` | `now` is not a valid ISO-8601 UTC timestamp |
+| `reclaim-entry-exists` | quarantine entry or sidecar path already exists |
+| `reclaim-cross-device` | `os.rename` fails with `EXDEV` |
+| `reclaim-rename-failed` | `os.rename` fails for any other reason |
+| `reclaim-sidecar-write-failed` | sidecar atomic write or parent-directory fsync fails — before any rename (nothing moved); after rename but before `move: moved` update (payload moved, sidecar stale); or during tombstone write after deletion (payload gone, tombstone missing) |
+| `reclaim-sidecar-absent` | sidecar file does not exist |
+| `reclaim-sidecar-unreadable` | sidecar cannot be opened or read as a regular file |
+| `reclaim-sidecar-invalid` | sidecar JSON or structural validation fails |
+| `reclaim-sidecar-status-unbacked` | `status` is `deletion-authorized` or `deleted` but `terminalReceipt` is absent |
+| `reclaim-sidecar-entry-name-mismatch` | sidecar `entryName` disagrees with its filename |
+| `reclaim-quarantine-dir-unsafe` | `.pilot-quarantine` is a symlink or non-directory |
+| `reclaim-pending-move-not-applied` | `move` is `pending`, payload absent from quarantine, but `originalPath` still exists |
+| `reclaim-grace-not-elapsed` | fewer than 72 hours since `quarantinedAt` |
+| `reclaim-receipt-invalid` | receipt shape fails validation, or `receipts` argument to `sweep` is not a mapping |
+| `reclaim-receipt-source-not-terminal` | receipt `source` is not in `TERMINAL_SOURCES` |
+| `reclaim-receipt-not-independent` | receipt `source` equals the occupant's `livenessSource` |
+| `reclaim-occupant-unbound` | occupant `pid` or `processInstance` is null |
+| `reclaim-receipt-binding-mismatch` | receipt `pid`, `processInstance`, `entryName`, or `slotRef` does not match the sidecar |
+| `reclaim-receipt-predates-liveness` | receipt `observedAt` is before the occupant's `observedAt` |
+| `reclaim-entry-not-moved` | sidecar `move` is not `moved` |
+| `reclaim-status-not-deletable` | sidecar `status` is already `deleted` |
+| `reclaim-delete-failed` | `shutil.rmtree` on the payload fails during sweep |
+| `reclaim-quarantine-dir-unreadable` | quarantine directory cannot be listed |
+| `reclaim-journal-segments-high` | a slot has at least `SEGMENT_WARN_COUNT` (20) retained journal segments |
+| `reclaim-slot-invalid` | slot id fails validation |
+| `reclaim-journal-path-invalid` | journal path is missing, not absolute, or is a symlink |
+| `reclaim-journal-outside-slot` | journal path is not contained in the slot directory |
+| `reclaim-journal-absent` | live journal does not exist at rotation time |
+| `reclaim-rotate-slot-unreadable` | slot record cannot be read during rotation |
+| `reclaim-rotate-slot-active` | slot state is `provisioning`, `provisioned`, or `occupied` |
+| `reclaim-rotate-slot-failed` | slot state is `failed` |
+| `reclaim-rotate-not-quiescent` | journal replay is torn, anomalous, or has unsettled effects |
+| `reclaim-rotate-below-threshold` | live journal has fewer than 200 non-empty lines (ok result, `rotated: false`) |
+| `reclaim-rotate-segment-exists` | target segment path already exists |
+| `reclaim-rotate-failed` | `os.rename` of live journal to segment fails |
+| `reclaim-segments-unreadable` | slot directory cannot be listed for segment enumeration |
+
+### The reassignment acceptance probe
+
+`reassignment_probe_result(slot_ref, checks)` grades four reach-check answers:
+
+| Check | Required answer for `trusted` |
+|---|---|
+| `browser` | `unreachable` |
+| `port` | `unreachable` |
+| `worktree` | `unreachable` |
+| `datastore` | `unreachable` |
+
+Three answers: `unreachable`, `reachable`, `indeterminate`. Two verdicts: `trusted` and
+`retire`. **An ungradeable probe is never `trusted`** — any missing check, unknown check name,
+or invalid answer returns `retire`.
+
+The verdict is **generation-bound**: `apply_probe_verdict` compares the carried generation
+against the record's current one inside the mutation via `generation_check`. A `trusted`
+verdict mutates nothing.
+
+**Scope:** this module grades the probe and applies the fail-closed retirement; `failed →
+retired` is an edge that **already exists** in the lifecycle transition table, so this is the
+*reason* to take it, not a new transition — and making a failed slot reusable again is
+deliberately **not built here**.
+
+### Fence refusal tokens
+
+| Token | When returned |
+|---|---|
+| `fence-slot-ref-invalid` | `slot_ref` does not parse |
+| `fence-checks-invalid` | `checks` is not a mapping |
+| `fence-check-unknown` | a check key is not one of the four required checks |
+| `fence-check-missing` | a required check is absent |
+| `fence-answer-invalid` | an answer is not one of the three allowed values |
+| `fence-check-failed` | one or more checks are not `unreachable` (ok result with `verdict: retire`) |
+| `fence-result-invalid` | probe result shape or verdict is invalid |
+| `fence-result-slot-mismatch` | result `slotRef` does not equal the caller's `slot_ref` |
+| `fence-now-invalid` | `now` is not a valid ISO-8601 UTC timestamp |
+| `fence-slots-dir-invalid` | `slots_dir_path` is missing or empty |
+| `fence-verdict-not-applicable` | verdict is `trusted` — no mutation applies |
+
 ## Cleanup containment and resurrection
 
 Cleanup containment lives in `lib/pilot_cleanup.py`. It answers whether a project's declared
