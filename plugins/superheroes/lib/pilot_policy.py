@@ -1,6 +1,7 @@
 """Pilot policy document resolution, material extraction, and reach exercise (A3).
 
 Non-goals: no boundary binding, no provisioning — policy home only.
+The policy document also carries the out-of-reach datastore containment declaration.
 """
 import json
 import os
@@ -38,7 +39,23 @@ ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 _TOP_LEVEL_KEYS = frozenset(
     {"schemaVersion", "declaration", "protectedTargets", "datastore", "slots"}
 )
-_DATASTORE_KEYS = frozenset({"expectedIdentity", "connectionDetail", "observer"})
+_DATASTORE_REQUIRED_KEYS = frozenset(
+    {"expectedIdentity", "connectionDetail", "observer"}
+)
+_DATASTORE_KEYS = _DATASTORE_REQUIRED_KEYS | frozenset({"containment"})
+CONTAINMENT_KEYS = frozenset({"permissions", "sentinel"})
+CONTAINMENT_PERMISSIONS_KEYS = frozenset(
+    {"cannotReachForeignNamespaces", "evidence"}
+)
+CONTAINMENT_SENTINEL_KEYS = frozenset(
+    {"plantCommand", "probeCommand", "connectionEnvVar"}
+)
+NAMESPACE_PLACEHOLDER = "{namespace}"
+SENTINEL_PLACEHOLDER = "{sentinel}"
+_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+_ALLOWED_PLACEHOLDERS = frozenset(
+    {NAMESPACE_PLACEHOLDER, SENTINEL_PLACEHOLDER}
+)
 OBSERVER_KEYS = frozenset({"command", "connectionEnvVar"})
 _SLOT_KEYS = frozenset(
     {"origin", "permittedRedirects", "expectedIdentities", "mintableAccounts"}
@@ -164,7 +181,10 @@ def validate_policy(doc):
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
     datastore = doc["datastore"]
-    if not isinstance(datastore, dict) or set(datastore.keys()) != _DATASTORE_KEYS:
+    if not isinstance(datastore, dict):
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    datastore_keys = set(datastore.keys())
+    if datastore_keys - _DATASTORE_KEYS or datastore_keys < _DATASTORE_REQUIRED_KEYS:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     expected_identity = datastore["expectedIdentity"]
     connection_detail = datastore["connectionDetail"]
@@ -173,6 +193,8 @@ def validate_policy(doc):
     if not isinstance(connection_detail, str) or not connection_detail:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     _validate_observer(datastore["observer"])
+    if "containment" in datastore:
+        _validate_containment(datastore["containment"])
 
     slots = doc["slots"]
     if not isinstance(slots, dict) or not slots:
@@ -477,6 +499,65 @@ def _ancestors_including_self(path):
         current = parent
     ancestors.reverse()
     return ancestors
+
+
+def _validate_containment(containment):
+    # bite-axis: containment shape — optional datastore declaration for permissions and sentinel
+    # probes; when present every field is validated fail-closed.
+    if not isinstance(containment, dict) or set(containment.keys()) != CONTAINMENT_KEYS:
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+    permissions = containment["permissions"]
+    if permissions is not None:
+        if (
+            not isinstance(permissions, dict)
+            or set(permissions.keys()) != CONTAINMENT_PERMISSIONS_KEYS
+        ):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        cannot_reach = permissions["cannotReachForeignNamespaces"]
+        if type(cannot_reach) is not bool:
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        evidence = permissions["evidence"]
+        if not isinstance(evidence, str) or not evidence:
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+    sentinel = containment["sentinel"]
+    if sentinel is not None:
+        if (
+            not isinstance(sentinel, dict)
+            or set(sentinel.keys()) != CONTAINMENT_SENTINEL_KEYS
+        ):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        _validate_sentinel_command(sentinel["plantCommand"])
+        _validate_sentinel_command(sentinel["probeCommand"])
+        env_var = sentinel["connectionEnvVar"]
+        if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+
+def _validate_sentinel_command(command):
+    if not isinstance(command, list) or not command:
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    for item in command:
+        if not isinstance(item, str) or not item:
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    executable = command[0]
+    if not os.path.isabs(executable):
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    if (
+        NAMESPACE_PLACEHOLDER in executable
+        or SENTINEL_PLACEHOLDER in executable
+    ):
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    args = command[1:]
+    has_namespace = any(NAMESPACE_PLACEHOLDER in part for part in args)
+    has_sentinel = any(SENTINEL_PLACEHOLDER in part for part in args)
+    if not has_namespace or not has_sentinel:
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    for part in command:
+        for match in _PLACEHOLDER_RE.findall(part):
+            if match not in _ALLOWED_PLACEHOLDERS:
+                raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
 
 def _validate_observer(observer):
