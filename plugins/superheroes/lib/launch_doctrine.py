@@ -37,10 +37,11 @@ RULING_TEXT = {
         "park only genuinely consequential ones."
     ),
     "await-dispatches": (
-        "await every dispatch in-turn; a long dispatch uses the runner's own detached shape "
-        "(`dispatch-review`/`dispatch-write --max-wait`, re-invoked on the same `--run-dir` "
-        "until its structured result is terminal), never an external `setsid`/`nohup` wrapper "
-        "or an exit-code sentinel — the failure is ending a turn with a dispatch unawaited."
+        "until the handback or park comment is posted, every turn ends with a tool call; "
+        "await each dispatch in-turn through `dispatch-review`/`dispatch-write --max-wait` "
+        "(positive, never 0 — a zero slice launches nothing) re-invoked on the same `--run-dir` "
+        "until the structured result is terminal, never an external `setsid`/`nohup` wrapper "
+        "or an exit-code sentinel; when the in-turn poll cannot fit the turn, park durably on the issue or PR."
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
 }

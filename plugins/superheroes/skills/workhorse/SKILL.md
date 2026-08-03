@@ -400,7 +400,11 @@ without a tool call.
   A long-running external dispatch the builder invokes directly from a headless session — an engine
   CLI: the implementer, the brief-check reviewer, or any engine CLI the builder hand-rolls — is
   **awaited in-turn** through the **authorized entrypoint itself** — `dispatch-review` /
-  `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap) — **never** wrapped in `setsid`/`nohup`,
+  `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap; the slice must be **positive** — zero
+  or negative clamps to zero and returns `running` **without starting an attempt at all**, so it is
+  never a valid dispatch; a `running` result whose attempt count is **zero** means nothing was
+  launched — re-invoke with a positive slice rather than continuing to poll) — **never** wrapped in
+  `setsid`/`nohup`,
   because the host grant matches a **prefix** and a wrapped command no longer matches it. Invoke
   through the authorized entrypoint; redirect stdout and stderr to **files, never pipes** (a pipe
   buffer dies with the reader and makes a stall look like progress). When a `--max-wait` slice
@@ -414,8 +418,9 @@ without a tool call.
   sentinel beside a forfeited runner result is a false completion signal, not a receipt.
   **`dispatch-poll --run-dir` is the read-only diagnostic** — observational only; it reads the journal
   and returns the folded result **only if a supervisor already folded it**; it never spawns, never
-  advances a run, and is **never** the continuation path (grading and `run-folded` happen only inside
-  `_supervise`, entered through the originating verb). **Recovery latency:** a dispatch whose
+  advances a run, and is **never** the continuation path (`dispatch-poll` never folds a run — it is
+  observational; folding is done by the **originating-verb call path**, not by poll). **Recovery
+  latency:** a dispatch whose
   `--max-wait` slice **expired normally** has already released `run.lock` and re-attaches immediately
   on the next originating-verb call; a builder **killed mid-slice** leaves `run.lock` held for up to
   **1080 s** (`2 × MAX_SYNC_WAIT`) before a fresh call can take over — reclaim needs TTL expiry **and**
