@@ -570,6 +570,7 @@ verification, or with a stale verdict), not a hostile process in another address
 | `provision-slot-unknown` | `verify_boundary` or an `authorized_*` wrapper: slot reference does not parse, or slot id is absent from `policy.slots` |
 | `provision-account-unknown` | `authorized_seed_request`: account is not in the slot's `expectedIdentities` |
 | `provision-mint-unsupported` | `authorized_mint_request`: slot has no `mintableAccounts` or the list is empty |
+| `provision-launch-invalid` | `authorized_app_launch`: `launch` is not a mapping, or `baseUrl` / `readinessUrl` is absent, non-string, or empty |
 
 ## Seed and mint call shapes
 
@@ -2076,6 +2077,14 @@ Per-slot app instance control lives in `lib/pilot_appctl.py`. It owns one slot's
 process: resolve the project's `devCommand` and `readinessUrl` with per-slot parameters,
 fence endpoints wave-wide before any spawn, write the durable instance record **before**
 spawn, poll readiness with attribution, and stop with two independent observations.
+
+**Declaration digest limit:** the `app-lifecycle` declaration digest binds the policy-side
+`origin` and `permittedRedirects` for the slot — the same facts `authorized_app_launch` checks
+`baseUrl` and `readinessUrl` against. It does **not** bind the project's branch-mutable
+`devCommand` or outer `readinessUrl` (those live in the outer `test-pilot-config`, outside the
+extractor's reach). A `devCommand` change therefore does not invalidate an existing
+app-lifecycle exercise receipt. Closing that gap would need the outer config in the extractor's
+reach — a successor change, deliberately not made here.
 
 **What it deliberately does not own:** it allocates no port, picks no port, performs no
 fencing at a broker, and never restarts or reseeds a slot. Port assignment and broker-side

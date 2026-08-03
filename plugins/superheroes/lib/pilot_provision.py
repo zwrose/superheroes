@@ -363,6 +363,15 @@ def _extract_mint_account_allowlist(block, policy, slot_ref):
     return policy["slots"][slot]["mintableAccounts"]
 
 
+def _extract_app_lifecycle(_block, policy, slot_ref):
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    slot_config = policy["slots"][slot]
+    return {
+        "origin": slot_config["origin"],
+        "permittedRedirects": slot_config["permittedRedirects"],
+    }
+
+
 DECLARATION_SOURCES = {
     "identity-probe": {
         "extract": _extract_identity_probe,
@@ -391,6 +400,10 @@ DECLARATION_SOURCES = {
     "mint-account-allowlist": {
         "extract": _extract_mint_account_allowlist,
         "applicable": _mint_applicable,
+    },
+    "app-lifecycle": {
+        "extract": _extract_app_lifecycle,
+        "applicable": _always_applicable,
     },
 }
 

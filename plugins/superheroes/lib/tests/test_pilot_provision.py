@@ -1002,6 +1002,81 @@ def _valid_weaker_acceptance():
 
 def test_declaration_sources_covers_declaration_kinds():
     assert set(pp.DECLARATION_SOURCES) == pilot_contract.DECLARATION_KINDS
+    pp._verify_declaration_sources_complete()
+
+
+def test_app_lifecycle_extractor_returns_policy_origin_and_redirects():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("app-lifecycle", block, policy, slot_ref)
+    assert info["applicable"] is True
+    assert set(info["declaration"]) == {"origin", "permittedRedirects"}
+    assert info["declaration"] == {
+        "origin": policy["slots"]["slot-a"]["origin"],
+        "permittedRedirects": policy["slots"]["slot-a"]["permittedRedirects"],
+    }
+
+
+def test_app_lifecycle_always_applicable_for_captured_project():
+    policy = _captured_policy()
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("app-lifecycle", block, policy, slot_ref)
+    assert info["applicable"] is True
+    assert info["declaration"] is not None
+
+
+def test_app_lifecycle_missing_origin_refuses():
+    policy = dict(SAMPLE_POLICY)
+    slot_cfg = dict(policy["slots"]["slot-a"])
+    del slot_cfg["origin"]
+    policy["slots"] = {"slot-a": slot_cfg}
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("app-lifecycle", block, policy, "slot-a@1")
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_app_lifecycle_missing_permitted_redirects_refuses():
+    policy = dict(SAMPLE_POLICY)
+    slot_cfg = dict(policy["slots"]["slot-a"])
+    del slot_cfg["permittedRedirects"]
+    policy["slots"] = {"slot-a": slot_cfg}
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("app-lifecycle", block, policy, "slot-a@1")
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_app_lifecycle_unparseable_slot_ref_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("app-lifecycle", block, policy, "bad@@1")
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_app_lifecycle_digest_moves_when_origin_changes():
+    policy_a = _captured_policy()
+    policy_b = copy.deepcopy(policy_a)
+    policy_b["slots"]["slot-a"]["origin"] = "http://127.0.0.1:3000"
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info_a = pp.declaration_for("app-lifecycle", block, policy_a, slot_ref)
+    info_b = pp.declaration_for("app-lifecycle", block, policy_b, slot_ref)
+    digest_a = pilot_contract.declaration_digest(info_a["declaration"])
+    digest_b = pilot_contract.declaration_digest(info_b["declaration"])
+    assert digest_a != digest_b
+    registry = {
+        "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
+        "records": [_registry_record("app-lifecycle", info_a["declaration"])],
+    }
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pilot_contract.require_exercised(
+            registry, "app-lifecycle", info_b["declaration"],
+        )
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
 
 
 def test_gate_provisioning_pass_strong_identity_captured(private_tmp):
@@ -1531,22 +1606,6 @@ def test_app_launch_edge_readiness_url_empty():
             {"baseUrl": "http://127.0.0.1:5173", "readinessUrl": ""},
         )
     assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
-
-
-def test_app_launch_edge_base_url_off_origin():
-    policy = SAMPLE_POLICY
-    verdict = _passing_verdict(policy)
-    with pytest.raises(pp.PilotProvisionError) as exc:
-        pp.authorized_app_launch(
-            verdict,
-            policy,
-            "slot-a@1",
-            {
-                "baseUrl": "http://evil.example.com:80",
-                "readinessUrl": "http://127.0.0.1:5173",
-            },
-        )
-    assert exc.value.reason == pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
 
 
 def test_app_launch_edge_base_url_off_origin():
