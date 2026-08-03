@@ -6,10 +6,12 @@ replay honestly as possibly-applied rather than never-happened.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import re
 import stat
+import time
 import uuid
 from datetime import datetime
 
@@ -95,6 +97,9 @@ BLOCK_SLOT_DUPLICATE = "report-slot-duplicate"
 
 _EFFECT_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _REASON_MAX_LEN = 500
+DETAIL_MAX_BYTES = 8192
+_LOCK_DEFAULT_TIMEOUT = 30.0
+_LOCK_POLL_INTERVAL = 0.05
 
 _BEGIN_REQUIRED_KEYS = frozenset({
     "schemaVersion", "phase", "effectId", "slotRef", "kind", "at",
@@ -150,6 +155,12 @@ def _is_iso8601_utc(value):
     return dt.tzinfo is not None
 
 
+def _detail_encoded_size(detail):
+    return len(
+        json.dumps(detail, sort_keys=True, ensure_ascii=False).encode("utf-8"),
+    )
+
+
 def _is_json_serialisable_detail(detail):
     if detail is None:
         return True
@@ -158,6 +169,8 @@ def _is_json_serialisable_detail(detail):
     try:
         json.dumps(detail, allow_nan=False)
     except (TypeError, ValueError):
+        return False
+    if _detail_encoded_size(detail) > DETAIL_MAX_BYTES:
         return False
     return True
 
@@ -182,12 +195,90 @@ def _ensure_parent_dir(path):
         os.makedirs(parent, exist_ok=True)
 
 
+def _journal_lock_path(journal_path):
+    return journal_path + ".lock"
+
+
+def _journal_path_writable(journal_path):
+    """True only when a write may proceed to lock acquisition."""
+    if not _is_str_path(journal_path):
+        return False
+    if not journal_path:
+        return False
+    parent = os.path.dirname(os.path.abspath(journal_path)) or "."
+    if os.path.islink(parent):
+        return False
+    if os.path.lexists(parent) and not os.path.isdir(parent):
+        return False
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError:
+        return False
+    return os.path.isdir(parent)
+
+
+def _acquire_journal_lock(journal_path, timeout=_LOCK_DEFAULT_TIMEOUT):
+    """Acquire an advisory flock on a separate lock file beside the journal."""
+    lock_file = _journal_lock_path(journal_path)
+    parent = os.path.dirname(os.path.abspath(journal_path)) or "."
+    try:
+        os.makedirs(parent, exist_ok=True)
+    except OSError:
+        return None
+    if os.path.islink(lock_file):
+        return None
+    if os.path.lexists(lock_file):
+        if os.path.isdir(lock_file):
+            return None
+        try:
+            lock_stat = os.stat(lock_file, follow_symlinks=False)
+            if stat.S_ISSOCK(lock_stat.st_mode):
+                return None
+        except OSError:
+            return None
+    try:
+        fd = os.open(lock_file, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+        lock_stat = os.fstat(fd)
+        if not stat.S_ISREG(lock_stat.st_mode):
+            os.close(fd)
+            return None
+        acquired = False
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    os.close(fd)
+                    return None
+                time.sleep(_LOCK_POLL_INTERVAL)
+        return fd
+    except OSError:
+        return None
+
+
+def _release_journal_lock(lock_fd):
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+    except OSError:
+        pass
+    try:
+        os.close(lock_fd)
+    except OSError:
+        pass
+
+
 def _write_record(journal_path, record):
     """Durable single-write append. Returns ok/reason dict."""
-    if not _is_str_path(journal_path):
+    if not _journal_path_writable(journal_path):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     line = json.dumps(record, sort_keys=True) + "\n"
     encoded = line.encode("utf-8")
+    lock_fd = _acquire_journal_lock(journal_path)
+    if lock_fd is None:
+        return _fail(REASON_JOURNAL_WRITE_FAILED)
     fd = None
     try:
         _ensure_parent_dir(journal_path)
@@ -223,6 +314,7 @@ def _write_record(journal_path, record):
                 os.close(fd)
             except OSError:
                 pass
+        _release_journal_lock(lock_fd)
 
 
 def _build_begin_record(*, slot_ref, kind, at, detail, effect_id):

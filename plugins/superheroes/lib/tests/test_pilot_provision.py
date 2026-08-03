@@ -1002,6 +1002,81 @@ def _valid_weaker_acceptance():
 
 def test_declaration_sources_covers_declaration_kinds():
     assert set(pp.DECLARATION_SOURCES) == pilot_contract.DECLARATION_KINDS
+    pp._verify_declaration_sources_complete()
+
+
+def test_app_lifecycle_extractor_returns_policy_origin_and_redirects():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("app-lifecycle", block, policy, slot_ref)
+    assert info["applicable"] is True
+    assert set(info["declaration"]) == {"origin", "permittedRedirects"}
+    assert info["declaration"] == {
+        "origin": policy["slots"]["slot-a"]["origin"],
+        "permittedRedirects": policy["slots"]["slot-a"]["permittedRedirects"],
+    }
+
+
+def test_app_lifecycle_always_applicable_for_captured_project():
+    policy = _captured_policy()
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info = pp.declaration_for("app-lifecycle", block, policy, slot_ref)
+    assert info["applicable"] is True
+    assert info["declaration"] is not None
+
+
+def test_app_lifecycle_missing_origin_refuses():
+    policy = dict(SAMPLE_POLICY)
+    slot_cfg = dict(policy["slots"]["slot-a"])
+    del slot_cfg["origin"]
+    policy["slots"] = {"slot-a": slot_cfg}
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("app-lifecycle", block, policy, "slot-a@1")
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_app_lifecycle_missing_permitted_redirects_refuses():
+    policy = dict(SAMPLE_POLICY)
+    slot_cfg = dict(policy["slots"]["slot-a"])
+    del slot_cfg["permittedRedirects"]
+    policy["slots"] = {"slot-a": slot_cfg}
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("app-lifecycle", block, policy, "slot-a@1")
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_app_lifecycle_unparseable_slot_ref_refuses():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.declaration_for("app-lifecycle", block, policy, "bad@@1")
+    assert exc.value.reason == pp.REFUSAL_DECLARATION_SOURCE_MISSING
+
+
+def test_app_lifecycle_digest_moves_when_origin_changes():
+    policy_a = _captured_policy()
+    policy_b = copy.deepcopy(policy_a)
+    policy_b["slots"]["slot-a"]["origin"] = "http://127.0.0.1:3000"
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    info_a = pp.declaration_for("app-lifecycle", block, policy_a, slot_ref)
+    info_b = pp.declaration_for("app-lifecycle", block, policy_b, slot_ref)
+    digest_a = pilot_contract.declaration_digest(info_a["declaration"])
+    digest_b = pilot_contract.declaration_digest(info_b["declaration"])
+    assert digest_a != digest_b
+    registry = {
+        "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
+        "records": [_registry_record("app-lifecycle", info_a["declaration"])],
+    }
+    with pytest.raises(pilot_contract.PilotContractError) as exc:
+        pilot_contract.require_exercised(
+            registry, "app-lifecycle", info_b["declaration"],
+        )
+    assert exc.value.reason == pilot_contract.REFUSAL_DECLARATION_UNEXERCISED
 
 
 def test_gate_provisioning_pass_strong_identity_captured(private_tmp):
@@ -1348,3 +1423,250 @@ def test_datastore_strength_matches_pilot_boundary(private_tmp):
         run_cwd=run_cwd,
     )
     assert verdict["datastoreIdentity"]["strength"] == pp.STRENGTH_STRONG
+
+
+# --- authorized_app_launch (O3 / seam S-B) -------------------------------------
+
+
+def _valid_launch():
+    return {
+        "baseUrl": "http://127.0.0.1:5173",
+        "readinessUrl": "http://127.0.0.1:5173",
+    }
+
+
+def test_authorized_app_launch_happy_path():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    launch = _valid_launch()
+    result = pp.authorized_app_launch(verdict, policy, "slot-a@1", launch)
+    assert result == {
+        "schemaVersion": 1,
+        "slotRef": "slot-a@1",
+        "baseUrl": launch["baseUrl"],
+        "readinessUrl": launch["readinessUrl"],
+        "policyDigest": _digest(policy),
+    }
+
+
+def test_app_launch_edge_refused_verdict(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    verdict["result"] = "refuse"
+    binding_calls = []
+
+    def record_binding(*_args, **_kwargs):
+        binding_calls.append(True)
+
+    monkeypatch.setattr(pilot_boundary, "target_binding", record_binding)
+    with pytest.raises(pilot_boundary.PilotBoundaryError) as exc:
+        pp.authorized_app_launch(verdict, policy, "slot-a@1", _valid_launch())
+    assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
+    assert binding_calls == []
+
+
+def test_app_launch_edge_policy_digest_mismatch(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    tampered = dict(policy)
+    tampered["declaration"] = "tampered-policy"
+    binding_calls = []
+
+    def record_binding(*_args, **_kwargs):
+        binding_calls.append(True)
+
+    monkeypatch.setattr(pilot_boundary, "target_binding", record_binding)
+    with pytest.raises(pilot_boundary.PilotBoundaryError) as exc:
+        pp.authorized_app_launch(verdict, tampered, "slot-a@1", _valid_launch())
+    assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
+    assert binding_calls == []
+
+
+def test_app_launch_edge_verdict_slot_ref_disagrees(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy, slot_ref="slot-b@1")
+    binding_calls = []
+
+    def record_binding(*_args, **_kwargs):
+        binding_calls.append(True)
+
+    monkeypatch.setattr(pilot_boundary, "target_binding", record_binding)
+    with pytest.raises(pilot_boundary.PilotBoundaryError) as exc:
+        pp.authorized_app_launch(verdict, policy, "slot-a@1", _valid_launch())
+    assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
+    assert binding_calls == []
+
+
+def test_app_launch_edge_malformed_slot_ref(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    binding_calls = []
+
+    def record_binding(*_args, **_kwargs):
+        binding_calls.append(True)
+
+    monkeypatch.setattr(pilot_boundary, "target_binding", record_binding)
+    with pytest.raises(pilot_boundary.PilotBoundaryError) as exc:
+        pp.authorized_app_launch(verdict, policy, "bad@@1", _valid_launch())
+    assert exc.value.reason == pilot_boundary.REFUSAL_UNVERIFIED
+    assert binding_calls == []
+
+
+def test_app_launch_edge_slot_absent_from_policy(monkeypatch):
+    policy = dict(SAMPLE_POLICY)
+    policy["slots"] = {}
+    verdict = _passing_verdict(policy)
+    binding_calls = []
+
+    def record_binding(*_args, **_kwargs):
+        binding_calls.append(True)
+
+    monkeypatch.setattr(pilot_boundary, "target_binding", record_binding)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(verdict, policy, "slot-a@1", _valid_launch())
+    assert exc.value.reason == pp.REFUSAL_SLOT_UNKNOWN
+    assert binding_calls == []
+
+
+def test_app_launch_edge_launch_not_mapping():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(verdict, policy, "slot-a@1", "not-a-mapping")
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_base_url_absent():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict, policy, "slot-a@1", {"readinessUrl": "http://127.0.0.1:5173"},
+        )
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_base_url_non_string():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {"baseUrl": 5173, "readinessUrl": "http://127.0.0.1:5173"},
+        )
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_base_url_empty():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {"baseUrl": "", "readinessUrl": "http://127.0.0.1:5173"},
+        )
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_readiness_url_absent():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict, policy, "slot-a@1", {"baseUrl": "http://127.0.0.1:5173"},
+        )
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_readiness_url_non_string():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {"baseUrl": "http://127.0.0.1:5173", "readinessUrl": 5173},
+        )
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_readiness_url_empty():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {"baseUrl": "http://127.0.0.1:5173", "readinessUrl": ""},
+        )
+    assert exc.value.reason == pp.REFUSAL_LAUNCH_INVALID
+
+
+def test_app_launch_edge_base_url_off_origin():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {
+                "baseUrl": "http://evil.example.com:80",
+                "readinessUrl": "http://127.0.0.1:5173",
+            },
+        )
+    assert exc.value.reason == pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
+
+
+def test_app_launch_edge_readiness_url_off_origin():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {
+                "baseUrl": "http://127.0.0.1:5173",
+                "readinessUrl": "http://evil.example.com:80",
+            },
+        )
+    assert exc.value.reason == pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
+
+
+def test_app_launch_edge_readiness_url_protected_target():
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.authorized_app_launch(
+            verdict,
+            policy,
+            "slot-a@1",
+            {
+                "baseUrl": "http://127.0.0.1:5173",
+                "readinessUrl": "https://app.example.com:443",
+            },
+        )
+    assert exc.value.reason == pilot_boundary.REFUSAL_PROTECTED_TARGET
+
+
+def test_app_launch_edge_assert_results_only_refuses(monkeypatch):
+    policy = SAMPLE_POLICY
+    verdict = _passing_verdict(policy)
+
+    def raising_assert(_result, _material):
+        raise pilot_policy.PilotPolicyError(
+            pilot_policy.REFUSAL_MATERIAL_IN_RESULT,
+            detail="connection-detail",
+        )
+
+    monkeypatch.setattr(pilot_policy, "assert_results_only", raising_assert)
+    with pytest.raises(pilot_policy.PilotPolicyError) as exc:
+        pp.authorized_app_launch(verdict, policy, "slot-a@1", _valid_launch())
+    assert exc.value.reason == pilot_policy.REFUSAL_MATERIAL_IN_RESULT

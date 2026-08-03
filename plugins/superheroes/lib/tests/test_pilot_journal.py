@@ -1,10 +1,12 @@
 """Tests for pilot provisioning journal and partial-failure reports."""
 import json
+import multiprocessing
 import os
 import shutil
 import stat
 import sys
 import tempfile
+import time
 
 import pytest
 
@@ -21,6 +23,81 @@ _SLOT = "slot-a"
 _SLOT_REF = "slot-a@1"
 _SLOT_B = "slot-b"
 _SLOT_REF_B = "slot-b@1"
+
+_CONCURRENCY_TS = "2026-08-02T12:00:00Z"
+_CONCURRENCY_BARRIER_TIMEOUT = 60.0
+_CONCURRENCY_JOIN_TIMEOUT = 60.0
+_CONCURRENCY_WORKERS = 8
+_CONCURRENCY_RECORDS_PER_WORKER = 20
+_FLOCK_SHORT_WRITE_WORKERS = 6
+_FLOCK_SHORT_WRITE_RECORDS_PER_WORKER = 15
+_FLOCK_SHORT_WRITE_DETAIL_BYTES = 400
+
+
+def _flock_short_write_worker(journal_path, worker_id, barrier):
+    import os
+
+    import pilot_journal as pj_module
+
+    _real_write = os.write
+
+    def _short_write(fd, data):
+        return _real_write(fd, data[:1])
+
+    os.write = _short_write
+    barrier.wait(timeout=_CONCURRENCY_BARRIER_TIMEOUT)
+    for seq in range(_FLOCK_SHORT_WRITE_RECORDS_PER_WORKER):
+        effect_id = "f%02d-%02d" % (worker_id, seq)
+        detail = {
+            "worker": worker_id,
+            "seq": seq,
+            "padding": "x" * _FLOCK_SHORT_WRITE_DETAIL_BYTES,
+        }
+        result = pj_module.begin_effect(
+            journal_path,
+            slot_ref="slot-a@1",
+            kind=pj_module.KIND_APP_STARTED,
+            at=_CONCURRENCY_TS,
+            effect_id=effect_id,
+            detail=detail,
+        )
+        if not result["ok"]:
+            raise RuntimeError(result["reason"])
+
+
+def _journal_append_worker(journal_path, worker_id, barrier):
+    import pilot_journal as pj_module
+    barrier.wait(timeout=_CONCURRENCY_BARRIER_TIMEOUT)
+    for seq in range(_CONCURRENCY_RECORDS_PER_WORKER):
+        effect_id = "w%02d-%02d" % (worker_id, seq)
+        detail = {
+            "worker": worker_id,
+            "seq": seq,
+            "padding": "x" * 1500,
+        }
+        result = pj_module.begin_effect(
+            journal_path,
+            slot_ref="slot-a@1",
+            kind=pj_module.KIND_APP_STARTED,
+            at=_CONCURRENCY_TS,
+            effect_id=effect_id,
+            detail=detail,
+        )
+        if not result["ok"]:
+            raise RuntimeError(result["reason"])
+
+
+def _detail_with_encoded_size(target_size):
+    padding_len = target_size
+    while padding_len >= 0:
+        detail = {"padding": "a" * padding_len}
+        encoded_size = len(
+            json.dumps(detail, sort_keys=True, ensure_ascii=False).encode("utf-8"),
+        )
+        if encoded_size == target_size:
+            return detail
+        padding_len -= 1
+    raise ValueError("cannot construct detail at encoded size %d" % target_size)
 
 
 @pytest.fixture
@@ -1060,3 +1137,149 @@ def test_write_record_directory_fsync_failure(tmp_dir, monkeypatch):
     )
     assert result["ok"] is False
     assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
+
+
+def test_concurrent_append_all_lines_parse(tmp_dir, monkeypatch):
+    # Load-bearing concurrency proof is test_concurrent_append_flock_short_write_all_lines_parse;
+    # this case only checks parseability when the lock is bypassed.
+    def _noop_lock(_path, _timeout=30.0):
+        return os.open(os.devnull, os.O_RDONLY)
+
+    monkeypatch.setattr(pj, "_acquire_journal_lock", _noop_lock)
+    multiprocessing.set_start_method("spawn", force=True)
+    path = _journal(tmp_dir)
+    n = _CONCURRENCY_WORKERS
+    barrier = multiprocessing.Barrier(n)
+    processes = []
+    for worker_id in range(n):
+        proc = multiprocessing.Process(
+            target=_journal_append_worker,
+            args=(path, worker_id, barrier),
+        )
+        processes.append(proc)
+        proc.start()
+    for proc in processes:
+        proc.join(timeout=_CONCURRENCY_JOIN_TIMEOUT)
+    for proc in processes:
+        assert proc.exitcode == 0, "worker exited with %s" % proc.exitcode
+    with open(path, encoding="utf-8") as fh:
+        lines = [ln for ln in fh if ln.strip()]
+    assert len(lines) == n * _CONCURRENCY_RECORDS_PER_WORKER
+    for line in lines:
+        json.loads(line)
+
+
+def test_journal_lock_symlink_refuses_write(tmp_dir):
+    path = _journal(tmp_dir)
+    lock_target = os.path.join(tmp_dir, "real.lock")
+    lock_path = path + ".lock"
+    os.symlink(lock_target, lock_path)
+    result = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="locksym1",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
+
+
+def test_journal_lock_directory_refuses_write(tmp_dir):
+    path = _journal(tmp_dir)
+    os.mkdir(path + ".lock")
+    result = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="lockdir1",
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
+
+
+def test_detail_at_max_bytes_passes(tmp_dir):
+    detail = _detail_with_encoded_size(pj.DETAIL_MAX_BYTES)
+    path = _journal(tmp_dir)
+    result = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+        effect_id="maxdetail1", detail=detail,
+    )
+    assert result["ok"] is True
+
+
+def test_detail_one_byte_over_max_refuses(tmp_dir):
+    at_limit = _detail_with_encoded_size(pj.DETAIL_MAX_BYTES)
+    over_detail = {"padding": at_limit["padding"] + "x"}
+    encoded_size = len(
+        json.dumps(over_detail, sort_keys=True, ensure_ascii=False).encode("utf-8"),
+    )
+    assert encoded_size == pj.DETAIL_MAX_BYTES + 1
+    path = _journal(tmp_dir)
+    result = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+        effect_id="overdetail1", detail=over_detail,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_RECORD_INVALID
+
+
+def test_refused_write_empty_path_leaves_no_lock(tmp_dir):
+    cwd = os.getcwd()
+    os.chdir(tmp_dir)
+    try:
+        result = pj.begin_effect(
+            "", slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+        )
+        assert result == {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
+        assert not os.path.exists(".lock")
+    finally:
+        os.chdir(cwd)
+
+
+def test_refused_write_bad_parent_leaves_no_lock(tmp_dir):
+    bad_parent = os.path.join(tmp_dir, "not-a-dir")
+    with open(bad_parent, "w", encoding="utf-8") as fh:
+        fh.write("blocker")
+    journal_path = os.path.join(bad_parent, "subdir", "journal.jsonl")
+    lock_path = journal_path + ".lock"
+    result = pj.begin_effect(
+        journal_path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_WRITE_FAILED
+    assert not os.path.exists(lock_path)
+
+
+def test_bare_filename_writes_lock_beside_journal(tmp_dir):
+    cwd = os.getcwd()
+    os.chdir(tmp_dir)
+    try:
+        journal_name = "journal.jsonl"
+        result = pj.begin_effect(
+            journal_name, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED,
+            at=_TS, effect_id="bare1",
+        )
+        assert result["ok"] is True
+        assert os.path.isfile(journal_name)
+        assert os.path.isfile(journal_name + ".lock")
+    finally:
+        os.chdir(cwd)
+
+
+def test_concurrent_append_flock_short_write_all_lines_parse(tmp_dir):
+    multiprocessing.set_start_method("spawn", force=True)
+    path = _journal(tmp_dir)
+    n = _FLOCK_SHORT_WRITE_WORKERS
+    expected = n * _FLOCK_SHORT_WRITE_RECORDS_PER_WORKER
+    barrier = multiprocessing.Barrier(n)
+    processes = []
+    for worker_id in range(n):
+        proc = multiprocessing.Process(
+            target=_flock_short_write_worker,
+            args=(path, worker_id, barrier),
+        )
+        processes.append(proc)
+        proc.start()
+    for proc in processes:
+        proc.join(timeout=_CONCURRENCY_JOIN_TIMEOUT)
+    for proc in processes:
+        assert proc.exitcode == 0, "worker exited with %s" % proc.exitcode
+    with open(path, encoding="utf-8") as fh:
+        lines = [ln for ln in fh if ln.strip()]
+    assert len(lines) == expected
+    for line in lines:
+        json.loads(line)
