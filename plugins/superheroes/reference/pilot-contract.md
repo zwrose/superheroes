@@ -17,9 +17,14 @@
 15. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
 16. [The provisioning journal](#the-provisioning-journal)
 17. [The partial-failure report](#the-partial-failure-report)
-18. [Per-slot browser topology](#per-slot-browser-topology)
-19. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
-20. [The provisioning gate](#the-provisioning-gate)
+18. [The identity-probe exercise](#the-identity-probe-exercise)
+19. [Mid-wave lapse](#mid-wave-lapse)
+20. [Credential validity margin](#credential-validity-margin)
+21. [Minted sign-in exercises](#minted-sign-in-exercises)
+22. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
+23. [Per-slot browser topology](#per-slot-browser-topology)
+24. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
+25. [The provisioning gate](#the-provisioning-gate)
 
 ---
 
@@ -35,20 +40,26 @@ probe vocabulary (`lib/pilot_probe.py`); slot reference format and account-set t
 the contract validator (`lib/pilot_contract.py`, wired into `engine.load_profile_config`);
 sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
 document home (`lib/pilot_policy.py`), and the provisioning authorization layer
-(`lib/pilot_provision.py`); and sub-issue **A2a** — the slot lifecycle and generation
+(`lib/pilot_provision.py`); sub-issue **A2a** — the slot lifecycle and generation
 allocation (`lib/pilot_lifecycle.py`) plus the provisioning journal and partial-failure
-report (`lib/pilot_journal.py`).
+report (`lib/pilot_journal.py`); sub-issue **B6** — the identity-probe exercise and
+mid-wave lapse episode (`lib/pilot_identity.py`), the launch-time credential validity
+margin (`lib/pilot_horizon.py`), and minted sign-in exercises (`lib/pilot_mint.py`); and
+sub-issue **C9** — the cleanup effect receipt, containment resolution, and resurrection
+planner (`lib/pilot_cleanup.py`, plus the policy's `datastore.containment` declaration).
 
 **What this deliberately does not build** (successor sub-issues own these):
 
 - Quarantine, sweep, the reassignment acceptance probe, deletion rules, and any recovery path out of
   `failed` (**A2b**).
 - Browser context creation, credential injection, or broker-side stale-generation enforcement (**C7**).
-- Running a live cleanup and capturing its effect receipt (**C9**).
 - The measured operating ceiling and its degradation receipts (**D11b**).
-- App stand-up, teardown, or wave-deadline runtime (**B5**).
+- App stand-up, teardown, or wave-deadline **runtime** terminus enforcement (**B5**,
+  #827) — the launch-time `deadline + margin ≤ horizon` comparison now lives here
+  (B6, `lib/pilot_horizon.py`); runtime terminus stays B5's.
 
-This wave ships types, vocabulary, schema, and call shapes only.
+This document pins schema, vocabulary, validation, and the mechanisms through A3, A2a, and C9;
+browser, broker, and teardown execution remain successor-owned.
 
 ## The `pilot` block
 
@@ -380,6 +391,17 @@ as a relative path.
     "observer": {
       "command": ["/opt/pilot/db-identity"],
       "connectionEnvVar": "PILOT_DB_URL"
+    },
+    "containment": {
+      "permissions": {
+        "cannotReachForeignNamespaces": true,
+        "evidence": "separate database per slot; role grants scoped to slot namespace"
+      },
+      "sentinel": {
+        "plantCommand": ["/opt/pilot/sentinel-plant", "--namespace", "{namespace}", "--id", "{sentinel}"],
+        "probeCommand": ["/opt/pilot/sentinel-probe", "--namespace", "{namespace}", "--id", "{sentinel}"],
+        "connectionEnvVar": "PILOT_DB_URL"
+      }
     }
   },
   "slots": {
@@ -397,7 +419,13 @@ Top-level keys are exactly `schemaVersion`, `declaration`, `protectedTargets`, `
 and `slots`. Each slot requires `origin`, `permittedRedirects`, and `expectedIdentities`
 (non-empty dict mapping account names to identity strings). `mintableAccounts` is optional.
 `datastore.observer` may be `null` (app-reported path) or an object with `command` (non-empty
-argv list) and `connectionEnvVar` (valid env-var name). The resolved document's
+argv list) and `connectionEnvVar` (valid env-var name). `datastore.containment` is **optional**;
+when present its keys are exactly `permissions` and `sentinel`, and each may be `null`.
+`permissions` requires a real-boolean `cannotReachForeignNamespaces` and non-empty `evidence`.
+`sentinel` requires `plantCommand`, `probeCommand`, and `connectionEnvVar`; each command is a
+non-empty argv of non-empty strings with an **absolute** `argv[0]` that carries neither
+`{namespace}` nor `{sentinel}`, both `{namespace}` and `{sentinel}` appearing in
+`command[1:]`, and no unrecognised `{...}` placeholder anywhere. The resolved document's
 `declaration` field must match the identifier used to open it.
 
 Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy`,
@@ -890,6 +918,10 @@ On a clean body a failed `end` write raises `PilotJournalError`; when the body i
 the body's exception wins and the missing `end` record replays as `possibly-applied`. The
 asymmetry is deliberate.
 
+`mark_indeterminate` records `indeterminate` with an explicit end timestamp and optional
+`reason` when transport, process, timeout, or partial-operation error prevents the caller
+from proving applied or not-applied.
+
 ### Journal refusal tokens
 
 | Token | When returned |
@@ -978,6 +1010,780 @@ A **shared**-scoped possibly-applied effect blocks even on a fenced slot: fencin
 not un-touch a shared datastore or un-mint a credential on a shared service.
 
 Sub-issue **C8** renders this report to the owner.
+
+## The identity-probe exercise
+
+The identity-probe exercise (design decision D3) proves that the configured probe
+discriminates between seeded and unseeded contexts. Public API lives in
+`lib/pilot_identity.py`.
+
+### Answer shape
+
+Each probe answer carries **exactly one** of:
+
+- `identity` — a non-empty string naming the session's identity, or
+- `reason` — one of the ten probe tokens from [The probe vocabulary](#the-probe-vocabulary).
+
+Both fields present, neither present, or an empty identity refuses
+(`identity-answer-invalid`). An unknown `reason` token refuses
+(`identity-answer-reason-unknown`).
+
+`probe_answer(*, identity=None, reason=None)` normalizes and validates one answer.
+`evaluate_pair` and `run_pair_exercise` accept answer dicts with the same shape.
+
+### Authoritative exercise vs helper
+
+`run_pair_exercise` is the **authoritative** single-account exercise: it invokes two
+**distinct** probe callables exactly once each and grades the results through
+`evaluate_pair`. Distinct callables are verified here; whether they ran in different
+browser contexts is C7's responsibility.
+
+`evaluate_pair(seeded, unseeded, *, expected_identity)` is a **helper** only — grading
+two fabricated answers does not establish that they came from two contexts. Preflight
+must call `run_pair_exercise` (or the slot-level harness below), not `evaluate_pair`
+alone.
+
+### Ordered checks in `evaluate_pair`
+
+Checks run in this order:
+
+1. **Normalize both answers** — malformed shape returns the answer-validation refusal.
+2. **Expected identity** — `expected_identity` must be a non-empty string
+   (`identity-expected-missing` otherwise). This runs before grading because an absent
+   expectation cannot discriminate seeded from unseeded answers.
+3. **Identical answers** — if the normalized seeded and unseeded answers are equal,
+   refuse with `identity-probe-answers-identical`. This runs **before** seeded/unseeded
+   discrimination because identical answers prove the probe cannot distinguish contexts,
+   regardless of whether each answer individually looks valid.
+4. **Seeded leg** — seeded answer must carry `identity` matching `expected_identity`;
+   a seeded `reason` refuses (`identity-probe-seeded-refused`).
+5. **Unseeded leg** — unseeded answer must carry `reason: no-session`
+   (`identity-probe-unseeded-not-no-session` otherwise).
+
+### Per-account harness
+
+`evaluate_slot(slot_accounts, expected_identities, answers)` runs the pair grading across
+a slot's whole account set. The authoritative account list comes from
+`pilot_slot.account_keys(slot_accounts)`; the `expected_identities` and `answers` key sets
+must match that list exactly (`identity-account-set-mismatch`). An empty account set
+refuses (`identity-account-set-empty`).
+
+### Valid-but-wrong-account leg
+
+`evaluate_wrong_account_leg(answer, *, expected_identity, other_identity)` grades the
+free leg under minting: the probe must discriminate when a valid-but-wrong account is
+presented. When `other_identity` equals `expected_identity`, the check is vacuous and
+refuses (`identity-wrong-account-vacuous`). Pass requires `wrong-identity` or an identity
+matching `other_identity`; infrastructure and lapse tokens are inconclusive
+(`identity-wrong-account-inconclusive`).
+
+### Declaration and registry binding
+
+`identity_probe_declaration` binds a receipt to slot reference, generation, policy digest,
+sorted account keys, and a **digest** of the expected identities — never the identity
+strings themselves (they are policy material).
+
+`identity_probe_receipt` assembles the `identity-probe` registry record.
+`require_identity_probe_exercised` calls `require_exercised` for that kind.
+
+A registry record is the durable receipt of an exercise that happened; it is **never**
+a substitute for running the live probe in the current preflight. `is_exercised` carries
+no freshness or launched-instance binding — the declaration binds slot, generation, and
+policy digest.
+
+### Identity-probe refusal tokens
+
+| Token | When returned |
+|---|---|
+| `identity-answer-invalid` | `probe_answer` or answer normalization: both fields set, neither set, empty identity, or malformed dict |
+| `identity-answer-reason-unknown` | `reason` is not one of the ten probe tokens |
+| `identity-expected-missing` | `evaluate_pair`: `expected_identity` missing or empty |
+| `identity-probe-answers-identical` | `evaluate_pair`: normalized seeded and unseeded answers are equal |
+| `identity-probe-seeded-refused` | `evaluate_pair`: seeded answer carries a `reason` instead of identity |
+| `identity-probe-seeded-identity-mismatch` | `evaluate_pair`: seeded identity does not match `expected_identity` |
+| `identity-probe-unseeded-not-no-session` | `evaluate_pair`: unseeded answer is not `no-session` |
+| `identity-probe-not-callable` | `run_pair_exercise`: a probe argument is not callable |
+| `identity-probe-legs-not-distinct` | `run_pair_exercise`: seeded and unseeded callables are the same object |
+| `identity-probe-leg-failed` | `run_pair_exercise` or `lapse_episode`: probe callable raised |
+| `identity-account-set-empty` | `evaluate_slot`: account list from `account_keys` is empty |
+| `identity-account-set-mismatch` | `evaluate_slot`: `expected_identities` or `answers` keys do not match the slot account set |
+| `identity-wrong-account-vacuous` | `evaluate_wrong_account_leg`: `other_identity` equals `expected_identity` |
+| `identity-wrong-account-not-discriminated` | `evaluate_wrong_account_leg`: answer identity equals `expected_identity` |
+| `identity-wrong-account-unexpected-identity` | `evaluate_wrong_account_leg`: answer identity matches neither expected nor other |
+| `identity-wrong-account-inconclusive` | `evaluate_wrong_account_leg`: infrastructure/lapse token or malformed answer |
+| `identity-declaration-slot-invalid` | `identity_probe_declaration`: slot reference does not parse |
+| `identity-declaration-invalid` | `identity_probe_declaration`: policy digest or expected-identities shape invalid |
+| `identity-receipt-argument-invalid` | `identity_probe_receipt`: malformed result, timestamp, or declaration kind absent |
+
+## Mid-wave lapse
+
+When a mid-wave probe returns `no-session`, the framework routes to the lapse path.
+Public API: `lapse_step`, `lapse_episode` in `lib/pilot_identity.py`.
+
+Infrastructure classifications **never** route to lapse — only `no-session` does
+(see [The probe vocabulary](#the-probe-vocabulary)). `lapse_step` classifies via
+`pilot_probe.classify`; infrastructure tokens defer, identity-class tokens refuse.
+
+### Action set
+
+| Action | Meaning |
+|---|---|
+| `continue` | Session is valid; wave proceeds |
+| `reprobe` | First `no-session` within budget — exactly one re-probe allowed |
+| `park` | Confirmed lapse on `captured` sign-in path — slot parks (durable transition is A2a/B5) |
+| `remint` | Confirmed lapse on `minted` sign-in path — caller must re-mint before continuing |
+| `defer` | Infrastructure classification or probe transport failure — not a lapse |
+| `refuse` | Identity-class probe token — not a lapse |
+
+### Re-probe budget
+
+`lapse_episode` **owns** the re-probe budget. A caller-supplied `reprobe_count` on
+`lapse_step` can grade individual steps but cannot confirm a lapse — only
+`lapse_episode` performs the second probe. The budget is exactly one re-probe: first
+`no-session` → `reprobe`; second confirmed `no-session` → `park` (captured) or
+`remint` (minted).
+
+### Captured ⇒ park / minted ⇒ re-mint
+
+After the single re-probe confirms `no-session`:
+
+- **`signInPath: captured`** → `park` with lapse evidence.
+- **`signInPath: minted`** → `remint` action; `continue` is returned **only after** a
+  supplied `remint` callable actually succeeds. If `remint` is absent, not callable,
+  raises, or returns falsy, the episode **parks** (`lapse-remint-unavailable` or
+  `lapse-remint-failed`).
+
+Probe callable failures during the episode defer rather than lapse.
+
+### `lapse_episode` return shape
+
+Every return carries the same keys: `action`, `class`, `reason`, `firstReason`,
+`secondReason`, `probeCalls`, `reminted` (`null` where not applicable).
+
+### Lapse refusal tokens
+
+| Token | When returned |
+|---|---|
+| `lapse-sign-in-path-invalid` | `lapse_step`: `sign_in_path` not in `captured` / `minted` |
+| `lapse-reprobe-budget-invalid` | `lapse_step`: `reprobe_count` not `0` or `1` (bools excluded) |
+| `lapse-probe-not-callable` | `lapse_episode`: probe argument is not callable |
+| `lapse-remint-unavailable` | `lapse_episode`: minted path confirmed lapse but `remint` absent or not callable — episode parks |
+| `lapse-remint-failed` | `lapse_episode`: `remint` raised or returned falsy |
+
+## Credential validity margin
+
+Launch-time comparison: for each account, `deadline + margin ≤ horizon` must hold before
+the wave launches. Public API lives in `lib/pilot_horizon.py`.
+
+**Runtime terminus enforcement is B5's (#827); only the launch-time comparison lives
+here.**
+
+The margin math never takes a bare integer horizon — every comparison uses a
+**provenance-bound observation** constructed by one of:
+
+- `cookie_expiry_observation(storage_state, *, cookie_name)`
+- `token_claim_observation(token, *, claim="exp")`
+- `server_probe_observation(*, expires_at, observed_at)`
+- `unknown_observation()`
+
+`validate_observation` refuses shapes the constructors would not emit.
+
+### The comparison
+
+`account_margin(observation, *, deadline_at, margin_seconds, sign_in_path, attended, ...)`
+computes `required_until = deadline_at + margin_seconds` and requires
+`required_until ≤ expiresAt` for a covered launch.
+
+There is **no minted-path exemption** from `deadline + margin ≤ horizon`. Re-minting is
+recovery after a confirmed mid-wave lapse (see [Mid-wave lapse](#mid-wave-lapse)), not a
+launch gate — a short horizon cannot be waived because the sign-in path is `minted`.
+
+### Decision order
+
+1. **Validate observation shape** — refuse malformed observations before margin math.
+2. **Unknown provenance, unattended** — when `validityProvenance` is `unknown` and
+   `attended` is `false`, refuse (`horizon-unknown-provenance-unattended`). Unknown
+   cannot claim an unattended horizon. When `attended` is `true`, disposition is
+   `attended` (pass).
+3. **Server-probe staleness** — when `server_probe_max_age` is set, refuse if
+   `now - observedAt > server_probe_max_age` (`horizon-server-probe-stale`).
+4. **Server-probe without expiry** — when `expiresAt` is `null`, disposition is
+   `server-probe-recheck` with `requiresMidWaveRecheck: true` (pass at launch; B5
+   re-checks mid-wave).
+5. **Margin comparison** — `required_until ≤ expiresAt` → disposition `covered`; else
+   `horizon-margin-exceeded` with `shortfallSeconds`.
+
+`wave_margin(slot_accounts, accounts, ...)` evaluates every account in the authoritative
+account set from `pilot_slot.account_keys(slot_accounts)`. The `accounts` observation
+mapping must match that set exactly (`horizon-account-set-mismatch`). The wave result
+includes `requiresMidWaveRecheck: true` when **any** account's margin result requires it.
+
+### Epoch seconds
+
+All instants in the margin path are **UTC epoch seconds** (integer). Instants in wire
+format (`YYYY-MM-DDTHH:MM:SSZ`) parse through `parse_instant`, which uses
+`time.strptime` — not `datetime.fromisoformat`, which does not accept a trailing `Z`
+before Python 3.11.
+
+### Horizon refusal tokens
+
+| Token | When returned |
+|---|---|
+| `horizon-instant-invalid` | `parse_instant`: value is not `YYYY-MM-DDTHH:MM:SSZ` |
+| `horizon-storage-state-invalid` | `cookie_expiry_observation`: malformed storage state or cookie entry |
+| `horizon-cookie-name-invalid` | `cookie_name` missing or empty |
+| `horizon-cookie-not-found` | named cookie absent from storage state |
+| `horizon-cookie-ambiguous` | more than one cookie with the same name |
+| `horizon-cookie-session-only` | cookie has no expiry or session-only expiry (`-1`, `0`) |
+| `horizon-token-malformed` | JWT-shaped token cannot be decoded |
+| `horizon-token-claim-missing` | claim (default `exp`) absent from payload |
+| `horizon-token-claim-invalid` | claim value not a finite number with `int(value) >= 1` |
+| `horizon-observation-invalid` | `validate_observation` or constructor input shape invalid |
+| `horizon-sign-in-path-invalid` | `sign_in_path` not in `captured` / `minted` |
+| `horizon-deadline-invalid` | `deadline_at` not a positive integer (bools excluded) |
+| `horizon-margin-invalid` | `margin_seconds` not a strictly positive integer |
+| `horizon-flag-invalid` | `attended` is not a bool |
+| `horizon-now-invalid` | `now` invalid, or required but absent for staleness / past-deadline checks |
+| `horizon-max-age-invalid` | `server_probe_max_age` invalid when provided |
+| `horizon-deadline-in-past` | `deadline_at <= now` when `now` is supplied |
+| `horizon-unknown-provenance-unattended` | `unknown` provenance with `attended: false` |
+| `horizon-server-probe-stale` | server-probe observation older than `server_probe_max_age` |
+| `horizon-margin-exceeded` | `deadline_at + margin_seconds > expiresAt` |
+| `horizon-account-set-empty` | `wave_margin`: accounts mapping empty or absent |
+| `horizon-account-set-mismatch` | `wave_margin`: observation keys do not match the slot account set, or slot account entry missing or empty |
+
+## Minted sign-in exercises
+
+Minted sign-in exercises live in `lib/pilot_mint.py`. Every public path that mints goes
+through A3's `authorized_*` wrappers; this module performs no network I/O — the caller
+injects a transport callable.
+
+A registry record is the durable receipt of an exercise that happened; it is **never**
+a substitute for the live sentinel exercise in the current preflight (see
+[Declare and exercise](#declare-and-exercise) — `is_exercised` carries no freshness or
+launched-instance binding).
+
+### Flag-scope rule
+
+`flag_scope_check(envelope, *, observed_scopes)` returns whether the enabling flag was
+observed only in declared `enabledScopes`. A flag set in any scope **outside**
+`enabledScopes` is disqualifying (`mint-flag-set-outside-declared-scope`). Vacuous or
+malformed `observed_scopes` refuses (`mint-observed-scopes-invalid`).
+
+### Gate-off receipt
+
+`run_gate_off_test` executes `gateOffTestCommand` with the enabling environment variable
+**removed** from the supplied environment. Timeout, oversize output, and spawn failure
+refuse rather than pass.
+
+`gate_off_receipt` binds the registry record to the exact envelope via
+`declaration_digest`. `require_gate_off` calls `require_exercised` for kind
+`mint-gate-off`.
+
+### Live sentinel exercise
+
+`sentinel_exercise` runs a two-leg preflight:
+
+1. **Positive control** — an authorized mint of an allowlisted `control_account` must
+   succeed first. If the control mint fails, the exercise is `inconclusive`
+   (`mint-control-did-not-mint`) — a refusal only discriminates when minting
+   demonstrably works.
+2. **Sentinel probe** — `authorized_sentinel_probe_request` probes the sentinel
+   identifier, which must be absent from the mintable allowlist.
+
+**Unverifiable half:** the framework cannot verify that the sentinel corresponds to no
+real account — only that it is absent from the allowlist
+(`sentinel_probe_request` enforces allowlist absence, not global non-existence).
+
+### Sentinel status table
+
+| HTTP status | Outcome | Notes |
+|---|---|---|
+| 400, 403, 409, 422 | `refused` (pass) | Gate refused as expected |
+| 401 | `inconclusive` | Request was not authenticated — the allowlist may never have been consulted; treating "could not tell" as "refused" fails open (`unauthorized`) |
+| 2xx | `minted` (fail) | `mint-sentinel-minted` — gate did not refuse |
+| 404 | `inconclusive` | Endpoint absent — allowlist was never consulted; treating "could not tell" as "refused" fails open (`mint-sentinel-endpoint-absent`) |
+| 429 | `inconclusive` | `rate-limited` |
+| ≥ 500 | `inconclusive` | `infrastructure-unavailable` |
+| other | `inconclusive` | `mint-sentinel-unexpected-status` |
+| transport error | `inconclusive` | `transport-error` |
+
+### Mint exercise refusal tokens
+
+| Token | When returned |
+|---|---|
+| `mint-envelope-incomplete` | envelope missing required keys, malformed scope fields, or missing/malformed `gateOffTestCommand` |
+| `mint-observed-scopes-invalid` | `flag_scope_check`: `observed_scopes` empty or malformed |
+| `mint-flag-set-outside-declared-scope` | enabling flag observed in a scope outside `enabledScopes` |
+| `mint-gate-off-argument-invalid` | `timeout_seconds` or `max_output_bytes` not a positive integer |
+| `mint-gate-off-cwd-invalid` | `run_cwd` missing or not an existing directory |
+| `mint-gate-off-environment-invalid` | environment not a string-to-string mapping |
+| `mint-gate-off-timeout` | gate-off subprocess exceeded timeout |
+| `mint-gate-off-output-oversize` | gate-off stdout exceeded byte cap |
+| `mint-gate-off-spawn-failed` | gate-off subprocess could not start or stdout read failed |
+| `mint-gate-off-test-failed` | gate-off subprocess exited non-zero |
+| `mint-receipt-argument-invalid` | `gate_off_receipt`: malformed run result or timestamp |
+| `mint-transport-invalid` | `authorized_mint` or `sentinel_exercise`: transport not callable |
+| `mint-control-did-not-mint` | sentinel exercise: control mint leg failed — exercise inconclusive |
+| `mint-sentinel-setup-failed` | sentinel exercise: post-control setup failed — exercise inconclusive but control result preserved |
+| `mint-sentinel-minted` | sentinel leg returned 2xx — gate did not refuse |
+| `mint-sentinel-endpoint-absent` | sentinel leg returned 404 — inconclusive, not refusal |
+| `mint-sentinel-unexpected-status` | sentinel leg returned an unclassified status |
+
+## Reclaim safety
+
+Quarantine-never-delete reclaim, sweep, deletion authorization, journal rotation, and the
+reassignment acceptance probe live in `lib/pilot_reclaim.py` and `lib/pilot_fence.py`.
+
+### On-disk layout
+
+```
+<slots_dir>/
+  <slot>/
+    journal.ndjson
+    journal.<NNNN>.ndjson
+    slot.json
+    .slot.lock
+  .pilot-quarantine/
+    <entryName>/
+      …payload…
+    <entryName>.quarantine.json
+```
+
+The quarantine directory name `.pilot-quarantine` cannot collide with a slot id: `store.SLOT_RE`
+requires a leading `[A-Za-z0-9]`, so no valid slot id begins with `.`.
+
+### Quarantine, never delete
+
+When a stale occupant is reclaimed, its payload directory is **renamed aside** into
+`.pilot-quarantine`, never deleted. A cross-device rename **refuses** (`reclaim-cross-device`)
+rather than degrading to a copy. The sidecar is written **before** the rename: a crash must
+leave an unexplained sidecar rather than an unexplained entry — the same before-and-after
+discipline the provisioning journal uses.
+
+If the rename never happened (cross-device or other `OSError` refusal), the payload remains
+**untouched at `originalPath`** and the pending sidecar is stale. Recovery: the operator
+removes the stale sidecar by hand — the framework will not, by design. The sidecar is loud
+so the operator can distinguish "payload safe at original path, sidecar stale" from a
+completed move.
+
+### The sidecar
+
+```json
+{
+  "schemaVersion": 1,
+  "entryName": "<slot>-gen<generation>-<compact-timestamp>",
+  "originalPath": "/absolute/path/to/payload",
+  "slot": "<slot-id>",
+  "slotRef": "<slot>@<generation>",
+  "generation": 1,
+  "reason": "<reclaim-reason>",
+  "quarantinedAt": "<ISO-8601-UTC-Z>",
+  "expiresAt": "<ISO-8601-UTC-Z>",
+  "move": "pending | moved",
+  "status": "quarantined | deletion-authorized | deleted",
+  "occupant": {
+    "pid": 12345,
+    "processInstance": "inst-abc",
+    "livenessSource": "heartbeat-record | mtime | process-table | lock-probe",
+    "observedAt": "<ISO-8601-UTC-Z>"
+  }
+}
+```
+
+After authorization or deletion, optional fields `terminalReceipt`, `deletionAuthorizedAt`, and
+`deletedAt` may appear.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `schemaVersion` | integer | must be `1` |
+| `entryName` | string | quarantine entry directory name |
+| `originalPath` | string | realpath of the payload before rename |
+| `slot` | string | slot id |
+| `slotRef` | string | `<slot>@<generation>` |
+| `generation` | integer | generation at quarantine time |
+| `reason` | string | caller-supplied reclaim reason (≤ 500 chars) |
+| `quarantinedAt` | string | ISO-8601 UTC timestamp with `Z` suffix |
+| `expiresAt` | string | informational only — **no predicate ever reads it**; grace is always recomputed from `quarantinedAt` |
+| `move` | string | `pending` before rename completes; `moved` after |
+| `status` | string | `quarantined`, `deletion-authorized`, or `deleted` |
+| `occupant` | object | the stale occupant's liveness binding |
+| `terminalReceipt` | object | present after deletion is authorized |
+| `deletionAuthorizedAt` | string | present after deletion is authorized |
+| `deletedAt` | string | present on the tombstone |
+
+### Deletion authorization
+
+`authorize_deletion(sidecar, receipt, *, now)` is a pure check — it touches no filesystem.
+`GRACE_HOURS` is a fixed constant (`72`) with no parameter. The occupant's `livenessSource`
+may be `heartbeat-record`, `mtime`, `process-table`, or `lock-probe`; `mtime` and
+`process-table` are **liveness** sources that can never be terminal.
+
+Authorization requires **all** of the following, checked in this order:
+
+1. Sidecar passes structural validation (`reclaim-sidecar-invalid` otherwise).
+2. `now` is a valid ISO-8601 UTC timestamp (`reclaim-now-invalid` otherwise).
+3. `move` is `moved` (`reclaim-entry-not-moved` otherwise).
+4. `status` is not `deleted` (`reclaim-status-not-deletable` otherwise).
+5. At least `GRACE_HOURS` (72) have elapsed since `quarantinedAt` (`reclaim-grace-not-elapsed`
+   otherwise).
+6. Receipt passes structural validation (`reclaim-receipt-invalid` otherwise).
+7. Receipt `source` is in `TERMINAL_SOURCES` — currently only `process-exit-status`
+   (`reclaim-receipt-source-not-terminal` otherwise).
+8. Receipt `source` differs from the occupant's `livenessSource`
+   (`reclaim-receipt-not-independent` otherwise).
+9. Occupant `pid` and `processInstance` are both non-null (`reclaim-occupant-unbound`
+   otherwise).
+10. Receipt `pid`, `processInstance`, `entryName`, and `slotRef` match the sidecar
+    (`reclaim-receipt-binding-mismatch` otherwise).
+11. Receipt `observedAt` is not before the occupant's `observedAt`
+    (`reclaim-receipt-predates-liveness` otherwise).
+
+Two properties make this fail-closed: an occupant with a null `pid` or `processInstance` can
+**never** be authorized, and there is **no disk-pressure input, no force flag, and no
+free-space read anywhere in the module** — an emergency cleanup path is how a recovery
+mechanism becomes a data-loss mechanism.
+
+### The terminal receipt
+
+```json
+{
+  "schemaVersion": 1,
+  "source": "process-exit-status",
+  "pid": 12345,
+  "processInstance": "inst-abc",
+  "waitStatus": 0,
+  "entryName": "<entryName>",
+  "slotRef": "<slot>@<generation>",
+  "observedAt": "<ISO-8601-UTC-Z>"
+}
+```
+
+The caller mints this **at its real wait/reap seam, immediately after `os.waitpid`/
+`Popen.wait()` returns, and nowhere else**.
+
+The receipt is a **caller attestation minted at the reap seam** — the framework cannot verify
+that the caller actually reaped the process. Its trustworthiness is the caller's responsibility.
+Specifically, a non-blocking `waitpid(..., WNOHANG)` that returns `(0, 0)` means the process
+has **not** exited and must never be turned into a receipt.
+
+### The sweep
+
+`sweep(slots_dir_path, *, now, receipts=None)` runs **on the next acting run, never on a
+timer**. `receipts` is a mapping keyed by `entryName` to terminal receipts.
+
+Each entry in `warned`, `retained`, and `deleted` carries a `kind` discriminator:
+
+- `"entry"` — per-quarantine-entry shapes (`entryName`, `sidecarPath`, `entryPath`, `reason`).
+- `"journal-segments"` — segment-pressure shapes (`slot`, `segmentCount`, `reason`).
+
+Per-entry classification:
+
+- Payload directory without a matching sidecar → warn `reclaim-sidecar-absent`, retain.
+- Unreadable or invalid sidecar → warn with the load reason, retain.
+- Sidecar `entryName` disagrees with its filename → warn `reclaim-sidecar-entry-name-mismatch`, retain.
+- `move` is `pending` and the payload exists → repair sidecar to `moved`, warn, retain.
+- `move` is `pending`, payload absent, but `originalPath` still exists → warn
+  `reclaim-pending-move-not-applied` (payload safe at original path; sidecar stale), retain.
+- `move` is `pending` and the payload is absent with no `originalPath` → warn
+  `reclaim-entry-not-moved`, retain.
+- `status` is `deleted` → retain (tombstone, no warn).
+- `status` is `deletion-authorized` → re-run `authorize_deletion` with the stored receipt;
+  on success resume delete if payload exists, otherwise write tombstone; on refusal retain and warn.
+- Receipt supplied for entry → `authorize_deletion`; on success delete; on refusal retain
+  (warn if grace has elapsed).
+- No receipt → retain; warn `reclaim-grace-not-elapsed` if grace has elapsed.
+
+Symlinked `.pilot-quarantine` refuses in both `quarantine_entry` and `sweep`
+(`reclaim-quarantine-dir-unsafe`). Containment checks and sweep listing are check-then-use guards
+under this project's single-user threat model — they aim at accidents and stale state, not a
+hostile local actor.
+
+Deletion order (three steps):
+
+1. Write durable `deletion-authorized` sidecar with embedded `terminalReceipt`.
+2. Remove the payload directory (`shutil.rmtree`).
+3. Write `deleted` tombstone sidecar.
+
+**The tombstone is retained forever.** An interrupted delete resumes on the next sweep when
+the sidecar is already `deletion-authorized`.
+
+### Journal rotation and retention
+
+`rotate_journal(slots_dir_path, slot, journal_path, *, now, timeout=30.0)` rotates a live
+journal into a retained segment.
+
+**State gate:** rotation is permitted only when the slot record's state is `released` or
+`retired`. `failed` refuses (`reclaim-rotate-slot-failed`) because its journal is what the
+partial-failure report reads. Active states (`provisioning`, `provisioned`, `occupied`) refuse
+(`reclaim-rotate-slot-active`).
+
+**Quiescence:** an unfiltered replay must succeed with no torn tail, no anomalies, and every
+effect in `applied` or `not-applied` state (`reclaim-rotate-not-quiescent` otherwise).
+
+**Threshold:** at least `ROTATE_MIN_RECORDS` (200) non-empty lines in the live journal
+(`reclaim-rotate-below-threshold` when below).
+
+**Segment naming:** `<stem>.<NNNN>.ndjson` where `<stem>` is the live journal basename without
+extension and `<NNNN>` is a zero-padded four-digit (or longer) sequence (`journal.0001.ndjson`,
+`journal.0002.ndjson`, …). **Segments are never deleted.**
+
+Segment-pressure warnings in `sweep` count retained segments for every `*.ndjson` live journal
+found in a slot directory (default `journal.ndjson` and any non-segment sibling such as
+`events.ndjson`), using the same stem-based derivation as `rotate_journal`.
+
+`pilot_journal`'s writers do not hold the slot lock, so the exclusion rotation relies on is
+**contract-level, not lock-level** — no provisioning attempt is live in `released` or
+`retired`. The lock does not exclude writers.
+
+Rotation **does not create a new live journal** — `pilot_journal`'s writer opens with `O_CREAT`
+and recreates the live journal on the next append.
+
+### Reclaim refusal tokens
+
+| Token | When returned |
+|---|---|
+| `reclaim-slots-dir-invalid` | `slots_dir_path` is missing, empty, or not a string |
+| `reclaim-source-invalid` | source path is not an absolute existing directory (symlinks and files refuse) |
+| `reclaim-source-inside-slot-store` | source path is inside, equal to, or an ancestor of the slot store or quarantine |
+| `reclaim-slot-ref-invalid` | `slot_ref` does not parse |
+| `reclaim-reason-invalid` | `reason` is missing, empty, not a string, or exceeds 500 characters |
+| `reclaim-occupant-invalid` | occupant block shape or field values fail validation |
+| `reclaim-now-invalid` | `now` is not a valid ISO-8601 UTC timestamp |
+| `reclaim-entry-exists` | quarantine entry or sidecar path already exists |
+| `reclaim-cross-device` | `os.rename` fails with `EXDEV` |
+| `reclaim-rename-failed` | `os.rename` fails for any other reason |
+| `reclaim-sidecar-write-failed` | sidecar atomic write or parent-directory fsync fails — before any rename (nothing moved); after rename but before `move: moved` update (payload moved, sidecar stale); or during tombstone write after deletion (payload gone, tombstone missing) |
+| `reclaim-sidecar-absent` | sidecar file does not exist |
+| `reclaim-sidecar-unreadable` | sidecar cannot be opened or read as a regular file |
+| `reclaim-sidecar-invalid` | sidecar JSON or structural validation fails |
+| `reclaim-sidecar-status-unbacked` | `status` is `deletion-authorized` or `deleted` but `terminalReceipt` is absent |
+| `reclaim-sidecar-entry-name-mismatch` | sidecar `entryName` disagrees with its filename |
+| `reclaim-quarantine-dir-unsafe` | `.pilot-quarantine` is a symlink or non-directory |
+| `reclaim-pending-move-not-applied` | `move` is `pending`, payload absent from quarantine, but `originalPath` still exists |
+| `reclaim-grace-not-elapsed` | fewer than 72 hours since `quarantinedAt` |
+| `reclaim-receipt-invalid` | receipt shape fails validation, or `receipts` argument to `sweep` is not a mapping |
+| `reclaim-receipt-source-not-terminal` | receipt `source` is not in `TERMINAL_SOURCES` |
+| `reclaim-receipt-not-independent` | receipt `source` equals the occupant's `livenessSource` |
+| `reclaim-occupant-unbound` | occupant `pid` or `processInstance` is null |
+| `reclaim-receipt-binding-mismatch` | receipt `pid`, `processInstance`, `entryName`, or `slotRef` does not match the sidecar |
+| `reclaim-receipt-predates-liveness` | receipt `observedAt` is before the occupant's `observedAt` |
+| `reclaim-entry-not-moved` | sidecar `move` is not `moved` |
+| `reclaim-status-not-deletable` | sidecar `status` is already `deleted` |
+| `reclaim-delete-failed` | `shutil.rmtree` on the payload fails during sweep |
+| `reclaim-quarantine-dir-unreadable` | quarantine directory cannot be listed |
+| `reclaim-journal-segments-high` | a slot has at least `SEGMENT_WARN_COUNT` (20) retained journal segments |
+| `reclaim-slot-invalid` | slot id fails validation |
+| `reclaim-journal-path-invalid` | journal path is missing, not absolute, or is a symlink |
+| `reclaim-journal-outside-slot` | journal path is not contained in the slot directory |
+| `reclaim-journal-absent` | live journal does not exist at rotation time |
+| `reclaim-rotate-slot-unreadable` | slot record cannot be read during rotation |
+| `reclaim-rotate-slot-active` | slot state is `provisioning`, `provisioned`, or `occupied` |
+| `reclaim-rotate-slot-failed` | slot state is `failed` |
+| `reclaim-rotate-not-quiescent` | journal replay is torn, anomalous, or has unsettled effects |
+| `reclaim-rotate-below-threshold` | live journal has fewer than 200 non-empty lines (ok result, `rotated: false`) |
+| `reclaim-rotate-segment-exists` | target segment path already exists |
+| `reclaim-rotate-failed` | `os.rename` of live journal to segment fails |
+| `reclaim-segments-unreadable` | slot directory cannot be listed for segment enumeration |
+
+### The reassignment acceptance probe
+
+`reassignment_probe_result(slot_ref, checks)` grades four reach-check answers:
+
+| Check | Required answer for `trusted` |
+|---|---|
+| `browser` | `unreachable` |
+| `port` | `unreachable` |
+| `worktree` | `unreachable` |
+| `datastore` | `unreachable` |
+
+Three answers: `unreachable`, `reachable`, `indeterminate`. Two verdicts: `trusted` and
+`retire`. **An ungradeable probe is never `trusted`** — any missing check, unknown check name,
+or invalid answer returns `retire`.
+
+The verdict is **generation-bound**: `apply_probe_verdict` compares the carried generation
+against the record's current one inside the mutation via `generation_check`. A `trusted`
+verdict mutates nothing.
+
+**Scope:** this module grades the probe and applies the fail-closed retirement; `failed →
+retired` is an edge that **already exists** in the lifecycle transition table, so this is the
+*reason* to take it, not a new transition — and making a failed slot reusable again is
+deliberately **not built here**.
+
+### Fence refusal tokens
+
+| Token | When returned |
+|---|---|
+| `fence-slot-ref-invalid` | `slot_ref` does not parse |
+| `fence-checks-invalid` | `checks` is not a mapping |
+| `fence-check-unknown` | a check key is not one of the four required checks |
+| `fence-check-missing` | a required check is absent |
+| `fence-answer-invalid` | an answer is not one of the three allowed values |
+| `fence-check-failed` | one or more checks are not `unreachable` (ok result with `verdict: retire`) |
+| `fence-result-invalid` | probe result shape or verdict is invalid |
+| `fence-result-slot-mismatch` | result `slotRef` does not equal the caller's `slot_ref` |
+| `fence-now-invalid` | `now` is not a valid ISO-8601 UTC timestamp |
+| `fence-slots-dir-invalid` | `slots_dir_path` is missing or empty |
+| `fence-verdict-not-applicable` | verdict is `trusted` — no mutation applies |
+
+## Cleanup containment and resurrection
+
+Cleanup containment lives in `lib/pilot_cleanup.py`. It answers whether a project's declared
+cleanup command is safe to run during resurrection — whether it confines its destructive effect
+to the slot's own namespace — and plans the resurrection sequence without executing it.
+
+### Why a receipt at all
+
+A `{namespace}` argument on the cleanup command proves **command shape**, not **effect**. A
+stale, buggy, or branch-modified cleanup can ignore its argument, connect to the wrong datastore,
+or delete by a prefix that reaches sibling namespaces. The containment exercise runs the real
+cleanup against planted sentinels and records what actually happened.
+
+### The exercise lifecycle
+
+The harness mints fresh sentinel ids, probes **absent** everywhere, plants in the slot's
+namespace **and in every other declared slot namespace**, probes **present** everywhere, runs
+the parameterized cleanup, then requires the own sentinel **gone** and every foreign sentinel
+**surviving**. Both directions are checked: an inert cleanup that leaves the own sentinel
+standing fails as loudly as an overreaching one that destroys a foreign sentinel.
+
+**Every** sibling namespace is used, not one arbitrary foreign namespace. With slots `a`, `ab`,
+and `b`, a prefix cleanup of `a*` destroys `ab` while leaving `b` intact — testing against a
+single foreign namespace would pass.
+
+### What the receipt is bound to
+
+A passing receipt binds to:
+
+- the declared cleanup argv (HMAC digest keyed on the policy document),
+- the resolved configuration (sentinel commands, namespace, foreign namespaces, observed
+  datastore identity with provenance and strength, run cwd),
+- **and the cleanup's source state** — the repository HEAD oid plus a content digest of every
+  dirty or untracked path in the cleanup repository (regular files by content, symlinks by link
+  target string, directories and other non-regular entries by path only), plus content digests of
+  the cleanup argv's executable (`argv0`) and of every existing regular file or symlink target in
+  its argv tail (`argvDigests` — relative tail paths resolved against `runCwd`, the same cwd the
+  cleanup command runs under), so an edit to those bound files — committed or not — invalidates
+  the receipt at the same argv. A cleanup that reads a file not named in its argv (a sourced
+  helper, an imported module, a config file) is still not covered by this binding; that
+  limitation is known.
+
+Both digests are **HMAC-SHA256 keyed on a digest of the whole policy document**. An unkeyed
+truncated digest of a low-entropy identity such as a database name would be a dictionary oracle
+recovering the very material the policy keeps out of results.
+
+### What the receipt does not prove
+
+> This receipt is evidence about one execution of one cleanup command. It shows that a stale, buggy, or edited cleanup did not reach a foreign namespace on this run.
+>
+> It is NOT a defense against hostile cleanup code. A cleanup with datastore access can preserve or recreate a sentinel while destroying other foreign data, so a passing receipt does not establish containment against an adversary. Datastore permissions that cannot reach foreign namespaces are the stronger assurance, which is why resolve_containment prefers them.
+
+The receipt is evidence against stale, buggy, and edited cleanup, **not** against hostile
+cleanup code — which is why datastore permissions rank above it.
+
+### The containment resolution ladder
+
+`resolve_containment` returns one of four modes:
+
+| Mode | Requires | Meaning | Refusal remedy |
+|---|---|---|---|
+| `permissions` | `containment.permissions` with `cannotReachForeignNamespaces: true` and non-empty `evidence` | Datastore permissions cannot reach foreign namespaces; no receipt exercise needed | — |
+| `single-slot` | Policy declares exactly one slot | No sibling namespace exists to destroy | — |
+| `receipt` | A passing, fresh `cleanup-containment` receipt for the current policy, block, and source tree | Containment was exercised and passed on this run | — |
+| `refused` | None of the above | Containment cannot be assured | `isolated datastores, or one slot` |
+
+### The trust asymmetry
+
+The cleanup command lives in the branch-mutable `pilot` block and is deliberately **unconfined**
+— it is the thing under test. The sentinel instruments live in the out-of-reach policy and are
+**confined**: owner-owned executable, not group/world-writable, absolute `argv[0]` outside every
+reach root, run cwd outside every reach root. An instrument a branch can edit can forge its own
+verdict.
+
+### Journaling
+
+Both shared effects — the plant and the cleanup — are wrapped in `pilot_journal`
+`namespace-touched` begin/end pairs, so a crash mid-exercise leaves `possibly-applied` rather
+than a silent gap.
+
+### Resurrection
+
+`resurrection_plan` orders: parameterized cleanup → reseed through A1's interface via A3's
+authorization chokepoint → a new generation (**enforced at the broker, C7 — this planner does
+not perform it**) → resume.
+
+**Effects-escape rule:** the declaration has no default; an absent or unexercised declaration
+refuses. Where effects **can** escape the datastore (`effectsEscape.canEscape` is `true`), a
+crashed slot **parks for owner inspection instead of resurrecting** — reseeding cannot un-send
+mail or un-fire a webhook, and replay would duplicate it.
+
+Resurrection actions: `park` (effects can escape), `resurrect` (containment resolved and verdict
+present), `refuse` (declaration unexercised, containment unresolved, or verdict missing).
+
+### Residual sentinels
+
+The harness plants foreign sentinels it cannot remove — there is no remove command, and running
+the project cleanup against a sibling namespace to tidy up would be the exact destruction the
+exercise prevents — so the receipt records them under `residualSentinels` for the advisor. On a
+successful exercise, residual entries name the **foreign** namespaces whose sentinels were
+planted and not removed. On a **plant failure**, an entry may also name the **own** namespace,
+marked `possibly-planted`, meaning the plant may or may not have written before failing. Each
+entry carries the `namespace`, the planted `sentinelId`, and a `state` of `planted` when the plant
+command completed successfully or `possibly-planted` when the plant may or may not have written (a
+mid-command failure or timeout leaves the honest `possibly-planted` state) so the advisor can
+locate and remove residue without guessing which unpredictable id was minted for that namespace.
+
+### Declare-and-exercise binding
+
+`cleanup_containment_exercise_declaration(cleanup, slot)` is the declaration shape for
+`cleanup-containment` registry records and `require_exercised` checks: the cleanup declaration
+plus the slot id, so a receipt exercised for one slot cannot satisfy resurrection for a sibling.
+
+The containment exercise is **not** safe to run concurrently against one datastore for two
+sibling slots: concurrent exercises can interfere through shared sentinel state and degrade to a
+false `cleanup-foreign-sentinel-destroyed` containment failure rather than a false pass.
+
+### Cleanup containment refusal tokens
+
+| Token | When returned |
+|---|---|
+| `cleanup-namespace-invalid` | `namespace_for_slot`, `resolve_cleanup_command`, or `substitute_sentinel_command`: slot id does not validate |
+| `cleanup-command-invalid` | `resolve_cleanup_command` or `substitute_sentinel_command`: command is missing, empty, or contains a non-string or empty argv element |
+| `cleanup-command-unparameterized` | `resolve_cleanup_command` or `substitute_sentinel_command`: `{namespace}` or `{sentinel}` is absent from `command[1:]`, or substitution leaves no namespace/sentinel in the resolved argv |
+| `cleanup-command-argv0-placeholder` | `resolve_cleanup_command` or `substitute_sentinel_command`: `{namespace}` or `{sentinel}` appears in `argv[0]` |
+| `cleanup-command-placeholder-unknown` | `resolve_cleanup_command` or `substitute_sentinel_command`: an unrecognised `{...}` placeholder appears in the command |
+| `cleanup-substitution-empty` | `resolve_cleanup_command` or `substitute_sentinel_command`: placeholder substitution produces an empty argv element |
+| `cleanup-sentinel-undeclared` | `_sentinel_from_policy`: `datastore.containment` is absent or `sentinel` is `null` |
+| `cleanup-sentinel-declaration-invalid` | `_validate_sentinel_declaration`: sentinel shape, env var, or command argv is malformed |
+| `cleanup-sentinel-confinement` | `_validate_sentinel_declaration`: reach roots or run cwd invalid; executable not owner-owned, not mode-safe, not outside reach roots, or run cwd inside reach |
+| `cleanup-sentinel-id-invalid` | `substitute_sentinel_command`: sentinel id does not match the allowed pattern |
+| `cleanup-sentinel-plant-failed` | `plant_sentinel`: plant command exited non-zero or timed out |
+| `cleanup-sentinel-probe-indeterminate` | `probe_sentinel` or `run_bounded`: probe exited with a code other than 0/1, timed out, or subprocess could not be started |
+| `cleanup-source-root-invalid` | `source_identity`: `cleanup_root` is missing or not an existing directory |
+| `cleanup-source-unreadable` | `source_identity`: `git status --porcelain -z` could not be read, or a dirty worktree file could not be hashed |
+| `cleanup-policy-invalid` | `foreign_namespaces`: policy shape or slot membership is invalid |
+| `cleanup-argv0-not-absolute` | `cleanup_effect_receipt`: resolved cleanup `argv[0]` is not an absolute path |
+| `cleanup-receipt-vacuous` | `cleanup_effect_receipt`: sentinel already present before plant, or absent after plant |
+| `cleanup-own-sentinel-survived` | `cleanup_effect_receipt`: own sentinel still present after cleanup |
+| `cleanup-foreign-sentinel-destroyed` | `cleanup_effect_receipt`: a foreign sentinel was destroyed by cleanup |
+| `cleanup-command-failed` | `cleanup_effect_receipt`: cleanup command exited non-zero or timed out |
+| `cleanup-no-foreign-namespace` | `cleanup_effect_receipt`: policy has no sibling slot to contain against |
+| `receipt-schema-invalid` | `receipt_valid_for` or `registry_record`: receipt shape is invalid; or `resolve_containment`: receipt validation prerequisites are missing |
+| `receipt-result-not-pass` | `receipt_valid_for` or `registry_record`: receipt `result` is not `pass` |
+| `receipt-slot-mismatch` | `receipt_valid_for`: receipt `slotRef` does not match |
+| `receipt-stale-command` | `receipt_valid_for`: declared cleanup command changed since the receipt was taken |
+| `receipt-stale-config` | `receipt_valid_for`: resolved configuration or source state changed since the receipt was taken |
+| `containment-undeclared` | `resolve_containment`: no permissions, no single-slot escape, and no receipt supplied |
+| `resurrection-effects-escape-park` | `resurrection_plan`: `effectsEscape.canEscape` is `true` — slot parks for owner inspection |
+| `resurrection-effects-escape-unexercised` | `resurrection_plan`: `effects-escape` declaration has not been exercised |
+| `resurrection-containment-unresolved` | `resurrection_plan`: containment mode is not `permissions`, `receipt`, or `single-slot` |
+| `resurrection-cleanup-containment-unexercised` | `resurrection_plan`: containment mode is `receipt` but `cleanup-containment` declaration is unexercised |
+| `resurrection-verdict-missing` | `resurrection_plan`: no boundary verdict supplied |
+
+Public API in `lib/pilot_cleanup.py`: `namespace_for_slot`, `foreign_namespaces`,
+`resolve_cleanup_command`, `substitute_sentinel_command`, `mint_sentinel_id`, `plant_sentinel`,
+`probe_sentinel`, `cleanup_effect_receipt`, `receipt_valid_for`, `registry_record`,
+`cleanup_containment_exercise_declaration`, `resolve_containment`, `resurrection_plan`.
 
 ## Per-slot browser topology
 

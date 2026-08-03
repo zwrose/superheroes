@@ -15,7 +15,7 @@ import pilot_probe  # noqa: E402
 _BANNED_LITERALS = pilot_probe.ALL_PROBE_REASONS
 _EXEMPT_MODULE = "pilot_probe.py"
 _REQUIRED_BASENAMES = ("engine.py", "store.py")
-_REFUSAL_MODULE_BASENAMES = ("pilot_contract.py", "pilot_seed.py", "pilot_slot.py")
+_REFUSAL_MODULE_BASENAMES = ("pilot_contract.py", "pilot_seed.py", "pilot_slot.py", "pilot_cleanup.py")
 
 
 def _lineno(source_path, node):
