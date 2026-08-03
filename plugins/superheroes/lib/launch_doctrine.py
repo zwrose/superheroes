@@ -37,8 +37,10 @@ RULING_TEXT = {
         "park only genuinely consequential ones."
     ),
     "await-dispatches": (
-        "await every dispatch in-turn; background-and-poll is fine when a dispatch "
-        "cannot fit the foreground cap — the failure is ending a turn with a dispatch unawaited."
+        "await every dispatch in-turn; a long dispatch uses the runner's own detached shape "
+        "(`dispatch-review`/`dispatch-write --max-wait`, re-invoked on the same `--run-dir` "
+        "until its structured result is terminal), never an external `setsid`/`nohup` wrapper "
+        "or an exit-code sentinel — the failure is ending a turn with a dispatch unawaited."
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
 }

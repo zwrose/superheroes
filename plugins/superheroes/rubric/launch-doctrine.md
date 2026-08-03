@@ -20,7 +20,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `base-moved` — if your base merges mid-build, rebase onto main, retarget, and disclose.
 - `no-force-push` — never force-push (it is gated); use a fresh branch if history must move.
 - `design-forks` — design forks inside ratified scope are your call with disclosure; park only genuinely consequential ones.
-- `await-dispatches` — await every dispatch in-turn; background-and-poll is fine when a dispatch cannot fit the foreground cap — the failure is ending a turn with a dispatch unawaited.
+- `await-dispatches` — await every dispatch in-turn; a long dispatch uses the runner's own detached shape (`dispatch-review`/`dispatch-write --max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal), never an external `setsid`/`nohup` wrapper or an exit-code sentinel — the failure is ending a turn with a dispatch unawaited.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
 <!-- launch-doctrine:rulings:end -->
 
@@ -76,12 +76,8 @@ turn; it is not the automatic consequence of detaching.
 This section is the doctrine artifact's home for those rules. The operative copy a builder session
 loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
 §7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
-blocks above. **Limitation:** this section is prose outside the machine-parsed blocks, so it does
-not travel in a composed launch prompt — only the parsed rulings block does — and the
-`await-dispatches` ruling **has not yet been updated** to carry these turn-end and detached-channel
-rules; a launched builder currently receives the older wording. A builder reading this section should
-treat these rules as governing; aligning the ruling line is **open, tracked, and not done by this
-change**.
+blocks above. The `await-dispatches` ruling in the machine-parsed block above carries these rules,
+so a launched builder receives them in its composed prompt.
 
 ## Recovery — taking over a build that stopped
 
