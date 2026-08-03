@@ -731,12 +731,19 @@ def test_e2e_dispatch_abandon_order_and_idempotent(tmp_path, monkeypatch):
     assert second == first
 
 
-# --- 10. Caller death: fresh process re-attaches via originating verb -------
+# --- 10. Caller exit + pgroup kill: engine survives, re-attaches via verb ---
 
 
 @pytest.mark.parametrize("verb", ["dispatch-review", "dispatch-write"])
-def test_e2e_caller_death_originating_verb_reattaches(tmp_path, monkeypatch, verb):
-    """Prove a dead dispatch caller does not orphan the run: re-invoke the verb."""
+def test_e2e_caller_exit_pgroup_kill_engine_survives_reattaches(tmp_path, monkeypatch, verb):
+    """Prove caller exit plus caller process-group destruction leaves the engine alive.
+
+    The caller completes its positive --max-wait slice normally, its process group is
+    then killed, the detached engine survives in its own session, and a fresh process
+    re-attaches via the originating verb until the structured result is terminal.
+
+    Not covered: a caller killed mid-slice (that path holds run.lock up to 1080 s).
+    """
     order_id = "death-reattach-1"
     engine_sleep_s = 30
     max_wait_s = "1"
@@ -779,7 +786,9 @@ def test_e2e_caller_death_originating_verb_reattaches(tmp_path, monkeypatch, ver
     wall_start = time.monotonic()
     proc = subprocess.Popen(
         cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env,
+        start_new_session=True,
     )
+    caller_pgid = os.getpgid(proc.pid)
     try:
         _wait_until(
             time.monotonic() + 15,
@@ -792,22 +801,46 @@ def test_e2e_caller_death_originating_verb_reattaches(tmp_path, monkeypatch, ver
         )
         pgid = _engine_pgid(run_dir)
         assert pgid is not None
-        assert ED._process_group_alive(pgid), "engine must be alive before caller exits"
+        assert ED._process_group_alive(pgid), "engine must become alive for this run"
 
         stdout, _stderr = proc.communicate(timeout=15)
-        assert proc.poll() is not None, "first CLI caller must have exited"
+        assert proc.poll() is not None, "CLI caller must have exited after max-wait slice"
         first = _parse_cli_json(stdout)
         assert first["terminal"] is False
         assert first["reason"] == "running"
 
-        assert proc.poll() is not None, "caller must be dead before re-attach"
-        assert ED._process_group_alive(pgid), "engine must survive caller death"
+        try:
+            os.killpg(caller_pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        assert not ED._process_group_alive(caller_pgid), (
+            "caller's process group must be gone after killpg"
+        )
+        assert ED._process_group_alive(pgid), (
+            "engine must survive destruction of caller's process group"
+        )
 
         terminal = _cli_until_terminal(env, verb, reattach_args, run_dir, timeout=120)
         assert terminal["terminal"] is True
         assert terminal["ok"] is True
+        if verb == "dispatch-review":
+            assert len(terminal.get("findings") or []) == 1
+            assert terminal["findings"][0]["id"] == "f1"
+        else:
+            assert terminal["signal"] == "ok"
+            assert terminal["evidence"]["testPassed"] is True
         assert _count_attempt_started(run_dir) == 1
     finally:
+        if proc.poll() is None:
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
         ED.dispatch_abandon(run_dir)
 
     wall_elapsed = time.monotonic() - wall_start
