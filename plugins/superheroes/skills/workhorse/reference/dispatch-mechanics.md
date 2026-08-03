@@ -11,12 +11,15 @@
 # Dispatch mechanics — long dispatches you own
 
 Read this at dispatch time, before you invoke a long dispatch. **Channel and wait are two choices.**
-A long-running external dispatch the builder invokes directly from a headless session runs in the **detached shape** *and* is
-**polled in-turn** — detaching buys survivability if the session dies; the in-turn poll is still the
-duty. Harness-tracked background-and-poll is **not** the normal path for those dispatches — tracked
-background work dies when the turn ends. The **detach-and-park contract** (files not pipes, stamp and
-completion sentinel before waiting, shell-detach not harness-background, durable park, recovery rules)
-is **only** in the workhorse charter §7 — not restated here. Mechanics by dispatch kind:
+A long-running external dispatch the builder invokes directly from a headless session is **awaited
+in-turn** through the **authorized entrypoint** (`dispatch-review` / `dispatch-write` with
+`--max-wait`, re-invoked on the same `--run-dir` until its structured result is terminal) — never an
+external `setsid`/`nohup` wrapper or an exit-code sentinel. Harness-tracked background-and-poll is
+**not** the normal path for those dispatches — tracked background work dies when the turn ends. The
+**native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
+originating-verb continuation, structured terminal result as the only completion signal,
+`dispatch-poll` observational only, mid-slice-kill lock latency, durable park) is **only** in the
+workhorse charter §7 — not restated here. Mechanics by dispatch kind:
 
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
   Bash timeout. On the Claude host (harness **2.1.219**) that is **ten minutes (600 s) — a
@@ -24,10 +27,12 @@ is **only** in the workhorse charter §7 — not restated here. Mechanics by dis
   `bash_timeout` hook injects 600 s **only when a call omits its own `timeout`** (an explicit one is
   never touched), and the host **converts** a foreground call whose `timeout` exceeds 600 s to
   background — it does **not** clamp-and-kill at 600 s. What kills a converted run is **the turn
-  ending**. Give the dispatch that room by launching it in the **detached shape** and **polling
-  in-turn** — never by trying to raise a foreground timeout or by harness-tracked background-and-poll
-  (tracked background dies when the turn ends). Redirect its output to a **file, never a pipe or `|
-  tail`** — pipes die with the reader and make a stall look like progress. Watch that
+  ending**. Give the dispatch that room by invoking through **`dispatch-review`/`dispatch-write
+  --max-wait`** (≤ 540 s) and **re-invoking the originating verb on the same `--run-dir` until
+  terminal** — never by trying to raise a foreground timeout, by wrapping in `setsid`/`nohup`, or by
+  harness-tracked background-and-poll (tracked background dies when the turn ends). Redirect its
+  output to a **file, never a pipe or `| tail`** — pipes die with the reader and make a stall look
+  like progress. Watch that
   **output/transcript file growing as your primary stall signal**: a growing file is live; use the
   process's **CPU-time column only as corroboration** (an engine CLI can sit at ~0% CPU for minutes
   and still be live, so CPU alone can't separate idle-but-live from stuck). Treat **elapsed time as
