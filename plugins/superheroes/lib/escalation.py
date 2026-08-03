@@ -126,6 +126,13 @@ SAFETY_MACHINERY = (
     "round_driver.py",        # the one-entrypoint loop orchestration (#507)
     "audits.py",              # fix-audit fold decider
     "delta_surface.py",       # delta-surface/shard decider
+    # the two owner-named-risk gates (collector #695 item 55): the guards' own implementation
+    # files must not be editable by the fixer they constrain — an edit here could disable a
+    # halt/refusal guarantee without tripping any pin.
+    "worktree_guard.py",      # worktree-protection gate core (git-discard/forced-removal refusals)
+    "owner_authority.py",     # owner-authority gate core (merge/release/publish refusals)
+    "worktree_guard_gate.py", # PreToolUse hook wrapper that invokes worktree_guard
+    "owner_authority_gate.py",# PreToolUse hook wrapper that invokes owner_authority
 )
 
 

@@ -406,6 +406,19 @@ def test_path_containment_filesystem_root():
     assert pb._is_inside("/private/tmp/example", "/") is True
 
 
+def test_is_outside_all_reach_roots_matches_private_helper(private_tmp):
+    reach_root = os.path.join(private_tmp, "reach")
+    inside = os.path.join(reach_root, "inside")
+    outside = os.path.join(private_tmp, "outside")
+    os.makedirs(inside)
+    os.makedirs(outside)
+    reach_roots = [reach_root]
+    assert pb.is_outside_all_reach_roots(inside, reach_roots) is False
+    assert pb._is_outside_all_reach_roots(inside, reach_roots) is False
+    assert pb.is_outside_all_reach_roots(outside, reach_roots) is True
+    assert pb._is_outside_all_reach_roots(outside, reach_roots) is True
+
+
 # --- G1 empty reach_roots -----------------------------------------------------
 
 def test_observe_datastore_identity_refuses_empty_reach_roots(private_tmp):
