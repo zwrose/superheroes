@@ -20,7 +20,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `base-moved` — if your base merges mid-build, rebase onto main, retarget, and disclose.
 - `no-force-push` — never force-push (it is gated); use a fresh branch if history must move.
 - `design-forks` — design forks inside ratified scope are your call with disclosure; park only genuinely consequential ones.
-- `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await each dispatch in-turn through `dispatch-review`/`dispatch-write --max-wait` (positive, never 0 — a zero slice launches nothing) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
+- `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (positive, never 0 — a zero slice launches nothing) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
 <!-- launch-doctrine:rulings:end -->
 
@@ -77,8 +77,9 @@ This section is the doctrine artifact's home for those rules. The operative copy
 loads — the full mechanism, the detached-shape contract, and the field evidence — is workhorse charter
 §7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
 blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
-the native-shape poll contract, and the park escape, so a launched builder receives them in its
-composed prompt.
+the poll contract for external engine dispatches the builder invokes directly (skill-owned seats
+and native subagents keep their own lifecycle), and the park escape, so a launched builder receives
+them in its composed prompt.
 
 ## Recovery — taking over a build that stopped
 
