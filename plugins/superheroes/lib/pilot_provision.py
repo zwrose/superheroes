@@ -3,7 +3,14 @@
 Ties the pilot framework's target boundary to its policy: runs boundary verification
 (including datastore observation), produces the traveling verdict, and gates every
 credential-producing call behind that verdict.
+
+The declare-and-exercise and datastore-identity gates are in-process ordering chokepoints,
+not sandboxes — launcher, browser, and build session share a UID by design (#660 §14), so
+they prevent ordering mistakes, not a hostile process.
 """
+import time
+from datetime import datetime
+
 import pilot_boundary
 import pilot_contract
 import pilot_policy
@@ -13,6 +20,19 @@ import pilot_slot
 REFUSAL_SLOT_UNKNOWN = "provision-slot-unknown"
 REFUSAL_ACCOUNT_UNKNOWN = "provision-account-unknown"
 REFUSAL_MINT_UNSUPPORTED = "provision-mint-unsupported"
+REFUSAL_DECLARATION_KINDS_UNCOVERED = "provision-declaration-kinds-uncovered"
+REFUSAL_DECLARATION_SOURCE_MISSING = "provision-declaration-source-missing"
+REFUSAL_DATASTORE_IDENTITY_ABSENT = "provision-datastore-identity-absent"
+REFUSAL_DATASTORE_IDENTITY_UNMATCHED = "provision-datastore-identity-unmatched"
+REFUSAL_DATASTORE_IDENTITY_WEAKER_UNACCEPTED = "provision-datastore-identity-weaker-unaccepted"
+REFUSAL_WEAKER_ACCEPTANCE_INVALID = "provision-weaker-acceptance-invalid"
+REFUSAL_DATASTORE_IDENTITY_STRENGTH_UNKNOWN = "provision-datastore-identity-strength-unknown"
+REFUSAL_MINT_DECLARATION_MISSING = "provision-mint-declaration-missing"
+
+STRENGTH_STRONG = "strong"
+STRENGTH_WEAKER = "weaker"
+
+_WEAKER_ACCEPTANCE_KEYS = frozenset({"acceptedBy", "acceptedAt", "reason"})
 
 
 class PilotProvisionError(Exception):
@@ -218,3 +238,239 @@ def authorized_sentinel_probe_request(verdict, policy, slot_ref, sentinel, envel
         allowlist=mintable_accounts,
         envelope=envelope,
     )
+
+
+def _always_applicable(_block, _policy, _slot_ref):
+    return True
+
+
+def _mint_policy_granted(policy, slot_ref):
+    try:
+        slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        return False
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        return False
+    mintable_accounts = slot_config.get("mintableAccounts")
+    return bool(mintable_accounts)
+
+
+def _require_mint_block(block, policy, slot_ref):
+    if _mint_policy_granted(policy, slot_ref) and block.get("mint") is None:
+        raise PilotProvisionError(REFUSAL_MINT_DECLARATION_MISSING)
+
+
+def _mint_applicable(block, policy, slot_ref):
+    # bite-axis: mint applicability — policy-side mintableAccounts grant makes mint kinds
+    # applicable regardless of branch-mutable pilot.mint; block-only trigger is insufficient.
+    return _mint_policy_granted(policy, slot_ref) or block.get("mint") is not None
+
+
+def _extract_identity_probe(block, _policy, _slot_ref):
+    return block["identityProbe"]
+
+
+def _extract_capture_reduction(block, _policy, _slot_ref):
+    return {
+        "captureSurface": block["captureSurface"],
+        "captureOptions": block["captureOptions"],
+    }
+
+
+def _extract_cleanup_containment(block, _policy, _slot_ref):
+    return block["cleanup"]
+
+
+def _extract_effects_escape(block, _policy, _slot_ref):
+    return block["effectsEscape"]
+
+
+def _extract_operating_ceiling(block, _policy, _slot_ref):
+    return {"administrativeMax": block["administrativeMax"]}
+
+
+def _extract_mint_gate_off(block, policy, slot_ref):
+    _require_mint_block(block, policy, slot_ref)
+    return block["mint"]["envelope"]
+
+
+def _extract_mint_account_allowlist(block, policy, slot_ref):
+    _require_mint_block(block, policy, slot_ref)
+    slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    return policy["slots"][slot]["mintableAccounts"]
+
+
+DECLARATION_SOURCES = {
+    "identity-probe": {
+        "extract": _extract_identity_probe,
+        "applicable": _always_applicable,
+    },
+    "capture-reduction": {
+        "extract": _extract_capture_reduction,
+        "applicable": _always_applicable,
+    },
+    "cleanup-containment": {
+        "extract": _extract_cleanup_containment,
+        "applicable": _always_applicable,
+    },
+    "effects-escape": {
+        "extract": _extract_effects_escape,
+        "applicable": _always_applicable,
+    },
+    "operating-ceiling": {
+        "extract": _extract_operating_ceiling,
+        "applicable": _always_applicable,
+    },
+    "mint-gate-off": {
+        "extract": _extract_mint_gate_off,
+        "applicable": _mint_applicable,
+    },
+    "mint-account-allowlist": {
+        "extract": _extract_mint_account_allowlist,
+        "applicable": _mint_applicable,
+    },
+}
+
+
+def _verify_declaration_sources_complete():
+    if set(DECLARATION_SOURCES) != pilot_contract.DECLARATION_KINDS:
+        raise PilotProvisionError(REFUSAL_DECLARATION_KINDS_UNCOVERED)
+
+
+def declaration_for(kind, block, policy, slot_ref):
+    """Return whether a declaration kind applies and its current declaration value."""
+    if kind not in DECLARATION_SOURCES:
+        raise PilotProvisionError(REFUSAL_DECLARATION_KINDS_UNCOVERED)
+    entry = DECLARATION_SOURCES[kind]
+    applicable = entry["applicable"](block, policy, slot_ref)
+    if not applicable:
+        return {"applicable": False, "declaration": None}
+    try:
+        declaration = entry["extract"](block, policy, slot_ref)
+    except (KeyError, TypeError, pilot_slot.PilotSlotError):
+        raise PilotProvisionError(REFUSAL_DECLARATION_SOURCE_MISSING)
+    return {"applicable": True, "declaration": declaration}
+
+
+def require_declarations_exercised(block, policy, slot_ref, registry):
+    """Require every applicable declaration kind to be exercised in the registry."""
+    # bite-axis: declare-and-exercise completeness — every DECLARATION_KINDS member must have a
+    # DECLARATION_SOURCES entry; divergence refuses provision-declaration-kinds-uncovered.
+    _verify_declaration_sources_complete()
+    declarations = []
+    for kind in sorted(DECLARATION_SOURCES):
+        info = declaration_for(kind, block, policy, slot_ref)
+        if not info["applicable"]:
+            declarations.append({"kind": kind, "status": "not-applicable"})
+            continue
+        pilot_contract.require_exercised(registry, kind, info["declaration"])
+        declarations.append({"kind": kind, "status": "exercised"})
+    return declarations
+
+
+def _is_iso8601_utc(value):
+    if not isinstance(value, str) or not value:
+        return False
+    text = value.strip()
+    if not text.endswith("Z"):
+        return False
+    try:
+        dt = datetime.fromisoformat(text[:-1] + "+00:00")
+    except ValueError:
+        return False
+    return dt.tzinfo is not None
+
+
+def _validate_weaker_acceptance(record):
+    if not isinstance(record, dict):
+        raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
+    if set(record.keys()) != _WEAKER_ACCEPTANCE_KEYS:
+        raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
+    accepted_by = record.get("acceptedBy")
+    if not isinstance(accepted_by, str) or not accepted_by:
+        raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
+    accepted_at = record.get("acceptedAt")
+    if not _is_iso8601_utc(accepted_at):
+        raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
+    reason = record.get("reason")
+    if not isinstance(reason, str) or not reason:
+        raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
+    return {
+        "acceptedBy": accepted_by,
+        "acceptedAt": accepted_at,
+        "reason": reason,
+    }
+
+
+def gate_datastore_identity(verdict, *, weaker_acceptance=None):
+    """Gate provisioning on datastore identity strength and weaker acceptance.
+
+    This is an in-process ordering chokepoint, not a sandbox — launcher, browser, and build
+    session share a UID by design (#660 §14), so it prevents ordering mistakes, not a hostile
+    process.
+    """
+    # bite-axis: datastore identity strength — weaker strength refuses unless a valid acceptance
+    # record is supplied; absent or invalid identity refuses before provisioning proceeds.
+    identity = verdict.get("datastoreIdentity") if isinstance(verdict, dict) else None
+    if not isinstance(identity, dict):
+        raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_ABSENT)
+    provenance = identity.get("provenance")
+    strength = identity.get("strength")
+    match = identity.get("match")
+    if not isinstance(provenance, str) or not provenance:
+        raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_ABSENT)
+    if not isinstance(strength, str) or not strength:
+        raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_ABSENT)
+    if type(match) is not bool:
+        raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_ABSENT)
+    if match is not True:
+        raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_UNMATCHED)
+    if strength == STRENGTH_STRONG:
+        return {
+            "ok": True,
+            "reason": None,
+            "strength": strength,
+            "provenance": provenance,
+            "acceptance": None,
+        }
+    if strength == STRENGTH_WEAKER:
+        if weaker_acceptance is None:
+            raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_WEAKER_UNACCEPTED)
+        acceptance = _validate_weaker_acceptance(weaker_acceptance)
+        return {
+            "ok": True,
+            "reason": None,
+            "strength": strength,
+            "provenance": provenance,
+            "acceptance": acceptance,
+        }
+    raise PilotProvisionError(REFUSAL_DATASTORE_IDENTITY_STRENGTH_UNKNOWN)
+
+
+def gate_provisioning(verdict, policy, slot_ref, block, registry, *, weaker_acceptance=None):
+    """Compose boundary authorization, identity strength, and declare-and-exercise gates."""
+    # bite-axis: provisioning composition — authorize_credentials must run before identity and
+    # declaration gates; assert_results_only refuses policy material in the receipt.
+    pilot_boundary.authorize_credentials(verdict, slot_ref, policy_digest(policy))
+    identity_gate = gate_datastore_identity(verdict, weaker_acceptance=weaker_acceptance)
+    declarations = require_declarations_exercised(block, policy, slot_ref, registry)
+    slot, generation = pilot_slot.parse_slot_ref(slot_ref)
+    canonical_slot_ref = pilot_slot.format_slot_ref(slot, generation)
+    receipt = {
+        "slotRef": canonical_slot_ref,
+        "policyDigest": policy_digest(policy),
+        "datastoreIdentity": {
+            "provenance": identity_gate["provenance"],
+            "strength": identity_gate["strength"],
+            "match": True,
+        },
+        "weakerAcceptance": identity_gate["acceptance"],
+        "declarations": declarations,
+        "gatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    }
+    pilot_policy.assert_results_only(
+        receipt,
+        pilot_policy.policy_material(policy),
+    )
+    return receipt

@@ -22,6 +22,9 @@
 20. [Credential validity margin](#credential-validity-margin)
 21. [Minted sign-in exercises](#minted-sign-in-exercises)
 22. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
+23. [Per-slot browser topology](#per-slot-browser-topology)
+24. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
+25. [The provisioning gate](#the-provisioning-gate)
 
 ---
 
@@ -819,6 +822,8 @@ success reports a shared effect as never having happened.
 | `credential-seeded` | `shared` |
 | `namespace-touched` | `shared` |
 | `project-declared` | `shared` |
+| `browser-server-provisioned` | `slot` |
+| `browser-server-torn-down` | `slot` |
 
 `project-declared` is the **one** project hook ("what did setup touch") and is `shared`
 because the framework cannot classify what the project names — fail closed.
@@ -1779,3 +1784,277 @@ Public API in `lib/pilot_cleanup.py`: `namespace_for_slot`, `foreign_namespaces`
 `resolve_cleanup_command`, `substitute_sentinel_command`, `mint_sentinel_id`, `plant_sentinel`,
 `probe_sentinel`, `cleanup_effect_receipt`, `receipt_valid_for`, `registry_record`,
 `cleanup_containment_exercise_declaration`, `resolve_containment`, `resurrection_plan`.
+
+## Per-slot browser topology
+
+Each slot gets its own browser and its own automation server, never shared between slots.
+Within a slot, one browser context per account. The server and its socket directory are created
+fresh per generation and the previous ones torn down. **The browser is the server's child**,
+so tearing down the server takes the browser with it.
+
+Two ruled-out arrangements are refused in code:
+
+- **Tabs sharing one context** — `plan_topology` refuses when the same account appears more
+  than once in the account list (`browser-shared-context-refused`); `context_set` refuses when
+  two accounts would share the same context identity.
+- **One browser or server spanning more than one slot** — `admit_server_registry` refuses when
+  a server PID or browser PID is registered under more than one slot, or when more than one
+  server record exists for the same slot.
+
+### The Playwright pin
+
+The framework **never installs** an automation runtime — `verify_pin` observes and compares
+only. The pin shape is `schemaVersion` (integer `1`), `version` (non-empty string without
+control characters), and `integrityDigest` (64-character lowercase hex). Before spawn,
+`verify_pin` validates the observer the way `pilot_boundary` hardens datastore observers:
+the executable must be an **absolute path** to a regular file **owned by the reading process**
+with mode that grants neither group- nor world-write, resolved **outside every reach root**;
+`run_cwd` must be an existing directory outside every reach root; and every absolute command
+argument, and every relative argument resolved against `run_cwd`, must lie outside every reach
+root. `reach_roots` is a required argument — omitting it or supplying an empty or invalid list
+refuses (`browser-pin-observer-unsafe`) rather than spawning. Branch-controlled code must not
+be able to supply the executable that vouches for the pin. The child receives
+a **minimal environment** — only `PATH` is carried from the ambient environment, nothing else.
+The observer contract requires one clean line of stdout in the form `<version> <digest>`, from
+a bounded subprocess with stderr discarded; a subprocess that cannot spawn, or anything else
+(non-zero exit, timeout, oversized output, invalid UTF-8, multi-line stdout, control characters,
+or wrong token count), refuses (`browser-pin-observer-failed`) rather than raising.
+
+### The socket directory
+
+A unix socket path is capped by `sun_path` — 104 bytes on Darwin, 108 on Linux (the values in
+`SUN_PATH_MAX`). The framework **measures the worst-case full path and refuses before launch**
+(`socket_dir_plan`), and an unrecognised platform uses the **smallest** cap. The base directory
+defaults to a short path under the system temp directory — never derived from the checkout —
+and is never inside the worktree (`browser-socket-base-in-worktree` when `worktree_root` overlaps
+the base). Checkout-independent base selection keeps the measured worst-case path independent of
+where the repository lives. When the caller omits `worktree_root`, `socket_dir_plan` resolves the
+calling process's repository root from `os.getcwd()` itself (`browser-worktree-root-unresolved`
+when that resolution fails). Field evidence this closes: deep worktree paths break automation
+socket tooling.
+
+`remove_socket_dir` refuses **before deleting anything** when the path's basename does not carry
+the framework's socket-directory prefix (`pb-`; `browser-socket-dir-unrecognized`). Removal is
+still guarded by "is a directory, not a symlink" on an already-planned path.
+
+### Teardown requires an observed terminal state
+
+`teardown_server` never infers process exit from the socket file's absence — that is a second
+read of the same liveness marker the design refuses for terminal states. The caller supplies an
+`observe_exit` callback; teardown proceeds only when it reports `exited: true` for **both** the
+server PID and the browser PID. A genuinely unobserved exit refuses (`browser-terminal-state-unobserved`);
+an observer that reports a process exited but cannot supply an exit status is **accepted** — the
+receipt records the status as absent. This matters because the browser is the server's child by
+design, so a launcher legitimately has no exit status for it. A reparented or surviving browser
+would otherwise hold a live authenticated session while teardown reported success — so both
+processes must be observed exited. The teardown receipt carries both exit statuses
+(`observedServerExitStatus`, `observedBrowserExitStatus`); either may be absent.
+
+When socket-directory removal fails after having already removed entries, teardown records the
+journal effect as **possibly-applied** (`indeterminate`), not `not-applied`, because the
+journal's `not-applied` means *proved* not applied — partial cleanup is not proof of
+non-application.
+
+### Broker admission
+
+Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception.
+
+Every browser instruction travels through the per-generation server, which is why admission is
+where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
+reads the slot's on-disk lifecycle record for the authoritative generation — it does not trust
+the caller's server record for "current". An unusable `slots_dir` — omitted, not a non-empty
+string, or not an existing directory — refuses (`browser-fencing-slots-dir-required`) rather than
+raising. A server record whose `generation` disagrees with the slot store refuses
+(`browser-server-record-stale`) before comparing the operation's generation. Fencing also reads
+the slot's on-disk lifecycle **state**: only `provisioned` and `occupied` may serve browser
+operations; `provisioning`, `released`, `failed`, and `retired` refuse
+(`browser-slot-state-not-live`). The state check matters because `released`, `failed`, and
+`retired` slots keep the **same** generation number — a generation-only fence would still admit a
+slot that is no longer live. Generation comparison then delegates to
+`pilot_lifecycle.generation_check`, propagating its tokens (`slot-generation-stale`,
+`slot-generation-ahead`) rather than re-deriving them. Cross-reference the declared seam **S1**
+(generation numbering defined in A2a / #823, enforced here).
+
+### Provisioning journal shape
+
+The primary provisioning shape journals **before** processes exist: `begin_provision_server`
+writes the journal `begin` record and returns an `effectId`; the caller spawns the server and
+browser, then `provision_server` closes that effect with `outcome: applied` via the supplied
+`effect_id`. A crash between spawning and recording must replay as *possibly-applied*, never as
+never-happened (#660 §7). The legacy `effect()` wrapper inside `provision_server` (when
+`effect_id` is omitted) remains for callers that journal and spawn in one step.
+
+Public API in `lib/pilot_browser.py`: `validate_pin`, `verify_pin`, `socket_dir_plan`,
+`create_socket_dir`, `remove_socket_dir`, `assert_browser_is_server_child`,
+`begin_provision_server`, `provision_server`, `teardown_server`, `plan_topology`,
+`admit_server_registry`, `admit`.
+
+### Known limitations
+
+These are recorded contract facts, not oversights pending silent fix:
+
+- **`provision_server`'s legacy non-pre-spawn path still exists.** A caller that omits the
+  pre-spawn `effect_id` gets the old journal-after-the-fact ordering, which cannot record a crash
+  between spawning and recording. The pre-spawn path (`begin_provision_server` then
+  `provision_server` with `effect_id`) is the documented one; whether the legacy path should be
+  removed is an open API-shape question.
+- **Socket-base worktree containment resolves the calling process's repository, not the slot's
+  worktree.** Per-slot worktrees are a framework concept C7 does not own; binding the
+  containment check to the slot's tree belongs with the sub-issues that own slot worktrees
+  (B5/C8). As shipped, the check confines the base relative to the running process's repo.
+
+### Browser topology refusal tokens
+
+| Token | When returned |
+|---|---|
+| `browser-pin-invalid` | `validate_pin`: pin is not a dict with exactly `schemaVersion`, `version`, and `integrityDigest`; `schemaVersion` is not `1`; `version` is empty or contains whitespace/control characters; `integrityDigest` is not a 64-character lowercase hex string |
+| `browser-pin-observer-invalid` | `_validate_observer` or `verify_pin`: observer is not a dict with exactly a non-empty `command` list of non-empty strings; `run_cwd` is not a string path; `timeout_seconds` or `max_output_bytes` has wrong type |
+| `browser-pin-observer-unsafe` | `_validate_observer_safety` or `verify_pin`: `reach_roots` is omitted, empty, or invalid; `run_cwd` is not an existing directory or overlaps a reach root; observer executable is not an absolute path, cannot be stat'd, is not a regular file, owner UID does not match the reading process, mode grants group- or world-write, or overlaps a reach root; or any command argument resolves inside a reach root |
+| `browser-pin-observer-failed` | `verify_pin`: subprocess spawn failure, timeout, oversized output, non-zero exit, invalid UTF-8, empty/multi-line/control-character stdout, or stdout not exactly two space-separated tokens |
+| `browser-pin-version-mismatch` | `verify_pin`: observed version does not match the pin's `version` |
+| `browser-pin-integrity-mismatch` | `verify_pin`: observed digest does not match the pin's `integrityDigest` |
+| `browser-socket-path-too-long` | `socket_dir_plan`: worst-case socket path exceeds the platform `SUN_PATH_MAX` cap, or `launch_token` is present but not a non-empty string |
+| `browser-socket-base-in-worktree` | `socket_dir_plan`: `worktree_root` is not a string, or the resolved base directory overlaps the worktree |
+| `browser-worktree-root-unresolved` | `socket_dir_plan`: `worktree_root` is supplied but not a valid path string, or omitted and `store_core.repo_root(os.getcwd())` for the calling process fails |
+| `browser-socket-dir-exists` | `create_socket_dir`: the planned path already exists |
+| `browser-socket-dir-unsafe` | `create_socket_dir`: plan is invalid, path is a symlink, created path is not a directory, mode is wrong, or `os.makedirs`/`stat` fails; `remove_socket_dir`: path is a symlink |
+| `browser-socket-dir-not-directory` | `remove_socket_dir`: path is not a string or not a directory |
+| `browser-socket-dir-unrecognized` | `remove_socket_dir`: path basename does not start with the framework socket-directory prefix (`pb-`), checked before any entries are removed |
+| `browser-socket-dir-unremovable` | `remove_socket_dir`: directory contents cannot be enumerated; an entry cannot be classified or removed safely (including a non-empty subdirectory); or removing the now-empty directory fails |
+| `browser-server-record-invalid` | `provision_server`, `teardown_server`, `admit_server_registry`, or `admit`: server record shape, slot reference, generation, PIDs, pin, or timestamps fail validation; journal write fails |
+| `browser-not-server-child` | `assert_browser_is_server_child`: browser PID's parent is not the server PID |
+| `browser-pid-unreadable` | `assert_browser_is_server_child`: parent PID cannot be read from the process table |
+| `browser-terminal-state-unobserved` | `teardown_server`: `observe_exit` does not return a dict with `exited: true` for the server PID or for the browser PID (a dict with `exited: true` and absent `status` is accepted) |
+| `browser-shared-context-refused` | `plan_topology`: duplicate account in the account list; `context_set`: two accounts would share the same context identity |
+| `browser-server-shared-across-slots-refused` | `admit_server_registry`: the same server PID appears under more than one slot |
+| `browser-shared-across-slots-refused` | `admit_server_registry`: the same browser PID appears under more than one slot |
+| `browser-multiple-servers-for-slot` | `admit_server_registry`: more than one server record exists for the same slot |
+| `browser-fencing-slots-dir-required` | `admit`: `slots_dir` is omitted, not a non-empty string, or not an existing directory |
+| `browser-server-record-stale` | `admit`: on-disk slot lifecycle record cannot be read, or the live server record's `generation` disagrees with the slot store's authoritative generation |
+| `browser-slot-state-not-live` | `admit`: on-disk slot lifecycle state is not `provisioned` or `occupied` |
+| `browser-operation-slot-ref-invalid` | `socket_dir_plan`, `provision_server`, `plan_topology`, or `admit`: operation slot reference does not parse |
+| `browser-operation-slot-mismatch` | `admit`: operation slot id does not match the live record's slot |
+
+## Browser context creation and seed injection
+
+This is the declared seam **S3**'s context-side half: the interface and artifact-integrity
+contract are A1's (#822), the artifacts come from B4 (capture) and B6 (mint client), and
+**context-side injection is C7's** because C7 owns context creation and the capture options.
+
+**No credential is seeded before provisioning gates have run.** `context_spec` refuses to build
+a context spec without a valid `gate_provisioning` receipt whose `slotRef` matches the caller's
+slot reference — boundary authorization, declare-and-exercise, and datastore-identity gates must
+have completed first. The receipt check is not shape-only: it requires a non-empty `declarations`
+list whose entries carry `kind` and `status`, a `datastoreIdentity` carrying `provenance`,
+`strength`, and `match` with `match` true, a non-empty `policyDigest`, and it refuses an
+unparseable caller `slot_ref` rather than allowing it. The receipt is the evidence that the
+boundary, declare-and-exercise, and datastore-identity gates ran — a gate that accepted a
+hand-made dict would not be checking anything. This is the ordering guarantee the design rests
+on; the receipt is checked before `seed_request` runs.
+
+A project declares which surface holds its login session, and **the framework requires the
+matching capture options** — `indexedDB: true` for an IndexedDB-held session, `credentials: true`
+for WebAuthn. A capture missing the options its declared surfaces require **refuses here**. The
+match must be **exact in both directions**: an option set that the declared surfaces do not
+require also refuses, because an unrequired `credentials: true` installs a virtual authenticator
+that displaces real ones.
+
+**Verify-at-seed happens at context creation**, not earlier and not in the caller — the
+artifact's integrity is checked as the context is built, and the spec carries the artifact's
+verified path and hash, never its contents.
+
+One context per account; `sessionStorage` never reaches a context spec (D7).
+
+Public API in `lib/pilot_context.py`: `context_set`, `context_spec`.
+
+### Context refusal tokens
+
+| Token | When returned |
+|---|---|
+| `context-provisioning-receipt-missing` | `context_spec`: `provisioning_receipt` is `None` |
+| `context-provisioning-receipt-invalid` | `context_spec`: receipt is not a dict, is missing a required key (`slotRef`, `policyDigest`, `datastoreIdentity`, `declarations`), any required value is `None` or wrong type, `declarations` is empty or an entry lacks `kind` or `status`, `datastoreIdentity` lacks non-empty `provenance`/`strength` or `match` is not `true`, or `policyDigest` is empty |
+| `context-provisioning-receipt-slot-mismatch` | `context_spec`: receipt `slotRef` does not equal the canonical slot reference for the caller's `slot_ref` |
+| `context-options-mismatch` | `context_spec`: `requested_options` is supplied and does not exactly equal `required_context_options(capture_surfaces)` |
+| `context-artifact-missing` | `context_set`: `artifacts` is not a dict, or a required account has no artifact entry |
+| `context-artifact-unknown-account` | `context_set`: `artifacts` contains an account not in the slot's account set |
+| `context-shared-context-refused` | `context_set`: two accounts would share the same context identity |
+
+**Propagated verbatim from `pilot_seed`:** this module does not re-wrap `seed-*` or `artifact-*`
+tokens — `context_spec` propagates them from `required_context_options` and `seed_request`
+unchanged (`seed-capture-surfaces-invalid`, `seed-capture-surfaces-empty`,
+`seed-capture-surface-duplicate`, `seed-capture-surface-session-storage-refused`,
+`seed-capture-surface-unknown`, `seed-slot-ref-invalid`, `seed-account-invalid`,
+`seed-context-options-invalid`, `seed-verify-argument-invalid`, `artifact-path-traversal`,
+`artifact-symlink-in-path`, `artifact-missing`, `artifact-not-regular-file`,
+`artifact-owner-mismatch`, `artifact-mode-mismatch`, `artifact-hash-mismatch`,
+`artifact-unreadable`). Propagation is deliberate so a caller can distinguish "your declared
+surfaces are wrong" from "your options do not match your surfaces."
+
+## The provisioning gate
+
+### Declare and exercise, live
+
+A1 shipped the registry's shape and predicates without a live enforcement point on purpose —
+wiring it into the in-repo path would put policy back inside the builder's reach. The live gate
+is here. A declaration that has never been exercised is **absent**, and absent **refuses**.
+
+| kind | declaration source | applicable when |
+|---|---|---|
+| `identity-probe` | `pilot.identityProbe` | always |
+| `capture-reduction` | `pilot.captureSurface` + `pilot.captureOptions` | always |
+| `cleanup-containment` | `pilot.cleanup` | always |
+| `effects-escape` | `pilot.effectsEscape` | always |
+| `operating-ceiling` | `pilot.administrativeMax` | always |
+| `mint-gate-off` | `pilot.mint.envelope` | slot policy grants `mintableAccounts`, or `pilot.mint` is present |
+| `mint-account-allowlist` | policy slot's `mintableAccounts` | slot policy grants `mintableAccounts`, or `pilot.mint` is present |
+
+Two load-bearing facts: **mint applicability is policy-side** — a slot whose policy grants
+`mintableAccounts` makes both mint kinds applicable regardless of whether the branch-mutable
+`pilot.mint` block declares mint; a policy grant with no block declaration to exercise now
+refuses (`provision-mint-declaration-missing`) rather than skipping. A captured-sign-in project
+with no policy mint grant legitimately has no mint declaration, and its mint kinds are recorded
+`not-applicable`, not failed — and **`mint-account-allowlist` is sourced from the policy, never
+the block**, because an inline allowlist is refused precisely to keep it outside branch-mutable
+reach. Letting the block alone decide applicability would let a builder skip the mint gates by
+deleting a config key.
+
+Mapping **completeness is enforced**: a `DECLARATION_KINDS` member with no
+`DECLARATION_SOURCES` entry refuses (`provision-declaration-kinds-uncovered`), so a new
+declaration kind cannot silently miss the gate.
+
+### The datastore-identity strength gate
+
+A3 records `strength` explicitly rather than refusing, because the design supports
+app-reported identity where the datastore is not directly reachable — it just requires the
+weaker guarantee to be carried explicitly rather than silently. The `strong` / `weaker`
+vocabulary is not single-homed: `pilot_boundary` emits the literals on observations and
+verdicts; `pilot_provision` carries matching `STRENGTH_*` constants for the gate, and a drift
+test guards the pair. So C7 **refuses `weaker` by default** and proceeds only on an explicit
+**acceptance record** (`acceptedBy`, `acceptedAt`, `reason`) supplied at the provisioning call,
+which runs in the advisor and never reaches the builder. It is deliberately a record, not a
+boolean, so it cannot be dropped silently and the advisor's launch ledger (sub-issue C8 / #830)
+can surface it to the owner.
+
+A passing boundary verdict **may still carry a null `datastoreIdentity`** — the mandatory-check
+set constrains check *names* only — which is why absent identity is a real refusal here rather
+than a formality.
+
+This is an **in-process chokepoint, not a sandbox**: the launcher, browser, and build session
+share a UID by design (#660 §14). It prevents ordering mistakes, not a hostile process in
+another address space.
+
+Public API in `lib/pilot_provision.py`: `declaration_for`, `require_declarations_exercised`,
+`gate_datastore_identity`, `gate_provisioning`.
+
+### Provisioning gate refusal tokens
+
+| Token | When returned |
+|---|---|
+| `provision-declaration-kinds-uncovered` | `declaration_for` or `require_declarations_exercised`: `kind` is not in `DECLARATION_SOURCES`, or `DECLARATION_SOURCES` does not cover every `DECLARATION_KINDS` member |
+| `provision-declaration-source-missing` | `declaration_for`: applicable kind's extractor raises `KeyError`, `TypeError`, or `PilotSlotError` |
+| `provision-datastore-identity-absent` | `gate_datastore_identity`: verdict has no `datastoreIdentity` dict, or provenance/strength is missing or empty, or `match` is not a boolean |
+| `provision-datastore-identity-unmatched` | `gate_datastore_identity`: `match` is not `true` |
+| `provision-datastore-identity-weaker-unaccepted` | `gate_datastore_identity`: strength is `weaker` and no `weaker_acceptance` record is supplied |
+| `provision-weaker-acceptance-invalid` | `gate_datastore_identity`: `weaker_acceptance` is not a dict with exactly `acceptedBy`, `acceptedAt`, and `reason` as non-empty strings, with `acceptedAt` in ISO-8601 UTC `Z` form |
+| `provision-datastore-identity-strength-unknown` | `gate_datastore_identity`: strength is neither `strong` nor `weaker` |
+| `provision-mint-declaration-missing` | `declaration_for` for a mint kind: slot policy grants `mintableAccounts` but `pilot.mint` is absent from the block |
