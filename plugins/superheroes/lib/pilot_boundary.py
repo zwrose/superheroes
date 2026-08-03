@@ -386,6 +386,11 @@ def _is_outside_all_reach_roots(path, reach_roots):
     return True
 
 
+def is_outside_all_reach_roots(path, reach_roots):
+    """Public: True when ``path`` resolves outside every reach root."""
+    return _is_outside_all_reach_roots(path, reach_roots)
+
+
 def _validate_observer(observer, connection_detail, reach_roots, run_cwd):
     # bite-axis: observer confinement — observer executable, run cwd, and reachable command
     # paths must lie outside all reach roots; violation raises REFUSAL_DATASTORE_OBSERVER_INVALID.

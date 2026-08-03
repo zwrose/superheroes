@@ -29,6 +29,8 @@ KIND_CREDENTIAL_MINTED = "credential-minted"
 KIND_CREDENTIAL_SEEDED = "credential-seeded"
 KIND_NAMESPACE_TOUCHED = "namespace-touched"
 KIND_PROJECT_DECLARED = "project-declared"
+KIND_BROWSER_SERVER_PROVISIONED = "browser-server-provisioned"
+KIND_BROWSER_SERVER_TORN_DOWN = "browser-server-torn-down"
 EFFECT_KINDS = frozenset({
     KIND_WORKTREE_CREATED,
     KIND_APP_STARTED,
@@ -36,6 +38,8 @@ EFFECT_KINDS = frozenset({
     KIND_CREDENTIAL_SEEDED,
     KIND_NAMESPACE_TOUCHED,
     KIND_PROJECT_DECLARED,
+    KIND_BROWSER_SERVER_PROVISIONED,
+    KIND_BROWSER_SERVER_TORN_DOWN,
 })
 
 KIND_UNKNOWN = "unknown"
@@ -49,6 +53,8 @@ EFFECT_SCOPE = {
     KIND_CREDENTIAL_SEEDED: SCOPE_SHARED,
     KIND_NAMESPACE_TOUCHED: SCOPE_SHARED,
     KIND_PROJECT_DECLARED: SCOPE_SHARED,
+    KIND_BROWSER_SERVER_PROVISIONED: SCOPE_SLOT,
+    KIND_BROWSER_SERVER_TORN_DOWN: SCOPE_SLOT,
 }
 
 OUTCOME_APPLIED = "applied"
@@ -411,6 +417,12 @@ class _EffectHandle:
 
     def mark_not_applied(self, *, at, reason=None):
         self._outcome = OUTCOME_NOT_APPLIED
+        self._end_at = at
+        self._end_reason = reason
+        self._marked = True
+
+    def mark_indeterminate(self, *, at, reason=None):
+        self._outcome = OUTCOME_INDETERMINATE
         self._end_at = at
         self._end_reason = reason
         self._marked = True
