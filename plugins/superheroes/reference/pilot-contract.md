@@ -1673,12 +1673,24 @@ A passing receipt binds to:
 - **and the cleanup's source state** — the repository HEAD oid plus a content digest of every
   dirty or untracked path in the cleanup repository (regular files by content, symlinks by link
   target string, directories and other non-regular entries by path only), plus content digests of
-  the cleanup argv's executable (`argv0`) and of every existing regular file or symlink target in
-  its argv tail (`argvDigests` — relative tail paths resolved against `runCwd`, the same cwd the
-  cleanup command runs under), so an edit to those bound files — committed or not — invalidates
-  the receipt at the same argv. A cleanup that reads a file not named in its argv (a sourced
-  helper, an imported module, a config file) is still not covered by this binding; that
-  limitation is known.
+  the cleanup argv's executable (`argv0Digest`) and of every argv-tail element that exists as a
+  regular file or as a symlink to a regular file (`argvDigests` — every tail element is probed as
+  a path with no leading-dash exemption; relative tail paths are resolved against `runCwd`, the
+  same cwd the cleanup command runs under). An element that names nothing on disk contributes
+  nothing; an element that exists but yields no content digest makes the whole receipt refuse with
+  `cleanup-source-argv-unbindable` — the receipt is withheld rather than recording an unbound
+  entry, so `argvDigests` never carries a null digest. `argv0_content_digest` digests a regular
+  file only and returns `null` for a symlinked `argv[0]`, so a symlinked cleanup executable is not
+  content-bound today — a known limitation, deliberately not closed here because refusing on it
+  would break the ordinary "interpreter plus script" shape (`/usr/bin/python3` is commonly a
+  symlink). An edit to bound files — committed or not — invalidates the receipt at the same argv.
+  A cleanup that reads a file not named in its argv (a sourced helper, an imported module, a config
+  file) is still not covered by this binding; that limitation is known.
+
+  The source binding is a **snapshot taken before the exercise runs**, not an execution-time
+  guarantee: a tail path can be created after it was classified absent, or a digested file replaced
+  after it was hashed, between the snapshot and the cleanup's own execution. Closing that window
+  would require an execution-time identity strategy, which this binding does not attempt.
 
 Both digests are **HMAC-SHA256 keyed on a digest of the whole policy document**. An unkeyed
 truncated digest of a low-entropy identity such as a database name would be a dictionary oracle
@@ -1773,6 +1785,7 @@ false `cleanup-foreign-sentinel-destroyed` containment failure rather than a fal
 | `cleanup-sentinel-probe-indeterminate` | `probe_sentinel` or `run_bounded`: probe exited with a code other than 0/1, timed out, or subprocess could not be started |
 | `cleanup-source-root-invalid` | `source_identity`: `cleanup_root` is missing or not an existing directory |
 | `cleanup-source-unreadable` | `source_identity`: `git status --porcelain -z` could not be read, or a dirty worktree file could not be hashed |
+| `cleanup-source-argv-unbindable` | `_argv_tail_digests`: an argv-tail element exists but yields no content digest (a symlink to a non-regular target, a dangling or looping symlink, a directory or other non-regular entry, an unreadable file, or an indeterminate `lstat`), or a tail element is not a string |
 | `cleanup-policy-invalid` | `foreign_namespaces`: policy shape or slot membership is invalid |
 | `cleanup-argv0-not-absolute` | `cleanup_effect_receipt`: resolved cleanup `argv[0]` is not an absolute path |
 | `cleanup-receipt-vacuous` | `cleanup_effect_receipt`: sentinel already present before plant, or absent after plant |

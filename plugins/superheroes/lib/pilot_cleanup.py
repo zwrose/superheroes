@@ -1,5 +1,6 @@
 """Cleanup-command resolution, sentinel instrumentation, containment receipts, and resurrection planning (C9)."""
 import copy
+import errno
 import hashlib
 import hmac
 import json
@@ -33,6 +34,7 @@ REFUSAL_PLANT_FAILED = "cleanup-sentinel-plant-failed"
 REFUSAL_PROBE_INDETERMINATE = "cleanup-sentinel-probe-indeterminate"
 REFUSAL_SOURCE_ROOT_INVALID = "cleanup-source-root-invalid"
 REFUSAL_SOURCE_UNREADABLE = "cleanup-source-unreadable"
+REFUSAL_SOURCE_ARGV_UNBINDABLE = "cleanup-source-argv-unbindable"
 REFUSAL_POLICY_INVALID = "cleanup-policy-invalid"
 REFUSAL_CLEANUP_ARGV0_NOT_ABSOLUTE = "cleanup-argv0-not-absolute"
 
@@ -575,58 +577,76 @@ def _worktree_digest(cleanup_root, status_data):
     return hashlib.sha256(payload.encode("utf-8", errors="surrogateescape")).hexdigest()
 
 
+# An argv-tail element resolves to exactly one of these three states. The middle state is the
+# whole point: "not a path at all" and "a path we cannot bind" were the same `None` before, so a
+# receipt could record an un-digestible entry and still claim a content binding it did not have.
+_TAIL_ABSENT = "absent"
+_TAIL_DIGESTED = "digested"
+_TAIL_UNBINDABLE = "unbindable"
+
+# Only errnos that prove the name CANNOT denote an existing file. Everything else — EACCES,
+# ELOOP, EIO — leaves existence undetermined, and undetermined is unbindable, never absent.
+_TAIL_ABSENT_ERRNOS = frozenset((errno.ENOENT, errno.ENOTDIR, errno.ENAMETOOLONG))
+
+
 def _argv_tail_candidate(part, run_cwd):
-    if not isinstance(part, str) or part.startswith("-"):
+    if not isinstance(part, str):
         return None
     return part if os.path.isabs(part) else os.path.join(run_cwd, part)
 
 
 def _argv_tail_content_digest(candidate):
+    """Classify one argv-tail path as absent, content-digested, or unbindable.
+
+    Three outcomes, not two: a name that cannot denote an existing file is an ordinary non-path
+    argument (a namespace token), while a path that exists but yields no content digest cannot be
+    bound at all — and recording it anyway is a receipt claiming a binding it does not have.
+    """
     try:
         st = os.lstat(candidate)
-    except OSError:
-        return None
+    except ValueError:
+        return (_TAIL_ABSENT, None)
+    except OSError as exc:
+        if exc.errno in _TAIL_ABSENT_ERRNOS:
+            return (_TAIL_ABSENT, None)
+        return (_TAIL_UNBINDABLE, None)
     if stat.S_ISREG(st.st_mode):
         try:
-            return _sha256_file_chunks(candidate)
+            return (_TAIL_DIGESTED, _sha256_file_chunks(candidate))
         except OSError:
-            return None
+            return (_TAIL_UNBINDABLE, None)
     if stat.S_ISLNK(st.st_mode):
         try:
             resolved = os.path.realpath(candidate)
-        except OSError:
-            return None
-        try:
             target_st = os.stat(resolved)
-        except OSError:
-            return None
+        except (OSError, ValueError):
+            return (_TAIL_UNBINDABLE, None)
         if not stat.S_ISREG(target_st.st_mode):
-            return None
+            return (_TAIL_UNBINDABLE, None)
         try:
-            return _sha256_file_chunks(resolved)
+            return (_TAIL_DIGESTED, _sha256_file_chunks(resolved))
         except OSError:
-            return None
-    return None
+            return (_TAIL_UNBINDABLE, None)
+    return (_TAIL_UNBINDABLE, None)
 
 
 def _argv_tail_digests(resolved_argv, run_cwd):
+    # axis: refuses when an argv-tail element EXISTS but yields no content digest — the receipt
+    # is withheld rather than recording an un-digestible entry and claiming a binding.
     if not isinstance(run_cwd, str) or not os.path.isdir(run_cwd):
         raise PilotCleanupError(REFUSAL_SOURCE_ROOT_INVALID)
     digests = []
     for index, part in enumerate(resolved_argv[1:], start=1):
         candidate = _argv_tail_candidate(part, run_cwd)
         if candidate is None:
+            raise PilotCleanupError(REFUSAL_SOURCE_ARGV_UNBINDABLE)
+        state, content_hash = _argv_tail_content_digest(candidate)
+        if state == _TAIL_ABSENT:
             continue
-        content_hash = _argv_tail_content_digest(candidate)
-        if content_hash is not None:
+        if state == _TAIL_DIGESTED:
             digests.append([index, content_hash])
             continue
-        try:
-            st = os.lstat(candidate)
-        except OSError:
-            continue
-        if stat.S_ISLNK(st.st_mode):
-            digests.append([index, None])
+        raise PilotCleanupError(REFUSAL_SOURCE_ARGV_UNBINDABLE)
     digests.sort(key=lambda item: item[0])
     return digests
 
