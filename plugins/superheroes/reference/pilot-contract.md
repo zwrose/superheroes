@@ -1677,9 +1677,12 @@ A passing receipt binds to:
   regular file or as a symlink to a regular file (`argvDigests` — every tail element is probed as
   a path with no leading-dash exemption; relative tail paths are resolved against `runCwd`, the
   same cwd the cleanup command runs under). An element that names nothing on disk contributes
-  nothing; an element that exists but yields no content digest makes the whole receipt refuse with
-  `cleanup-source-argv-unbindable` — the receipt is withheld rather than recording an unbound
-  entry, so `argvDigests` never carries a null digest. `argv0_content_digest` digests a regular
+  nothing. The receipt refuses with `cleanup-source-argv-unbindable` when a tail element is not a
+  string, when `lstat` leaves existence undetermined (for example `EACCES`, `ELOOP`, or `EIO`), or
+  when an element exists but yields no content digest (a symlink to a non-regular target, a
+  dangling or looping symlink, a directory or other non-regular entry, or an unreadable file) — the
+  receipt is withheld rather than recording an unbound entry, so `argvDigests` never carries a null
+  digest. `argv0_content_digest` digests a regular
   file only and returns `null` for a symlinked `argv[0]`, so a symlinked cleanup executable is not
   content-bound today — a known limitation, deliberately not closed here because refusing on it
   would break the ordinary "interpreter plus script" shape (`/usr/bin/python3` is commonly a
@@ -1691,6 +1694,13 @@ A passing receipt binds to:
   guarantee: a tail path can be created after it was classified absent, or a digested file replaced
   after it was hashed, between the snapshot and the cleanup's own execution. Closing that window
   would require an execution-time identity strategy, which this binding does not attempt.
+
+  Because every relative argv-tail element is resolved against `runCwd`, an ordinary lexical argv
+  token that happens to name an existing non-digestible entry there — most commonly a directory —
+  refuses the whole receipt with `cleanup-source-argv-unbindable`. This is deliberate: the harness
+  cannot tell a lexical token from a path the cleanup reads, and a receipt it cannot bind is one it
+  must not issue. Authors can rename or relocate the colliding entry, or declare the cleanup with a
+  `runCwd` that does not contain it.
 
 Both digests are **HMAC-SHA256 keyed on a digest of the whole policy document**. An unkeyed
 truncated digest of a low-entropy identity such as a database name would be a dictionary oracle

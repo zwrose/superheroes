@@ -1363,6 +1363,7 @@ def test_cleanup_effect_receipt_refuses_relative_argv0_before_plant(private_tmp)
     assert not os.listdir(store_dir)
 
 
+# axis: refusal precedes sentinel plant
 def test_cleanup_effect_receipt_refuses_unbindable_argv_tail(private_tmp):
     reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
         private_tmp
@@ -1387,6 +1388,7 @@ def test_cleanup_effect_receipt_refuses_unbindable_argv_tail(private_tmp):
             identity_strength="strong",
         )
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+    assert not os.listdir(store_dir)
 
 
 # --- happy path: passing receipt -----------------------------------------------
@@ -1450,6 +1452,7 @@ def test_receipt_valid_for_happy_path(private_tmp):
     assert result == {"ok": True, "reason": None}
 
 
+# axis: receipt_valid_for re-checks argv-tail binding
 def test_receipt_valid_for_refuses_unbindable_argv_tail(private_tmp):
     receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
     os.makedirs(os.path.join(ctx["run_cwd"], "slot-a"))
@@ -2418,6 +2421,7 @@ def test_worktree_digest_detects_retargeted_dirty_symlink(private_tmp):
     assert first["worktreeDigest"] != second["worktreeDigest"]
 
 
+# axis: symlink-to-directory tail refuses
 def test_argv_tail_refuses_symlink_to_directory(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2442,6 +2446,7 @@ def test_argv_tail_refuses_symlink_to_directory(private_tmp):
         assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: dangling symlink tail refuses
 def test_argv_tail_refuses_dangling_symlink(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2459,6 +2464,7 @@ def test_argv_tail_refuses_dangling_symlink(private_tmp):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: symlink-loop tail refuses
 def test_argv_tail_refuses_symlink_loop(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2478,6 +2484,7 @@ def test_argv_tail_refuses_symlink_loop(private_tmp):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: directory tail element refuses
 def test_argv_tail_refuses_directory_element(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2495,6 +2502,7 @@ def test_argv_tail_refuses_directory_element(private_tmp):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: fifo tail element refuses
 def test_argv_tail_refuses_fifo_element(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2515,6 +2523,7 @@ def test_argv_tail_refuses_fifo_element(private_tmp):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: indeterminate lstat errno refuses
 def test_argv_tail_refuses_indeterminate_lstat(private_tmp, monkeypatch):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2542,6 +2551,7 @@ def test_argv_tail_refuses_indeterminate_lstat(private_tmp, monkeypatch):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: unreadable regular file refuses
 def test_argv_tail_refuses_unreadable_regular_file(private_tmp, monkeypatch):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2567,6 +2577,7 @@ def test_argv_tail_refuses_unreadable_regular_file(private_tmp, monkeypatch):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: unknown classifier state refuses
 def test_argv_tail_refuses_unknown_classifier_state(private_tmp, monkeypatch):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2587,6 +2598,7 @@ def test_argv_tail_refuses_unknown_classifier_state(private_tmp, monkeypatch):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: non-string tail element refuses
 def test_argv_tail_refuses_non_string_element(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2602,10 +2614,13 @@ def test_argv_tail_refuses_non_string_element(private_tmp):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+# axis: absent namespace token skipped not refused
 def test_argv_tail_skips_absent_namespace_argument(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
-    resolved_argv = [sys.executable, "slot-a"]
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "slot-a", "cleanup.py"]
     source_id = {
         "head": None,
         "worktreeDigest": "a" * 64,
@@ -2613,14 +2628,18 @@ def test_argv_tail_skips_absent_namespace_argument(private_tmp):
         "argvDigests": [],
     }
     pc._populate_source_binding(source_id, resolved_argv, run_cwd)
-    assert source_id["argvDigests"] == []
+    expected_digest = pc._sha256_file_chunks(script)
+    assert source_id["argvDigests"] == [[2, expected_digest]]
 
 
+# axis: ENAMETOOLONG tail skipped not refused
 def test_argv_tail_skips_overlong_argument(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
     overlong = "x" * 5000
-    resolved_argv = [sys.executable, overlong, "slot-a"]
+    resolved_argv = [sys.executable, overlong, "cleanup.py", "slot-a"]
     source_id = {
         "head": None,
         "worktreeDigest": "a" * 64,
@@ -2635,13 +2654,17 @@ def test_argv_tail_skips_overlong_argument(private_tmp):
     else:
         pytest.skip("overlong name did not raise")
     pc._populate_source_binding(source_id, resolved_argv, run_cwd)
-    assert source_id["argvDigests"] == []
+    expected_digest = pc._sha256_file_chunks(script)
+    assert source_id["argvDigests"] == [[2, expected_digest]]
 
 
+# axis: nul-bearing tail skipped not refused
 def test_argv_tail_skips_nul_bearing_argument(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
-    resolved_argv = [sys.executable, "slot\x00a", "slot-a"]
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "slot\x00a", "cleanup.py", "slot-a"]
     source_id = {
         "head": None,
         "worktreeDigest": "a" * 64,
@@ -2649,9 +2672,11 @@ def test_argv_tail_skips_nul_bearing_argument(private_tmp):
         "argvDigests": [],
     }
     pc._populate_source_binding(source_id, resolved_argv, run_cwd)
-    assert source_id["argvDigests"] == []
+    expected_digest = pc._sha256_file_chunks(script)
+    assert source_id["argvDigests"] == [[2, expected_digest]]
 
 
+# axis: dash-prefixed script path bound
 def test_argv_tail_binds_dash_prefixed_script(private_tmp):
     repo = os.path.join(private_tmp, "repo")
     run_cwd = os.path.join(private_tmp, "cwd")
@@ -2679,6 +2704,7 @@ def test_argv_tail_binds_dash_prefixed_script(private_tmp):
     assert first != second
 
 
+# axis: argvDigests never carries null digests
 def test_argv_tail_digests_carry_no_null_entries(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
