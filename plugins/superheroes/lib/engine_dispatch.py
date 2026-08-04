@@ -521,7 +521,9 @@ def _validate_max_wait(max_wait):
         return True, ""
     if isinstance(max_wait, bool) or not isinstance(max_wait, int):
         return False, MAX_WAIT_REFUSAL_TYPE
-    if max_wait < MIN_SYNC_WAIT or max_wait > MAX_SYNC_WAIT:
+    if max_wait < MIN_SYNC_WAIT:
+        return True, ""
+    if max_wait > MAX_SYNC_WAIT:
         return False, "%s:%d:allowed=%d..%d" % (
             MAX_WAIT_REFUSAL_RANGE, max_wait, MIN_SYNC_WAIT, MAX_SYNC_WAIT)
     return True, ""
