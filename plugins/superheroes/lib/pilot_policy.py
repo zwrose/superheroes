@@ -35,9 +35,14 @@ REASON_EXERCISE_MATERIAL_FOUND = "policy-exercise-material-found"
 
 _DECLARATION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 ENV_VAR_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
-# A needle spelled like a bare field name is indistinguishable from a result's own schema key, so
-# `assert_results_only` never matches one in key position (#861).
+# An account name spelled like a bare field name is indistinguishable from a result's own schema
+# key, so `assert_results_only` never matches one in key position (#861).
 _FIELD_NAME_SHAPED_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\Z")
+# The one material class the key-position carve-out reaches. Account names are chosen by the
+# project and collide with field names by construction; identities and connection details are not
+# under naming pressure toward field names, and the policy schema lets either be a bare word, so
+# neither may be exempted by spelling.
+_KEY_CARVE_OUT_CLASS = "mintable-account"
 
 _TOP_LEVEL_KEYS = frozenset(
     {"schemaVersion", "declaration", "protectedTargets", "datastore", "slots"}
@@ -249,16 +254,24 @@ def assert_results_only(result, material):
     # guard cannot tell the two apart when they spell the same word, and account names are exactly
     # the short bare words that field names use (#861: a plan step keyed `owner` met an account
     # named `owner` and refused, with nothing in the refusal to say the account NAME, not a leak,
-    # was the cause). So a needle that could itself be a field name is matched against values only;
-    # every needle that could not be one — identities, connection strings, anything carrying `@`,
-    # `:`, `/`, or a space — is still matched in key position too.
+    # was the cause). So a field-name-shaped ACCOUNT NAME is matched against values only.
+    #
+    # The carve-out is keyed on the material class as well as the spelling, and both conditions are
+    # load-bearing. The schema permits any non-empty string for an identity or a connection detail,
+    # and bare ones are ordinary — the contract's own example datastore identity is `example_dev`.
+    # Exempting those by spelling would drop key-position detection for real secrets that are under
+    # no naming pressure toward field names. Only account names are chosen by the project in the
+    # same vocabulary its result fields use, so only they are exempt.
     if not isinstance(material, dict) or not _material_index(material):
         raise PilotPolicyError(REFUSAL_MATERIAL_INVALID)
     for material_class in MATERIAL_CLASSES:
         for needle in material.get(material_class, []):
             if not isinstance(needle, str) or not needle:
                 continue
-            match_keys = not _FIELD_NAME_SHAPED_RE.match(needle)
+            match_keys = not (
+                material_class == _KEY_CARVE_OUT_CLASS
+                and _FIELD_NAME_SHAPED_RE.match(needle)
+            )
             if _result_embeds_material(result, needle, match_keys=match_keys):
                 raise PilotPolicyError(REFUSAL_MATERIAL_IN_RESULT, detail=material_class)
 

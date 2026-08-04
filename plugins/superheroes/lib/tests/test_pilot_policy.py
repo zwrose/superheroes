@@ -292,14 +292,20 @@ def test_assert_results_only_refuses_account_name_as_value():
         ("expected-identity", "pilot-owner@example.test"),
         ("connection-detail", "postgres://localhost:5432/example_dev"),
         ("mintable-account", "service account"),
+        # The rows that matter most: an identity and a connection detail that ARE field-name-shaped.
+        # The schema permits any non-empty string for both, and `example_dev` is the contract's own
+        # example datastore identity — so the carve-out must key on material CLASS, not on spelling
+        # alone. Exempting these by shape would silently drop key-position detection for real
+        # secrets while every other test still passed.
+        ("expected-identity", "service_identity"),
+        ("connection-detail", "example_dev"),
     ],
 )
-def test_assert_results_only_still_refuses_non_field_shaped_material_as_key(
+def test_assert_results_only_still_refuses_non_account_material_as_key(
     material_class, secret
 ):
-    # A needle that could never be a field name keeps its key-position bite: a result KEYED by an
-    # identity or a connection string is a real leak, and #861's carve-out must not reach it. The
-    # third row proves the carve-out keys on the needle's SHAPE, not on its material class.
+    # Key-position bite is kept for every needle the carve-out does not reach: a result KEYED by an
+    # identity or a connection string is a real leak, whatever it is spelled like.
     material = {"expected-identity": [], "mintable-account": [], "connection-detail": []}
     material[material_class] = [secret]
     result = {"byAccount": {secret: {"result": "pass"}}}
