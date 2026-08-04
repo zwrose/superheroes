@@ -1003,3 +1003,73 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
     assert ended
     assert ended[-1].get("refusal") == "journal-append-failed"
     assert not any(r.get("kind") == "engine-started" for r in records)
+
+
+# --- #862: --max-wait boundary on the write path -------------------------------
+
+
+@pytest.mark.parametrize("value", [ED.MAX_SYNC_WAIT + 1, 900, -1])
+def test_write_out_of_range_max_wait_refuses_before_anything_opens(tmp_path, value):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, max_wait=value)
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "max-wait-out-of-range:%d:allowed=0..%d" % (value, ED.MAX_SYNC_WAIT)
+    assert res["attempts"] == 0
+    assert fake.calls == []
+    assert not os.path.exists(run_dir), "a refused slice must not open a run directory"
+    assert not os.path.exists(ED._worktree_lease_path(os.path.realpath(wt))), (
+        "a refused slice must not take the worktree lease")
+
+
+def test_write_non_integer_max_wait_refuses(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait="540")
+    assert res["detail"] == ED.MAX_WAIT_REFUSAL_TYPE
+    assert res["terminal"] is True
+    assert fake.calls == []
+
+
+@pytest.mark.parametrize("value", [0, 3, ED.MAX_SYNC_WAIT])
+def test_write_in_range_max_wait_is_honored_not_clamped(tmp_path, monkeypatch, value):
+    wt, _main = _linked_worktree(tmp_path)
+    seen = {}
+
+    def fake_supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
+        seen["slice"] = deadline - time.monotonic()
+        return ED._with_run_fields(
+            {"ok": False, "terminal": False, "reason": "running", "detail": "captured",
+             "attempts": 0, "forfeited": False},
+            run_dir=run_dir_real, argv=[],
+        )
+
+    monkeypatch.setattr(ED, "_supervise", fake_supervise)
+    res = _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, max_wait=value)
+    assert res["terminal"] is False
+    assert abs(seen["slice"] - value) < 1.0, (
+        "requested %s s slice, supervisor got %.1f s" % (value, seen["slice"]))
+
+
+def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    argv = [
+        "dispatch-write",
+        "--engine", "cursor",
+        "--engine-model", "composer-2.5",
+        "--prompt-path", _prompt(tmp_path),
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--max-wait", str(ED.MAX_SYNC_WAIT + 1),
+    ]
+    assert ED.main(argv) == 0
+    res = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["detail"] == "max-wait-out-of-range:%d:allowed=0..%d" % (
+        ED.MAX_SYNC_WAIT + 1, ED.MAX_SYNC_WAIT)
+    assert not os.path.exists(run_dir)

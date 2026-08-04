@@ -56,6 +56,9 @@ ANTIHIJACK_PREAMBLE = (
 
 DEFAULT_SYNC_WAIT = 540          # below the 600 s foreground-conversion boundary (2.1.219)
 MAX_SYNC_WAIT = 540              # hard cap: a caller can ask for less, never more
+MIN_SYNC_WAIT = 0                # a zero slice is legal (open the run, return now); negative is not
+MAX_WAIT_REFUSAL_RANGE = "max-wait-out-of-range"
+MAX_WAIT_REFUSAL_TYPE = "max-wait-not-an-integer"
 MAX_ATTEMPTS = 2                 # unchanged semantics: one tight-inline retry
 SUPERVISOR_POLL_INTERVAL = 0.5
 RUN_CHILD_RECORD_WAIT_SECONDS = 10
@@ -500,6 +503,34 @@ def _acquire_worktree_lease(cwd_real, run_dir_real):
         file_lock.release(lease_path)
         return False, "journal-append-failed", None, lease_path
     return True, "", token, lease_path
+
+
+def _validate_max_wait(max_wait):
+    """Return (ok, detail_token). The caller's slice bound is honored as asked or refused by
+    name — never silently clamped (#862).
+
+    `None` means "no slice bound: poll until terminal". Any other value must be an int in
+    [MIN_SYNC_WAIT, MAX_SYNC_WAIT]. Clamping an over-cap value to the cap inverted the flag at
+    the boundary: `--max-wait 600` ran a 540 s slice and returned non-terminal `running`
+    SOONER than the 600 s the caller asked to wait, and a negative value collapsed to a
+    zero-length slice that started nothing. Both are refusals now, before anything is opened
+    or spawned."""
+    if max_wait is None:
+        return True, ""
+    if isinstance(max_wait, bool) or not isinstance(max_wait, int):
+        return False, MAX_WAIT_REFUSAL_TYPE
+    if max_wait < MIN_SYNC_WAIT or max_wait > MAX_SYNC_WAIT:
+        return False, "%s:%d:allowed=%d..%d" % (
+            MAX_WAIT_REFUSAL_RANGE, max_wait, MIN_SYNC_WAIT, MAX_SYNC_WAIT)
+    return True, ""
+
+
+def _max_wait_refusal(detail):
+    return _with_run_fields(
+        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": detail,
+         "attempts": 0, "forfeited": False, "terminal": True},
+        run_dir="", argv=[],
+    )
 
 
 def _validate_repo_root(repo_root):
@@ -1734,7 +1765,7 @@ def _highest_attempt(state):
 def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
     lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
     try:
-        file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
+        file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL, reclaim_dead_holder=True)
     except file_lock.LockHeld:
         records, _corrupt = _journal_read(run_dir_real)
         state = _journal_state(records)
@@ -2119,6 +2150,10 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
 
+    ok, wait_detail = _validate_max_wait(max_wait)
+    if not ok:
+        return _max_wait_refusal(wait_detail)
+
     ok, repo_detail = _validate_repo_root(repo_root)
     if not ok:
         return _with_run_fields(
@@ -2271,7 +2306,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     record_kind="run-folded", result=err,
                 )
 
-        slice_wait = MAX_SYNC_WAIT if max_wait is None else min(max(int(max_wait), 0), MAX_SYNC_WAIT)
+        # Validated at entry (#862) — honored as asked, never clamped.
+        slice_wait = MAX_SYNC_WAIT if max_wait is None else int(max_wait)
         while True:
             deadline = time.monotonic() + slice_wait
             try:
@@ -2396,6 +2432,9 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     role_kind = "build"
     argv = []
+    ok, wait_detail = _validate_max_wait(max_wait)
+    if not ok:
+        return _max_wait_refusal(wait_detail)
     preflight_timeout = max(int(max_wait), 1) if max_wait is not None else None
 
     ok, cwd_detail = _validate_linked_build_cwd(cwd, timeout=preflight_timeout)
@@ -2554,7 +2593,8 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                     run_dir=run_dir_real, argv=argv,
                 )
 
-        slice_wait = MAX_SYNC_WAIT if max_wait is None else min(max(int(max_wait), 0), MAX_SYNC_WAIT)
+        # Validated at entry (#862) — honored as asked, never clamped.
+        slice_wait = MAX_SYNC_WAIT if max_wait is None else int(max_wait)
         while True:
             deadline = time.monotonic() + slice_wait
             try:
@@ -2757,7 +2797,7 @@ def dispatch_abandon(run_dir):
 
         lock_path = os.path.join(run_dir_real, RUN_LOCK_NAME)
         try:
-            file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL)
+            file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL, reclaim_dead_holder=True)
         except file_lock.LockHeld:
             return _with_run_fields(
                 {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,

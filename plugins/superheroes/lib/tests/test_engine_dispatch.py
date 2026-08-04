@@ -3429,3 +3429,185 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
     assert rc == 0
     json.loads(capsys.readouterr().out.strip())
     assert captured.get("diff_base") == "REF"
+
+
+# --- #862: --max-wait is honored as asked or refused by name — never clamped ----
+
+
+def _running_slice_capture(monkeypatch):
+    """Capture the slice length dispatch_* hands the supervisor, without supervising."""
+    seen = {}
+
+    def fake_supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
+        seen["slice"] = deadline - time.monotonic()
+        seen["calls"] = seen.get("calls", 0) + 1
+        return ED._with_run_fields(
+            {"ok": False, "terminal": False, "reason": ED.dispatch_outcome.REASON_RUNNING,
+             "detail": "captured", "attempts": 0, "forfeited": False},
+            run_dir=run_dir_real, argv=[],
+        )
+
+    monkeypatch.setattr(ED, "_supervise", fake_supervise)
+    return seen
+
+
+def _review_with_max_wait(tmp_path, repo_root, run_dir, max_wait, *, runner=None,
+                          build_view=None):
+    return ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+        run_engine=runner if runner is not None else FakeRunner([]),
+        build_view=build_view if build_view is not None else _fake_build_view(tmp_path),
+        run_dir=run_dir, order_id="test-order", max_wait=max_wait,
+    )
+
+
+@pytest.mark.parametrize("value", [0, 1, 7, ED.MAX_SYNC_WAIT])
+def test_review_in_range_max_wait_is_honored_not_clamped(tmp_path, monkeypatch, value):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    seen = _running_slice_capture(monkeypatch)
+    res = _review_with_max_wait(tmp_path, repo_root, run_dir, value)
+    assert res["terminal"] is False
+    assert abs(seen["slice"] - value) < 1.0, (
+        "requested %s s slice, supervisor got %.1f s" % (value, seen["slice"]))
+
+
+@pytest.mark.parametrize("value", [ED.MAX_SYNC_WAIT + 1, 600, 3600, -1, -540])
+def test_review_out_of_range_max_wait_is_a_named_refusal(tmp_path, monkeypatch, value):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    seen = _running_slice_capture(monkeypatch)
+    runner = FakeRunner([])
+    res = _review_with_max_wait(tmp_path, repo_root, run_dir, value,
+                                runner=runner, build_view=_never_build_view)
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_UNRUNNABLE
+    assert res["detail"] == "max-wait-out-of-range:%d:allowed=0..%d" % (value, ED.MAX_SYNC_WAIT)
+    assert res["attempts"] == 0
+    assert runner.calls == []
+    assert "calls" not in seen, "a refused slice must not reach the supervisor"
+
+
+@pytest.mark.parametrize("value", ["540", 1.5, True, [540]])
+def test_review_non_integer_max_wait_is_a_named_refusal(tmp_path, value):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    runner = FakeRunner([])
+    res = _review_with_max_wait(tmp_path, repo_root, run_dir, value,
+                                runner=runner, build_view=_never_build_view)
+    assert res["detail"] == ED.MAX_WAIT_REFUSAL_TYPE
+    assert res["terminal"] is True
+    assert runner.calls == []
+
+
+def test_over_cap_max_wait_never_returns_running_sooner_than_in_range(tmp_path, monkeypatch):
+    """#862 regression — the flag must not invert at the boundary.
+
+    An over-cap value used to be clamped to MAX_SYNC_WAIT and then, because any explicit
+    --max-wait returns after one slice, handed back non-terminal `running` *sooner* than the
+    caller asked to wait. Pinned here: the at-cap value gets exactly the slice it asked for,
+    and the over-cap value yields no non-terminal result at all — so it cannot come back
+    sooner."""
+    run_dir_ok = str(tmp_path / "run-ok")
+    repo_ok, _ = _manual_open_review_run(tmp_path, run_dir_ok)
+    seen = _running_slice_capture(monkeypatch)
+    at_cap = _review_with_max_wait(tmp_path, repo_ok, run_dir_ok, ED.MAX_SYNC_WAIT)
+    assert at_cap["terminal"] is False
+    assert at_cap["reason"] == ED.dispatch_outcome.REASON_RUNNING
+    in_range_slice = seen["slice"]
+    assert abs(in_range_slice - ED.MAX_SYNC_WAIT) < 1.0
+
+    run_dir_over = str(tmp_path / "run-over")
+    repo_over, _ = _manual_open_review_run(tmp_path, run_dir_over)
+    over_cap = _review_with_max_wait(tmp_path, repo_over, run_dir_over, ED.MAX_SYNC_WAIT + 60,
+                                     build_view=_never_build_view)
+    assert over_cap["reason"] != ED.dispatch_outcome.REASON_RUNNING
+    assert over_cap["terminal"] is True
+    assert over_cap["detail"].startswith(ED.MAX_WAIT_REFUSAL_RANGE)
+
+
+def test_omitted_max_wait_still_polls_to_terminal_in_capped_slices(tmp_path, monkeypatch):
+    """The documented way to wait longer than the cap is to omit the flag and keep polling —
+    not to pass a bigger number."""
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
+    slices = []
+
+    def fake_supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
+        slices.append(deadline - time.monotonic())
+        terminal = len(slices) >= 3
+        return ED._with_run_fields(
+            {"ok": terminal, "terminal": terminal,
+             "reason": None if terminal else ED.dispatch_outcome.REASON_RUNNING,
+             "detail": "captured", "attempts": 1, "forfeited": False},
+            run_dir=run_dir_real, argv=[],
+        )
+
+    monkeypatch.setattr(ED, "_supervise", fake_supervise)
+    monkeypatch.setattr(ED, "SUPERVISOR_POLL_INTERVAL", 0.01)
+    res = _review_with_max_wait(tmp_path, repo_root, run_dir, None)
+    assert res["terminal"] is True
+    assert len(slices) == 3
+    assert all(abs(s - ED.MAX_SYNC_WAIT) < 1.0 for s in slices)
+
+
+def test_run_lock_reclaimed_from_dead_holder_without_ttl_wait(tmp_path):
+    """#862: a builder killed mid-slice leaves run.lock held by its dead pid. The next call
+    reclaims it as soon as the holder is confirmed dead, instead of blocking re-attach for up
+    to RUN_LOCK_TTL (1080 s) — while a LIVE holder still blocks."""
+    import file_lock
+    import hostinfo
+    import socket
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+    })
+    lock_path = os.path.join(run_dir, ED.RUN_LOCK_NAME)
+    fresh_dead_holder = {
+        "pid": 99999999,
+        "host": socket.gethostname(),
+        "acquiredAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),  # well inside the TTL
+        "bootId": hostinfo.boot_id(),
+        "ttl": ED.RUN_LOCK_TTL,
+    }
+    with open(lock_path, "w", encoding="utf-8") as fh:
+        json.dump(fresh_dead_holder, fh)
+    try:
+        res = ED._supervise(run_dir, run_kind=ED.RUN_KIND_REVIEW,
+                            deadline=time.monotonic() + 1, run_engine=FakeRunner([]))
+        assert res.get("detail") != "run-locked", (
+            "a dead mid-slice holder must not block re-attach for the TTL")
+        assert file_lock.read_holder(lock_path).get("pid") in (os.getpid(), None)
+    finally:
+        file_lock.release(lock_path)
+        ED._terminate_process_group(proc.pid)
+        proc.wait(timeout=5)
+
+
+def test_run_lock_live_holder_still_blocks_reattach(tmp_path):
+    """The other direction of the same reclaim rule: a LIVE run.lock holder is never stolen."""
+    import file_lock
+
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    lock_path = os.path.join(run_dir, ED.RUN_LOCK_NAME)
+    file_lock.acquire(lock_path, ttl=ED.RUN_LOCK_TTL)            # held by THIS live pid
+    try:
+        res = ED._supervise(run_dir, run_kind=ED.RUN_KIND_REVIEW,
+                            deadline=time.monotonic() + 1, run_engine=FakeRunner([]))
+        assert res["detail"] == "run-locked"
+        assert res["terminal"] is False
+        assert file_lock.read_holder(lock_path)["pid"] == os.getpid()
+    finally:
+        file_lock.release(lock_path)

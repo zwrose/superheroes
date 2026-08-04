@@ -217,9 +217,9 @@ def test_acquire_succeeds_when_lock_vanishes_during_not_stale_check(tmp_path, mo
         )
     real_is_stale = lock.is_stale
 
-    def release_then_is_stale(path, ttl=lock.DEFAULT_TTL):
+    def release_then_is_stale(path, ttl=lock.DEFAULT_TTL, **kwargs):
         lock.release(path)
-        return real_is_stale(path, ttl)
+        return real_is_stale(path, ttl, **kwargs)
 
     monkeypatch.setattr(lock, "is_stale", release_then_is_stale)
     assert lock.acquire(p) is False
@@ -609,3 +609,70 @@ def test_reclaim_guard_mode_is_owner_only(tmp_path):
     assert os.path.exists(guard_path)
     assert (os.stat(guard_path).st_mode & 0o777) == 0o600
     lock.release(p)
+
+
+# --- #862: confirmed-dead holder reclaim, without the TTL wait ------------------
+
+
+def _now_stamp():
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def _rewrite_holder(path, **fields):
+    h = lock.read_holder(path)
+    h.update(fields)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(h, fh)
+    return h
+
+
+def test_dead_holder_inside_ttl_is_stale_only_when_opted_in(tmp_path):
+    """A holder that is CONFIRMED dead is reclaimable immediately under the opt-in; the
+    default keeps the TTL wait, so locks whose resource outlives the holder are unchanged."""
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, acquiredAt=_now_stamp())   # dead pid, well inside TTL
+    assert lock.is_stale(p) is False
+    assert lock.is_stale(p, reclaim_dead_holder=True) is True
+
+
+def test_acquire_reclaims_dead_holder_inside_ttl_when_opted_in(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, acquiredAt=_now_stamp())
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)                                          # default: still waits out the TTL
+    assert lock.acquire(p, reclaim_dead_holder=True) is True     # opt-in: reclaimed now
+    assert lock.read_holder(p)["pid"] == os.getpid()
+    lock.release(p)
+
+
+def test_live_holder_is_never_reclaimed_even_past_ttl(tmp_path):
+    """The invariant the short-circuit must not touch: a LIVE holder is never stale, however
+    long it has held the lock and whichever setting the caller passes."""
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, acquiredAt="1970-01-01T00:00:00Z")        # ancient, but pid is this process
+    try:
+        assert lock.is_stale(p, ttl=1) is False
+        assert lock.is_stale(p, ttl=1, reclaim_dead_holder=True) is False
+        for kwargs in ({"ttl": 1}, {"ttl": 1, "reclaim_dead_holder": True}):
+            with pytest.raises(lock.LockHeld) as e:
+                lock.acquire(p, **kwargs)
+            assert e.value.holder["pid"] == os.getpid()
+    finally:
+        lock.release(p)
+
+
+def test_unsignalable_holder_is_not_reclaimed_by_the_short_circuit(tmp_path, monkeypatch):
+    """A pid we may not signal is not CONFIRMED dead — the short-circuit fails closed."""
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, acquiredAt="1970-01-01T00:00:00Z")
+
+    def deny(_pid, _sig):
+        raise PermissionError(errno.EPERM, "not yours")
+
+    monkeypatch.setattr(lock.os, "kill", deny)
+    assert lock.is_stale(p, ttl=1) is False
+    assert lock.is_stale(p, ttl=1, reclaim_dead_holder=True) is False

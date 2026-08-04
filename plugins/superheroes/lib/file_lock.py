@@ -3,6 +3,15 @@
 Stale reclaim: a holder is stale when it is EXPIRED by TTL and its
 pid is dead-on-this-boot, OR when its bootId no longer matches (the host
 rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
+
+`reclaim_dead_holder=True` (#862) drops the TTL wait for a holder whose pid is
+CONFIRMED dead on this host: the TTL only ever delayed reclaim of a holder that was
+already gone, and on a lock whose holder is the only worker (engine_dispatch's
+`run.lock`) that delay is pure re-attach latency. It is opt-in, not the default,
+because some locks guard a resource a child process keeps using after the holder
+dies (engine_dispatch's worktree lease) — there, holder death alone is not evidence
+the resource is free, and those call sites keep the TTL wait. The refusal to reclaim
+a LIVE holder is unconditional either way.
 """
 import calendar
 import errno
@@ -108,9 +117,24 @@ def _expired(acquired_at, ttl, now=None):
     return (time.time() if now is None else now) - t > ttl
 
 
-def is_stale(lock_path, ttl=DEFAULT_TTL, now=None):
+def _pid_dead_on_this_host(holder):
+    """True only when the recorded pid is CONFIRMED dead. A pid we may not signal
+    (PermissionError) or cannot read is treated as live — fail closed."""
+    try:
+        os.kill(int(holder["pid"]), 0)
+    except ProcessLookupError:
+        return True
+    except (PermissionError, ValueError, OverflowError, KeyError, TypeError):
+        return False
+    return False
+
+
+def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     """Stale iff (bootId mismatch) OR (expired by TTL AND pid dead-on-this-host)
-    OR (malformed holder past grace window)."""
+    OR (malformed holder past grace window).
+
+    With `reclaim_dead_holder=True` a pid dead-on-this-host is stale immediately, with
+    no TTL wait (#862). A LIVE holder is never stale under either setting."""
     if not os.path.lexists(lock_path):
         return False
     status, holder = _read_holder_state(lock_path)
@@ -124,15 +148,9 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None):
     bid, cur = h.get("bootId"), hostinfo.boot_id()
     if bid is not None and cur is not None and bid != cur:
         return True
-    if not _expired(h.get("acquiredAt"), ttl, now):
+    if not reclaim_dead_holder and not _expired(h.get("acquiredAt"), ttl, now):
         return False
-    try:
-        os.kill(int(h["pid"]), 0)
-    except ProcessLookupError:
-        return True
-    except (PermissionError, ValueError, OverflowError):
-        return False
-    return False
+    return _pid_dead_on_this_host(h)
 
 
 def _publish_lock(lock_path, holder_info):
@@ -161,7 +179,7 @@ def _publish_lock(lock_path, holder_info):
             pass
 
 
-def _reclaim_stale_lock(lock_path, ttl):
+def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False):
     guard_path = lock_path + ".reclaim"
     try:
         fd = os.open(guard_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
@@ -181,7 +199,7 @@ def _reclaim_stale_lock(lock_path, ttl):
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
             return False
-        if not is_stale(lock_path, ttl):
+        if not is_stale(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder):
             return False
         try:
             os.unlink(lock_path)
@@ -201,8 +219,11 @@ def _reclaim_stale_lock(lock_path, ttl):
 ACQUIRE_RETRY_LIMIT = 3
 
 
-def acquire(lock_path, ttl=DEFAULT_TTL):
+def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
     """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
+
+    `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
+    TTL (#862); a live holder still raises LockHeld.
 
     Raises only LockHeld — never propagates OSError from publish or directory setup."""
     try:
@@ -216,11 +237,11 @@ def acquire(lock_path, ttl=DEFAULT_TTL):
                 return False
             except OSError:
                 pass
-            if not is_stale(lock_path, ttl):
+            if not is_stale(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder):
                 if not os.path.lexists(lock_path):
                     continue
                 raise LockHeld(read_holder(lock_path)) from None
-            if _reclaim_stale_lock(lock_path, ttl):
+            if _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder):
                 return True
             if not os.path.lexists(lock_path):
                 continue
