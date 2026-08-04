@@ -678,3 +678,35 @@ def test_unsignalable_holder_is_not_reclaimed_by_the_short_circuit(tmp_path, mon
     monkeypatch.setattr(lock.os, "kill", deny)
     assert lock.is_stale(p, ttl=1) is False
     assert lock.is_stale(p, ttl=1, reclaim_dead_holder=True) is False
+
+
+# axis: a terminated-but-unreaped holder is DEAD, not live — checked only on the opt-in path.
+
+
+def _make_zombie():
+    """A forked child that exited and stays unreaped: os.kill(pid, 0) still succeeds."""
+    pid = os.fork()
+    if pid == 0:                                   # pragma: no cover — child never returns
+        os._exit(0)
+    deadline = time.time() + 5
+    while time.time() < deadline:
+        out = subprocess.run(["ps", "-o", "state=", "-p", str(pid)],
+                             capture_output=True, text=True)
+        if (out.stdout or "").strip().startswith("Z"):
+            return pid
+        time.sleep(0.05)
+    os.waitpid(pid, 0)
+    pytest.skip("could not observe a zombie process on this host")
+
+
+def test_zombie_holder_is_dead_under_the_opt_in(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    pid = _make_zombie()
+    try:
+        os.kill(pid, 0)                            # precondition: still signalable
+        _rewrite_holder(p, pid=pid, acquiredAt=_now_stamp())
+        assert lock.is_stale(p) is False                              # default: unchanged
+        assert lock.is_stale(p, reclaim_dead_holder=True) is True     # opt-in: reaps the wait
+    finally:
+        os.waitpid(pid, 0)

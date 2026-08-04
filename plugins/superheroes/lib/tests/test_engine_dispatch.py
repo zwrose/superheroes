@@ -3615,3 +3615,45 @@ def test_run_lock_live_holder_still_blocks_reattach(tmp_path):
         assert file_lock.read_holder(lock_path)["pid"] == os.getpid()
     finally:
         file_lock.release(lock_path)
+
+
+# --- #862 review finding: only the recorded child runs the attempt --------------
+# axis: WHICH child owns the attempt (identity), not whether one is alive.
+
+
+def test_run_child_stands_down_when_the_attempt_names_another_child(tmp_path, monkeypatch):
+    """A supervisor that died between Popen and its journal append leaves an orphan child
+    waiting for a pending attempt. Once a fresh supervisor records its OWN child, the orphan
+    must stand down instead of launching a second engine on the same run dir."""
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": 99999999, "at": time.time(),
+    })
+    launched = []
+    monkeypatch.setattr(ED, "_run_engine_files", lambda *a, **k: launched.append(a))
+
+    assert ED._run_child_main(run_dir) == 0
+
+    assert launched == [], "orphan child launched the engine for another child's attempt"
+    kinds = [r.get("kind") for r in ED._journal_read(run_dir)[0]]
+    assert "engine-launching" not in kinds
+    assert "child-stood-down" in kinds
+
+
+def test_run_child_runs_the_attempt_recorded_for_it(tmp_path, monkeypatch):
+    """The other direction: the child the record names does run it."""
+    run_dir = str(tmp_path / "run")
+    _manual_open_review_run(tmp_path, run_dir)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 1, "childPid": os.getpid(), "at": time.time(),
+    })
+    launched = []
+    monkeypatch.setattr(ED, "_run_engine_files", lambda *a, **k: launched.append(a))
+
+    assert ED._run_child_main(run_dir) == 0
+
+    assert len(launched) == 1
+    kinds = [r.get("kind") for r in ED._journal_read(run_dir)[0]]
+    assert "engine-launching" in kinds
+    assert "child-stood-down" not in kinds

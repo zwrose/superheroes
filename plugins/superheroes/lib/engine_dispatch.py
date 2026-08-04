@@ -521,9 +521,7 @@ def _validate_max_wait(max_wait):
         return True, ""
     if isinstance(max_wait, bool) or not isinstance(max_wait, int):
         return False, MAX_WAIT_REFUSAL_TYPE
-    if max_wait < MIN_SYNC_WAIT:
-        return True, ""
-    if max_wait > MAX_SYNC_WAIT:
+    if max_wait < MIN_SYNC_WAIT or max_wait > MAX_SYNC_WAIT:
         return False, "%s:%d:allowed=%d..%d" % (
             MAX_WAIT_REFUSAL_RANGE, max_wait, MIN_SYNC_WAIT, MAX_SYNC_WAIT)
     return True, ""
@@ -2006,6 +2004,19 @@ def _run_child_main(run_dir_real):
             if pending_att is not None:
                 break
     if pending_att is None:
+        return 0
+
+    # axis: WHICH child owns this attempt — identity, not liveness. A supervisor that dies
+    # between Popen and its `attempt-started` append leaves an orphan child waiting here; a
+    # fresh supervisor may now reclaim run.lock at once (dead-holder reclaim, #862), see no
+    # attempt, and spawn its own child. Only the child the record names runs the engine —
+    # otherwise both would launch against the same run dir and build worktree.
+    recorded_pid = ((state.get("attempts") or {}).get(pending_att) or {}).get("childPid")
+    if recorded_pid != os.getpid():
+        _journal_append(run_dir_real, {
+            "kind": "child-stood-down", "attempt": pending_att,
+            "childPid": os.getpid(), "recordedPid": recorded_pid, "at": time.time(),
+        })
         return 0
 
     argv = opened["argv"]

@@ -20,6 +20,7 @@ import json
 import os
 import socket
 import stat
+import subprocess
 import tempfile
 import time
 
@@ -117,16 +118,36 @@ def _expired(acquired_at, ttl, now=None):
     return (time.time() if now is None else now) - t > ttl
 
 
-def _pid_dead_on_this_host(holder):
+def _pid_is_zombie(pid):
+    """A terminated-but-unreaped holder still answers signal 0. Ambiguity is live —
+    fail closed. (engine_dispatch._process_alive makes the same distinction; file_lock
+    cannot import it — engine_dispatch imports this module.)"""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "state=", "-p", str(pid)],
+            capture_output=True, text=True, timeout=2,
+        )
+    except Exception:
+        return False
+    if out.returncode != 0:
+        return False
+    return (out.stdout or "").strip().startswith("Z")
+
+
+def _pid_dead_on_this_host(holder, zombie_is_dead=False):
     """True only when the recorded pid is CONFIRMED dead. A pid we may not signal
     (PermissionError) or cannot read is treated as live — fail closed."""
     try:
-        os.kill(int(holder["pid"]), 0)
+        pid = int(holder["pid"])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return False
+    try:
+        os.kill(pid, 0)
     except ProcessLookupError:
         return True
-    except (PermissionError, ValueError, OverflowError, KeyError, TypeError):
+    except (PermissionError, ValueError, OverflowError):
         return False
-    return False
+    return bool(zombie_is_dead) and _pid_is_zombie(pid)
 
 
 def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
@@ -151,7 +172,7 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     # axis: what licenses reclaim is holder DEATH, not TTL expiry — and never a live holder.
     if not reclaim_dead_holder and not _expired(h.get("acquiredAt"), ttl, now):
         return False
-    return _pid_dead_on_this_host(h)
+    return _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder)
 
 
 def _publish_lock(lock_path, holder_info):
