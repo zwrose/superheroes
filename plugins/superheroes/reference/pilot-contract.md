@@ -497,9 +497,12 @@ structure (dicts, lists, and string values) and refuses when any string from
 **Values always; keys for everything except a field-name-shaped account name.** A dict value is
 data; a dict key is the result's *shape* — a field name the producer wrote. The guard cannot tell
 the two apart when they spell the same word, and account names are exactly the short bare words
-that field names use. So a **`mintable-account`** needle matching `^[A-Za-z_][A-Za-z0-9_-]*$` is
+that field names use. So a **`mintable-account`** needle matching `^[A-Za-z_][A-Za-z0-9_-]*\Z` is
 matched against **values only**. Every other needle — both other classes, and any account name that
-could not be a field name — is matched **in key position as well**. Before this rule, a project
+could not be a field name — is matched **in key position as well**. The anchor is `\Z`, matching
+the whole string with no exception: Python's `$` would also accept one trailing newline, so an
+account name spelled `owner\n` would read as field-name-shaped and lose its key-position match. It
+does not — it is matched in key position, like any other name that could not be a field name. Before this rule, a project
 with an account named `owner`, `note`, or `op` hit a refusal the moment a result used that word as
 a field name, with nothing in the refusal to say the account *name* rather than a leak was the
 cause — account naming was a landmine (#861; PR #857 worked around it by renaming a plan-step key

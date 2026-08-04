@@ -316,6 +316,20 @@ def test_assert_results_only_still_refuses_non_account_material_as_key(
     assert secret not in str(exc.value)
 
 
+@pytest.mark.parametrize("account", ["9owner", "owner\n", "-owner"])
+def test_assert_results_only_refuses_non_field_shaped_account_as_key(account):
+    # The carve-out's boundaries, pinned so the shape test cannot quietly widen. Slot validation
+    # accepts any non-empty account string, so all three are reachable. `owner\n` is the one that
+    # bites back: Python's `$` would accept that trailing newline as field-name-shaped and drop the
+    # key match, so this row is what holds the pattern at a strict `\Z`.
+    material = {"expected-identity": [], "mintable-account": [account], "connection-detail": []}
+    result = {"byAccount": {account: {"result": "pass"}}}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only(result, material)
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_IN_RESULT
+    assert exc.value.detail == "mintable-account"
+
+
 def test_assert_results_only_refuses_non_mapping_material():
     with pytest.raises(pp.PilotPolicyError) as exc:
         pp.assert_results_only({"ok": True}, ["not", "a", "mapping"])
