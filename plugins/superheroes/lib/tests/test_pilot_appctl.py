@@ -779,6 +779,161 @@ def test_stand_up_generation_moved_stops_child():
         shutil.rmtree(tmp)
 
 
+def test_stand_up_generation_moved_persists_stop_to_disk():
+    """The in-lock generation-moved site writes the stopped instance record to disk.
+
+    Bite axis: DURABILITY of the stop at pilot_appctl.py's generation-moved
+    `_write_instance_locked` call — that the stop reached the file, not merely that
+    stand_up returned a stopped record in memory.
+    """
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        rec = _setup_slot(slots_dir)
+        journal = os.path.join(tmp, "journal.jsonl")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
+        child_holder = {}
+        phase = {"count": 0}
+
+        def probe(url, *, timeout):
+            if phase["count"] == 0:
+                phase["count"] = 1
+                rec2 = pl.transition(rec, pl.STATE_OCCUPIED, now=LATER)
+                rec2 = pl.transition(rec2, pl.STATE_RELEASED, now=LATER)
+                rec2 = pl.begin_generation(rec2, now=LATER)
+                pl.write_record(pl.record_path(slots_dir, SLOT), rec2)
+            return {"status": 200, "body": child_holder.get("nonce", ""), "error": None}
+
+        def spawn_stub(argv, *, cwd, env):
+            child_holder["nonce"] = env["SUPERHEROES_PILOT_LAUNCH_NONCE"]
+            proc = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)"],
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            child_holder["proc"] = proc
+            return proc
+
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=_now_seq(),
+            registry=_registry(),
+            declaration=_DECLARATION,
+            spawn=spawn_stub,
+            readiness_probe=probe,
+            monotonic=lambda: 0.0,
+            sleep=lambda _t: None,
+        )
+        assert result["reason"] == pa.REASON_GENERATION_MOVED
+        assert result["instance"]["state"] == pa.STATE_STOPPED
+
+        on_disk = pa.read_instance(slots_dir, SLOT)
+        assert on_disk["ok"], on_disk
+        assert on_disk["instance"]["state"] == pa.STATE_STOPPED
+        assert on_disk["instance"]["stopReceipt"] == result["instance"]["stopReceipt"]
+        assert on_disk["instance"]["updatedAt"] == result["instance"]["updatedAt"]
+
+        proc = child_holder.get("proc")
+        if proc is not None:
+            proc.wait(timeout=_JOIN_TIMEOUT)
+    finally:
+        shutil.rmtree(tmp)
+
+
+def test_stand_up_unreadable_slot_record_persists_stop_to_disk():
+    """The in-lock unreadable-slot-record site writes the stopped instance record to disk.
+
+    Bite axis: DURABILITY of the stop at pilot_appctl.py's unreadable-record
+    `_write_instance_locked` call — that the stop reached the file, not merely that
+    stand_up returned a stopped record in memory.
+    """
+    tmp = _tmp_dir()
+    try:
+        cwd = os.path.join(tmp, "wt")
+        os.makedirs(cwd)
+        slots_dir = os.path.join(tmp, "slots")
+        _setup_slot(slots_dir)
+        journal = os.path.join(tmp, "journal.jsonl")
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.bind(("127.0.0.1", 0))
+        port = sock.getsockname()[1]
+        sock.close()
+        # This path stops the child under the DEFAULT corroborator, which compares
+        # `ps -o command=` against argv[0]. A framework-wrapped interpreter reports a
+        # different basename than sys.executable, so drive a plain `sleep` child whose
+        # reported command matches the launch argv on both macOS and Linux.
+        sleep_bin = shutil.which("sleep")
+        assert sleep_bin, "no sleep(1) on PATH"
+        launch = _launch_base(
+            cwd,
+            port,
+            f"http://127.0.0.1:{port}/ready",
+            argv=[sleep_bin, "60"],
+        )
+        child_holder = {}
+        phase = {"count": 0}
+
+        def probe(url, *, timeout):
+            if phase["count"] == 0:
+                phase["count"] = 1
+                # Corrupt the slot record so the post-readiness re-read inside the
+                # lock fails, driving the unreadable-record branch.
+                with open(pl.record_path(slots_dir, SLOT), "w", encoding="utf-8") as fh:
+                    fh.write("{ not json")
+            return {"status": 200, "body": child_holder.get("nonce", ""), "error": None}
+
+        def spawn_stub(argv, *, cwd, env):
+            child_holder["nonce"] = env["SUPERHEROES_PILOT_LAUNCH_NONCE"]
+            proc = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                start_new_session=True,
+            )
+            child_holder["proc"] = proc
+            return proc
+
+        result = pa.stand_up(
+            launch,
+            journal_path=journal,
+            slots_dir_path=slots_dir,
+            now=NOW,
+            now_fn=_now_seq(),
+            registry=_registry(),
+            declaration=_DECLARATION,
+            spawn=spawn_stub,
+            readiness_probe=probe,
+            monotonic=lambda: 0.0,
+            sleep=lambda _t: None,
+        )
+        assert result["reason"] == pa.REASON_SLOT_STATE_NOT_LAUNCHABLE
+        assert result["instance"]["state"] == pa.STATE_STOPPED
+
+        on_disk = pa.read_instance(slots_dir, SLOT)
+        assert on_disk["ok"], on_disk
+        assert on_disk["instance"]["state"] == pa.STATE_STOPPED
+        assert on_disk["instance"]["stopReceipt"] == result["instance"]["stopReceipt"]
+        assert on_disk["instance"]["updatedAt"] == result["instance"]["updatedAt"]
+
+        proc = child_holder.get("proc")
+        if proc is not None:
+            proc.wait(timeout=_JOIN_TIMEOUT)
+    finally:
+        shutil.rmtree(tmp)
+
+
 def test_stand_up_record_write_failed_keeps_pid(monkeypatch):
     tmp = _tmp_dir()
     try:
