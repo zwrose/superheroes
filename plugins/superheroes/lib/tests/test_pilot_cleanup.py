@@ -1363,6 +1363,32 @@ def test_cleanup_effect_receipt_refuses_relative_argv0_before_plant(private_tmp)
     assert not os.listdir(store_dir)
 
 
+def test_cleanup_effect_receipt_refuses_unbindable_argv_tail(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    pilot_block = _pilot_block(cleanup_script)
+    os.makedirs(os.path.join(run_cwd, "slot-a"))
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc.cleanup_effect_receipt(
+            policy=policy,
+            pilot_block=pilot_block,
+            slot_ref=_SLOT_REF,
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            cleanup_root=cleanup_repo,
+            journal_path=journal_path,
+            now=_NOW,
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
 # --- happy path: passing receipt -----------------------------------------------
 
 def test_cleanup_effect_receipt_pass(private_tmp):
@@ -1422,6 +1448,24 @@ def test_receipt_valid_for_happy_path(private_tmp):
         identity_strength="strong",
     )
     assert result == {"ok": True, "reason": None}
+
+
+def test_receipt_valid_for_refuses_unbindable_argv_tail(private_tmp):
+    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    os.makedirs(os.path.join(ctx["run_cwd"], "slot-a"))
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc.receipt_valid_for(
+            receipt,
+            ctx["policy"],
+            ctx["pilot_block"],
+            _SLOT_REF,
+            cleanup_root=ctx["cleanup_repo"],
+            run_cwd=ctx["run_cwd"],
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
 @pytest.mark.parametrize("receipt", [None, "not-a-dict", {}])
@@ -2521,6 +2565,26 @@ def test_argv_tail_refuses_unreadable_regular_file(private_tmp, monkeypatch):
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
+def test_argv_tail_refuses_unknown_classifier_state(private_tmp, monkeypatch):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "cleanup.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    monkeypatch.setattr(
+        pc, "_argv_tail_content_digest", lambda candidate: ("some-future-state", None)
+    )
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
 def test_argv_tail_refuses_non_string_element(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
@@ -2562,14 +2626,13 @@ def test_argv_tail_skips_overlong_argument(private_tmp):
         "argvDigests": [],
     }
     try:
-        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
-    except pc.PilotCleanupError as exc:
-        if exc.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE:
-            try:
-                os.lstat(os.path.join(run_cwd, overlong))
-            except OSError as lstat_exc:
-                pytest.skip(f"overlong name raised errno {lstat_exc.errno}, not ENAMETOOLONG")
-        raise
+        os.lstat(os.path.join(run_cwd, overlong))
+    except OSError as lstat_exc:
+        if lstat_exc.errno != errno.ENAMETOOLONG:
+            pytest.skip(f"overlong name raised errno {lstat_exc.errno}, not ENAMETOOLONG")
+    else:
+        pytest.skip("overlong name did not raise")
+    pc._populate_source_binding(source_id, resolved_argv, run_cwd)
     assert source_id["argvDigests"] == []
 
 
@@ -2629,6 +2692,8 @@ def test_argv_tail_digests_carry_no_null_entries(private_tmp):
         "argvDigests": [],
     }
     pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert len(source_id["argvDigests"]) == 2
+    assert [entry[0] for entry in source_id["argvDigests"]] == [1, 3]
     for index, digest in source_id["argvDigests"]:
         assert isinstance(index, int)
         assert isinstance(digest, str)
