@@ -99,6 +99,41 @@ This default does not bend. The thoughts that precede a bad light call — *it's
 wording fix*, *I know this area* — are exactly the ones this convention exists to
 override.
 
+### Third-rework tripwire and the census-order exception
+
+The **workhorse** and **showrunner** charters state the operative tripwire rule in their own voice;
+this section owns the **census-order exception's conditions** only. When a surface hits the
+third-rework threshold, park and name the seam problem — the charters carry that tripwire.
+
+A build that is about to dispatch the **third rework** of the same surface — an initial
+implementation plus three reworks would be a fourth patch — has hit the **park
+tripwire**. Name the seam problem; another site-by-site rework is the wrong answer.
+
+**The census-order exception.** The third rework may be replaced by **one census order**
+— and only that — when **all** of the following hold:
+
+1. **A diagnosed common cause.** The repeated reworks are explained by **one invariant**
+   that every failing site violates, named before the order is written — not an
+   unexplained recurrence.
+2. **The corrective is a census order.** It names the invariant and carries a **complete
+   census** of the sites that invariant governs — not another patch at the sites found so
+   far.
+3. **Exactly one.** Taking the census order **counts as the third rework it replaced** — the
+   surface's tally is unchanged, so any further corrective to that surface hits the tripwire and
+   parks. If that order does not converge, the tripwire binds and the build **parks**. The
+   exception is never a licence for a second attempt.
+4. **Convergence is confirmed by a further engaged review round** on the same surface. An
+   empty round that cannot be shown to have engaged is **not** a confirmation.
+5. **The override is disclosed in the PR**, with its diagnosis.
+
+If any condition fails, the unmodified tripwire applies: **park, and say what the seam
+problem looks like.** Precedent: PR #853 segment 1.
+
+**Why this is an exception and not a softening.** The tripwire exists because a third
+rework is the wrong answer to a design signal. A census order is not a third rework — it is
+the design answer, which is what the tripwire was asking for. What the exception forbids
+is unchanged: another round of site-by-site reworks.
+
 ### Provisional guidance
 
 Lane guidance here is **provisional pending accumulated recorded lane calls**. Field

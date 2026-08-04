@@ -92,7 +92,11 @@ above).
    serialize (stages are fine when only some of the work is independent). When the work is a family
    of parallel siblings, **one concern per issue** — one lens per PR for lens-family work. A
    **shared shell or contract seam** is filed and landed first, as its own small issue, before the
-   siblings that build on it. When a builder discloses mid-build that the diff has crossed **twice its
+   siblings that build on it. When routing **parallel lanes that extend a shared registry, kind-set, or
+   enum**, name the **union coupling** (parallel lanes each extend the same shared set, so the
+   registry/kind-set/enum is only complete once all have landed) in each issue — and name the
+   **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
+   after the first** expects it to fire and budgets the integration commit. When a builder discloses mid-build that the diff has crossed **twice its
    brief's estimate** and offers a split, **take the split seriously** — that disclosure is the
    tripwire working, not a builder stalling. Mark each issue's route — **build-ready** (the builder
    goes straight to the brief)
@@ -100,7 +104,19 @@ above).
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
    process constraints (test right-sizing, E2E policy), and launch context (local export paths,
-   known-broken links, environment quirks). If it matters to the build it is an issue line anyone can
+   known-broken links, environment quirks). **Any scope exclusion that leaves an audience or delivery
+   channel on old behavior must be stated as a plain consequence at filing time** — in the issue, when
+   it is filed, in plain language: *who* is still on the old behavior, and *what they will still
+   experience* — not discovered at build time, and not left implicit in what the issue omits. **Headless
+   and interactive are parity surfaces:** shipping a rule, prompt, or behavior to one and not the other
+   is a scope fork that must be named as a consequence, never an unstated boundary. This was ratified
+   after the **#846 scope defect**: segment 1 landed a rule in prose only; a launched headless builder
+   composes its prompt from the byte-pinned rulings block, so the new rule never reached a launched
+   builder, which kept receiving the superseded wording — the rule was "shipped" and its actual
+   audience never saw it. PR #853's second segment closed that machine channel. When there is no such
+   exclusion, do not invent a ritual line — state consequences only when a real audience or channel
+   remains on old behavior. Enumerate audiences and channels rather than trusting recall; obviousness
+   is exactly what produced #846. If it matters to the build it is an issue line anyone can
    read, never a launch line that evaporates with the session. (A mis-routed "ready" issue that turns out unclear is
    caught by the builder's stop-and-report safeguard — see the **workhorse** charter; you own the
    route, the builder owns that safeguard.) The premises of an order you send — the base commit,
@@ -174,7 +190,12 @@ above).
      builder back to widen a diff the owner already bounded.
    - When a builder **parks on a third rework of the same surface**, the tripwire is firing as
      designed — **welcome it and go looking for the design problem**, rather than ordering a third
-     patch.
+     rework.
+   - From dispatch-provenance, when a surface's **rework orders** show it reached the third-rework
+     threshold, check that the build either **parked** or took **the census-order exception** with
+     disclosure in the PR — check the override against the conditions in `rubric/review-discipline.md`.
+     **Neither park nor disclosed override** is a vet finding; do not wait for the build to disclose
+     the override before running this check.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where

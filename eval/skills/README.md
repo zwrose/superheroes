@@ -9,12 +9,25 @@ API calls beyond the normal Claude Code session.
 Run this procedure:
 - Before recording a new baseline (Task 14)
 - After any description change to a skill (UFR-4)
-- After splitting a skill body into reference files (Tasks 15–17)
+- After adding, removing, or rewording a fixture phrase
 - At any time you want to verify activation health (UFR-5)
 
-The recorded `activation-result.json` is a **required artifact of done** — a task that
-changes a skill description or body is not complete until this file is regenerated and
-every skill scores `pass`.
+**Body-only skill changes owe no regeneration** — `activation-result.json` records
+**activation shape** (driven by skill *descriptions* and fixtures), not body text. The
+recorded observations are judged against skill descriptions and fixture phrases;
+`eval/lib/tests/test_activation_result.py`'s coverage gates key on `(skill, direction,
+phrase)` tuples from the fixtures, not on body text. Regeneration **is** owed when a
+skill **description** changes or when **fixtures** are added, removed, or reworded.
+
+`eval/lib/skills.py`'s `skill_digest(description, body)` does hash the body, and
+`eval/lib/activation_score.py` uses that digest for exactly one purpose — deciding whether
+a `carveOuts` entry still applies to an unchanged skill. A body-only change lapses any
+carve-out keyed to that skill; resolve the lapse before recording the baseline as done.
+Verify the current `carveOuts` snapshot in `eval/skills/baseline.json` before relying on it — empty today is not durable policy.
+
+The recorded `activation-result.json` is a **required artifact of done** when a task
+changes a skill **description** or **fixtures** — not complete until this file is
+regenerated and every skill scores `pass`.
 
 ## Procedure
 
@@ -117,6 +130,8 @@ is recorded as done.
 
 ### 7. Required artifact
 
-`eval/skills/activation-result.json` is a **required artifact of done** (UFR-5). Its
-`recordedAt` date must be on or after the date of the most recent skill change in the
-commit being recorded. Commit it alongside any changes to skills or their descriptions.
+`eval/skills/activation-result.json` is a **required artifact of done** (UFR-5) when a
+skill **description** or **fixtures** change — not for body-only changes (see above).
+Its `recordedAt` date must be on or after the date of the most recent **description**
+change in the commit being recorded. Commit it alongside any changes to skill
+descriptions or fixtures.
