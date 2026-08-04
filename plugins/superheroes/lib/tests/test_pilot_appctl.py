@@ -779,7 +779,40 @@ def test_stand_up_generation_moved_stops_child():
         shutil.rmtree(tmp)
 
 
-def test_stand_up_generation_moved_persists_stop_to_disk():
+def _pin_poll_alive_to_child(monkeypatch, child_holder):
+    """Pin stop()'s liveness view to the test's own child handle.
+
+    PINNED CONDITION: `pilot_appctl._default_poll_alive`, for the duration of one test.
+    The real one asks `killpg(pgid, 0)`, which keeps answering "alive" for a child that
+    has exited but not yet been reaped — and stand_up's in-lock stop() reaps only after
+    its kill loops, so it burns the full SIGTERM + SIGKILL budget (20s) on a zombie.
+
+    MADE UNOBSERVABLE BY THIS PIN: that production timing. These tests will not notice
+    if stop() gets slower, or faster, against an unreaped child. They pin liveness, not
+    the stop sequence: the real SIGTERM, the real stop(), and the real persistence call
+    all still run.
+    """
+    monkeypatch.setattr(
+        pa,
+        "_default_poll_alive",
+        lambda _pgid: child_holder["proc"].poll() is None,
+    )
+
+
+def _reap_child(child_holder):
+    """Failure-safe child cleanup, matching this file's real-process convention."""
+    proc = child_holder.get("proc")
+    if proc is None:
+        return
+    if proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except OSError:
+            pass
+    proc.wait(timeout=_JOIN_TIMEOUT)
+
+
+def test_stand_up_generation_moved_persists_stop_to_disk(monkeypatch):
     """The in-lock generation-moved site writes the stopped instance record to disk.
 
     Bite axis: DURABILITY of the stop at pilot_appctl.py's generation-moved
@@ -787,6 +820,7 @@ def test_stand_up_generation_moved_persists_stop_to_disk():
     stand_up returned a stopped record in memory.
     """
     tmp = _tmp_dir()
+    child_holder = {}
     try:
         cwd = os.path.join(tmp, "wt")
         os.makedirs(cwd)
@@ -798,8 +832,8 @@ def test_stand_up_generation_moved_persists_stop_to_disk():
         port = sock.getsockname()[1]
         sock.close()
         launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
-        child_holder = {}
         phase = {"count": 0}
+        _pin_poll_alive_to_child(monkeypatch, child_holder)
 
         def probe(url, *, timeout):
             if phase["count"] == 0:
@@ -843,15 +877,12 @@ def test_stand_up_generation_moved_persists_stop_to_disk():
         assert on_disk["instance"]["state"] == pa.STATE_STOPPED
         assert on_disk["instance"]["stopReceipt"] == result["instance"]["stopReceipt"]
         assert on_disk["instance"]["updatedAt"] == result["instance"]["updatedAt"]
-
-        proc = child_holder.get("proc")
-        if proc is not None:
-            proc.wait(timeout=_JOIN_TIMEOUT)
     finally:
+        _reap_child(child_holder)
         shutil.rmtree(tmp)
 
 
-def test_stand_up_unreadable_slot_record_persists_stop_to_disk():
+def test_stand_up_unreadable_slot_record_persists_stop_to_disk(monkeypatch):
     """The in-lock unreadable-slot-record site writes the stopped instance record to disk.
 
     Bite axis: DURABILITY of the stop at pilot_appctl.py's unreadable-record
@@ -859,6 +890,7 @@ def test_stand_up_unreadable_slot_record_persists_stop_to_disk():
     stand_up returned a stopped record in memory.
     """
     tmp = _tmp_dir()
+    child_holder = {}
     try:
         cwd = os.path.join(tmp, "wt")
         os.makedirs(cwd)
@@ -881,8 +913,8 @@ def test_stand_up_unreadable_slot_record_persists_stop_to_disk():
             f"http://127.0.0.1:{port}/ready",
             argv=[sleep_bin, "60"],
         )
-        child_holder = {}
         phase = {"count": 0}
+        _pin_poll_alive_to_child(monkeypatch, child_holder)
 
         def probe(url, *, timeout):
             if phase["count"] == 0:
@@ -926,11 +958,8 @@ def test_stand_up_unreadable_slot_record_persists_stop_to_disk():
         assert on_disk["instance"]["state"] == pa.STATE_STOPPED
         assert on_disk["instance"]["stopReceipt"] == result["instance"]["stopReceipt"]
         assert on_disk["instance"]["updatedAt"] == result["instance"]["updatedAt"]
-
-        proc = child_holder.get("proc")
-        if proc is not None:
-            proc.wait(timeout=_JOIN_TIMEOUT)
     finally:
+        _reap_child(child_holder)
         shutil.rmtree(tmp)
 
 
