@@ -2529,10 +2529,12 @@ def test_argv_tail_refuses_indeterminate_lstat(private_tmp, monkeypatch):
     }
     real_lstat = os.lstat
 
-    def _lstat(path):
+    # Passthrough *args/**kwargs: stands in for global os.lstat; pytest teardown's
+    # shutil.rmtree passes dir_fd= on Python 3.12.
+    def _lstat(path, *args, **kwargs):
         if path == script:
             raise OSError(errno.EACCES, "denied")
-        return real_lstat(path)
+        return real_lstat(path, *args, **kwargs)
 
     monkeypatch.setattr(os, "lstat", _lstat)
     with pytest.raises(pc.PilotCleanupError) as exc:
@@ -2554,10 +2556,10 @@ def test_argv_tail_refuses_unreadable_regular_file(private_tmp, monkeypatch):
     }
     real_sha256 = pc._sha256_file_chunks
 
-    def _sha256(path):
+    def _sha256(path, *args, **kwargs):
         if path == script:
             raise OSError(errno.EACCES, "denied")
-        return real_sha256(path)
+        return real_sha256(path, *args, **kwargs)
 
     monkeypatch.setattr(pc, "_sha256_file_chunks", _sha256)
     with pytest.raises(pc.PilotCleanupError) as exc:
