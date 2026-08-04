@@ -1006,6 +1006,8 @@ def test_engine_started_append_failure_terminates_engine(tmp_path, monkeypatch):
 
 
 # --- #862: --max-wait boundary on the write path -------------------------------
+# axis: refusal vs clamp on the slice bound — an out-of-range value opens no run directory,
+# takes no worktree lease, and spawns nothing.
 
 
 @pytest.mark.parametrize("value", [ED.MAX_SYNC_WAIT + 1, 900, -1])

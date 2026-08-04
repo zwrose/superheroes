@@ -3432,6 +3432,10 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
 
 
 # --- #862: --max-wait is honored as asked or refused by name — never clamped ----
+# axis: refusal vs clamp on the slice bound — an in-range value reaches the supervisor
+# unshortened, an out-of-range one is a terminal refusal and never a non-terminal `running`.
+# The run.lock tests at the end of this block bite on the call site passing the dead-holder
+# opt-in (axis: reclaim licensed by holder death, not TTL).
 
 
 def _running_slice_capture(monkeypatch):

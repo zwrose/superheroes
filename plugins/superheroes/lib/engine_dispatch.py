@@ -515,6 +515,8 @@ def _validate_max_wait(max_wait):
     SOONER than the 600 s the caller asked to wait, and a negative value collapsed to a
     zero-length slice that started nothing. Both are refusals now, before anything is opened
     or spawned."""
+    # axis: refusal vs clamp on the slice bound — an out-of-range value never becomes a shorter
+    # slice, and never comes back non-terminal.
     if max_wait is None:
         return True, ""
     if isinstance(max_wait, bool) or not isinstance(max_wait, int):

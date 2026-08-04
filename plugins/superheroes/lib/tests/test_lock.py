@@ -612,6 +612,8 @@ def test_reclaim_guard_mode_is_owner_only(tmp_path):
 
 
 # --- #862: confirmed-dead holder reclaim, without the TTL wait ------------------
+# axis: what licenses reclaim — holder DEATH, not TTL expiry; a live or unsignalable holder
+# is never reclaimed under either setting.
 
 
 def _now_stamp():

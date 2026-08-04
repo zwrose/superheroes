@@ -148,6 +148,7 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     bid, cur = h.get("bootId"), hostinfo.boot_id()
     if bid is not None and cur is not None and bid != cur:
         return True
+    # axis: what licenses reclaim is holder DEATH, not TTL expiry — and never a live holder.
     if not reclaim_dead_holder and not _expired(h.get("acquiredAt"), ttl, now):
         return False
     return _pid_dead_on_this_host(h)
