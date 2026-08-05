@@ -595,7 +595,8 @@ def test_unparsed_message_verbatim():
         "git discard and only mentions one in prose — a PR or issue comment body, a commit "
         "message — that prose is the trigger: text naming `git checkout`, `git reset`, or "
         "`git clean` reads as a command whenever it sits outside shell quoting this guard "
-        "can track, such as a heredoc body or a quote nested inside another quoted string. "
+        "can track — a heredoc body, or a backslash-escaped quote of the same kind as the "
+        "one around it (`\"… \\\" …\"`), which this guard does not treat as an escape. "
         "Write the text to a file and pass the file — `gh ... --body-file <path>`, "
         "`git commit -F <path>` — rather than inlining it. If a discard is intended, commit "
         "or `git stash -u` your work first, or revert a probe edit with an inverse Edit "
@@ -615,12 +616,22 @@ def test_unparsed_message_names_the_prose_case_and_the_file_remedy():
 # The two shapes that put prose outside the guard's quote tracking, so the text reads as a
 # command. Both are refused today and stay refused — #842 changes the message, not behavior.
 _PROSE_ONLY_MENTIONS = (
-    # a PR comment body that quotes someone, leaving one unbalanced quote after the escape
+    # a comment body quoting someone with a backslash-escaped quote of the enclosing kind;
+    # the scanner has no escape handling, so its quote state desynchronizes from the shell's
     'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt"',
     # a heredoc body whose lines are bare command text as far as any shell-text scanner knows
     "cat > /tmp/note.md <<'EOF'\n"
     "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
     "EOF",
+)
+
+# The counterpart the message must NOT send an operator away from: prose in a body whose quoting
+# the scanner does track stays allowed, nested other-delimiter quotes included.
+_PROSE_MENTIONS_STILL_ALLOWED = (
+    'gh pr comment 1 --body "never git checkout -- f.txt"',
+    'gh pr comment 1 --body "the reviewer said \'never: git checkout -- f.txt\'"',
+    "gh pr comment 1 --body 'the reviewer said \"never: git checkout -- f.txt\"'",
+    'gh pr comment 1 --body "revert with an inverse Edit, not `git reset --hard`"',
 )
 
 
@@ -633,6 +644,15 @@ def test_classify_prose_only_mention_denies_with_the_prose_hint(tmp_path, monkey
         decision, reason = wg.classify(command, repo)
         assert decision == "deny", command
         assert reason == wg.unparsed_message(), command
+
+
+def test_classify_prose_in_tracked_quoting_stays_allowed(tmp_path, monkeypatch):
+    """The refusal names the shapes it actually refuses — these bodies are not among them (#842)."""
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    for command in _PROSE_MENTIONS_STILL_ALLOWED:
+        assert wg.classify(command, repo) == ("allow", ""), command
 
 
 # --- unexpected probe state --------------------------------------------------
