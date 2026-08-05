@@ -47,9 +47,15 @@ _INDETERMINATE_TEMPLATE = (
 _UNPARSED_TEMPLATE = (
     "superheroes worktree guard: could not confidently parse this command's git "
     "invocation — it may include a destructive discard subcommand — so it is refused "
-    "(fail-closed) rather than risk wiping uncommitted work. Commit or `git stash -u` "
-    "your work first, or revert a probe edit with an inverse Edit rather than a git "
-    "discard."
+    "(fail-closed) rather than risk wiping uncommitted work. If this command runs no "
+    "git discard and only mentions one in prose — a PR or issue comment body, a commit "
+    "message — that prose is the trigger: text naming `git checkout`, `git reset`, or "
+    "`git clean` reads as a command whenever it sits outside shell quoting this guard "
+    "can track, such as a heredoc body or a quote nested inside another quoted string. "
+    "Write the text to a file and pass the file — `gh ... --body-file <path>`, "
+    "`git commit -F <path>` — rather than inlining it. If a discard is intended, commit "
+    "or `git stash -u` your work first, or revert a probe edit with an inverse Edit "
+    "rather than a git discard."
 )
 
 _GIT_TIMEOUT = 5

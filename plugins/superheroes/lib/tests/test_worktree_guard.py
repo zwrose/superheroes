@@ -591,11 +591,48 @@ def test_unparsed_message_verbatim():
     expected = (
         "superheroes worktree guard: could not confidently parse this command's git "
         "invocation — it may include a destructive discard subcommand — so it is refused "
-        "(fail-closed) rather than risk wiping uncommitted work. Commit or `git stash -u` "
-        "your work first, or revert a probe edit with an inverse Edit rather than a git "
-        "discard."
+        "(fail-closed) rather than risk wiping uncommitted work. If this command runs no "
+        "git discard and only mentions one in prose — a PR or issue comment body, a commit "
+        "message — that prose is the trigger: text naming `git checkout`, `git reset`, or "
+        "`git clean` reads as a command whenever it sits outside shell quoting this guard "
+        "can track, such as a heredoc body or a quote nested inside another quoted string. "
+        "Write the text to a file and pass the file — `gh ... --body-file <path>`, "
+        "`git commit -F <path>` — rather than inlining it. If a discard is intended, commit "
+        "or `git stash -u` your work first, or revert a probe edit with an inverse Edit "
+        "rather than a git discard."
     )
     assert wg.unparsed_message() == expected
+
+
+def test_unparsed_message_names_the_prose_case_and_the_file_remedy():
+    """The refusal has to point an operator at the file remedy, not just fail closed (#842)."""
+    message = wg.unparsed_message()
+    assert "prose" in message
+    assert "--body-file" in message
+    assert "commit -F" in message
+
+
+# The two shapes that put prose outside the guard's quote tracking, so the text reads as a
+# command. Both are refused today and stay refused — #842 changes the message, not behavior.
+_PROSE_ONLY_MENTIONS = (
+    # a PR comment body that quotes someone, leaving one unbalanced quote after the escape
+    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt"',
+    # a heredoc body whose lines are bare command text as far as any shell-text scanner knows
+    "cat > /tmp/note.md <<'EOF'\n"
+    "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
+    "EOF",
+)
+
+
+def test_classify_prose_only_mention_denies_with_the_prose_hint(tmp_path, monkeypatch):
+    """Prose that only *names* a discard is refused, and the refusal explains why (#842)."""
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    for command in _PROSE_ONLY_MENTIONS:
+        decision, reason = wg.classify(command, repo)
+        assert decision == "deny", command
+        assert reason == wg.unparsed_message(), command
 
 
 # --- unexpected probe state --------------------------------------------------
