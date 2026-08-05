@@ -5,7 +5,7 @@ _KEY_CAPTURE = r'[^\'"]+'
 
 
 def _obj(obj_names):
-    return r'(?:%s)' % obj_names
+    return r'(?<![A-Za-z0-9_])(?:%s)' % obj_names
 
 
 def _quoted_key(key):
