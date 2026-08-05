@@ -1,5 +1,6 @@
 import ast
 import fcntl
+import inspect
 import json
 import os
 import signal
@@ -7,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import pytest
@@ -2597,6 +2599,93 @@ def test_record_outcome_on_refused_lane_no_amendment(tmp_path, monkeypatch):
     assert result["reason"] == "outcome-without-started"
     assert result["recorded"] is None
     assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_record_outcome_concurrent_identical_retry_dedupes_under_lock(tmp_path, monkeypatch):
+    # axis: concurrent identical retries dedupe inside amend's lock transaction
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-concurrent-dedupe"
+    launch = "launch-concurrent-dedupe"
+    evidence = "identical-evidence"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", evidence)
+
+    real_read = ll.read
+    barrier = threading.Barrier(2, timeout=10)
+    worker_tids = set()
+    shim_state = threading.local()
+
+    def _is_record_outcome_pre_amend_read():
+        chain = [frame.function for frame in inspect.stack()[1:12]]
+        return (
+            "record_outcome" in chain
+            and "amend" not in chain
+            and "terminalize" not in chain
+        )
+
+    def read_shim(repo_root, env=None):
+        tid = threading.get_ident()
+        if tid not in worker_tids:
+            return real_read(repo_root, env=env)
+        if (
+            _is_record_outcome_pre_amend_read()
+            and not getattr(shim_state, "pre_amend_barrier_done", False)
+        ):
+            shim_state.pre_amend_barrier_done = True
+            try:
+                barrier.wait(timeout=10)
+            except threading.BrokenBarrierError as exc:
+                raise AssertionError(
+                    "concurrent record_outcome dedupe: barrier broken or timed out"
+                ) from exc
+        return real_read(repo_root, env=env)
+
+    monkeypatch.setattr(ll, "read", read_shim)
+
+    results = [None, None]
+    errors = [None, None]
+
+    def worker(idx):
+        worker_tids.add(threading.get_ident())
+        try:
+            results[idx] = ll.record_outcome(repo, launch, "handback", evidence)
+        except Exception as exc:
+            errors[idx] = exc
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+        if thread.is_alive():
+            pytest.fail(
+                "concurrent record_outcome dedupe: thread timed out; "
+                "results=%r errors=%r" % (results, errors)
+            )
+
+    assert errors == [None, None], errors
+    assert results[0]["ok"] is True
+    assert results[1]["ok"] is True
+    recorded = {results[0]["recorded"], results[1]["recorded"]}
+    assert recorded == {"amendment", "amendment-existing"}
+
+    folded = ll.fold(ll.read(repo)["records"])
+    amendments = folded["launches"][launch]["amendments"]
+    reoutcome_amendments = [a for a in amendments if a["kind"] == "reoutcome"]
+    assert len(reoutcome_amendments) == 1
+
+    amendment_events = [
+        r for r in ll.read(repo)["records"]
+        if r.get("event") == "amendment" and r.get("launchId") == launch
+    ]
+    assert len(amendment_events) == 1
+
+    counted = ll.count(repo, batch)
+    assert counted["amendments"]["reoutcome"] == 1
+    assert counted["amendments"]["rehandback"] == 1
 
 
 def test_record_outcome_idempotent_retry(tmp_path, monkeypatch):
