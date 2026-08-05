@@ -253,6 +253,83 @@ def test_assert_results_only_refuses_nested_material():
     assert secret not in str(exc.value)
 
 
+def test_assert_results_only_allows_step_key_equal_to_account_name():
+    # #861: the exact shape that bit in PR #857 — a plan step keyed `owner` against a slot whose
+    # `mintableAccounts` names `owner`. The key is the step's own field name, not leaked material,
+    # so the guard must not refuse.
+    material = {"expected-identity": [], "mintable-account": ["owner"], "connection-detail": []}
+    result = {"steps": [{"op": "resume", "owner": "C7"}]}
+    pp.assert_results_only(result, material)
+
+
+def test_assert_results_only_allows_hyphenated_account_name_as_key():
+    # The same landmine one naming convention over: a kebab-case account meeting a kebab-case
+    # field name. Fixing only bare identifiers would leave the bug armed for `test-user`.
+    material = {
+        "expected-identity": [],
+        "mintable-account": ["pilot-owner"],
+        "connection-detail": [],
+    }
+    result = {"steps": [{"op": "resume", "pilot-owner": "C7"}]}
+    pp.assert_results_only(result, material)
+
+
+def test_assert_results_only_refuses_account_name_as_value():
+    # The other half of #861: dropping the key match must not drop the VALUE match for that same
+    # needle — an account name traveling as data is still a leak.
+    material = {"expected-identity": [], "mintable-account": ["owner"], "connection-detail": []}
+    result = {"steps": [{"op": "resume", "responsibleParty": "owner"}]}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only(result, material)
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_IN_RESULT
+    assert exc.value.detail == "mintable-account"
+    assert "owner" not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    ("material_class", "secret"),
+    [
+        ("expected-identity", "pilot-owner@example.test"),
+        ("connection-detail", "postgres://localhost:5432/example_dev"),
+        ("mintable-account", "service account"),
+        # The rows that matter most: an identity and a connection detail that ARE field-name-shaped.
+        # The schema permits any non-empty string for both, and `example_dev` is the contract's own
+        # example datastore identity — so the carve-out must key on material CLASS, not on spelling
+        # alone. Exempting these by shape would silently drop key-position detection for real
+        # secrets while every other test still passed.
+        ("expected-identity", "service_identity"),
+        ("connection-detail", "example_dev"),
+    ],
+)
+def test_assert_results_only_still_refuses_non_account_material_as_key(
+    material_class, secret
+):
+    # Key-position bite is kept for every needle the carve-out does not reach: a result KEYED by an
+    # identity or a connection string is a real leak, whatever it is spelled like.
+    material = {"expected-identity": [], "mintable-account": [], "connection-detail": []}
+    material[material_class] = [secret]
+    result = {"byAccount": {secret: {"result": "pass"}}}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only(result, material)
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_IN_RESULT
+    assert exc.value.detail == material_class
+    assert secret not in str(exc.value)
+
+
+@pytest.mark.parametrize("account", ["9owner", "owner\n", "-owner"])
+def test_assert_results_only_refuses_non_field_shaped_account_as_key(account):
+    # The carve-out's boundaries, pinned so the shape test cannot quietly widen. Slot validation
+    # accepts any non-empty account string, so all three are reachable. `owner\n` is the one that
+    # bites back: Python's `$` would accept that trailing newline as field-name-shaped and drop the
+    # key match, so this row is what holds the pattern at a strict `\Z`.
+    material = {"expected-identity": [], "mintable-account": [account], "connection-detail": []}
+    result = {"byAccount": {account: {"result": "pass"}}}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.assert_results_only(result, material)
+    assert exc.value.reason == pp.REFUSAL_MATERIAL_IN_RESULT
+    assert exc.value.detail == "mintable-account"
+
+
 def test_assert_results_only_refuses_non_mapping_material():
     with pytest.raises(pp.PilotPolicyError) as exc:
         pp.assert_results_only({"ok": True}, ["not", "a", "mapping"])

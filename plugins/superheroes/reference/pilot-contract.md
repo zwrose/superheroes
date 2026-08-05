@@ -489,10 +489,36 @@ verdict. `verify_boundary` in `lib/pilot_provision.py` calls `assert_results_onl
 verdict before returning it.
 
 `assert_results_only(result, material)` is the mechanical guard: it walks the result
-structure (dicts, lists, string values, and dict keys) and refuses when any string from
+structure (dicts, lists, and string values) and refuses when any string from
 `policy_material(policy)` appears as an exact match (`policy-material-in-result`).
 `policy_material` extracts three classes:
 `expected-identity`, `mintable-account`, and `connection-detail`.
+
+**Values always; keys for everything except a field-name-shaped account name.** A dict value is
+data; a dict key is the result's *shape* — a field name the producer wrote. The guard cannot tell
+the two apart when they spell the same word, and account names are exactly the short bare words
+that field names use. So a **`mintable-account`** needle matching `^[A-Za-z_][A-Za-z0-9_-]*\Z` is
+matched against **values only**. Every other needle — both other classes, and any account name that
+could not be a field name — is matched **in key position as well**. The anchor is `\Z`, matching
+the whole string with no exception: Python's `$` would also accept one trailing newline, so an
+account name spelled `owner\n` would read as field-name-shaped and lose its key-position match. It
+does not — it is matched in key position, like any other name that could not be a field name. Before this rule, a project
+with an account named `owner`, `note`, or `op` hit a refusal the moment a result used that word as
+a field name, with nothing in the refusal to say the account *name* rather than a leak was the
+cause — account naming was a landmine (#861; PR #857 worked around it by renaming a plan-step key
+to `responsibleParty`).
+
+The carve-out is deliberately keyed on the material **class** and not on spelling alone. The schema
+permits any non-empty string for `expectedIdentity` and `connectionDetail`, and bare ones are
+ordinary — the example policy above uses `example_dev` as its datastore identity. Exempting
+material by shape alone would have dropped key-position detection for those too, silently, since
+they are under no naming pressure toward field names. Account names are the only class the project
+chooses in the same vocabulary as its result fields.
+
+**Coverage limit:** a `mintable-account` name that is field-name-shaped is **not** detected in
+**key** position. A producer that keys a result dict *by account name* leaks that name past this
+guard. Producers assemble results under fixed field names and put data in values; keying by
+material is the shape to avoid.
 
 `exercise_no_policy_material_in_reach(reach_roots, material)` walks reach roots and scans
 regular file bytes for policy material needles. Receipt shape:
@@ -532,7 +558,7 @@ receipt).
 
 | Token | When returned |
 |---|---|
-| `policy-material-in-result` | `assert_results_only`: result structure contains a policy material string as a value or dict key |
+| `policy-material-in-result` | `assert_results_only`: result structure contains a policy material string as a value — or, for everything except a field-name-shaped `mintable-account` name, as a dict key |
 | `policy-material-invalid` | `assert_results_only`: `material` is not a mapping or has no non-empty indexed needles |
 | `policy-exercise-vacuous` | `exercise_no_policy_material_in_reach`: empty material, or walk completes with zero files scanned |
 | `policy-exercise-unreadable` | `exercise_no_policy_material_in_reach`: directory listing or file read fails during walk |
@@ -1673,12 +1699,34 @@ A passing receipt binds to:
 - **and the cleanup's source state** — the repository HEAD oid plus a content digest of every
   dirty or untracked path in the cleanup repository (regular files by content, symlinks by link
   target string, directories and other non-regular entries by path only), plus content digests of
-  the cleanup argv's executable (`argv0`) and of every existing regular file or symlink target in
-  its argv tail (`argvDigests` — relative tail paths resolved against `runCwd`, the same cwd the
-  cleanup command runs under), so an edit to those bound files — committed or not — invalidates
-  the receipt at the same argv. A cleanup that reads a file not named in its argv (a sourced
-  helper, an imported module, a config file) is still not covered by this binding; that
-  limitation is known.
+  the cleanup argv's executable (`argv0Digest`) and of every argv-tail element that exists as a
+  regular file or as a symlink to a regular file (`argvDigests` — every tail element is probed as
+  a path with no leading-dash exemption; relative tail paths are resolved against `runCwd`, the
+  same cwd the cleanup command runs under). An element that names nothing on disk contributes
+  nothing. The receipt refuses with `cleanup-source-argv-unbindable` when a tail element is not a
+  string, when `lstat` leaves existence undetermined (for example `EACCES`, `ELOOP`, or `EIO`), or
+  when an element exists but yields no content digest (a symlink to a non-regular target, a
+  dangling or looping symlink, a directory or other non-regular entry, or an unreadable file) — the
+  receipt is withheld rather than recording an unbound entry, so `argvDigests` never carries a null
+  digest. `argv0_content_digest` digests a regular
+  file only and returns `null` for a symlinked `argv[0]`, so a symlinked cleanup executable is not
+  content-bound today — a known limitation, deliberately not closed here because refusing on it
+  would break the ordinary "interpreter plus script" shape (`/usr/bin/python3` is commonly a
+  symlink). An edit to bound files — committed or not — invalidates the receipt at the same argv.
+  A cleanup that reads a file not named in its argv (a sourced helper, an imported module, a config
+  file) is still not covered by this binding; that limitation is known.
+
+  The source binding is a **snapshot taken before the exercise runs**, not an execution-time
+  guarantee: a tail path can be created after it was classified absent, or a digested file replaced
+  after it was hashed, between the snapshot and the cleanup's own execution. Closing that window
+  would require an execution-time identity strategy, which this binding does not attempt.
+
+  Because every relative argv-tail element is resolved against `runCwd`, an ordinary lexical argv
+  token that happens to name an existing non-digestible entry there — most commonly a directory —
+  refuses the whole receipt with `cleanup-source-argv-unbindable`. This is deliberate: the harness
+  cannot tell a lexical token from a path the cleanup reads, and a receipt it cannot bind is one it
+  must not issue. Authors can rename or relocate the colliding entry, or declare the cleanup with a
+  `runCwd` that does not contain it.
 
 Both digests are **HMAC-SHA256 keyed on a digest of the whole policy document**. An unkeyed
 truncated digest of a low-entropy identity such as a database name would be a dictionary oracle
@@ -1773,6 +1821,7 @@ false `cleanup-foreign-sentinel-destroyed` containment failure rather than a fal
 | `cleanup-sentinel-probe-indeterminate` | `probe_sentinel` or `run_bounded`: probe exited with a code other than 0/1, timed out, or subprocess could not be started |
 | `cleanup-source-root-invalid` | `source_identity`: `cleanup_root` is missing or not an existing directory |
 | `cleanup-source-unreadable` | `source_identity`: `git status --porcelain -z` could not be read, or a dirty worktree file could not be hashed |
+| `cleanup-source-argv-unbindable` | `_argv_tail_digests`: an argv-tail element exists but yields no content digest (a symlink to a non-regular target, a dangling or looping symlink, a directory or other non-regular entry, an unreadable file, or an indeterminate `lstat`), or a tail element is not a string |
 | `cleanup-policy-invalid` | `foreign_namespaces`: policy shape or slot membership is invalid |
 | `cleanup-argv0-not-absolute` | `cleanup_effect_receipt`: resolved cleanup `argv[0]` is not an absolute path |
 | `cleanup-receipt-vacuous` | `cleanup_effect_receipt`: sentinel already present before plant, or absent after plant |
@@ -1869,7 +1918,11 @@ non-application.
 
 ### Broker admission
 
-Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception.
+Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception for
+the validation failures it recognises. `provision_server` takes a **required** `effect_id`, and the
+two ways to get that wrong land differently: **omitting** it raises `TypeError` at the call, as any
+Python call missing an argument does — a call-shape error, not a recognised validation failure —
+while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
@@ -1893,8 +1946,11 @@ The primary provisioning shape journals **before** processes exist: `begin_provi
 writes the journal `begin` record and returns an `effectId`; the caller spawns the server and
 browser, then `provision_server` closes that effect with `outcome: applied` via the supplied
 `effect_id`. A crash between spawning and recording must replay as *possibly-applied*, never as
-never-happened (#660 §7). The legacy `effect()` wrapper inside `provision_server` (when
-`effect_id` is omitted) remains for callers that journal and spawn in one step.
+never-happened (#660 §7). This is the **only** provisioning shape: `effect_id` is a required
+argument, so omitting it is a `TypeError` at call time, and an explicitly supplied non-string or
+empty `effect_id` refuses (`browser-server-record-invalid`). There is no journal-after-the-fact
+fallback — the legacy `effect()` wrapper was removed in #863 with zero live callers, because a
+crash on that path left no journal trace at all.
 
 Public API in `lib/pilot_browser.py`: `validate_pin`, `verify_pin`, `socket_dir_plan`,
 `create_socket_dir`, `remove_socket_dir`, `assert_browser_is_server_child`,
@@ -1905,11 +1961,6 @@ Public API in `lib/pilot_browser.py`: `validate_pin`, `verify_pin`, `socket_dir_
 
 These are recorded contract facts, not oversights pending silent fix:
 
-- **`provision_server`'s legacy non-pre-spawn path still exists.** A caller that omits the
-  pre-spawn `effect_id` gets the old journal-after-the-fact ordering, which cannot record a crash
-  between spawning and recording. The pre-spawn path (`begin_provision_server` then
-  `provision_server` with `effect_id`) is the documented one; whether the legacy path should be
-  removed is an open API-shape question.
 - **Socket-base worktree containment resolves the calling process's repository, not the slot's
   worktree.** Per-slot worktrees are a framework concept C7 does not own; binding the
   containment check to the slot's tree belongs with the sub-issues that own slot worktrees
@@ -1933,7 +1984,7 @@ These are recorded contract facts, not oversights pending silent fix:
 | `browser-socket-dir-not-directory` | `remove_socket_dir`: path is not a string or not a directory |
 | `browser-socket-dir-unrecognized` | `remove_socket_dir`: path basename does not start with the framework socket-directory prefix (`pb-`), checked before any entries are removed |
 | `browser-socket-dir-unremovable` | `remove_socket_dir`: directory contents cannot be enumerated; an entry cannot be classified or removed safely (including a non-empty subdirectory); or removing the now-empty directory fails |
-| `browser-server-record-invalid` | `provision_server`, `teardown_server`, `admit_server_registry`, or `admit`: server record shape, slot reference, generation, PIDs, pin, or timestamps fail validation; journal write fails |
+| `browser-server-record-invalid` | `provision_server`, `teardown_server`, `admit_server_registry`, or `admit`: server record shape, slot reference, generation, PIDs, pin, or timestamps fail validation; `provision_server`'s required `effect_id` is supplied but is not a non-empty string; journal write fails |
 | `browser-not-server-child` | `assert_browser_is_server_child`: browser PID's parent is not the server PID |
 | `browser-pid-unreadable` | `assert_browser_is_server_child`: parent PID cannot be read from the process table |
 | `browser-terminal-state-unobserved` | `teardown_server`: `observe_exit` does not return a dict with `exited: true` for the server PID or for the browser PID (a dict with `exited: true` and absent `status` is accepted) |
