@@ -726,17 +726,23 @@ def _launch_doctrine_builder_dispatch_section():
 
 def test_amendment_vocabulary_in_showrunner_charter():
     """§11: showrunner charter carries post-terminal amendment vocabulary from launch_ledger."""
-    # axis: caller-writable amendment kinds, vet rulings, and the amend verb must appear in the charter.
+    # axis: caller-writable amendment kinds, vet rulings, and the amend verb must appear in the
+    # charter pinned in their invocation context (--kind / --value lines), not merely anywhere in prose.
     import launch_ledger
 
     doc = _read("skills/showrunner/SKILL.md")
     missing = []
     for kind in launch_ledger.CALLER_WRITABLE_AMENDMENT_KINDS:
-        if kind not in doc:
+        if "--kind %s" % kind not in doc:
             missing.append("kind %r" % kind)
-    for ruling in launch_ledger.VET_RULINGS:
-        if ruling not in doc:
-            missing.append("ruling %r" % ruling)
+    value_lines = [ln for ln in doc.splitlines() if "--value" in ln]
+    if not value_lines:
+        missing.append("no --value line")
+    else:
+        value_text = "\n".join(value_lines)
+        for ruling in launch_ledger.VET_RULINGS:
+            if ruling not in value_text:
+                missing.append("ruling %r" % ruling)
     if "amend" not in doc:
         missing.append("verb 'amend'")
     assert not missing, (

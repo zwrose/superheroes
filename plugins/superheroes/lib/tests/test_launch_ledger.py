@@ -2490,7 +2490,7 @@ def test_fold_amendment_missing_field(tmp_path, field):
 
 
 def test_terminal_outcome_unchanged_after_amendment(tmp_path, monkeypatch):
-    # axis: terminal record byte-unchanged after amendment
+    # axis: terminal record byte-unchanged after amendment; fold projection unchanged too
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
@@ -2501,11 +2501,21 @@ def test_terminal_outcome_unchanged_after_amendment(tmp_path, monkeypatch):
     with open(path, encoding="utf-8") as fh:
         lines = fh.readlines()
     outcome_line = [ln for ln in lines if '"event":"outcome"' in ln.replace(" ", "")][0]
-    ll.amend(repo, "l1", "evidence", "corrected", "typo fix")
+    records_before = ll.read(repo)["records"]
+    folded_before = ll.fold(records_before)
+    info_before = folded_before["launches"]["l1"]
+    ll.amend(repo, "l1", "vet", "not-ready", "advisor ruling")
     with open(path, encoding="utf-8") as fh:
         lines_after = fh.readlines()
     outcome_line_after = [ln for ln in lines_after if '"event":"outcome"' in ln.replace(" ", "")][0]
     assert outcome_line_after == outcome_line
+    records_after = ll.read(repo)["records"]
+    folded_after = ll.fold(records_after)
+    info_after = folded_after["launches"]["l1"]
+    assert info_after["terminal"] == info_before["terminal"]
+    assert info_after["outcome"] == info_before["outcome"]
+    assert info_after["terminalKind"] == info_before["terminalKind"]
+    assert len(info_after["amendments"]) == len(info_before["amendments"]) + 1
 
 
 # Bite-proof tests (guarded elements) -----------------------------------------
@@ -2551,14 +2561,19 @@ def test_bite_rehandback_subset_derivation(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "bite-rehandback"
-    launch = "l-reh"
-    _declare(repo, batch, 1)
-    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
-    _append_raw(_ledger_file(repo, os.environ), _started(launch))
-    ll.record_outcome(repo, launch, "handback", "first")
-    ll.record_outcome(repo, launch, "handback", "second")
+    launch_handback = "l-reh-handback"
+    launch_park = "l-reh-park"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved(launch_handback, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch_handback))
+    ll.record_outcome(repo, launch_handback, "handback", "first")
+    ll.record_outcome(repo, launch_handback, "handback", "second")
+    ll.reserve(repo, _reserved(launch_park, batch, ["b"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch_park))
+    ll.record_outcome(repo, launch_park, "park", "blocked")
+    ll.record_outcome(repo, launch_park, "handback", "retry")
     result = ll.count(repo, batch)
-    assert result["amendments"]["reoutcome"] == 1
+    assert result["amendments"]["reoutcome"] == 2
     assert result["amendments"]["rehandback"] == 1
 
 
