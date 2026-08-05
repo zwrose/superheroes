@@ -171,6 +171,136 @@ def test_submit_duplicate_is_idempotent(tmp_path):
     assert dup == {"ok": True, "duplicate": True}
 
 
+# --- #845 panel seat-key guard ------------------------------------------------
+
+_ALL_STEMS = {s: {"findings": []} for s in ("architecture", "code", "security", "test", "premortem")}
+_ALL_DIMS = {d: {"findings": []} for d in RD.DIMENSIONS}
+_CORRECT_RECOVERY = {"seats": {"code-reviewer": {"findings": []}}}
+
+
+def _assert_seat_key_refused(d, n, artifact, offending_key):
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)
+    assert out["ok"] is False
+    assert "seat key" in out["reason"]
+    assert offending_key in out["reason"]
+    after = RD.cmd_next(d)
+    assert after["phase"] == n["phase"]
+    assert after["attempt"] == n["attempt"]
+    assert after["expectedStateHash"] == n["expectedStateHash"]
+    recovery = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                             _CORRECT_RECOVERY)
+    assert recovery["ok"] is True
+    journal = RD.read_journal(d)
+    assert any(e.get("outcome") == "seat-key-mismatch" for e in journal)
+
+
+@pytest.mark.parametrize("artifact,offending_key", [
+    (_ALL_STEMS, "architecture"),
+    ({"code-reviewer": {"findings": []}, "architecture": {"findings": []}}, "architecture"),
+    ({"code-reviewer": {"findings": []}, "architecture-reviewr": {"findings": []}},
+     "architecture-reviewr"),
+    ({"seats": {"seatMap": {}}}, "seatMap"),
+], ids=["all-stems", "partial-mis-key", "arbitrary-wrong-key", "envelope-in-seats"])
+def test_submit_panel_seat_key_refused(tmp_path, artifact, offending_key):
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    _assert_seat_key_refused(d, n, artifact, offending_key)
+
+
+@pytest.mark.parametrize("artifact", [
+    _ALL_DIMS,
+    {"seats": {"code-reviewer": {"findings": []}}},
+    {"seats": {}},
+    {"seats": []},
+    {"seatMap": {}, "ranManifest": {}},
+], ids=["all-dims", "partial-legitimate", "empty-seats", "non-dict-seats", "metadata-only"])
+def test_submit_panel_seat_key_accepted(tmp_path, artifact):
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)
+    assert out["ok"] is True
+
+
+def test_submit_panel_seat_key_guard_before_fold(tmp_path):
+    """A refused submit must not mutate loop-state — the guard runs before fold/save."""
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    state_path = os.path.join(d, RD.STATE_FILE)
+    with open(state_path, "rb") as fh:
+        before = fh.read()
+    RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                  {"architecture": {"findings": []}})
+    with open(state_path, "rb") as fh:
+        after = fh.read()
+    assert before == after
+
+
+def test_submit_panel_seat_key_does_not_preempt_fences(tmp_path):
+    """Mis-keyed artifact with stale attempt or bad hash keeps the existing fence reasons."""
+    d = str(tmp_path)
+    n = _first_next(d, _cfg())
+    bad = {"architecture": {"findings": []}}
+    stale = RD.cmd_submit(d, n["phase"], n["attempt"] + 3, n["expectedStateHash"], bad)
+    assert stale["ok"] is False and "echo" in stale["reason"]
+    assert "seat key" not in stale["reason"]
+    hash_bad = RD.cmd_submit(d, n["phase"], n["attempt"], "deadbeef", bad)
+    assert hash_bad["ok"] is False and "hash" in hash_bad["reason"]
+    assert "seat key" not in hash_bad["reason"]
+
+
+def test_cmd_submit_is_only_fold_caller_besides_run_loop():
+    """A NEW `_fold` caller is a new submit seam that must either route through
+    `panel_seat_key_fault` or be added to this census deliberately."""
+    import ast
+    mod_path = os.path.join(_LIB, "round_driver.py")
+    with open(mod_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    callers = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        for child in ast.walk(node):
+            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
+                if child.func.id == "_fold":
+                    callers.add(node.name)
+                    break
+    assert callers == {"cmd_submit", "run_loop"}
+
+
+def test_panel_seat_keys_explicit_shape():
+    art = {"seats": {"code-reviewer": {}, "seatMap": {}}}
+    assert RD.panel_seat_keys(art) == ["code-reviewer", "seatMap"]
+
+
+def test_panel_seat_keys_legacy_shape():
+    art = {"code-reviewer": {}, "seatMap": {}, "ranManifest": {}}
+    assert RD.panel_seat_keys(art) == ["code-reviewer"]
+
+
+def test_panel_seat_keys_non_dict():
+    assert RD.panel_seat_keys(None) == []
+    assert RD.panel_seat_keys([]) == []
+
+
+def test_panel_seat_key_fault_empty_dimensions():
+    assert RD.panel_seat_key_fault([], {"architecture": {}}) is None
+    assert RD.panel_seat_key_fault(None, {"architecture": {}}) is None
+
+
+def test_panel_seat_key_fault_stem_hint():
+    fault = RD.panel_seat_key_fault(RD.DIMENSIONS, {"architecture": {}})
+    assert fault is not None
+    assert "seat key" in fault
+    assert "architecture is the findings-file stem for architecture-reviewer" in fault
+
+
+def test_panel_seat_key_fault_no_hint_for_unknown_stem():
+    fault = RD.panel_seat_key_fault(RD.DIMENSIONS, {"totally-unknown": {}})
+    assert fault is not None
+    assert "seat key" in fault
+    assert "findings-file stem" not in fault
+
+
 def test_v1_state_is_refused_with_fresh_start_message(tmp_path):
     d = str(tmp_path)
     with open(os.path.join(d, RD.STATE_FILE), "w", encoding="utf-8") as fh:

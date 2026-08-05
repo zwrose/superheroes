@@ -931,6 +931,12 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
+# The four artifact-envelope keys `_fold_panel` reads off a panel artifact. They are NOT seat keys.
+# In the legacy shape (no dict-valued `artifact["seats"]`, so the artifact ITSELF is the seats map)
+# these names must be subtracted before judging seat keys; in the explicit `{"seats": {...}}` shape
+# nothing is subtracted, so one of these names appearing INSIDE the seats map is a real mis-key.
+_PANEL_ENVELOPE_KEYS = ("seats", "seatMap", "ranManifest", "canaryResult")
+
 # Derived from dispatch_outcome.py — the single home for not-run reason tokens (#747).
 _DISPATCH_NOT_RUN_REASONS = dispatch_outcome.NOT_RUN_REASONS
 
@@ -1110,6 +1116,54 @@ def _seat_map_configured_vendor(seat_map, dim):
     c = seat_map["seats"].get(dim)
     v = c.get("vendor") if isinstance(c, dict) else None
     return v if isinstance(v, str) and v in _PANEL_VENDORS else None
+
+
+def panel_seat_keys(artifact):
+    """The candidate seat keys of a panel artifact, resolved EXACTLY as `_fold_panel` resolves
+    `seats` — so the guard and the fold can never read different maps.
+
+    Returns a sorted list of string keys. Non-string keys are ignored (the fold's `seats.get(dim)`
+    can never match one). The legacy shape — no dict-valued `artifact["seats"]`, so the artifact
+    itself is the seats map — has `_PANEL_ENVELOPE_KEYS` subtracted; the explicit shape does not.
+    """
+    if not isinstance(artifact, dict):
+        return []
+    if isinstance(artifact.get("seats"), dict):
+        keys = [k for k in artifact["seats"] if isinstance(k, str)]
+    else:
+        keys = [k for k in artifact if isinstance(k, str) and k not in _PANEL_ENVELOPE_KEYS]
+    return sorted(keys)
+
+
+def panel_seat_key_fault(dimensions, artifact):
+    """None when every seat key in `artifact` is a configured dimension; otherwise a reason string
+    naming the offending keys.
+
+    An EMPTY candidate key set is not a mis-key — there is no wrong key to name — so it returns None
+    and `_fold_panel`'s own fail-closed path (every configured dimension folds `missing`, nothing
+    certifies) is left exactly as it is.
+    """
+    dims = ([d for d in dimensions if isinstance(d, str)]
+            if isinstance(dimensions, (list, tuple)) else [])
+    keys = panel_seat_keys(artifact)
+    if not keys:
+        return None
+    if not dims:
+        return None
+    unknown = [k for k in keys if k not in dims]
+    if not unknown:
+        return None
+    stem_to_dim = {AGENT_SUFFIX[d]: d for d in dims if d in AGENT_SUFFIX}
+    hints = [f"{k} is the findings-file stem for {stem_to_dim[k]}"
+             for k in sorted(unknown) if k in stem_to_dim]
+    parts = [
+        "unknown seat key(s): %s" % ", ".join(sorted(unknown)),
+        "configured dimensions: %s" % ", ".join(sorted(dims)),
+        "re-key the seats map and resubmit the same phase/attempt/state-hash",
+    ]
+    if hints:
+        parts.append(", ".join(hints))
+    return "; ".join(parts)
 
 
 def _fold_panel(state, config, artifact):
@@ -2669,6 +2723,18 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "hash-mismatch"})
         return {"ok": False, "reason": "state-hash mismatch — the state moved under a stale submit"}
+
+    # #845: the panel seat-key invariant, at the chokepoint. A `seats` map keyed by findings-file
+    # stems instead of `payload.dimensions` submits `ok` today and fails phases later with empty
+    # clusters and every seat `missing` — four recorded occurrences. Refuse HERE, before the fold, so
+    # the pending step survives and recovery is a plain re-keyed resubmit on the same attempt/hash.
+    if phase == P_PANEL:
+        fault = panel_seat_key_fault(_panel_dimensions(state["config"]), artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "seat-key-mismatch"})
+            return {"ok": False, "reason": fault}
 
     # accept: clear the pending, fold, record lastAccepted, advance.
     round_no = pending.get("round")
