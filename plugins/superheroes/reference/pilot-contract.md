@@ -21,12 +21,13 @@
 19. [Mid-wave lapse](#mid-wave-lapse)
 20. [Credential validity margin](#credential-validity-margin)
 21. [Minted sign-in exercises](#minted-sign-in-exercises)
-22. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
-23. [Per-slot browser topology](#per-slot-browser-topology)
-24. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
-25. [The provisioning gate](#the-provisioning-gate)
-26. [Per-slot app lifecycle](#per-slot-app-lifecycle)
-27. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
+22. [Reclaim safety](#reclaim-safety)
+23. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
+24. [Per-slot browser topology](#per-slot-browser-topology)
+25. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
+26. [The provisioning gate](#the-provisioning-gate)
+27. [Per-slot app lifecycle](#per-slot-app-lifecycle)
+28. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
 
 ---
 
