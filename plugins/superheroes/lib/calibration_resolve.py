@@ -21,6 +21,39 @@ import store_core       # noqa: E402
 
 REVIEW_CREW = "review-crew"
 
+REASON_UNRESOLVABLE_ROOT = "root-unresolvable-project-calibrated-elsewhere"
+
+_REMEDY_UNRESOLVABLE_ROOT = (
+    "--root is the control-plane STORE root, not the repository root; "
+    "omit --root to resolve calibration for this project."
+)
+
+
+class UnresolvableRootError(Exception):
+    def __init__(self, root, cwd, hero, default_location, default_layer_path):
+        self.root = root
+        self.cwd = cwd
+        self.hero = hero
+        self.reason = REASON_UNRESOLVABLE_ROOT
+        self.default_location = default_location
+        self.default_layer_path = default_layer_path
+        super().__init__(self.reason)
+
+    def __str__(self):
+        return f"{self.reason}: {self.root}"
+
+    def payload(self):
+        return {
+            "refusal": "unresolvable-root",
+            "reason": self.reason,
+            "root": self.root,
+            "cwd": self.cwd,
+            "hero": self.hero,
+            "default_location": self.default_location,
+            "default_layer_path": self.default_layer_path,
+            "remedy": _REMEDY_UNRESOLVABLE_ROOT,
+        }
+
 
 def _repo_root(cwd):
     return store_core.repo_root(cwd)
@@ -73,7 +106,7 @@ def _with_dispatch_fields(out):
     return out
 
 
-def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False):
+def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _contradiction_check=True):
     """Resolve unified + legacy calibration locations for review-crew consumers.
 
     Precedence: unified-in-repo → legacy-in-repo → unified-global → legacy-global.
@@ -121,6 +154,20 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False):
                 "healed": g["healed"], "entry_id": g["entry_id"],
             })
 
+    if root is not None and _contradiction_check:
+        probe = resolve(
+            cwd, root=None, hero=hero, legacy_root=legacy_root,
+            heal=False, _contradiction_check=False,
+        )
+        if probe.get("exists"):
+            raise UnresolvableRootError(
+                root=root,
+                cwd=cwd,
+                hero=hero,
+                default_location=probe["location"],
+                default_layer_path=probe.get("dispatch_layer"),
+            )
+
     return _with_dispatch_fields({
         "location": "none", "exists": False, "layout": None,
         "core_path": None, "layer_path": None, "legacy_path": None,
@@ -142,7 +189,12 @@ def main(argv):
     ap.add_argument("command", nargs="?", default="resolve", choices=("resolve",))
     ap.add_argument("--root", default=None)
     args = ap.parse_args(argv[1:])
-    sys.stdout.write(json.dumps(resolve(os.getcwd(), root=args.root)) + "\n")
+    try:
+        result = resolve(os.getcwd(), root=args.root)
+    except UnresolvableRootError as exc:
+        sys.stderr.write(json.dumps(exc.payload()) + "\n")
+        return 2
+    sys.stdout.write(json.dumps(result) + "\n")
     return 0
 
 

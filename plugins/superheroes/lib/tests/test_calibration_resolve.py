@@ -1,9 +1,35 @@
+import json
 import os
 import subprocess
+import sys
+
+import pytest
 
 import calibration_resolve as cr
 import core_md as cm
 import mode_registry as mr
+
+_MODULE_PATH = os.path.abspath(cr.__file__)
+
+
+def _default_store_root(tmp_path):
+    return str(tmp_path / "_store_isolation")
+
+
+def _empty_store_root(tmp_path):
+    d = tmp_path / "empty_store"
+    d.mkdir()
+    return str(d)
+
+
+def _ensure_global_unified_layer(repo, store_root):
+    store = mr.ensure_project_store(repo, root=store_root)
+    cfg = os.path.join(store, "config")
+    os.makedirs(cfg, exist_ok=True)
+    layer = os.path.join(cfg, "review-crew.md")
+    with open(layer, "w") as fh:
+        fh.write("## Focus hints\n- code: x\n")
+    return layer
 
 
 def _init_repo(path, remote=None):
@@ -93,3 +119,139 @@ def test_migrated_unified_dispatch_core_carries_threat_model(tmp_path):
     assert out["dispatch_layer"] == str(layer)
     assert "multi-tenant" in core.read_text()
     assert out["dispatch_core"] != out["dispatch_layer"]
+
+
+def test_supplied_root_empty_default_store_holds_unified_global_raises(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    empty = _empty_store_root(tmp_path)
+    layer = _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError) as excinfo:
+        cr.resolve(str(repo), root=empty)
+    exc = excinfo.value
+    assert exc.reason == cr.REASON_UNRESOLVABLE_ROOT
+    assert exc.root == empty
+    assert exc.default_location == mr.GLOBAL
+    assert exc.default_layer_path == layer
+
+
+def test_supplied_root_empty_heal_true_still_raises(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError):
+        cr.resolve(str(repo), root=empty, heal=True)
+
+
+def test_neither_root_has_calibration_returns_none(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    empty = _empty_store_root(tmp_path)
+    out = cr.resolve(str(repo), root=empty)
+    assert out["location"] == "none"
+    assert out["exists"] is False
+
+
+def test_root_none_calibrated_default_no_raise(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    out = cr.resolve(str(repo))
+    assert out["exists"] is True
+    assert out["location"] == mr.GLOBAL
+
+
+def test_supplied_root_resolves_even_when_default_also_calibrated(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo, "git@github.com:o/r.git")
+    default_store = _default_store_root(tmp_path)
+    supplied_store = tmp_path / "supplied_store"
+    supplied_store.mkdir()
+    _ensure_global_unified_layer(str(repo), default_store)
+    supplied_layer = _ensure_global_unified_layer(str(repo), str(supplied_store))
+    out = cr.resolve(str(repo), root=str(supplied_store))
+    assert out["exists"] is True
+    assert out["location"] == mr.GLOBAL
+    assert out["layer_path"] == supplied_layer
+
+
+def test_in_repo_layer_bogus_supplied_root_no_raise(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    empty = _empty_store_root(tmp_path)
+    default_store = _default_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    layer = repo / ".claude" / "superheroes" / "review-crew.md"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("## Focus hints\n- code: x\n")
+    out = cr.resolve(str(repo), root=empty)
+    assert out["exists"] is True
+    assert out["location"] == mr.IN_REPO
+
+
+def test_resolve_profile_path_propagates_unresolvable_root(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError):
+        cr.resolve_profile_path(str(repo), root=empty)
+
+
+def test_unresolvable_root_error_payload_keys(tmp_path):
+    exc = cr.UnresolvableRootError(
+        root="/bad", cwd="/repo", hero=cr.REVIEW_CREW,
+        default_location=mr.GLOBAL, default_layer_path="/layer",
+    )
+    payload = exc.payload()
+    assert set(payload.keys()) == {
+        "refusal", "reason", "root", "cwd", "hero",
+        "default_location", "default_layer_path", "remedy",
+    }
+    assert payload["refusal"] == "unresolvable-root"
+
+
+def test_cli_resolve_root_empty_returns_2_stderr_refusal(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    proc = subprocess.run(
+        [sys.executable, "-B", _MODULE_PATH, "resolve", "--root", empty],
+        cwd=str(repo), capture_output=True, text=True,
+        env={**os.environ, "WORKHORSE_STORE_ROOT": default_store},
+    )
+    assert proc.returncode == 2
+    assert proc.stdout.strip() == ""
+    payload = json.loads(proc.stderr)
+    assert payload["reason"] == cr.REASON_UNRESOLVABLE_ROOT
+
+
+def test_cli_resolve_bare_calibrated_returns_0_stdout_json(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    proc = subprocess.run(
+        [sys.executable, "-B", _MODULE_PATH, "resolve"],
+        cwd=str(repo), capture_output=True, text=True,
+        env={**os.environ, "WORKHORSE_STORE_ROOT": default_store},
+    )
+    assert proc.returncode == 0
+    out = json.loads(proc.stdout)
+    assert out["exists"] is True
