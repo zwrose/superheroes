@@ -2689,16 +2689,51 @@ def test_record_outcome_amend_failed_no_double_prefix(tmp_path, monkeypatch):
     assert result["recorded"] is None
 
 
-def test_record_outcome_uniform_keys_on_success(tmp_path, monkeypatch):
-    # axis: ordinary success carries attemptedOutcome without KeyError
+_RECORD_OUTCOME_KEYS = frozenset({
+    "ok", "reason", "recorded", "amendmentKind", "attemptedOutcome", "terminalOutcome",
+})
+
+
+@pytest.mark.parametrize("case", [
+    "invalid_outcome",
+    "empty_evidence",
+    "unknown_launch",
+    "never_started",
+    "fresh_amendment",
+    "deduplicated_retry",
+])
+def test_record_outcome_uniform_keys(tmp_path, monkeypatch, case):
+    # axis: every return branch carries the full key set
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
-    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
-    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
-    result = ll.record_outcome(repo, "l1", "handback", "evidence")
-    assert result["attemptedOutcome"] == "handback"
-    assert result["terminalOutcome"] == "handback"
-    assert result["recorded"] == "outcome"
+    if case == "invalid_outcome":
+        result = ll.record_outcome(repo, "l1", "bogus", "evidence")
+    elif case == "empty_evidence":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+        result = ll.record_outcome(repo, "l1", "handback", "   ")
+    elif case == "unknown_launch":
+        result = ll.record_outcome(repo, "missing", "handback", "evidence")
+    elif case == "never_started":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+        result = ll.record_outcome(repo, "l1", "handback", "evidence")
+    elif case == "fresh_amendment":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+        _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+        result = ll.record_outcome(repo, "l1", "handback", "again")
+        assert result["recorded"] == "amendment"
+    elif case == "deduplicated_retry":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+        _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+        ll.record_outcome(repo, "l1", "handback", "done")
+        result = ll.record_outcome(repo, "l1", "handback", "done")
+        assert result["recorded"] == "amendment-existing"
+    else:
+        raise AssertionError("unknown case: %s" % case)
+    assert set(result.keys()) == _RECORD_OUTCOME_KEYS
 
 
 def test_bite_amend_lock_gate(tmp_path, monkeypatch):

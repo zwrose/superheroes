@@ -1399,22 +1399,12 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
             return _record_outcome_response(False, reason="outcome-unknown-launch")
 
         info = folded["launches"][launch_id]
+        # Terminal kind is immutable once terminal; a stale read cannot flip it.
         if info.get("terminalKind") == "refused" or not info.get("started"):
             return _record_outcome_response(False, reason="outcome-without-started")
 
-        for existing in info.get("amendments") or []:
-            if (existing.get("kind") == AMENDMENT_REOUTCOME
-                    and existing.get("value") == outcome
-                    and existing.get("note") == evidence):
-                return _record_outcome_response(
-                    True, recorded="amendment-existing",
-                    amendment_kind=AMENDMENT_REOUTCOME,
-                    attempted_outcome=outcome,
-                    terminal_outcome=info.get("outcome"),
-                )
-
         amended = amend(repo_root, launch_id, AMENDMENT_REOUTCOME, outcome, evidence,
-                        env=env, lock_timeout=lock_timeout)
+                        env=env, lock_timeout=lock_timeout, dedupe_identical=True)
         if not amended["ok"]:
             amend_reason = amended["reason"]
             if amend_reason == "amend-failed":
@@ -1422,8 +1412,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
             return _record_outcome_response(
                 False, reason="amend-failed:%s" % amend_reason,
             )
+        recorded = "amendment-existing" if amended["deduped"] else "amendment"
         return _record_outcome_response(
-            True, recorded="amendment",
+            True, recorded=recorded,
             amendment_kind=AMENDMENT_REOUTCOME,
             attempted_outcome=outcome,
             terminal_outcome=amended["terminalOutcome"],
@@ -1437,59 +1428,73 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     return _record_outcome_response(False, reason=mapped_reason)
 
 
-def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+def _amend_response(ok, reason=None, kind=None, value=None, terminal_outcome=None,
+                    terminal_kind=None, deduped=False):
+    return {
+        "ok": ok,
+        "reason": reason,
+        "kind": kind,
+        "value": value,
+        "terminalOutcome": terminal_outcome,
+        "terminalKind": terminal_kind,
+        "deduped": deduped,
+    }
+
+
+def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT,
+          *, dedupe_identical=False):
     """Record a post-terminal annotation on a terminal launch. Never mutates the terminal
     outcome, and never raises."""
     try:
         if not isinstance(launch_id, str) or not launch_id:
-            return {"ok": False, "reason": "amend-launch-id-invalid", "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="amend-launch-id-invalid")
         if kind not in AMENDMENT_KINDS:
-            return {"ok": False, "reason": "amend-kind-invalid:%s" % kind, "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="amend-kind-invalid:%s" % kind)
         if not isinstance(value, str) or not value:
-            return {"ok": False, "reason": "amend-value-empty", "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="amend-value-empty")
         if not isinstance(note, str) or not note:
-            return {"ok": False, "reason": "amend-note-empty", "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="amend-note-empty")
         if kind == "reoutcome" and value not in TERMINAL_OUTCOMES:
-            return {"ok": False, "reason": "amend-value-invalid:%s" % value, "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="amend-value-invalid:%s" % value)
         if kind == "vet" and value not in VET_RULINGS:
-            return {"ok": False, "reason": "amend-value-invalid:%s" % value, "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="amend-value-invalid:%s" % value)
 
         lock_result = _ensure_lock_file(repo_root, env=env)
         if not lock_result["ok"]:
-            return {"ok": False, "reason": lock_result["reason"], "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason=lock_result["reason"])
 
         lock_path = lock_result["path"]
         if not _acquire_lock(lock_path, lock_timeout):
-            return {"ok": False, "reason": "lock-unavailable", "kind": None,
-                    "value": None, "terminalOutcome": None, "terminalKind": None}
+            return _amend_response(False, reason="lock-unavailable")
 
         try:
             read_result = read(repo_root, env=env)
             state = read_result["state"]
             if state not in ("ok", "missing"):
-                return {"ok": False, "reason": "ledger-unreadable:%s" % state, "kind": None,
-                        "value": None, "terminalOutcome": None, "terminalKind": None}
+                return _amend_response(False, reason="ledger-unreadable:%s" % state)
 
             folded = fold(read_result["records"])
             if not folded["ok"]:
-                return {"ok": False, "reason": folded["reason"], "kind": None,
-                        "value": None, "terminalOutcome": None, "terminalKind": None}
+                return _amend_response(False, reason=folded["reason"])
 
             if launch_id not in folded["launches"]:
-                return {"ok": False, "reason": "amend-unknown-launch", "kind": None,
-                        "value": None, "terminalOutcome": None, "terminalKind": None}
+                return _amend_response(False, reason="amend-unknown-launch")
 
             info = folded["launches"][launch_id]
             if not info.get("terminal"):
-                return {"ok": False, "reason": "amend-not-terminal", "kind": None,
-                        "value": None, "terminalOutcome": None, "terminalKind": None}
+                return _amend_response(False, reason="amend-not-terminal")
+
+            if dedupe_identical:
+                for existing in info.get("amendments") or []:
+                    if (existing.get("kind") == kind
+                            and existing.get("value") == value
+                            and existing.get("note") == note):
+                        return _amend_response(
+                            True, kind=kind, value=value,
+                            terminal_outcome=info.get("outcome"),
+                            terminal_kind=info.get("terminalKind"),
+                            deduped=True,
+                        )
 
             record = {
                 "event": AMENDMENT_EVENT,
@@ -1502,23 +1507,20 @@ def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAU
             }
             folded_with = fold(read_result["records"] + [record])
             if not folded_with["ok"]:
-                return {"ok": False, "reason": folded_with["reason"], "kind": None,
-                        "value": None, "terminalOutcome": None, "terminalKind": None}
+                return _amend_response(False, reason=folded_with["reason"])
 
             if not append(repo_root, record, env=env):
-                return {"ok": False, "reason": "ledger-append-failed", "kind": None,
-                        "value": None, "terminalOutcome": None, "terminalKind": None}
+                return _amend_response(False, reason="ledger-append-failed")
 
-            return {
-                "ok": True, "reason": None, "kind": kind, "value": value,
-                "terminalOutcome": info.get("outcome"),
-                "terminalKind": info.get("terminalKind"),
-            }
+            return _amend_response(
+                True, kind=kind, value=value,
+                terminal_outcome=info.get("outcome"),
+                terminal_kind=info.get("terminalKind"),
+            )
         finally:
             _release_lock(lock_path)
     except Exception:
-        return {"ok": False, "reason": "amend-failed", "kind": None,
-                "value": None, "terminalOutcome": None, "terminalKind": None}
+        return _amend_response(False, reason="amend-failed")
 
 
 def _vet_count_key(ruling):

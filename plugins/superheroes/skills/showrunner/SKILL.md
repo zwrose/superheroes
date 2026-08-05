@@ -468,8 +468,9 @@ above).
    refusals is a signal to inspect, never a clean sheet**. **After vetting a delivered lane, record
    the ruling** with `amend --kind vet --value ready|not-ready|parked-blocker --note "<one line>"`. A
    NOT-READY ruling, and a parked blocker inside a delivered PR, are friction the terminal tallies
-   cannot see. **A second `record-outcome` on a lane that already ended is recorded, not
-   refused** — it lands as a `reoutcome` amendment and leaves the original terminal outcome untouched,
+   cannot see. **A second `record-outcome` on a lane that started and then ended with an outcome is
+   recorded, not refused** — a never-started lane is still refused with `outcome-without-started` —
+   it lands as a `reoutcome` amendment and leaves the original terminal outcome untouched,
    and the CLI exits **non-zero** with `recorded: 'amendment'` (or `'amendment-existing'` on an
    identical retry) because the caller's requested terminal write did not become the lane's outcome;
    so a lane handed back twice stops reading as one clean handback. **A terminal record whose evidence
