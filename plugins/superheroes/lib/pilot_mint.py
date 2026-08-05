@@ -9,10 +9,8 @@ resolution, boundary verification — those belong to callers and sibling module
 """
 import json
 import os
-import signal
-import subprocess
-import threading
 
+import pilot_bounded_run
 import pilot_contract
 import pilot_journal
 import pilot_probe
@@ -109,9 +107,6 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
     """Execute gateOffTestCommand with the enabling flag removed from the environment."""
     # bite-axis: gate-off execution — the declared test runs with the enabling variable
     # absent; timeout, oversize output, and spawn failure refuse rather than pass.
-    # bite-disclosure: bounded-runner shape duplicated from pilot_boundary._run_bounded_observer
-    # (private helper there); copies have diverged here (process-group handling on timeout).
-    # A third caller should trigger extraction into a shared helper.
     envelope_error = _validate_envelope(envelope)
     if envelope_error is not None:
         return _gate_fail(envelope_error)
@@ -137,88 +132,48 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
     env_copy = dict(environment)
     env_copy.pop(flag_var, None)
 
-    try:
-        proc = subprocess.Popen(
-            command,
-            cwd=run_cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            shell=False,
-            env=env_copy,
-            start_new_session=True,
-        )
-    except OSError:
+    # The gate-off command is a project's own test command, so it may fork children of its own;
+    # it runs in its own process group and the whole group is reaped on timeout.
+    run = pilot_bounded_run.run_bounded(
+        command,
+        run_cwd=run_cwd,
+        env=env_copy,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+        new_process_group=True,
+    )
+
+    outcome = run["outcome"]
+    if outcome == pilot_bounded_run.OUTCOME_TIMEOUT:
+        return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
+    if outcome == pilot_bounded_run.OUTCOME_OVERSIZE:
+        return _gate_fail(REFUSAL_GATE_OFF_OUTPUT_OVERSIZE)
+    if outcome != pilot_bounded_run.OUTCOME_COMPLETED:
+        # Fail closed on anything that is not a completed run — spawn-failed today, and any
+        # outcome the runner learns to report tomorrow.
         return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
 
     try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, PermissionError):
-        pgid = None
+        stdout_text = run["stdout"].decode("utf-8")
+    except UnicodeDecodeError:
+        stdout_text = ""
 
-    try:
-        stdout_holder = []
-        read_error = []
-
-        def _read_stdout():
-            try:
-                stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
-            except Exception as exc:
-                read_error.append(exc)
-
-        reader = threading.Thread(target=_read_stdout, daemon=True)
-        reader.start()
-        reader.join(timeout=timeout_seconds)
-
-        if reader.is_alive():
-            _terminate_process_group(proc, pgid)
-            reader.join(timeout=1)
-            return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
-
-        if read_error:
-            _terminate_process_group(proc, pgid)
-            return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
-
-        stdout_bytes = stdout_holder[0] if stdout_holder else b""
-        if len(stdout_bytes) > max_output_bytes:
-            _terminate_process_group(proc, pgid)
-            return _gate_fail(REFUSAL_GATE_OFF_OUTPUT_OVERSIZE)
-
-        try:
-            proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            _terminate_process_group(proc, pgid)
-            reader.join(timeout=1)
-            return _gate_fail(REFUSAL_GATE_OFF_TIMEOUT)
-
-        try:
-            stdout_text = stdout_bytes.decode("utf-8")
-        except UnicodeDecodeError:
-            stdout_text = ""
-
-        exit_code = proc.returncode
-        if exit_code == 0:
-            return {
-                "ok": True,
-                "exitCode": exit_code,
-                "reason": None,
-                "stdout": stdout_text,
-            }
+    # Neutral exit-code semantics, deliberately unlike pilot_boundary's observer: a nonzero
+    # gate-off run is a REPORTED result carrying its exit code, not the same event as a timeout.
+    exit_code = run["exitCode"]
+    if exit_code == 0:
         return {
-            "ok": False,
+            "ok": True,
             "exitCode": exit_code,
-            "reason": REFUSAL_GATE_OFF_TEST_FAILED,
+            "reason": None,
             "stdout": stdout_text,
         }
-    except Exception:
-        _terminate_process_group(proc, pgid)
-        return _gate_fail(REFUSAL_GATE_OFF_SPAWN_FAILED)
-    finally:
-        if proc.poll() is None:
-            _terminate_process_group(proc, pgid)
-        if reader.is_alive():
-            reader.join(timeout=1)
-        if proc.stdout and not reader.is_alive():
-            proc.stdout.close()
+    return {
+        "ok": False,
+        "exitCode": exit_code,
+        "reason": REFUSAL_GATE_OFF_TEST_FAILED,
+        "stdout": stdout_text,
+    }
 
 
 def gate_off_receipt(envelope, run_result, *, exercised_at):
@@ -559,31 +514,3 @@ def _scope_fail(reason):
 def _gate_fail(reason):
     return {"ok": False, "exitCode": None, "reason": reason, "stdout": ""}
 
-
-def _terminate_process_group(proc, pgid):
-    """Signal the captured process group, then reap the direct child."""
-    if pgid is not None:
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    if proc.poll() is None:
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            try:
-                proc.kill()
-            except (ProcessLookupError, PermissionError):
-                pass
-            try:
-                proc.wait()
-            except Exception:
-                pass

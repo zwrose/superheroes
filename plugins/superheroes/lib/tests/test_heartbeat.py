@@ -15,25 +15,10 @@ _LAUNCHER_MOD = os.path.join(_LIB, "launcher.py")
 _THIS_FILE = os.path.abspath(__file__)
 
 
-@pytest.fixture(autouse=True)
-def _pin_heartbeat_env(monkeypatch):
-    """#843: these tests build their own ledger/heartbeat roots under tmp_path, but any test
-    reaching `resolve_root` with the ambient process env inherits whatever the *session* was
-    launched with. `launcher.py` exports SUPERHEROES_HEARTBEAT_ROOT (and SUPERHEROES_LAUNCH_ID)
-    into every builder it spawns, so in a launcher-issued session the ambient override wins over
-    the tmp root: the e2e test's sweep read the real launch ledger instead of its own root and
-    classified the child's stamp `unknown` — six independent field receipts in one night, while
-    CI (which sets neither var) stayed green.
-
-    Same class as conftest's `_isolate_store_root`: pin the env so the module is hermetic
-    wherever it runs. Deleting rather than redirecting is deliberate — each test already
-    establishes its own root via SUPERHEROES_LAUNCH_LEDGER_ROOT or its own
-    SUPERHEROES_HEARTBEAT_ROOT, and a test that sets either still wins (it applies after this
-    fixture). Stripping the ambient value also stops these tests writing heartbeat files for
-    throwaway tmp repos into the developer's real launch-ledger root.
-    """
-    monkeypatch.delenv(hb.HEARTBEAT_ROOT_ENV, raising=False)
-    monkeypatch.delenv(hb.LAUNCH_ID_ENV, raising=False)
+# The #843 heartbeat/launch env pin used to live here as a module-local autouse fixture. #866
+# hoisted it into conftest's `_isolate_store_root`, because the exposure is the class — every lib
+# test module that resolves a heartbeat or launch-ledger root — not this module. The guard below
+# (`test_e2e_survives_ambient_launcher_env`) is what proves the pin still bites from up there.
 
 
 def _init_repo(tmp_path):
@@ -679,10 +664,10 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
 
 def test_e2e_survives_ambient_launcher_env(tmp_path):
     """#843 guard: re-run the e2e test in a child pytest carrying the env a launcher-issued
-    session exports. Without `_pin_heartbeat_env` the ambient SUPERHEROES_HEARTBEAT_ROOT
-    redirects the sweep away from the test's own root and the child run fails. CI sets neither
-    var, so this subprocess is what makes the regression visible there rather than only in a
-    real launcher session.
+    session exports. Without conftest's env pin the ambient SUPERHEROES_HEARTBEAT_ROOT redirects
+    the sweep away from the test's own root and the child run fails. CI sets neither var, so this
+    subprocess is what makes the regression visible there rather than only in a real launcher
+    session.
     """
     decoy = tmp_path / "decoy-heartbeat-root"
     decoy.mkdir(mode=0o700)

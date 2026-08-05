@@ -82,8 +82,11 @@ ASSURANCE_LIMITS = (
     "prefers them.",
 )
 
-NAMESPACE_PLACEHOLDER = "{namespace}"
-SENTINEL_PLACEHOLDER = "{sentinel}"
+# Both placeholders are read from their one home, never respelled here (#866): `{namespace}`
+# from `pilot_contract` (declaration grammar), `{sentinel}` from `pilot_policy` (containment
+# grammar). This module substitutes them; it does not define them.
+NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
+SENTINEL_PLACEHOLDER = pilot_policy.SENTINEL_PLACEHOLDER
 
 _PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 _SENTINEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")

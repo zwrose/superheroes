@@ -9,7 +9,14 @@ _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import heartbeat as _heartbeat  # noqa: E402  (needs the sys.path insert above)
+
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
+
+# Read the names off their one home rather than respelling them here — a rename in
+# heartbeat.py that this fixture did not follow would silently stop pinning.
+_HEARTBEAT_ROOT_ENV = _heartbeat.HEARTBEAT_ROOT_ENV
+_LAUNCH_ID_ENV = _heartbeat.LAUNCH_ID_ENV
 
 
 def _path_has_symlinked_ancestor(path):
@@ -70,3 +77,15 @@ def _isolate_store_root(monkeypatch, tmp_path):
     # after this fixture).
     monkeypatch.delenv("SUPERHEROES_ACCEPTANCE_DENY_ONLY", raising=False)
     monkeypatch.delenv("SUPERHEROES_ACCEPTANCE_CONTEXT", raising=False)
+    # #843, hoisted here by #866: `launcher.py` exports SUPERHEROES_LAUNCH_ID and
+    # SUPERHEROES_HEARTBEAT_ROOT into every builder session it spawns, so in a launcher-issued
+    # session those values are ambient for the whole suite. Any test that builds its own
+    # heartbeat/launch-ledger root under tmp_path and then reaches `heartbeat.resolve_root`
+    # with the process env silently resolves the AMBIENT root instead — six independent field
+    # receipts in one night, while CI (which sets neither var) stayed green. #843 pinned the
+    # one module that had tests then; the class is every lib test module, present and future,
+    # so the pin belongs here beside the store roots. Deleting rather than redirecting is
+    # deliberate: a test that needs either var establishes its own value, which still wins
+    # (it applies after this fixture).
+    monkeypatch.delenv(_HEARTBEAT_ROOT_ENV, raising=False)
+    monkeypatch.delenv(_LAUNCH_ID_ENV, raising=False)

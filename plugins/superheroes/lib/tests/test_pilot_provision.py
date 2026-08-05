@@ -1409,6 +1409,10 @@ def test_weaker_acceptance_accepts_real_timestamp():
 # --- finding 4: datastore strength vocabulary drift guard ---------------------
 
 def test_datastore_strength_matches_pilot_boundary(private_tmp):
+    # axis: the two words still travel on the observation shapes the gate reads. Since #866 the
+    # vocabulary has one home (`pilot_boundary`) and `pp` re-exports it, so a spelling *drift*
+    # between the modules is no longer representable — what this still discriminates is a
+    # producer that stops emitting `strength` on either observation, or emits the wrong one.
     weaker_observation = pilot_boundary.app_reported_identity("example_dev")
     assert weaker_observation["strength"] == pp.STRENGTH_WEAKER
 
