@@ -699,7 +699,11 @@ fail-closed by `lib/launch_doctrine.py`) — never reconstructed from session me
 preconditions with a stated horizon, and the standing exclusions it applies itself (release
 PRs excluded, force-push never). That record carries R1's mechanical park/refusal accounting
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
-parks is a signal to inspect, never a clean sheet. The Showrunner advisor invokes the launcher
+parks is a signal to inspect, never a clean sheet. The same record also carries **post-terminal
+amendments** — a second terminal-outcome write, an advisor vet ruling, or an evidence correction —
+recorded without mutating the terminal outcome and surfaced by `count` beside the terminal tallies;
+`lib/launch_ledger.py` is the authoritative home for the amendment kinds and vet rulings. The
+Showrunner advisor invokes the launcher
 per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
 by a drift test — cite those homes, do not duplicate them here. The recovery half —
 adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript
