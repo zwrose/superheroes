@@ -2771,10 +2771,20 @@ def test_lane_sequential_reversed_timestamps_still_resolves(tmp_path, monkeypatc
     _append_raw(path, o2)
     result = ll.count(repo, batch)
     assert result["resolved"] is True
+    assert result["counts"]["handback"] == 1
+    assert result["counts"]["park"] == 0
+    assert result["attempts"]["outcomes"]["park"] == 1
+    assert result["laneDetail"] == [{
+        "issue": 701,
+        "attempts": 2,
+        "outcome": "handback",
+        "terminalKind": "outcome",
+        "attemptOutcomes": ["park", "handback"],
+    }]
 
 
 def test_lane_overlapping_sequential_timestamps_still_refuses_concurrent(tmp_path, monkeypatch):
-    # axis: index-based concurrency guard ignores monotonic-looking ts
+    # axis: index-based concurrency guard ignores sequential-looking ts
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-overlap-seq-ts"
@@ -2784,16 +2794,16 @@ def test_lane_overlapping_sequential_timestamps_still_refuses_concurrent(tmp_pat
     r1["ts"] = 100.0
     ll.reserve(repo, r1)
     r2 = _reserved("l2", batch, ["b"], repo, issue=801)
-    r2["ts"] = 200.0
+    r2["ts"] = 500.0
     ll.reserve(repo, r2)
     s1 = _started("l1")
-    s1["ts"] = 300.0
+    s1["ts"] = 150.0
     _append_raw(path, s1)
     o1 = _outcome("l1", outcome="park")
-    o1["ts"] = 400.0
+    o1["ts"] = 200.0
     _append_raw(path, o1)
     s2 = _started("l2")
-    s2["ts"] = 500.0
+    s2["ts"] = 550.0
     _append_raw(path, s2)
     o2 = _outcome("l2", outcome="handback")
     o2["ts"] = 600.0
