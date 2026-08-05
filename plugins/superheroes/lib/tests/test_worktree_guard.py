@@ -593,14 +593,17 @@ def test_unparsed_message_verbatim():
         "invocation — it may include a destructive discard subcommand — so it is refused "
         "(fail-closed) rather than risk wiping uncommitted work. If this command runs no "
         "git discard and only mentions one in prose — a PR or issue comment body, a commit "
-        "message — that prose is the trigger: text naming `git checkout`, `git reset`, or "
-        "`git clean` reads as a command wherever this guard loses track of the shell quoting "
-        "around it — a heredoc body, a backslash-escaped quote inside a quoted string, or a "
-        "quote nested inside a `$(...)` substitution. Write the text to a file with a "
-        "file-writing tool — not a shell heredoc, which trips this same refusal — and pass "
-        "the file: `gh ... --body-file <path>`, `git commit -F <path>`. If a discard is "
-        "intended, commit "
-        "or `git stash -u` your work first, or revert a probe edit with an inverse Edit "
+        "message — that prose is the trigger: text naming a destructive git subcommand "
+        "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
+        "`worktree`) reads as a command wherever this guard loses track of the quoting "
+        "around it — a heredoc body, or a quote of the same kind as the one enclosing it, "
+        "either backslash-escaped or nested inside a `$(...)` substitution. Write the text "
+        "to a file with a file-writing tool — not a shell heredoc, which trips this same "
+        "refusal — and pass the file: `gh ... --body-file <path>`, `git commit -F <path>`. "
+        "If a discard is intended, note that this refusal does not depend on what your tree "
+        "holds, so committing or stashing alone will not clear it: re-issue the command as "
+        "a plain `git ...` invocation this guard can parse. Keep the work you care about by "
+        "committing or `git stash -u` first, and revert a probe edit with an inverse Edit "
         "rather than a git discard."
     )
     assert wg.unparsed_message() == expected
@@ -614,8 +617,8 @@ def test_unparsed_message_names_the_prose_case_and_the_file_remedy():
     assert "commit -F" in message
 
 
-# The two shapes that put prose outside the guard's quote tracking, so the text reads as a
-# command. Both are refused today and stay refused — #842 changes the message, not behavior.
+# The shapes that put prose outside the guard's quote tracking, so the text reads as a command.
+# All of them are refused today and stay refused — #842 changes the message, not behavior.
 _PROSE_ONLY_MENTIONS = (
     # a comment body quoting someone with a backslash-escaped quote of the enclosing kind;
     # the scanner has no escape handling, so its quote state desynchronizes from the shell's
@@ -642,6 +645,9 @@ _PROSE_MENTIONS_STILL_ALLOWED = (
     "gh pr comment 1 --body 'the reviewer said \"never: git checkout -- f.txt\"'",
     # single-quoted, so the backticks are literal text the shell will not substitute
     "gh pr comment 1 --body 'revert with an inverse Edit, not `git reset --hard`'",
+    # opposite-delimiter quotes inside a substitution stay tracked; only same-delimiter
+    # quotes desynchronize the scanner, which is why the message says "of the same kind"
+    'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
 )
 
 
