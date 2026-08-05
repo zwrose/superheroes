@@ -267,7 +267,7 @@ def _resolve_profile_path(cwd=None, root=None):
                 import calibration_resolve as _cr
             except Exception:
                 _cr = None
-        if _cr is not None and isinstance(exc, _cr.UnresolvableRootError):
+        if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
         return None
 

@@ -7,6 +7,7 @@ import configure_view as cv
 import guardian_store as gs
 import mode_registry as mr
 import store_core as sc
+from conftest import isolated_default_store_root
 from guardian_fixtures import (
     benched_fixture_ledger, init_calibrated_repo, write_guardian_layer, write_ledger,
 )
@@ -245,7 +246,7 @@ def test_collect_threads_root_into_model_tier_resolution(tmp_path, monkeypatch):
 
 
 def _default_store_root(tmp_path):
-    return str(tmp_path / "_store_isolation")
+    return isolated_default_store_root(tmp_path)
 
 
 def _empty_store_root(tmp_path):
@@ -300,6 +301,22 @@ def test_collect_fallopen_when_calibration_resolve_unimportable(tmp_path, monkey
     assert data["modelTierProfile"] is None
     assert data["modelTierOverrides"] == {}
     assert data["modelTiers"]["implementer"] == "sonnet"
+
+
+def test_collect_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeypatch):
+    import types
+    import sys
+
+    stub = types.ModuleType("calibration_resolve")
+    monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cv.model_tier_overrides, "resolve_profile_path", _raise)
+    data = cv.collect(str(tmp_path))
+    assert data["modelTierProfile"] is None
+    assert data["modelTierOverrides"] == {}
 
 
 def _seed_guardian_view_repo(tmp_path, *, guardian_config=None, ledger_records=None,

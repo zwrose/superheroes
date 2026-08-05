@@ -1,6 +1,8 @@
 import importlib.util, json, os
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+from conftest import isolated_default_store_root
+
 
 def _load():
     path = os.path.join(_HERE, "..", "review_code_config.py")
@@ -136,7 +138,7 @@ def _init_repo(path):
 
 
 def _default_store_root(tmp_path):
-    return str(tmp_path / "_store_isolation")
+    return isolated_default_store_root(tmp_path)
 
 
 def _empty_store_root(tmp_path):
@@ -178,3 +180,19 @@ def test_resolve_fallopen_when_calibration_resolve_unimportable(tmp_path, monkey
     assert out["verifyCommand"] == "none"
     assert out["verifyMode"] is None
     assert out["tiers"]["fixer"] == "sonnet"
+
+
+def test_resolve_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeypatch):
+    import types
+    import sys
+
+    stub = types.ModuleType("calibration_resolve")
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("boom")
+
+    stub.resolve = _boom
+    monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
+    out = RC.resolve(str(tmp_path))
+    assert out["verifyCommand"] == "none"
+    assert out["verifyMode"] is None

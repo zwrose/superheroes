@@ -101,7 +101,7 @@ def resolve(cwd, root=None):
                 import calibration_resolve as _cr
             except Exception:
                 _cr = None
-        if _cr is not None and isinstance(exc, _cr.UnresolvableRootError):
+        if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
         profile = None
         verify_mode = None

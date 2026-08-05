@@ -1,12 +1,14 @@
 """Static AST census: every calibration_resolve caller adjudicates UnresolvableRootError (#844)."""
 import ast
 import os
+import re
 import sys
 
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.realpath(os.path.join(_HERE, ".."))
+_SKILLS = os.path.realpath(os.path.join(_HERE, "..", "..", "skills"))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
@@ -48,26 +50,61 @@ ADJUDICATED = {
     ),
 }
 
+_CALIBRATION_MODULE = "calibration_resolve"
+_FALL_OPEN_EXISTS_FALSE = re.compile(
+    r'\|\|\s*[^;\n]*"exists"\s*:\s*false', re.IGNORECASE
+)
+_FALL_OPEN_LOCATION_NONE = re.compile(
+    r'\|\|\s*[^;\n]*"location"\s*:\s*"none"', re.IGNORECASE
+)
+_CALIBRATION_RESOLVE_INVOCATION = re.compile(
+    r'calibration_resolve\.py'
+)
 
-def _call_site_tag(call):
+
+def _collect_calibration_bindings(tree):
+    """Bound names for calibration_resolve imports in a module."""
+    module_names = set()
+    resolve_names = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                if alias.name == _CALIBRATION_MODULE:
+                    module_names.add(alias.asname or _CALIBRATION_MODULE)
+        elif isinstance(node, ast.ImportFrom):
+            if node.module == _CALIBRATION_MODULE:
+                for alias in node.names:
+                    bound = alias.asname or alias.name
+                    if alias.name == "resolve":
+                        resolve_names.add(bound)
+    return module_names, resolve_names
+
+
+def _call_site_tag(call, module_names, resolve_names):
     func = call.func
     if isinstance(func, ast.Attribute):
         if func.attr == "resolve":
             val = func.value
-            if isinstance(val, ast.Name) and val.id == "calibration_resolve":
+            if isinstance(val, ast.Name) and val.id in module_names:
                 return "resolve"
         if func.attr == "resolve_profile_path":
             return "resolve_profile_path"
-    if isinstance(func, ast.Name) and func.id == "_resolve_profile_path":
-        return "_resolve_profile_path"
+    if isinstance(func, ast.Name):
+        if func.id in resolve_names:
+            return "resolve"
+        if func.id == "_resolve_profile_path":
+            return "_resolve_profile_path"
     return None
 
 
 class _CallSiteVisitor(ast.NodeVisitor):
-    def __init__(self, basename):
+    def __init__(self, basename, module_names, resolve_names):
         self.basename = basename
+        self.module_names = module_names
+        self.resolve_names = resolve_names
         self.sites = set()
         self._stack = []
+        self._contradiction_check_sites = []
 
     def visit_FunctionDef(self, node):
         self._stack.append(node.name)
@@ -80,7 +117,13 @@ class _CallSiteVisitor(ast.NodeVisitor):
         self._stack.pop()
 
     def visit_Call(self, node):
-        tag = _call_site_tag(node)
+        for kw in node.keywords:
+            if kw.arg == "_contradiction_check":
+                def_name = self._stack[-1] if self._stack else "<module>"
+                self._contradiction_check_sites.append(
+                    "%s::%s" % (self.basename, def_name)
+                )
+        tag = _call_site_tag(node, self.module_names, self.resolve_names)
         if tag is not None:
             def_name = self._stack[-1] if self._stack else "<module>"
             self.sites.add("%s::%s::%s" % (self.basename, def_name, tag))
@@ -137,17 +180,64 @@ def _validate_population(modules):
             )
 
 
+def _skills_markdown_files():
+    files = []
+    for dirpath, _dirnames, filenames in os.walk(_SKILLS):
+        for name in filenames:
+            if name.endswith(".md"):
+                files.append(os.path.join(dirpath, name))
+    return sorted(files)
+
+
+def _validate_skills_population(md_files):
+    if not md_files:
+        raise RuntimeError(
+            "Calibration-root shell census population collapsed: derived zero markdown files "
+            "from %s" % _SKILLS
+        )
+
+
+def _scan_shell_fall_opens():
+    md_files = _skills_markdown_files()
+    _validate_skills_population(md_files)
+    invocations = 0
+    violations = []
+    for path in md_files:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if not _CALIBRATION_RESOLVE_INVOCATION.search(text):
+            continue
+        invocations += 1
+        rel = os.path.relpath(path, _SKILLS)
+        if _FALL_OPEN_EXISTS_FALSE.search(text) or _FALL_OPEN_LOCATION_NONE.search(text):
+            violations.append(rel)
+    if invocations == 0:
+        raise RuntimeError(
+            "Calibration-root shell census population collapsed: derived zero "
+            "calibration_resolve.py invocations from %s" % _SKILLS
+        )
+    return violations
+
+
 def derive_site_keys():
     modules = _lib_python_modules()
     _validate_population(modules)
     sites = set()
+    contradiction_sites = []
     for path in modules:
         basename = os.path.basename(path)
         with open(path, encoding="utf-8") as fh:
             tree = _parse_source(fh.read(), path)
-        visitor = _CallSiteVisitor(basename)
+        module_names, resolve_names = _collect_calibration_bindings(tree)
+        visitor = _CallSiteVisitor(basename, module_names, resolve_names)
         visitor.visit(tree)
         sites.update(visitor.sites)
+        contradiction_sites.extend(visitor._contradiction_check_sites)
+    if contradiction_sites:
+        raise RuntimeError(
+            "Calibration-root caller census: _contradiction_check keyword at site(s): %s"
+            % ", ".join(sorted(contradiction_sites))
+        )
     return sites
 
 
@@ -173,6 +263,15 @@ def test_calibration_root_caller_census_adjudicated():
         )
 
 
+def test_shell_census_no_fall_open_on_calibration_resolve():
+    violations = _scan_shell_fall_opens()
+    if violations:
+        raise AssertionError(
+            "INVARIANT: shell blocks must not swallow calibration_resolve refusal into "
+            "uncalibrated-looking output; fall-open at: %s" % ", ".join(violations)
+        )
+
+
 def test_matcher_catches_calibration_resolve_resolve():
     source = (
         "def bad(cwd, root):\n"
@@ -181,7 +280,36 @@ def test_matcher_catches_calibration_resolve_resolve():
     )
     path = os.path.join(_LIB, "fake_consumer.py")
     tree = _parse_source(source, path)
-    visitor = _CallSiteVisitor("fake_consumer.py")
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
+    visitor.visit(tree)
+    assert visitor.sites == {"fake_consumer.py::bad::resolve"}
+
+
+def test_matcher_catches_aliased_calibration_resolve_resolve():
+    source = (
+        "def bad(cwd, root):\n"
+        "    import calibration_resolve as cr\n"
+        "    return cr.resolve(cwd, root=root)\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    tree = _parse_source(source, path)
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
+    visitor.visit(tree)
+    assert visitor.sites == {"fake_consumer.py::bad::resolve"}
+
+
+def test_matcher_catches_from_import_resolve():
+    source = (
+        "def bad(cwd, root):\n"
+        "    from calibration_resolve import resolve\n"
+        "    return resolve(cwd, root=root)\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    tree = _parse_source(source, path)
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
     visitor.visit(tree)
     assert visitor.sites == {"fake_consumer.py::bad::resolve"}
 
@@ -193,7 +321,8 @@ def test_matcher_catches_resolve_profile_path_attribute():
     )
     path = os.path.join(_LIB, "fake_consumer.py")
     tree = _parse_source(source, path)
-    visitor = _CallSiteVisitor("fake_consumer.py")
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
     visitor.visit(tree)
     assert visitor.sites == {"fake_consumer.py::bad::resolve_profile_path"}
 
@@ -205,6 +334,21 @@ def test_matcher_catches_bare_resolve_profile_path():
     )
     path = os.path.join(_LIB, "fake_consumer.py")
     tree = _parse_source(source, path)
-    visitor = _CallSiteVisitor("fake_consumer.py")
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
     visitor.visit(tree)
     assert visitor.sites == {"fake_consumer.py::bad::_resolve_profile_path"}
+
+
+def test_matcher_fails_on_contradiction_check_keyword():
+    source = (
+        "def bad(cwd, root):\n"
+        "    import calibration_resolve\n"
+        "    return calibration_resolve.resolve(cwd, root=root, _contradiction_check=False)\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    tree = _parse_source(source, path)
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
+    visitor.visit(tree)
+    assert visitor._contradiction_check_sites == ["fake_consumer.py::bad"]

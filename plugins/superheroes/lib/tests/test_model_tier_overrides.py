@@ -4,6 +4,8 @@ import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
+from conftest import isolated_default_store_root
+
 
 def _load():
     path = os.path.join(_HERE, "..", "model_tier_overrides.py")
@@ -277,7 +279,7 @@ def _init_repo(path):
 
 
 def _default_store_root(tmp_path):
-    return str(tmp_path / "_store_isolation")
+    return isolated_default_store_root(tmp_path)
 
 
 def _empty_store_root(tmp_path):
@@ -315,6 +317,20 @@ def test_resolve_profile_path_fallopen_when_calibration_resolve_unimportable(mon
     import sys
 
     monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    assert MTO.resolve_profile_path("/any/cwd", root="/any/root") is None
+
+
+def test_resolve_profile_path_fallopen_when_unresolvable_root_error_missing(monkeypatch):
+    import types
+    import sys
+
+    stub = types.ModuleType("calibration_resolve")
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("boom")
+
+    stub.resolve_profile_path = _boom
+    monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
     assert MTO.resolve_profile_path("/any/cwd", root="/any/root") is None
 
 

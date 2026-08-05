@@ -21,6 +21,8 @@ import store_core       # noqa: E402
 
 REVIEW_CREW = "review-crew"
 
+REFUSAL_UNRESOLVABLE_ROOT = "unresolvable-root"
+
 REASON_UNRESOLVABLE_ROOT = "root-unresolvable-project-calibrated-elsewhere"
 
 _REMEDY_UNRESOLVABLE_ROOT = (
@@ -44,7 +46,8 @@ class UnresolvableRootError(Exception):
 
     def payload(self):
         return {
-            "refusal": "unresolvable-root",
+            "action": "refused",
+            "refusal": REFUSAL_UNRESOLVABLE_ROOT,
             "reason": self.reason,
             "root": self.root,
             "cwd": self.cwd,

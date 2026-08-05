@@ -11,6 +11,14 @@ if _LIB not in sys.path:
 
 _TMP_BASE = os.path.realpath(tempfile.gettempdir())
 
+# Single home for the autouse store-isolation dirname (#844 F7).
+_STORE_ISOLATION_DIRNAME = "_store_isolation"
+
+
+def isolated_default_store_root(tmp_path):
+    """Path to the default-store root pinned by _isolate_store_root."""
+    return str(tmp_path / _STORE_ISOLATION_DIRNAME)
+
 
 def _path_has_symlinked_ancestor(path):
     current = os.path.realpath(path)
@@ -55,7 +63,7 @@ def _isolate_store_root(monkeypatch, tmp_path):
     — one orphaned checkout per unique tmp-repo path, accumulating every run and never cleaned. Isolating
     it here (mirroring the store root) keeps every test's worktrees inside tmp_path. A test that sets its
     own SUPERHEROES_WORKTREES_ROOT still wins (applies after this fixture)."""
-    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "_store_isolation"))
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", isolated_default_store_root(tmp_path))
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "_worktrees_isolation"))
     # #412 review finding: test-pilot's store has its OWN env-pinned root; without this, a
     # test (or its subprocess) that never sets TEST_PILOT_STORE_ROOT resolves — and

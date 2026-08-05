@@ -5,6 +5,8 @@ import sys
 
 import pytest
 
+from conftest import isolated_default_store_root
+
 import calibration_resolve as cr
 import core_md as cm
 import mode_registry as mr
@@ -13,7 +15,7 @@ _MODULE_PATH = os.path.abspath(cr.__file__)
 
 
 def _default_store_root(tmp_path):
-    return str(tmp_path / "_store_isolation")
+    return isolated_default_store_root(tmp_path)
 
 
 def _empty_store_root(tmp_path):
@@ -217,10 +219,11 @@ def test_unresolvable_root_error_payload_keys(tmp_path):
     )
     payload = exc.payload()
     assert set(payload.keys()) == {
-        "refusal", "reason", "root", "cwd", "hero",
+        "action", "refusal", "reason", "root", "cwd", "hero",
         "default_location", "default_layer_path", "remedy",
     }
-    assert payload["refusal"] == "unresolvable-root"
+    assert payload["action"] == "refused"
+    assert payload["refusal"] == cr.REFUSAL_UNRESOLVABLE_ROOT
 
 
 def test_cli_resolve_root_empty_returns_2_stderr_refusal(tmp_path):
