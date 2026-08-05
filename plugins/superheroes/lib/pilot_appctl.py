@@ -1511,6 +1511,15 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
             Reaping is never on its own a verdict that the group is gone — the leader
             can exit while other members of its process group are still running, and
             those still have to be signalled. `poll_alive` remains the authority.
+
+            Accepted residual: reaping releases the pid, so a signal sent after a
+            successful reap addresses `pgid` by number rather than by pinned identity.
+            A pid recycled into a *group leader* between the reap and the poll below
+            would be signalled instead. The window is the gap between two adjacent
+            syscalls and needs pid wraparound to land exactly here. Closing it needs
+            group-membership enumeration (`ps -o pgid=`); re-corroborating on the
+            leader's pid instead would refuse to signal exactly the surviving-member
+            case above, which is a live process leak — a worse trade. See issue #872.
             """
             reap_once()
             return bool(poll_alive(pgid))
