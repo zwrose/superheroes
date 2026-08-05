@@ -2225,3 +2225,82 @@ def test_append_under_lock_refuses_a_fifo_lock_without_blocking(tmp_path, monkey
     elapsed = time.monotonic() - start
     assert elapsed < 5.0, "_append_under_lock blocked on FIFO lock"
     assert result["ok"] is False
+
+
+# --- WO-864 amend CLI --------------------------------------------------------
+
+
+def test_cli_amend_happy_path(tmp_path, monkeypatch):
+    # axis: amend CLI happy path
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-cli-amend"
+    batch = "batch-cli"
+    ll.declare_batch(repo, batch, 1)
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch,
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 424242,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.record_outcome(repo, launch_id, "handback", "done")
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "amend",
+            "--repo-root", repo,
+            "--launch-id", launch_id,
+            "--kind", "vet",
+            "--value", "ready",
+            "--note", "advisor ok",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["kind"] == "vet"
+    assert payload["value"] == "ready"
+
+
+def test_cli_amend_kind_not_caller_writable(tmp_path, monkeypatch):
+    # axis: amend-kind-not-caller-writable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "amend",
+            "--repo-root", repo,
+            "--launch-id", "any",
+            "--kind", "reoutcome",
+            "--value", "handback",
+            "--note", "not allowed",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "amend-kind-not-caller-writable:reoutcome"

@@ -953,6 +953,11 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None):
     return ll.record_outcome(repo_root, launch_id, outcome, evidence, env=env)
 
 
+def amend(repo_root, launch_id, kind, value, note, env=None):
+    """Thin pass-through to launch_ledger.amend."""
+    return ll.amend(repo_root, launch_id, kind, value, note, env=env)
+
+
 def declare_batch(repo_root, batch_id, expected_launches, env=None):
     """Thin pass-through to launch_ledger.declare_batch."""
     return ll.declare_batch(repo_root, batch_id, expected_launches, env=env)
@@ -1011,6 +1016,12 @@ def _cli_record_outcome(args):
     return record_outcome(args.repo_root, args.launch_id, args.outcome, args.evidence)
 
 
+def _cli_amend(args):
+    if args.kind not in ll.CALLER_WRITABLE_AMENDMENT_KINDS:
+        return _fail("amend-kind-not-caller-writable:%s" % args.kind)
+    return amend(args.repo_root, args.launch_id, args.kind, args.value, args.note)
+
+
 def _cli_count(args):
     return count_batch(args.repo_root, args.batch)
 
@@ -1055,6 +1066,14 @@ def main(argv=None):
     ro.add_argument("--outcome", required=True)
     ro.add_argument("--evidence", required=True)
     ro.set_defaults(func=_cli_record_outcome)
+
+    am = sub.add_parser("amend")
+    am.add_argument("--repo-root", required=True)
+    am.add_argument("--launch-id", required=True)
+    am.add_argument("--kind", required=True)
+    am.add_argument("--value", required=True)
+    am.add_argument("--note", required=True)
+    am.set_defaults(func=_cli_amend)
 
     ct = sub.add_parser("count")
     ct.add_argument("--repo-root", required=True)

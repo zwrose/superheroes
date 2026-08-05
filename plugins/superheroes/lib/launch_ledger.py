@@ -31,8 +31,16 @@ LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
 LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
-EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome")
+EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome", "amendment")
 TERMINAL_OUTCOMES = ("handback", "park", "refusal", "died")
+AMENDMENT_EVENT = "amendment"
+AMENDMENT_REOUTCOME = "reoutcome"
+AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
+# What a caller may write by hand. `reoutcome` is a recorded consequence of a real second
+# record_outcome call, never a hand-written claim.
+CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
+VET_RULINGS = ("ready", "not-ready", "parked-blocker")
+_AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
 WHOLE_REPO = ":whole-repo:"
 
@@ -722,6 +730,8 @@ def _validate_event_fields(rec):
         fields = _RETRY_FIELDS
     elif event in TERMINAL_EVENTS:
         fields = _REFUSED_FIELDS if event == "refused" else _OUTCOME_FIELDS
+    elif event == AMENDMENT_EVENT:
+        fields = _AMENDMENT_FIELDS
     else:
         return "fold-unknown-event:%s" % event
 
@@ -729,7 +739,21 @@ def _validate_event_fields(rec):
         if field not in rec:
             return "fold-missing-field:%s:%s" % (event, field)
 
-    if event == "started":
+    if event == AMENDMENT_EVENT:
+        kind = rec["kind"]
+        if kind not in AMENDMENT_KINDS:
+            return "fold-bad-amendment-kind:%s" % rec["launchId"]
+        value = rec["value"]
+        if not isinstance(value, str) or not value:
+            return "fold-missing-amendment-value:%s" % rec["launchId"]
+        note = rec["note"]
+        if not isinstance(note, str) or not note:
+            return "fold-missing-amendment-note:%s" % rec["launchId"]
+        if kind == "reoutcome" and value not in TERMINAL_OUTCOMES:
+            return "fold-bad-amendment-value:%s" % rec["launchId"]
+        if kind == "vet" and value not in VET_RULINGS:
+            return "fold-bad-amendment-value:%s" % rec["launchId"]
+    elif event == "started":
         attempt = rec["attempt"]
         pid = rec["pid"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -800,6 +824,7 @@ def fold(records):
                 "reservedIndex": idx,
                 "attempts": 0,
                 "started": False,
+                "amendments": [],
             }
             continue
 
@@ -808,6 +833,15 @@ def fold(records):
                     "launches": {}, "batchDeclarations": batch_declarations}
 
         info = launches[launch_id]
+        if event == AMENDMENT_EVENT:
+            if not info["terminal"]:
+                return {"ok": False,
+                        "reason": "fold-amendment-before-terminal:%s" % launch_id,
+                        "launches": {}, "batchDeclarations": batch_declarations}
+            info["amendments"].append({
+                "kind": rec["kind"], "value": rec["value"], "note": rec["note"], "ts": rec["ts"],
+            })
+            continue
         if info["terminal"]:
             return {
                 "ok": False,
@@ -1319,9 +1353,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
                    lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Record a terminal outcome under lock."""
     if outcome not in TERMINAL_OUTCOMES:
-        return {"ok": False, "reason": "outcome-invalid:%s" % outcome}
+        return {"ok": False, "reason": "outcome-invalid:%s" % outcome, "recorded": None}
     if not isinstance(evidence, str) or not evidence.strip():
-        return {"ok": False, "reason": "outcome-evidence-empty"}
+        return {"ok": False, "reason": "outcome-evidence-empty", "recorded": None}
 
     result = terminalize(
         repo_root, launch_id, outcome=outcome, evidence=evidence,
@@ -1330,7 +1364,113 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     mapped_reason = result["reason"]
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"
-    return {"ok": result["ok"], "reason": mapped_reason}
+    if not result["ok"] and result["reason"] == "outcome-already-terminal":
+        amended = amend(repo_root, launch_id, AMENDMENT_REOUTCOME, outcome, evidence,
+                        env=env, lock_timeout=lock_timeout)
+        if not amended["ok"]:
+            return {"ok": False, "reason": "amend-failed:%s" % amended["reason"],
+                    "recorded": None}
+        return {"ok": True, "reason": None, "recorded": "amendment",
+                "amendmentKind": AMENDMENT_REOUTCOME, "attemptedOutcome": outcome,
+                "terminalOutcome": amended["terminalOutcome"]}
+    if result["ok"]:
+        return {"ok": True, "reason": None, "recorded": "outcome"}
+    return {"ok": False, "reason": mapped_reason, "recorded": None}
+
+
+def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
+    """Record a post-terminal annotation on a terminal launch. Never mutates the terminal
+    outcome, and never raises."""
+    try:
+        if not isinstance(launch_id, str) or not launch_id:
+            return {"ok": False, "reason": "amend-launch-id-invalid", "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+        if kind not in AMENDMENT_KINDS:
+            return {"ok": False, "reason": "amend-kind-invalid:%s" % kind, "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+        if not isinstance(value, str) or not value:
+            return {"ok": False, "reason": "amend-value-empty", "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+        if not isinstance(note, str) or not note:
+            return {"ok": False, "reason": "amend-note-empty", "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+        if kind == "reoutcome" and value not in TERMINAL_OUTCOMES:
+            return {"ok": False, "reason": "amend-value-invalid:%s" % value, "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+        if kind == "vet" and value not in VET_RULINGS:
+            return {"ok": False, "reason": "amend-value-invalid:%s" % value, "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+
+        lock_result = _ensure_lock_file(repo_root, env=env)
+        if not lock_result["ok"]:
+            return {"ok": False, "reason": lock_result["reason"], "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+
+        lock_path = lock_result["path"]
+        if not _acquire_lock(lock_path, lock_timeout):
+            return {"ok": False, "reason": "lock-unavailable", "kind": None,
+                    "value": None, "terminalOutcome": None, "terminalKind": None}
+
+        try:
+            read_result = read(repo_root, env=env)
+            state = read_result["state"]
+            if state not in ("ok", "missing"):
+                return {"ok": False, "reason": "ledger-unreadable:%s" % state, "kind": None,
+                        "value": None, "terminalOutcome": None, "terminalKind": None}
+
+            folded = fold(read_result["records"])
+            if not folded["ok"]:
+                return {"ok": False, "reason": folded["reason"], "kind": None,
+                        "value": None, "terminalOutcome": None, "terminalKind": None}
+
+            if launch_id not in folded["launches"]:
+                return {"ok": False, "reason": "amend-unknown-launch", "kind": None,
+                        "value": None, "terminalOutcome": None, "terminalKind": None}
+
+            info = folded["launches"][launch_id]
+            if not info.get("terminal"):
+                return {"ok": False, "reason": "amend-not-terminal", "kind": None,
+                        "value": None, "terminalOutcome": None, "terminalKind": None}
+
+            record = {
+                "event": AMENDMENT_EVENT,
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "kind": kind,
+                "value": value,
+                "note": note,
+            }
+            folded_with = fold(read_result["records"] + [record])
+            if not folded_with["ok"]:
+                return {"ok": False, "reason": folded_with["reason"], "kind": None,
+                        "value": None, "terminalOutcome": None, "terminalKind": None}
+
+            if not append(repo_root, record, env=env):
+                return {"ok": False, "reason": "ledger-append-failed", "kind": None,
+                        "value": None, "terminalOutcome": None, "terminalKind": None}
+
+            return {
+                "ok": True, "reason": None, "kind": kind, "value": value,
+                "terminalOutcome": info.get("outcome"),
+                "terminalKind": info.get("terminalKind"),
+            }
+        finally:
+            _release_lock(lock_path)
+    except Exception:
+        return {"ok": False, "reason": "amend-failed", "kind": None,
+                "value": None, "terminalOutcome": None, "terminalKind": None}
+
+
+def _vet_count_key(ruling):
+    return "vet" + "".join(part.capitalize() for part in ruling.split("-"))
+
+
+def _zero_amendments():
+    zeroed = {"reoutcome": 0, "rehandback": 0, "evidence": 0, "total": 0}
+    for ruling in VET_RULINGS:
+        zeroed[_vet_count_key(ruling)] = 0
+    return zeroed
 
 
 def _count_indeterminate(batch_id, reason):
@@ -1348,6 +1488,8 @@ def _count_indeterminate(batch_id, reason):
             "refusedToLaunch": 0,
             "total": 0,
         },
+        "amendments": _zero_amendments(),
+        "amendedLaunches": 0,
         "inspect": False,
         "inspectReason": "",
     }
@@ -1417,6 +1559,27 @@ def count(repo_root, batch_id, env=None):
             if outcome in counts:
                 counts[outcome] += 1
 
+    amendments = _zero_amendments()
+    amended_launches = 0
+    for lid in batch_launches:
+        info = folded["launches"][lid]
+        lane_amendments = info.get("amendments") or []
+        if lane_amendments:
+            amended_launches += 1
+        for amend_rec in lane_amendments:
+            amendments["total"] += 1
+            kind = amend_rec["kind"]
+            value = amend_rec["value"]
+            if kind == "reoutcome":
+                amendments["reoutcome"] += 1
+                # Genuine re-handback: second write was handback on a lane that ended handback.
+                if value == "handback" and info.get("outcome") == "handback":
+                    amendments["rehandback"] += 1
+            elif kind == "vet":
+                amendments[_vet_count_key(value)] += 1
+            elif kind == "evidence":
+                amendments["evidence"] += 1
+
     inspect = (
         counts["park"] + counts["refusal"] + counts["refusedToLaunch"] == 0
     )
@@ -1427,6 +1590,8 @@ def count(repo_root, batch_id, env=None):
         "indeterminate": False,
         "reason": None,
         "counts": counts,
+        "amendments": amendments,
+        "amendedLaunches": amended_launches,
         "inspect": inspect,
         "inspectReason": _INSPECT_REASON if inspect else "",
     }

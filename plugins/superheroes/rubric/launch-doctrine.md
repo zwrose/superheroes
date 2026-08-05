@@ -20,7 +20,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `base-moved` — if your base merges mid-build, rebase onto main, retarget, and disclose.
 - `no-force-push` — never force-push (it is gated); use a fresh branch if history must move.
 - `design-forks` — design forks inside ratified scope are your call with disclosure; park only genuinely consequential ones.
-- `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (positive, never 0 — a zero slice launches nothing) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
+- `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — a zero slice opens the run and returns now without starting an attempt, so progress comes from the re-invocation) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
 <!-- launch-doctrine:rulings:end -->
 

@@ -378,3 +378,41 @@ def test_ruling_line_returns_exact_source():
     assert line == "- `own-worktree` — build in your OWN worktree, NEVER the primary checkout."
     assert LD.ruling_line(result, "nonexistent") is None
     assert LD.ruling_line({"ok": False}, "own-worktree") is None
+
+
+def test_await_dispatches_ruling_states_the_real_slice_contract():
+    import engine_dispatch
+
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    ruling_text = next(r["text"] for r in parsed["rulings"] if r["id"] == "await-dispatches")
+    expected_range = "%d..%d" % (
+        engine_dispatch.MIN_SYNC_WAIT,
+        engine_dispatch.MAX_SYNC_WAIT,
+    )
+    assert expected_range in ruling_text
+    assert "never 0" not in ruling_text
+    assert "launches nothing" not in ruling_text
+
+
+# Bite: reworded await-dispatches ruling (stale zero-slice parenthetical) — must refuse exact-text pin
+def test_reworded_await_dispatches_ruling_refuses():
+    text = _mutate_once(
+        _read_doctrine(),
+        (
+            "(a slice of 0..540 seconds — a zero slice opens the run and returns now without "
+            "starting an attempt, so progress comes from the re-invocation)"
+        ),
+        "(positive, never 0 — a zero slice launches nothing)",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == "doctrine-ruling-text-mismatch:await-dispatches"
+
+
+def test_ruling_text_constant_matches_the_artifact_for_every_ruling():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    by_id = {r["id"]: r["text"] for r in parsed["rulings"]}
+    for rid in LD.RULING_IDS:
+        assert by_id[rid] == LD.RULING_TEXT[rid]
