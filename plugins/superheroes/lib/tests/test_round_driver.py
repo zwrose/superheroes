@@ -3516,7 +3516,10 @@ def test_run_config_retired_keys_census():
         source = fh.read()
     violations = []
     for key in _RETIRED_RUN_CONFIG_KEYS:
-        if re.search(r'\b(?:config|cfg)\.get\("%s"' % re.escape(key), source):
+        if re.search(
+                r'\b(?:config|cfg)(?:\.get\([\'"]%s[\'"]\)|\[[\'"]%s[\'"]\])'
+                % (re.escape(key), re.escape(key)),
+                source):
             violations.append(key)
     assert not violations, (
         "retired run-config keys read in round_driver.py: %s" % violations)

@@ -279,6 +279,15 @@ def test_load_engine_prefs_does_not_surface_timeout_config_channel(tmp_path, mon
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"timeout": "1800"}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig(
+            {"timeout": 1800, "reviewer": "codex", "effort": {"review": "high"}},
+            core_md.CONFIG_OK, None))
+    got = EP.load_engine_prefs(str(tmp_path))
+    assert "timeout" not in got
+    assert got["reviewer"] == "codex"
+    assert got["effort"] == {"review": "high"}
 
 
 def test_resolve_idle_role_windows_and_default():
@@ -327,6 +336,15 @@ def test_load_engine_prefs_does_not_surface_idle_timeout_config_channel(tmp_path
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"idleTimeout": "90"}, core_md.CONFIG_OK, None))
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig(
+            {"idleTimeout": 90, "reviewer": "codex", "effort": {"review": "high"}},
+            core_md.CONFIG_OK, None))
+    got = EP.load_engine_prefs(str(tmp_path))
+    assert "idleTimeout" not in got
+    assert got["reviewer"] == "codex"
+    assert got["effort"] == {"review": "high"}
 
 
 def test_dispatch_calibration_rows_codex_implementer_reports_gpt_model_not_claude_tier():

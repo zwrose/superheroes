@@ -2088,6 +2088,38 @@ def test_skill_cadence_phrase_matches_cadence_defaults():
     assert days == gsw.CADENCE_DEFAULTS["minDays"]
 
 
+def test_calibration_reference_defaults_match_library_constants():
+    """§11 drift guard: calibration.md Keys table ↔ library constants (no hand-typed expect)."""
+    import json
+    import re
+    import guardian_ledger as gled
+    import guardian_vitals as gv
+
+    cal_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "skills", "guardian", "reference",
+        "calibration.md")
+    text = open(cal_path, encoding="utf-8").read()
+
+    def _extract_json_after(marker):
+        m = re.search(re.escape(marker) + r"` = `(\{[^`]*\})`", text)
+        assert m, "calibration.md missing documented default for %s" % marker
+        return json.loads(m.group(1))
+
+    def _extract_paren_int(marker):
+        m = re.search(re.escape(marker) + r"` \((\d+)\)", text)
+        assert m, "calibration.md missing documented default for %s" % marker
+        return int(m.group(1))
+
+    assert _extract_json_after("RED_LINE_THRESHOLDS") == dict(gl.RED_LINE_THRESHOLDS)
+    assert _extract_json_after("CADENCE_DEFAULTS") == dict(gsw.CADENCE_DEFAULTS)
+    assert _extract_json_after("REPORT_CARD_DEFAULTS") == dict(gled.REPORT_CARD_DEFAULTS)
+    assert _extract_json_after("DRIFT_THRESHOLDS") == dict(gv.DRIFT_THRESHOLDS)
+    assert _extract_paren_int("_DEFAULT_VERIFY_BUDGET_SECONDS") == (
+        gsw._DEFAULT_VERIFY_BUDGET_SECONDS)
+    assert _extract_paren_int("_DEFAULT_FIRST_BASELINE_VALIDATE_MAX") == (
+        gsw._DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
+
+
 def test_issue_resolve_respects_aggregate_deadline(monkeypatch, tmp_path):
     calls = []
 
