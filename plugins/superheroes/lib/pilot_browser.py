@@ -646,11 +646,19 @@ def provision_server(
     pin,
     created_at,
     begin_at,
+    effect_id,
     ppid_of=None,
-    effect_id=None,
 ):
-    """Journal and validate a per-generation server+browser provisioning."""
+    """Close a pre-spawn provision effect and validate the server+browser record.
+
+    `effect_id` is required: it is the `effectId` returned by
+    `begin_provision_server`, which journals before any process is spawned. There
+    is no journal-after-the-fact ordering — omitting the argument is a TypeError,
+    and passing a non-string or empty `effect_id` refuses.
+    """
     if not _is_str_path(journal_path):
+        return _fail(REFUSAL_SERVER_RECORD_INVALID)
+    if not isinstance(effect_id, str) or not effect_id:
         return _fail(REFUSAL_SERVER_RECORD_INVALID)
     try:
         slot, parsed_gen = pilot_slot.parse_slot_ref(slot_ref)
@@ -695,32 +703,15 @@ def provision_server(
 
     end_at = _later_timestamp(begin_at)
 
-    if effect_id is not None:
-        if not isinstance(effect_id, str) or not effect_id:
-            return _fail(REFUSAL_SERVER_RECORD_INVALID)
-        end_result = pilot_journal.end_effect(
-            journal_path,
-            slot_ref=formatted_ref,
-            effect_id=effect_id,
-            outcome=pilot_journal.OUTCOME_APPLIED,
-            at=end_at,
-        )
-        if not end_result["ok"]:
-            return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=end_result.get("reason"))
-        return _ok(record=record)
-
-    try:
-        with pilot_journal.effect(
-            journal_path,
-            slot_ref=formatted_ref,
-            kind=pilot_journal.KIND_BROWSER_SERVER_PROVISIONED,
-            at=begin_at,
-            detail={"socketDir": socket_dir, "serverPid": server_pid},
-        ) as handle:
-            handle.mark_applied(at=end_at)
-    except pilot_journal.PilotJournalError as exc:
-        return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=str(exc.reason))
-
+    end_result = pilot_journal.end_effect(
+        journal_path,
+        slot_ref=formatted_ref,
+        effect_id=effect_id,
+        outcome=pilot_journal.OUTCOME_APPLIED,
+        at=end_at,
+    )
+    if not end_result["ok"]:
+        return _fail(REFUSAL_SERVER_RECORD_INVALID, detail=end_result.get("reason"))
     return _ok(record=record)
 
 
