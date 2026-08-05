@@ -7,11 +7,13 @@ handling. That divergence is the reason to extract rather than a reason not to: 
 the whole process group on timeout and the other only the direct child, so a runaway grandchild
 outlived exactly one of them.
 
-**Process-group containment is unconditional.** Every run starts its own session
-(`start_new_session=True`), so every child is the leader of its own process group and every
-termination path signals that whole group, not just the direct child. There is no per-caller
-opt-out: a command that forks its own children never leaves them behind, whether the caller is
-running a project's test suite or a single short-lived observer.
+**Process-group containment on every termination path is unconditional.** Every run starts its own
+session (`start_new_session=True`), so every child is the leader of its own process group, and
+timeout, oversize output, a read failure, an unexpected error, and the `finally` sweep of a child
+still running all signal that whole group — never just the direct child, and with no per-caller
+opt-out. What this does NOT cover: a command that **exits on its own** is reaped as the leader
+only, because `_terminate` is never called on that path. A descendant it left running with stdout
+detached is not signalled — that gap is known and out of scope here, tracked as a follow-up.
 
 **This runner classifies, it never judges.** A run that finished is `completed`, whatever its exit
 code, with stdout returned as raw bytes and undecoded. The two semantic differences the callers
@@ -23,6 +25,7 @@ import os
 import signal
 import subprocess
 import threading
+import time
 
 # A run reaches exactly one of these. `completed` is the only one carrying an exit code.
 OUTCOME_COMPLETED = "completed"
@@ -47,10 +50,11 @@ def run_bounded(
     unexpected error all classify as ``spawn-failed``, because a caller that cannot see the child's
     output cannot distinguish them and must refuse either way.
 
-    Every run starts its own session (``start_new_session=True``) and every termination path
-    signals the whole process group, unconditionally — so a child that forks its own children
-    never leaves them running, whether the caller is a project's own test command or a single
-    short-lived observer.
+    Every run starts its own session (``start_new_session=True``), and every *termination* path
+    (timeout, oversize, read failure, unexpected error, or the ``finally`` sweep of a still-running
+    child) signals the whole process group, unconditionally. A command that exits on its own is a
+    different path: it is reaped as the leader only, so a descendant it left behind with stdout
+    detached is not signalled — a known, deliberate gap, not covered by this change.
     """
     # bite-axis: containment — stdout is read under a byte cap so oversized output cannot exhaust
     # memory, both the read and the wait are bounded by timeout_seconds, and the child's whole
@@ -154,13 +158,20 @@ def _terminate(proc, pgid):
         os.killpg(pgid, signal.SIGTERM)
     except (ProcessLookupError, PermissionError):
         pass
-    try:
-        proc.wait(timeout=1)
-    except subprocess.TimeoutExpired:
-        pass
+    # Deliberately a bare sleep, not `proc.wait(timeout=1)`: reaping the group leader here would
+    # release its pid — and pgid IS that pid, since this runner's pgid is always the leader's own
+    # pid (start_new_session=True) — for the kernel to hand to an unrelated same-UID process group
+    # before the SIGKILL below runs. An unreaped zombie leader keeps holding that pid/pgid identity,
+    # which is exactly what stops the second killpg from ever hitting a process we don't mean to
+    # (#866 audit r2-2). Reaping happens only after both signals, below.
+    time.sleep(1)
     try:
         os.killpg(pgid, signal.SIGKILL)
     except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
         pass
     if proc.poll() is None:
         try:
