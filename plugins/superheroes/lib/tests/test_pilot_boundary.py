@@ -413,6 +413,7 @@ _GRANDCHILD_OBSERVER_SCRIPT = """#!/usr/bin/env python3
 import os
 import subprocess
 import sys
+import time
 
 pid_path = os.environ["PILOT_DB_URL"]
 grandchild_code = (
@@ -423,18 +424,47 @@ grandchild_code = (
     "time.sleep(120)\\n"
 )
 subprocess.Popen([sys.executable, "-c", grandchild_code, pid_path], stdout=sys.stdout)
+
+# Wait for the grandchild to actually be observable before this parent exits, instead of exiting
+# immediately and leaving the test to assume it started. Bounded so a stuck grandchild cannot hang
+# the runner: if the deadline passes, exit anyway and let the test's own poll fail with its
+# existing "grandchild never started" message, which is the correct signal in that case.
+deadline = time.monotonic() + 20
+while time.monotonic() < deadline:
+    if os.path.isfile(pid_path):
+        try:
+            with open(pid_path) as f:
+                if f.read().strip():
+                    break
+        except OSError:
+            pass
+    time.sleep(0.05)
+
 os._exit(0)
 """
 
 
 def test_observe_datastore_identity_timeout_reaps_process_group(private_tmp):
     # axis: process-group containment for the BOUNDARY caller specifically. The observer script
-    # exits immediately after forking a grandchild that inherits its stdout, ignores SIGTERM, and
-    # sleeps. pilot_mint's own grandchild-timeout test cannot prove this for pilot_boundary — a
-    # review seat showed that hardcoding `start_new_session=True` inside the shared runner (rather
-    # than deriving it from a per-caller flag) left every existing boundary test green while the
+    # exits after forking a grandchild that inherits its stdout, ignores SIGTERM, and sleeps.
+    # pilot_mint's own grandchild-timeout test cannot prove this for pilot_boundary — a review seat
+    # showed that hardcoding `start_new_session=True` inside the shared runner (rather than
+    # deriving it from a per-caller flag) left every existing boundary test green while the
     # observer path had no equivalent proof (#866). This test is that proof: only signalling the
     # observer's whole process group (not just the direct child) reaps the grandchild.
+    #
+    # Timing: `timeout_seconds=15` here is what the runner is bounded by, not what the test's
+    # setup should be tuned to the edge of — setup (interpreter spawn twice + a file write) must
+    # complete inside that timeout or the group gets killed before the grandchild ever proves it
+    # started, failing the test at setup rather than at the containment assertion. Measured cold
+    # start (5 trials, otherwise-idle machine) was `['1.895', '0.056', '0.046', '0.048', '0.051']`
+    # seconds — the first, cold trial at ~1.9s, everything after warm. 15s is roughly 8x that
+    # worst measured cold start. This test failed in CI once for exactly this reason at
+    # `timeout_seconds=2` (#866, CI run 31002921349): "grandchild never started: pid file never
+    # appeared" — a race against its own timeout, not a containment defect. The pid-file poll
+    # deadline (20s) and `runner.join` timeout (40s) below are widened to match; the post-timeout
+    # grandchild-death poll (3s) is untouched because the group is SIGKILLed before `run_bounded`
+    # returns, so that poll never races the timeout the way setup did.
     reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
     pid_file = os.path.join(private_tmp, "grandchild.pid")
     script = os.path.join(bin_dir, "observer.py")
@@ -451,7 +481,7 @@ def test_observe_datastore_identity_timeout_reaps_process_group(private_tmp):
                 connection_detail=pid_file,
                 reach_roots=[reach_root],
                 run_cwd=run_cwd,
-                timeout_seconds=2,
+                timeout_seconds=15,
             )
         except pb.PilotBoundaryError as exc:
             outcome["error"] = exc
@@ -460,7 +490,7 @@ def test_observe_datastore_identity_timeout_reaps_process_group(private_tmp):
         runner = threading.Thread(target=_run_observe)
         runner.start()
 
-        deadline = time.monotonic() + 5.0
+        deadline = time.monotonic() + 20.0
         while time.monotonic() < deadline:
             if os.path.isfile(pid_file):
                 with open(pid_file) as f:
@@ -472,7 +502,7 @@ def test_observe_datastore_identity_timeout_reaps_process_group(private_tmp):
         else:
             pytest.fail("grandchild never started: pid file never appeared")
 
-        runner.join(timeout=10)
+        runner.join(timeout=40)
         assert runner.is_alive() is False, "observe_datastore_identity did not finish"
         assert "error" in outcome, "observe_datastore_identity did not raise"
         assert outcome["error"].reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
