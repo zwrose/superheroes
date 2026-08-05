@@ -51,14 +51,14 @@ ADJUDICATED = {
 }
 
 _CALIBRATION_MODULE = "calibration_resolve"
-_FALL_OPEN_EXISTS_FALSE = re.compile(
-    r'\|\|\s*[^;\n]*"exists"\s*:\s*false', re.IGNORECASE
+_HANDLER_FALL_OPEN_EXISTS_FALSE = re.compile(
+    r'"exists"\s*:\s*false', re.IGNORECASE
 )
-_FALL_OPEN_LOCATION_NONE = re.compile(
-    r'\|\|\s*[^;\n]*"location"\s*:\s*"none"', re.IGNORECASE
+_HANDLER_FALL_OPEN_LOCATION_NONE = re.compile(
+    r'"location"\s*:\s*"none"', re.IGNORECASE
 )
 _CALIBRATION_RESOLVE_INVOCATION = re.compile(
-    r'calibration_resolve\.py'
+    r'calibration_resolve\.py["\s]+resolve\b'
 )
 
 
@@ -237,24 +237,73 @@ def _validate_skills_population(md_files):
         )
 
 
+def _logical_shell_lines(text):
+    """Physical lines merged by trailing backslash continuation."""
+    logical = []
+    current = None
+    for line in text.splitlines():
+        if current is None:
+            current = line
+        else:
+            current = current.rstrip().rstrip("\\").rstrip() + " " + line.lstrip()
+        if not line.rstrip().endswith("\\"):
+            logical.append(current)
+            current = None
+    if current is not None:
+        logical.append(current)
+    return logical
+
+
+def _scan_shell_text_violations(rel, text):
+    """Per-file shell census: each calibration_resolve.py invocation must have a halting || handler."""
+    violations = []
+    invocation_count = 0
+    handled_count = 0
+    for line in _logical_shell_lines(text):
+        for match in _CALIBRATION_RESOLVE_INVOCATION.finditer(line):
+            invocation_count += 1
+            rest = line[match.end():]
+            or_pos = rest.find("||")
+            if or_pos < 0:
+                violations.append(
+                    "%s: missing handler on calibration_resolve.py invocation" % rel
+                )
+                continue
+            handled_count += 1
+            handler = rest[or_pos:]
+            if (
+                _HANDLER_FALL_OPEN_EXISTS_FALSE.search(handler)
+                or _HANDLER_FALL_OPEN_LOCATION_NONE.search(handler)
+            ):
+                violations.append(
+                    "%s: fall-open handler on calibration_resolve.py invocation" % rel
+                )
+    return violations, invocation_count, handled_count
+
+
 def _scan_shell_fall_opens():
     md_files = _skills_markdown_files()
     _validate_skills_population(md_files)
-    invocations = 0
+    total_invocations = 0
+    total_handled = 0
     violations = []
     for path in md_files:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
-        if not _CALIBRATION_RESOLVE_INVOCATION.search(text):
-            continue
-        invocations += 1
         rel = os.path.relpath(path, _SKILLS)
-        if _FALL_OPEN_EXISTS_FALSE.search(text) or _FALL_OPEN_LOCATION_NONE.search(text):
-            violations.append(rel)
-    if invocations == 0:
+        file_violations, invocations, handled = _scan_shell_text_violations(rel, text)
+        violations.extend(file_violations)
+        total_invocations += invocations
+        total_handled += handled
+    if total_invocations == 0:
         raise RuntimeError(
             "Calibration-root shell census population collapsed: derived zero "
             "calibration_resolve.py invocations from %s" % _SKILLS
+        )
+    if total_handled == 0:
+        raise RuntimeError(
+            "Calibration-root shell census population collapsed: derived zero "
+            "calibration_resolve.py invocations with handlers from %s" % _SKILLS
         )
     return violations
 
@@ -307,9 +356,44 @@ def test_shell_census_no_fall_open_on_calibration_resolve():
     violations = _scan_shell_fall_opens()
     if violations:
         raise AssertionError(
-            "INVARIANT: shell blocks must not swallow calibration_resolve refusal into "
-            "uncalibrated-looking output; fall-open at: %s" % ", ".join(violations)
+            "INVARIANT: every calibration_resolve.py shell invocation must have a halting "
+            "|| handler that does not yield uncalibrated-looking output; violations: %s"
+            % ", ".join(violations)
         )
+
+
+def test_shell_census_halting_handler_clean():
+    text = (
+        "CAL=$(python3 -B \"$ROOT_DIR/lib/calibration_resolve.py\" resolve) "
+        "|| { echo \"halting\" >&2; exit 1; }\n"
+    )
+    violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert invocations == 1
+    assert handled == 1
+    assert violations == []
+
+
+def test_shell_census_missing_handler_violation():
+    text = "CAL=$(python3 -B \"$ROOT_DIR/lib/calibration_resolve.py\" resolve)\n"
+    violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert invocations == 1
+    assert handled == 0
+    assert violations == [
+        "fake.md: missing handler on calibration_resolve.py invocation"
+    ]
+
+
+def test_shell_census_fall_open_handler_violation():
+    text = (
+        "CAL=$(python3 -B \"$ROOT_DIR/lib/calibration_resolve.py\" resolve) "
+        "|| CAL='{\"location\":\"none\",\"exists\":false}'\n"
+    )
+    violations, invocations, handled = _scan_shell_text_violations("fake.md", text)
+    assert invocations == 1
+    assert handled == 1
+    assert violations == [
+        "fake.md: fall-open handler on calibration_resolve.py invocation"
+    ]
 
 
 def test_matcher_catches_calibration_resolve_resolve():

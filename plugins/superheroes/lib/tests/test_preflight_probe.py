@@ -634,14 +634,16 @@ def test_dispatch_selftest_config_root_unavailable_returns_read_error(tmp_path, 
     assert cfg["read_error"].startswith("repo-root-unavailable: ")
 
 
-def test_dispatch_selftest_config_unresolvable_root_returns_read_error(tmp_path):
+def test_dispatch_selftest_config_unresolvable_root_returns_read_error(
+    tmp_path, isolated_default_store_root
+):
     import calibration_resolve as cr
     import subprocess
 
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
-    default_store = str(tmp_path / "_store_isolation")
+    default_store = isolated_default_store_root
     empty = tmp_path / "empty_store"
     empty.mkdir()
     empty_s = str(empty)
