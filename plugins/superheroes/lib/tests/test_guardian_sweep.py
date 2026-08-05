@@ -1,5 +1,7 @@
+import ast
 import json
 import os
+import re
 
 import guardian_lens as gl
 import guardian_report as gr
@@ -10,6 +12,7 @@ from guardian_fixtures import (
     FixtureLens, benched_fixture_ledger, funnel_conserved, init_calibrated_repo,
     write_guardian_layer, write_ledger,
 )
+from source_access_scan import source_obj_access_keys
 
 
 def _store(tmp_path):
@@ -2120,28 +2123,32 @@ def test_calibration_reference_defaults_match_library_constants():
         gsw._DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
 
 
-def _read_config_block_keys():
-    """Keys guardian_sweep.read_config reads from the guardian-config block — derived from source."""
-    import re
+def _read_config_function_source():
     gsw_path = os.path.join(os.path.dirname(gsw.__file__), "guardian_sweep.py")
     source = open(gsw_path, encoding="utf-8").read()
-    func_m = re.search(
-        r'def read_config\([^)]*\):(.*?)(?=\n\ndef |\nclass |\Z)',
-        source, re.DOTALL)
-    assert func_m, "could not locate guardian_sweep.read_config in source"
-    body = func_m.group(1)
-    keys = set(re.findall(r'block\.get\("([^"]+)"\)', body))
-    if '"reportCard" in block' in body:
-        keys.add("reportCard")
-    return keys
+    tree = ast.parse(source)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "read_config":
+            lines = source.splitlines(keepends=True)
+            return "".join(lines[node.lineno - 1:node.end_lineno])
+    assert False, "could not locate guardian_sweep.read_config in source"
+
+
+def _read_config_block_keys():
+    """Keys guardian_sweep.read_config reads from the guardian-config block — derived from source."""
+    return source_obj_access_keys(_read_config_function_source(), "block")
 
 
 def _calibration_keys_table_keys(text):
-    """Keys listed in calibration.md Keys table — includes alias pairs."""
-    import re
+    """Keys listed in calibration.md ## Keys table — includes alias pairs."""
+    section_m = re.search(r'^## Keys\s*$', text, re.MULTILINE)
+    assert section_m, "calibration.md missing ## Keys section"
+    start = section_m.end()
+    next_section = re.search(r'^## ', text[start:], re.MULTILINE)
+    section_text = text[start:start + next_section.start()] if next_section else text[start:]
     keys = set()
     for m in re.finditer(
-            r'^\| `([^`/]+)(?:` / `([^`]+))?` \|', text, re.MULTILINE):
+            r'^\| `([^`/]+)(?:` / `([^`]+))?` \|', section_text, re.MULTILINE):
         keys.add(m.group(1))
         if m.group(2):
             keys.add(m.group(2))

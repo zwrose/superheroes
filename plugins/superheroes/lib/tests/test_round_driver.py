@@ -22,6 +22,8 @@ import subprocess
 
 import pytest
 
+from source_access_scan import source_obj_accesses_key
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 
@@ -3516,10 +3518,7 @@ def test_run_config_retired_keys_census():
         source = fh.read()
     violations = []
     for key in _RETIRED_RUN_CONFIG_KEYS:
-        if re.search(
-                r'\b(?:config|cfg)(?:\.get\([\'"]%s[\'"](?:\)|,)|\[[\'"]%s[\'"]\])'
-                % (re.escape(key), re.escape(key)),
-                source):
+        if source_obj_accesses_key(source, "config|cfg", key):
             violations.append(key)
     assert not violations, (
         "retired run-config keys read in round_driver.py: %s" % violations)

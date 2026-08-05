@@ -16,9 +16,12 @@ In `guardian.md`, embed one fenced block tagged `guardian-config`:
 ```
 ````
 
-An **absent** layer, an **empty** layer, or a layer with **no** `guardian-config` fence is
-**healthy** — plugin defaults are authoritative (the emptiness probe fails open on `OSError`).
-A layer file that is not valid UTF-8 raises `UnicodeDecodeError` out of `core_md._layer_is_empty`
+An **absent** layer, an **empty** layer, an **unreadable** layer (file-level I/O error), or a
+layer with **no** `guardian-config` fence is **healthy** — plugin defaults are authoritative and
+benching authority is retained. `core_md._layer_is_empty` catches `OSError` and treats the layer
+as empty before `read_config`'s own unreadable branch can run; that branch is therefore reachable
+only in a TOCTOU window. A layer file that is not valid UTF-8 raises `UnicodeDecodeError` out of
+`core_md._layer_is_empty`
 (it catches only `OSError`) and is not mapped to either healthy or degraded — the error
 propagates. **Malformed JSON** or a fence whose parsed value is **not an object** sets
 `configStatus: "degraded"`, which **revokes benching authority for that sweep** (plugin defaults
