@@ -594,11 +594,12 @@ def test_unparsed_message_verbatim():
         "(fail-closed) rather than risk wiping uncommitted work. If this command runs no "
         "git discard and only mentions one in prose — a PR or issue comment body, a commit "
         "message — that prose is the trigger: text naming `git checkout`, `git reset`, or "
-        "`git clean` reads as a command whenever it sits outside shell quoting this guard "
-        "can track — a heredoc body, or a backslash-escaped quote of the same kind as the "
-        "one around it (`\"… \\\" …\"`), which this guard does not treat as an escape. "
-        "Write the text to a file and pass the file — `gh ... --body-file <path>`, "
-        "`git commit -F <path>` — rather than inlining it. If a discard is intended, commit "
+        "`git clean` reads as a command wherever this guard loses track of the shell quoting "
+        "around it — a heredoc body, a backslash-escaped quote inside a quoted string, or a "
+        "quote nested inside a `$(...)` substitution. Write the text to a file with a "
+        "file-writing tool — not a shell heredoc, which trips this same refusal — and pass "
+        "the file: `gh ... --body-file <path>`, `git commit -F <path>`. If a discard is "
+        "intended, commit "
         "or `git stash -u` your work first, or revert a probe edit with an inverse Edit "
         "rather than a git discard."
     )
@@ -623,15 +624,24 @@ _PROSE_ONLY_MENTIONS = (
     "cat > /tmp/note.md <<'EOF'\n"
     "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
     "EOF",
+    # same-delimiter quotes nested inside a command substitution: legal shell, but the scanner
+    # toggles its outer quote state on the inner quotes and the prose reads as bare text
+    'gh pr comment 1 --body "$(echo "never git reset --hard")"',
 )
 
 # The counterpart the message must NOT send an operator away from: prose in a body whose quoting
 # the scanner does track stays allowed, nested other-delimiter quotes included.
+#
+# Deliberately absent: a body carrying backticks inside DOUBLE quotes
+# (`--body "not `git reset --hard`"`). The shell substitutes there, so that command really does
+# run the discard — it is not prose, and this suite must not bless it as safe. The guard allows
+# it today; that gap is the guard's, not this message's, and is filed for the advisor.
 _PROSE_MENTIONS_STILL_ALLOWED = (
     'gh pr comment 1 --body "never git checkout -- f.txt"',
     'gh pr comment 1 --body "the reviewer said \'never: git checkout -- f.txt\'"',
     "gh pr comment 1 --body 'the reviewer said \"never: git checkout -- f.txt\"'",
-    'gh pr comment 1 --body "revert with an inverse Edit, not `git reset --hard`"',
+    # single-quoted, so the backticks are literal text the shell will not substitute
+    "gh pr comment 1 --body 'revert with an inverse Edit, not `git reset --hard`'",
 )
 
 
