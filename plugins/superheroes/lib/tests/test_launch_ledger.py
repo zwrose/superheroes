@@ -2602,7 +2602,7 @@ def test_record_outcome_on_refused_lane_no_amendment(tmp_path, monkeypatch):
 
 
 def test_record_outcome_concurrent_identical_retry_dedupes_under_lock(tmp_path, monkeypatch):
-    # axis: concurrent identical retries dedupe inside amend's lock transaction
+    # axis: dedupe and append are one lock transaction; snapshots captured before barrier sync
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "wave-concurrent-dedupe"
@@ -2635,12 +2635,14 @@ def test_record_outcome_concurrent_identical_retry_dedupes_under_lock(tmp_path, 
             and not getattr(shim_state, "pre_amend_barrier_done", False)
         ):
             shim_state.pre_amend_barrier_done = True
+            snapshot = real_read(repo_root, env=env)
             try:
                 barrier.wait(timeout=10)
             except threading.BrokenBarrierError as exc:
                 raise AssertionError(
                     "concurrent record_outcome dedupe: barrier broken or timed out"
                 ) from exc
+            return snapshot
         return real_read(repo_root, env=env)
 
     monkeypatch.setattr(ll, "read", read_shim)
