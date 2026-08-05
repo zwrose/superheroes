@@ -391,8 +391,7 @@ def test_await_dispatches_ruling_states_the_real_slice_contract():
         engine_dispatch.MAX_SYNC_WAIT,
     )
     assert expected_range in ruling_text
-    assert "never 0" not in ruling_text
-    assert "launches nothing" not in ruling_text
+    assert "positive slice" in ruling_text
 
 
 # Bite: reworded await-dispatches ruling (stale zero-slice parenthetical) — must refuse exact-text pin
@@ -401,7 +400,7 @@ def test_reworded_await_dispatches_ruling_refuses():
         _read_doctrine(),
         (
             "(a slice of 0..540 seconds — a zero slice opens the run and returns now without "
-            "starting an attempt, so progress comes from the re-invocation)"
+            "starting an attempt, so progress comes from a re-invocation with a positive slice)"
         ),
         "(positive, never 0 — a zero slice launches nothing)",
     )

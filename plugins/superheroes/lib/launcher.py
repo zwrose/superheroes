@@ -1093,6 +1093,10 @@ def main(argv=None):
         return 1
     if args.command == "count" and result.get("indeterminate"):
         return 1
+    if args.command == "record-outcome" and result.get("recorded") in (
+        "amendment", "amendment-existing",
+    ):
+        return 1
     return 0
 
 

@@ -8,6 +8,13 @@ refuse to ground a rate. Never raises to callers.
 Every locked writer validates its candidate record against the reader
 (read → fold(records + [candidate])) before appending; that invariant keeps
 one grammar across reserve, append_under_lock, declare_batch, and terminalize.
+
+The ledger's event grammar is version-coupled to the plugin build that wrote
+it: a record kind an older build does not understand (for example ``amendment``)
+makes ``fold`` refuse the whole stream with ``fold-unknown-event:<kind>``, and
+every ledger door fails closed until the file is cleared. Recovery is deleting
+the ledger file at the path ``ledger_path()`` reports — there is no in-place
+prune or forward-compat skip for unknown events.
 """
 import fcntl
 import hashlib
@@ -1349,13 +1356,27 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             _release_lock(lock_path)
 
 
+def _record_outcome_response(ok, reason=None, recorded=None, amendment_kind=None,
+                             attempted_outcome=None, terminal_outcome=None):
+    return {
+        "ok": ok,
+        "reason": reason,
+        "recorded": recorded,
+        "amendmentKind": amendment_kind,
+        "attemptedOutcome": attempted_outcome,
+        "terminalOutcome": terminal_outcome,
+    }
+
+
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
                    lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Record a terminal outcome under lock."""
+    """Record a terminal outcome under lock. Never raises."""
     if outcome not in TERMINAL_OUTCOMES:
-        return {"ok": False, "reason": "outcome-invalid:%s" % outcome, "recorded": None}
+        return _record_outcome_response(
+            False, reason="outcome-invalid:%s" % outcome,
+        )
     if not isinstance(evidence, str) or not evidence.strip():
-        return {"ok": False, "reason": "outcome-evidence-empty", "recorded": None}
+        return _record_outcome_response(False, reason="outcome-evidence-empty")
 
     result = terminalize(
         repo_root, launch_id, outcome=outcome, evidence=evidence,
@@ -1365,17 +1386,55 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"
     if not result["ok"] and result["reason"] == "outcome-already-terminal":
+        read_result = read(repo_root, env=env)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return _record_outcome_response(
+                False, reason="ledger-unreadable:%s" % state,
+            )
+        folded = fold(read_result["records"])
+        if not folded["ok"]:
+            return _record_outcome_response(False, reason=folded["reason"])
+        if launch_id not in folded["launches"]:
+            return _record_outcome_response(False, reason="outcome-unknown-launch")
+
+        info = folded["launches"][launch_id]
+        if info.get("terminalKind") == "refused" or not info.get("started"):
+            return _record_outcome_response(False, reason="outcome-without-started")
+
+        for existing in info.get("amendments") or []:
+            if (existing.get("kind") == AMENDMENT_REOUTCOME
+                    and existing.get("value") == outcome
+                    and existing.get("note") == evidence):
+                return _record_outcome_response(
+                    True, recorded="amendment-existing",
+                    amendment_kind=AMENDMENT_REOUTCOME,
+                    attempted_outcome=outcome,
+                    terminal_outcome=info.get("outcome"),
+                )
+
         amended = amend(repo_root, launch_id, AMENDMENT_REOUTCOME, outcome, evidence,
                         env=env, lock_timeout=lock_timeout)
         if not amended["ok"]:
-            return {"ok": False, "reason": "amend-failed:%s" % amended["reason"],
-                    "recorded": None}
-        return {"ok": True, "reason": None, "recorded": "amendment",
-                "amendmentKind": AMENDMENT_REOUTCOME, "attemptedOutcome": outcome,
-                "terminalOutcome": amended["terminalOutcome"]}
+            amend_reason = amended["reason"]
+            if amend_reason == "amend-failed":
+                return _record_outcome_response(False, reason="amend-failed")
+            return _record_outcome_response(
+                False, reason="amend-failed:%s" % amend_reason,
+            )
+        return _record_outcome_response(
+            True, recorded="amendment",
+            amendment_kind=AMENDMENT_REOUTCOME,
+            attempted_outcome=outcome,
+            terminal_outcome=amended["terminalOutcome"],
+        )
     if result["ok"]:
-        return {"ok": True, "reason": None, "recorded": "outcome"}
-    return {"ok": False, "reason": mapped_reason, "recorded": None}
+        return _record_outcome_response(
+            True, recorded="outcome",
+            attempted_outcome=outcome,
+            terminal_outcome=result["outcome"],
+        )
+    return _record_outcome_response(False, reason=mapped_reason)
 
 
 def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):

@@ -703,6 +703,9 @@ parks is a signal to inspect, never a clean sheet. The same record also carries 
 amendments** — a second terminal-outcome write, an advisor vet ruling, or an evidence correction —
 recorded without mutating the terminal outcome and surfaced by `count` beside the terminal tallies;
 `lib/launch_ledger.py` is the authoritative home for the amendment kinds and vet rulings. The
+ledger's event grammar is version-coupled: a record kind an older build does not understand makes
+every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
+`ledger_path()` reports). The
 Showrunner advisor invokes the launcher
 per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
 by a drift test — cite those homes, do not duplicate them here. The recovery half —

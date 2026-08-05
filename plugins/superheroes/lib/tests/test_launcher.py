@@ -1146,6 +1146,105 @@ def test_cli_count_resolved_exits_zero(tmp_path, monkeypatch):
     assert payload["indeterminate"] is False
 
 
+def test_cli_record_outcome_amendment_exits_nonzero(tmp_path, monkeypatch):
+    # axis: amendment record-outcome exits non-zero while ok:true
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-amend-exit"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-amend-exit",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 424242,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.record_outcome(repo, launch_id, "handback", "done")
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "record-outcome",
+            "--repo-root", repo,
+            "--launch-id", launch_id,
+            "--outcome", "handback",
+            "--evidence", "retry",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["recorded"] == "amendment"
+
+
+def test_cli_record_outcome_amendment_existing_exits_nonzero(tmp_path, monkeypatch):
+    # axis: amendment-existing retry exits non-zero
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-amend-existing"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-amend-existing",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 424242,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.record_outcome(repo, launch_id, "handback", "done")
+    ll.record_outcome(repo, launch_id, "handback", "retry")
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "record-outcome",
+            "--repo-root", repo,
+            "--launch-id", launch_id,
+            "--outcome", "handback",
+            "--evidence", "retry",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["recorded"] == "amendment-existing"
+
+
 # --- CLI shape ---------------------------------------------------------------
 
 

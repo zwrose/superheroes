@@ -40,9 +40,9 @@ RULING_TEXT = {
         "until the handback or park comment is posted, every turn ends with a tool call; "
         "await every dispatch in-turn, and run each external engine dispatch you invoke directly "
         "through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — a zero slice "
-        "opens the run and returns now without starting an attempt, so progress comes from the "
-        "re-invocation) re-invoked on the same `--run-dir` until the structured result is "
-        "terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; "
+        "opens the run and returns now without starting an attempt, so progress comes from a "
+        "re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured "
+        "result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; "
         "skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll "
         "cannot fit the turn, park durably on the issue or PR."
     ),

@@ -2185,7 +2185,14 @@ def test_rehandback_end_to_end(tmp_path, monkeypatch):
     assert ll.reserve(repo, _reserved(launch, batch, ["a"], repo))["ok"]
     _append_raw(_ledger_file(repo, os.environ), _started(launch))
     first = ll.record_outcome(repo, launch, "handback", "first")
-    assert first == {"ok": True, "reason": None, "recorded": "outcome"}
+    assert first == {
+        "ok": True,
+        "reason": None,
+        "recorded": "outcome",
+        "amendmentKind": None,
+        "attemptedOutcome": "handback",
+        "terminalOutcome": "handback",
+    }
     second = ll.record_outcome(repo, launch, "handback", "second")
     assert second["ok"] is True
     assert second["recorded"] == "amendment"
@@ -2575,6 +2582,123 @@ def test_bite_rehandback_subset_derivation(tmp_path, monkeypatch):
     result = ll.count(repo, batch)
     assert result["amendments"]["reoutcome"] == 2
     assert result["amendments"]["rehandback"] == 1
+    assert result["amendedLaunches"] == 2
+
+
+def test_record_outcome_on_refused_lane_no_amendment(tmp_path, monkeypatch):
+    # axis: refused/never-started lane keeps outcome-without-started, no amendment
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.record_outcome(repo, "l1", "handback", "evidence")
+    assert result["ok"] is False
+    assert result["reason"] == "outcome-without-started"
+    assert result["recorded"] is None
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_record_outcome_idempotent_retry(tmp_path, monkeypatch):
+    # axis: byte-identical retry appends one amendment, not two
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-idempotent"
+    launch = "launch-idempotent"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", "done")
+    second = ll.record_outcome(repo, launch, "handback", "done")
+    assert second["recorded"] == "amendment"
+    third = ll.record_outcome(repo, launch, "handback", "done")
+    assert third["recorded"] == "amendment-existing"
+    counted = ll.count(repo, batch)
+    assert counted["amendments"]["reoutcome"] == 1
+    assert counted["amendments"]["rehandback"] == 1
+    assert counted["amendedLaunches"] == 1
+
+
+@pytest.mark.parametrize("kind,value,note,reason", [
+    ("bogus", "ready", "n", "fold-bad-amendment-kind:a"),
+    ("vet", 7, "n", "fold-missing-amendment-value:a"),
+    ("vet", "", "n", "fold-missing-amendment-value:a"),
+    ("vet", "ready", "", "fold-missing-amendment-note:a"),
+    ("vet", "maybe", "n", "fold-bad-amendment-value:a"),
+    ("reoutcome", "ready", "n", "fold-bad-amendment-value:a"),
+])
+def test_fold_amendment_field_values(kind, value, note, reason):
+    # axis: fold refuses a malformed amendment record with the exact token, per field
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a"), _outcome("a"),
+               _amendment("a", kind, value, note)]
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == reason
+
+
+def test_amend_launch_id_invalid(tmp_path, monkeypatch):
+    # axis: amend-launch-id-invalid
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    result = ll.amend(repo, "", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-launch-id-invalid"
+
+
+def test_amend_value_invalid_for_reoutcome(tmp_path, monkeypatch):
+    # axis: amend-value-invalid on reoutcome leg
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.amend(repo, "l1", "reoutcome", "bogus", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-value-invalid:bogus"
+
+
+def test_amend_failed_exception(tmp_path, monkeypatch):
+    # axis: amend-failed on unexpected exception inside lock
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(ll, "read", boom)
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-failed"
+
+
+def test_record_outcome_amend_failed_no_double_prefix(tmp_path, monkeypatch):
+    # axis: amend-failed is not double-prefixed in record_outcome
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    monkeypatch.setattr(ll, "amend", lambda *a, **k: {"ok": False, "reason": "amend-failed",
+                                                     "terminalOutcome": None})
+    result = ll.record_outcome(repo, "l1", "handback", "again")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-failed"
+    assert result["recorded"] is None
+
+
+def test_record_outcome_uniform_keys_on_success(tmp_path, monkeypatch):
+    # axis: ordinary success carries attemptedOutcome without KeyError
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    result = ll.record_outcome(repo, "l1", "handback", "evidence")
+    assert result["attemptedOutcome"] == "handback"
+    assert result["terminalOutcome"] == "handback"
+    assert result["recorded"] == "outcome"
 
 
 def test_bite_amend_lock_gate(tmp_path, monkeypatch):
