@@ -189,8 +189,9 @@ above).
      not override that scope — yours or a reviewer's. **Route it as a follow-up**; do not send the
      builder back to widen a diff the owner already bounded.
    - From **dispatch-provenance**, when a surface's **rework orders** show it reached the
-     third-rework threshold, the build must show a **park** — a fourth patch or an undisclosed
-     continue is a **vet finding**, and you do not wait for the build to disclose it; the provenance
+     third-rework threshold, the build must show a **park** — anything other than a park is a
+     **vet finding** (a fourth patch or a continue are examples), and you do not wait for the build
+     to disclose it; the provenance
      is the trigger. When a builder parks here, the tripwire is firing as designed — **welcome it
      and go looking for the design problem**, rather than ordering another rework.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders

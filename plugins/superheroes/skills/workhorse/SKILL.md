@@ -299,7 +299,8 @@ invariants plus a complete census rather than a list of sentences. Independently
 PR #726, two site-enumerating rounds produced a new defect each round — including regressions
 introduced by the fixes — and one invariant-plus-chokepoint order closed it with zero reachable
 bypasses in the confirmation round. This is how you satisfy the existing rules — especially rule 3,
-complete target enumeration — when authoring; the implementer template is unchanged.
+complete target enumeration — when authoring; this adds no seventh validity rule and leaves the
+six validity rules unchanged.
 
 ## 7. Delegate every implementation (lane-scoped — no size exception)
 

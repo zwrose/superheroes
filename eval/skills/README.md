@@ -132,6 +132,6 @@ is recorded as done.
 
 `eval/skills/activation-result.json` is a **required artifact of done** (UFR-5) when a
 skill **description** or **fixtures** change — not for body-only changes (see above).
-Its `recordedAt` date must be on or after the date of the most recent **description**
+Its `recordedAt` date must be on or after the date of the most recent **description or fixture**
 change in the commit being recorded. Commit it alongside any changes to skill
 descriptions or fixtures.
