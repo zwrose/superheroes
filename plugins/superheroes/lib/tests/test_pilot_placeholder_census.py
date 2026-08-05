@@ -78,6 +78,8 @@ def _literal_sites(token):
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
                 continue
+            if id(node) in docstring_ids:
+                continue
             if token not in node.value:
                 continue
             sites.append((module, node.lineno))
