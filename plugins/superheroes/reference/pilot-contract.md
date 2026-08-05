@@ -1918,7 +1918,10 @@ non-application.
 
 ### Broker admission
 
-Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception.
+Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception on
+malformed *data*. A **missing required argument** is a call-shape error, not data: `provision_server`
+called without `effect_id` raises `TypeError`, as any Python call with a missing argument does,
+while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
