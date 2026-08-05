@@ -62,12 +62,44 @@ _CALIBRATION_RESOLVE_INVOCATION = re.compile(
 )
 
 
+def _is_calibration_module_binding(value):
+    """True when value binds calibration_resolve via sys.modules.get or importlib.import_module."""
+    if not isinstance(value, ast.Call):
+        return False
+    func = value.func
+    if isinstance(func, ast.Attribute):
+        if (
+            isinstance(func.value, ast.Attribute)
+            and isinstance(func.value.value, ast.Name)
+            and func.value.value.id == "sys"
+            and func.value.attr == "modules"
+            and func.attr == "get"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+        ):
+            return value.args[0].value == _CALIBRATION_MODULE
+        if (
+            isinstance(func.value, ast.Name)
+            and func.value.id == "importlib"
+            and func.attr == "import_module"
+            and value.args
+            and isinstance(value.args[0], ast.Constant)
+        ):
+            return value.args[0].value == _CALIBRATION_MODULE
+    return False
+
+
 def _collect_calibration_bindings(tree):
     """Bound names for calibration_resolve imports in a module."""
     module_names = set()
     resolve_names = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
+        if isinstance(node, ast.Assign):
+            if _is_calibration_module_binding(node.value):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        module_names.add(target.id)
+        elif isinstance(node, ast.Import):
             for alias in node.names:
                 if alias.name == _CALIBRATION_MODULE:
                     module_names.add(alias.asname or _CALIBRATION_MODULE)
@@ -106,6 +138,14 @@ class _CallSiteVisitor(ast.NodeVisitor):
         self._stack = []
         self._contradiction_check_sites = []
 
+    def _enclosing_name(self):
+        return ".".join(self._stack) if self._stack else "<module>"
+
+    def visit_ClassDef(self, node):
+        self._stack.append(node.name)
+        self.generic_visit(node)
+        self._stack.pop()
+
     def visit_FunctionDef(self, node):
         self._stack.append(node.name)
         self.generic_visit(node)
@@ -119,14 +159,14 @@ class _CallSiteVisitor(ast.NodeVisitor):
     def visit_Call(self, node):
         for kw in node.keywords:
             if kw.arg == "_contradiction_check":
-                def_name = self._stack[-1] if self._stack else "<module>"
                 self._contradiction_check_sites.append(
-                    "%s::%s" % (self.basename, def_name)
+                    "%s::%s" % (self.basename, self._enclosing_name())
                 )
         tag = _call_site_tag(node, self.module_names, self.resolve_names)
         if tag is not None:
-            def_name = self._stack[-1] if self._stack else "<module>"
-            self.sites.add("%s::%s::%s" % (self.basename, def_name, tag))
+            self.sites.add(
+                "%s::%s::%s" % (self.basename, self._enclosing_name(), tag)
+            )
         self.generic_visit(node)
 
 
@@ -338,6 +378,57 @@ def test_matcher_catches_bare_resolve_profile_path():
     visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
     visitor.visit(tree)
     assert visitor.sites == {"fake_consumer.py::bad::_resolve_profile_path"}
+
+
+def test_matcher_catches_sys_modules_get_assignment_binding():
+    source = (
+        "import sys\n"
+        "def bad(cwd, root):\n"
+        '    _cr = sys.modules.get("calibration_resolve")\n'
+        "    return _cr.resolve(cwd, root=root)\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    tree = _parse_source(source, path)
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
+    visitor.visit(tree)
+    assert visitor.sites == {"fake_consumer.py::bad::resolve"}
+
+
+def test_matcher_catches_importlib_import_module_assignment_binding():
+    source = (
+        "import importlib\n"
+        "def bad(cwd, root):\n"
+        '    _cr = importlib.import_module("calibration_resolve")\n'
+        "    return _cr.resolve(cwd, root=root)\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    tree = _parse_source(source, path)
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
+    visitor.visit(tree)
+    assert visitor.sites == {"fake_consumer.py::bad::resolve"}
+
+
+def test_matcher_distinct_keys_for_same_named_methods_in_different_classes():
+    source = (
+        "import calibration_resolve as cr\n"
+        "class A:\n"
+        "    def go(self, cwd, root):\n"
+        "        return cr.resolve(cwd, root=root)\n"
+        "class B:\n"
+        "    def go(self, cwd, root):\n"
+        "        return cr.resolve(cwd, root=root)\n"
+    )
+    path = os.path.join(_LIB, "fake_consumer.py")
+    tree = _parse_source(source, path)
+    module_names, resolve_names = _collect_calibration_bindings(tree)
+    visitor = _CallSiteVisitor("fake_consumer.py", module_names, resolve_names)
+    visitor.visit(tree)
+    assert visitor.sites == {
+        "fake_consumer.py::A.go::resolve",
+        "fake_consumer.py::B.go::resolve",
+    }
 
 
 def test_matcher_fails_on_contradiction_check_keyword():

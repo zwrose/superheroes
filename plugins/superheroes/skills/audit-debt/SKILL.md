@@ -53,11 +53,11 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
-**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. A non-zero exit is a refusal to surface — not an uncalibrated project.
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt — do not treat the project as uncalibrated.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) || { echo "calibration_resolve refused (exit $?); surface refusal — not uncalibrated" >&2; exit 1; }
+CAL=$(python3 -B "$ROOT_DIR/lib/calibration_resolve.py" resolve) || { echo "calibration_resolve resolve exited non-zero (exit $?); halting rather than assuming uncalibrated" >&2; exit 1; }
 CORE=$(printf '%s' "$CAL" | jq -r '.dispatch_core // empty')
 LAYER=$(printf '%s' "$CAL" | jq -r '.dispatch_layer // empty')
 PROFILE="${LAYER:-$(printf '%s' "$CAL" | jq -r '.legacy_path // empty')}"

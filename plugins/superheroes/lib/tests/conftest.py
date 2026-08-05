@@ -67,7 +67,12 @@ def _isolate_store_root(monkeypatch, tmp_path):
     that reaches buildtree does a real `git worktree add` into the developer's ~/.superheroes-worktrees
     — one orphaned checkout per unique tmp-repo path, accumulating every run and never cleaned. Isolating
     it here (mirroring the store root) keeps every test's worktrees inside tmp_path. A test that sets its
-    own SUPERHEROES_WORKTREES_ROOT still wins (applies after this fixture)."""
+    own SUPERHEROES_WORKTREES_ROOT still wins (applies after this fixture).
+
+    Drop SUPERHEROES_STORE_ROOT before pinning WORKHORSE_STORE_ROOT: control_plane prefers the former,
+    so an exported SUPERHEROES_STORE_ROOT would bypass this isolation. A test that sets its own store
+    env still wins (applies after this fixture)."""
+    monkeypatch.delenv("SUPERHEROES_STORE_ROOT", raising=False)
     monkeypatch.setenv("WORKHORSE_STORE_ROOT", _isolated_default_store_root_path(tmp_path))
     monkeypatch.setenv("SUPERHEROES_WORKTREES_ROOT", str(tmp_path / "_worktrees_isolation"))
     # #412 review finding: test-pilot's store has its OWN env-pinned root; without this, a
