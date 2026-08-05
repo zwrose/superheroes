@@ -94,7 +94,10 @@ def resolve(cwd, root=None):
             profile = None
         if verify is None:
             verify_mode, verify = resolve_verify_from_profile(profile)
-    except Exception:
+    except Exception as exc:
+        import calibration_resolve
+        if isinstance(exc, calibration_resolve.UnresolvableRootError):
+            raise
         profile = None
         verify_mode = None
     try:

@@ -271,6 +271,46 @@ def test_resolve_profile_path_threads_root_to_calibration_resolve(monkeypatch):
     assert captured == {"cwd": "/proj", "root": "/store"}
 
 
+def _init_repo(path):
+    import subprocess
+    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
+
+
+def _default_store_root(tmp_path):
+    return str(tmp_path / "_store_isolation")
+
+
+def _empty_store_root(tmp_path):
+    d = tmp_path / "empty_store"
+    d.mkdir()
+    return str(d)
+
+
+def _ensure_global_unified_layer(repo, store_root):
+    import mode_registry as mr
+    store = mr.ensure_project_store(repo, root=store_root)
+    cfg = os.path.join(store, "config")
+    os.makedirs(cfg, exist_ok=True)
+    layer = os.path.join(cfg, "review-crew.md")
+    with open(layer, "w") as fh:
+        fh.write("## Focus hints\n- code: x\n")
+    return layer
+
+
+def test_resolve_profile_path_raises_on_unresolvable_root(tmp_path):
+    import calibration_resolve as cr
+    import pytest
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = _default_store_root(tmp_path)
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError):
+        MTO.resolve_profile_path(str(repo), root=empty)
+
+
 def test_write_cli_refuses_fable_tier_on_external_engine(tmp_path, monkeypatch, capsys):
     import importlib.util
 

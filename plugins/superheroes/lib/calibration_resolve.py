@@ -114,6 +114,8 @@ def resolve(cwd, root=None, hero=REVIEW_CREW, legacy_root=None, heal=False, *, _
     dispatch_core and dispatch_layer (paths specialists should read — legacy
     single-file fills both when no unified split exists yet). healed/entry_id
     are set only when the legacy-global branch runs (heal controls pointer repair).
+    Raises UnresolvableRootError when a supplied ``root`` resolves nothing while the
+    default resolution finds calibration.
     """
     legacy_root = legacy_root or review_store.store_root()
     legacy_in = _legacy_in_repo(cwd, hero)

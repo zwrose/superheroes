@@ -634,6 +634,27 @@ def test_dispatch_selftest_config_root_unavailable_returns_read_error(tmp_path, 
     assert cfg["read_error"].startswith("repo-root-unavailable: ")
 
 
+def test_dispatch_selftest_config_unresolvable_root_returns_read_error(tmp_path):
+    import calibration_resolve as cr
+    import subprocess
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "-C", str(repo), "init", "-q"], check=True)
+    default_store = str(tmp_path / "_store_isolation")
+    empty = tmp_path / "empty_store"
+    empty.mkdir()
+    empty_s = str(empty)
+    store = __import__("mode_registry").ensure_project_store(str(repo), root=default_store)
+    cfg_dir = os.path.join(store, "config")
+    os.makedirs(cfg_dir, exist_ok=True)
+    with open(os.path.join(cfg_dir, "review-crew.md"), "w") as fh:
+        fh.write("## Focus hints\n- code: x\n")
+    cfg = pp._dispatch_selftest_config(cwd=str(repo), root=empty_s)
+    assert "read_error" in cfg
+    assert cr.REASON_UNRESOLVABLE_ROOT in cfg["read_error"]
+
+
 def test_dispatch_selftest_config_ok_returns_prefs(tmp_path):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
