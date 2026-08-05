@@ -5,17 +5,11 @@ import sys
 
 import pytest
 
-from conftest import isolated_default_store_root
-
 import calibration_resolve as cr
 import core_md as cm
 import mode_registry as mr
 
 _MODULE_PATH = os.path.abspath(cr.__file__)
-
-
-def _default_store_root(tmp_path):
-    return isolated_default_store_root(tmp_path)
 
 
 def _empty_store_root(tmp_path):
@@ -123,11 +117,11 @@ def test_migrated_unified_dispatch_core_carries_threat_model(tmp_path):
     assert out["dispatch_core"] != out["dispatch_layer"]
 
 
-def test_supplied_root_empty_default_store_holds_unified_global_raises(tmp_path):
+def test_supplied_root_empty_default_store_holds_unified_global_raises(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     empty = _empty_store_root(tmp_path)
     layer = _ensure_global_unified_layer(str(repo), default_store)
     with pytest.raises(cr.UnresolvableRootError) as excinfo:
@@ -139,11 +133,11 @@ def test_supplied_root_empty_default_store_holds_unified_global_raises(tmp_path)
     assert exc.default_layer_path == layer
 
 
-def test_supplied_root_empty_heal_true_still_raises(tmp_path):
+def test_supplied_root_empty_heal_true_still_raises(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     empty = _empty_store_root(tmp_path)
     _ensure_global_unified_layer(str(repo), default_store)
     with pytest.raises(cr.UnresolvableRootError):
@@ -160,22 +154,22 @@ def test_neither_root_has_calibration_returns_none(tmp_path):
     assert out["exists"] is False
 
 
-def test_root_none_calibrated_default_no_raise(tmp_path):
+def test_root_none_calibrated_default_no_raise(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     _ensure_global_unified_layer(str(repo), default_store)
     out = cr.resolve(str(repo))
     assert out["exists"] is True
     assert out["location"] == mr.GLOBAL
 
 
-def test_supplied_root_resolves_even_when_default_also_calibrated(tmp_path):
+def test_supplied_root_resolves_even_when_default_also_calibrated(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo, "git@github.com:o/r.git")
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     supplied_store = tmp_path / "supplied_store"
     supplied_store.mkdir()
     _ensure_global_unified_layer(str(repo), default_store)
@@ -186,12 +180,12 @@ def test_supplied_root_resolves_even_when_default_also_calibrated(tmp_path):
     assert out["layer_path"] == supplied_layer
 
 
-def test_in_repo_layer_bogus_supplied_root_no_raise(tmp_path):
+def test_in_repo_layer_bogus_supplied_root_no_raise(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
     empty = _empty_store_root(tmp_path)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     _ensure_global_unified_layer(str(repo), default_store)
     layer = repo / ".claude" / "superheroes" / "review-crew.md"
     layer.parent.mkdir(parents=True)
@@ -201,11 +195,11 @@ def test_in_repo_layer_bogus_supplied_root_no_raise(tmp_path):
     assert out["location"] == mr.IN_REPO
 
 
-def test_resolve_profile_path_propagates_unresolvable_root(tmp_path):
+def test_resolve_profile_path_propagates_unresolvable_root(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     empty = _empty_store_root(tmp_path)
     _ensure_global_unified_layer(str(repo), default_store)
     with pytest.raises(cr.UnresolvableRootError):
@@ -226,11 +220,11 @@ def test_unresolvable_root_error_payload_keys(tmp_path):
     assert payload["refusal"] == cr.REFUSAL_UNRESOLVABLE_ROOT
 
 
-def test_cli_resolve_root_empty_returns_2_stderr_refusal(tmp_path):
+def test_cli_resolve_root_empty_returns_2_stderr_refusal(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     empty = _empty_store_root(tmp_path)
     _ensure_global_unified_layer(str(repo), default_store)
     proc = subprocess.run(
@@ -244,11 +238,11 @@ def test_cli_resolve_root_empty_returns_2_stderr_refusal(tmp_path):
     assert payload["reason"] == cr.REASON_UNRESOLVABLE_ROOT
 
 
-def test_cli_resolve_bare_calibrated_returns_0_stdout_json(tmp_path):
+def test_cli_resolve_bare_calibrated_returns_0_stdout_json(tmp_path, isolated_default_store_root):
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     _ensure_global_unified_layer(str(repo), default_store)
     proc = subprocess.run(
         [sys.executable, "-B", _MODULE_PATH, "resolve"],

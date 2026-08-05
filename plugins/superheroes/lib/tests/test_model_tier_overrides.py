@@ -4,8 +4,6 @@ import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
-from conftest import isolated_default_store_root
-
 
 def _load():
     path = os.path.join(_HERE, "..", "model_tier_overrides.py")
@@ -278,10 +276,6 @@ def _init_repo(path):
     subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
 
 
-def _default_store_root(tmp_path):
-    return isolated_default_store_root(tmp_path)
-
-
 def _empty_store_root(tmp_path):
     d = tmp_path / "empty_store"
     d.mkdir()
@@ -299,14 +293,14 @@ def _ensure_global_unified_layer(repo, store_root):
     return layer
 
 
-def test_resolve_profile_path_raises_on_unresolvable_root(tmp_path):
+def test_resolve_profile_path_raises_on_unresolvable_root(tmp_path, isolated_default_store_root):
     import calibration_resolve as cr
     import pytest
 
     repo = tmp_path / "repo"
     repo.mkdir()
     _init_repo(repo)
-    default_store = _default_store_root(tmp_path)
+    default_store = isolated_default_store_root
     empty = _empty_store_root(tmp_path)
     _ensure_global_unified_layer(str(repo), default_store)
     with pytest.raises(cr.UnresolvableRootError):
