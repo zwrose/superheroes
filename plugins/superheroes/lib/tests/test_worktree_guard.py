@@ -596,10 +596,11 @@ def test_unparsed_message_verbatim():
         "message — that prose is the trigger: text naming a destructive git subcommand "
         "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
         "`worktree`) reads as a command wherever this guard loses track of the quoting "
-        "around it — a heredoc body, or a quote of the same kind as the one enclosing it, "
-        "either backslash-escaped or nested inside a `$(...)` substitution. Write the text "
-        "to a file with a file-writing tool — not a shell heredoc, which trips this same "
-        "refusal — and pass the file: `gh ... --body-file <path>`, `git commit -F <path>`. "
+        "around it — a heredoc body, whose lines read as bare command text, or a quote of "
+        "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
+        "`$(...)` substitution. Write the text to a file with a file-writing tool rather "
+        "than a shell heredoc, whose bare lines trip this same refusal, and pass the file: "
+        "`gh ... --body-file <path>`, `git commit -F <path>`. "
         "If a discard is intended, note that this refusal does not depend on what your tree "
         "holds, so committing or stashing alone will not clear it: re-issue the command as "
         "a plain `git ...` invocation this guard can parse. Keep the work you care about by "
@@ -648,6 +649,11 @@ _PROSE_MENTIONS_STILL_ALLOWED = (
     # opposite-delimiter quotes inside a substitution stay tracked; only same-delimiter
     # quotes desynchronize the scanner, which is why the message says "of the same kind"
     'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
+    # a heredoc line is not categorically refused: the scanner is quote-aware within the
+    # line, so a mention inside quotes stays allowed. The message says "bare lines" for this.
+    "cat > /tmp/note.md <<'EOF'\n"
+    'Never run "git reset --hard" here\n'
+    "EOF",
 )
 
 
