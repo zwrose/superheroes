@@ -400,10 +400,14 @@ without a tool call.
   A long-running external dispatch the builder invokes directly from a headless session — an engine
   CLI: the implementer, the brief-check reviewer, or any engine CLI the builder hand-rolls — is
   **awaited in-turn** through the **authorized entrypoint itself** — `dispatch-review` /
-  `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap; the slice must be **positive** — zero
-  or negative clamps to zero and returns `running` **without starting an attempt at all**, so it is
-  never a valid dispatch; a `running` result whose attempt count is **zero** means nothing was
-  launched — re-invoke with a positive slice rather than continuing to poll) — **never** wrapped in
+  `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap the runner **refuses past, never
+  clamps** — an over-cap or negative value comes back `unrunnable` with detail
+  `max-wait-out-of-range:<value>:allowed=0..540`, nothing opened and nothing spawned, so waiting
+  longer than the cap means **omitting the flag and polling**, never passing a bigger number; the
+  slice you do pass must be **positive** — a zero slice is accepted but returns `running`
+  **without starting an attempt at all**, so it is never a valid dispatch; a `running` result whose
+  attempt count is **zero** means nothing was launched — re-invoke with a positive slice rather than
+  continuing to poll) — **never** wrapped in
   `setsid`/`nohup`,
   because the host grant matches a **prefix** and a wrapped command no longer matches it. Invoke
   through the authorized entrypoint; redirect stdout and stderr to **files, never pipes** (a pipe
@@ -422,9 +426,10 @@ without a tool call.
   observational; folding is done by the **originating-verb call path**, not by poll). **Recovery
   latency:** a dispatch whose
   `--max-wait` slice **expired normally** has already released `run.lock` and re-attaches immediately
-  on the next originating-verb call; a builder **killed mid-slice** leaves `run.lock` held for up to
-  **1080 s** (`2 × MAX_SYNC_WAIT`) before a fresh call can take over — reclaim needs TTL expiry **and**
-  a dead holder pid. **Park is unchanged in kind:** it is what happens when the in-turn poll genuinely
+  on the next originating-verb call; a builder **killed mid-slice** leaves `run.lock` held, and the
+  next call takes it over as soon as that holder pid is **confirmed dead** — no TTL wait. A holder
+  that is still **alive** is never taken over, so a second caller racing a live builder still gets
+  `running`/`run-locked`. **Park is unchanged in kind:** it is what happens when the in-turn poll genuinely
   cannot fit the turn — not ending a turn with a dispatch unawaited.
 - **Review seats — coverage and limitation.** The native-shape rule above — no `setsid`/`nohup` wrapper,
   no exit-code sentinel, originating-verb continuation on the same `--run-dir` — binds **dispatches

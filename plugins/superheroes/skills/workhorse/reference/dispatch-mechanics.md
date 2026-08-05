@@ -18,7 +18,7 @@ external `setsid`/`nohup` wrapper or an exit-code sentinel. Harness-tracked back
 **not** the normal path for those dispatches — tracked background work dies when the turn ends. The
 **native-shape contract** (files not pipes, `--max-wait` slices with non-terminal `running`,
 originating-verb continuation, structured terminal result as the only completion signal,
-`dispatch-poll` observational only, mid-slice-kill lock latency, durable park) is **only** in the
+`dispatch-poll` observational only, mid-slice-kill lock reclaim, durable park) is **only** in the
 workhorse charter §7 — not restated here. Mechanics by dispatch kind:
 
 - **A shell/CLI run** (an engine CLI invoked through the host's run action) is bounded by the host's
