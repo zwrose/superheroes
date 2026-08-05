@@ -212,7 +212,7 @@ def test_submit_panel_seat_key_refused(tmp_path, artifact, offending_key):
     {"seats": {"code-reviewer": {"findings": []}}},
     {"seats": {}},
     {"seats": []},
-    {"seatMap": {}, "ranManifest": {}},
+    {"seatMap": {}, "ranManifest": {}, "canaryResult": {}},
 ], ids=["all-dims", "partial-legitimate", "empty-seats", "non-dict-seats", "metadata-only"])
 def test_submit_panel_seat_key_accepted(tmp_path, artifact):
     d = str(tmp_path)
@@ -248,23 +248,150 @@ def test_submit_panel_seat_key_does_not_preempt_fences(tmp_path):
     assert "seat key" not in hash_bad["reason"]
 
 
-def test_cmd_submit_is_only_fold_caller_besides_run_loop():
-    """A NEW `_fold` caller is a new submit seam that must either route through
-    `panel_seat_key_fault` or be added to this census deliberately."""
+def _fold_call_census():
+    """Collect `_fold` / `_fold_panel` callers in round_driver.py (Name and Attribute calls)."""
     import ast
     mod_path = os.path.join(_LIB, "round_driver.py")
     with open(mod_path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
-    callers = set()
+    func_nodes = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
+
+    def _is_call_to(node, name):
+        if not isinstance(node, ast.Call):
+            return False
+        if isinstance(node.func, ast.Name):
+            return node.func.id == name
+        if isinstance(node.func, ast.Attribute):
+            return node.func.attr == name
+        return False
+
+    def _enclosing_function(node):
+        candidates = []
+        for func in func_nodes:
+            if node is func:
+                return None
+            if (hasattr(node, "lineno") and hasattr(func, "end_lineno")
+                    and func.lineno <= node.lineno <= func.end_lineno):
+                candidates.append(func)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda f: f.lineno).name
+
+    callers = {"_fold": set(), "_fold_panel": set()}
+    module_level = []
     for node in ast.walk(tree):
-        if not isinstance(node, ast.FunctionDef):
+        if not isinstance(node, ast.Call):
             continue
-        for child in ast.walk(node):
-            if isinstance(child, ast.Call) and isinstance(child.func, ast.Name):
-                if child.func.id == "_fold":
-                    callers.add(node.name)
-                    break
-    assert callers == {"cmd_submit", "run_loop"}
+        for target in ("_fold", "_fold_panel"):
+            if not _is_call_to(node, target):
+                continue
+            owner = _enclosing_function(node)
+            if owner is None:
+                module_level.append(target)
+            else:
+                callers[target].add(owner)
+    return callers, module_level
+
+
+def test_cmd_submit_is_only_fold_caller_besides_run_loop():
+    """A NEW caller of `_fold` or `_fold_panel` is a new fold seam that must either route through
+    `panel_seat_key_fault` or be added to this census deliberately.
+
+    eval/review_loop_runner.py rebinds `_fold_panel` around line 530 and delegates to the
+    original — it is driven by `run_loop`, which is mis-key-proof by construction; this census
+    intentionally covers round_driver.py only."""
+    callers, module_level = _fold_call_census()
+    assert not module_level, (
+        "module-level %s call(s) in round_driver.py — fold seam outside any function"
+        % ", ".join(module_level))
+    assert callers["_fold"] == {"cmd_submit", "run_loop"}
+    assert callers["_fold_panel"] == {"_fold"}
+
+
+def _fold_panel_artifact_get_keys():
+    """Return the set of string keys read via artifact.get(...) inside _fold_panel."""
+    import ast
+    mod_path = os.path.join(_LIB, "round_driver.py")
+    with open(mod_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    fold_panel = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_fold_panel":
+            fold_panel = node
+            break
+    assert fold_panel is not None
+    keys = set()
+    for node in ast.walk(fold_panel):
+        if not isinstance(node, ast.Call):
+            continue
+        if (isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get"
+                and isinstance(node.func.value, ast.Name)
+                and node.func.value.id == "artifact"
+                and node.args):
+            const = node.args[0]
+            if isinstance(const, ast.Constant) and isinstance(const.value, str):
+                keys.add(const.value)
+            elif isinstance(const, ast.Str):
+                keys.add(const.s)
+    return keys
+
+
+def _fold_panel_invisible_artifact_reads():
+    """Return descriptions of artifact reads _fold_panel makes that the get-census cannot see."""
+    import ast
+    mod_path = os.path.join(_LIB, "round_driver.py")
+    with open(mod_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    fold_panel = None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "_fold_panel":
+            fold_panel = node
+            break
+    assert fold_panel is not None
+    invisible = []
+    for node in ast.walk(fold_panel):
+        if isinstance(node, ast.Subscript):
+            if isinstance(node.value, ast.Name) and node.value.id == "artifact":
+                invisible.append("artifact[...] subscript at line %d" % node.lineno)
+        if isinstance(node, ast.Call):
+            for arg in node.args:
+                if isinstance(arg, ast.Name) and arg.id == "artifact":
+                    invisible.append(
+                        "artifact passed to %s at line %d"
+                        % (getattr(node.func, "id", getattr(node.func, "attr", "?")),
+                           node.lineno))
+    return invisible
+
+
+def test_panel_envelope_keys_match_fold_panel_reads():
+    """`_PANEL_ENVELOPE_KEYS` is exactly the set of artifact keys `_fold_panel` reads; drift in
+    either direction makes the seat-key guard misjudge the legacy envelope-as-seats shape."""
+    invisible = _fold_panel_invisible_artifact_reads()
+    assert not invisible, (
+        "census can no longer see all of _fold_panel's artifact reads: %s"
+        % "; ".join(invisible))
+    assert _fold_panel_artifact_get_keys() == set(RD._PANEL_ENVELOPE_KEYS)
+
+
+def test_submit_panel_seat_key_custom_dimensions(tmp_path):
+    """Guard uses the configured roster from state, not the global DIMENSIONS default."""
+    narrow = ["code-reviewer", "test-reviewer"]
+    d = str(tmp_path)
+    n = _first_next(d, _cfg(dimensions=narrow))
+    assert sorted(n["payload"]["dimensions"]) == sorted(narrow)
+    accepted = {dim: {"findings": []} for dim in narrow}
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], accepted)
+    assert out["ok"] is True
+
+    d2 = str(tmp_path / "refuse")
+    os.makedirs(d2, exist_ok=True)
+    n2 = _first_next(d2, _cfg(dimensions=narrow))
+    refused = {"code-reviewer": {"findings": []}, "architecture-reviewer": {"findings": []}}
+    out2 = RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"], refused)
+    assert out2["ok"] is False
+    assert "architecture-reviewer" in out2["reason"]
+    assert "configured dimensions: code-reviewer, test-reviewer" in out2["reason"]
 
 
 def test_panel_seat_keys_explicit_shape():
@@ -273,7 +400,7 @@ def test_panel_seat_keys_explicit_shape():
 
 
 def test_panel_seat_keys_legacy_shape():
-    art = {"code-reviewer": {}, "seatMap": {}, "ranManifest": {}}
+    art = {"code-reviewer": {}, "seatMap": {}, "ranManifest": {}, "canaryResult": {}}
     assert RD.panel_seat_keys(art) == ["code-reviewer"]
 
 
