@@ -3517,7 +3517,7 @@ def test_run_config_retired_keys_census():
     violations = []
     for key in _RETIRED_RUN_CONFIG_KEYS:
         if re.search(
-                r'\b(?:config|cfg)(?:\.get\([\'"]%s[\'"]\)|\[[\'"]%s[\'"]\])'
+                r'\b(?:config|cfg)(?:\.get\([\'"]%s[\'"](?:\)|,)|\[[\'"]%s[\'"]\])'
                 % (re.escape(key), re.escape(key)),
                 source):
             violations.append(key)

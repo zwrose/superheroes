@@ -2120,6 +2120,53 @@ def test_calibration_reference_defaults_match_library_constants():
         gsw._DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
 
 
+def _read_config_block_keys():
+    """Keys guardian_sweep.read_config reads from the guardian-config block — derived from source."""
+    import re
+    gsw_path = os.path.join(os.path.dirname(gsw.__file__), "guardian_sweep.py")
+    source = open(gsw_path, encoding="utf-8").read()
+    func_m = re.search(
+        r'def read_config\([^)]*\):(.*?)(?=\n\ndef |\nclass |\Z)',
+        source, re.DOTALL)
+    assert func_m, "could not locate guardian_sweep.read_config in source"
+    body = func_m.group(1)
+    keys = set(re.findall(r'block\.get\("([^"]+)"\)', body))
+    if '"reportCard" in block' in body:
+        keys.add("reportCard")
+    return keys
+
+
+def _calibration_keys_table_keys(text):
+    """Keys listed in calibration.md Keys table — includes alias pairs."""
+    import re
+    keys = set()
+    for m in re.finditer(
+            r'^\| `([^`/]+)(?:` / `([^`]+))?` \|', text, re.MULTILINE):
+        keys.add(m.group(1))
+        if m.group(2):
+            keys.add(m.group(2))
+    return keys
+
+
+def test_calibration_reference_keys_match_read_config_parser():
+    """§11 drift guard: calibration.md Keys table key set ↔ read_config parser (no hand-typed expect)."""
+    import re
+    cal_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "skills", "guardian", "reference",
+        "calibration.md")
+    text = open(cal_path, encoding="utf-8").read()
+    documented = _calibration_keys_table_keys(text)
+    parsed = _read_config_block_keys()
+    assert documented, (
+        "calibration.md Keys table parsed to empty set — table shape regressed")
+    assert parsed, (
+        "read_config block key extraction parsed to empty — source shape regressed")
+    assert documented == parsed, (
+        "calibration.md Keys table vs read_config parser drift: "
+        "doc-only=%s parser-only=%s"
+        % (sorted(documented - parsed), sorted(parsed - documented)))
+
+
 def test_issue_resolve_respects_aggregate_deadline(monkeypatch, tmp_path):
     calls = []
 

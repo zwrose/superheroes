@@ -16,12 +16,17 @@ In `guardian.md`, embed one fenced block tagged `guardian-config`:
 ```
 ````
 
-An **absent** layer, an **empty** layer, a layer with **no** `guardian-config` fence, or an
-**unreadable** file is **healthy** — plugin defaults are authoritative (the emptiness probe fails
-open on `OSError`). **Malformed JSON**, a fence whose parsed value is **not an object**, or a
-`reportCard` value that is present but not an object sets `configStatus: "degraded"`, which **revokes
-benching authority for that sweep** (defaults still apply for thresholds and cadence, but a degraded
-config must not silently mute a lens via the report card — see `guardian_ledger._resolve_thresholds`).
+An **absent** layer, an **empty** layer, or a layer with **no** `guardian-config` fence is
+**healthy** — plugin defaults are authoritative (the emptiness probe fails open on `OSError`).
+A layer file that is not valid UTF-8 raises `UnicodeDecodeError` out of `core_md._layer_is_empty`
+(it catches only `OSError`) and is not mapped to either healthy or degraded — the error
+propagates. **Malformed JSON** or a fence whose parsed value is **not an object** sets
+`configStatus: "degraded"`, which **revokes benching authority for that sweep** (plugin defaults
+still govern thresholds and cadence on those paths). A **`reportCard` value that is present but not
+an object** also sets `configStatus: "degraded"` and returns **before** `_resolve_cadence` runs, so
+owner cadence is not resolved on that path (thresholds and other keys parsed earlier in
+`read_config` still apply from the block); a degraded config must not silently mute a lens via the
+report card — see `guardian_ledger._resolve_thresholds`.
 
 `cadenceTuned` is a **derived output** of `read_config` (which cadence keys the owner positively
 set). It is not a settable key.
@@ -73,10 +78,12 @@ set). It is not a settable key.
 **Healthy absence.** No fence (or no `guardian.md` layer at all) is not an error — defaults govern
 every knob above.
 
-**Degraded config revokes benching.** Malformed JSON, a non-object fence, or a `reportCard` value
-that is present but not an object all yield `configStatus: "degraded"`. That status revokes
-benching authority for the sweep even when individual override keys look fine — defaults must not
-become a silent mute button after a config typo.
+**Degraded config revokes benching.** Malformed JSON or a non-object fence yields
+`configStatus: "degraded"` with plugin defaults governing thresholds and cadence. A `reportCard`
+value that is present but not an object also yields `configStatus: "degraded"` but returns before
+owner cadence is resolved (other keys parsed earlier in the block still apply). That status
+revokes benching authority for the sweep even when individual override keys look fine — defaults
+must not become a silent mute button after a config typo.
 
 **Vitals off.** Setting `vitals: false` **or** `collectVitals: false` disables vitals collection;
 if both keys appear with different values, **either** being `false` wins (collection off).

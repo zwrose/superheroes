@@ -263,6 +263,25 @@ def test_engine_role_keys_are_documented():
         )
 
 
+def test_documented_effort_role_kinds_match_codex_effort():
+    """§11 drift guard: view-and-tune effort roster ↔ engine_pref._CODEX_EFFORT keys."""
+    tune_md = _read("skills/configure/reference/view-and-tune.md")
+    m = re.search(
+        r'Valid role-kind keys are (.+?) \(role',
+        tune_md, re.DOTALL)
+    assert m, (
+        "view-and-tune.md missing the enginePreferences.effort role-kind roster sentence"
+    )
+    documented = set(re.findall(r'`([^`]+)`', m.group(1)))
+    expected = set(engine_pref._CODEX_EFFORT.keys())
+    assert documented, (
+        "effort role-kind roster parsed to empty — prose shape regressed")
+    assert documented == expected, (
+        "documented effort role kinds vs _CODEX_EFFORT drift: "
+        "doc-only=%s code-only=%s"
+        % (sorted(documented - expected), sorted(expected - documented)))
+
+
 # --- Guard 3: observability wiring ------------------------------------------------------------
 
 def test_workhorse_requires_dispatch_provenance():

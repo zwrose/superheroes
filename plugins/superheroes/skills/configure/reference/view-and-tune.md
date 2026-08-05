@@ -38,9 +38,13 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
   through `core_md`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
-- **Tune the guardian calibration** → re-write the `guardian.md` layer through
-  `core_md.py write-layer --hero guardian` (owner confirms the body on stdin). The
-  `guardian-config` JSON fence shape is in the guardian skill's `reference/calibration.md`.
+- **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
+  knob you want inside the `guardian-config` JSON fence, and submit the **complete** body (the
+  whole fence with every sibling knob preserved) through `core_md.py write-layer --hero guardian`
+  (owner confirms the body on stdin). `write-layer` replaces the entire layer file — a partial
+  fence silently drops every other guardian knob (thresholds, cadence, coverage, vitals,
+  `reportCard`, …) and the next sweep still reads `configStatus: healthy`. The fence shape is in
+  the guardian skill's `reference/calibration.md`.
 - **Set up a hero skipped at set-up** (FR-6) → list every optional hero not yet set up and not
   previously declined, and offer to run each one's set-up from here. Get the list from the lib —
   never guess which heroes apply:
