@@ -2625,6 +2625,19 @@ def test_lane_issue_invalid_string_refuses(tmp_path, monkeypatch):
     assert result["reason"] == "batch-lane-issue-invalid:l1"
 
 
+def test_lane_issue_invalid_bool_refuses(tmp_path, monkeypatch):
+    # axis: bool issue never becomes a lane (bool subclasses int)
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-issue-bool"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=True))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
 def test_lane_declared_with_zero_rows_refuses(tmp_path, monkeypatch):
     # axis: fewer distinct lanes than declared is batch-reservation-mismatch
     repo = _init_repo(tmp_path / "repo")
@@ -2707,6 +2720,166 @@ def test_lane_late_declaration_wins_over_concurrency(tmp_path, monkeypatch):
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-declaration-after-reservations"
+
+
+def test_count_result_blocks_anchor_to_real_count_keys(tmp_path, monkeypatch):
+    """§11 drift chain: COUNT_RESULT_BLOCKS and CHARTER_NAMED_COUNT_BLOCKS trace to count() keys."""
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-count-blocks"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=501))
+    path = _ledger_file(repo, os.environ)
+    _append_raw(path, _started("l1"))
+    _append_raw(path, _outcome("l1", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    for block in ll.COUNT_RESULT_BLOCKS:
+        assert block in result, (
+            "COUNT_RESULT_BLOCKS name %r not a key of count() result" % block
+        )
+    for block in ll.CHARTER_NAMED_COUNT_BLOCKS:
+        assert block in ll.COUNT_RESULT_BLOCKS, (
+            "CHARTER_NAMED_COUNT_BLOCKS name %r not in COUNT_RESULT_BLOCKS" % block
+        )
+
+
+def test_lane_sequential_reversed_timestamps_still_resolves(tmp_path, monkeypatch):
+    # axis: index-based sequencing ignores reversed wall-clock ts
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-seq-rev-ts"
+    path = _ledger_file(repo, os.environ)
+    _declare(repo, batch, 1)
+    r1 = _reserved("l1", batch, ["a"], repo, issue=701)
+    r1["ts"] = 300.0
+    ll.reserve(repo, r1)
+    s1 = _started("l1")
+    s1["ts"] = 250.0
+    _append_raw(path, s1)
+    o1 = _outcome("l1", outcome="park")
+    o1["ts"] = 200.0
+    _append_raw(path, o1)
+    r2 = _reserved("l2", batch, ["a"], repo, issue=701)
+    r2["ts"] = 100.0
+    ll.reserve(repo, r2)
+    s2 = _started("l2")
+    s2["ts"] = 50.0
+    _append_raw(path, s2)
+    o2 = _outcome("l2", outcome="handback")
+    o2["ts"] = 10.0
+    _append_raw(path, o2)
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+
+
+def test_lane_overlapping_sequential_timestamps_still_refuses_concurrent(tmp_path, monkeypatch):
+    # axis: index-based concurrency guard ignores monotonic-looking ts
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-overlap-seq-ts"
+    path = _ledger_file(repo, os.environ)
+    _declare(repo, batch, 1)
+    r1 = _reserved("l1", batch, ["a"], repo, issue=801)
+    r1["ts"] = 100.0
+    ll.reserve(repo, r1)
+    r2 = _reserved("l2", batch, ["b"], repo, issue=801)
+    r2["ts"] = 200.0
+    ll.reserve(repo, r2)
+    s1 = _started("l1")
+    s1["ts"] = 300.0
+    _append_raw(path, s1)
+    o1 = _outcome("l1", outcome="park")
+    o1["ts"] = 400.0
+    _append_raw(path, o1)
+    s2 = _started("l2")
+    s2["ts"] = 500.0
+    _append_raw(path, s2)
+    o2 = _outcome("l2", outcome="handback")
+    o2["ts"] = 600.0
+    _append_raw(path, o2)
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:801"
+
+
+def test_lane_sequential_nonfinite_timestamp_still_resolves(tmp_path, monkeypatch):
+    # axis: non-finite ts on a sequential lane does not break index-based resolution
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-seq-nan-ts"
+    path = _ledger_file(repo, os.environ)
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=901))
+    _append_raw(path, _started("l1"))
+    o1 = _outcome("l1", outcome="park")
+    o1["ts"] = float("nan")
+    _append_raw(path, o1)
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=901))
+    s2 = _started("l2")
+    s2["ts"] = float("inf")
+    _append_raw(path, s2)
+    _append_raw(path, _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+
+
+def test_count_duplicate_declaration_beats_invalid_issue(tmp_path, monkeypatch):
+    # axis: declaration validity beats lane-issue validity
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-dup-vs-invalid"
+    _declare(repo, batch, 1)
+    _append_raw(_ledger_file(repo, os.environ), _batch_declared(batch, 1))
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=True))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-duplicate-declaration"
+
+
+def test_count_invalid_issue_beats_reservation_mismatch(tmp_path, monkeypatch):
+    # axis: lane-issue validity beats lane cardinality
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-invalid-vs-mismatch"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=True))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_count_reservation_mismatch_beats_late_declaration(tmp_path, monkeypatch):
+    # axis: lane cardinality beats late declaration
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-mismatch-vs-late"
+    path = _ledger_file(repo, os.environ)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=1001))
+    _append_raw(path, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "expectedLaunches": 2,
+        "ts": 200.0,
+        "schema": ll.SCHEMA,
+    })
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-reservation-mismatch"
+
+
+def test_count_concurrency_beats_unresolved(tmp_path, monkeypatch):
+    # axis: lane concurrency beats batch-unresolved
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-concurrent-vs-unresolved"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=1101))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=1101))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:1101"
 
 
 @pytest.mark.parametrize("field", ["kind", "value", "note"])
