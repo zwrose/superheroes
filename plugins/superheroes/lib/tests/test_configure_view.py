@@ -244,10 +244,6 @@ def test_collect_threads_root_into_model_tier_resolution(tmp_path, monkeypatch):
     assert captured["root"] == root
 
 
-def _init_repo(path):
-    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
-
-
 def _default_store_root(tmp_path):
     return str(tmp_path / "_store_isolation")
 
@@ -294,6 +290,16 @@ def test_render_raises_on_unresolvable_root(tmp_path):
     _ensure_global_unified_layer(str(repo), default_store)
     with pytest.raises(cr.UnresolvableRootError):
         cv.render(str(repo), root=empty)
+
+
+def test_collect_fallopen_when_calibration_resolve_unimportable(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    data = cv.collect(str(tmp_path))
+    assert data["modelTierProfile"] is None
+    assert data["modelTierOverrides"] == {}
+    assert data["modelTiers"]["implementer"] == "sonnet"
 
 
 def _seed_guardian_view_repo(tmp_path, *, guardian_config=None, ledger_records=None,

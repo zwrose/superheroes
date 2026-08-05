@@ -168,3 +168,13 @@ def test_resolve_raises_on_unresolvable_root(tmp_path):
     _ensure_global_unified_layer(str(repo), default_store)
     with pytest.raises(cr.UnresolvableRootError):
         RC.resolve(str(repo), root=empty)
+
+
+def test_resolve_fallopen_when_calibration_resolve_unimportable(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    out = RC.resolve(str(tmp_path))
+    assert out["verifyCommand"] == "none"
+    assert out["verifyMode"] is None
+    assert out["tiers"]["fixer"] == "sonnet"

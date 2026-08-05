@@ -311,6 +311,13 @@ def test_resolve_profile_path_raises_on_unresolvable_root(tmp_path):
         MTO.resolve_profile_path(str(repo), root=empty)
 
 
+def test_resolve_profile_path_fallopen_when_calibration_resolve_unimportable(monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    assert MTO.resolve_profile_path("/any/cwd", root="/any/root") is None
+
+
 def test_write_cli_refuses_fable_tier_on_external_engine(tmp_path, monkeypatch, capsys):
     import importlib.util
 
