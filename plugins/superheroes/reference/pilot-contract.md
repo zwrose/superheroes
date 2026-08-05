@@ -489,10 +489,36 @@ verdict. `verify_boundary` in `lib/pilot_provision.py` calls `assert_results_onl
 verdict before returning it.
 
 `assert_results_only(result, material)` is the mechanical guard: it walks the result
-structure (dicts, lists, string values, and dict keys) and refuses when any string from
+structure (dicts, lists, and string values) and refuses when any string from
 `policy_material(policy)` appears as an exact match (`policy-material-in-result`).
 `policy_material` extracts three classes:
 `expected-identity`, `mintable-account`, and `connection-detail`.
+
+**Values always; keys for everything except a field-name-shaped account name.** A dict value is
+data; a dict key is the result's *shape* — a field name the producer wrote. The guard cannot tell
+the two apart when they spell the same word, and account names are exactly the short bare words
+that field names use. So a **`mintable-account`** needle matching `^[A-Za-z_][A-Za-z0-9_-]*\Z` is
+matched against **values only**. Every other needle — both other classes, and any account name that
+could not be a field name — is matched **in key position as well**. The anchor is `\Z`, matching
+the whole string with no exception: Python's `$` would also accept one trailing newline, so an
+account name spelled `owner\n` would read as field-name-shaped and lose its key-position match. It
+does not — it is matched in key position, like any other name that could not be a field name. Before this rule, a project
+with an account named `owner`, `note`, or `op` hit a refusal the moment a result used that word as
+a field name, with nothing in the refusal to say the account *name* rather than a leak was the
+cause — account naming was a landmine (#861; PR #857 worked around it by renaming a plan-step key
+to `responsibleParty`).
+
+The carve-out is deliberately keyed on the material **class** and not on spelling alone. The schema
+permits any non-empty string for `expectedIdentity` and `connectionDetail`, and bare ones are
+ordinary — the example policy above uses `example_dev` as its datastore identity. Exempting
+material by shape alone would have dropped key-position detection for those too, silently, since
+they are under no naming pressure toward field names. Account names are the only class the project
+chooses in the same vocabulary as its result fields.
+
+**Coverage limit:** a `mintable-account` name that is field-name-shaped is **not** detected in
+**key** position. A producer that keys a result dict *by account name* leaks that name past this
+guard. Producers assemble results under fixed field names and put data in values; keying by
+material is the shape to avoid.
 
 `exercise_no_policy_material_in_reach(reach_roots, material)` walks reach roots and scans
 regular file bytes for policy material needles. Receipt shape:
@@ -532,7 +558,7 @@ receipt).
 
 | Token | When returned |
 |---|---|
-| `policy-material-in-result` | `assert_results_only`: result structure contains a policy material string as a value or dict key |
+| `policy-material-in-result` | `assert_results_only`: result structure contains a policy material string as a value — or, for everything except a field-name-shaped `mintable-account` name, as a dict key |
 | `policy-material-invalid` | `assert_results_only`: `material` is not a mapping or has no non-empty indexed needles |
 | `policy-exercise-vacuous` | `exercise_no_policy_material_in_reach`: empty material, or walk completes with zero files scanned |
 | `policy-exercise-unreadable` | `exercise_no_policy_material_in_reach`: directory listing or file read fails during walk |
