@@ -701,9 +701,10 @@ PRs excluded, force-push never). That record carries R1's mechanical park/refusa
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
 parks is a signal to inspect, never a clean sheet. The same record also carries **post-terminal
 amendments** — a second terminal-outcome write, an advisor vet ruling, or an evidence correction —
-recorded without mutating the terminal outcome and surfaced by `count` beside the terminal tallies;
-`lib/launch_ledger.py` is the authoritative home for the amendment kinds and vet rulings. The
-ledger's event grammar is version-coupled: a record kind an older build does not understand makes
+recorded without mutating the terminal outcome and surfaced by `count` beside the terminal tallies.
+`count` reads **lanes** (a build intent keyed by issue number — retried attempts belong to one lane)
+with an `attempts` tally beside the terminal ones and per-lane `laneDetail`; overlapping same-lane
+launches still refuse — see `lib/launch_ledger.py` for the authoritative semantics. The ledger's event grammar is version-coupled: a record kind an older build does not understand makes
 every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
 `ledger_path()` reports). The
 Showrunner advisor invokes the launcher

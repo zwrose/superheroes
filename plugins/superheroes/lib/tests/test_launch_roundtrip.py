@@ -536,16 +536,16 @@ def test_count_never_resolves_a_batch_with_a_live_member(tmp_path, monkeypatch):
     batch = "b-two"
     assert ll.declare_batch(repo, batch, 2)["ok"]
 
-    premise1 = _valid_premise(repo, surfaces=["plugins/superheroes/a"], batchId=batch)
-    first = _run_launch(
-        repo, log_dir, premise1, _all_checks(), monkeypatch,
+    premise1 = _valid_premise(repo, surfaces=["plugins/superheroes/a"], batchId=batch, issue=801)
+    first = L.launch_build(
+        repo, 801, premise1, _all_checks(), log_dir,
         spawn_fn=_make_spawn_fn("exit1"), settle_seconds=10,
     )
     assert first["ok"] is False
 
-    premise2 = _valid_premise(repo, surfaces=["plugins/superheroes/b"], batchId=batch)
-    second = _run_launch(
-        repo, log_dir, premise2, _all_checks(), monkeypatch,
+    premise2 = _valid_premise(repo, surfaces=["plugins/superheroes/b"], batchId=batch, issue=802)
+    second = L.launch_build(
+        repo, 802, premise2, _all_checks(), log_dir,
         spawn_fn=_make_spawn_fn("sleep"), settle_seconds=0.3,
     )
     assert second["ok"] is True

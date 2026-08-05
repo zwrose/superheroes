@@ -78,6 +78,7 @@ _BATCH_DECLARED_FIELDS = ("batchId", "expectedLaunches")
 _INSPECT_REASON = (
     "zero parks and zero refusals is a signal to inspect, never a clean sheet"
 )
+COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail")
 
 
 def _scrub_env(env=None):
@@ -823,10 +824,12 @@ def fold(records):
                 }
             launches[launch_id] = {
                 "batchId": rec["batchId"],
+                "issue": rec["issue"],
                 "surfaces": rec["surfaces"],
                 "terminal": False,
                 "outcome": None,
                 "terminalKind": None,
+                "terminalIndex": None,
                 "reservedTs": rec["ts"],
                 "reservedIndex": idx,
                 "attempts": 0,
@@ -887,6 +890,7 @@ def fold(records):
                     }
                 info["terminal"] = True
                 info["terminalKind"] = "refused"
+                info["terminalIndex"] = idx
             else:
                 if not info["started"]:
                     return {
@@ -898,6 +902,7 @@ def fold(records):
                 info["terminal"] = True
                 info["terminalKind"] = "outcome"
                 info["outcome"] = rec["outcome"]
+                info["terminalIndex"] = idx
 
     return {"ok": True, "reason": None, "launches": launches,
             "batchDeclarations": batch_declarations}
@@ -1534,6 +1539,26 @@ def _zero_amendments():
     return zeroed
 
 
+def _zero_attempt_outcomes():
+    return {
+        "handback": 0,
+        "park": 0,
+        "refusal": 0,
+        "died": 0,
+        "refusedToLaunch": 0,
+    }
+
+
+def _valid_lane_issue(issue):
+    return isinstance(issue, int) and not isinstance(issue, bool) and issue > 0
+
+
+def _attempt_outcome_label(info):
+    if info.get("terminalKind") == "refused":
+        return "refusedToLaunch"
+    return info.get("outcome")
+
+
 def _count_indeterminate(batch_id, reason):
     return {
         "ok": True,
@@ -1551,6 +1576,9 @@ def _count_indeterminate(batch_id, reason):
         },
         "amendments": _zero_amendments(),
         "amendedLaunches": 0,
+        "lanes": {"declared": 0, "resolved": 0},
+        "attempts": {"total": 0, "extra": 0, "outcomes": _zero_attempt_outcomes()},
+        "laneDetail": [],
         "inspect": False,
         "inspectReason": "",
     }
@@ -1585,7 +1613,21 @@ def count(repo_root, batch_id, env=None):
         return _count_indeterminate(batch_id, "batch-undeclared")
     if len(decls) > 1:
         return _count_indeterminate(batch_id, "batch-duplicate-declaration")
-    if len(batch_launches) != decls[0]:
+
+    for lid in batch_launches:
+        issue = folded["launches"][lid].get("issue")
+        if not _valid_lane_issue(issue):
+            return _count_indeterminate(
+                batch_id, "batch-lane-issue-invalid:%s" % lid,
+            )
+
+    lane_groups = {}
+    for lid in batch_launches:
+        issue = folded["launches"][lid]["issue"]
+        lane_groups.setdefault(issue, []).append(lid)
+
+    distinct_lanes = len(lane_groups)
+    if distinct_lanes != decls[0]:
         return _count_indeterminate(batch_id, "batch-reservation-mismatch")
 
     decl_index = _declaration_index(read_result["records"], batch_id, folded=folded)
@@ -1596,6 +1638,25 @@ def count(repo_root, batch_id, env=None):
         if reserved_index is not None and decl_index > reserved_index:
             return _count_indeterminate(batch_id, "batch-declaration-after-reservations")
 
+    for issue, lane_launch_ids in lane_groups.items():
+        ordered = sorted(
+            lane_launch_ids,
+            key=lambda launch_id: folded["launches"][launch_id]["reservedIndex"],
+        )
+        for idx in range(len(ordered) - 1):
+            earlier = folded["launches"][ordered[idx]]
+            later = folded["launches"][ordered[idx + 1]]
+            earlier_terminal = earlier.get("terminalIndex")
+            if earlier_terminal is None or earlier_terminal >= later["reservedIndex"]:
+                return _count_indeterminate(
+                    batch_id, "batch-lane-concurrent:%s" % issue,
+                )
+
+    for lid in batch_launches:
+        info = folded["launches"][lid]
+        if not info.get("terminal"):
+            return _count_indeterminate(batch_id, "batch-unresolved:%s" % lid)
+
     counts = {
         "handback": 0,
         "park": 0,
@@ -1604,21 +1665,40 @@ def count(repo_root, batch_id, env=None):
         "refusedToLaunch": 0,
         "total": 0,
     }
+    attempt_outcomes = _zero_attempt_outcomes()
+    lane_detail = []
 
-    for lid in batch_launches:
-        info = folded["launches"][lid]
-        if not info.get("terminal"):
-            return _count_indeterminate(batch_id, "batch-unresolved:%s" % lid)
+    for issue in sorted(lane_groups):
+        lane_launch_ids = lane_groups[issue]
+        ordered = sorted(
+            lane_launch_ids,
+            key=lambda launch_id: folded["launches"][launch_id]["reservedIndex"],
+        )
+        attempt_labels = []
+        for launch_id in ordered:
+            attempt_labels.append(_attempt_outcome_label(folded["launches"][launch_id]))
 
-    for lid in batch_launches:
-        info = folded["launches"][lid]
+        for launch_id in ordered[:-1]:
+            label = _attempt_outcome_label(folded["launches"][launch_id])
+            if label in attempt_outcomes:
+                attempt_outcomes[label] += 1
+
+        final_info = folded["launches"][ordered[-1]]
         counts["total"] += 1
-        if info.get("terminalKind") == "refused":
+        if final_info.get("terminalKind") == "refused":
             counts["refusedToLaunch"] += 1
-        elif info.get("terminalKind") == "outcome":
-            outcome = info.get("outcome")
+        elif final_info.get("terminalKind") == "outcome":
+            outcome = final_info.get("outcome")
             if outcome in counts:
                 counts[outcome] += 1
+
+        lane_detail.append({
+            "issue": issue,
+            "attempts": len(ordered),
+            "outcome": final_info.get("outcome"),
+            "terminalKind": final_info.get("terminalKind"),
+            "attemptOutcomes": attempt_labels,
+        })
 
     amendments = _zero_amendments()
     amended_launches = 0
@@ -1653,6 +1733,13 @@ def count(repo_root, batch_id, env=None):
         "counts": counts,
         "amendments": amendments,
         "amendedLaunches": amended_launches,
+        "lanes": {"declared": decls[0], "resolved": distinct_lanes},
+        "attempts": {
+            "total": len(batch_launches),
+            "extra": len(batch_launches) - distinct_lanes,
+            "outcomes": attempt_outcomes,
+        },
+        "laneDetail": lane_detail,
         "inspect": inspect,
         "inspectReason": _INSPECT_REASON if inspect else "",
     }

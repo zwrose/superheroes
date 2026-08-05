@@ -490,8 +490,8 @@ def test_count_indeterminate_on_unresolved_member(tmp_path, monkeypatch):
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-unresolved"
     _declare(repo, batch, 2)
-    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo))
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=101))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=102))
     path = _ledger_file(repo, os.environ)
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     ll.record_outcome(repo, "l1", "handback", "done")
@@ -904,8 +904,8 @@ def test_edge12_count_indeterminate_when_reservations_above_declared(tmp_path, m
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-over"
     _declare(repo, batch, 1)
-    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo))
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=201))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=202))
     path = _ledger_file(repo, os.environ)
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
@@ -2485,6 +2485,163 @@ def test_count_indeterminate_includes_zero_amendments(tmp_path, monkeypatch):
     assert result["indeterminate"] is True
     assert result["amendments"] == ll._zero_amendments()
     assert result["amendedLaunches"] == 0
+    assert result["lanes"] == {"declared": 0, "resolved": 0}
+    assert result["attempts"] == {
+        "total": 0, "extra": 0, "outcomes": ll._zero_attempt_outcomes(),
+    }
+    assert result["laneDetail"] == []
+
+
+def test_lane_sequential_retries_same_issue_resolve(tmp_path, monkeypatch):
+    # axis: sequential same-issue rows fold as one lane with attempts
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-retry-lane"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=501))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=501))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["total"] == 1
+    assert result["counts"]["handback"] == 1
+    assert result["attempts"]["total"] == 2
+    assert result["attempts"]["extra"] == 1
+    assert result["attempts"]["outcomes"]["park"] == 1
+    assert result["laneDetail"] == [{
+        "issue": 501,
+        "attempts": 2,
+        "outcome": "handback",
+        "terminalKind": "outcome",
+        "attemptOutcomes": ["park", "handback"],
+    }]
+
+
+def test_lane_concurrent_same_issue_refuses(tmp_path, monkeypatch):
+    # axis: overlapping same-lane launches refuse before unresolved
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-concurrent"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=601))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=601))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:601"
+
+
+def test_lane_issue_invalid_zero_refuses(tmp_path, monkeypatch):
+    # axis: issue 0 never becomes a lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-issue-zero"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=0))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_lane_issue_invalid_string_refuses(tmp_path, monkeypatch):
+    # axis: non-int issue never becomes a lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-issue-str"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue="656"))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_lane_declared_with_zero_rows_refuses(tmp_path, monkeypatch):
+    # axis: fewer distinct lanes than declared is batch-reservation-mismatch
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-missing-lane"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=701))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-reservation-mismatch"
+
+
+def test_lane_final_refused_headline_with_earlier_attempts(tmp_path, monkeypatch):
+    # axis: final refused attempt is headline; earlier outcomes in attempts only
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-final-refused"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=801))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=801))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l2"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["refusedToLaunch"] == 1
+    assert result["counts"]["park"] == 0
+    assert result["attempts"]["outcomes"]["park"] == 1
+
+
+def test_lane_retry_event_between_attempts_no_effect(tmp_path, monkeypatch):
+    # axis: retry between attempts does not affect sequencing or tallies
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-retry-event"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=901))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), {
+        "event": "retry",
+        "launchId": "l1",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "reason": "spawn",
+        "delaySeconds": 0,
+    })
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=901))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["handback"] == 1
+    assert result["attempts"]["outcomes"]["park"] == 1
+
+
+def test_lane_late_declaration_wins_over_concurrency(tmp_path, monkeypatch):
+    # axis: batch-declaration-after-reservations wins over concurrency guard
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-late-decl-concurrent"
+    path = _ledger_file(repo, os.environ)
+    reserved1 = _reserved("l1", batch, ["a"], repo, issue=1001)
+    reserved1["ts"] = 100.0
+    ll.reserve(repo, reserved1)
+    _append_raw(path, _started("l1"))
+    reserved2 = _reserved("l2", batch, ["a"], repo, issue=1001)
+    reserved2["ts"] = 150.0
+    ll.reserve(repo, reserved2)
+    _append_raw(path, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "expectedLaunches": 1,
+        "ts": 200.0,
+        "schema": ll.SCHEMA,
+    })
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-declaration-after-reservations"
 
 
 @pytest.mark.parametrize("field", ["kind", "value", "note"])
@@ -2573,11 +2730,11 @@ def test_bite_rehandback_subset_derivation(tmp_path, monkeypatch):
     launch_handback = "l-reh-handback"
     launch_park = "l-reh-park"
     _declare(repo, batch, 2)
-    ll.reserve(repo, _reserved(launch_handback, batch, ["a"], repo))
+    ll.reserve(repo, _reserved(launch_handback, batch, ["a"], repo, issue=301))
     _append_raw(_ledger_file(repo, os.environ), _started(launch_handback))
     ll.record_outcome(repo, launch_handback, "handback", "first")
     ll.record_outcome(repo, launch_handback, "handback", "second")
-    ll.reserve(repo, _reserved(launch_park, batch, ["b"], repo))
+    ll.reserve(repo, _reserved(launch_park, batch, ["b"], repo, issue=302))
     _append_raw(_ledger_file(repo, os.environ), _started(launch_park))
     ll.record_outcome(repo, launch_park, "park", "blocked")
     ll.record_outcome(repo, launch_park, "handback", "retry")

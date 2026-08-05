@@ -484,7 +484,10 @@ above).
    refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
    a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
    batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
-   refusals is a signal to inspect, never a clean sheet**. **After vetting a delivered lane, record
+   refusals is a signal to inspect, never a clean sheet**. **`count` reads lanes** (a build intent
+   keyed by issue number — retried attempts belong to one lane) with **`attempts`** beside the
+   terminal tallies and **`laneDetail`** per lane; overlapping same-lane launches still refuse —
+   see `lib/launch_ledger.py` for the authoritative semantics. **After vetting a delivered lane, record
    the ruling** with `amend --kind vet --value ready|not-ready|parked-blocker --note "<one line>"`. A
    NOT-READY ruling, and a parked blocker inside a delivered PR, are friction the terminal tallies
    cannot see. **A second `record-outcome` on a lane that started and then ended with an outcome is
