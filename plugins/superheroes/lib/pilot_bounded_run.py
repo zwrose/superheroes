@@ -60,7 +60,13 @@ def run_bounded(
             env=env,
             start_new_session=bool(new_process_group),
         )
-    except OSError:
+    except (OSError, ValueError):
+        # ValueError, not just OSError: Popen raises it for an embedded NUL in an argv element
+        # or in an environment name or value. Both callers validate their inputs as "non-empty
+        # strings" and neither excludes a NUL, so those inputs reach here — and before this catch
+        # the exception escaped the runner entirely, past `run_gate_off_test`'s refusal contract
+        # and past `observe_datastore_identity`'s. A named refusal is the honest outcome, and it
+        # is what makes this module's "never raises for a child's behaviour" claim true.
         return _result(OUTCOME_SPAWN_FAILED)
 
     pgid = None
@@ -119,8 +125,17 @@ def run_bounded(
             _terminate(proc, pgid)
         if reader is not None and reader.is_alive():
             reader.join(timeout=1)
-        # Only close the pipe once the reader has let go of it — closing under a live reader
-        # turns a bounded run into an exception on a daemon thread nobody is watching.
+        # The two copies disagreed here and this is `pilot_mint`'s shape, adopted deliberately.
+        # `pilot_boundary`'s copy closed the pipe unconditionally, which means closing a
+        # BufferedReader another thread is blocked inside: `close()` waits on the buffer lock the
+        # blocked `read()` holds, so the caller can hang in its own `finally`. Guarding on the
+        # reader trades that hang for a bounded leak — if a descendant that inherited the pipe
+        # outlives the direct child, this run leaves one daemon thread and one descriptor alive
+        # until that descendant exits. That is reachable only with `new_process_group=False`
+        # (with `True` the whole group is reaped), so today only the observer path can hit it,
+        # where the command is a single short-lived process. Raised as an Important finding by
+        # the #866 brief check; recorded here and handed on as a follow-up rather than fixed,
+        # because the fix is a non-blocking/`select`-based reader — a redesign, not hygiene.
         if proc.stdout and (reader is None or not reader.is_alive()):
             proc.stdout.close()
 
