@@ -213,4 +213,5 @@ order is the likeliest defect source, so catching one early is high-value.
 - Work **test-first** where the order calls for it.
 - Run the commands the order names and **capture their raw output** as your receipts — per the
   **command precedence** ladder (rungs 2–7).
+- Before returning, check that your edits introduced no stray run of two-or-more spaces mid-line (e.g. `grep -nE '[^ ]  +[^ ]'` over the files you changed) — a no-match (grep exit 1, empty output) is the passing result and does not invoke rung 2 of the command-precedence ladder; pre-existing multi-space runs in markdown tables, fenced code blocks, and aligned trailing comments are legitimate and out of scope.
 - Return per the **Short structured return** rule above. Nothing beyond that — no verdict, no "ready."
