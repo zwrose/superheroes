@@ -2114,6 +2114,12 @@ def test_resurrection_plan_captured_happy_path(private_tmp):
     assert plan["steps"][1]["path"] == "captured"
     assert plan["steps"][2]["op"] == "begin-generation"
     assert plan["steps"][3]["op"] == "resume"
+    # axis: the plan-step key is `owner` again (#866 reverting #857's dodge), and this policy
+    # declares a mintable account literally named `owner` — so these two lines are also the
+    # regression proof that #870's guard no longer refuses a plan whose step key spells an
+    # account name. Undo #870's carve-out and `resurrection_plan` raises before it returns.
+    assert plan["steps"][2]["owner"] == "C7"
+    assert plan["steps"][3]["owner"] == "C7"
 
 
 def test_resurrection_plan_minted_happy_path(private_tmp):
@@ -2612,6 +2618,151 @@ def test_argv_tail_refuses_non_string_element(private_tmp):
     with pytest.raises(pc.PilotCleanupError) as exc:
         pc._populate_source_binding(source_id, resolved_argv, run_cwd)
     assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# --- refusal position: an unbindable element refuses wherever it sits in the tail -------------
+#
+# Every refusal test above puts the unbindable element at tail index 1, so a fail-open that only
+# refuses "while nothing has been digested yet" — `if digests: continue` in front of the raise —
+# survives all of them. #868's verifier proved that mutation surviving on a scratch copy. The
+# tests below put a genuinely digestible element FIRST, so the refusal has to fire with digests
+# already accumulated (#866, closing #868's r2-v0).
+
+
+def _later_position_run_cwd(private_tmp):
+    """A run_cwd whose tail index 1 is a real, digestible script."""
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    _write_executable(
+        os.path.join(run_cwd, "cleanup.py"), "#!/usr/bin/env python3\nprint('v1')\n"
+    )
+    return run_cwd
+
+
+def _fresh_source_id():
+    return {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+
+
+def _plant_unbindable(run_cwd, shape):
+    """Create one unbindable argv-tail element of ``shape`` and return the argv element itself."""
+    if shape == "symlink-to-directory":
+        os.makedirs(os.path.join(run_cwd, "dirA"))
+        os.symlink(os.path.join(run_cwd, "dirA"), os.path.join(run_cwd, "link-a.py"))
+        return "link-a.py"
+    if shape == "dangling-symlink":
+        os.symlink(os.path.join(run_cwd, "nowhere.py"), os.path.join(run_cwd, "missing.py"))
+        return "missing.py"
+    if shape == "symlink-loop":
+        link_a = os.path.join(run_cwd, "a")
+        link_b = os.path.join(run_cwd, "b")
+        os.symlink(link_b, link_a)
+        os.symlink(link_a, link_b)
+        return "a"
+    if shape == "directory":
+        os.makedirs(os.path.join(run_cwd, "scripts"))
+        return "scripts"
+    if shape == "fifo":
+        try:
+            os.mkfifo(os.path.join(run_cwd, "pipe"))
+        except OSError:
+            pytest.skip("platform or filesystem refuses mkfifo")
+        return "pipe"
+    if shape == "non-string":
+        return 42
+    raise AssertionError("unknown unbindable shape %r" % shape)
+
+
+# axis: an unbindable element at a LATER tail position still refuses, with digests already taken
+@pytest.mark.parametrize(
+    "shape",
+    [
+        "symlink-to-directory",
+        "dangling-symlink",
+        "symlink-loop",
+        "directory",
+        "fifo",
+        "non-string",
+    ],
+)
+def test_argv_tail_refuses_unbindable_element_behind_a_digested_one(private_tmp, shape):
+    run_cwd = _later_position_run_cwd(private_tmp)
+    bad = _plant_unbindable(run_cwd, shape)
+    # Non-vacuity: index 1 really is digestible, so the loop has appended a digest by the time it
+    # reaches the bad element — the exact state a "refuse only while nothing is bound yet"
+    # fail-open would skip over.
+    state, digest = pc._argv_tail_content_digest(os.path.join(run_cwd, "cleanup.py"))
+    assert state == pc._TAIL_DIGESTED and digest
+
+    resolved_argv = [sys.executable, "cleanup.py", bad, "slot-a"]
+    source_id = _fresh_source_id()
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: an unreadable regular file at a later tail position still refuses
+def test_argv_tail_refuses_unreadable_regular_file_behind_a_digested_one(private_tmp, monkeypatch):
+    run_cwd = _later_position_run_cwd(private_tmp)
+    unreadable = os.path.join(run_cwd, "second.py")
+    _write_executable(unreadable, "#!/usr/bin/env python3\nprint('v2')\n")
+    real_sha256 = pc._sha256_file_chunks
+
+    def _sha256(path, *args, **kwargs):
+        if path == unreadable:
+            raise OSError(errno.EACCES, "denied")
+        return real_sha256(path, *args, **kwargs)
+
+    monkeypatch.setattr(pc, "_sha256_file_chunks", _sha256)
+    # Non-vacuity: the stub leaves index 1 digestible, so a digest is taken before the refusal.
+    state, digest = pc._argv_tail_content_digest(os.path.join(run_cwd, "cleanup.py"))
+    assert state == pc._TAIL_DIGESTED and digest
+
+    resolved_argv = [sys.executable, "cleanup.py", "second.py", "slot-a"]
+    source_id = _fresh_source_id()
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: the public seam refuses too when the unbindable element sits behind a digested one
+def test_cleanup_effect_receipt_refuses_unbindable_argv_tail_at_a_later_position(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    pilot_block = _pilot_block(cleanup_script)
+    # A real digestible file at tail index 1, the unbindable namespace directory at index 2.
+    _write_executable(
+        os.path.join(run_cwd, "bound.py"), "#!/usr/bin/env python3\nprint('v1')\n"
+    )
+    pilot_block["cleanup"]["command"] = [
+        cleanup_script, "bound.py", pc.NAMESPACE_PLACEHOLDER,
+    ]
+    os.makedirs(os.path.join(run_cwd, "slot-a"))
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc.cleanup_effect_receipt(
+            policy=policy,
+            pilot_block=pilot_block,
+            slot_ref=_SLOT_REF,
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            cleanup_root=cleanup_repo,
+            journal_path=journal_path,
+            now=_NOW,
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+    # The refusal precedes any effect: nothing was planted in the store.
+    assert not os.listdir(store_dir)
 
 
 # axis: absent namespace token skipped not refused

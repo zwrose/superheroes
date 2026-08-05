@@ -506,7 +506,8 @@ does not — it is matched in key position, like any other name that could not b
 with an account named `owner`, `note`, or `op` hit a refusal the moment a result used that word as
 a field name, with nothing in the refusal to say the account *name* rather than a leak was the
 cause — account naming was a landmine (#861; PR #857 worked around it by renaming a plan-step key
-to `responsibleParty`).
+to `responsibleParty`, and #866 renamed that key back to `owner` once this rule made the workaround
+unnecessary).
 
 The carve-out is deliberately keyed on the material **class** and not on spelling alone. The schema
 permits any non-empty string for `expectedIdentity` and `connectionDetail`, and bare ones are

@@ -1428,15 +1428,20 @@ def resurrection_plan(
                 "request": reseed_request,
                 "path": reseed_path,
             },
+            # `owner` names which component performs the step. PR #857 renamed this key to
+            # `responsibleParty` solely to dodge a bug in `assert_results_only`, which matched a
+            # field-name-shaped account name in KEY position and so refused any plan whose step
+            # key spelled a declared account. #870 fixed the guard at its cause; the dodge is
+            # renamed back here (#866) rather than left as a fossil that reads like a design call.
             {
                 "op": "begin-generation",
-                "responsibleParty": "C7",
+                "owner": "C7",
                 "requires": "released",
                 "note": "the generation bump is enforced at the broker; this plan does not perform it",
             },
             {
                 "op": "resume",
-                "responsibleParty": "C7",
+                "owner": "C7",
             },
         ],
     }
