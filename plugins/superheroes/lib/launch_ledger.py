@@ -79,6 +79,8 @@ _INSPECT_REASON = (
     "zero parks and zero refusals is a signal to inspect, never a clean sheet"
 )
 COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail")
+# The count-result blocks the advisor's charter names by hand; the drift test reads THIS.
+CHARTER_NAMED_COUNT_BLOCKS = ("lanes", "attempts", "laneDetail")
 
 
 def _scrub_env(env=None):

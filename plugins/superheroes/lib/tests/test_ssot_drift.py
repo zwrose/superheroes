@@ -758,9 +758,7 @@ def test_count_result_blocks_in_showrunner_charter():
     doc = _read("skills/showrunner/SKILL.md")
     duty = _showrunner_orchestration_duty()
     missing = []
-    for block in launch_ledger.COUNT_RESULT_BLOCKS:
-        if block not in ("lanes", "attempts", "laneDetail"):
-            continue
+    for block in launch_ledger.CHARTER_NAMED_COUNT_BLOCKS:
         if block not in duty:
             missing.append(block)
     assert not missing, (

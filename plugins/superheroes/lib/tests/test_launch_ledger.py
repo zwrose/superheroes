@@ -2534,6 +2534,71 @@ def test_lane_concurrent_same_issue_refuses(tmp_path, monkeypatch):
     assert result["reason"] == "batch-lane-concurrent:601"
 
 
+def test_lane_concurrent_same_issue_interleaved_refuses(tmp_path, monkeypatch):
+    # axis: the comparison leg of the lane-sequencing guard (earlier_terminal >= later reservedIndex)
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-interleaved"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=602))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=602))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:602"
+
+
+def test_lane_sequential_same_issue_tightest_boundary_resolves(tmp_path, monkeypatch):
+    # axis: strictly sequential rows at the >= boundary resolve as one lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-seq-boundary"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=603))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=603))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    folded = ll.fold(ll.read(repo)["records"])
+    l1 = folded["launches"]["l1"]
+    l2 = folded["launches"]["l2"]
+    assert l1["terminalIndex"] == l2["reservedIndex"] - 1
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["attempts"]["extra"] == 1
+    assert result["counts"]["handback"] == 1
+    assert result["attempts"]["outcomes"]["park"] == 1
+
+
+def test_count_partitions_final_into_counts_not_attempt_outcomes(tmp_path, monkeypatch):
+    # axis: each launch row lands in exactly one tally (counts vs attempts.outcomes)
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-partition"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=701))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="died"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=701))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    counts = result["counts"]
+    outcomes = result["attempts"]["outcomes"]
+    assert counts["handback"] == 1
+    assert outcomes["handback"] == 0
+    assert outcomes["died"] == 1
+    assert counts["died"] == 0
+    counts_sum = sum(counts[k] for k in counts if k != "total")
+    outcomes_sum = sum(outcomes.values())
+    assert counts_sum + outcomes_sum == result["attempts"]["total"]
+
+
 def test_lane_issue_invalid_zero_refuses(tmp_path, monkeypatch):
     # axis: issue 0 never becomes a lane
     repo = _init_repo(tmp_path / "repo")
