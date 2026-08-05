@@ -31,10 +31,11 @@ def _github_anchor(title):
     """Slug a heading the way GitHub does: lowercase, drop punctuation, spaces to hyphens.
 
     Punctuation is *removed* rather than replaced, which is why an em-dash surrounded by spaces
-    yields a doubled hyphen — `Wave runtime — deadline` becomes `wave-runtime--deadline`.
+    yields a doubled hyphen — `Wave runtime — deadline` becomes `wave-runtime--deadline`. `_` is
+    kept (not stripped as punctuation) because GitHub's own slugger keeps underscores.
     """
     slug = title.lower()
-    slug = re.sub(r"[^a-z0-9 \-]", "", slug)
+    slug = re.sub(r"[^a-z0-9 _\-]", "", slug)
     return slug.replace(" ", "-")
 
 
@@ -43,7 +44,11 @@ def _contents_rows(doc):
     assert separator != -1, "pilot-contract.md missing the Contents separator"
     rows = []
     for line in doc[:separator].splitlines():
-        match = _CONTENTS_ROW_RE.match(line.strip())
+        # Matched as-is, anchored at column 0 — not `line.strip()`. An indented row (four spaces,
+        # which CommonMark renders as a code block rather than a usable ToC entry) must not parse
+        # as a row: stripping leading whitespace before matching would make an indented block of
+        # rows invisible to every check below, defeating the census on this exact defect shape.
+        match = _CONTENTS_ROW_RE.match(line)
         if match:
             rows.append((int(match.group(1)), match.group(2), match.group(3)))
     return rows
@@ -103,12 +108,23 @@ def test_contents_order_and_numbering_track_the_document():
 
 
 def test_every_contents_anchor_matches_its_heading():
-    # axis: an entry whose link would not land on its own section reddens. Every wrong anchor is
-    # named, not just the first, so one run tells you the whole repair.
-    rows = _contents_rows(_load_contract())
+    # axis: the expected anchor is derived from the DOCUMENT HEADING at each row's position (the
+    # same positional pairing the ordering test above establishes) — never re-derived from the
+    # row's own title. Comparing a row's anchor to `_github_anchor(row_title)` only proves the row
+    # is internally self-consistent; it never consults `_section_headings`, so a heading renamed
+    # without its Contents anchor being updated would pass. Pairing against the real heading text
+    # catches exactly that.
+    doc = _load_contract()
+    rows = _contents_rows(doc)
+    headings = _section_headings(doc)
+    assert len(rows) == len(headings), (
+        "Contents has %d rows but the document has %d ## sections (file: %s)"
+        % (len(rows), len(headings), _PILOT_CONTRACT)
+    )
     wrong = [
-        "entry %d %r links to #%s, expected #%s" % (number, title, anchor, _github_anchor(title))
-        for number, title, anchor in rows
-        if anchor != _github_anchor(title)
+        "entry %d %r links to #%s, expected #%s (from heading %r)"
+        % (number, title, anchor, _github_anchor(heading), heading)
+        for (number, title, anchor), heading in zip(rows, headings)
+        if anchor != _github_anchor(heading)
     ]
     assert wrong == [], "%s (file: %s)" % ("; ".join(wrong), _PILOT_CONTRACT)

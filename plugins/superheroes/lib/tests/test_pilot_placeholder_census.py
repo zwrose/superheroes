@@ -6,7 +6,15 @@ three (`pilot_contract`, `pilot_policy`, `pilot_cleanup`), `{sentinel}` in two (
 same token, so a change to the grammar in one home leaves the others silently accepting the old
 spelling. The literal now lives once per token, at the module that owns that token's grammar, and
 every other module reads the name from there. This census is what keeps that true — it fails on a
-re-spelled literal anywhere in `lib/`, including a module that does not exist yet.
+re-spelled literal anywhere in `lib/`, including a module that does not exist yet, and on a
+re-spelling embedded inside a larger *code* literal (e.g. an argv string like
+`"--namespace={namespace}"`) as well as a literal that equals the token outright.
+
+It deliberately does NOT count a comment or a docstring that merely names the token while
+explaining the grammar it consumes — prose describing what a module does with the placeholder is
+not a second home for it, the same way a comment already isn't. Comments get that exemption for
+free (they are not AST nodes at all); a docstring is an `ast.Constant` like any other string
+literal, so the walk below excludes it explicitly.
 """
 import ast
 import os
@@ -29,12 +37,36 @@ def _library_modules():
     )
 
 
+def _docstring_constant_ids(tree):
+    """Return the set of ``id()``s of every docstring `ast.Constant` node in ``tree``.
+
+    A docstring is the first statement of a module/class/function body when that statement is a
+    bare string-literal expression — `ast.get_docstring` is how the stdlib itself recognizes that
+    shape. Its `ast.Constant` node is excluded from the census below: prose explaining what a
+    module does with a placeholder is not a second home for it, the same way a comment already
+    isn't (comments get that exemption for free, since they are not AST nodes at all).
+    """
+    ids = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if ast.get_docstring(node, clean=False) is None:
+            continue
+        ids.add(id(node.body[0].value))
+    return ids
+
+
 def _literal_sites(token):
-    """Return [(module, lineno)] for every string literal equal to ``token`` in lib/*.py.
+    """Return [(module, lineno)] for every CODE string literal containing ``token`` in lib/*.py.
 
     Walks the AST rather than grepping so a token named in a *comment* never counts — a comment
     explaining the grammar is prose, not a second home — while a literal nested inside a
-    collection, an f-string-free format string, or a call argument does count.
+    collection, an f-string-free format string, or a call argument does count. Matches by
+    containment, not equality: the production grammar puts placeholders INSIDE argv strings (e.g.
+    a module could hard-code `"--namespace={namespace}"`), so a literal that merely embeds the
+    token is as much a second home as one that equals it outright. A module/class/function
+    docstring that merely names the token while documenting the grammar is excluded for the same
+    reason a comment is — it is prose, not a literal the module actually uses.
     """
     sites = []
     for module in _library_modules():
@@ -42,10 +74,11 @@ def _literal_sites(token):
         with open(path, "r", encoding="utf-8") as handle:
             source = handle.read()
         tree = ast.parse(source, filename=path)
+        docstring_ids = _docstring_constant_ids(tree)
         for node in ast.walk(tree):
             if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
                 continue
-            if node.value != token:
+            if token not in node.value:
                 continue
             sites.append((module, node.lineno))
     return sites

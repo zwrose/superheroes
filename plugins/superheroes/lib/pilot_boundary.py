@@ -153,15 +153,16 @@ def observe_datastore_identity(
     _validate_observer(observer, connection_detail, reach_roots, run_cwd)
     env_var = observer["connectionEnvVar"]
     command = observer["command"]
-    # The observer is a single short-lived command, so the direct child is the whole run — no
-    # process group, deliberately unlike pilot_mint's gate-off runner.
+    # The observer is a single short-lived command, but the runner's process-group containment is
+    # unconditional regardless — if it forks its own children, the whole group is reaped on
+    # timeout too. What stays deliberately unlike pilot_mint's gate-off runner is only the
+    # nonzero-is-failure mapping below, not process-group handling.
     run = pilot_bounded_run.run_bounded(
         command,
         run_cwd=run_cwd,
         env={env_var: connection_detail},
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
-        new_process_group=False,
     )
     # Nonzero-is-failure, deliberately unlike pilot_mint: an observer that did not exit clean
     # observed nothing, so every non-completed outcome and every nonzero exit is the same event.

@@ -1,8 +1,11 @@
 """Tests for pilot_boundary.py — target boundary bindings and verdicts."""
 import json
 import os
+import signal
 import stat
 import sys
+import threading
+import time
 
 import pytest
 
@@ -404,6 +407,95 @@ def test_observe_datastore_identity_refuses_nonzero_exit(private_tmp):
             run_cwd=run_cwd,
         )
     assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
+
+
+_GRANDCHILD_OBSERVER_SCRIPT = """#!/usr/bin/env python3
+import os
+import subprocess
+import sys
+
+pid_path = os.environ["PILOT_DB_URL"]
+grandchild_code = (
+    "import os, signal, sys, time\\n"
+    "signal.signal(signal.SIGTERM, signal.SIG_IGN)\\n"
+    "open(sys.argv[1], 'w').write(str(os.getpid()))\\n"
+    "sys.stdout.flush()\\n"
+    "time.sleep(120)\\n"
+)
+subprocess.Popen([sys.executable, "-c", grandchild_code, pid_path], stdout=sys.stdout)
+os._exit(0)
+"""
+
+
+def test_observe_datastore_identity_timeout_reaps_process_group(private_tmp):
+    # axis: process-group containment for the BOUNDARY caller specifically. The observer script
+    # exits immediately after forking a grandchild that inherits its stdout, ignores SIGTERM, and
+    # sleeps. pilot_mint's own grandchild-timeout test cannot prove this for pilot_boundary — a
+    # review seat showed that hardcoding `start_new_session=True` inside the shared runner (rather
+    # than deriving it from a per-caller flag) left every existing boundary test green while the
+    # observer path had no equivalent proof (#866). This test is that proof: only signalling the
+    # observer's whole process group (not just the direct child) reaps the grandchild.
+    reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
+    pid_file = os.path.join(private_tmp, "grandchild.pid")
+    script = os.path.join(bin_dir, "observer.py")
+    _write_executable(script, _GRANDCHILD_OBSERVER_SCRIPT)
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
+
+    gpid = None
+    outcome = {}
+
+    def _run_observe():
+        try:
+            outcome["result"] = pb.observe_datastore_identity(
+                observer,
+                connection_detail=pid_file,
+                reach_roots=[reach_root],
+                run_cwd=run_cwd,
+                timeout_seconds=2,
+            )
+        except pb.PilotBoundaryError as exc:
+            outcome["error"] = exc
+
+    try:
+        runner = threading.Thread(target=_run_observe)
+        runner.start()
+
+        deadline = time.monotonic() + 5.0
+        while time.monotonic() < deadline:
+            if os.path.isfile(pid_file):
+                with open(pid_file) as f:
+                    content = f.read().strip()
+                if content:
+                    gpid = int(content)
+                    break
+            time.sleep(0.02)
+        else:
+            pytest.fail("grandchild never started: pid file never appeared")
+
+        runner.join(timeout=10)
+        assert runner.is_alive() is False, "observe_datastore_identity did not finish"
+        assert "error" in outcome, "observe_datastore_identity did not raise"
+        assert outcome["error"].reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
+
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline:
+            try:
+                os.kill(gpid, 0)
+            except ProcessLookupError:
+                break
+            time.sleep(0.05)
+        else:
+            pytest.fail(
+                "grandchild pid %d still alive after observer timeout reap" % gpid
+            )
+    finally:
+        if gpid is not None:
+            try:
+                os.kill(gpid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+        if os.path.isfile(pid_file):
+            os.remove(pid_file)
 
 
 def test_path_containment_filesystem_root():

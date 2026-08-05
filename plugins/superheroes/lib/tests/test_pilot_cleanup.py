@@ -2742,6 +2742,12 @@ def test_cleanup_effect_receipt_refuses_unbindable_argv_tail_at_a_later_position
     _write_executable(
         os.path.join(run_cwd, "bound.py"), "#!/usr/bin/env python3\nprint('v1')\n"
     )
+    # Non-vacuity: bound.py really is digestible, so the loop has appended a digest by the time it
+    # reaches the unbindable namespace directory — the exact state a "refuse only while nothing is
+    # bound yet" fail-open would skip over. Without this, the test would stay green even if
+    # bound.py were never digested (an empty `digests` list, with the fail-open untriggered).
+    state, digest = pc._argv_tail_content_digest(os.path.join(run_cwd, "bound.py"))
+    assert state == pc._TAIL_DIGESTED and digest
     pilot_block["cleanup"]["command"] = [
         cleanup_script, "bound.py", pc.NAMESPACE_PLACEHOLDER,
     ]

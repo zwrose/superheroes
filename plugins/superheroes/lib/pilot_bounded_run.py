@@ -7,6 +7,12 @@ handling. That divergence is the reason to extract rather than a reason not to: 
 the whole process group on timeout and the other only the direct child, so a runaway grandchild
 outlived exactly one of them.
 
+**Process-group containment is unconditional.** Every run starts its own session
+(`start_new_session=True`), so every child is the leader of its own process group and every
+termination path signals that whole group, not just the direct child. There is no per-caller
+opt-out: a command that forks its own children never leaves them behind, whether the caller is
+running a project's test suite or a single short-lived observer.
+
 **This runner classifies, it never judges.** A run that finished is `completed`, whatever its exit
 code, with stdout returned as raw bytes and undecoded. The two semantic differences the callers
 actually have — `pilot_mint`'s neutral exit code (a nonzero gate-off run is a *reported result*,
@@ -32,7 +38,6 @@ def run_bounded(
     env,
     timeout_seconds,
     max_output_bytes,
-    new_process_group=False,
 ):
     """Run ``command`` bounded by wall-clock and stdout bytes; classify how it ended.
 
@@ -42,14 +47,14 @@ def run_bounded(
     unexpected error all classify as ``spawn-failed``, because a caller that cannot see the child's
     output cannot distinguish them and must refuse either way.
 
-    ``new_process_group=True`` starts the child in its own session and signals the whole group on
-    every termination path, so a child that forks its own children does not leave them running.
-    ``False`` signals the direct child only, which is what a caller wants when the command is a
-    single short-lived observer.
+    Every run starts its own session (``start_new_session=True``) and every termination path
+    signals the whole process group, unconditionally — so a child that forks its own children
+    never leaves them running, whether the caller is a project's own test command or a single
+    short-lived observer.
     """
     # bite-axis: containment — stdout is read under a byte cap so oversized output cannot exhaust
-    # memory, both the read and the wait are bounded by timeout_seconds, and the child (or its
-    # whole group) is reaped on every exit path including the unexpected-exception path.
+    # memory, both the read and the wait are bounded by timeout_seconds, and the child's whole
+    # process group is reaped on every exit path including the unexpected-exception path.
     try:
         proc = subprocess.Popen(
             command,
@@ -58,7 +63,7 @@ def run_bounded(
             stderr=subprocess.DEVNULL,
             shell=False,
             env=env,
-            start_new_session=bool(new_process_group),
+            start_new_session=True,
         )
     except (OSError, ValueError):
         # ValueError, not just OSError: Popen raises it for an embedded NUL in an argv element
@@ -69,12 +74,11 @@ def run_bounded(
         # is what makes this module's "never raises for a child's behaviour" claim true.
         return _result(OUTCOME_SPAWN_FAILED)
 
-    pgid = None
-    if new_process_group:
-        try:
-            pgid = os.getpgid(proc.pid)
-        except (ProcessLookupError, PermissionError):
-            pgid = None
+    # With start_new_session=True the child IS the process-group leader, so its pgid is
+    # deterministically its own pid — no need to query it back with os.getpgid(proc.pid), which
+    # would race a child that has already exited (os.getpgid raises ProcessLookupError, pgid would
+    # fall to None, and the surviving group would then never be signalled).
+    pgid = proc.pid
 
     reader = None
     try:
@@ -126,16 +130,16 @@ def run_bounded(
         if reader is not None and reader.is_alive():
             reader.join(timeout=1)
         # The two copies disagreed here and this is `pilot_mint`'s shape, adopted deliberately.
-        # `pilot_boundary`'s copy closed the pipe unconditionally, which means closing a
-        # BufferedReader another thread is blocked inside: `close()` waits on the buffer lock the
-        # blocked `read()` holds, so the caller can hang in its own `finally`. Guarding on the
-        # reader trades that hang for a bounded leak — if a descendant that inherited the pipe
-        # outlives the direct child, this run leaves one daemon thread and one descriptor alive
-        # until that descendant exits. That is reachable only with `new_process_group=False`
-        # (with `True` the whole group is reaped), so today only the observer path can hit it,
-        # where the command is a single short-lived process. Raised as an Important finding by
-        # the #866 brief check; recorded here and handed on as a follow-up rather than fixed,
-        # because the fix is a non-blocking/`select`-based reader — a redesign, not hygiene.
+        # Now that every termination path signals the whole process group unconditionally
+        # (Task 1, #866), a descendant that inherited the pipe is signalled along with everything
+        # else in its group: SIGKILL cannot be ignored, so the blocked `read()` unblocks on EOF
+        # and the reader thread exits. This is no longer the leak/hang tradeoff it used to be —
+        # closing the pipe here is not what reaps a lingering descendant, the group kill above
+        # already did that. The guard below is belt-and-braces, not the primary defense: closing
+        # a BufferedReader while another thread is still blocked inside it makes `close()` wait on
+        # the buffer lock that blocked `read()` holds, which can hang the caller in its own
+        # `finally`, so this still only closes once the reader is confirmed not alive rather than
+        # assuming that timing.
         if proc.stdout and (reader is None or not reader.is_alive()):
             proc.stdout.close()
 
@@ -145,25 +149,19 @@ def _result(outcome):
 
 
 def _terminate(proc, pgid):
-    """Signal the child (or its whole group), then reap the direct child."""
-    if pgid is not None:
-        try:
-            os.killpg(pgid, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            pass
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
-        try:
-            os.killpg(pgid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-    elif proc.poll() is None:
-        try:
-            proc.terminate()
-        except (ProcessLookupError, PermissionError):
-            pass
+    """Signal the child's whole process group, then reap the direct child."""
+    try:
+        os.killpg(pgid, signal.SIGTERM)
+    except (ProcessLookupError, PermissionError):
+        pass
+    try:
+        proc.wait(timeout=1)
+    except subprocess.TimeoutExpired:
+        pass
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
     if proc.poll() is None:
         try:
             proc.wait(timeout=1)

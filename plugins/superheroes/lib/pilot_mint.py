@@ -133,14 +133,14 @@ def run_gate_off_test(envelope, *, run_cwd, environment, timeout_seconds=120,
     env_copy.pop(flag_var, None)
 
     # The gate-off command is a project's own test command, so it may fork children of its own;
-    # it runs in its own process group and the whole group is reaped on timeout.
+    # the runner's process-group containment is unconditional, so the whole group is reaped on
+    # timeout regardless of caller.
     run = pilot_bounded_run.run_bounded(
         command,
         run_cwd=run_cwd,
         env=env_copy,
         timeout_seconds=timeout_seconds,
         max_output_bytes=max_output_bytes,
-        new_process_group=True,
     )
 
     outcome = run["outcome"]
