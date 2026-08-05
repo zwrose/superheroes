@@ -1,5 +1,6 @@
 """Tests for pilot_cleanup.py — cleanup primitives and receipt binding."""
 import copy
+import errno
 import hashlib
 import inspect
 import json
@@ -1362,6 +1363,34 @@ def test_cleanup_effect_receipt_refuses_relative_argv0_before_plant(private_tmp)
     assert not os.listdir(store_dir)
 
 
+# axis: refusal precedes sentinel plant
+def test_cleanup_effect_receipt_refuses_unbindable_argv_tail(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    pilot_block = _pilot_block(cleanup_script)
+    os.makedirs(os.path.join(run_cwd, "slot-a"))
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc.cleanup_effect_receipt(
+            policy=policy,
+            pilot_block=pilot_block,
+            slot_ref=_SLOT_REF,
+            reach_roots=[reach_root],
+            run_cwd=run_cwd,
+            cleanup_root=cleanup_repo,
+            journal_path=journal_path,
+            now=_NOW,
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+    assert not os.listdir(store_dir)
+
+
 # --- happy path: passing receipt -----------------------------------------------
 
 def test_cleanup_effect_receipt_pass(private_tmp):
@@ -1421,6 +1450,25 @@ def test_receipt_valid_for_happy_path(private_tmp):
         identity_strength="strong",
     )
     assert result == {"ok": True, "reason": None}
+
+
+# axis: receipt_valid_for re-checks argv-tail binding
+def test_receipt_valid_for_refuses_unbindable_argv_tail(private_tmp):
+    receipt, ctx = _run_receipt(private_tmp, _cleanup_correct_script())
+    os.makedirs(os.path.join(ctx["run_cwd"], "slot-a"))
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc.receipt_valid_for(
+            receipt,
+            ctx["policy"],
+            ctx["pilot_block"],
+            _SLOT_REF,
+            cleanup_root=ctx["cleanup_repo"],
+            run_cwd=ctx["run_cwd"],
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
 
 
 @pytest.mark.parametrize("receipt", [None, "not-a-dict", {}])
@@ -2373,7 +2421,33 @@ def test_worktree_digest_detects_retargeted_dirty_symlink(private_tmp):
     assert first["worktreeDigest"] != second["worktreeDigest"]
 
 
-def test_argv_tail_digest_tolerates_dangling_symlink(private_tmp):
+# axis: symlink-to-directory tail refuses
+def test_argv_tail_refuses_symlink_to_directory(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    dir_a = os.path.join(run_cwd, "dirA")
+    dir_b = os.path.join(run_cwd, "dirB")
+    os.makedirs(dir_a)
+    os.makedirs(dir_b)
+    link_a = os.path.join(run_cwd, "link-a.py")
+    link_b = os.path.join(run_cwd, "link-b.py")
+    os.symlink(dir_a, link_a)
+    os.symlink(dir_b, link_b)
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    for link in (link_a, link_b):
+        resolved_argv = [sys.executable, os.path.basename(link), "slot-a"]
+        with pytest.raises(pc.PilotCleanupError) as exc:
+            pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+        assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: dangling symlink tail refuses
+def test_argv_tail_refuses_dangling_symlink(private_tmp):
     run_cwd = os.path.join(private_tmp, "cwd")
     os.makedirs(run_cwd)
     link = os.path.join(run_cwd, "missing.py")
@@ -2385,8 +2459,273 @@ def test_argv_tail_digest_tolerates_dangling_symlink(private_tmp):
         "argv0Digest": None,
         "argvDigests": [],
     }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: symlink-loop tail refuses
+def test_argv_tail_refuses_symlink_loop(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    link_a = os.path.join(run_cwd, "a")
+    link_b = os.path.join(run_cwd, "b")
+    os.symlink(link_b, link_a)
+    os.symlink(link_a, link_b)
+    resolved_argv = [sys.executable, "a", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: directory tail element refuses
+def test_argv_tail_refuses_directory_element(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    subdir = os.path.join(run_cwd, "scripts")
+    os.makedirs(subdir)
+    resolved_argv = [sys.executable, "scripts", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: fifo tail element refuses
+def test_argv_tail_refuses_fifo_element(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    fifo = os.path.join(run_cwd, "pipe")
+    try:
+        os.mkfifo(fifo)
+    except OSError:
+        pytest.skip("platform or filesystem refuses mkfifo")
+    resolved_argv = [sys.executable, "pipe", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: indeterminate lstat errno refuses
+def test_argv_tail_refuses_indeterminate_lstat(private_tmp, monkeypatch):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "cleanup.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    real_lstat = os.lstat
+
+    # Passthrough *args/**kwargs: stands in for global os.lstat; pytest teardown's
+    # shutil.rmtree passes dir_fd= on Python 3.12.
+    def _lstat(path, *args, **kwargs):
+        if path == script:
+            raise OSError(errno.EACCES, "denied")
+        return real_lstat(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "lstat", _lstat)
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: unreadable regular file refuses
+def test_argv_tail_refuses_unreadable_regular_file(private_tmp, monkeypatch):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "cleanup.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    real_sha256 = pc._sha256_file_chunks
+
+    def _sha256(path, *args, **kwargs):
+        if path == script:
+            raise OSError(errno.EACCES, "denied")
+        return real_sha256(path, *args, **kwargs)
+
+    monkeypatch.setattr(pc, "_sha256_file_chunks", _sha256)
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: unknown classifier state refuses
+def test_argv_tail_refuses_unknown_classifier_state(private_tmp, monkeypatch):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "cleanup.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    monkeypatch.setattr(
+        pc, "_argv_tail_content_digest", lambda candidate: ("some-future-state", None)
+    )
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: non-string tail element refuses
+def test_argv_tail_refuses_non_string_element(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    resolved_argv = [sys.executable, 42, "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    with pytest.raises(pc.PilotCleanupError) as exc:
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert exc.value.reason == pc.REFUSAL_SOURCE_ARGV_UNBINDABLE
+
+
+# axis: absent namespace token skipped not refused
+def test_argv_tail_skips_absent_namespace_argument(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "slot-a", "cleanup.py"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
     pc._populate_source_binding(source_id, resolved_argv, run_cwd)
-    assert source_id["argvDigests"] == [[1, None]]
+    expected_digest = pc._sha256_file_chunks(script)
+    assert source_id["argvDigests"] == [[2, expected_digest]]
+
+
+# axis: ENAMETOOLONG tail skipped not refused
+def test_argv_tail_skips_overlong_argument(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    overlong = "x" * 5000
+    resolved_argv = [sys.executable, overlong, "cleanup.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    try:
+        os.lstat(os.path.join(run_cwd, overlong))
+    except OSError as lstat_exc:
+        if lstat_exc.errno != errno.ENAMETOOLONG:
+            pytest.skip(f"overlong name raised errno {lstat_exc.errno}, not ENAMETOOLONG")
+    else:
+        pytest.skip("overlong name did not raise")
+    pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    expected_digest = pc._sha256_file_chunks(script)
+    assert source_id["argvDigests"] == [[2, expected_digest]]
+
+
+# axis: nul-bearing tail skipped not refused
+def test_argv_tail_skips_nul_bearing_argument(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "slot\x00a", "cleanup.py", "slot-a"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    expected_digest = pc._sha256_file_chunks(script)
+    assert source_id["argvDigests"] == [[2, expected_digest]]
+
+
+# axis: dash-prefixed script path bound
+def test_argv_tail_binds_dash_prefixed_script(private_tmp):
+    repo = os.path.join(private_tmp, "repo")
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(repo)
+    _init_git_repo(repo)
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "-cleanup.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    resolved_argv = [sys.executable, "-cleanup.py", "slot-a"]
+
+    def _config_for_binding():
+        source_id = pc.source_identity(repo)
+        pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+        inputs = _config_digest_inputs(
+            source_identity=source_id,
+            resolved_cleanup_argv=resolved_argv,
+            run_cwd=run_cwd,
+        )
+        return pc.config_digest(**inputs)
+
+    first = _config_for_binding()
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/usr/bin/env python3\nprint('v2')\n")
+    second = _config_for_binding()
+    assert first != second
+
+
+# axis: argvDigests never carries null digests
+def test_argv_tail_digests_carry_no_null_entries(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    os.makedirs(run_cwd)
+    script = os.path.join(run_cwd, "cleanup.py")
+    link = os.path.join(run_cwd, "cleanup-link.py")
+    _write_executable(script, "#!/usr/bin/env python3\nprint('v1')\n")
+    os.symlink(script, link)
+    resolved_argv = [sys.executable, "cleanup.py", "slot-a", "cleanup-link.py"]
+    source_id = {
+        "head": None,
+        "worktreeDigest": "a" * 64,
+        "argv0Digest": None,
+        "argvDigests": [],
+    }
+    pc._populate_source_binding(source_id, resolved_argv, run_cwd)
+    assert len(source_id["argvDigests"]) == 2
+    assert [entry[0] for entry in source_id["argvDigests"]] == [1, 3]
+    for index, digest in source_id["argvDigests"]:
+        assert isinstance(index, int)
+        assert isinstance(digest, str)
+        assert len(digest) == 64
 
 
 def test_source_identity_hashes_non_utf8_filename(private_tmp):
