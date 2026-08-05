@@ -188,14 +188,11 @@ above).
    - A finding that cites a **general convention against the issue's owner-ratified scope** does
      not override that scope — yours or a reviewer's. **Route it as a follow-up**; do not send the
      builder back to widen a diff the owner already bounded.
-   - When a builder **parks on a third rework of the same surface**, the tripwire is firing as
-     designed — **welcome it and go looking for the design problem**, rather than ordering a third
-     rework.
-   - From dispatch-provenance, when a surface's **rework orders** show it reached the third-rework
-     threshold, check that the build either **parked** or took **the census-order exception** with
-     disclosure in the PR — check the override against the conditions in `rubric/review-discipline.md`.
-     **Neither park nor disclosed override** is a vet finding; do not wait for the build to disclose
-     the override before running this check.
+   - From **dispatch-provenance**, when a surface's **rework orders** show it reached the
+     third-rework threshold, the build must show a **park** — a fourth patch or an undisclosed
+     continue is a **vet finding**, and you do not wait for the build to disclose it; the provenance
+     is the trigger. When a builder parks here, the tripwire is firing as designed — **welcome it
+     and go looking for the design problem**, rather than ordering another rework.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where

@@ -380,9 +380,8 @@ A dispatched order's premises — the base commit, "main will not move", the seq
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
 **third** rework of the same surface in one build, park instead — a third rework is the wrong answer
-to a design signal. The **census-order exception** in `rubric/review-discipline.md` is the one named
-override that may replace that third rework; its conditions live there — meet them there. Otherwise
-say what the seam problem looks like.
+to a design signal, with no override. Say what the seam problem looks like. Resumption after the
+park is owner- or advisor-ruled — a builder cannot lift the park on its own.
 
 **Headless turn-end rule — the turn's final act, not work in flight.** A headless builder session
 (`claude -p`) **exits when its turn ends**. Therefore: **until the durable handback comment — or a
@@ -762,7 +761,7 @@ curation stay with the advisor.
 | "I'll bump the version / merge / wire the board" | Never — merge/release/version are the owner's; the board is the advisor's. |
 | "I found follow-up work, I'll file an issue for it" | You never wire the board. List follow-ups in the PR for the advisor to file. |
 | "The convention clearly says X, so I'll fix it while I'm here." | The issue's owner-ratified scope beats a general convention argument. Hand the gap to the advisor as a follow-up — never a silent widening of this diff. |
-| "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire — not another rework. The **census-order exception** in `rubric/review-discipline.md` is the one named override; otherwise name the seam problem. |
+| "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire — park, not another rework, no override. Name the seam problem. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
 | "This dispatch will finish quickly — the default timeout is fine." | A long external dispatch **you own** is **awaited in-turn** through `dispatch-review`/`dispatch-write --max-wait` (≤ 540 s) with originating-verb re-invocation on the same `--run-dir` until terminal — never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |

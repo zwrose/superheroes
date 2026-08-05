@@ -27,7 +27,7 @@ Verify the current `carveOuts` snapshot in `eval/skills/baseline.json` before re
 
 The recorded `activation-result.json` is a **required artifact of done** when a task
 changes a skill **description** or **fixtures** — not complete until this file is
-regenerated and every skill scores `pass`.
+regenerated and every skill is `pass` (or `carved-out` with owner approval).
 
 ## Procedure
 
