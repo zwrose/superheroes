@@ -1918,10 +1918,16 @@ non-application.
 
 ### Broker admission
 
-Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception on
-malformed *data*. A **missing required argument** is a call-shape error, not data: `provision_server`
-called without `effect_id` raises `TypeError`, as any Python call with a missing argument does,
-while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
+Public entry points in `pilot_browser.py` refuse rather than raising a builtin exception for the
+inputs they validate — journal paths, slot references, server records, pins, and timestamps. Two
+shapes sit outside that guarantee, and both are stated here rather than implied:
+
+- A **missing required argument** is a call-shape error, not data: `provision_server` called
+  without `effect_id` raises `TypeError`, as any Python call with a missing argument does. An
+  `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
+- `socket_dir_plan`'s **`platform`** argument is not type-validated: `_socket_cap` looks it up in
+  `SUN_PATH_MAX`, so an unhashable value (`[]`, `{}`, `set()`) raises `TypeError` rather than
+  refusing. Pre-existing; recorded here so the guarantee above is not read wider than it holds.
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
