@@ -254,7 +254,6 @@ def _fold_call_census():
     mod_path = os.path.join(_LIB, "round_driver.py")
     with open(mod_path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
-    func_nodes = [n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)]
 
     def _is_call_to(node, name):
         if not isinstance(node, ast.Call):
@@ -265,31 +264,46 @@ def _fold_call_census():
             return node.func.attr == name
         return False
 
-    def _enclosing_function(node):
-        candidates = []
-        for func in func_nodes:
-            if node is func:
-                return None
-            if (hasattr(node, "lineno") and hasattr(func, "end_lineno")
-                    and func.lineno <= node.lineno <= func.end_lineno):
-                candidates.append(func)
-        if not candidates:
-            return None
-        return max(candidates, key=lambda f: f.lineno).name
-
     callers = {"_fold": set(), "_fold_panel": set()}
     module_level = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        for target in ("_fold", "_fold_panel"):
-            if not _is_call_to(node, target):
-                continue
-            owner = _enclosing_function(node)
-            if owner is None:
-                module_level.append(target)
-            else:
-                callers[target].add(owner)
+
+    def _visit(node, owner):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for default in node.args.defaults:
+                _visit(default, owner)
+            for default in (node.args.kw_defaults or []):
+                if default is not None:
+                    _visit(default, owner)
+            for dec in node.decorator_list:
+                _visit(dec, owner)
+            if node.returns:
+                _visit(node.returns, owner)
+            for child in node.body:
+                _visit(child, node.name)
+            return
+        if isinstance(node, ast.Lambda):
+            for default in node.args.defaults:
+                _visit(default, owner)
+            for default in (node.args.kw_defaults or []):
+                if default is not None:
+                    _visit(default, owner)
+            _visit(node.body, owner)
+            return
+        if isinstance(node, ast.ClassDef):
+            for child in node.body:
+                _visit(child, owner)
+            return
+        if isinstance(node, ast.Call):
+            for target in ("_fold", "_fold_panel"):
+                if _is_call_to(node, target):
+                    if owner is None:
+                        module_level.append(target)
+                    else:
+                        callers[target].add(owner)
+        for child in ast.iter_child_nodes(node):
+            _visit(child, owner)
+
+    _visit(tree, None)
     return callers, module_level
 
 
@@ -332,8 +346,6 @@ def _fold_panel_artifact_get_keys():
             const = node.args[0]
             if isinstance(const, ast.Constant) and isinstance(const.value, str):
                 keys.add(const.value)
-            elif isinstance(const, ast.Str):
-                keys.add(const.s)
     return keys
 
 
@@ -349,18 +361,48 @@ def _fold_panel_invisible_artifact_reads():
             fold_panel = node
             break
     assert fold_panel is not None
+    parent = {}
+    for node in ast.walk(fold_panel):
+        for child in ast.iter_child_nodes(node):
+            parent[child] = node
+
+    def _is_sanctioned_get_call(call):
+        return (isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "get"
+                and isinstance(call.func.value, ast.Name)
+                and call.func.value.id == "artifact"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+                and isinstance(call.args[0].value, str))
+
+    sanctioned_ids = set()
+    for node in ast.walk(fold_panel):
+        if not isinstance(node, ast.Call):
+            continue
+        if _is_sanctioned_get_call(node):
+            sanctioned_ids.add(id(node.func.value))
     invisible = []
     for node in ast.walk(fold_panel):
-        if isinstance(node, ast.Subscript):
-            if isinstance(node.value, ast.Name) and node.value.id == "artifact":
-                invisible.append("artifact[...] subscript at line %d" % node.lineno)
-        if isinstance(node, ast.Call):
-            for arg in node.args:
-                if isinstance(arg, ast.Name) and arg.id == "artifact":
-                    invisible.append(
-                        "artifact passed to %s at line %d"
-                        % (getattr(node.func, "id", getattr(node.func, "attr", "?")),
-                           node.lineno))
+        if not (isinstance(node, ast.Name) and node.id == "artifact"
+                and isinstance(node.ctx, ast.Load)):
+            continue
+        if id(node) in sanctioned_ids:
+            continue
+        parent_node = parent.get(node)
+        if (isinstance(parent_node, ast.IfExp)
+                and _is_sanctioned_get_call(parent_node.body)):
+            continue
+        if isinstance(parent_node, ast.Attribute):
+            desc = "artifact.%s at line %d" % (parent_node.attr, node.lineno)
+        elif isinstance(parent_node, ast.Call):
+            fn = getattr(parent_node.func, "id", getattr(parent_node.func, "attr", "?"))
+            desc = "artifact passed to %s at line %d" % (fn, node.lineno)
+        elif isinstance(parent_node, ast.Subscript):
+            desc = "artifact[...] subscript at line %d" % node.lineno
+        else:
+            desc = "artifact load at line %d" % node.lineno
+        invisible.append(desc)
     return invisible
 
 
