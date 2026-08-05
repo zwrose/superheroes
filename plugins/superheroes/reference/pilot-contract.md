@@ -1918,24 +1918,11 @@ non-application.
 
 ### Broker admission
 
-Public entry points in `pilot_browser.py` **refuse rather than raising for the validation failures
-they recognise**: a malformed slot reference, server record, pin, or timestamp comes back as an
-`ok`/`reason` refusal. That is a statement about *recognised* validation — it is deliberately not a
-promise that no builtin exception can ever escape. An argument an entry point does not type-check,
-and a filesystem call underneath one that does, can still raise. Three verified instances, offered
-as the **shape of the limit and not as a closed list**:
-
-- `provision_server` called **without** the required `effect_id` raises `TypeError`, as any Python
-  call missing an argument does — a call-shape error, not data. An `effect_id` that is *supplied*
-  but unusable refuses (`browser-server-record-invalid`).
-- `socket_dir_plan`'s **`platform`** is not type-validated: `_socket_cap` looks it up in
-  `SUN_PATH_MAX`, so an unhashable value (`[]`, `{}`, `set()`) raises `TypeError`.
-- A **journal path containing a NUL byte** satisfies `_is_str_path`, then raises `ValueError` from
-  the `os.open` beneath `pilot_journal`'s lock acquisition.
-
-The last two are pre-existing and are recorded so the guarantee above is not read wider than it
-holds. Enumerating every such case exhaustively is not the contract's job — bounding what the
-guarantee covers is.
+Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception for
+the validation failures it recognises. `provision_server` takes a **required** `effect_id`, and the
+two ways to get that wrong land differently: **omitting** it raises `TypeError` at the call, as any
+Python call missing an argument does — a call-shape error, not a recognised validation failure —
+while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and

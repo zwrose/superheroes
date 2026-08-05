@@ -658,8 +658,6 @@ def provision_server(
     """
     if not _is_str_path(journal_path):
         return _fail(REFUSAL_SERVER_RECORD_INVALID)
-    if not isinstance(effect_id, str) or not effect_id:
-        return _fail(REFUSAL_SERVER_RECORD_INVALID)
     try:
         slot, parsed_gen = pilot_slot.parse_slot_ref(slot_ref)
     except pilot_slot.PilotSlotError:
@@ -703,6 +701,8 @@ def provision_server(
 
     end_at = _later_timestamp(begin_at)
 
+    if not isinstance(effect_id, str) or not effect_id:
+        return _fail(REFUSAL_SERVER_RECORD_INVALID)
     end_result = pilot_journal.end_effect(
         journal_path,
         slot_ref=formatted_ref,
