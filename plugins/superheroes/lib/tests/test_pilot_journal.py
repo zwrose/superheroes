@@ -1718,6 +1718,60 @@ def test_end_effect_refuses_torn_journal_with_no_newline(tmp_dir):
     assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
 
 
+def test_end_effect_refuses_when_read_reports_no_reason(tmp_dir, monkeypatch):
+    path = _journal(tmp_dir)
+    monkeypatch.setattr(
+        pj,
+        "_read_journal_text",
+        lambda _path: {
+            "ok": False,
+            "text": "",
+            "torn": False,
+            "reason": None,
+            "missing": False,
+        },
+    )
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="no-reason",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+    assert not os.path.exists(path)
+
+
+@pytest.mark.parametrize("junk_line", ["[]", '"junk"', "42"])
+def test_end_effect_scan_ignores_non_dict_lines(tmp_dir, junk_line):
+    path = _journal(tmp_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(junk_line + "\n")
+    refuse = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="no-begin",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert refuse == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if isinstance(rec, dict) and rec.get("phase") == pj.PHASE_END:
+                raise AssertionError("unexpected end record")
+
+    path2 = _journal(tmp_dir, "with-begin.jsonl")
+    with open(path2, "w", encoding="utf-8") as fh:
+        fh.write(junk_line + "\n")
+    begin = pj.begin_effect(
+        path2, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+        effect_id="with-begin",
+    )
+    assert begin["ok"] is True
+    allow = pj.end_effect(
+        path2, slot_ref=_SLOT_REF, effect_id="with-begin",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert allow["ok"] is True
+
+
 def test_end_effect_refuses_unreadable_journal(tmp_dir):
     path = _journal(tmp_dir)
     begin = pj.begin_effect(
@@ -1756,11 +1810,11 @@ def test_concurrent_end_effect_exactly_one_close(tmp_dir):
         )
         processes.append(proc)
         proc.start()
+    results = [out_queue.get(timeout=_CONCURRENCY_JOIN_TIMEOUT) for _ in range(2)]
     for proc in processes:
         proc.join(timeout=_CONCURRENCY_JOIN_TIMEOUT)
     for proc in processes:
         assert proc.exitcode == 0, "worker exited with %s" % proc.exitcode
-    results = [out_queue.get(timeout=_CONCURRENCY_JOIN_TIMEOUT) for _ in range(2)]
     ok_count = sum(1 for r in results if r["ok"] is True)
     already_closed = [
         r for r in results

@@ -380,7 +380,8 @@ def _verify_end_effect_origin(journal_path, *, slot_ref, effect_id, kind):
     if not read_result["ok"]:
         if read_result["missing"]:
             return REASON_ORIGIN_MISSING
-        return read_result["reason"]
+        # None reason would read as "proceed" — refuse instead.
+        return read_result["reason"] or REASON_JOURNAL_UNREADABLE
     if read_result["torn"]:
         return REASON_JOURNAL_TORN
 
