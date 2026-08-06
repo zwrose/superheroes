@@ -871,3 +871,106 @@ def test_aggregate_replay_slot_ref_passes_partial_failure_report(tmp_path):
     report = pj.partial_failure_report([entry])
     assert pj.BLOCK_REPLAY_SLOT_MISMATCH not in {b["reason"] for b in report["blockers"]}
     assert replay["slotRef"] == _SLOT_REF
+
+
+@pytest.mark.parametrize("seg_reason,expected_reason", [
+    (pr.REASON_SEGMENTS_UNREADABLE, pj.REASON_JOURNAL_UNREADABLE),
+    (pr.REASON_SLOTS_DIR_INVALID, pr.REASON_SLOTS_DIR_INVALID),
+    (pr.REASON_SLOT_INVALID, pr.REASON_SLOT_INVALID),
+    (pr.REASON_JOURNAL_PATH_INVALID, pr.REASON_JOURNAL_PATH_INVALID),
+    (pr.REASON_JOURNAL_OUTSIDE_SLOT, pr.REASON_JOURNAL_OUTSIDE_SLOT),
+])
+def test_aggregate_replay_propagates_journal_segments_reason(
+    tmp_path, monkeypatch, seg_reason, expected_reason,
+):
+    slots_dir = _slots_dir(tmp_path)
+    _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+
+    def _fake_journal_segments(slots_dir_path, slot, journal_path):
+        return {"ok": False, "reason": seg_reason, "segments": []}
+
+    monkeypatch.setattr(pr, "journal_segments", _fake_journal_segments)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == expected_reason
+
+
+def _segment_with_live_journal(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    begin = {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    }
+    end = {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_END,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "outcome": pj.OUTCOME_APPLIED,
+        "at": _NOW2,
+    }
+    with open(seg1, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(begin, sort_keys=True) + "\n")
+        fh.write(json.dumps(end, sort_keys=True) + "\n")
+    return slots_dir, journal
+
+
+def test_aggregate_replay_symlink_live_journal_refuses(tmp_path, monkeypatch):
+    slots_dir, journal = _segment_with_live_journal(tmp_path)
+    slot_dir = os.path.dirname(journal)
+    real_live = os.path.join(slot_dir, "real-live.ndjson")
+    with open(real_live, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_BEGIN,
+            "effectId": "live-eff",
+            "slotRef": _SLOT_REF,
+            "kind": pj.KIND_APP_STARTED,
+            "at": _NOW,
+        }, sort_keys=True) + "\n")
+    os.symlink(real_live, journal)
+
+    real_journal_segments = pr.journal_segments
+
+    def _segments_ok(slots_dir_path, slot, journal_path):
+        result = real_journal_segments(slots_dir_path, slot, journal_path)
+        if not result["ok"] and result["reason"] == pr.REASON_JOURNAL_PATH_INVALID:
+            seg1 = _segment_path(slot_dir, journal, 1)
+            return {"ok": True, "reason": None, "segments": [seg1]}
+        return result
+
+    monkeypatch.setattr(pr, "journal_segments", _segments_ok)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_aggregate_replay_directory_live_journal_refuses(tmp_path):
+    slots_dir, journal = _segment_with_live_journal(tmp_path)
+    os.mkdir(journal)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_aggregate_replay_fifo_live_journal_refuses(tmp_path):
+    slots_dir, journal = _segment_with_live_journal(tmp_path)
+    os.mkfifo(journal)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_aggregate_replay_live_absent_with_segments_ok(tmp_path):
+    slots_dir, journal = _segment_with_live_journal(tmp_path)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert len(result["effects"]) == 1

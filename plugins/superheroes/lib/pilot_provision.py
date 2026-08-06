@@ -459,7 +459,8 @@ def _is_iso8601_utc(value):
     return dt.tzinfo is not None
 
 
-def _validate_weaker_acceptance(record):
+def validate_weaker_acceptance(record):
+    """Validate a weaker-acceptance record. Raises PilotProvisionError on refusal."""
     if not isinstance(record, dict):
         raise PilotProvisionError(REFUSAL_WEAKER_ACCEPTANCE_INVALID)
     if set(record.keys()) != _WEAKER_ACCEPTANCE_KEYS:
@@ -478,6 +479,9 @@ def _validate_weaker_acceptance(record):
         "acceptedAt": accepted_at,
         "reason": reason,
     }
+
+
+_validate_weaker_acceptance = validate_weaker_acceptance
 
 
 def gate_datastore_identity(verdict, *, weaker_acceptance=None):

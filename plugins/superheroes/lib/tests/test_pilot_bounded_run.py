@@ -5,6 +5,7 @@ import inspect
 import os
 import signal
 import stat
+import subprocess
 import sys
 import threading
 
@@ -549,4 +550,37 @@ def test_retain_output_false_timeout_kills_grandchild(private_tmp):
         pid = int(handle.read().strip())
     with pytest.raises(ProcessLookupError):
         os.kill(pid, 0)
+
+
+def test_retain_output_false_read_error_refuses_spawn_failed(private_tmp, monkeypatch):
+    # axis: mid-stream read error refuses rather than reporting zero bytes (#830 FB-5).
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    script = os.path.join(bin_dir, "echo.sh")
+    _write_executable(script, "#!/bin/sh\nprintf hello\n")
+
+    real_popen = subprocess.Popen
+
+    class _BrokenStdout:
+        def read(self, _size=-1):
+            raise OSError("read failed")
+
+        def close(self):
+            pass
+
+    def _popen_with_broken_stdout(*args, **kwargs):
+        proc = real_popen(*args, **kwargs)
+        proc.stdout = _BrokenStdout()
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", _popen_with_broken_stdout)
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=5,
+        max_output_bytes=4096,
+        retain_output=False,
+    )
+    assert result["outcome"] == pbr.OUTCOME_SPAWN_FAILED
+    assert result["exitCode"] is None
 

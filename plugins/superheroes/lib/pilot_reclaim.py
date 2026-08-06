@@ -1105,17 +1105,19 @@ def _segment_sequence_anomalies(sequences):
     return anomalies
 
 
-def _live_journal_readable(journal_path):
-    """True when journal_path exists and is a readable regular file."""
+def _live_journal_status(journal_path):
+    """Return ``absent``, ``present``, or ``unusable`` for the live journal path."""
     if not os.path.lexists(journal_path):
-        return False
+        return "absent"
     if os.path.islink(journal_path):
-        return False
+        return "unusable"
     try:
         st = os.stat(journal_path)
     except OSError:
-        return False
-    return stat.S_ISREG(st.st_mode)
+        return "unusable"
+    if not stat.S_ISREG(st.st_mode):
+        return "unusable"
+    return "present"
 
 
 def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref):
@@ -1147,14 +1149,7 @@ def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref):
         reclaim_reason = seg_result["reason"]
         if reclaim_reason == REASON_SEGMENTS_UNREADABLE:
             return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
-        if reclaim_reason in (
-            REASON_SLOTS_DIR_INVALID,
-            REASON_SLOT_INVALID,
-            REASON_JOURNAL_PATH_INVALID,
-            REASON_JOURNAL_OUTSIDE_SLOT,
-        ):
-            return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
-        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+        return _refuse(reclaim_reason)
 
     slot_dir = os.path.join(slots_dir_path, slot)
     segment_pairs = _list_journal_segments(slot_dir, journal_path)
@@ -1165,8 +1160,10 @@ def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref):
     segment_anomalies = _segment_sequence_anomalies(sequences)
     paths = [path for _seq, path in segment_pairs]
 
-    live_present = _live_journal_readable(journal_path)
-    if live_present:
+    live_status = _live_journal_status(journal_path)
+    if live_status == "unusable":
+        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+    if live_status == "present":
         paths.append(journal_path)
 
     if not paths:
