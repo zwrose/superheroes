@@ -25,6 +25,21 @@ SLOT = "slot1"
 SLOT_REF = "slot1@1"
 ACCOUNTS = [{"account": "owner", "role": "resource-owner"}]
 
+class _Opaque:
+    """An arbitrary object with no useful interface, with a PROCESS-STABLE repr.
+
+    DIAGNOSTIC PROBE for spike #816 — not a proposed fix. Plain `object()` here
+    made `ids=lambda v: repr(v)[:40]` (below) emit `<object object at 0x...>`,
+    whose address differs per process, so pytest-xdist workers collected
+    different test IDs and aborted with "Different tests were collected".
+    """
+
+    __slots__ = ()
+
+    def __repr__(self):
+        return "<opaque>"
+
+
 HOSTILE_VALUES = [
     [],
     {},
@@ -33,7 +48,7 @@ HOSTILE_VALUES = [
     0,
     "",
     b"x",
-    object(),
+    _Opaque(),
     [[]],
     {"k": set()},
     "x" * 10000,
