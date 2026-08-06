@@ -918,6 +918,35 @@ End phase (`_build_end_record`):
 Optional `reason` string — `end_effect()` accepts a `reason` with **any** outcome including
 `applied`, not only `not-applied` or `indeterminate`.
 
+### `end_effect()` origin verification
+
+`end_effect(journal_path, *, slot_ref, effect_id, kind, outcome, at, reason=None)` requires
+`kind` — the same effect kind the caller opened with `begin_effect`. The `kind` argument is used
+only for verification; it is **not** written into the end record. On-disk end record shapes and
+`schemaVersion` are unchanged.
+
+Before appending, the writer scans the journal (under the write lock, in the same lock hold as
+the append) for every parsed record whose `effectId` equals `effect_id`. Precedence (first match
+wins):
+
+| Condition | Refusal |
+|---|---|
+| zero records with `phase == "begin"` and this `effectId` | `journal-effect-origin-missing` |
+| more than one such begin-phase record | `journal-effect-origin-ambiguous` |
+| exactly one, but it fails begin-record validation | `journal-effect-origin-invalid` |
+| exactly one valid begin, but its `kind` != the `kind` argument | `journal-effect-origin-kind-mismatch` |
+| exactly one valid begin, but its `slotRef` != the `slot_ref` argument | `journal-effect-origin-slot-mismatch` |
+| any record with `phase == "end"` and this `effectId` already exists | `journal-effect-already-closed` |
+| otherwise | proceed with the append |
+
+A parseable record counts by its `phase` and `effectId` whether or not it is a valid record. An
+unparseable line cannot match. A torn trailing line is dropped before the scan (same rule as
+replay). A missing journal file is treated as `journal-effect-origin-missing` during close;
+replay still treats a missing journal as `journal-unreadable`.
+
+On any refusal, **nothing is appended** — the open `begin` stays open and replays as
+`possibly-applied`.
+
 ### Durable append
 
 Journal records are appended with durability and safety: opened `O_NOFOLLOW | O_NONBLOCK` with a
@@ -970,6 +999,12 @@ from proving applied or not-applied.
 | `journal-outcome-invalid` | `outcome` is not in `END_OUTCOMES` |
 | `journal-slot-ref-invalid` | `slotRef` does not parse |
 | `journal-effect-id-invalid` | `effectId` is missing or does not match the allowed pattern |
+| `journal-effect-origin-missing` | `end_effect`: no begin-phase record carries this `effectId` (including missing journal) |
+| `journal-effect-origin-ambiguous` | `end_effect`: more than one begin-phase record carries this `effectId` |
+| `journal-effect-origin-invalid` | `end_effect`: the single begin-phase record fails validation |
+| `journal-effect-origin-kind-mismatch` | `end_effect`: begin `kind` does not match the `kind` argument |
+| `journal-effect-origin-slot-mismatch` | `end_effect`: begin `slotRef` does not match the `slot_ref` argument |
+| `journal-effect-already-closed` | `end_effect`: an end-phase record for this `effectId` already exists |
 
 ## The partial-failure report
 

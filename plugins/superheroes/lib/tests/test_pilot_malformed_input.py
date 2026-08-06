@@ -269,6 +269,7 @@ def _invoke_journal(name, hostile, param):
             kwargs = {
                 "slot_ref": SLOT_REF,
                 "effect_id": "eff1",
+                "kind": pj.KIND_APP_STARTED,
                 "outcome": pj.OUTCOME_APPLIED,
                 "at": NOW,
             }
@@ -278,6 +279,8 @@ def _invoke_journal(name, hostile, param):
                 kwargs["slot_ref"] = hostile
             elif param == "effect_id":
                 kwargs["effect_id"] = hostile
+            elif param == "kind":
+                kwargs["kind"] = hostile
             elif param == "outcome":
                 kwargs["outcome"] = hostile
             elif param == "at":
@@ -584,7 +587,7 @@ def _journal_params(name):
     if name == "begin_effect":
         return ("journal_path", "slot_ref", "kind", "at", "detail", "effect_id")
     if name == "end_effect":
-        return ("journal_path", "slot_ref", "effect_id", "outcome", "at", "reason")
+        return ("journal_path", "slot_ref", "effect_id", "kind", "outcome", "at", "reason")
     if name == "effect":
         return ("journal_path", "slot_ref", "kind", "at", "detail", "effect_id")
     if name == "replay":

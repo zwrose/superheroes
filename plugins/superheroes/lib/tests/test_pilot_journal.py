@@ -207,7 +207,7 @@ def _begin_end_applied_effect(tmp_dir, kind, *, slot_ref=_SLOT_REF, effect_id="a
     )
     assert result["ok"] is True
     pj.end_effect(
-        path, slot_ref=slot_ref, effect_id=effect_id,
+        path, slot_ref=slot_ref, effect_id=effect_id, kind=kind,
         outcome=pj.OUTCOME_APPLIED, at=_TS2,
     )
     return path
@@ -229,7 +229,7 @@ def test_write_replay_round_trip_each_kind(tmp_dir, kind):
     )
     assert result["ok"] is True
     pj.end_effect(
-        path, slot_ref=_SLOT_REF, effect_id="roundtrip1",
+        path, slot_ref=_SLOT_REF, effect_id="roundtrip1", kind=kind,
         outcome=pj.OUTCOME_APPLIED, at=_TS2,
     )
     replayed = pj.replay(path)
@@ -1350,3 +1350,190 @@ def test_concurrent_append_flock_short_write_all_lines_parse(tmp_dir):
     assert len(lines) == expected
     for line in lines:
         json.loads(line)
+
+
+# --- WO-883 end_effect origin verification ---
+
+
+def _assert_effect_possibly_applied_no_end(path, effect_id):
+    replayed = pj.replay(path)
+    assert replayed["ok"] is True
+    matching = [e for e in replayed["effects"] if e["effectId"] == effect_id]
+    assert len(matching) == 1
+    assert matching[0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert matching[0]["endedAt"] is None
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == effect_id:
+                raise AssertionError("end record found for %s" % effect_id)
+
+
+def test_end_effect_refuses_nonexistent_id(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="missing1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    assert not os.path.exists(path)
+
+
+def test_end_effect_refuses_wrong_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="slot-mis",
+    )
+    assert begin["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref="slot-a@2", effect_id="slot-mis",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_SLOT_MISMATCH}
+    _assert_effect_possibly_applied_no_end(path, "slot-mis")
+
+
+def test_end_effect_refuses_wrong_kind_same_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="kind-mis",
+    )
+    assert begin["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="kind-mis",
+        kind=pj.KIND_BROWSER_SERVER_PROVISIONED,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+    _assert_effect_possibly_applied_no_end(path, "kind-mis")
+
+
+def test_end_effect_refuses_already_closed(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="closed1",
+    )
+    assert begin["ok"] is True
+    first = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="closed1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert first["ok"] is True
+    second = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="closed1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert second == {"ok": False, "reason": pj.REASON_ALREADY_CLOSED}
+    replayed = pj.replay(path)
+    assert replayed["effects"][0]["state"] == pj.STATE_APPLIED
+    end_lines = [
+        json.loads(ln) for ln in open(path, encoding="utf-8")
+        if ln.strip() and json.loads(ln).get("phase") == pj.PHASE_END
+    ]
+    assert len(end_lines) == 1
+
+
+def test_end_effect_refuses_ambiguous_origin(tmp_dir):
+    path = _journal(tmp_dir)
+    _write_line(path, _begin_record(effect_id="ambig1"))
+    _write_line(path, _begin_record(effect_id="ambig1"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="ambig1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_AMBIGUOUS}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            assert rec.get("phase") != pj.PHASE_END
+    replayed = pj.replay(path)
+    ambig_effects = [e for e in replayed["effects"] if e["effectId"] == "ambig1"]
+    assert len(ambig_effects) == 2
+    assert all(e["state"] == pj.STATE_POSSIBLY_APPLIED for e in ambig_effects)
+
+
+def test_end_effect_refuses_invalid_origin(tmp_dir):
+    path = _journal(tmp_dir)
+    bad_begin = _begin_record(effect_id="bad-origin1")
+    bad_begin["kind"] = "bogus-kind"
+    _write_line(path, bad_begin)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="bad-origin1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_INVALID}
+    _assert_effect_possibly_applied_no_end(path, "bad-origin1")
+
+
+def test_end_effect_refuses_invalid_kind(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="eff1",
+        kind="bogus-kind", outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_KIND_UNKNOWN}
+    assert not os.path.exists(path)
+
+
+def test_end_effect_refuses_unreadable_journal(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="unread1",
+    )
+    assert begin["ok"] is True
+    with open(path, "ab") as fh:
+        fh.write(b"\xff\xfe\n")
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="unread1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+    with open(path, "rb") as fh:
+        content = fh.read()
+    assert b'"phase": "end"' not in content
+    replayed = pj.replay(path)
+    assert replayed["ok"] is False
+    assert replayed["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_provision_server_refuses_wrong_kind_effect_id(tmp_dir):
+    import pilot_browser as pb  # noqa: E402
+
+    path = _journal(tmp_dir)
+    sock = os.path.join(tmp_dir, "sock")
+    os.makedirs(sock)
+    pin = {
+        "schemaVersion": 1,
+        "version": "1.40.0",
+        "integrityDigest": "a" * 64,
+    }
+    begin = pb.begin_provision_server(path, slot_ref=_SLOT_REF, at=_TS)
+    assert begin["ok"] is True
+    other = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="other-kind",
+    )
+    assert other["ok"] is True
+    result = pb.provision_server(
+        path,
+        slot_ref=_SLOT_REF,
+        generation=1,
+        socket_dir=sock,
+        server_pid=100,
+        browser_pid=101,
+        pin=pin,
+        created_at=_TS,
+        begin_at=_TS,
+        ppid_of=lambda _pid: 100,
+        effect_id=other["effectId"],
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pb.REFUSAL_SERVER_RECORD_INVALID
+    assert result.get("detail") == pj.REASON_ORIGIN_KIND_MISMATCH
+    replayed = pj.replay(path)
+    prov = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_PROVISIONED]
+    assert len(prov) == 1
+    assert prov[0]["state"] == pj.STATE_POSSIBLY_APPLIED
