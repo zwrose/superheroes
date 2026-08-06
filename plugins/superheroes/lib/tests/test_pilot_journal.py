@@ -334,12 +334,34 @@ def test_invalid_non_z_timestamp(tmp_dir):
     assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
 
 
+def _assert_replayed_effect(effect, *, effect_id, kind, scope, slot_ref, state, outcome):
+    assert effect["effectId"] == effect_id
+    assert effect["kind"] == kind
+    assert effect["scope"] == scope
+    assert effect["slotRef"] == slot_ref
+    assert effect["state"] == state
+    assert effect["outcome"] == outcome
+
+
 def test_orphan_end(tmp_dir):
     path = _journal(tmp_dir)
     _write_line(path, _end_record(effect_id="orphan1"))
     replayed = pj.replay(path)
-    assert replayed["anomalies"]
-    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert replayed["ok"] is True
+    assert replayed["torn"] is False
+    assert replayed["anomalies"] == [
+        {"effectId": "orphan1", "line": 1, "reason": "orphan-end"},
+    ]
+    assert len(replayed["effects"]) == 1
+    _assert_replayed_effect(
+        replayed["effects"][0],
+        effect_id="orphan1",
+        kind=pj.KIND_UNKNOWN,
+        scope=pj.SCOPE_SHARED,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=pj.OUTCOME_APPLIED,
+    )
 
 
 def test_duplicate_begin(tmp_dir):
@@ -358,8 +380,39 @@ def test_duplicate_end(tmp_dir):
     _write_line(path, _end_record(effect_id="dupend1"))
     _write_line(path, _end_record(effect_id="dupend1"))
     replayed = pj.replay(path)
-    assert replayed["anomalies"]
-    assert all(e["state"] == pj.STATE_POSSIBLY_APPLIED for e in replayed["effects"])
+    assert replayed["ok"] is True
+    assert replayed["torn"] is False
+    assert replayed["anomalies"] == [
+        {"effectId": "dupend1", "line": 3, "reason": "duplicate-end"},
+    ]
+    assert len(replayed["effects"]) == 3
+    _assert_replayed_effect(
+        replayed["effects"][0],
+        effect_id="dupend1",
+        kind=pj.KIND_APP_STARTED,
+        scope=pj.SCOPE_SLOT,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=None,
+    )
+    _assert_replayed_effect(
+        replayed["effects"][1],
+        effect_id="dupend1",
+        kind=pj.KIND_UNKNOWN,
+        scope=pj.SCOPE_SHARED,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=pj.OUTCOME_APPLIED,
+    )
+    _assert_replayed_effect(
+        replayed["effects"][2],
+        effect_id="dupend1",
+        kind=pj.KIND_UNKNOWN,
+        scope=pj.SCOPE_SHARED,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=pj.OUTCOME_APPLIED,
+    )
 
 
 def test_end_before_begin(tmp_dir):
@@ -376,8 +429,22 @@ def test_slot_ref_disagreement(tmp_dir):
     _write_line(path, _begin_record(effect_id="mismatch1", slot_ref=_SLOT_REF))
     _write_line(path, _end_record(effect_id="mismatch1", slot_ref="slot-a@2"))
     replayed = pj.replay(path)
-    assert replayed["anomalies"]
-    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert replayed["ok"] is True
+    assert replayed["torn"] is False
+    assert replayed["anomalies"] == [
+        {"effectId": "mismatch1", "reason": "slot-ref-mismatch"},
+    ]
+    assert "line" not in replayed["anomalies"][0]
+    assert len(replayed["effects"]) == 1
+    _assert_replayed_effect(
+        replayed["effects"][0],
+        effect_id="mismatch1",
+        kind=pj.KIND_APP_STARTED,
+        scope=pj.SCOPE_SLOT,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=None,
+    )
 
 
 def test_effect_clean_exit_applied(tmp_dir):
