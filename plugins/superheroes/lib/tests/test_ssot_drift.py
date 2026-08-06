@@ -637,16 +637,16 @@ def _showrunner_slot_write_bullet():
     return m.group(0)
 
 
-def _workhorse_close_link_directive():
-    """§11's close-link directive paragraph — the body's first line is the close link."""
+def _workhorse_close_link_directive_sentence():
+    """§11's close-link directive sentence — the body's first line is the close link."""
     section = _workhorse_section_11()
     m = re.search(
-        r"\*\*The body's first line is the close link.*?(?=\n\n\*\*The owner half\*\*)",
+        r"\*\*The body's first line is the close link.*?\*\*",
         section,
         re.DOTALL,
     )
     assert m, (
-        "workhorse/SKILL.md §11 close-link directive paragraph not found (moved or reworded?)"
+        "workhorse/SKILL.md §11 close-link directive sentence not found (moved or reworded?)"
     )
     return m.group(0)
 
@@ -874,7 +874,7 @@ def test_pr_body_skeleton_opens_with_the_close_link():
     A close-state sweep of 20 merged PRs found 5 shipped issues left open for want of this one
     mechanical line — a 25% escape rate the template owns, not the builder's memory.
     """
-    directive = _workhorse_close_link_directive()
+    directive = _workhorse_close_link_directive_sentence()
     assert "`Closes #<issue>.`" in directive, (
         "§11 close-link directive no longer names the `Closes #<issue>.` first line"
     )
