@@ -793,30 +793,38 @@ PR-body markers from the retired execution spine survive independently of it:
   are none. Ratification amendment F2: disclosed degradations are **prose** in every PR
   examined, so without a marker the omission floor's third row would be a judgment call
   rather than a mechanism.
-- **Vet-receipt markers** — three markers ratified from #672, **all advisor-authored at vet, after
-  handback**. Two of them live in the vet-receipt **comment**, not the PR body, so this bullet names a
+- **Vet-receipt markers** — three markers ratified from #672, **written at vet, after handback** —
+  except the one the builder pre-stamps (below). Two of them live in the vet-receipt **comment**, not
+  the PR body, so this bullet names a
   **PR-artifact** family rather than extending the body-marker family above; each marker's home and
   lifecycle is part of the contract:
   - `<!-- superheroes:vet-receipt -->` — the **first line of the vet-receipt comment**.
   - `<!-- superheroes:pending-proposals -->` — **inside that same comment**, immediately above the
     pending disposition set, whose body is either the items or the literal **None**.
   - `<!-- superheroes:advisor-vet -->` — the only one in the **PR body**: the **append-only** boundary
-    the advisor stamps inside the existing `## Advisor vet` owner-half slot.
+    of the advisor's write inside the `## Advisor vet` owner-half slot. Unlike its two siblings it is
+    **builder-emitted at handback** — the workhorse charter's §11 skeleton stamps it into the empty
+    slot, together with an advisor-facing reminder comment beneath it that the advisor's write
+    replaces — and the advisor writes **beneath** it, re-stamping it only when a body rewrite dropped it.
 
   Shape and contents live in `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` — the
   authoritative home; this bullet names the literals and their locations, and does not restate the
   receipt's shape.
 
-  **Lifecycle — and why nothing flags their absence.** Unlike every marker above, these are **not a
-  builder obligation and not a review-seat check**: a build's pre-handback `review-code` runs in
+  **Lifecycle — and why nothing flags their absence.** `advisor-vet` **is** a builder obligation
+  (the §11 skeleton stamps it); the other two are not, and **none of the three is a review-seat
+  check**: a build's pre-handback `review-code` runs in
   **branch mode**, before any PR body or vet exists, so a missing vet-receipt marker at review time is
   the **normal** state and must never be emitted as a finding. (The §11 drift test enumerates this
   section's marker inventory and holds this family **out** of the copy-holders for exactly that reason —
   a docs-consistency check, not a consumer of these markers at review time.) Their absence becomes meaningful only
   **at vet or re-vet**, and only to the advisor. They exist as grep anchors for the **advisor's own**
   backstops: `pending-proposals` is what makes a carried item's age inspectable (an item proposed two
-  or more vets ago owes an escalation line), and `advisor-vet` is how a body rewrite that re-created
-  the slot heading while dropping the advisor's write gets noticed.
+  or more vets ago owes an escalation line), and the **reminder comment** the builder seeds beneath
+  `advisor-vet` is how a body rewrite that re-created the slot heading while dropping the advisor's
+  write gets noticed: a slot still carrying the reminder is a vet not yet written, while a slot
+  carrying neither reminder nor verdict is a write that was dropped. Marker-presence no longer
+  separates those two states, because the builder stamps the marker.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that

@@ -138,19 +138,25 @@ to whatever the receipt happens to look like.
 
 ## Markers
 
-Three markers, **all written by the advisor at vet time**, after handback:
+Three markers. Two are **written by the advisor at vet time**, after handback; the third —
+`advisor-vet` — is **stamped by the builder** into the empty slot at handback, and you write beneath
+it:
 
 - `<!-- superheroes:vet-receipt -->` — the **first line** of the receipt.
 - `<!-- superheroes:pending-proposals -->` — immediately above spine field 7's **pending** set (its
   body is the items, or the literal `None`).
-- `<!-- superheroes:advisor-vet -->` — stamped inside the PR's `## Advisor vet` owner-half slot,
-  immediately above what you write there. The slot is **append-only and yours**: you edit your own
-  prior text in place, never the builder's prose. **What this marker detects is the hidden case:** a
-  body rewrite that **re-creates the heading but drops your text** leaves the slot looking present and
-  saying nothing — that is a slot whose text was dropped, distinct from one you have not written yet.
-  (A rewrite that drops the heading entirely is visible without it.) The marker alone is **not
-  sufficient**: a slot can be marker-present and text-stale. The showrunner charter's **duty 4**
-  backstop is where the check and remedy live — follow that, not a marker-keyed rule here.
+- `<!-- superheroes:advisor-vet -->` — the boundary of your write inside the PR's `## Advisor vet`
+  owner-half slot. **The builder stamps it for you** (workhorse charter §11), together with a
+  reminder comment beneath it; you write **beneath the marker**, and your write **replaces the
+  reminder**. The slot is **append-only and yours**: you edit your own prior text in place, never the
+  builder's prose. **What the reminder detects is the hidden case:** a body rewrite that
+  **re-creates the heading but drops your text** leaves the slot looking present and saying nothing
+  — a slot carrying **neither** reminder nor verdict is a write that was dropped, distinct from one
+  still carrying the reminder, which is a vet not yet written. (A rewrite that drops the heading
+  entirely is visible without either.) Marker-presence alone is **not sufficient** and no longer
+  separates those two states: re-stamp the marker when a rewrite dropped it, and remember a slot can
+  be marker-present and text-stale. The showrunner charter's **duty 4** backstop is where the check
+  and remedy live — follow that, not a marker-keyed rule here.
 
 **No review seat checks these at review time.** A build's pre-handback review runs in branch mode,
 before a PR body or a vet exists, so their absence during a review is the normal state and is never a

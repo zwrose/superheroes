@@ -662,7 +662,16 @@ hold, and what must I route?* **Consequence up, mechanism down** — the owner h
 consequences; the build record carries mechanism. The owner half is **not** a summary of the build
 record.
 
-**The owner half** — three fixed headings, always present in this order, each filled or explicitly
+**The body's first line is the close link — `Closes #<issue>.` on its own, above every heading.** A
+close-state sweep of the last 20 merged PRs found **five shipped issues left open** because their
+bodies opened straight into `## What's changing` and carried no functional closing keyword, while
+the builds that opened with `Closes #<issue>.` auto-closed cleanly. A 25% escape rate on one
+mechanical line is the template's job, not the builder's memory. When this PR genuinely must **not**
+close the issue it references — a parent epic, a tracking issue — the first line still names the
+link, with a **non-closing** verb per the issue-linking discipline below. What it is never is
+**absent**.
+
+**The owner half** — the close line above, then three fixed headings, always present in this order, each filled or explicitly
 marked **N/A** where the contract allows, then **`## Advisor vet`**. The owner half is **usually
 short** — a few lines even on a very large PR — and that is the normal case, not a failure of the
 format.
@@ -689,9 +698,26 @@ format.
   — not a silent **None** on the floor's third row. The ranked entry-point levels and the
   presentation standard live in `rubric/review-discipline.md` — cite that home rather than restating
   the ranking here.
-- **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. **Shape and
-  contents** live in `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that
-  home); **when it is written** is the showrunner charter's own duty. If you rewrite the PR body
+- **`## Advisor vet`** — an empty slot **the builder creates and pre-stamps**; the advisor writes
+  into it. Emit exactly three things, in this order and nothing between them: the `## Advisor vet`
+  heading; then the marker `<!-- superheroes:advisor-vet -->` on its own line; then, as its **own
+  separate comment below the marker — never nested inside it**, the advisor reminder, verbatim:
+
+  ```html
+  <!-- advisor: BEFORE writing this slot, read skills/showrunner/reference/vet-receipt.md.
+       Post the receipt comment FIRST (vet-receipt marker, 8-field spine, explicit None,
+       triggered fields incl. escalation lines), THEN replace this comment with your verdict +
+       receipt pointer under the advisor-vet marker. -->
+  ```
+
+  You stamp the marker so the advisor never has to, and the advisor's write **replaces the
+  reminder** — which is what makes the slot's three states readable without anyone's context:
+  reminder still present → **vet receipt owed**; verdict present, reminder gone → **vetted**;
+  **neither** present → an advisor write that a body rewrite dropped. Marker-absence used to carry
+  that last signal; once you stamp the marker it cannot, and the reminder carries it instead.
+  **Shape and contents** of what the advisor writes — the owner-half register — live in
+  `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that home); **when it is
+  written** is the showrunner charter's own duty. If you rewrite the PR body
   later, **carry the slot's existing text forward byte-for-byte** — advisor-authored content is
   never yours to edit, reflow, summarize, shorten, or drop, and re-creating the heading over an
   advisor write you deleted **is the defect, not compliance with the rule** (the advisor's marker
