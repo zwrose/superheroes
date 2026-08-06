@@ -1776,6 +1776,9 @@ def verify_result_fault(artifact):
     A recognized token is returned unchanged to the fold — including `fail` and `timeout`, which are
     genuine outcomes the fold halts on. Only a missing, None, non-string, or unrecognized `result`
     is a fault: those are precisely the values `_fold_verify` cannot tell apart from a real failure.
+
+    axis: REFUSAL of an unexpressible verify result — not whether the gate passed. A recognized
+    `fail`/`timeout` is expressible, so it is accepted here and halts in the fold as it always has.
     """
     if not isinstance(artifact, dict):
         artifact = {}
@@ -1801,31 +1804,42 @@ def _audit_result_entry_fault(entry, index, target_ids, seen_ids):
     can never match a target, so it is the audit-side twin of the #845 seat mis-key. An EMPTY set
     means the driver has no targets to key against, so no id is judged (mirroring the seat-key
     guard's empty-key rule) — never a false refusal.
+
+    axis: REFUSAL of a ruling the fold cannot honor as written — not whether the ruling is correct.
+    Each branch below bites on one distinct way an entry fails to express a usable answer.
     """
     where = "results[%d]" % index
+    # axis: shape of the entry itself — a non-object can carry no ruling at all.
     if not isinstance(entry, dict):
         return "%s is %s, not a ruling object; expected {\"id\", \"ruling\", \"reason\", ...}" % (
             where, type(entry).__name__)
     rid = entry.get("id")
+    # axis: presence of a binding id — without one the ruling can never reach any finding.
     if not isinstance(rid, str) or not rid:
         return ("%s has no usable `id` (got %r) — a ruling with no finding id can never reach its "
                 "target; expected the target's staged id" % (where, rid))
+    # axis: that the id BINDS to a real target of this round — the audit-side twin of the #845 mis-key.
     if target_ids and rid not in target_ids:
         return ("%s is keyed to %r, which is not an audit target of this round; targets: %s; "
                 "re-key the ruling to its target's staged id" % (where, rid,
                                                                 ", ".join(sorted(target_ids))))
+    # axis: uniqueness of the binding — two rulings for one finding leave the fold able to honor none.
     if rid in seen_ids:
         return ("%s repeats id %r — more than one ruling claiming one finding is ambiguous and "
                 "none can be honored; submit exactly one ruling per target" % (where, rid))
     ruling = entry.get("ruling")
+    # axis: that the verdict token is one the fold has an arm for — never a near-miss word.
     if not isinstance(ruling, str) or ruling not in audits.AUDIT_RULINGS:
         return ("%s has an unrecognized `ruling` (got %r); expected one of: %s" % (
             where, ruling, ", ".join(audits.AUDIT_RULINGS)))
     reason = entry.get("reason")
     has_reason = isinstance(reason, str) and bool(reason.strip())
+    # axis: that a CLEARING ruling carries its grounds — a bare discharge is the unproven claim.
     if ruling == "discharged" and not has_reason:
         return ("%s rules `discharged` with no `reason` — a bare discharge is the unproven claim "
                 "the audit fold exists to reject; expected a non-empty `reason` string" % where)
+    # axis: that the NEW-ISSUE payload is usable — the #880 loss, where the receipt understated the
+    # auditor's ruling because `newIssues` carried nothing the fold could emit.
     if ruling == "discharged-but-new-issue" and not audits.has_usable_new_issues(
             entry.get("newIssues")):
         detail = ("%s rules `discharged-but-new-issue` with no usable `newIssues` (got %r); "
@@ -1846,10 +1860,13 @@ def audit_results_fault(artifact, targets):
     (the collection-manifest authentication) is a trust boundary, not a shape, and stays entirely in
     the fold: a correctly-shaped ruling the manifest cannot authenticate must still fold to
     not-discharged, never be handed back for a "corrected" resubmit.
+
+    axis: REFUSAL of an audits artifact that cannot express its rulings — not the rulings' merit.
     """
     if not isinstance(artifact, dict) or "results" not in artifact:
         return None
     results = artifact["results"]
+    # axis: the container's shape — a non-list `results` silently folds to zero rulings today.
     if not isinstance(results, list):
         return ("audits artifact `results` is %s, not a list of ruling objects; expected "
                 "{\"results\": [{\"id\", \"ruling\", \"reason\", ...}]}; resubmit the same "
@@ -2876,6 +2893,10 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
     # immutable state, so the loss is unrecoverable once folded; refusing here keeps the pending step
     # alive and makes recovery a corrected resubmit. The journalled outcome is a NON-TERMINAL refusal
     # event — the loop is never halted by a shape fault.
+    #
+    # axis (both wirings): that the refusal reaches the SUBMIT path — a guard that exists but is not
+    # called at the chokepoint protects nothing. Placed AFTER the echo/hash fences so a stale or
+    # forked submit keeps its own reason, and BEFORE the fold so no state mutates on a refusal.
     if phase == P_VERIFY:
         fault = verify_result_fault(artifact)
         if fault:
