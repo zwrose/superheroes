@@ -569,6 +569,8 @@ def _spawn_attempt(
     child_env[hb.LAUNCH_ID_ENV] = launch_id
     if slot is not None and generation is not None:
         child_env[SLOT_REF_ENV] = pilot_slot.format_slot_ref(slot, generation)
+    else:
+        child_env.pop(SLOT_REF_ENV, None)
     resolved = ll.resolve_root(repo_root, env=env)
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]

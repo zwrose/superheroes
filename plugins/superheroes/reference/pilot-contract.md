@@ -1212,11 +1212,15 @@ and `boundary` keyword arguments and passes them through on the refusal path via
 is still attributable to its slot. The `launch` CLI exposes the same three fields (`--slot`,
 `--generation`, `--boundary`).
 
-**Results only, never policy.** The block carries verification outcomes and a policy digest — no
-origins, identities, connection strings, or mintable-account names. See [Results travel, never
-policy](#results-travel-never-policy) for the `assert_results_only` mechanism. The residual is
-plain: `acceptanceReason` is advisor-authored prose in a durable file, and the guard over it is the
-same exact-match `assert_results_only` with the same documented coverage limit.
+**Results-only scan at the durable write boundary.** `boundary_record` accepts an optional
+`material` argument; when the caller passes it, the composer scans the record it is about to return
+with `assert_results_only` against that policy material and refuses with
+`ledger-boundary-material-in-record` if policy material appears in the composed block. Production
+callers on the `--boundary` CLI route and the `reserve`/`fold` path do not pass `material` by design
+— S2's rule is that policy never travels to where the builder or ledger writer can hold it. The
+advisor holds the policy and **must** pass `material` when it wants that scan. When `material` is not
+passed, `acceptanceReason` is unscanned caller-supplied prose in a durable file; that residual is
+stated here rather than implied clean.
 
 ### Slot-grammar refusal tokens
 
@@ -1828,6 +1832,7 @@ live journal, see [Segment-aware aggregate replay](#segment-aware-aggregate-repl
 | `reclaim-rotate-segment-exists` | target segment path already exists |
 | `reclaim-rotate-failed` | `os.rename` of live journal to segment fails |
 | `reclaim-segments-unreadable` | slot directory cannot be listed for segment enumeration |
+| `reclaim-aggregate-lock-unavailable` | `aggregate_replay`: `slot_lock` times out while listing retained journal segments and reading live-journal status |
 
 ### The reassignment acceptance probe
 

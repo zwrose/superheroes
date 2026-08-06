@@ -2396,6 +2396,208 @@ def test_spawn_attempt_omits_slot_ref_without_generation(tmp_path, monkeypatch):
     assert L.SLOT_REF_ENV not in captured
 
 
+def test_spawn_attempt_strips_inherited_slot_ref_when_unslotted(tmp_path, monkeypatch):
+    # axis: unslotted spawn must not inherit SUPERHEROES_SLOT_REF from caller env
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-strip-inherited"
+    ll.declare_batch(repo, "batch-strip-inherited", 1)
+    ll.append(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-strip-inherited",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424245
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    stale_ref = "old-slot@3"
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: stale_ref},
+        spawn_fn=capture_spawn,
+    )
+    assert result["ok"] is True
+    assert L.SLOT_REF_ENV not in captured
+
+
+def test_spawn_attempt_replaces_inherited_slot_ref_when_slotted(tmp_path, monkeypatch):
+    # axis: slotted spawn exports formatted ref, not inherited stale value
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-replace-inherited"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-spawn-env",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424246
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    stale_ref = "old-slot@3"
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: stale_ref},
+        spawn_fn=capture_spawn,
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is True
+    assert captured.get(L.SLOT_REF_ENV) == "slot-a@1"
+
+
+def test_spawn_attempt_strips_slot_ref_from_process_env_when_unslotted(
+    tmp_path, monkeypatch,
+):
+    # axis: env=None inherits os.environ but must still strip SUPERHEROES_SLOT_REF
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(L.SLOT_REF_ENV, "old-slot@3")
+    launch_id = "launch-strip-process-env"
+    ll.declare_batch(repo, "batch-strip-process", 1)
+    ll.append(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-strip-process",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424247
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env=None,
+        spawn_fn=capture_spawn,
+    )
+    assert result["ok"] is True
+    assert L.SLOT_REF_ENV not in captured
+
+
+def test_spawn_attempt_strips_empty_string_slot_ref_when_unslotted(tmp_path, monkeypatch):
+    # axis: empty SUPERHEROES_SLOT_REF in caller env must not reach child
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-strip-empty-ref"
+    ll.declare_batch(repo, "batch-strip-empty", 1)
+    ll.append(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-strip-empty",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424248
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: ""},
+        spawn_fn=capture_spawn,
+    )
+    assert result["ok"] is True
+    assert L.SLOT_REF_ENV not in captured
+
+
 def test_append_under_lock_refuses_a_fifo_lock_without_blocking(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     ledger_root = _ledger_env(tmp_path, monkeypatch)
