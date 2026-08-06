@@ -1753,8 +1753,9 @@ _VERIFY_SKIP = ("skipped", "none", "unverified")
 # The verify vocabulary the fold RECOGNIZES. `pass` advances; the skip tokens take the skip arm;
 # `fail` and `timeout` are real reported outcomes the fold halts on deliberately. A value OUTSIDE
 # this set is not an outcome anyone reported — it is a mis-shaped artifact.
-# `test_verify_vocabulary_matches_the_fold` pins each token against the fold arm it lands in, so
-# this tuple can never drift away from `_fold_verify`.
+# `test_verify_vocabulary_census` holds this tuple equal to the token/fold-arm table, and
+# `test_submit_verify_recognized_token_accepted` drives each token through the guard to the arm it
+# lands in — together they keep this tuple from drifting away from `_fold_verify`.
 _VERIFY_RESULTS = ("pass", "fail", "timeout") + _VERIFY_SKIP
 
 # Keys of the shapes real orchestrators submitted instead of `{"result": ...}` — the raw runner
@@ -1839,10 +1840,11 @@ def _audit_result_entry_fault(entry, index, target_ids):
     if not isinstance(ruling, str) or ruling not in audits.AUDIT_RULINGS:
         return ("%s has an unrecognized `ruling` (got %r); expected one of: %s" % (
             where, ruling, ", ".join(audits.AUDIT_RULINGS)))
-    reason = entry.get("reason")
-    has_reason = isinstance(reason, str) and bool(reason.strip())
     # axis: that a CLEARING ruling carries its grounds — a bare discharge is the unproven claim.
-    if ruling == "discharged" and not has_reason:
+    # The grounds test is `audits.has_usable_reason`, the fold's OWN predicate — one function, not a
+    # second copy of the rule, so the guard can never accept a reason the fold rejects (or refuse one
+    # it would honor). Same shared-home discipline as `has_usable_new_issues` below.
+    if ruling == "discharged" and not audits.has_usable_reason(entry.get("reason")):
         return ("%s rules `discharged` with no `reason` — a bare discharge is the unproven claim "
                 "the audit fold exists to reject; expected a non-empty `reason` string" % where)
     # axis: that the NEW-ISSUE payload is usable — the #880 loss, where the receipt understated the

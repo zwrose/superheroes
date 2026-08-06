@@ -442,9 +442,11 @@ def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
     raise AssertionError("never reached %s within %d steps" % (target_phase, max_steps))
 
 
-def _at(tmp_path, target_phase):
+def _at(tmp_path, target_phase, cfg=None):
+    """Drive a fresh session to `target_phase`. `cfg` overrides the default profile so a test can
+    pin real config the guard must stay blind to (e.g. a configured `verifyCommand`)."""
     d = str(tmp_path)
-    n = _drive_to_phase(d, _cfg(), _responder(round1_findings=_A_FINDING), target_phase)
+    n = _drive_to_phase(d, cfg or _cfg(), _responder(round1_findings=_A_FINDING), target_phase)
     return d, n
 
 
@@ -532,6 +534,32 @@ def test_submit_verify_recognized_token_accepted(tmp_path, token, decision_kind)
         assert not any(k and k.startswith("verify-") for k in kinds), kinds
     else:
         assert decision_kind in kinds, kinds
+
+
+@pytest.mark.parametrize("token", list(RD._VERIFY_SKIP), ids=list(RD._VERIFY_SKIP))
+def test_submit_verify_skip_accepted_with_a_configured_command(tmp_path, token):
+    """A skip token is ACCEPTED by the shape guard even when a REAL verify command is configured —
+    the guard is deliberately CONFIG-BLIND (vocabulary only) and the FOLD owns the fail-closed
+    `verify-skip-but-configured` halt.
+
+    axis: that the guard never refuses an HONESTLY reported skip. A runner that truthfully says
+    `skipped`/`none`/`unverified` while a command is configured cannot "correct" that artifact
+    without lying, so a config-aware refusal here would trap the orchestrator in an unresolvable
+    refusal loop — the exact class this guard exists to remove. The sibling
+    `test_verify_skip_with_configured_command_halts` drives `run_loop`, which calls `_fold` directly
+    and never reaches the guard, so it does not pin this split: guard ACCEPTS, fold DECIDES.
+    """
+    d, n = _at(tmp_path, RD.P_VERIFY, cfg=_cfg(verifyCommand="pytest -q"))
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], {"result": token})
+    assert out["ok"] is True, out                      # the GUARD accepts
+    ok, state = RD.load_state(d)
+    assert ok
+    kinds = [dec.get("kind") for dec in state.get("decisions", [])]
+    assert "verify-skip-but-configured" in kinds, kinds   # the FOLD halts
+    assert "verify-skipped" not in kinds, kinds          # never the unverified-advance arm
+    assert state.get("terminal") == "halted", state.get("terminal")
+    assert state["certification"]["shape"] is None
+    assert "pytest -q" in state["certification"]["reason"]
 
 
 def test_submit_verify_guard_does_not_preempt_fences(tmp_path):
@@ -646,7 +674,13 @@ def test_submit_audits_non_dict_entry_refused(tmp_path):
     {},
     {"ruling": "not-discharged", "reason": "still broken"},
     {"ruling": "not-discharged"},                      # reason is optional on not-discharged
-    {"ruling": "discharged-but-new-issue", "newIssues": [{"title": "new"}]},
+    # The candidate is FULLY shaped on purpose. A title-only candidate is accepted by both the guard
+    # and the fold today (usability is dict-shape, deliberately not diff-scoped), but `_fold_scoped`
+    # then runs it through `mechanical_compile`, which drops an uncited `file:line`-less candidate
+    # and whose drop list that fold does not surface. This fixture must not read as the project
+    # asserting that a thin candidate travels safely.
+    {"ruling": "discharged-but-new-issue",
+     "newIssues": [{"title": "new", "severity": "Important", "file": "f.py", "line": 1}]},
 ], ids=["discharged", "not-discharged-with-reason", "not-discharged-bare", "discharged-new-issue"])
 def test_submit_audits_wellformed_accepted(tmp_path, over):
     d, n = _at(tmp_path, RD.P_AUDITS)
@@ -662,6 +696,26 @@ def test_submit_audits_silence_still_accepted(tmp_path, artifact):
     cannot escape."""
     d, n = _at(tmp_path, RD.P_AUDITS)
     assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)["ok"] is True
+
+
+def test_submit_audits_guard_does_not_preempt_fences(tmp_path):
+    """The audits twin of `test_submit_verify_guard_does_not_preempt_fences`: a mis-shaped AUDITS
+    artifact submitted with a stale attempt or a bad state-hash keeps the ECHO/HASH fence reason —
+    the shape refusal never surfaces in front of them.
+
+    axis: the guard's PLACEMENT in `cmd_submit` — after both anti-stale/fork fences. A regression
+    that hoists the `P_AUDITS` block above the hash fence would answer a forked submit with a
+    "correct your artifact" reason, inviting a resubmit against state that has already moved.
+    """
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    bad, _targets = _audit_artifact(n, ruling="discharged-but-new-issue",
+                                    newIssue="found another bug")
+    stale = RD.cmd_submit(d, n["phase"], n["attempt"] + 3, n["expectedStateHash"], bad)
+    assert stale["ok"] is False and "echo" in stale["reason"], stale
+    assert "newIssues" not in stale["reason"], stale
+    hash_bad = RD.cmd_submit(d, n["phase"], n["attempt"], "deadbeef", bad)
+    assert hash_bad["ok"] is False and "hash" in hash_bad["reason"], hash_bad
+    assert "newIssues" not in hash_bad["reason"], hash_bad
 
 
 def test_submit_audits_unauthenticated_ruling_still_folds(tmp_path):
@@ -713,12 +767,36 @@ def test_audit_results_fault_pure():
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
-def test_has_usable_new_issues_matches_the_fold():
-    """The guard's usability test and the fold's are ONE function — pinned, not merely intended."""
+def test_new_issues_usability_agrees_with_the_running_fold():
+    """What the guard ACCEPTS is what the fold can USE — proven by running `apply_audit_results`
+    itself, never by re-asserting `has_usable_new_issues` against its own callee.
+
+    axis: DIVERGENCE between the guard's usability predicate and the fold's actual behavior. If the
+    fold grows an inline rule the predicate does not share (say, also demanding a `title`), the #880
+    split-brain returns — the guard admits a `discharged-but-new-issue` claim the fold then fails
+    closed on, and the build loses the ruling it submitted. So each payload is driven through the
+    REAL fold: usable ⇒ the finding clears with its candidate emitted; unusable ⇒ it falls closed.
+    """
     AU = _load("audits")
-    for candidates in ([{"title": "x"}], [], "str", None, [1, 2], [{"a": 1}, 2]):
-        assert AU.has_usable_new_issues(candidates) == bool(
-            AU._valid_new_issues(candidates, "origin"))
+    target = {"id": "v0", "file": "f.py", "line": 1, "title": "bug", "severity": "Important"}
+    for candidates in ([{"title": "x"}], [{"a": 1}], [{}], [{"a": 1}, 2],
+                       [], "str", None, [1, 2]):
+        usable = AU.has_usable_new_issues(candidates)
+        out = AU.apply_audit_results(
+            [target],
+            [{"id": "v0", "ruling": "discharged-but-new-issue", "reason": "fixed but leaked",
+              "newIssues": candidates}])
+        folded = out["audits"][0]["ruling"]
+        if usable:
+            assert folded == "discharged-but-new-issue", (candidates, out)
+            assert out["discharged"] == ["v0"], (candidates, out)
+            assert out["newIssues"], (candidates, out)
+            assert out["malformed"] == [], (candidates, out)
+        else:
+            assert folded == "not-discharged", (candidates, out)
+            assert out["notDischarged"] == ["v0"], (candidates, out)
+            assert out["discharged"] == [], (candidates, out)
+            assert out["newIssues"] == [], (candidates, out)
 
 
 def test_happy_path_audited_chain_certification(tmp_path):

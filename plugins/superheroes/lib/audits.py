@@ -43,6 +43,16 @@ def has_usable_new_issues(candidates):
     return bool(_valid_new_issues(candidates, None))
 
 
+def has_usable_reason(reason):
+    """True when `reason` is a non-blank string — EXACTLY the grounds test `apply_audit_results`
+    applies before it honors a `discharged` ruling, exposed so the submit-shape guard (#885) and the
+    fold can never read the field differently. Sibling of `has_usable_new_issues`: the guard's whole
+    value is that what it accepts is what the fold can use, so a later loosening or tightening of the
+    rule moves BOTH sides at once — a guard reading it one way and the fold the other either
+    false-refuses a legitimate submit or re-admits the #885 terminal-loss class."""
+    return isinstance(reason, str) and bool(reason.strip())
+
+
 def _resolve_expected_auditor(fid, finding, expected_auditors):
     """The TRUSTED independent-auditor selection for a target — the DRIVER's record, never the
     result's own echo (#507 R2). Prefer the explicit `expected_auditors` map the driver passes
@@ -165,7 +175,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
 
         ruling = r.get("ruling")
         reason = r.get("reason")
-        has_reason = isinstance(reason, str) and bool(reason.strip())
+        # The SHARED grounds predicate — the same function the submit-shape guard calls, never a
+        # second copy of the rule (#885 review: cross-module connascence of algorithm).
+        has_reason = has_usable_reason(reason)
         evidence = r.get("evidence")
 
         # Provenance (trust-boundary): a ruling that CLEARS the finding is authenticated against the
