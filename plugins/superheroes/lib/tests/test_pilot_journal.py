@@ -1475,6 +1475,114 @@ def test_end_effect_precedence_kind_beats_already_closed(tmp_dir):
         outcome=pj.OUTCOME_APPLIED, at=_TS2,
     )
     assert second == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+    with open(path, encoding="utf-8") as fh:
+        end_lines = []
+        for ln in fh:
+            if not ln.strip():
+                continue
+            rec = json.loads(ln)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "prec-kc":
+                end_lines.append(rec)
+    assert len(end_lines) == 1
+
+
+def test_end_effect_precedence_invalid_origin_beats_kind_and_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    bad_begin = _begin_record(effect_id="prec-io")
+    bad_begin["schemaVersion"] = 2
+    bad_begin["kind"] = pj.KIND_BROWSER_SERVER_PROVISIONED
+    bad_begin["slotRef"] = "slot-a@2"
+    _write_line(path, bad_begin)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="prec-io",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_INVALID}
+    _assert_effect_possibly_applied_no_end(path, "prec-io")
+
+
+def test_end_effect_precedence_origin_missing_beats_already_closed(tmp_dir):
+    path = _journal(tmp_dir)
+    _write_line(path, _end_record(effect_id="only-end"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="only-end",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    with open(path, encoding="utf-8") as fh:
+        end_count = 0
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "only-end":
+                end_count += 1
+    assert end_count == 1
+
+
+def test_end_effect_refuses_already_closed_by_invalid_end(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="inv-end",
+    )
+    assert begin["ok"] is True
+    bad_end = _end_record(effect_id="inv-end")
+    bad_end["schemaVersion"] = 2
+    _write_line(path, bad_end)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="inv-end",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ALREADY_CLOSED}
+    with open(path, encoding="utf-8") as fh:
+        end_count = 0
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "inv-end":
+                end_count += 1
+    assert end_count == 1
+
+
+def test_end_effect_refuses_symlink_journal(tmp_dir):
+    target = os.path.join(tmp_dir, "real.jsonl")
+    journal = os.path.join(tmp_dir, "journal.jsonl")
+    begin = pj.begin_effect(
+        target, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="sym-close",
+    )
+    assert begin["ok"] is True
+    with open(target, "rb") as fh:
+        before = fh.read()
+    os.symlink(target, journal)
+    result = pj.end_effect(
+        journal, slot_ref=_SLOT_REF, effect_id="sym-close",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+    with open(target, "rb") as fh:
+        assert fh.read() == before
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_end_effect_refuses_fifo_journal(tmp_dir):
+    journal = _journal(tmp_dir)
+    os.mkfifo(journal)
+    result = pj.end_effect(
+        journal, slot_ref=_SLOT_REF, effect_id="fifo-close",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+
+
+def test_end_effect_refuses_directory_journal(tmp_dir):
+    journal = _journal(tmp_dir)
+    os.mkdir(journal)
+    result = pj.end_effect(
+        journal, slot_ref=_SLOT_REF, effect_id="dir-close",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
 
 
 def test_end_effect_precedence_torn_beats_origin_missing(tmp_dir):

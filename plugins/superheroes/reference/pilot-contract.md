@@ -931,6 +931,8 @@ wins):
 
 | Condition | Refusal |
 |---|---|
+| journal cannot be read (non-regular file, I/O error, invalid UTF-8) | `journal-unreadable` |
+| journal file missing | `journal-effect-origin-missing` |
 | journal torn (last record incomplete, file does not end with newline) | `journal-torn` |
 | zero records with `phase == "begin"` and this `effectId` | `journal-effect-origin-missing` |
 | more than one such begin-phase record | `journal-effect-origin-ambiguous` |

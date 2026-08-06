@@ -280,6 +280,9 @@ def _release_journal_lock(lock_fd):
 def _read_journal_text(journal_path):
     """Read a journal fail-closed. Returns a dict:
        {"ok": bool, "text": str, "torn": bool, "reason": str|None, "missing": bool}
+
+    On failure, ``reason`` is ``REASON_JOURNAL_UNREADABLE`` unless the file is missing
+    (``missing`` is True and ``reason`` is None).
     """
     fd = None
     try:
@@ -363,20 +366,21 @@ def _verify_end_effect_origin(journal_path, *, slot_ref, effect_id, kind):
     """Verify the effect ID names an open begin of the right kind for this slot.
 
     Precedence (first match wins):
-    1. journal torn (last record incomplete) → journal-torn
-    2. zero begin-phase records with this effectId → origin-missing
-    3. more than one begin-phase record → origin-ambiguous
-    4. exactly one begin but fails _validate_begin_record → origin-invalid
-    5. exactly one valid begin but kind != argument → origin-kind-mismatch
-    6. exactly one valid begin but slotRef != argument → origin-slot-mismatch
-    7. any end-phase record with this effectId → already-closed
-    8. otherwise → proceed (return None)
+    1. journal read failure → journal-unreadable (missing file → origin-missing)
+    2. journal torn (last record incomplete) → journal-torn
+    3. zero begin-phase records with this effectId → origin-missing
+    4. more than one begin-phase record → origin-ambiguous
+    5. exactly one begin but fails _validate_begin_record → origin-invalid
+    6. exactly one valid begin but kind != argument → origin-kind-mismatch
+    7. exactly one valid begin but slotRef != argument → origin-slot-mismatch
+    8. any end-phase record with this effectId → already-closed
+    9. otherwise → proceed (return None)
     """
     read_result = _read_journal_text(journal_path)
     if not read_result["ok"]:
         if read_result["missing"]:
             return REASON_ORIGIN_MISSING
-        return REASON_JOURNAL_UNREADABLE
+        return read_result["reason"]
     if read_result["torn"]:
         return REASON_JOURNAL_TORN
 
@@ -428,10 +432,9 @@ def _write_record(journal_path, record, verify=None):
     if lock_fd is None:
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     fd = None
-    hook = verify
     try:
-        if hook is not None:
-            refusal = hook()
+        if verify is not None:
+            refusal = verify()
             if refusal is not None:
                 return _fail(refusal)
         _ensure_parent_dir(journal_path)
@@ -823,7 +826,12 @@ def replay(journal_path, *, slot_ref=None):
     read_result = _read_journal_text(journal_path)
     if not read_result["ok"]:
         return _stamp_replay(
-            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            _fail(
+                read_result["reason"] or REASON_JOURNAL_UNREADABLE,
+                effects=[],
+                torn=False,
+                anomalies=[],
+            ),
             journal_path,
             slot_ref,
         )
