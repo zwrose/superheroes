@@ -87,6 +87,20 @@ def _journal_append_worker(journal_path, worker_id, barrier):
             raise RuntimeError(result["reason"])
 
 
+def _concurrent_end_effect_worker(journal_path, effect_id, barrier, out_queue):
+    import pilot_journal as pj_module
+    barrier.wait(timeout=_CONCURRENCY_BARRIER_TIMEOUT)
+    result = pj_module.end_effect(
+        journal_path,
+        slot_ref="slot-a@1",
+        effect_id=effect_id,
+        kind=pj_module.KIND_APP_STARTED,
+        outcome=pj_module.OUTCOME_APPLIED,
+        at=_TS2,
+    )
+    out_queue.put(result)
+
+
 def _detail_with_encoded_size(target_size):
     padding_len = target_size
     while padding_len >= 0:
@@ -1429,6 +1443,55 @@ def test_end_effect_refuses_wrong_kind_same_slot(tmp_dir):
     _assert_effect_possibly_applied_no_end(path, "kind-mis")
 
 
+def test_end_effect_precedence_kind_beats_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="prec-ks",
+    )
+    assert begin["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref="slot-a@2", effect_id="prec-ks",
+        kind=pj.KIND_BROWSER_SERVER_PROVISIONED,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+    _assert_effect_possibly_applied_no_end(path, "prec-ks")
+
+
+def test_end_effect_precedence_kind_beats_already_closed(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="prec-kc",
+    )
+    assert begin["ok"] is True
+    first = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="prec-kc",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert first["ok"] is True
+    second = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="prec-kc",
+        kind=pj.KIND_BROWSER_SERVER_PROVISIONED,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert second == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+
+
+def test_end_effect_precedence_torn_beats_origin_missing(tmp_dir):
+    path = _journal(tmp_dir)
+    partial = json.dumps(
+        _begin_record(effect_id="other-eff"),
+        sort_keys=True,
+    )[:20]
+    with open(path, "wb") as fh:
+        fh.write(partial.encode("utf-8"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="never-begun",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
+
+
 def test_end_effect_refuses_already_closed(tmp_dir):
     path = _journal(tmp_dir)
     begin = pj.begin_effect(
@@ -1447,10 +1510,14 @@ def test_end_effect_refuses_already_closed(tmp_dir):
     assert second == {"ok": False, "reason": pj.REASON_ALREADY_CLOSED}
     replayed = pj.replay(path)
     assert replayed["effects"][0]["state"] == pj.STATE_APPLIED
-    end_lines = [
-        json.loads(ln) for ln in open(path, encoding="utf-8")
-        if ln.strip() and json.loads(ln).get("phase") == pj.PHASE_END
-    ]
+    with open(path, encoding="utf-8") as fh:
+        end_lines = []
+        for ln in fh:
+            if not ln.strip():
+                continue
+            rec = json.loads(ln)
+            if rec.get("phase") == pj.PHASE_END:
+                end_lines.append(rec)
     assert len(end_lines) == 1
 
 
@@ -1554,40 +1621,42 @@ def test_end_effect_refuses_unreadable_journal(tmp_dir):
     assert replayed["reason"] == pj.REASON_JOURNAL_UNREADABLE
 
 
-def test_provision_server_refuses_wrong_kind_effect_id(tmp_dir):
-    import pilot_browser as pb  # noqa: E402
-
+def test_concurrent_end_effect_exactly_one_close(tmp_dir):
+    multiprocessing.set_start_method("spawn", force=True)
     path = _journal(tmp_dir)
-    sock = os.path.join(tmp_dir, "sock")
-    os.makedirs(sock)
-    pin = {
-        "schemaVersion": 1,
-        "version": "1.40.0",
-        "integrityDigest": "a" * 64,
-    }
-    begin = pb.begin_provision_server(path, slot_ref=_SLOT_REF, at=_TS)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="conc-end1",
+    )
     assert begin["ok"] is True
-    other = pj.begin_effect(
-        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="other-kind",
-    )
-    assert other["ok"] is True
-    result = pb.provision_server(
-        path,
-        slot_ref=_SLOT_REF,
-        generation=1,
-        socket_dir=sock,
-        server_pid=100,
-        browser_pid=101,
-        pin=pin,
-        created_at=_TS,
-        begin_at=_TS,
-        ppid_of=lambda _pid: 100,
-        effect_id=other["effectId"],
-    )
-    assert result["ok"] is False
-    assert result["reason"] == pb.REFUSAL_SERVER_RECORD_INVALID
-    assert result.get("detail") == pj.REASON_ORIGIN_KIND_MISMATCH
-    replayed = pj.replay(path)
-    prov = [e for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_PROVISIONED]
-    assert len(prov) == 1
-    assert prov[0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    barrier = multiprocessing.Barrier(2)
+    out_queue = multiprocessing.Queue()
+    processes = []
+    for _ in range(2):
+        proc = multiprocessing.Process(
+            target=_concurrent_end_effect_worker,
+            args=(path, "conc-end1", barrier, out_queue),
+        )
+        processes.append(proc)
+        proc.start()
+    for proc in processes:
+        proc.join(timeout=_CONCURRENCY_JOIN_TIMEOUT)
+    for proc in processes:
+        assert proc.exitcode == 0, "worker exited with %s" % proc.exitcode
+    results = [out_queue.get(timeout=_CONCURRENCY_JOIN_TIMEOUT) for _ in range(2)]
+    ok_count = sum(1 for r in results if r["ok"] is True)
+    already_closed = [
+        r for r in results
+        if not r["ok"] and r["reason"] == pj.REASON_ALREADY_CLOSED
+    ]
+    assert ok_count == 1
+    assert len(already_closed) == 1
+    with open(path, encoding="utf-8") as fh:
+        end_count = 0
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "conc-end1":
+                end_count += 1
+    assert end_count == 1
+

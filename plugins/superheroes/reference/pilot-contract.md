@@ -955,12 +955,14 @@ On any refusal, **nothing is appended** — the open `begin` stays open and repl
 
 Journal records are appended with durability and safety: opened `O_NOFOLLOW | O_NONBLOCK` with a
 regular-file check, written in a loop until the whole line lands, `fsync`ed, and the **parent
-directory** `fsync`ed. A symlink or FIFO at the journal path is refused (`journal-write-failed`)
-rather than followed or blocked on. Invalid UTF-8 in a journal is `journal-unreadable`, never an
-exception and never silently replaced.
+directory** `fsync`ed. `begin_effect` still refuses a symlink, FIFO, or directory sitting **at** the
+journal path with `journal-write-failed` (its write path is unchanged). `end_effect` reaches the
+special file first through close-time origin verification and refuses `journal-unreadable` before
+the write-side `open`/`fstat` that would have produced `journal-write-failed`. Invalid UTF-8 in a
+journal is `journal-unreadable`, never an exception and never silently replaced.
 
 **Special-file safety:** the journal reader also opens with `O_NOFOLLOW | O_NONBLOCK` and refuses
-a non-regular file at the journal path.
+a non-regular file at the journal path (`replay`, `end_effect` origin verification).
 
 **Type-safety of validation:** every enum/membership check tests that the value is a string
 first, so malformed data produces the documented refusal rather than raising. Public entry points
@@ -996,9 +998,9 @@ from proving applied or not-applied.
 
 | Token | When returned |
 |---|---|
-| `journal-unreadable` | journal file cannot be read during replay |
+| `journal-unreadable` | journal file cannot be read during replay **or during `end_effect` close-time origin verification** (`replay`, `end_effect`) |
 | `journal-torn` | `end_effect`: journal torn (last record incomplete) — close refused, nothing appended |
-| `journal-write-failed` | append or fsync failed |
+| `journal-write-failed` | append or fsync failed (`begin_effect`, `end_effect` write path); `begin_effect` also returns this for a symlink, FIFO, or directory at the journal path |
 | `journal-record-invalid` | record shape, timestamp, or serialisable `detail` fails validation |
 | `journal-effect-kind-unknown` | `kind` is not in `EFFECT_KINDS` |
 | `journal-outcome-invalid` | `outcome` is not in `END_OUTCOMES` |

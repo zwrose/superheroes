@@ -300,6 +300,9 @@ def test_rotate_journal_rejects_orphan_end_anomaly(tmp_path):
             "outcome": pj.OUTCOME_APPLIED,
             "at": _NOW2,
         }, sort_keys=True) + "\n")
+    replayed = pj.replay(journal)
+    anomaly_reasons = [a["reason"] for a in replayed["anomalies"]]
+    assert "orphan-end" in anomaly_reasons
     result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
     assert result["reason"] == pr.REASON_ROTATE_NOT_QUIESCENT
 
@@ -325,6 +328,9 @@ def test_rotate_journal_rejects_duplicate_begin_anomaly(tmp_path):
             "outcome": pj.OUTCOME_APPLIED,
             "at": _NOW2,
         }, sort_keys=True) + "\n")
+    replayed = pj.replay(journal)
+    anomaly_reasons = [a["reason"] for a in replayed["anomalies"]]
+    assert "duplicate-begin" in anomaly_reasons
     result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
     assert result["reason"] == pr.REASON_ROTATE_NOT_QUIESCENT
 
