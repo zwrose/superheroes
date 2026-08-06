@@ -533,7 +533,7 @@ def begin_effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=Non
 
 
 def end_effect(journal_path, *, slot_ref, effect_id, kind, outcome, at, reason=None):
-    """Append an end-phase journal record."""
+    """Verify effect origin (required ``kind``) under the write lock, then append an end-phase journal record; refuse without writing when verification fails."""
     if not _is_str_path(journal_path):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     if not _validate_slot_ref(slot_ref):

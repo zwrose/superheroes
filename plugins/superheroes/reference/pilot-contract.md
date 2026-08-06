@@ -1973,11 +1973,33 @@ non-application.
 
 ### Broker admission
 
-Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception for
-the validation failures it recognises. `provision_server` takes a **required** `effect_id`, and the
-two ways to get that wrong land differently: **omitting** it raises `TypeError` at the call, as any
-Python call missing an argument does — a call-shape error, not a recognised validation failure —
-while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
+Most public entry points in `pilot_browser.py` refuse rather than raising a builtin exception for
+the validation failures they recognise. The **known** exceptions from a hostile-input sweep of every
+public entry point — evidence, not a proof of totality — are:
+
+- **`validate_pin` and `verify_pin` raise `PilotBrowserError` by design** — they are not
+  refusal-returning functions; callers are expected to catch the domain exception. This does not
+  violate the letter of "a **builtin** exception", but it defeats a reader's reasonable expectation
+  that every entry point returns an `ok`/`reason` dict (e.g. `validate_pin(None)` raises
+  `PilotBrowserError: browser-pin-invalid`).
+- **`socket_dir_plan` can raise builtin `TypeError`** when `platform` is unhashable (e.g.
+  `platform=[]` or `platform={}`) — a recognised validation input, not a call-shape error.
+- **`begin_provision_server` and `provision_server` can raise builtin `ValueError`** on a
+  NUL-containing journal path (e.g. `journal_path="a\x00b"`); the failure comes from `os.open` on
+  the lock file inside `pilot_journal._acquire_journal_lock`, reached because `_is_str_path`
+  accepts any `str` and a NUL byte only fails at the syscall — not from opening the journal itself.
+  `teardown_server` also takes a journal path but refuses earlier with
+  `browser-terminal-state-unobserved` on such a path, before it ever journals — its exposure is
+  masked by an earlier check, not absent by design.
+
+All other public entry points — `create_socket_dir`, `remove_socket_dir`,
+`assert_browser_is_server_child`, `teardown_server`, `plan_topology`, `admit_server_registry`, and
+`admit` — refused on every hostile input in the same sweep.
+
+`provision_server` takes a **required** `effect_id`, and the two ways to get that wrong land
+differently: **omitting** it raises `TypeError` at the call, as any Python call missing an argument
+does — a call-shape error, not a recognised validation failure — while an `effect_id` that is
+*supplied* but unusable refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
