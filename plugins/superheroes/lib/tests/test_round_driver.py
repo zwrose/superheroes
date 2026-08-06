@@ -413,6 +413,259 @@ def _responder(round1_findings=None, scoped=None, audit="discharged", verify="pa
     return respond
 
 
+# --- #885 submit-shape guards (verify + audits) -------------------------------
+#
+# A wrong-SHAPE verify or audits artifact used to fold into a TERMINAL, journalled, immutable state
+# — the certification receipt was lost and a corrected resubmit refused. These pin the refusal at
+# the chokepoint: the pending step survives, the state file is byte-identical, and recovery is a
+# corrected resubmit on the SAME phase/attempt/state-hash.
+
+_A_FINDING = [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]
+_GOOD_VERIFY = {"result": "pass"}
+
+
+def _drive_to_phase(session_dir, cfg, respond, target_phase, max_steps=80):
+    """Drive next/submit with `respond` until the PENDING step is `target_phase`; return that
+    `next`. Asserts the loop did not reach a terminal first, so a routing change that stops
+    reaching the phase fails loudly instead of silently skipping the test's body."""
+    first = True
+    for _ in range(max_steps):
+        n = RD.cmd_next(session_dir, cfg if first else None)
+        first = False
+        assert n["ok"], n
+        if n.get("phase") == target_phase:
+            return n
+        assert n["action"] != RD.P_TERMINAL, "reached terminal before %s" % target_phase
+        s = RD.cmd_submit(session_dir, n["phase"], n["attempt"], n["expectedStateHash"],
+                          respond(n["phase"], n["payload"], n["round"]))
+        assert s["ok"], s
+    raise AssertionError("never reached %s within %d steps" % (target_phase, max_steps))
+
+
+def _at(tmp_path, target_phase):
+    d = str(tmp_path)
+    n = _drive_to_phase(d, _cfg(), _responder(round1_findings=_A_FINDING), target_phase)
+    return d, n
+
+
+def _state_bytes(session_dir):
+    with open(os.path.join(session_dir, RD.STATE_FILE), "rb") as fh:
+        return fh.read()
+
+
+def _assert_shape_refused(d, n, artifact, expected_outcome, must_name, recovery):
+    """The whole refusal contract in one place: refused with a shape-naming reason, state
+    byte-identical, the pending step intact, a NON-terminal journal event, and the corrected
+    artifact accepted on the same phase/attempt/state-hash."""
+    before = _state_bytes(d)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)
+    assert out["ok"] is False, out
+    for fragment in must_name:
+        assert fragment in out["reason"], (fragment, out["reason"])
+    assert "resubmit the same phase/attempt/state-hash" in out["reason"]
+
+    assert _state_bytes(d) == before, "a refused submit mutated loop-state"
+    ok, state = RD.load_state(d)
+    assert ok and not state.get("terminal"), "a shape refusal reached a terminal state"
+
+    journal = RD.read_journal(d)
+    assert journal[-1].get("outcome") == expected_outcome, journal[-1]
+    assert not any(e.get("outcome") in ("accepted", "terminal-receipt-fault") for e in journal
+                   if e is journal[-1])
+
+    again = RD.cmd_next(d)
+    assert (again["phase"], again["attempt"], again["expectedStateHash"]) == (
+        n["phase"], n["attempt"], n["expectedStateHash"])
+    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], recovery)["ok"] is True
+
+
+@pytest.mark.parametrize("artifact,must_name", [
+    ({}, ["no usable `result` (got None)", "one of: fail, none, pass, skipped, timeout"]),
+    ({"result": None}, ["no usable `result` (got None)"]),
+    ({"exitCode": 0, "passed": True, "output": "ok"},
+     ["`passed` is the raw runner envelope's key", "`exitCode` is the raw runner envelope's key"]),
+    ({"result": "passed"}, ["got 'passed'"]),
+    ({"result": "PASS"}, ["got 'PASS'"]),
+    ({"result": True}, ["got True"]),
+    ({"status": "ok"}, ["`status` is not the driver's key"]),
+], ids=["missing", "explicit-none", "runner-envelope-878", "near-miss-token", "wrong-case",
+        "non-string", "status-key"])
+def test_submit_verify_malformed_refused(tmp_path, artifact, must_name):
+    d, n = _at(tmp_path, RD.P_VERIFY)
+    _assert_shape_refused(d, n, artifact, "verify-result-shape", must_name, _GOOD_VERIFY)
+
+
+# Every token the guard accepts, paired with the fold arm it lands in. This is the anti-drift pin:
+# `_VERIFY_RESULTS` may not accept a token `_fold_verify` has no defined arm for, and may not reject
+# one it does. `test_verify_vocabulary_census` holds the two sides equal.
+_VERIFY_TOKEN_ARMS = [
+    ("pass", None),                    # advances — no halting decision recorded
+    ("fail", "verify-fail"),
+    ("timeout", "verify-unresolved"),
+    ("skipped", "verify-skipped"),
+    ("none", "verify-skipped"),
+    ("unverified", "verify-skipped"),
+]
+
+
+def test_verify_vocabulary_census():
+    assert sorted(t for t, _ in _VERIFY_TOKEN_ARMS) == sorted(RD._VERIFY_RESULTS)
+
+
+@pytest.mark.parametrize("token,decision_kind", _VERIFY_TOKEN_ARMS,
+                         ids=[t for t, _ in _VERIFY_TOKEN_ARMS])
+def test_submit_verify_recognized_token_accepted(tmp_path, token, decision_kind):
+    """A recognized token is ACCEPTED and folds exactly as it does today — including the deliberate
+    fail-closed halts. The guard refuses mis-shape, never a real outcome."""
+    d, n = _at(tmp_path, RD.P_VERIFY)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], {"result": token})
+    assert out["ok"] is True, out
+    ok, state = RD.load_state(d)
+    assert ok
+    kinds = [dec.get("kind") for dec in state.get("decisions", [])]
+    if decision_kind is None:
+        assert not any(k and k.startswith("verify-") for k in kinds), kinds
+    else:
+        assert decision_kind in kinds, kinds
+
+
+def test_submit_verify_guard_does_not_preempt_fences(tmp_path):
+    """A mis-shaped verify artifact with a stale attempt or bad hash keeps the existing fence
+    reasons — the shape guard sits AFTER the echo/hash fences, never in front of them."""
+    d, n = _at(tmp_path, RD.P_VERIFY)
+    bad = {"passed": True}
+    stale = RD.cmd_submit(d, n["phase"], n["attempt"] + 3, n["expectedStateHash"], bad)
+    assert stale["ok"] is False and "echo" in stale["reason"] and "`result`" not in stale["reason"]
+    hash_bad = RD.cmd_submit(d, n["phase"], n["attempt"], "deadbeef", bad)
+    assert hash_bad["ok"] is False and "hash" in hash_bad["reason"]
+    assert "`result`" not in hash_bad["reason"]
+
+
+def _audit_artifact(n, **over):
+    """A well-formed audits artifact for this round's real targets, with one field overridden."""
+    targets = n["payload"]["targets"]
+    assert targets, "the audits payload carried no targets to key rulings against"
+    result = {"id": targets[0]["id"], "ruling": "discharged", "reason": "r", "evidence": "e",
+              "auditorVendor": targets[0].get("auditorVendor")}
+    result.update(over)
+    return ({"results": [result],
+             "collectionManifest": {t["id"]: t.get("auditorVendor") for t in targets}}, targets)
+
+
+@pytest.mark.parametrize("over,must_name", [
+    ({"ruling": "discharged-but-new-issue", "newIssue": "found another bug"},
+     ["no usable `newIssues`", "`newIssue` (singular)", "a LIST"]),
+    ({"ruling": "discharged-but-new-issue", "newIssues": "found another bug"},
+     ["no usable `newIssues`", "non-empty list of issue objects"]),
+    ({"ruling": "discharged-but-new-issue", "newIssues": []}, ["no usable `newIssues`"]),
+    ({"ruling": "discharged-but-new-issue", "newIssues": ["a string"]}, ["no usable `newIssues`"]),
+    ({"ruling": "discharged", "reason": "   "}, ["rules `discharged` with no `reason`"]),
+    ({"ruling": "fixed"}, ["unrecognized `ruling` (got 'fixed')", "discharged, not-discharged"]),
+    ({"ruling": None}, ["unrecognized `ruling` (got None)"]),
+    ({"id": "no-such-target"},
+     ["keyed to 'no-such-target', which is not an audit target", "re-key the ruling"]),
+    ({"id": None}, ["no usable `id` (got None)"]),
+], ids=["new-issue-singular-880", "new-issues-string", "new-issues-empty", "new-issues-non-dict",
+        "discharged-blank-reason", "unknown-ruling", "null-ruling", "unmatched-id", "null-id"])
+def test_submit_audits_malformed_refused(tmp_path, over, must_name):
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    bad, _targets = _audit_artifact(n, **over)
+    good, _ = _audit_artifact(n)
+    _assert_shape_refused(d, n, bad, "audit-ruling-shape", must_name, good)
+
+
+def test_submit_audits_non_list_results_refused(tmp_path):
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, _ = _audit_artifact(n)
+    _assert_shape_refused(d, n, {"results": {"id": "x"}},
+                          "audit-ruling-shape",
+                          ["`results` is dict, not a list of ruling objects"], good)
+
+
+def test_submit_audits_duplicate_id_refused(tmp_path):
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, targets = _audit_artifact(n)
+    dup = {"results": list(good["results"]) + list(good["results"]),
+           "collectionManifest": good["collectionManifest"]}
+    _assert_shape_refused(d, n, dup, "audit-ruling-shape",
+                          ["repeats id", "exactly one ruling per target"], good)
+
+
+def test_submit_audits_non_dict_entry_refused(tmp_path):
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, _ = _audit_artifact(n)
+    _assert_shape_refused(d, n, {"results": ["discharged"]}, "audit-ruling-shape",
+                          ["results[0] is str, not a ruling object"], good)
+
+
+@pytest.mark.parametrize("over", [
+    {},
+    {"ruling": "not-discharged", "reason": "still broken"},
+    {"ruling": "not-discharged"},                      # reason is optional on not-discharged
+    {"ruling": "discharged-but-new-issue", "newIssues": [{"title": "new"}]},
+], ids=["discharged", "not-discharged-with-reason", "not-discharged-bare", "discharged-new-issue"])
+def test_submit_audits_wellformed_accepted(tmp_path, over):
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    art, _ = _audit_artifact(n, **over)
+    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)["ok"] is True
+
+
+@pytest.mark.parametrize("artifact", [{}, {"results": []}],
+                         ids=["absent-results", "empty-results"])
+def test_submit_audits_silence_still_accepted(tmp_path, artifact):
+    """Genuine auditor SILENCE is a real answer the fold discloses as `unaudited` and fails closed
+    on — not a shape fault. The guard must never convert it into a refusal loop the orchestrator
+    cannot escape."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)["ok"] is True
+
+
+def test_submit_audits_unauthenticated_ruling_still_folds(tmp_path):
+    """Provenance is a TRUST boundary, not a shape. A correctly-shaped ruling whose collection
+    manifest cannot authenticate it must still FOLD to not-discharged — never be handed back as a
+    'correctable' shape fault, which would invite the orchestrator to resubmit a forged echo."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    art, targets = _audit_artifact(n)
+    art["collectionManifest"] = {}                       # the orchestrator recorded no dispatch
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
+    assert out["ok"] is True, out
+    ok, state = RD.load_state(d)
+    assert ok
+    assert any(dec.get("kind") == "audit-provenance-fail" for dec in state["decisions"])
+
+
+# --- the guards as pure functions ---------------------------------------------
+
+def test_verify_result_fault_pure():
+    assert RD.verify_result_fault({"result": "pass"}) is None
+    assert RD.verify_result_fault({"result": "timeout"}) is None
+    assert RD.verify_result_fault(None) is not None
+    assert RD.verify_result_fault([]) is not None
+    assert "`passed`" in RD.verify_result_fault({"passed": True})
+    assert "`passed`" not in RD.verify_result_fault({"result": "nope"})
+
+
+def test_audit_results_fault_pure():
+    good = [{"id": "a1", "ruling": "not-discharged"}]
+    assert RD.audit_results_fault({"results": good}, [{"id": "a1"}]) is None
+    assert RD.audit_results_fault({}, [{"id": "a1"}]) is None
+    assert RD.audit_results_fault(None, []) is None
+    # an empty target set judges no id — the seat-key guard's empty-key rule, audit-side
+    assert RD.audit_results_fault({"results": [{"id": "zz", "ruling": "not-discharged"}]}, []) is None
+    assert "not an audit target" in RD.audit_results_fault({"results": good}, [{"id": "other"}])
+    # the entry index is named so a multi-result artifact says WHICH ruling is wrong
+    two = [{"id": "a1", "ruling": "not-discharged"}, {"id": "a2", "ruling": "nope"}]
+    assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
+
+
+def test_has_usable_new_issues_matches_the_fold():
+    """The guard's usability test and the fold's are ONE function — pinned, not merely intended."""
+    AU = _load("audits")
+    for candidates in ([{"title": "x"}], [], "str", None, [1, 2], [{"a": 1}, 2]):
+        assert AU.has_usable_new_issues(candidates) == bool(
+            AU._valid_new_issues(candidates, "origin"))
+
+
 def test_happy_path_audited_chain_certification(tmp_path):
     """Round-1 panel → verify findings → fix → delta round → all discharged → audited-chain."""
     d = str(tmp_path)
