@@ -487,6 +487,42 @@ def test_confirmation_surfacing_important_rearms_full_panel_doc_mode(tmp_path, c
     assert out["nextRound"] == 5
 
 
+def _two_panels_then_open_blocker_at_cap(tmp_path, capsys):
+    """#884: drive to the doc-review confirmation-panel CAP with a blocker still open.
+
+    Panel 1 (round 3) surfaces an Important; under FR-8 that re-arms panel 2 (round 5), which
+    surfaces an Important again; round 6 is the scoped verify. decide(6) therefore sees
+    MAX_CONFIRMATIONS qualifying panels and a still-surfaced blocker. Returns session_dir
+    positioned to decide(6)."""
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
+    out = _decide(capsys, session_dir, 4)                      # → confirmation panel 2 at round 5
+    assert out["roundKind"] == "confirmation" and out["nextRound"] == 5, out
+    _record_with_escalation(capsys, session_dir, 5,
+                            {"architecture-reviewer": [_finding("Architecture", "Important")]})
+    _write_compiled(session_dir, [_finding("Architecture", "Important")])
+    _decide(capsys, session_dir, 5)                            # blocking present → scoped round 6
+    _record_with_escalation(capsys, session_dir, 6, {})
+    _write_compiled(session_dir, [])
+    return session_dir
+
+
+def test_doc_review_parks_at_the_confirmation_cap_with_an_open_blocker(tmp_path, capsys):
+    # #884: FR-8's fail-safe half, driven through the production CLI entry path. A document has no
+    # stronger downstream reviewer than the owner, so at the confirmation-panel cap an open blocking
+    # finding PARKS — certification withheld — rather than scoped-certifying the way code review may
+    # (reference/review-loop.md). Before #884 this was unreachable on this leg: an Important never
+    # re-armed, so a second panel could not be raised by one.
+    session_dir = _two_panels_then_open_blocker_at_cap(tmp_path, capsys)
+    out = _decide(capsys, session_dir, 6)
+    assert out["action"] == "halt", out
+    assert out["mandatory"] is True
+    assert out["nextRound"] is None
+    assert "do NOT declare SPEC READY" in out["reason"]
+    # the park side of #174 finding 4's computed flag: two panels ran, the last one surfaced.
+    assert out["certification"]["fullPanels"] == 2
+    assert out["certification"]["lastPanelSurfacedResolved"] is True
+
+
 def test_doc_review_unknown_changed_surface_still_rearms(tmp_path, capsys):
     # #884 / brief-check briefcheck-001: with nothing blocking surfaced since the panel, doc mode
     # must NOT certify past an UNKNOWN changed surface. Deleting the panel round's snapshot makes
@@ -508,6 +544,11 @@ def test_doc_review_certifies_when_nothing_open_and_rework_not_cross_cutting(tmp
     out = _decide(capsys, session_dir, 4)
     assert out["action"] == "exit_clean", out
     assert out["nextRound"] is None
+    # #174 finding 4, re-homed by #884: the honest-readout flag is COMPUTED from what the panel
+    # surfaced, not hardcoded. This is the certify side — one qualifying panel ran and it surfaced
+    # nothing, so the flag reads False.
+    assert out["certification"]["fullPanels"] == 1
+    assert out["certification"]["lastPanelSurfacedResolved"] is False
 
 
 def test_confirmation_followup_is_reachable_only_through_the_doc_chokepoint():
