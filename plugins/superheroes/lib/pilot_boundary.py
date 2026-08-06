@@ -1,10 +1,9 @@
 """Pilot target boundary — exact-origin bindings, protected-target refusal, and verdicts (A3)."""
 import os
 import stat
-import subprocess
-import threading
 import time
 
+import pilot_bounded_run
 import pilot_policy
 import pilot_slot
 
@@ -23,6 +22,12 @@ REFUSAL_DATASTORE_OBSERVER_INVALID = "boundary-datastore-observer-invalid"
 REFUSAL_DATASTORE_OBSERVER_FAILED = "boundary-datastore-observer-failed"
 REFUSAL_UNVERIFIED = "boundary-unverified"
 REFUSAL_VERDICT_VACUOUS = "boundary-verdict-vacuous"
+
+# The one home for the datastore-identity strength vocabulary. This module PRODUCES the two
+# observation shapes below, so the words are declared here and every consumer reads them from
+# here — `pilot_provision` re-exports these names rather than respelling the literals (#866).
+STRENGTH_STRONG = "strong"
+STRENGTH_WEAKER = "weaker"
 
 _MANDATORY_VERDICT_CHECKS = frozenset({"target-binding", "datastore-identity"})
 
@@ -148,21 +153,28 @@ def observe_datastore_identity(
     _validate_observer(observer, connection_detail, reach_roots, run_cwd)
     env_var = observer["connectionEnvVar"]
     command = observer["command"]
-    try:
-        stdout = _run_bounded_observer(
-            command,
-            run_cwd=run_cwd,
-            env={env_var: connection_detail},
-            timeout_seconds=timeout_seconds,
-            max_output_bytes=max_output_bytes,
-        )
-    except PilotBoundaryError:
-        raise
-    except (OSError, subprocess.TimeoutExpired):
+    # The observer is a single short-lived command, but the runner's process-group containment is
+    # unconditional regardless — if it forks its own children, the whole group is reaped on
+    # timeout too. What stays deliberately unlike pilot_mint's gate-off runner is only the
+    # nonzero-is-failure mapping below, not process-group handling.
+    run = pilot_bounded_run.run_bounded(
+        command,
+        run_cwd=run_cwd,
+        env={env_var: connection_detail},
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+    )
+    # Nonzero-is-failure, deliberately unlike pilot_mint: an observer that did not exit clean
+    # observed nothing, so every non-completed outcome and every nonzero exit is the same event.
+    # Written as "not completed" rather than a list of known failures so a new outcome refuses.
+    if (
+        run["outcome"] != pilot_bounded_run.OUTCOME_COMPLETED
+        or run["exitCode"] != 0
+    ):
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
 
     try:
-        text = stdout.decode("utf-8")
+        text = run["stdout"].decode("utf-8")
     except UnicodeDecodeError:
         raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
     stripped = text.strip()
@@ -172,7 +184,7 @@ def observe_datastore_identity(
     return {
         "identity": stripped,
         "provenance": "observed",
-        "strength": "strong",
+        "strength": STRENGTH_STRONG,
         "weaker": False,
     }
 
@@ -186,7 +198,7 @@ def app_reported_identity(value):
     return {
         "identity": value,
         "provenance": "app-reported",
-        "strength": "weaker",
+        "strength": STRENGTH_WEAKER,
         "weaker": True,
     }
 
@@ -480,74 +492,3 @@ def _refuse_if_authorized_checks_invalid(checks):
             raise PilotBoundaryError(REFUSAL_UNVERIFIED)
     if _MANDATORY_VERDICT_CHECKS - names:
         raise PilotBoundaryError(REFUSAL_UNVERIFIED)
-
-
-def _terminate_and_wait(proc):
-    if proc.poll() is None:
-        proc.terminate()
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-
-
-def _run_bounded_observer(command, *, run_cwd, env, timeout_seconds, max_output_bytes):
-    # bite-axis: output containment — observer stdout is read with a byte cap so oversized output
-    # cannot exhaust memory; the child is always reaped on every exit path.
-    proc = subprocess.Popen(
-        command,
-        cwd=run_cwd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        shell=False,
-        env=env,
-    )
-    try:
-        stdout_holder = []
-        read_error = []
-
-        def _read_stdout():
-            try:
-                stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
-            except Exception as exc:
-                read_error.append(exc)
-
-        reader = threading.Thread(target=_read_stdout, daemon=True)
-        reader.start()
-        reader.join(timeout=timeout_seconds)
-
-        if reader.is_alive():
-            _terminate_and_wait(proc)
-            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-
-        if read_error:
-            _terminate_and_wait(proc)
-            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-
-        stdout = stdout_holder[0] if stdout_holder else b""
-
-        if len(stdout) > max_output_bytes:
-            _terminate_and_wait(proc)
-            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-
-        try:
-            proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            _terminate_and_wait(proc)
-            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-
-        if proc.returncode != 0:
-            raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-
-        return stdout
-    except PilotBoundaryError:
-        raise
-    except Exception:
-        _terminate_and_wait(proc)
-        raise PilotBoundaryError(REFUSAL_DATASTORE_OBSERVER_FAILED)
-    finally:
-        if proc.poll() is None:
-            _terminate_and_wait(proc)
-        if proc.stdout:
-            proc.stdout.close()

@@ -42,7 +42,10 @@ def test_load_happy_path():
     assert result["reason"] is None
     assert [r["id"] for r in result["rulings"]] == list(LD.RULING_IDS)
     assert [(c["id"], c["class"]) for c in result["checks"]] == list(LD.PREFLIGHT_CHECKS)
-    assert result["rulingsBlock"].count("\n") == 5
+    # One line per pinned ruling, so N rulings joined by N-1 newlines. Derived from
+    # RULING_IDS rather than hand-counted: a bare literal here silently rots the moment
+    # a ruling is added, and the block is the byte-pinned payload a launched builder gets.
+    assert result["rulingsBlock"].count("\n") == len(LD.RULING_IDS) - 1
     for rid in LD.RULING_IDS:
         assert any(rid in line for line in result["rulingsBlock"].split("\n"))
     assert len(result["digest"]) == 64
@@ -415,3 +418,27 @@ def test_ruling_text_constant_matches_the_artifact_for_every_ruling():
     by_id = {r["id"]: r["text"] for r in parsed["rulings"]}
     for rid in LD.RULING_IDS:
         assert by_id[rid] == LD.RULING_TEXT[rid]
+
+
+# Independent oracle for the git-identity ruling. Every other assertion in this file derives
+# its expectation from RULING_IDS, so a coordinated edit that drops the ruling from BOTH the
+# markdown block and the constant would leave the whole suite green while a launched builder
+# silently stops receiving the invariant. These literals are the thing that fails in that case.
+def test_git_identity_ruling_is_delivered_with_its_prohibitions():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "git-identity" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "git-identity")
+    # Pinned in full, not by substring. Substring checks would still pass if a coordinated edit
+    # appended an exception clause ("...unless an override is needed") around the asserted
+    # phrases, which would leave the launched payload carrying a conditional invariant. Exact
+    # equality means any softening has to edit this literal too — a third, deliberate site.
+    assert text == (
+        "commits inherit the repo's configured git identity; never pass `-c user.name` or "
+        "`-c user.email` and never synthesize one; a missing or wrong identity is a "
+        "park-and-report, not an improvisation."
+    )
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py::test_compose_git_identity_ruling_in_prompt — not here. Re-checking the
+    # block for the line at this point would be vacuous: a parsed ruling exists only because
+    # _parse_rulings_block matched that exact line in that exact block.

@@ -388,9 +388,13 @@ def test_observe_datastore_identity_child_env_has_only_connection_var(private_tm
 
 
 def test_observe_datastore_identity_refuses_nonzero_exit(private_tmp):
+    # axis: the EXIT CODE is what refuses. The observer prints a perfectly good one-line identity
+    # and then exits 1 — so with the exit-code check removed this call would succeed. It used to
+    # print nothing, which meant the empty-stdout check refused first and the exit-code check was
+    # never the discriminating one (#866, found by A/B probe during the bounded-runner extraction).
     reach_root, run_cwd, bin_dir = _observer_layout(private_tmp)
     script = os.path.join(bin_dir, "fail.sh")
-    _write_executable(script, "#!/bin/sh\nexit 1\n")
+    _write_executable(script, "#!/bin/sh\necho example_dev\nexit 1\n")
     observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
     with pytest.raises(pb.PilotBoundaryError) as exc:
         pb.observe_datastore_identity(

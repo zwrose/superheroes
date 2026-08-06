@@ -32,9 +32,6 @@ VALID_PIN = {
     "integrityDigest": VALID_DIGEST,
 }
 
-SHORT_BASE = None  # set per-test via _socket_base_outside_worktree()
-
-
 def _socket_base_parent():
     """Return a short writable temp parent for socket bases (SUN_PATH cap)."""
     short_tmp = "/tmp"
