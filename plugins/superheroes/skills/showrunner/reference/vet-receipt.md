@@ -157,6 +157,9 @@ it:
   separates those two states: re-stamp the marker when a rewrite dropped it, and remember a slot can
   be marker-present and text-stale. The showrunner charter's **duty 4** backstop is where the check
   and remedy live — follow that, not a marker-keyed rule here.
+  **A slot with no marker at all** is a body written before the builder stamped it (pre-#794) — read
+  it as *not yet vetted*, and stamp the marker yourself when you write; the dropped-write state is
+  **marker present, reminder and verdict both gone**.
 
 **No review seat checks these at review time.** A build's pre-handback review runs in branch mode,
 before a PR body or a vet exists, so their absence during a review is the normal state and is never a

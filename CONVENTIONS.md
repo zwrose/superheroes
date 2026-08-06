@@ -825,6 +825,7 @@ PR-body markers from the retired execution spine survive independently of it:
   write gets noticed: a slot still carrying the reminder is a vet not yet written, while a slot
   carrying neither reminder nor verdict is a write that was dropped. Marker-presence no longer
   separates those two states, because the builder stamps the marker.
+  A body predating the contract carries **no marker at all** and reads as *not yet vetted*, not as a dropped write.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that

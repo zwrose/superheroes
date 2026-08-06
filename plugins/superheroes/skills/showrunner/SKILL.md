@@ -341,6 +341,9 @@ above).
      never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
      empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
      replacing the reminder, and re-stamp the marker only when a body rewrite has dropped it.
+     The reminder is the **one** piece of builder-emitted text you are expected to remove, so it is not an
+     exception to "never the builder's prose"; if you ever find your verdict and the reminder both
+     present, the verdict wins — delete the reminder on that read.
      **Post the receipt first, then write the owner half that points at it** — in that order a
      failure between the two leaves a receipt with no pointer (visible, recoverable), never a verdict
      pointing at a receipt that does not exist. **Check the slot whenever you next read this PR's

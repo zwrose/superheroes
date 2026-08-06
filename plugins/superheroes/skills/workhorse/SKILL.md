@@ -180,7 +180,10 @@ synthesize one.** Every commit that lands on your branch runs with the identity 
 **already configured with** — repo-local `.git/config` when it is set, otherwise this environment's
 **global** config, exactly as git's normal cascade resolves it. A clone with no repo-local identity
 is the **normal** case, not a missing one: a `git config --local` that comes back empty is not by
-itself the missing-identity condition below. **Never pass `-c user.name` or `-c user.email`** on it, and never
+itself the missing-identity condition below. **Read the resolved identity, not the local one** —
+`git config user.email` and `git config user.name` **without** `--local` (or `git var
+GIT_AUTHOR_IDENT`); an empty answer *there* is the missing-identity condition, and that is the check
+to run before you commit. **Never pass `-c user.name` or `-c user.email`** on it, and never
 derive an identity from your own context — an account email you know about *yourself* is not the
 repo's identity, and inferring one is not a fallback. The damage is invisible from inside the build:
 a commit authored under a synthesized identity lands **unverified**, and a downstream gate can
@@ -703,18 +706,23 @@ format.
   heading; then the marker `<!-- superheroes:advisor-vet -->` on its own line; then, as its **own
   separate comment below the marker — never nested inside it**, the advisor reminder, verbatim:
 
-  ```html
-  <!-- advisor: BEFORE writing this slot, read skills/showrunner/reference/vet-receipt.md.
-       Post the receipt comment FIRST (vet-receipt marker, 8-field spine, explicit None,
-       triggered fields incl. escalation lines), THEN replace this comment with your verdict +
-       receipt pointer under the advisor-vet marker. -->
-  ```
+      <!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference
+           (skills/showrunner/reference/vet-receipt.md inside the superheroes plugin, not this repo).
+           Post the receipt comment FIRST (vet-receipt marker, 8-field spine, explicit None,
+           triggered fields incl. escalation lines), THEN replace this comment with the owner-half
+           register under the advisor-vet marker: the verdict; what was checked, in owner terms;
+           what accepting it means; what is theirs to decide — plus a pointer to the receipt. -->
 
   You stamp the marker so the advisor never has to, and the advisor's write **replaces the
-  reminder** — which is what makes the slot's three states readable without anyone's context:
+  reminder** — which is what makes the slot's three states readable from the body alone:
   reminder still present → **vet receipt owed**; verdict present, reminder gone → **vetted**;
-  **neither** present → an advisor write that a body rewrite dropped. Marker-absence used to carry
+  **neither** present → an advisor write that a body rewrite dropped. A slot with **no marker at all**
+  is a body that predates this contract, not a dropped write. Marker-absence used to carry
   that last signal; once you stamp the marker it cannot, and the reminder carries it instead.
+  One limit, stated rather than hidden: a rewrite that drops a written verdict **and** re-seeds this
+  reminder lands back on `marker + reminder`, which reads like a vet that has not happened. The body
+  alone cannot separate those two; the advisor's own backstop — comparing the slot against its most
+  recent vet-receipt comment (showrunner charter duty 4) — is what does.
   **Shape and contents** of what the advisor writes — the owner-half register — live in
   `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that home); **when it is
   written** is the showrunner charter's own duty. If you rewrite the PR body
@@ -829,6 +837,6 @@ curation stay with the advisor.
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
-| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
+| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global — read it with `git config user.email`, never `--local`); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. No recorded PID means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |

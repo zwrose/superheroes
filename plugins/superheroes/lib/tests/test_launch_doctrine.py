@@ -434,10 +434,11 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
     # phrases, which would leave the launched payload carrying a conditional invariant. Exact
     # equality means any softening has to edit this literal too — a third, deliberate site.
     assert text == (
-        "commits inherit the git identity the worktree resolves (its configured identity — "
-        "normally this environment's global config); never pass `-c user.name` or "
-        "`-c user.email` and never synthesize one; a missing or wrong identity is a "
-        "park-and-report, not an improvisation."
+        "commits inherit the git identity the worktree resolves through git's normal cascade "
+        "— repo-local `.git/config` when set, otherwise this environment's global config; "
+        "never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or "
+        "wrong identity — an empty *resolved* `git config user.email`/`user.name`, never an "
+        "empty `--local` — is a park-and-report, not an improvisation."
     )
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py::test_compose_git_identity_ruling_in_prompt — not here. Re-checking the

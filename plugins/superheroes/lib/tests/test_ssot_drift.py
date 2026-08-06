@@ -637,6 +637,47 @@ def _showrunner_slot_write_bullet():
     return m.group(0)
 
 
+def _workhorse_close_link_directive():
+    """§11's close-link directive paragraph — the body's first line is the close link."""
+    section = _workhorse_section_11()
+    m = re.search(
+        r"\*\*The body's first line is the close link.*?(?=\n\n\*\*The owner half\*\*)",
+        section,
+        re.DOTALL,
+    )
+    assert m, (
+        "workhorse/SKILL.md §11 close-link directive paragraph not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _workhorse_git_identity_section2_paragraph():
+    """§2's git-identity cascade paragraph — Third, and at every commit after."""
+    text = _read("skills/workhorse/SKILL.md")
+    m = re.search(
+        r"\*\*Third, and at every commit after.*?(?=\n\nYour own worktree)",
+        text,
+        re.DOTALL,
+    )
+    assert m, (
+        "workhorse/SKILL.md §2 git-identity cascade paragraph not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _workhorse_git_identity_tempted_row():
+    """The tempted-table row for synthesizing git identity on commit."""
+    text = _read("skills/workhorse/SKILL.md")
+    m = re.search(
+        r'\| "Git won\'t say who I am[^|]+\|[^|]+\|',
+        text,
+    )
+    assert m, (
+        "workhorse/SKILL.md git-identity tempted-table row not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
 def _workhorse_advisor_vet_bullet():
     """§11's `## Advisor vet` bullet — the builder's stamp instruction and the reminder it seeds."""
     section = _workhorse_section_11()
@@ -777,6 +818,9 @@ def test_pr_body_skeleton_stamps_the_marker_and_seeds_the_advisor_reminder():
     D1 exists because the skeleton omitted the marker 7-for-7. D3 exists because pre-stamping the
     marker destroys the signal that told a dropped advisor write from a vet not yet written — the
     reminder takes it over, so the two ship together or the detection path is worse than before.
+
+    The builder-authorship assertion catches swapping the builder-stamps imperative for an
+    advisor-stamps claim — D1's original defect reproduced with every other predicate still true.
     """
     bullet = _workhorse_advisor_vet_bullet()
     body_marker = _body_marker_from_conventions(_conventions_section_10_7())
@@ -796,6 +840,29 @@ def test_pr_body_skeleton_stamps_the_marker_and_seeds_the_advisor_reminder():
     assert "vet-receipt.md" in reminder.group(0), (
         "the reminder does not point the advisor at the receipt contract it exists to name"
     )
+    assert "FIRST" in reminder.group(0), (
+        "the reminder no longer carries the receipt-first step (FIRST)"
+    )
+    assert "replace this comment" in reminder.group(0), (
+        "the reminder no longer carries the replace-this-comment step"
+    )
+    assert re.search(r"owner-half\s+register", reminder.group(0)), (
+        "the reminder no longer teaches the owner-half register shape"
+    )
+    assert re.search(
+        r"builder creates and pre-stamps|You stamp the marker so the advisor never has to",
+        bullet,
+        re.IGNORECASE,
+    ), (
+        "§11's `## Advisor vet` bullet no longer asserts the builder creates and pre-stamps the slot"
+    )
+    assert not re.search(
+        r"advisor stamps the marker|the builder never stamps",
+        bullet,
+        re.IGNORECASE,
+    ), (
+        "§11's `## Advisor vet` bullet assigns marker stamping to the advisor instead of the builder"
+    )
     assert bullet.index(body_marker) < bullet.index(reminder.group(0)), (
         "the reminder must sit BELOW the marker, not above it"
     )
@@ -807,12 +874,12 @@ def test_pr_body_skeleton_opens_with_the_close_link():
     A close-state sweep of 20 merged PRs found 5 shipped issues left open for want of this one
     mechanical line — a 25% escape rate the template owns, not the builder's memory.
     """
-    section = _workhorse_section_11()
-    assert "`Closes #<issue>.`" in section, (
-        "§11 no longer names the `Closes #<issue>.` first line"
+    directive = _workhorse_close_link_directive()
+    assert "`Closes #<issue>.`" in directive, (
+        "§11 close-link directive no longer names the `Closes #<issue>.` first line"
     )
-    assert re.search(r"first line[^.]{0,80}close link", section, re.IGNORECASE), (
-        "§11 names the close link but no longer says it is the body's FIRST line"
+    assert re.search(r"first line[^.]{0,80}close link", directive, re.IGNORECASE), (
+        "§11 close-link directive names the close link but no longer says it is the body's FIRST line"
     )
 
 
@@ -830,12 +897,50 @@ def test_owner_half_register_matches_its_home():
         "showrunner duty-4 slot-write bullet is missing register element(s) %r "
         "(home: skills/showrunner/reference/vet-receipt.md)" % missing
     )
+    indices = [plain.index(e.lower()) for e in elements]
+    for i in range(len(indices) - 1):
+        assert indices[i] < indices[i + 1], (
+            "showrunner duty-4 register elements out of order: %r before %r"
+            % (elements[i], elements[i + 1])
+        )
+    details_idx = plain.index("`<details>`".lower())
+    assert indices[-1] < details_idx, (
+        "showrunner duty-4 register: `<details>` clause must follow the fourth element"
+    )
     assert "`<details>`" in bullet, (
         "the charter's register copy no longer sends probes/accounting to `<details>`"
     )
     assert "vet-receipt.md" in bullet, (
         "the charter's register copy no longer points at its authoritative home"
     )
+
+
+def test_workhorse_git_identity_prose_matches_the_doctrine():
+    """§11 + launch-doctrine: workhorse git-identity prose carries the doctrine's cascade terms.
+
+    Source: launch_doctrine.RULING_TEXT['git-identity'] — the machine-parsed ruling the launcher
+    delivers; the workhorse copies speak in charter voice but must not drift from these terms.
+    """
+    import launch_doctrine as LD
+
+    ruling = LD.RULING_TEXT["git-identity"]
+    required = (
+        "repo-local",
+        "global",
+        "`-c user.name`",
+        "`-c user.email`",
+    )
+    for term in required:
+        assert term in ruling, "doctrine ruling missing load-bearing term %r" % term
+
+    for label, text in (
+        ("workhorse/SKILL.md §2", _workhorse_git_identity_section2_paragraph()),
+        ("workhorse/SKILL.md tempted-table", _workhorse_git_identity_tempted_row()),
+    ):
+        missing = [t for t in required if t not in text]
+        assert not missing, (
+            "%s: git-identity prose drift — missing doctrine term(s) %r" % (label, missing)
+        )
 
 
 def _showrunner_orchestration_duty():
