@@ -418,3 +418,19 @@ def test_ruling_text_constant_matches_the_artifact_for_every_ruling():
     by_id = {r["id"]: r["text"] for r in parsed["rulings"]}
     for rid in LD.RULING_IDS:
         assert by_id[rid] == LD.RULING_TEXT[rid]
+
+
+# Independent oracle for the git-identity ruling. Every other assertion in this file derives
+# its expectation from RULING_IDS, so a coordinated edit that drops the ruling from BOTH the
+# markdown block and the constant would leave the whole suite green while a launched builder
+# silently stops receiving the invariant. These literals are the thing that fails in that case.
+def test_git_identity_ruling_is_delivered_with_its_prohibitions():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "git-identity" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "git-identity")
+    assert "never pass `-c user.name` or `-c user.email`" in text
+    assert "never synthesize one" in text
+    assert "park-and-report" in text
+    # The composed payload a launched builder actually receives must carry the line.
+    assert "- `git-identity` —" in parsed["rulingsBlock"]

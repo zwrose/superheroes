@@ -54,7 +54,14 @@ RULING_TEXT = {
         "park-and-report, not an improvisation."
     ),
 }
-RULING_INVARIANTS = {"own-worktree": ("OWN worktree", "NEVER the primary checkout")}
+RULING_INVARIANTS = {
+    "own-worktree": ("OWN worktree", "NEVER the primary checkout"),
+    "git-identity": (
+        "never pass `-c user.name` or `-c user.email`",
+        "never synthesize one",
+        "park-and-report",
+    ),
+}
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
 
 _RULINGS_BEGIN = "<!-- launch-doctrine:rulings:begin -->"
