@@ -1973,28 +1973,46 @@ non-application.
 
 ### Broker admission
 
-Most public entry points in `pilot_browser.py` refuse rather than raising a builtin exception for
-the validation failures they recognise. The **known** exceptions from a hostile-input sweep of every
-public entry point — evidence, not a proof of totality — are:
+The broker-admission guarantee does not hold in general: several public entry points in
+`pilot_browser.py` can leak a **builtin** exception once an input gets past outer shape
+validation — a stronger and more useful warning than a list of exceptions to a mostly-true rule.
+The raise sites below are **the ones found so far**; a shape-validation-only hostile-input sweep
+missed several of them, so this set is explicitly **not** established as complete.
 
-- **`validate_pin` and `verify_pin` raise `PilotBrowserError` by design** — they are not
-  refusal-returning functions; callers are expected to catch the domain exception. This does not
-  violate the letter of "a **builtin** exception", but it defeats a reader's reasonable expectation
-  that every entry point returns an `ok`/`reason` dict (e.g. `validate_pin(None)` raises
-  `PilotBrowserError: browser-pin-invalid`).
+- **`validate_pin` raises `PilotBrowserError` by design** — it is exception-only, not a
+  refusal-returning function; callers are expected to catch the domain exception (e.g.
+  `validate_pin(None)` raises `PilotBrowserError: browser-pin-invalid`).
+- **`verify_pin` is a hybrid** — it raises `PilotBrowserError` during its structural-validation
+  phase, then returns `ok`/`reason` dicts for observer failure, version mismatch, and integrity
+  mismatch (seven dict-returning exits in total — six `_fail`, one `_ok`). *This hybrid
+  characterization is from reading those return sites in code, not from an execution receipt — the
+  hostile-input sweep could not drive `verify_pin` past `_validate_observer_safety` in the
+  measurement environment.* `verify_pin` can also raise builtin `ValueError` when a NUL byte
+  appears in the observer executable path (e.g. `command=["/us\x00r/bin/false"]`):
+  `_validate_observer_safety` does `os.stat(executable)` inside a `try/except OSError`, and a NUL
+  in the path raises `ValueError`, which that handler does not catch.
 - **`socket_dir_plan` can raise builtin `TypeError`** when `platform` is unhashable (e.g.
   `platform=[]` or `platform={}`) — a recognised validation input, not a call-shape error.
+- **`create_socket_dir` can raise builtin `ValueError`** on a NUL-containing path (e.g.
+  `path="a\x00b"`): `os.path.islink(path)` and `os.makedirs(path)` sit in a `try/except OSError`,
+  and a NUL path raises `ValueError`, which that handler does not catch.
+- **`plan_topology` can raise builtin `TypeError`** when `accounts` is not iterable despite a valid
+  `slot_ref` (e.g. `plan_topology("slot-a@1", None)` or `plan_topology("slot-a@1", 0)`): `for
+  entry in accounts` executes directly with no iterability check.
 - **`begin_provision_server` and `provision_server` can raise builtin `ValueError`** on a
   NUL-containing journal path (e.g. `journal_path="a\x00b"`); the failure comes from `os.open` on
   the lock file inside `pilot_journal._acquire_journal_lock`, reached because `_is_str_path`
   accepts any `str` and a NUL byte only fails at the syscall — not from opening the journal itself.
-  `teardown_server` also takes a journal path but refuses earlier with
-  `browser-terminal-state-unobserved` on such a path, before it ever journals — its exposure is
-  masked by an earlier check, not absent by design.
+- **`teardown_server` can raise builtin `ValueError`** on a NUL-containing journal path when exit
+  observation reports both processes exited (e.g. `teardown_server("a\x00b", ...,
+  observe_exit=both-exited)`): it is masked **only while exit observation refuses** — the default
+  observer reports not-exited and refuses early with `browser-terminal-state-unobserved`, but with
+  an observer reporting both processes exited it proceeds to journalling and hits the same lock-file
+  `ValueError`; its `except` clauses do not handle it.
 
-All other public entry points — `create_socket_dir`, `remove_socket_dir`,
-`assert_browser_is_server_child`, `teardown_server`, `plan_topology`, `admit_server_registry`, and
-`admit` — refused on every hostile input in the same sweep.
+A **common cause** runs through most of these: a `try/except OSError` around a path syscall does
+not catch the `ValueError` a NUL byte produces, and `_is_str_path` accepts any `str`. Naming the
+pattern is more useful to a future reader than the list alone.
 
 `provision_server` takes a **required** `effect_id`, and the two ways to get that wrong land
 differently: **omitting** it raises `TypeError` at the call, as any Python call missing an argument
