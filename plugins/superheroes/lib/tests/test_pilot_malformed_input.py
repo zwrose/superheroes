@@ -688,28 +688,28 @@ def _assert_no_leaked_exceptions(module_label, name, param, hostile, invoke):
 
 
 @pytest.mark.parametrize("name", sorted(DRIVERS_LIFECYCLE))
-@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: repr(v)[:40])
+@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: type(v).__name__)
 def test_pilot_lifecycle_public_api_never_leaks_builtin_exceptions(name, hostile):
     for param in _lifecycle_params(name):
         _assert_no_leaked_exceptions("pilot_lifecycle", name, param, hostile, _invoke_lifecycle)
 
 
 @pytest.mark.parametrize("name", sorted(DRIVERS_JOURNAL))
-@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: repr(v)[:40])
+@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: type(v).__name__)
 def test_pilot_journal_public_api_never_leaks_builtin_exceptions(name, hostile):
     for param in _journal_params(name):
         _assert_no_leaked_exceptions("pilot_journal", name, param, hostile, _invoke_journal)
 
 
 @pytest.mark.parametrize("name", sorted(DRIVERS_APPCTL))
-@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: repr(v)[:40])
+@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: type(v).__name__)
 def test_pilot_appctl_public_api_never_leaks_builtin_exceptions(name, hostile):
     for param in _appctl_params(name):
         _assert_no_leaked_exceptions("pilot_appctl", name, param, hostile, _invoke_appctl)
 
 
 @pytest.mark.parametrize("name", sorted(DRIVERS_WAVE))
-@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: repr(v)[:40])
+@pytest.mark.parametrize("hostile", HOSTILE_VALUES, ids=lambda v: type(v).__name__)
 def test_pilot_wave_public_api_never_leaks_builtin_exceptions(name, hostile):
     for param in _wave_params(name):
         _assert_no_leaked_exceptions("pilot_wave", name, param, hostile, _invoke_wave)
