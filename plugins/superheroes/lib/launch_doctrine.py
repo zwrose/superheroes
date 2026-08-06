@@ -17,6 +17,7 @@ RULING_IDS = (
     "design-forks",
     "await-dispatches",
     "remote-head",
+    "git-identity",
 )
 PREFLIGHT_CHECKS = (
     ("quota", "always"),
@@ -47,6 +48,11 @@ RULING_TEXT = {
         "cannot fit the turn, park durably on the issue or PR."
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
+    "git-identity": (
+        "commits inherit the repo's configured git identity; never pass `-c user.name` or "
+        "`-c user.email` and never synthesize one; a missing or wrong identity is a "
+        "park-and-report, not an improvisation."
+    ),
 }
 RULING_INVARIANTS = {"own-worktree": ("OWN worktree", "NEVER the primary checkout")}
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)

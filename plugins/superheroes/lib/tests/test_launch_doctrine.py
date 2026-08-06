@@ -42,7 +42,10 @@ def test_load_happy_path():
     assert result["reason"] is None
     assert [r["id"] for r in result["rulings"]] == list(LD.RULING_IDS)
     assert [(c["id"], c["class"]) for c in result["checks"]] == list(LD.PREFLIGHT_CHECKS)
-    assert result["rulingsBlock"].count("\n") == 5
+    # One line per pinned ruling, so N rulings joined by N-1 newlines. Derived from
+    # RULING_IDS rather than hand-counted: a bare literal here silently rots the moment
+    # a ruling is added, and the block is the byte-pinned payload a launched builder gets.
+    assert result["rulingsBlock"].count("\n") == len(LD.RULING_IDS) - 1
     for rid in LD.RULING_IDS:
         assert any(rid in line for line in result["rulingsBlock"].split("\n"))
     assert len(result["digest"]) == 64
