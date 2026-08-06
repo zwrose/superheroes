@@ -321,19 +321,24 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
     def _fake_sleep(seconds):
         sleep_calls.append(seconds)
 
-    def _delegating_reap_recorder(event_name, original_fn):
-        """Wrap `original_fn` to log a reap event and then still actually call it.
+    # Task 2 (#866 WO-8, flakiness introduced by WO-7's own fix): `pbr.os` IS the shared stdlib
+    # `os` module, so patching `waitpid`/`wait`/`waitid`/`wait3`/`wait4` on it is PROCESS-GLOBAL,
+    # not scoped to this test. Any unrelated thread that legitimately reaps some other child
+    # while this test runs would append a foreign event — recorded with neither pid nor result,
+    # so even an unrelated `waitpid(..., WNOHANG)` returning `(0, 0)` could land inside the
+    # ordering window and fail the assertion spuriously. Scope the RECORDING (never the
+    # delegation, which always runs) to the thread that is actually driving `run_bounded`/
+    # `_terminate` — this test's own thread, since both execute synchronously on whichever thread
+    # calls `observe_datastore_identity`. The runner's own reader thread never reaps, so nothing
+    # we care about is filtered out by this.
+    test_thread_ident = threading.get_ident()
 
-        Task 2 (#866 WO-7): a direct OS-level reap — `os.waitpid`/`waitid`/`wait3`/`wait4` — used
-        between the two `killpg` calls instead of `proc.wait`/`proc.poll` is invisible to the fake
-        Popen object's own methods, so the shared event log would stay silent even though the
-        leader's pid was released early. DELEGATING (not stubbing out) matters: something else in
-        the interpreter may legitimately rely on these during the test, so behaviour must be
-        unchanged, only observed.
-        """
+    def _delegating_reap_recorder(event_name, original_fn):
+        """Wrap `original_fn` to log a reap event (on the test's own thread only) and delegate."""
 
         def _recorder(*args, **kwargs):
-            events.append((event_name,))
+            if threading.get_ident() == test_thread_ident:
+                events.append((event_name,))
             return original_fn(*args, **kwargs)
 
         return _recorder
@@ -341,10 +346,11 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
     monkeypatch.setattr(pbr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(pbr.os, "killpg", _fake_killpg)
     monkeypatch.setattr(pbr.time, "sleep", _fake_sleep)
-    # `waitpid` exists on every platform pilot_bounded_run runs on; `waitid`/`wait3`/`wait4` do
-    # not (macOS, for one, has no `os.waitid`) — guard with hasattr so this never breaks on a
-    # platform missing one of them.
+    # `waitpid`/`wait` exist on every platform pilot_bounded_run runs on; `waitid`/`wait3`/
+    # `wait4` do not (macOS, for one, has no `os.waitid`) — guard with hasattr so this never
+    # breaks on a platform missing one of them.
     monkeypatch.setattr(pbr.os, "waitpid", _delegating_reap_recorder("waitpid", pbr.os.waitpid))
+    monkeypatch.setattr(pbr.os, "wait", _delegating_reap_recorder("os_wait", pbr.os.wait))
     for _reap_name in ("waitid", "wait3", "wait4"):
         if hasattr(pbr.os, _reap_name):
             monkeypatch.setattr(
@@ -381,17 +387,18 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
         "that order; got %r" % (fake_pid, killpg_events)
     )
 
-    # Task 2: one shared, ordered event list across Popen/killpg/wait/poll/waitpid/waitid/wait3/
-    # wait4 — not several separate lists to correlate afterwards — so the reap-after-signals
+    # Task 2: one shared, ordered event list across Popen/killpg/wait/poll/waitpid/os_wait/waitid/
+    # wait3/wait4 — not several separate lists to correlate afterwards — so the reap-after-signals
     # check is a single position comparison. `proc.wait`, `proc.poll`, AND every direct OS-level
-    # reap call (`os.waitpid`/`waitid`/`wait3`/`wait4`, whichever exist on this platform) all
-    # count as reaping events: any of them can release the leader's pid in real life, so any of
-    # them sitting between the two `killpg` calls is the same defect (#866 WO-7 Task 2).
-    _REAP_EVENT_NAMES = ("wait", "poll", "waitpid", "waitid", "wait3", "wait4")
+    # reap call (`os.waitpid`/`os.wait`/`waitid`/`wait3`/`wait4`, whichever exist on this
+    # platform) all count as reaping events: any of them can release the leader's pid in real
+    # life, so any of them sitting between the two `killpg` calls is the same defect (#866 WO-7
+    # Task 2, WO-8 Task 1 added bare `os.wait`).
+    _REAP_EVENT_NAMES = ("wait", "poll", "waitpid", "os_wait", "waitid", "wait3", "wait4")
     reap_indices = [i for i, e in enumerate(events) if e[0] in _REAP_EVENT_NAMES]
     assert reap_indices, (
-        "no reaping event (proc.wait, proc.poll, or a direct os.wait*/os.waitid call) was "
-        "recorded at all — event log: %r" % (events,)
+        "no reaping event (proc.wait, proc.poll, os.waitpid, os.wait, or another direct "
+        "os.wait*/os.waitid call) was recorded at all — event log: %r" % (events,)
     )
     killpg_indices = [i for i, e in enumerate(events) if e[0] == "killpg"]
     assert max(killpg_indices) < min(reap_indices), (
