@@ -222,7 +222,15 @@ def collect(cwd, root=None):
         profile = model_tier_overrides.resolve_profile_path(cwd, root)
         tiers = model_tier_overrides.effective_tiers(profile)
         overrides = model_tier_overrides.load_overrides(profile)
-    except Exception:
+    except Exception as exc:
+        _cr = sys.modules.get("calibration_resolve")
+        if _cr is None:
+            try:
+                import calibration_resolve as _cr
+            except Exception:
+                _cr = None
+        if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
+            raise
         profile, tiers, overrides = None, None, {}
     try:
         # #409: the validated engine-preference view — carries the accepted codexModels pins AND the

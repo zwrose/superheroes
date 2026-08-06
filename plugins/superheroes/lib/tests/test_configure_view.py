@@ -244,6 +244,76 @@ def test_collect_threads_root_into_model_tier_resolution(tmp_path, monkeypatch):
     assert captured["root"] == root
 
 
+def _empty_store_root(tmp_path):
+    d = tmp_path / "empty_store"
+    d.mkdir()
+    return str(d)
+
+
+def _ensure_global_unified_layer(repo, store_root):
+    store = mr.ensure_project_store(repo, root=store_root)
+    cfg = os.path.join(store, "config")
+    os.makedirs(cfg, exist_ok=True)
+    layer = os.path.join(cfg, "review-crew.md")
+    with open(layer, "w") as fh:
+        fh.write("## Focus hints\n- code: x\n")
+    return layer
+
+
+def test_collect_raises_on_unresolvable_root(tmp_path, isolated_default_store_root):
+    import calibration_resolve as cr
+    import pytest
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = isolated_default_store_root
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError):
+        cv.collect(str(repo), root=empty)
+
+
+def test_render_raises_on_unresolvable_root(tmp_path, isolated_default_store_root):
+    import calibration_resolve as cr
+    import pytest
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = isolated_default_store_root
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError):
+        cv.render(str(repo), root=empty)
+
+
+def test_collect_fallopen_when_calibration_resolve_unimportable(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    data = cv.collect(str(tmp_path))
+    assert data["modelTierProfile"] is None
+    assert data["modelTierOverrides"] == {}
+    assert data["modelTiers"]["implementer"] == "sonnet"
+
+
+def test_collect_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeypatch):
+    import types
+    import sys
+
+    stub = types.ModuleType("calibration_resolve")
+    monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
+
+    def _raise(*_a, **_kw):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(cv.model_tier_overrides, "resolve_profile_path", _raise)
+    data = cv.collect(str(tmp_path))
+    assert data["modelTierProfile"] is None
+    assert data["modelTierOverrides"] == {}
+
+
 def _seed_guardian_view_repo(tmp_path, *, guardian_config=None, ledger_records=None,
                              snapshot=None, vitals_trend=None):
     repo = init_calibrated_repo(tmp_path)

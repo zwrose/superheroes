@@ -260,7 +260,15 @@ def _resolve_profile_path(cwd=None, root=None):
     try:
         import calibration_resolve
         return calibration_resolve.resolve_profile_path(cwd or os.getcwd(), root=root)
-    except Exception:
+    except Exception as exc:
+        _cr = sys.modules.get("calibration_resolve")
+        if _cr is None:
+            try:
+                import calibration_resolve as _cr
+            except Exception:
+                _cr = None
+        if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
+            raise
         return None
 
 
