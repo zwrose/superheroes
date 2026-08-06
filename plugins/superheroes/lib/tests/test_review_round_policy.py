@@ -176,3 +176,18 @@ def test_object_changed_subjects_from_live_doc_fix_still_schedule_skips():
     assert out["escalationPolicy"] == "cheap-first"
     assert out["dimensions"]["architecture-reviewer"]["tier"] == "reviewer"
     assert out["dimensions"]["security-reviewer"]["action"] == "skip"
+
+
+def test_doc_mode_never_rearms_or_parks_less_than_code_mode():
+    # #884: FR-8 is a FLOOR on the shared rule, not a replacement. Across the whole decision table,
+    # doc mode must re-arm at least as often as code mode and park at least as often — a single cell
+    # where doc mode is the laxer of the two is the fail-open class briefcheck-001 caught.
+    weaker = []
+    for sevs in ([], ["Nit"], ["Minor"], ["Important"], ["Critical"], ["Important", "Critical"]):
+        for run in (0, 1, 2, 3):
+            for cross in (False, True):
+                code = RP.confirmation_followup(sevs, run, cross)
+                doc = RP.confirmation_followup(sevs, run, cross, doc_mode=True)
+                if (code["rearm"] and not doc["rearm"]) or (code["park"] and not doc["park"]):
+                    weaker.append((sevs, run, cross, code, doc))
+    assert not weaker, weaker

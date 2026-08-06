@@ -146,19 +146,34 @@ def _read_findings(session_dir, dimension, tier):
 
 # --- confirmation follow-up (spec-leg changed-surface) ------------------------
 
+def _doc_confirmation_followup(surfaced_severities, confirmations_run, cross_cutting):
+    """#884 — the ONE chokepoint through which this module reaches the confirmation-followup rule.
+
+    review-spec IS the document-review leg: `doc_mode` is not a knob here, it is the leg's identity
+    (FR-8; `reference/review-loop.md`). The production path lost the flag once simply by letting it
+    default (`confirmation_followup(..., doc_mode=False)`), and every spec review since converged
+    under the weaker code-review bar with nothing to notice it. Routing EVERY call in this module
+    through this one helper — pinned by an AST census and two runtime spies in
+    `tests/test_spec_loop_plan.py` — is what stops that from recurring. Do NOT call
+    `review_round_policy.confirmation_followup` directly from this module."""
+    return review_round_policy.confirmation_followup(
+        surfaced_severities, confirmations_run, cross_cutting, doc_mode=True)
+
+
 def _further_confirmation_owed(session_dir, state, dimensions):
     """#174: is a FURTHER full confirmation panel owed? The mandatory first panel is always owed;
     after one QUALIFYING panel has run, the follow-up decision is computed over EVERYTHING SINCE THAT
     PANEL — the severities surfaced by the panel and every later scoped round, and the rework applied
     since (the changed spec surface diffed from the panel's own snapshot, so multi-round rework and
-    an unknown surface both fail toward one more panel). A Critical still owed at the cap parks."""
+    an unknown surface both fail toward one more panel). A Critical still owed at the cap parks.
+    #884: the follow-up decision runs through the doc-mode bar (FR-8) via `_doc_confirmation_followup`."""
     confirmations = _confirmation_rounds(state, dimensions)
     if not confirmations:
         return {"owed": True, "park": False, "panels": 0, "surfaced": False}
     last_round, _ = confirmations[-1]
     surfaced = _surfaced_severities_since(state, last_round)
     cross = review_round_policy.is_cross_cutting(_diff_changed_surface(session_dir, last_round))
-    followup = review_round_policy.confirmation_followup(surfaced, len(confirmations), cross)
+    followup = _doc_confirmation_followup(surfaced, len(confirmations), cross)
     return {"owed": followup["rearm"], "park": followup["park"], "panels": len(confirmations),
             "reason": followup["reason"], "surfaced": bool(surfaced)}
 
