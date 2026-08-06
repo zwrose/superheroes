@@ -150,15 +150,43 @@ def test_observe_datastore_identity_routes_through_the_shared_runner(private_tmp
     # does not have, because it observes what actually ran. This test proves ROUTING only;
     # process-group CONTAINMENT itself is proved by the sibling seam test below and by
     # `pilot_mint`'s grandchild test, not here.
+    #
+    # BINDING (#866 WO-7 Task 1): "the spy fired" and "the caller returned the right identity"
+    # are proved independently unless something ties the second to the first. Without this, a
+    # caller could call `run_bounded` with the right command, discard its result, and obtain the
+    # identity through a separate, UNCONTAINED subprocess — `spy_calls` would still be populated
+    # and the same script token would still satisfy an identity check, so that regression would
+    # stay green. The spy here substitutes a distinctive sentinel into the SPIED call's own
+    # return value (not the real script's actual output) and the test asserts the caller's
+    # returned identity IS that sentinel — the only way to pass is to have actually consumed the
+    # spied call's result.
+    #
+    # LIMITATION, accepted and documented rather than fixed (#866 WO-7 Task 3, reviewer-confirmed
+    # aliasing false-negative): this spy binds to `pilot_bounded_run.run_bounded` as a module
+    # attribute. If `pilot_boundary` is ever refactored to call through a cached or aliased
+    # reference obtained before this monkeypatch runs (e.g. `from pilot_bounded_run import
+    # run_bounded as bounded`), the live route would still execute correctly but `spy_calls` would
+    # stay empty and this test would go RED even though routing is fine. That is a deliberate
+    # trade, not an oversight: the failure direction is a false RED — a spurious, immediately
+    # visible failure a maintainer fixes by updating the spy's patch target — never a false GREEN
+    # over an actually-broken route, which is the direction that would let a containment
+    # regression ship silently. Chasing it away would mean reinstating the AST check this test
+    # replaced (rejected above for its own false-positive/false-negative pair) or patching every
+    # possible alias site, and neither buys more than it costs.
     reach_root, run_cwd, script = _bounded_run_observer_layout(private_tmp)
     observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
 
+    sentinel = "wo7-spy-sentinel-b6b6d2f4"
     spy_calls = []
     real_run_bounded = pbr.run_bounded
 
     def _spy_run_bounded(*args, **kwargs):
         spy_calls.append((args, kwargs))
-        return real_run_bounded(*args, **kwargs)
+        real_result = real_run_bounded(*args, **kwargs)
+        # Substitute the sentinel into THIS call's own result — the real script's actual stdout
+        # ("distinctive-observer-identity-token") is deliberately discarded here so that only the
+        # spied call's substituted value can satisfy the identity assertion below.
+        return dict(real_result, stdout=(sentinel + "\n").encode("utf-8"))
 
     monkeypatch.setattr(pbr, "run_bounded", _spy_run_bounded)
 
@@ -180,7 +208,13 @@ def test_observe_datastore_identity_routes_through_the_shared_runner(private_tmp
         "run_bounded was called, but not with the observer's own command: got %r, expected %r"
         % (called_args[0], observer["command"])
     )
-    assert result["identity"] == "distinctive-observer-identity-token"
+    assert result["identity"] == sentinel, (
+        "observe_datastore_identity's returned identity did not come from the SPIED call's own "
+        "result — got %r, expected the sentinel %r substituted into that call's return value; "
+        "this is exactly the escape where run_bounded is called but its result is discarded in "
+        "favor of an identity obtained some other way (#866 WO-7 Task 1)"
+        % (result["identity"], sentinel)
+    )
 
 
 class _BlockedFakeStdout:
@@ -287,9 +321,37 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
     def _fake_sleep(seconds):
         sleep_calls.append(seconds)
 
+    def _delegating_reap_recorder(event_name, original_fn):
+        """Wrap `original_fn` to log a reap event and then still actually call it.
+
+        Task 2 (#866 WO-7): a direct OS-level reap — `os.waitpid`/`waitid`/`wait3`/`wait4` — used
+        between the two `killpg` calls instead of `proc.wait`/`proc.poll` is invisible to the fake
+        Popen object's own methods, so the shared event log would stay silent even though the
+        leader's pid was released early. DELEGATING (not stubbing out) matters: something else in
+        the interpreter may legitimately rely on these during the test, so behaviour must be
+        unchanged, only observed.
+        """
+
+        def _recorder(*args, **kwargs):
+            events.append((event_name,))
+            return original_fn(*args, **kwargs)
+
+        return _recorder
+
     monkeypatch.setattr(pbr.subprocess, "Popen", _fake_popen)
     monkeypatch.setattr(pbr.os, "killpg", _fake_killpg)
     monkeypatch.setattr(pbr.time, "sleep", _fake_sleep)
+    # `waitpid` exists on every platform pilot_bounded_run runs on; `waitid`/`wait3`/`wait4` do
+    # not (macOS, for one, has no `os.waitid`) — guard with hasattr so this never breaks on a
+    # platform missing one of them.
+    monkeypatch.setattr(pbr.os, "waitpid", _delegating_reap_recorder("waitpid", pbr.os.waitpid))
+    for _reap_name in ("waitid", "wait3", "wait4"):
+        if hasattr(pbr.os, _reap_name):
+            monkeypatch.setattr(
+                pbr.os,
+                _reap_name,
+                _delegating_reap_recorder(_reap_name, getattr(pbr.os, _reap_name)),
+            )
 
     with pytest.raises(pb.PilotBoundaryError) as exc:
         pb.observe_datastore_identity(
@@ -319,19 +381,22 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
         "that order; got %r" % (fake_pid, killpg_events)
     )
 
-    # Task 2: one shared, ordered event list across Popen/killpg/wait/poll — not three separate
-    # lists to correlate afterwards — so the reap-after-signals check is a single position
-    # comparison. `wait` AND `poll` both count as reaping events: either can release the leader's
-    # pid in real life, so either sitting between the two `killpg` calls is the same defect.
-    reap_indices = [i for i, e in enumerate(events) if e[0] in ("wait", "poll")]
+    # Task 2: one shared, ordered event list across Popen/killpg/wait/poll/waitpid/waitid/wait3/
+    # wait4 — not several separate lists to correlate afterwards — so the reap-after-signals
+    # check is a single position comparison. `proc.wait`, `proc.poll`, AND every direct OS-level
+    # reap call (`os.waitpid`/`waitid`/`wait3`/`wait4`, whichever exist on this platform) all
+    # count as reaping events: any of them can release the leader's pid in real life, so any of
+    # them sitting between the two `killpg` calls is the same defect (#866 WO-7 Task 2).
+    _REAP_EVENT_NAMES = ("wait", "poll", "waitpid", "waitid", "wait3", "wait4")
+    reap_indices = [i for i, e in enumerate(events) if e[0] in _REAP_EVENT_NAMES]
     assert reap_indices, (
-        "no reaping event (proc.wait or proc.poll) was recorded at all — event log: %r"
-        % (events,)
+        "no reaping event (proc.wait, proc.poll, or a direct os.wait*/os.waitid call) was "
+        "recorded at all — event log: %r" % (events,)
     )
     killpg_indices = [i for i, e in enumerate(events) if e[0] == "killpg"]
     assert max(killpg_indices) < min(reap_indices), (
-        "a reaping event (proc.wait or proc.poll) happened before both signals finished "
-        "sending — event order was %r" % (events,)
+        "a reaping event (%s) happened before both signals finished sending — event order was %r"
+        % (events[min(reap_indices)][0], events)
     )
 
     assert sleep_calls, "the SIGTERM grace sleep never ran"
