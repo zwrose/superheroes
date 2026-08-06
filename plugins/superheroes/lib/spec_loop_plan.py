@@ -46,6 +46,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import circuit_breaker  # noqa: E402
 import loop_state  # noqa: E402
 import review_round_policy  # noqa: E402
 import loop_plan_common  # noqa: E402,F401
@@ -146,19 +147,84 @@ def _read_findings(session_dir, dimension, tier):
 
 # --- confirmation follow-up (spec-leg changed-surface) ------------------------
 
+def _compiled_severities(compiled_path):
+    """The blocking severities the COMPILE LAYER surfaced this round.
+
+    #884 review round 1 (architecture-001 / code-001): review-spec merges the deterministic
+    citation validator's findings into the pool at the COMPILE layer — "NOT as a sixth dispatched
+    dimension" (review-spec SKILL.md §compile) — so they never reach a `findings-<dim>.json` and
+    `_surfaced_severities` structurally cannot see them. Under FR-8 ANY open blocking finding owes
+    a full confirming panel, so a validator-only blocker surfaced BY a confirmation panel must
+    count exactly like a dimension's. Severity mapping mirrors `_surfaced_severities`: Critical
+    when the finding is Critical, else Important; the blocking partition is the shared fail-closed
+    `circuit_breaker.is_blocking`. Any read/shape failure returns ["Critical"] — fail toward one
+    more panel, never toward silence."""
+    try:
+        with open(compiled_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        findings = data if isinstance(data, list) else data.get("findings", [])
+        out = []
+        for entry in findings:
+            if not isinstance(entry, dict):
+                out.append("Critical")
+                continue
+            sev = entry.get("severity")
+            if circuit_breaker.is_blocking(sev):
+                out.append("Critical" if circuit_breaker.is_critical(sev) else "Important")
+        return out
+    except (OSError, ValueError, TypeError, AttributeError, KeyError):
+        return ["Critical"]
+
+
+def _compiled_severities_since(state, since_round):
+    """#884: the compile-layer blocking severities recorded on every round from `since_round`
+    onward — the compile-layer twin of `_surfaced_severities_since`, unioned with it so the
+    FR-8 follow-up sees a validator-only blocker as the open blocker it is.
+
+    #884 review round 2: missing or untrustworthy ``compiledSeverities`` fails closed as
+    ``Critical`` (mirrors ``_surfaced_severities``'s missing-``criticalCount`` rule in
+    ``loop_plan_common.py``) — never treat silence as a clean round."""
+    out = []
+    for key in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
+        if not str(key).isdigit() or int(key) < since_round:
+            continue
+        recorded = (state["rounds"][key] or {}).get("compiledSeverities")
+        if isinstance(recorded, list) and all(isinstance(s, str) for s in recorded):
+            out.extend(recorded)
+        else:
+            out.append("Critical")
+    return out
+
+
+def _doc_confirmation_followup(surfaced_severities, confirmations_run, cross_cutting):
+    """#884 — the ONE chokepoint through which this module reaches the confirmation-followup rule.
+
+    review-spec IS the document-review leg: `doc_mode` is not a knob here, it is the leg's identity
+    (FR-8; `reference/review-loop.md`). The production path lost the flag once simply by letting it
+    default (`confirmation_followup(..., doc_mode=False)`), and every spec review since converged
+    under the weaker code-review bar with nothing to notice it. Routing EVERY call in this module
+    through this one helper — pinned by an AST census and two runtime spies in
+    `tests/test_spec_loop_plan.py` — is what stops that from recurring. Do NOT call
+    `review_round_policy.confirmation_followup` directly from this module."""
+    return review_round_policy.confirmation_followup(
+        surfaced_severities, confirmations_run, cross_cutting, doc_mode=True)
+
+
 def _further_confirmation_owed(session_dir, state, dimensions):
     """#174: is a FURTHER full confirmation panel owed? The mandatory first panel is always owed;
     after one QUALIFYING panel has run, the follow-up decision is computed over EVERYTHING SINCE THAT
     PANEL — the severities surfaced by the panel and every later scoped round, and the rework applied
     since (the changed spec surface diffed from the panel's own snapshot, so multi-round rework and
-    an unknown surface both fail toward one more panel). A Critical still owed at the cap parks."""
+    an unknown surface both fail toward one more panel). A Critical still owed at the cap parks.
+    #884: the follow-up decision runs through the doc-mode bar (FR-8) via `_doc_confirmation_followup`."""
     confirmations = _confirmation_rounds(state, dimensions)
     if not confirmations:
         return {"owed": True, "park": False, "panels": 0, "surfaced": False}
     last_round, _ = confirmations[-1]
-    surfaced = _surfaced_severities_since(state, last_round)
+    surfaced = (_surfaced_severities_since(state, last_round)
+                + _compiled_severities_since(state, last_round))
     cross = review_round_policy.is_cross_cutting(_diff_changed_surface(session_dir, last_round))
-    followup = review_round_policy.confirmation_followup(surfaced, len(confirmations), cross)
+    followup = _doc_confirmation_followup(surfaced, len(confirmations), cross)
     return {"owed": followup["rearm"], "park": followup["park"], "panels": len(confirmations),
             "reason": followup["reason"], "surfaced": bool(surfaced)}
 
@@ -329,6 +395,10 @@ def _next_round_out(session_dir, state, state_ok, round_no, plan, action, mandat
 def cmd_decide(session_dir, round_no, max_rounds, compiled, skipped_blocking, dimensions):
     state_ok, state = load_state(session_dir)
     try:
+        if state_ok:
+            _round_entry(state, round_no)["compiledSeverities"] = _compiled_severities(compiled)
+        # #884 review round 2 (premortem-004): record BEFORE the read that can raise — the except
+        # branch continues the loop, and a missing record here lands as silence in later windows.
         present = loop_state._blocking_present_from_compiled(compiled)
         blocking_fixed = max(0, present - skipped_blocking)
     except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
@@ -385,12 +455,15 @@ def cmd_decide(session_dir, round_no, max_rounds, compiled, skipped_blocking, di
         plan = review_round_policy.plan_round(
             {"round": round_no + 1, "dimensions": dimensions, "confirmation": True,
              "changedSubjects": None, "previous": {}})
+        if owe["panels"] >= 1:
+            reason = ("MANDATORY: %s — a full %s confirmation round must come back clean before exit."
+                      % (owe["reason"], DEEP))
+        else:
+            reason = ("MANDATORY: this round was reduced or under-evidenced (skipped dimensions, "
+                      "%s-tier results, missing receipts, or unreadable scheduler state) — a full "
+                      "%s confirmation round must come back clean before exit." % (CHEAP, DEEP))
         return _next_round_out(
-            session_dir, state, state_ok, round_no, plan, "review", True,
-            "MANDATORY: this round was reduced or under-evidenced (skipped dimensions, "
-            "%s-tier results, missing receipts, or unreadable scheduler state) — a full "
-            "%s confirmation round must come back clean before exit." % (CHEAP, DEEP),
-            dimensions)
+            session_dir, state, state_ok, round_no, plan, "review", True, reason, dimensions)
 
     if action == "review":
         changed = _diff_changed_surface(session_dir, round_no) if state_ok else None

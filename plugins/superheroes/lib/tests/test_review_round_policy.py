@@ -141,6 +141,25 @@ def test_doc_mode_critical_at_cap_parks():
     assert out["park"] is True and out["atCap"] is True
 
 
+def test_doc_mode_unknown_surface_rearms_when_nothing_blocking_open():
+    # #884 briefcheck-001: an unknown changed surface maps to cross_cutting=True on purpose
+    # (is_cross_cutting(None)); with nothing blocking open, doc mode must still fail CLOSED to the
+    # shared trigger rather than certifying. Pinned at the policy layer: after the compile-layer
+    # union (#884 review round 1) the production `decide` path can no longer reach this cell,
+    # because every route into the follow-up with a qualifying panel carries a blocker.
+    out = RP.confirmation_followup([], 1, True, doc_mode=True)
+    assert out["rearm"] is True and out["park"] is False
+
+
+def test_doc_mode_unknown_surface_at_cap_certifies_like_code_mode():
+    # #884 review round 1 (security-001 / premortem-002): at the confirmation-panel cap, with
+    # nothing blocking open, the doc leg certifies exactly as code review does. This is the cell
+    # the contract prose used to over-claim as fail-closed; the behaviour is correct and the
+    # prose is what was fixed (reference/review-loop.md).
+    out = RP.confirmation_followup([], 2, True, doc_mode=True)
+    assert out["rearm"] is False and out["park"] is False and out["atCap"] is True
+
+
 def test_code_mode_unchanged_important_at_cap_scoped_verify():
     # regression guard: code review's rule is untouched — a non-Critical, non-cross-cutting finding
     # at the cap certifies via scoped verify. `cross_cutting=False` exercises the actual early
@@ -176,3 +195,18 @@ def test_object_changed_subjects_from_live_doc_fix_still_schedule_skips():
     assert out["escalationPolicy"] == "cheap-first"
     assert out["dimensions"]["architecture-reviewer"]["tier"] == "reviewer"
     assert out["dimensions"]["security-reviewer"]["action"] == "skip"
+
+
+def test_doc_mode_never_rearms_or_parks_less_than_code_mode():
+    # #884: FR-8 is a FLOOR on the shared rule, not a replacement. Across the whole decision table,
+    # doc mode must re-arm at least as often as code mode and park at least as often — a single cell
+    # where doc mode is the laxer of the two is the fail-open class briefcheck-001 caught.
+    weaker = []
+    for sevs in ([], ["Nit"], ["Minor"], ["Important"], ["Critical"], ["Important", "Critical"]):
+        for run in (0, 1, 2, 3):
+            for cross in (False, True):
+                code = RP.confirmation_followup(sevs, run, cross)
+                doc = RP.confirmation_followup(sevs, run, cross, doc_mode=True)
+                if (code["rearm"] and not doc["rearm"]) or (code["park"] and not doc["park"]):
+                    weaker.append((sevs, run, cross, code, doc))
+    assert not weaker, weaker

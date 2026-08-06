@@ -76,8 +76,12 @@ certify at the confirmation cap. **Two caps, not one (#518):** the overall round
 certification withheld) — a document has no stronger downstream reviewer than the owner, so the
 gate never scoped-certifies a blocker the way code review may; a spec that reaches a clean
 full-deep confirmation at the cap still certifies. The **confirmation-panel budget is separate**: at most **two** full panels
-per loop (`MAX_CONFIRMATIONS = 2` in `review_round_policy`); on the spine's doc path a doc-mode
-confirmation that reaches that budget parks too, rather than scoped-certifying. The earlier
+per loop (`MAX_CONFIRMATIONS = 2` in `review_round_policy`); on the `spec_loop_plan` document-review
+path a doc-mode confirmation that reaches that budget parks too, rather than scoped-certifying.
+FR-8's any-open-blocker trigger sits on top of the shared cross-cutting/unknown-surface trigger
+rather than replacing it — below the confirmation-panel cap an unknown changed surface still fails
+closed on the doc leg; at the cap, with nothing blocking open, the doc leg certifies exactly as code
+review does. The earlier
 three-round phrasing conflated these two caps and is retired. Everything else in
 this section — the full baseline panel, the convergence record, fail-closed on malformed/stale
 receipts — is identical. The re-arm/park **rule** lives once in

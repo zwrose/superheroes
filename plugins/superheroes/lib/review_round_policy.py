@@ -177,10 +177,10 @@ def confirmation_followup(surfaced_severities, confirmations_run, cross_cutting,
     """#174 confirmation-bar economics — the follow-up decision after a FULL confirmation panel
     surfaced blocking findings (which the fix loop still resolves + verifies, requirement 1).
 
-    `doc_mode` (FR-8): a document review has no cheap scoped tier, so ANY open blocking finding
-    (Critical OR Important) re-arms the one further confirmation, and at the cap the review
-    ALWAYS parks (never auto-passes — the Never-auto-pass constraint). Code review's rule is
-    unchanged when doc_mode is False.
+    `doc_mode` (FR-8, #884): adds the any-open-blocker trigger and the always-park-at-cap rule
+    **on top of** the shared trigger below — with nothing blocking open the shared
+    cross-cutting/unknown-surface trigger still governs, so doc_mode never re-arms less and never
+    parks less than code mode. Code review's rule is unchanged when doc_mode is False.
 
     Requirements 2 & 3:
       - Only a Critical surfaced by the confirmation, OR cross-cutting rework, triggers one more
@@ -195,16 +195,17 @@ def confirmation_followup(surfaced_severities, confirmations_run, cross_cutting,
     at_cap = confirmations_run >= max_confirmations
     if doc_mode:
         has_blocking = any(circuit_breaker.is_blocking(s) for s in sevs)
-        if not has_blocking:
+        if has_blocking:
+            if at_cap:
+                return {"rearm": False, "park": True, "atCap": True,
+                        "reason": "open blocking finding at the doc-review round cap — park; "
+                                  "certification withheld"}
+            return {"rearm": True, "park": False, "atCap": False,
+                    "reason": "open blocking finding in doc review — one more full confirmation "
+                              "panel required"}
+        if not cross_cutting:
             return {"rearm": False, "park": False, "atCap": at_cap,
                     "reason": "no open blocking finding — doc review certifies"}
-        if at_cap:
-            return {"rearm": False, "park": True, "atCap": True,
-                    "reason": "open blocking finding at the doc-review round cap — park; "
-                              "certification withheld"}
-        return {"rearm": True, "park": False, "atCap": False,
-                "reason": "open blocking finding in doc review — one more full confirmation "
-                          "panel required"}
     # #291: case-normalized Critical match — a surfaced mis-cased `critical` must still park at the cap.
     has_critical = any(circuit_breaker.is_critical(s) for s in sevs)
     trigger = has_critical or bool(cross_cutting)

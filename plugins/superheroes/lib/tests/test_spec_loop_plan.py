@@ -14,7 +14,9 @@ by the orchestrator. These tests pin:
   - the full reviewer-deep confirmation round before any exit;
   - fail-safe direction: every corruption/shape mismatch fails toward MORE review.
 """
+import ast
 import importlib.util
+import inspect
 import json
 import os
 
@@ -446,16 +448,212 @@ def _record_with_escalation(capsys, session_dir, rnd, findings_by_dim):
     return rec
 
 
-def test_confirmation_surfacing_important_certifies_after_scoped_verify(tmp_path, capsys):
-    # #174 req 1/2: a confirmation that surfaces a new Important does NOT forfeit certification —
-    # the Important is fixed + scope-verified and the loop certifies without a second full panel.
+def _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys):
+    """Drive to a QUALIFYING clean full-deep confirmation panel (round 3) whose dimension findings
+    files are all empty, while `compiled.json` carries a blocking finding — the real shape produced
+    by the citation validator, whose findings are merged into the pool at the compile layer and
+    never land in a dimension findings file (review-spec SKILL.md §compile). The panel therefore
+    surfaces NOTHING in scheduler state, the loop still owes a scoped round 4, and decide(4) reaches
+    the confirmation-followup chokepoint with the compile-layer Important recorded on round 3's
+    `compiledSeverities` (dimension findings empty) and one qualifying panel run.
+    Returns session_dir positioned to decide(4)."""
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)                      # → full-deep confirmation round 3
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])            # panel surfaces nothing
+    _record(capsys, session_dir, 3)
+    _write_compiled(session_dir, [_finding("Architecture", "Important")])
+    _decide(capsys, session_dir, 3)                      # blocking present → scoped round 4
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 4)
+    _write_compiled(session_dir, [])
+    return session_dir
+
+
+def test_confirmation_surfacing_important_rearms_full_panel_doc_mode(tmp_path, capsys):
+    # #884 (FR-8), driven through the PRODUCTION CLI entry path (`SLP.main("decide", ...)`), not the
+    # policy function in isolation: an Important surfaced by the confirmation panel is an OPEN
+    # BLOCKING finding, and a document review has no cheap scoped tier to certify off — so the loop
+    # owes one more FULL confirmation panel. #174 requirement 1/2 (an Important certifies after a
+    # scoped verify) is NOT repealed: that is the CODE leg's rule and stays pinned in
+    # test_review_loop_plan.py.
     session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
     out = _decide(capsys, session_dir, 4)
-    assert out["action"] == "exit_clean", out
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+    assert out["nextRound"] == 5
+
+
+def _two_panels_then_open_blocker_at_cap(tmp_path, capsys):
+    """#884: drive to the doc-review confirmation-panel CAP with a blocker still open.
+
+    Panel 1 (round 3) surfaces an Important; under FR-8 that re-arms panel 2 (round 5), which
+    surfaces an Important again; round 6 is the scoped verify. decide(6) therefore sees
+    MAX_CONFIRMATIONS qualifying panels and a still-surfaced blocker. Returns session_dir
+    positioned to decide(6)."""
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
+    out = _decide(capsys, session_dir, 4)                      # → confirmation panel 2 at round 5
+    assert out["roundKind"] == "confirmation" and out["nextRound"] == 5, out
+    _record_with_escalation(capsys, session_dir, 5,
+                            {"architecture-reviewer": [_finding("Architecture", "Important")]})
+    _write_compiled(session_dir, [_finding("Architecture", "Important")])
+    _decide(capsys, session_dir, 5)                            # blocking present → scoped round 6
+    _record_with_escalation(capsys, session_dir, 6, {})
+    _write_compiled(session_dir, [])
+    return session_dir
+
+
+def test_doc_review_parks_at_the_confirmation_cap_with_an_open_blocker(tmp_path, capsys):
+    # #884: FR-8's fail-safe half, driven through the production CLI entry path. A document has no
+    # stronger downstream reviewer than the owner, so at the confirmation-panel cap an open blocking
+    # finding PARKS — certification withheld — rather than scoped-certifying the way code review may
+    # (reference/review-loop.md). Before #884 this was unreachable on this leg: an Important never
+    # re-armed, so a second panel could not be raised by one.
+    session_dir = _two_panels_then_open_blocker_at_cap(tmp_path, capsys)
+    out = _decide(capsys, session_dir, 6)
+    assert out["action"] == "halt", out
+    assert out["mandatory"] is True
     assert out["nextRound"] is None
-    # #174 finding 4: the honest-readout flag is COMPUTED from what the panel surfaced, not hardcoded.
-    assert out["certification"]["fullPanels"] == 1
+    assert "do NOT declare SPEC READY" in out["reason"]
+    # the park side of #174 finding 4's computed flag: two panels ran, the last one surfaced.
+    assert out["certification"]["fullPanels"] == 2
     assert out["certification"]["lastPanelSurfacedResolved"] is True
+
+
+def test_doc_review_rearms_for_a_compile_layer_only_blocker(tmp_path, capsys):
+    # #884 review round 1 (architecture-001 / code-001): review-spec merges the citation
+    # validator's findings at the COMPILE layer, so a validator blocker surfaced BY a confirmation
+    # panel never reaches a dimension findings file. Before this fix the follow-up saw an empty
+    # severity window and certified off the scoped verify — FR-8's exact bypass, and this file
+    # previously ASSERTED that bypass was correct. Driven through the production CLI entry path.
+    session_dir = _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys)
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+    assert "open blocking finding" in out["reason"]
+    assert "reduced or under-evidenced" not in out["reason"]
+
+
+# List-element case must contain no genuine blocking string — otherwise the string
+# passes on its own merit rather than on the untrustworthy-shape guard.
+@pytest.mark.parametrize("bad", [None, "Important", [None], 5, {}])
+def test_doc_review_fails_closed_on_untrustworthy_compiled_severities(tmp_path, capsys, bad):
+    # #884 review round 2 (architecture-001 / code-001 / security-001): the compile-layer window
+    # must never read "I have no trustworthy record" as "nothing was blocking" — that is the FR-8
+    # bypass reached by a second door. `None` here means the key is DELETED (legacy / pre-change
+    # state); the rest are present-but-wrong shapes. Driven through the production CLI entry path.
+    session_dir = _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys)
+    ok, state = SLP.load_state(session_dir)
+    assert ok
+    if bad is None:
+        state["rounds"]["3"].pop("compiledSeverities", None)
+    else:
+        state["rounds"]["3"]["compiledSeverities"] = bad
+    SLP.save_state(session_dir, state)
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+
+
+def test_doc_review_fails_closed_when_the_panel_round_compiled_is_unreadable(tmp_path, capsys):
+    # #884 review round 2 (premortem-004): `cmd_decide`'s except branch CONTINUES the loop, so a
+    # round whose compiled.json could not be read must still record a fail-closed severity —
+    # otherwise it lands in a later follow-up window as silence.
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 3)
+    with open(os.path.join(session_dir, "compiled.json"), "w", encoding="utf-8") as fh:
+        fh.write("{not valid json")
+    out3 = _decide(capsys, session_dir, 3)
+    assert out3["action"] == "review", out3
+    assert "could not read the round artifacts" in out3["reason"], out3
+    ok, state = SLP.load_state(session_dir)
+    assert ok
+    assert state["rounds"]["3"]["compiledSeverities"] == ["Critical"]
+    # The except branch schedules run-all-deep; replace with the scoped plan a blocking panel
+    # would have issued so decide(4) reaches the confirmation-followup chokepoint.
+    plan = SLP.review_round_policy.plan_round(
+        {"round": 4, "dimensions": DIMS,
+         "changedSubjects": SLP._diff_changed_surface(session_dir, 3),
+         "previous": SLP._previous_dims(state, 3)})
+    state["rounds"]["4"]["plan"] = plan
+    SLP.save_state(session_dir, state)
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 4)
+    _write_compiled(session_dir, [])
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+
+
+def test_confirmation_followup_is_reachable_only_through_the_doc_chokepoint():
+    # #884 census guard: pin the SET of enclosing functions that may reference the policy rule, not
+    # a call-site string. Catches an attribute call, a bare-name call, and a `from ... import`
+    # alias — from any command path (`plan`, `record`, `decide`) — including ones no runtime fixture
+    # traverses.
+    with open(os.path.join(_HERE, "..", "spec_loop_plan.py"), encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    enclosing = []
+
+    def _walk(node, fn):
+        for child in ast.iter_child_nodes(node):
+            nxt = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+            hit = ((isinstance(child, ast.Attribute) and child.attr == "confirmation_followup")
+                   or (isinstance(child, ast.Name) and child.id == "confirmation_followup")
+                   or (isinstance(child, ast.alias) and child.name == "confirmation_followup"))
+            if hit:
+                enclosing.append(nxt)
+            _walk(child, nxt)
+
+    _walk(tree, None)
+    assert enclosing, "spec_loop_plan no longer references confirmation_followup at all"
+    assert set(enclosing) == {"_doc_confirmation_followup"}, enclosing
+
+
+def test_decide_reaches_the_doc_confirmation_chokepoint(tmp_path, capsys, monkeypatch):
+    # #884: the census (3.5) proves WHERE the rule may be called from; this proves the production
+    # `decide` path GETS there. Without it, inlining the policy call back into
+    # `_further_confirmation_owed` with doc_mode=True would satisfy 3.7 while quietly deleting the
+    # seam the census defends.
+    seen = []
+    real = SLP._doc_confirmation_followup
+    monkeypatch.setattr(SLP, "_doc_confirmation_followup",
+                        lambda *a, **kw: (seen.append((a, kw)), real(*a, **kw))[1])
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
+    _decide(capsys, session_dir, 4)
+    assert seen, "decide() never reached _doc_confirmation_followup"
+
+
+def test_decide_binds_doc_mode_true_at_the_policy_chokepoint(tmp_path, capsys, monkeypatch):
+    # #884: bind each invocation through the real signature with defaults applied, so a POSITIONAL
+    # doc_mode is graded exactly like a keyword one and an omitted one is caught as its False
+    # default. The non-empty assertion is what stops this passing vacuously if the production path
+    # stops reaching the rule.
+    real = SLP.review_round_policy.confirmation_followup
+    sig = inspect.signature(real)
+    bound = []
+
+    def _spy(*a, **kw):
+        args = sig.bind(*a, **kw)
+        args.apply_defaults()
+        bound.append(args.arguments)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(SLP.review_round_policy, "confirmation_followup", _spy)
+    session_dir = _confirmation_round3_surfacing(tmp_path, capsys, "Important")
+    _decide(capsys, session_dir, 4)
+    assert bound, "decide() never reached review_round_policy.confirmation_followup"
+    assert all(b.get("doc_mode") is True for b in bound), bound
 
 
 def test_spec_postconfirmation_scoped_critical_rearms(tmp_path, capsys):
