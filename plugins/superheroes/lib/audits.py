@@ -35,6 +35,14 @@ def _valid_new_issues(candidates, origin_id):
     return out
 
 
+def has_usable_new_issues(candidates):
+    """True when `candidates` carries at least one dict-shaped new-issue candidate — EXACTLY the
+    usability test `apply_audit_results` applies to a `discharged-but-new-issue` claim, exposed so
+    the submit-shape guard (#885) and the fold can never read the field differently. The guard's
+    whole value is that what it accepts is what the fold can use."""
+    return bool(_valid_new_issues(candidates, None))
+
+
 def _resolve_expected_auditor(fid, finding, expected_auditors):
     """The TRUSTED independent-auditor selection for a target — the DRIVER's record, never the
     result's own echo (#507 R2). Prefer the explicit `expected_auditors` map the driver passes
