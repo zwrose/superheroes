@@ -284,6 +284,24 @@ execution ~5:1**, so a well-authored order is your cheapest defect prevention. T
 place (the implementer template); the implementer is the backstop that flags a violating order, and
 satisfying them is your obligation as the author.
 
+**Order shape that converges — authoring craft, not a seventh rule.** An order that hands the
+implementer a **list of sentences to apply at named sites** makes correctness proportional to the
+author's imagination: each round fixes the sites someone thought of, the unenumerated ones stay
+broken, and a fix bolted onto one site can break another. The shape that converges names the
+**invariant** the surface must satisfy — in one sentence — and carries a **complete census** of the
+sites that invariant governs (the grep or equivalent enumeration, run and pasted, not promised), so
+the count stops depending on recall. Where the surface admits one, name the **single chokepoint** all
+paths must route through, and ask for a test that asserts the **invariant** rather than per-site end
+states — so a site nobody enumerated fails a test instead of shipping. **Measured evidence, not
+exhortation:** across PR #853's two segments, **7 of 7 reworks** were attributable to order quality,
+none to implementer execution, and the corrective that converged each one was an order naming
+invariants plus a complete census rather than a list of sentences. Independently, on issue #702 /
+PR #726, two site-enumerating rounds produced a new defect each round — including regressions
+introduced by the fixes — and one invariant-plus-chokepoint order closed it with zero reachable
+bypasses in the confirmation round. This is how you satisfy the existing rules — especially rule 3,
+complete target enumeration — when authoring; this adds no seventh validity rule and leaves the
+six validity rules unchanged.
+
 ## 7. Delegate every implementation (lane-scoped — no size exception)
 
 **In the full lane, all implementation is delegated — the ONLY exceptions are the light and micro
@@ -362,8 +380,9 @@ orchestrator's own accounting.
 A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
-**third** rework of the same surface in one build, park instead — a third patch is the wrong answer
-to a design signal. Say what the seam problem looks like.
+**third** rework of the same surface in one build, park instead — a third rework is the wrong answer
+to a design signal, with no override. Say what the seam problem looks like. Resumption after the
+park is owner- or advisor-ruled — a builder cannot lift the park on its own.
 
 **Headless turn-end rule — the turn's final act, not work in flight.** A headless builder session
 (`claude -p`) **exits when its turn ends**. Therefore: **until the durable handback comment — or a
@@ -403,11 +422,11 @@ without a tool call.
   `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap the runner **refuses past, never
   clamps** — an over-cap or negative value comes back `unrunnable` with detail
   `max-wait-out-of-range:<value>:allowed=0..540`, nothing opened and nothing spawned, so waiting
-  longer than the cap means **omitting the flag and polling**, never passing a bigger number; the
-  slice you do pass must be **positive** — a zero slice is accepted but returns `running`
-  **without starting an attempt at all**, so it is never a valid dispatch; a `running` result whose
-  attempt count is **zero** means nothing was launched — re-invoke with a positive slice rather than
-  continuing to poll) — **never** wrapped in
+  longer than the cap means **omitting the flag and polling**, never passing a bigger number;
+  a zero slice is a legal **open-and-return-now** — it opens the run and returns `running`
+  **without starting an attempt at all**, so on its own it completes nothing; a `running` result whose
+  attempt count is **zero** means nothing has launched **yet** — re-invoke the same verb on the same
+  `--run-dir` with a positive slice rather than continuing to poll) — **never** wrapped in
   `setsid`/`nohup`,
   because the host grant matches a **prefix** and a wrapped command no longer matches it. Invoke
   through the authorized entrypoint; redirect stdout and stderr to **files, never pipes** (a pipe
@@ -441,11 +460,22 @@ without a tool call.
   Bash tool call (every engine dispatch — reviewer and fixer — runs as a Bash tool call with a
   structural 600 s floor from `PreToolUse(Bash)`; see
   `review-code/reference/auto-fix-loop.md`); the in-place fixer is explicitly not a `dispatch-write`
-  consumer. Full reconciliation of `review-code`'s own dispatch instructions with the builder's
-  native-shape rule remains **open** — a build whose review seats ran under `review-code`'s own
-  dispatch **discloses that limitation** rather than reporting the native-shape rule as satisfied for
-  those seats. The **timeout** contract stays the skill's; the **channel** duty attaches to what the
-  builder itself launches.
+  consumer. **`review-code`'s codex/cursor seats run the native shape** — `dispatch-review` with
+  `--max-wait` slices and originating-verb continuation on the same `--run-dir` until terminal
+  (`review-code/reference/auto-fix-loop.md`); **claude seats** are native subagents covered by the
+  ruling's native-subagent lifecycle exemption (the runner cannot dispatch them). The **hand-rolled
+  engine fallback** in `review-code` does not follow that shape and still owes the limitation
+  disclosure when used. The **in-place fixer deliberately stays a foreground Bash dispatch**: the
+  auto-fix path runs in the checked-out branch of the current checkout, and `dispatch-write` refuses a
+  primary checkout (`cwd-primary-checkout`), so the fixer cannot adopt the write verb without changing
+  that checkout model — which is not on the table. **The exemption is permanent and reasoned:**
+  `review-code` owns the **bounds** of the dispatches it launches (slice size, structural timeout,
+  retry ladder, and the standing rule that the caller composes no per-dispatch watchdog); the builder's
+  `await-dispatches` ruling governs the **channel** for dispatches the **builder itself** launches.
+  A build whose review seats ran through the runner or as claude native subagents under
+  `review-code` **no longer owes a "native-shape limitation" disclosure** for those seats — the
+  reconciliation is closed for that scope. The **timeout** contract stays the skill's; the **channel**
+  duty attaches to what the builder itself launches.
 - **Stamp duty (launcher-issued lanes only).** When `SUPERHEROES_LAUNCH_ID` is present — the session
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
   entering a phase, before and after a dispatch, on park, on handback. The contract lives in
@@ -737,7 +767,7 @@ curation stay with the advisor.
 | "I'll bump the version / merge / wire the board" | Never — merge/release/version are the owner's; the board is the advisor's. |
 | "I found follow-up work, I'll file an issue for it" | You never wire the board. List follow-ups in the PR for the advisor to file. |
 | "The convention clearly says X, so I'll fix it while I'm here." | The issue's owner-ratified scope beats a general convention argument. Hand the gap to the advisor as a follow-up — never a silent widening of this diff. |
-| "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire, not another patch. Name the seam problem instead. |
+| "One more patch and this surface is finally right." | A third rework of the same surface in one build is the park tripwire — park, not another rework, no override. Name the seam problem. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |
 | "Main moved under the order I sent — the implementer should have coped." | The order's premises bind you, the dispatcher. Amend the order when the world moves; parking on a stale premise is correct behavior. |
 | "This dispatch will finish quickly — the default timeout is fine." | A long external dispatch **you own** is **awaited in-turn** through `dispatch-review`/`dispatch-write --max-wait` (≤ 540 s) with originating-verb re-invocation on the same `--run-dir` until terminal — never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |

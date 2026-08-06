@@ -667,9 +667,9 @@ codifies standing owner policy — the cursor fable channel is retired in code a
 fable-via-cursor is dead. The default cursor dispatch stays `composer-2.5`. Each
 dispatch carries a role-appropriate timeout
 ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)
-so a stalled external CLI is killed well before the ceiling; an owner may
-override either limit via `enginePreferences`, and an override never disables the
-ceiling.
+so a stalled external CLI is killed well before the ceiling; the ceiling is never
+disabled, and these limits are not owner-configurable through `enginePreferences`
+(that channel was retired as dead surface).
 
 **Seat-map preflight economics** (#610): the composition preflight that decides which vendors are
 live for the panel is **gated, cached, and pin-scoped**. It runs only on panel-dispatching entries —
@@ -699,7 +699,15 @@ fail-closed by `lib/launch_doctrine.py`) — never reconstructed from session me
 preconditions with a stated horizon, and the standing exclusions it applies itself (release
 PRs excluded, force-push never). That record carries R1's mechanical park/refusal accounting
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
-parks is a signal to inspect, never a clean sheet. The Showrunner advisor invokes the launcher
+parks is a signal to inspect, never a clean sheet. The same record also carries **post-terminal
+amendments** — a second terminal-outcome write, an advisor vet ruling, or an evidence correction —
+recorded without mutating the terminal outcome and surfaced by `count` beside the terminal tallies.
+`count` reads **lanes** (a build intent keyed by issue number — retried attempts belong to one lane)
+with an `attempts` tally beside the terminal ones and per-lane `laneDetail`; overlapping same-lane
+launches still refuse — see `lib/launch_ledger.py` for the authoritative semantics. The ledger's event grammar is version-coupled: a record kind an older build does not understand makes
+every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
+`ledger_path()` reports). The
+Showrunner advisor invokes the launcher
 per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
 by a drift test — cite those homes, do not duplicate them here. The recovery half —
 adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript

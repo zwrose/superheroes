@@ -17,9 +17,12 @@ the driver receipt + its validator.
 import importlib.util
 import json
 import os
+import re
 import subprocess
 
 import pytest
+
+from source_access_scan import source_obj_accesses_key
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
@@ -3655,6 +3658,26 @@ def test_canary_failed_record_stable_two_failing_probe_orders():
         })
         records.append(st["rounds"]["1"]["canaryFailed"])
     assert records[0] == records[1]
+
+
+_RETIRED_RUN_CONFIG_KEYS = ("docMode", "fixerModel", "fixerEffort")
+_ROUND_DRIVER_PATH = os.path.join(_LIB, "round_driver.py")
+
+
+def test_run_config_retired_keys_census():
+    """Unreachable run-config keys must not reappear as config reads in round_driver."""
+    cfg_keys = set(RD._default_config().keys())
+    retired_in_defaults = cfg_keys & set(_RETIRED_RUN_CONFIG_KEYS)
+    assert not retired_in_defaults, (
+        "retired keys in _default_config: %s" % sorted(retired_in_defaults))
+    with open(_ROUND_DRIVER_PATH, encoding="utf-8") as fh:
+        source = fh.read()
+    violations = []
+    for key in _RETIRED_RUN_CONFIG_KEYS:
+        if source_obj_accesses_key(source, "config|cfg", key):
+            violations.append(key)
+    assert not violations, (
+        "retired run-config keys read in round_driver.py: %s" % violations)
 
 
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():

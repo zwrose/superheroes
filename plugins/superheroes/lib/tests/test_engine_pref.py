@@ -260,24 +260,34 @@ def test_resolve_timeout_owner_override_wins_over_role_ceiling():
     assert EP.resolve_timeout({"timeout": True}, "build") == 2400   # bool rejected, ceiling stands
 
 
-def test_load_engine_prefs_surfaces_positive_timeout_override(tmp_path, monkeypatch):
-    # #309 owner channel end to end: a positive-int enginePreferences.timeout is surfaced by
-    # load_engine_prefs so resolve_timeout(prefs, role) honors it; a bool/non-positive is dropped.
+def test_load_engine_prefs_does_not_surface_timeout_config_channel(tmp_path, monkeypatch):
+    # Retired #847 config channel: enginePreferences.timeout is ignored by load_engine_prefs.
     import core_md
     monkeypatch.setattr(
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"timeout": 1800}, core_md.CONFIG_OK, None))
-    prefs = EP.load_engine_prefs(str(tmp_path))
-    assert prefs.get("timeout") == 1800
-    assert EP.resolve_timeout(prefs, "review") == 1800
+    assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
     monkeypatch.setattr(
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"timeout": True}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
     monkeypatch.setattr(
         core_md, "engine_preferences_for_gate",
-        lambda **k: core_md.CoreGateConfig({}, core_md.CONFIG_OK, None))
+        lambda **k: core_md.CoreGateConfig({"timeout": -1}, core_md.CONFIG_OK, None))
     assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"timeout": "1800"}, core_md.CONFIG_OK, None))
+    assert "timeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig(
+            {"timeout": 1800, "reviewer": "codex", "effort": {"review": "high"}},
+            core_md.CONFIG_OK, None))
+    got = EP.load_engine_prefs(str(tmp_path))
+    assert "timeout" not in got
+    assert got["reviewer"] == "codex"
+    assert got["effort"] == {"review": "high"}
 
 
 def test_resolve_idle_role_windows_and_default():
@@ -307,16 +317,13 @@ def test_resolve_idle_owner_override_wins_over_role_window():
     assert EP.resolve_idle("not-a-dict") == 300
 
 
-def test_load_engine_prefs_surfaces_positive_idle_override(tmp_path, monkeypatch):
-    # #309 owner stall-monitor channel end to end: a positive-int enginePreferences.idleTimeout is
-    # surfaced by load_engine_prefs so resolve_idle(prefs, role) honors it; a bool/non-positive is dropped.
+def test_load_engine_prefs_does_not_surface_idle_timeout_config_channel(tmp_path, monkeypatch):
+    # Retired #847 config channel: enginePreferences.idleTimeout is ignored by load_engine_prefs.
     import core_md
     monkeypatch.setattr(
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"idleTimeout": 90}, core_md.CONFIG_OK, None))
-    prefs = EP.load_engine_prefs(str(tmp_path))
-    assert prefs.get("idleTimeout") == 90
-    assert EP.resolve_idle(prefs, "review") == 90
+    assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
     monkeypatch.setattr(
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"idleTimeout": True}, core_md.CONFIG_OK, None))
@@ -325,6 +332,19 @@ def test_load_engine_prefs_surfaces_positive_idle_override(tmp_path, monkeypatch
         core_md, "engine_preferences_for_gate",
         lambda **k: core_md.CoreGateConfig({"idleTimeout": -1}, core_md.CONFIG_OK, None))
     assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig({"idleTimeout": "90"}, core_md.CONFIG_OK, None))
+    assert "idleTimeout" not in EP.load_engine_prefs(str(tmp_path))
+    monkeypatch.setattr(
+        core_md, "engine_preferences_for_gate",
+        lambda **k: core_md.CoreGateConfig(
+            {"idleTimeout": 90, "reviewer": "codex", "effort": {"review": "high"}},
+            core_md.CONFIG_OK, None))
+    got = EP.load_engine_prefs(str(tmp_path))
+    assert "idleTimeout" not in got
+    assert got["reviewer"] == "codex"
+    assert got["effort"] == {"review": "high"}
 
 
 def test_dispatch_calibration_rows_codex_implementer_reports_gpt_model_not_claude_tier():
