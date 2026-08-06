@@ -2417,3 +2417,184 @@ def test_cli_amend_kind_not_caller_writable(tmp_path, monkeypatch):
     payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert payload["reason"] == "amend-kind-not-caller-writable:reoutcome"
+
+
+# --- slot + generation + boundary CLI (issue #830) --------------------------
+
+def _launch_cli_args(repo, tmp_path, **extra):
+    checks_path = tmp_path / "checks.json"
+    premise_path = tmp_path / "premise.json"
+    log_dir = tmp_path / "logs"
+    _write_json(checks_path, _all_checks())
+    _write_json(premise_path, _valid_premise(repo))
+    args = [
+        sys.executable, _MOD, "launch",
+        "--repo-root", repo,
+        "--issue", "656",
+        "--premise", str(premise_path),
+        "--checks", str(checks_path),
+        "--log-dir", str(log_dir),
+    ]
+    for key, value in extra.items():
+        flag = "--" + key.replace("_", "-")
+        args.extend([flag, str(value)])
+    return args
+
+
+def test_launch_build_writes_slot_fields_on_reserved(tmp_path, monkeypatch):
+    # axis: launch_build writes slot fields on reserved record
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    boundary = {
+        "slotRef": "slot-a@1",
+        "result": "pass",
+        "provenance": "observed",
+        "strength": "strong",
+        "match": True,
+        "policyDigest": "digest123",
+        "verifiedAt": "2026-01-01T00:00:00Z",
+        "weakerAccepted": False,
+        "acceptedBy": None,
+        "acceptedAt": None,
+        "acceptanceReason": None,
+    }
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.1,
+        slot="slot-a",
+        generation=1,
+        boundary=boundary,
+    )
+    assert result["ok"] is True
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    assert reserved["slot"] == "slot-a"
+    assert reserved["generation"] == 1
+    assert reserved["boundary"] == boundary
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_without_slot_fields_has_no_keys(tmp_path, monkeypatch):
+    # axis: launch_build without slot fields omits keys entirely
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.1,
+    )
+    assert result["ok"] is True
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert "slot" not in reserved
+    assert "generation" not in reserved
+    assert "boundary" not in reserved
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_refusal_path_records_slot(tmp_path, monkeypatch):
+    # axis: refusal path still records slot on reserved row
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    checks = _all_checks()
+    checks["engine-auth"] = {"state": "fail", "reason": "no auth"}
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        checks,
+        str(tmp_path / "logs"),
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is False
+    reserved = [r for r in ll.read(repo)["records"] if r.get("event") == "reserved"][0]
+    assert reserved["slot"] == "slot-a"
+    assert reserved["generation"] == 1
+
+
+def test_cli_launch_boundary_without_slot_generation(tmp_path):
+    # axis: CLI refuses --boundary without --slot and --generation
+    repo = _init_repo(tmp_path / "repo")
+    boundary_path = tmp_path / "boundary.json"
+    _write_json(boundary_path, {"slotRef": "slot-a@1"})
+    proc = subprocess.run(
+        _launch_cli_args(repo, tmp_path, boundary=boundary_path),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "launch-boundary-without-slot-generation"
+
+
+def test_cli_launch_boundary_unreadable(tmp_path):
+    # axis: CLI refuses unreadable --boundary file
+    repo = _init_repo(tmp_path / "repo")
+    boundary_path = tmp_path / "boundary.json"
+    boundary_path.write_text("not json", encoding="utf-8")
+    proc = subprocess.run(
+        _launch_cli_args(
+            repo, tmp_path,
+            slot="slot-a", generation=1, boundary=boundary_path,
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "launch-boundary-unreadable"
+
+
+def test_cli_launch_boundary_not_object(tmp_path):
+    # axis: CLI refuses --boundary JSON that is not an object
+    repo = _init_repo(tmp_path / "repo")
+    boundary_path = tmp_path / "boundary.json"
+    _write_json(boundary_path, [1, 2, 3])
+    proc = subprocess.run(
+        _launch_cli_args(
+            repo, tmp_path,
+            slot="slot-a", generation=1, boundary=boundary_path,
+        ),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "launch-boundary-unreadable"
+
+
+def test_cli_launch_generation_zero_refused_by_fold(tmp_path, monkeypatch):
+    # axis: --generation 0 accepted by argparse but refused by validate_generation
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    proc = subprocess.run(
+        _launch_cli_args(repo, tmp_path, slot="slot-a", generation=0),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "fold-bad-field:reserved:generation"

@@ -3617,6 +3617,149 @@ def test_run_lock_live_holder_still_blocks_reattach(tmp_path):
         file_lock.release(lock_path)
 
 
+# --- #830 WO-3: child-stood-down reader ---
+
+
+def test_journal_state_child_stood_down_returns_both_in_order():
+    """axis: stand-down records are folded in journal order with all four fields."""
+    records = [
+        {
+            "kind": "child-stood-down", "attempt": 1,
+            "childPid": 100, "recordedPid": 200, "at": 1.0,
+        },
+        {
+            "kind": "child-stood-down", "attempt": 1,
+            "childPid": 101, "recordedPid": 200, "at": 2.0,
+        },
+    ]
+    state = ED._journal_state(records)
+    assert state["stoodDown"] == [
+        {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
+        {"attempt": 1, "childPid": 101, "recordedPid": 200, "at": 2.0},
+    ]
+
+
+def test_journal_state_no_stand_down_returns_empty_list():
+    """axis: stoodDown key is always present, never missing."""
+    records = [
+        {"kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "at": 1.0},
+    ]
+    state = ED._journal_state(records)
+    assert state["stoodDown"] == []
+
+
+def test_journal_state_child_stood_down_missing_field_kept_with_none():
+    """axis: malformed stand-down records are kept, not dropped."""
+    records = [
+        {
+            "kind": "child-stood-down", "attempt": 1,
+            "childPid": 100, "at": 1.0,
+        },
+    ]
+    state = ED._journal_state(records)
+    assert state["stoodDown"] == [
+        {"attempt": 1, "childPid": 100, "recordedPid": None, "at": 1.0},
+    ]
+
+
+def test_journal_state_other_keys_unchanged_when_stand_down_present():
+    """axis: stand-down fold is purely additive — every other key unchanged."""
+    base_records = [
+        {"kind": "run-opened", "runKind": ED.RUN_KIND_REVIEW, "at": 1.0},
+        {"kind": "lease-acquired", "leaseToken": "tok", "at": 2.0},
+        {"kind": "attempt-started", "attempt": 1, "childPid": 200, "at": 3.0},
+        {"kind": "attempt-ended", "attempt": 1, "exit": 0, "at": 4.0},
+        {"kind": "run-folded", "result": {"ok": True}, "at": 5.0},
+    ]
+    with_stand_down = base_records + [
+        {
+            "kind": "child-stood-down", "attempt": 1,
+            "childPid": 100, "recordedPid": 200, "at": 6.0,
+        },
+    ]
+    base_state = ED._journal_state(base_records)
+    full_state = ED._journal_state(with_stand_down)
+    for key in base_state:
+        if key != "stoodDown":
+            assert full_state[key] == base_state[key], key
+    assert full_state["stoodDown"] == [
+        {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 6.0},
+    ]
+
+
+def test_ledger_evidence_carries_stood_down_and_preserves_existing_keys(tmp_path):
+    """axis: ledger evidence includes stand-downs without altering path keys."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    opened = {"promptPath": os.path.join(run_dir, "prompt.txt")}
+    state = {
+        "attempts": {1: {"childPid": 200, "enginePgid": None, "ended": None}},
+        "stoodDown": [
+            {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
+        ],
+    }
+    evidence = ED._ledger_evidence(run_dir, state, opened)
+    assert evidence["stoodDownCount"] == 1
+    assert evidence["stoodDown"] == [
+        {"attempt": 1, "childPid": 100, "recordedPid": 200, "at": 1.0},
+    ]
+    assert evidence["stoodDownTruncated"] is False
+    assert evidence["stdoutPaths"] == [os.path.join(run_dir, "attempt-1.stdout")]
+    assert evidence["stderrPaths"] == [os.path.join(run_dir, "attempt-1.stderr")]
+    assert evidence["journalPath"] == ED._journal_path(run_dir)
+    assert evidence["promptPath"] == opened["promptPath"]
+
+
+def _stood_down_records(n):
+    return [
+        {
+            "kind": "child-stood-down", "attempt": 1,
+            "childPid": 100 + i, "recordedPid": 200, "at": float(i),
+        }
+        for i in range(n)
+    ]
+
+
+def test_ledger_evidence_stood_down_truncated_at_twenty(tmp_path):
+    """axis: ledger evidence caps stand-down list at 20 with truncation flag."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    opened = {"promptPath": None}
+    state = {"attempts": {}, "stoodDown": []}
+    for rec in _stood_down_records(25):
+        state["stoodDown"].append({
+            "attempt": rec["attempt"],
+            "childPid": rec["childPid"],
+            "recordedPid": rec["recordedPid"],
+            "at": rec["at"],
+        })
+    evidence = ED._ledger_evidence(run_dir, state, opened)
+    assert evidence["stoodDownCount"] == 25
+    assert len(evidence["stoodDown"]) == 20
+    assert evidence["stoodDownTruncated"] is True
+    assert evidence["stoodDown"][0]["childPid"] == 100
+    assert evidence["stoodDown"][-1]["childPid"] == 119
+
+
+def test_ledger_evidence_stood_down_at_boundary_not_truncated(tmp_path):
+    """axis: exactly 20 stand-downs fit without truncation."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    opened = {"promptPath": None}
+    state = {"attempts": {}, "stoodDown": []}
+    for rec in _stood_down_records(20):
+        state["stoodDown"].append({
+            "attempt": rec["attempt"],
+            "childPid": rec["childPid"],
+            "recordedPid": rec["recordedPid"],
+            "at": rec["at"],
+        })
+    evidence = ED._ledger_evidence(run_dir, state, opened)
+    assert evidence["stoodDownCount"] == 20
+    assert len(evidence["stoodDown"]) == 20
+    assert evidence["stoodDownTruncated"] is False
+
+
 # --- #862 review finding: only the recorded child runs the attempt --------------
 # axis: WHICH child owns the attempt (identity), not whether one is alive.
 

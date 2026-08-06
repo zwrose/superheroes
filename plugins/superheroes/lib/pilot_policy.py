@@ -65,7 +65,7 @@ CONTAINMENT_SENTINEL_KEYS = frozenset(
 # `test_pilot_placeholder_census` is the census that keeps it that way (#866).
 NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
 SENTINEL_PLACEHOLDER = "{sentinel}"
-_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+_PLACEHOLDER_RE = pilot_contract.PLACEHOLDER_RE
 _ALLOWED_PLACEHOLDERS = frozenset(
     {NAMESPACE_PLACEHOLDER, SENTINEL_PLACEHOLDER}
 )

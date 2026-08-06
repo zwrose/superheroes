@@ -83,6 +83,9 @@ REASON_ROTATE_SEGMENT_EXISTS = "reclaim-rotate-segment-exists"
 REASON_ROTATE_FAILED = "reclaim-rotate-failed"
 REASON_SEGMENTS_UNREADABLE = "reclaim-segments-unreadable"
 
+ANOMALY_SEGMENT_SEQUENCE_GAP = "segment-sequence-gap"
+ANOMALY_SEGMENT_SEQUENCE_NOT_ONE = "segment-sequence-not-one"
+
 ROTATE_MIN_RECORDS = 200
 _JOURNAL_SEGMENT_TEMPLATE = "%s.%04d%s"
 
@@ -1059,8 +1062,7 @@ def _replay_is_quiescent(journal_path):
 def journal_segments(slots_dir_path, slot, journal_path):
     """List retained journal segments for a slot, sorted by sequence number.
 
-    Exists as the input a future segment-aware aggregate replay will need;
-    nothing in this module consumes it yet.
+    Consumed by aggregate_replay for segment-aware journal folding.
     """
     refused = _validate_slots_dir(slots_dir_path)
     if refused is not None:
@@ -1081,6 +1083,107 @@ def journal_segments(slots_dir_path, slot, journal_path):
     if segments is None:
         return _fail(REASON_SEGMENTS_UNREADABLE, segments=[])
     return _ok(segments=[path for _seq, path in segments])
+
+
+def _segment_sequence_anomalies(sequences):
+    """Return anomalies for non-contiguous segment sequences starting at 1."""
+    if not sequences:
+        return []
+    anomalies = []
+    if sequences[0] != 1:
+        anomalies.append({
+            "reason": ANOMALY_SEGMENT_SEQUENCE_NOT_ONE,
+            "firstSequence": sequences[0],
+        })
+    expected = set(range(1, sequences[-1] + 1))
+    actual = set(sequences)
+    for missing in sorted(expected - actual):
+        anomalies.append({
+            "reason": ANOMALY_SEGMENT_SEQUENCE_GAP,
+            "missingSequence": missing,
+        })
+    return anomalies
+
+
+def _live_journal_readable(journal_path):
+    """True when journal_path exists and is a readable regular file."""
+    if not os.path.lexists(journal_path):
+        return False
+    if os.path.islink(journal_path):
+        return False
+    try:
+        st = os.stat(journal_path)
+    except OSError:
+        return False
+    return stat.S_ISREG(st.st_mode)
+
+
+def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref):
+    """Replay retained segments plus the live journal in sequence order."""
+    import pilot_journal
+
+    def _refuse(reason):
+        return {
+            "ok": False,
+            "reason": reason,
+            "effects": [],
+            "torn": False,
+            "anomalies": [],
+            "journalPath": journal_path,
+            "slotRef": slot_ref,
+        }
+
+    try:
+        pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        return _refuse(pilot_journal.REASON_SLOT_REF_INVALID)
+
+    parsed_slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    if parsed_slot != slot:
+        return _refuse(pilot_journal.REASON_SLOT_REF_INVALID)
+
+    seg_result = journal_segments(slots_dir_path, slot, journal_path)
+    if not seg_result["ok"]:
+        reclaim_reason = seg_result["reason"]
+        if reclaim_reason == REASON_SEGMENTS_UNREADABLE:
+            return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+        if reclaim_reason in (
+            REASON_SLOTS_DIR_INVALID,
+            REASON_SLOT_INVALID,
+            REASON_JOURNAL_PATH_INVALID,
+            REASON_JOURNAL_OUTSIDE_SLOT,
+        ):
+            return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+
+    slot_dir = os.path.join(slots_dir_path, slot)
+    segment_pairs = _list_journal_segments(slot_dir, journal_path)
+    if segment_pairs is None:
+        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+
+    sequences = [seq for seq, _path in segment_pairs]
+    segment_anomalies = _segment_sequence_anomalies(sequences)
+    paths = [path for _seq, path in segment_pairs]
+
+    live_present = _live_journal_readable(journal_path)
+    if live_present:
+        paths.append(journal_path)
+
+    if not paths:
+        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+
+    result = pilot_journal.replay_sources(
+        paths,
+        slot_ref=slot_ref,
+        journal_path=journal_path,
+    )
+    if not result["ok"]:
+        return result
+
+    if segment_anomalies:
+        result = dict(result)
+        result["anomalies"] = list(result.get("anomalies", [])) + segment_anomalies
+    return result
 
 
 def rotate_journal(slots_dir_path, slot, journal_path, *, now, timeout=30.0):
