@@ -724,6 +724,49 @@ def _launch_doctrine_builder_dispatch_section():
     return m.group(1)
 
 
+def test_amendment_vocabulary_in_showrunner_charter():
+    """§11: showrunner charter carries post-terminal amendment vocabulary from launch_ledger."""
+    # axis: caller-writable amendment kinds, vet rulings, and the amend verb must appear in the
+    # charter pinned in their invocation context (--kind / --value lines), not merely anywhere in prose.
+    import launch_ledger
+
+    doc = _read("skills/showrunner/SKILL.md")
+    missing = []
+    for kind in launch_ledger.CALLER_WRITABLE_AMENDMENT_KINDS:
+        if "--kind %s" % kind not in doc:
+            missing.append("kind %r" % kind)
+    value_lines = [ln for ln in doc.splitlines() if "--value" in ln]
+    if not value_lines:
+        missing.append("no --value line")
+    else:
+        value_text = "\n".join(value_lines)
+        for ruling in launch_ledger.VET_RULINGS:
+            if ruling not in value_text:
+                missing.append("ruling %r" % ruling)
+    if "amend" not in doc:
+        missing.append("verb 'amend'")
+    assert not missing, (
+        "showrunner/SKILL.md missing amendment vocabulary from launch_ledger.py: %s"
+        % ", ".join(missing)
+    )
+
+
+def test_count_result_blocks_in_showrunner_charter():
+    """§11: showrunner charter names count-result blocks sourced from launch_ledger."""
+    import launch_ledger
+
+    doc = _read("skills/showrunner/SKILL.md")
+    duty = _showrunner_orchestration_duty()
+    missing = []
+    for block in launch_ledger.CHARTER_NAMED_COUNT_BLOCKS:
+        if block not in duty:
+            missing.append(block)
+    assert not missing, (
+        "showrunner/SKILL.md duty 9 missing count-result block(s) from "
+        "launch_ledger.COUNT_RESULT_BLOCKS: %r" % missing
+    )
+
+
 def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
     """§11: loaded advisor surfaces and the doctrine artifact home must carry the builder-dispatch
     tier rule keyed to model_registry.FABLE_NEVER_DEFAULT — builder launches default to opus; fable

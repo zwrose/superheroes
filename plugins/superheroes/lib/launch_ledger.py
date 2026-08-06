@@ -8,6 +8,13 @@ refuse to ground a rate. Never raises to callers.
 Every locked writer validates its candidate record against the reader
 (read → fold(records + [candidate])) before appending; that invariant keeps
 one grammar across reserve, append_under_lock, declare_batch, and terminalize.
+
+The ledger's event grammar is version-coupled to the plugin build that wrote
+it: a record kind an older build does not understand (for example ``amendment``)
+makes ``fold`` refuse the whole stream with ``fold-unknown-event:<kind>``, and
+every ledger door fails closed until the file is cleared. Recovery is deleting
+the ledger file at the path ``ledger_path()`` reports — there is no in-place
+prune or forward-compat skip for unknown events.
 """
 import fcntl
 import hashlib
@@ -31,8 +38,16 @@ LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
 LEDGER_NAME = "launch-ledger.jsonl"
 SCHEMA = 1
-EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome")
+EVENT_KINDS = ("reserved", "started", "retry", "refused", "outcome", "amendment")
 TERMINAL_OUTCOMES = ("handback", "park", "refusal", "died")
+AMENDMENT_EVENT = "amendment"
+AMENDMENT_REOUTCOME = "reoutcome"
+AMENDMENT_KINDS = ("reoutcome", "vet", "evidence")
+# What a caller may write by hand. `reoutcome` is a recorded consequence of a real second
+# record_outcome call, never a hand-written claim.
+CALLER_WRITABLE_AMENDMENT_KINDS = ("vet", "evidence")
+VET_RULINGS = ("ready", "not-ready", "parked-blocker")
+_AMENDMENT_FIELDS = ("kind", "value", "note")
 TERMINAL_EVENTS = ("outcome", "refused")
 WHOLE_REPO = ":whole-repo:"
 
@@ -63,6 +78,9 @@ _BATCH_DECLARED_FIELDS = ("batchId", "expectedLaunches")
 _INSPECT_REASON = (
     "zero parks and zero refusals is a signal to inspect, never a clean sheet"
 )
+COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail")
+# The count-result blocks the advisor's charter names by hand; the drift test reads THIS.
+CHARTER_NAMED_COUNT_BLOCKS = ("lanes", "attempts", "laneDetail")
 
 
 def _scrub_env(env=None):
@@ -722,6 +740,8 @@ def _validate_event_fields(rec):
         fields = _RETRY_FIELDS
     elif event in TERMINAL_EVENTS:
         fields = _REFUSED_FIELDS if event == "refused" else _OUTCOME_FIELDS
+    elif event == AMENDMENT_EVENT:
+        fields = _AMENDMENT_FIELDS
     else:
         return "fold-unknown-event:%s" % event
 
@@ -729,7 +749,21 @@ def _validate_event_fields(rec):
         if field not in rec:
             return "fold-missing-field:%s:%s" % (event, field)
 
-    if event == "started":
+    if event == AMENDMENT_EVENT:
+        kind = rec["kind"]
+        if kind not in AMENDMENT_KINDS:
+            return "fold-bad-amendment-kind:%s" % rec["launchId"]
+        value = rec["value"]
+        if not isinstance(value, str) or not value:
+            return "fold-missing-amendment-value:%s" % rec["launchId"]
+        note = rec["note"]
+        if not isinstance(note, str) or not note:
+            return "fold-missing-amendment-note:%s" % rec["launchId"]
+        if kind == "reoutcome" and value not in TERMINAL_OUTCOMES:
+            return "fold-bad-amendment-value:%s" % rec["launchId"]
+        if kind == "vet" and value not in VET_RULINGS:
+            return "fold-bad-amendment-value:%s" % rec["launchId"]
+    elif event == "started":
         attempt = rec["attempt"]
         pid = rec["pid"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -792,14 +826,17 @@ def fold(records):
                 }
             launches[launch_id] = {
                 "batchId": rec["batchId"],
+                "issue": rec["issue"],
                 "surfaces": rec["surfaces"],
                 "terminal": False,
                 "outcome": None,
                 "terminalKind": None,
+                "terminalIndex": None,
                 "reservedTs": rec["ts"],
                 "reservedIndex": idx,
                 "attempts": 0,
                 "started": False,
+                "amendments": [],
             }
             continue
 
@@ -808,6 +845,15 @@ def fold(records):
                     "launches": {}, "batchDeclarations": batch_declarations}
 
         info = launches[launch_id]
+        if event == AMENDMENT_EVENT:
+            if not info["terminal"]:
+                return {"ok": False,
+                        "reason": "fold-amendment-before-terminal:%s" % launch_id,
+                        "launches": {}, "batchDeclarations": batch_declarations}
+            info["amendments"].append({
+                "kind": rec["kind"], "value": rec["value"], "note": rec["note"], "ts": rec["ts"],
+            })
+            continue
         if info["terminal"]:
             return {
                 "ok": False,
@@ -846,6 +892,7 @@ def fold(records):
                     }
                 info["terminal"] = True
                 info["terminalKind"] = "refused"
+                info["terminalIndex"] = idx
             else:
                 if not info["started"]:
                     return {
@@ -857,6 +904,7 @@ def fold(records):
                 info["terminal"] = True
                 info["terminalKind"] = "outcome"
                 info["outcome"] = rec["outcome"]
+                info["terminalIndex"] = idx
 
     return {"ok": True, "reason": None, "launches": launches,
             "batchDeclarations": batch_declarations}
@@ -1315,13 +1363,27 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
             _release_lock(lock_path)
 
 
+def _record_outcome_response(ok, reason=None, recorded=None, amendment_kind=None,
+                             attempted_outcome=None, terminal_outcome=None):
+    return {
+        "ok": ok,
+        "reason": reason,
+        "recorded": recorded,
+        "amendmentKind": amendment_kind,
+        "attemptedOutcome": attempted_outcome,
+        "terminalOutcome": terminal_outcome,
+    }
+
+
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
                    lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Record a terminal outcome under lock."""
+    """Record a terminal outcome under lock. Never raises."""
     if outcome not in TERMINAL_OUTCOMES:
-        return {"ok": False, "reason": "outcome-invalid:%s" % outcome}
+        return _record_outcome_response(
+            False, reason="outcome-invalid:%s" % outcome,
+        )
     if not isinstance(evidence, str) or not evidence.strip():
-        return {"ok": False, "reason": "outcome-evidence-empty"}
+        return _record_outcome_response(False, reason="outcome-evidence-empty")
 
     result = terminalize(
         repo_root, launch_id, outcome=outcome, evidence=evidence,
@@ -1330,7 +1392,173 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     mapped_reason = result["reason"]
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"
-    return {"ok": result["ok"], "reason": mapped_reason}
+    if not result["ok"] and result["reason"] == "outcome-already-terminal":
+        read_result = read(repo_root, env=env)
+        state = read_result["state"]
+        if state not in ("ok", "missing"):
+            return _record_outcome_response(
+                False, reason="ledger-unreadable:%s" % state,
+            )
+        folded = fold(read_result["records"])
+        if not folded["ok"]:
+            return _record_outcome_response(False, reason=folded["reason"])
+        if launch_id not in folded["launches"]:
+            return _record_outcome_response(False, reason="outcome-unknown-launch")
+
+        info = folded["launches"][launch_id]
+        # Terminal kind is immutable once terminal; a stale read cannot flip it.
+        if info.get("terminalKind") == "refused" or not info.get("started"):
+            return _record_outcome_response(False, reason="outcome-without-started")
+
+        amended = amend(repo_root, launch_id, AMENDMENT_REOUTCOME, outcome, evidence,
+                        env=env, lock_timeout=lock_timeout, dedupe_identical=True)
+        if not amended["ok"]:
+            amend_reason = amended["reason"]
+            if amend_reason == "amend-failed":
+                return _record_outcome_response(False, reason="amend-failed")
+            return _record_outcome_response(
+                False, reason="amend-failed:%s" % amend_reason,
+            )
+        recorded = "amendment-existing" if amended["deduped"] else "amendment"
+        return _record_outcome_response(
+            True, recorded=recorded,
+            amendment_kind=AMENDMENT_REOUTCOME,
+            attempted_outcome=outcome,
+            terminal_outcome=amended["terminalOutcome"],
+        )
+    if result["ok"]:
+        return _record_outcome_response(
+            True, recorded="outcome",
+            attempted_outcome=outcome,
+            terminal_outcome=result["outcome"],
+        )
+    return _record_outcome_response(False, reason=mapped_reason)
+
+
+def _amend_response(ok, reason=None, kind=None, value=None, terminal_outcome=None,
+                    terminal_kind=None, deduped=False):
+    return {
+        "ok": ok,
+        "reason": reason,
+        "kind": kind,
+        "value": value,
+        "terminalOutcome": terminal_outcome,
+        "terminalKind": terminal_kind,
+        "deduped": deduped,
+    }
+
+
+def amend(repo_root, launch_id, kind, value, note, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT,
+          *, dedupe_identical=False):
+    """Record a post-terminal annotation on a terminal launch. Never mutates the terminal
+    outcome, and never raises."""
+    try:
+        if not isinstance(launch_id, str) or not launch_id:
+            return _amend_response(False, reason="amend-launch-id-invalid")
+        if kind not in AMENDMENT_KINDS:
+            return _amend_response(False, reason="amend-kind-invalid:%s" % kind)
+        if not isinstance(value, str) or not value:
+            return _amend_response(False, reason="amend-value-empty")
+        if not isinstance(note, str) or not note:
+            return _amend_response(False, reason="amend-note-empty")
+        if kind == "reoutcome" and value not in TERMINAL_OUTCOMES:
+            return _amend_response(False, reason="amend-value-invalid:%s" % value)
+        if kind == "vet" and value not in VET_RULINGS:
+            return _amend_response(False, reason="amend-value-invalid:%s" % value)
+
+        lock_result = _ensure_lock_file(repo_root, env=env)
+        if not lock_result["ok"]:
+            return _amend_response(False, reason=lock_result["reason"])
+
+        lock_path = lock_result["path"]
+        if not _acquire_lock(lock_path, lock_timeout):
+            return _amend_response(False, reason="lock-unavailable")
+
+        try:
+            read_result = read(repo_root, env=env)
+            state = read_result["state"]
+            if state not in ("ok", "missing"):
+                return _amend_response(False, reason="ledger-unreadable:%s" % state)
+
+            folded = fold(read_result["records"])
+            if not folded["ok"]:
+                return _amend_response(False, reason=folded["reason"])
+
+            if launch_id not in folded["launches"]:
+                return _amend_response(False, reason="amend-unknown-launch")
+
+            info = folded["launches"][launch_id]
+            if not info.get("terminal"):
+                return _amend_response(False, reason="amend-not-terminal")
+
+            if dedupe_identical:
+                for existing in info.get("amendments") or []:
+                    if (existing.get("kind") == kind
+                            and existing.get("value") == value
+                            and existing.get("note") == note):
+                        return _amend_response(
+                            True, kind=kind, value=value,
+                            terminal_outcome=info.get("outcome"),
+                            terminal_kind=info.get("terminalKind"),
+                            deduped=True,
+                        )
+
+            record = {
+                "event": AMENDMENT_EVENT,
+                "launchId": launch_id,
+                "ts": time.time(),
+                "schema": SCHEMA,
+                "kind": kind,
+                "value": value,
+                "note": note,
+            }
+            folded_with = fold(read_result["records"] + [record])
+            if not folded_with["ok"]:
+                return _amend_response(False, reason=folded_with["reason"])
+
+            if not append(repo_root, record, env=env):
+                return _amend_response(False, reason="ledger-append-failed")
+
+            return _amend_response(
+                True, kind=kind, value=value,
+                terminal_outcome=info.get("outcome"),
+                terminal_kind=info.get("terminalKind"),
+            )
+        finally:
+            _release_lock(lock_path)
+    except Exception:
+        return _amend_response(False, reason="amend-failed")
+
+
+def _vet_count_key(ruling):
+    return "vet" + "".join(part.capitalize() for part in ruling.split("-"))
+
+
+def _zero_amendments():
+    zeroed = {"reoutcome": 0, "rehandback": 0, "evidence": 0, "total": 0}
+    for ruling in VET_RULINGS:
+        zeroed[_vet_count_key(ruling)] = 0
+    return zeroed
+
+
+def _zero_attempt_outcomes():
+    return {
+        "handback": 0,
+        "park": 0,
+        "refusal": 0,
+        "died": 0,
+        "refusedToLaunch": 0,
+    }
+
+
+def _valid_lane_issue(issue):
+    return isinstance(issue, int) and not isinstance(issue, bool) and issue > 0
+
+
+def _attempt_outcome_label(info):
+    if info.get("terminalKind") == "refused":
+        return "refusedToLaunch"
+    return info.get("outcome")
 
 
 def _count_indeterminate(batch_id, reason):
@@ -1348,6 +1576,11 @@ def _count_indeterminate(batch_id, reason):
             "refusedToLaunch": 0,
             "total": 0,
         },
+        "amendments": _zero_amendments(),
+        "amendedLaunches": 0,
+        "lanes": {"declared": 0, "resolved": 0},
+        "attempts": {"total": 0, "extra": 0, "outcomes": _zero_attempt_outcomes()},
+        "laneDetail": [],
         "inspect": False,
         "inspectReason": "",
     }
@@ -1382,7 +1615,21 @@ def count(repo_root, batch_id, env=None):
         return _count_indeterminate(batch_id, "batch-undeclared")
     if len(decls) > 1:
         return _count_indeterminate(batch_id, "batch-duplicate-declaration")
-    if len(batch_launches) != decls[0]:
+
+    for lid in batch_launches:
+        issue = folded["launches"][lid].get("issue")
+        if not _valid_lane_issue(issue):
+            return _count_indeterminate(
+                batch_id, "batch-lane-issue-invalid:%s" % lid,
+            )
+
+    lane_groups = {}
+    for lid in batch_launches:
+        issue = folded["launches"][lid]["issue"]
+        lane_groups.setdefault(issue, []).append(lid)
+
+    distinct_lanes = len(lane_groups)
+    if distinct_lanes != decls[0]:
         return _count_indeterminate(batch_id, "batch-reservation-mismatch")
 
     decl_index = _declaration_index(read_result["records"], batch_id, folded=folded)
@@ -1393,6 +1640,25 @@ def count(repo_root, batch_id, env=None):
         if reserved_index is not None and decl_index > reserved_index:
             return _count_indeterminate(batch_id, "batch-declaration-after-reservations")
 
+    for issue, lane_launch_ids in lane_groups.items():
+        ordered = sorted(
+            lane_launch_ids,
+            key=lambda launch_id: folded["launches"][launch_id]["reservedIndex"],
+        )
+        for idx in range(len(ordered) - 1):
+            earlier = folded["launches"][ordered[idx]]
+            later = folded["launches"][ordered[idx + 1]]
+            earlier_terminal = earlier.get("terminalIndex")
+            if earlier_terminal is None or earlier_terminal >= later["reservedIndex"]:
+                return _count_indeterminate(
+                    batch_id, "batch-lane-concurrent:%s" % issue,
+                )
+
+    for lid in batch_launches:
+        info = folded["launches"][lid]
+        if not info.get("terminal"):
+            return _count_indeterminate(batch_id, "batch-unresolved:%s" % lid)
+
     counts = {
         "handback": 0,
         "park": 0,
@@ -1401,21 +1667,61 @@ def count(repo_root, batch_id, env=None):
         "refusedToLaunch": 0,
         "total": 0,
     }
+    attempt_outcomes = _zero_attempt_outcomes()
+    lane_detail = []
 
-    for lid in batch_launches:
-        info = folded["launches"][lid]
-        if not info.get("terminal"):
-            return _count_indeterminate(batch_id, "batch-unresolved:%s" % lid)
+    for issue in sorted(lane_groups):
+        lane_launch_ids = lane_groups[issue]
+        ordered = sorted(
+            lane_launch_ids,
+            key=lambda launch_id: folded["launches"][launch_id]["reservedIndex"],
+        )
+        attempt_labels = []
+        for launch_id in ordered:
+            attempt_labels.append(_attempt_outcome_label(folded["launches"][launch_id]))
 
-    for lid in batch_launches:
-        info = folded["launches"][lid]
+        for launch_id in ordered[:-1]:
+            label = _attempt_outcome_label(folded["launches"][launch_id])
+            if label in attempt_outcomes:
+                attempt_outcomes[label] += 1
+
+        final_info = folded["launches"][ordered[-1]]
         counts["total"] += 1
-        if info.get("terminalKind") == "refused":
+        if final_info.get("terminalKind") == "refused":
             counts["refusedToLaunch"] += 1
-        elif info.get("terminalKind") == "outcome":
-            outcome = info.get("outcome")
+        elif final_info.get("terminalKind") == "outcome":
+            outcome = final_info.get("outcome")
             if outcome in counts:
                 counts[outcome] += 1
+
+        lane_detail.append({
+            "issue": issue,
+            "attempts": len(ordered),
+            "outcome": final_info.get("outcome"),
+            "terminalKind": final_info.get("terminalKind"),
+            "attemptOutcomes": attempt_labels,
+        })
+
+    amendments = _zero_amendments()
+    amended_launches = 0
+    for lid in batch_launches:
+        info = folded["launches"][lid]
+        lane_amendments = info.get("amendments") or []
+        if lane_amendments:
+            amended_launches += 1
+        for amend_rec in lane_amendments:
+            amendments["total"] += 1
+            kind = amend_rec["kind"]
+            value = amend_rec["value"]
+            if kind == "reoutcome":
+                amendments["reoutcome"] += 1
+                # Genuine re-handback: second write was handback on a lane that ended handback.
+                if value == "handback" and info.get("outcome") == "handback":
+                    amendments["rehandback"] += 1
+            elif kind == "vet":
+                amendments[_vet_count_key(value)] += 1
+            elif kind == "evidence":
+                amendments["evidence"] += 1
 
     inspect = (
         counts["park"] + counts["refusal"] + counts["refusedToLaunch"] == 0
@@ -1427,6 +1733,15 @@ def count(repo_root, batch_id, env=None):
         "indeterminate": False,
         "reason": None,
         "counts": counts,
+        "amendments": amendments,
+        "amendedLaunches": amended_launches,
+        "lanes": {"declared": decls[0], "resolved": distinct_lanes},
+        "attempts": {
+            "total": len(batch_launches),
+            "extra": len(batch_launches) - distinct_lanes,
+            "outcomes": attempt_outcomes,
+        },
+        "laneDetail": lane_detail,
         "inspect": inspect,
         "inspectReason": _INSPECT_REASON if inspect else "",
     }
