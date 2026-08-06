@@ -9,6 +9,7 @@ import re
 import stat
 import time
 
+import pilot_contract
 import pilot_slot
 
 POLICY_SCHEMA_VERSION = 1
@@ -58,7 +59,11 @@ CONTAINMENT_PERMISSIONS_KEYS = frozenset(
 CONTAINMENT_SENTINEL_KEYS = frozenset(
     {"plantCommand", "probeCommand", "connectionEnvVar"}
 )
-NAMESPACE_PLACEHOLDER = "{namespace}"
+# `{namespace}` is declaration grammar and homes in `pilot_contract`, which validates it on the
+# declared cleanup command; `{sentinel}` is containment grammar and homes here, where the
+# sentinel commands are validated. Each token has exactly one literal in the library, and
+# `test_pilot_placeholder_census` is the census that keeps it that way (#866).
+NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
 SENTINEL_PLACEHOLDER = "{sentinel}"
 _PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 _ALLOWED_PLACEHOLDERS = frozenset(

@@ -21,12 +21,13 @@
 19. [Mid-wave lapse](#mid-wave-lapse)
 20. [Credential validity margin](#credential-validity-margin)
 21. [Minted sign-in exercises](#minted-sign-in-exercises)
-22. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
-23. [Per-slot browser topology](#per-slot-browser-topology)
-24. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
-25. [The provisioning gate](#the-provisioning-gate)
-26. [Per-slot app lifecycle](#per-slot-app-lifecycle)
-27. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
+22. [Reclaim safety](#reclaim-safety)
+23. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
+24. [Per-slot browser topology](#per-slot-browser-topology)
+25. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
+26. [The provisioning gate](#the-provisioning-gate)
+27. [Per-slot app lifecycle](#per-slot-app-lifecycle)
+28. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
 
 ---
 
@@ -506,7 +507,8 @@ does not — it is matched in key position, like any other name that could not b
 with an account named `owner`, `note`, or `op` hit a refusal the moment a result used that word as
 a field name, with nothing in the refusal to say the account *name* rather than a leak was the
 cause — account naming was a landmine (#861; PR #857 worked around it by renaming a plan-step key
-to `responsibleParty`).
+to `responsibleParty`, and #866 renamed that key back to `owner` once this rule made the workaround
+unnecessary).
 
 The carve-out is deliberately keyed on the material **class** and not on spelling alone. The schema
 permits any non-empty string for `expectedIdentity` and `connectionDetail`, and bare ones are

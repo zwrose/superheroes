@@ -20,14 +20,6 @@ _PROVISIONING_RECEIPT_KEYS = frozenset(
 )
 
 
-class PilotContextError(Exception):
-    """Caller or contract refusal from pilot_context."""
-
-    def __init__(self, reason):
-        super().__init__(reason)
-        self.reason = reason
-
-
 def context_set(
     slot,
     generation,
