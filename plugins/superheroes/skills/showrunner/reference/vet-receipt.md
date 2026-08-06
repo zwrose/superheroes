@@ -152,7 +152,10 @@ it:
   builder's prose. **What the reminder detects is the hidden case:** a body rewrite that
   **re-creates the heading but drops your text** leaves the slot looking present and saying nothing
   — a slot carrying **neither** reminder nor verdict is a write that was dropped, distinct from one
-  still carrying the reminder, which is a vet not yet written. (A rewrite that drops the heading
+  still carrying the reminder, which is a vet not yet written.
+  A reminder still standing means the **owner-half write** is owed, not necessarily the receipt: you
+  post the receipt first, so a failure between the two leaves the receipt posted and the reminder
+  intact. Check for your own existing receipt comment before posting a second one. (A rewrite that drops the heading
   entirely is visible without either.) Marker-presence alone is **not sufficient** and no longer
   separates those two states: re-stamp the marker when a rewrite dropped it, and remember a slot can
   be marker-present and text-stale. The showrunner charter's **duty 4** backstop is where the check

@@ -849,6 +849,19 @@ def test_pr_body_skeleton_stamps_the_marker_and_seeds_the_advisor_reminder():
     assert re.search(r"owner-half\s+register", reminder.group(0)), (
         "the reminder no longer teaches the owner-half register shape"
     )
+    elements = _owner_half_register_from_home()
+    plain = " ".join(reminder.group(0).split()).replace("**", "").lower()
+    missing = [e for e in elements if e.lower() not in plain]
+    assert not missing, (
+        "§11 advisor reminder is missing register element(s) %r "
+        "(home: skills/showrunner/reference/vet-receipt.md)" % missing
+    )
+    indices = [plain.index(e.lower()) for e in elements]
+    for i in range(len(indices) - 1):
+        assert indices[i] < indices[i + 1], (
+            "§11 advisor reminder register elements out of order: %r before %r"
+            % (elements[i], elements[i + 1])
+        )
     assert re.search(
         r"builder creates and pre-stamps|You stamp the marker so the advisor never has to",
         bullet,

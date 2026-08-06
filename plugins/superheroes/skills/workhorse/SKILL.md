@@ -715,7 +715,9 @@ format.
 
   You stamp the marker so the advisor never has to, and the advisor's write **replaces the
   reminder** — which is what makes the slot's three states readable from the body alone:
-  reminder still present → **vet receipt owed**; verdict present, reminder gone → **vetted**;
+  reminder still present → **the owner-half write is owed** (the receipt itself may already exist —
+  the advisor posts it *before* writing the body, so check for an existing vet-receipt comment
+  before posting another); verdict present, reminder gone → **vetted**;
   **neither** present → an advisor write that a body rewrite dropped. A slot with **no marker at all**
   is a body that predates this contract, not a dropped write. Marker-absence used to carry
   that last signal; once you stamp the marker it cannot, and the reminder carries it instead.
