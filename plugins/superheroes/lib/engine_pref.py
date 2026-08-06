@@ -26,9 +26,9 @@ ENGINE_ROLE_KEYS = ("reviewer", "implementation", "briefCheck", "pilot")
 
 # The FULL valid enginePreferences key set (role keys + the non-role tuning keys) — the schema home
 # the §11 drift guard reads so no test re-types the list. `codexModels`/`seatPins`/`effort`/
-# `timeout`/`idleTimeout` are the non-role keys load_engine_prefs already honors.
+# `builderDispatchTier` are the non-role keys load_engine_prefs honors.
 ENGINE_PREF_KEYS = ENGINE_ROLE_KEYS + (
-    "codexModels", "seatPins", "effort", "timeout", "idleTimeout", "builderDispatchTier",
+    "codexModels", "seatPins", "effort", "builderDispatchTier",
 )
 
 BUILDER_DISPATCH_TIER_KEY = "builderDispatchTier"
@@ -623,18 +623,6 @@ def _normalize_engine_preferences_block(prefs):
             out["seatPins"] = seat_result["pins"]
         if seat_result["invalid"]:
             out["invalidSeatPins"] = seat_result["invalid"]
-    # #309 owner override channel: a positive-int `timeout` rides the same enginePreferences block so
-    # resolve_timeout(prefs, role) can honor it at real dispatch. A bool (an int subclass) or any
-    # non-positive/non-int value is dropped, leaving the role ceiling in force.
-    timeout = prefs.get("timeout")
-    if isinstance(timeout, int) and not isinstance(timeout, bool) and timeout > 0:
-        out["timeout"] = timeout
-    # #309 stall-monitor owner override: a positive-int `idleTimeout` rides the same block so
-    # resolve_idle(prefs, role) can honor it at dispatch. Same guard as `timeout` (bool/non-positive
-    # dropped, leaving the role idle window in force). The dispatch still clamps it to the ceiling.
-    idle_timeout = prefs.get("idleTimeout")
-    if isinstance(idle_timeout, int) and not isinstance(idle_timeout, bool) and idle_timeout > 0:
-        out["idleTimeout"] = idle_timeout
     tier_value = prefs.get(BUILDER_DISPATCH_TIER_KEY)
     tier_class = classify_builder_dispatch_tier(tier_value)
     if tier_class["state"] == "valid":
@@ -651,12 +639,11 @@ def _normalize_engine_preferences_block(prefs):
 def load_engine_prefs(cwd, root=None):
     """Read core.md's enginePreferences via ``core_md.engine_preferences_for_gate``; normalize each
     role to a valid engine (else that key's fail-open default via resolve_engine_pref_key); surface
-    the optional FR-9 `effort` sub-map (a dict, else {}) and the optional #309 `timeout` owner
-    override (a positive int, else omitted — resolve_timeout then falls to the role ceiling);
-    validated `codexModels` / `invalidCodexModels` and `seatPins` / `invalidSeatPins` when
-    present. Genuinely absent config → ``degenerate_engine_prefs()`` (documented defaults). A gate
-    refusal (unreadable, root-unavailable, …) → ``refusal_engine_prefs()`` (all-claude, non-
-    escalating) plus ``readError``. Never raises."""
+    the optional FR-9 `effort` sub-map (a dict, else {}); validated `codexModels` /
+    `invalidCodexModels` and `seatPins` / `invalidSeatPins` when present. Genuinely absent config →
+    ``degenerate_engine_prefs()`` (documented defaults). A gate refusal (unreadable, root-
+    unavailable, …) → ``refusal_engine_prefs()`` (all-claude, non-escalating) plus ``readError``.
+    Never raises."""
     try:
         import core_md
         cfg = core_md.engine_preferences_for_gate(cwd=cwd, root=root)

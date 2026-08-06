@@ -141,7 +141,7 @@ Artifacts live beside `core.md` under the band storage mode (CONVENTIONS §2):
 
 | Path | Role | Written by |
 | --- | --- | --- |
-| `guardian.md` | Calibration layer — thresholds, cadence, coverage records | configure / rarely |
+| `guardian.md` | Calibration layer — thresholds, cadence, coverage records ([`guardian-config` shape](reference/calibration.md)) | configure / rarely |
 | `guardian/report.md` | Latest sweep report — advisor-facing plain consequences with receipts | the sweep, each finalize |
 | `guardian/latest.json` | Drift-baseline snapshot (CAS) | the sweep, each finalize |
 | `guardian/ledger.md` | Dispositions ledger + per-lens report card | the advisor, at consult/triage (sole writer) |
