@@ -1975,7 +1975,7 @@ non-application.
 
 The broker-admission guarantee does not hold in general: several public entry points in
 `pilot_browser.py` can leak a **builtin** exception once an input gets past outer shape
-validation — a stronger and more useful warning than a list of exceptions to a mostly-true rule.
+validation.
 The raise sites below are **the ones found so far**; a shape-validation-only hostile-input sweep
 missed several of them, so this set is explicitly **not** established as complete.
 
@@ -2011,8 +2011,7 @@ missed several of them, so this set is explicitly **not** established as complet
   `ValueError`; its `except` clauses do not handle it.
 
 A **common cause** runs through most of these: a `try/except OSError` around a path syscall does
-not catch the `ValueError` a NUL byte produces, and `_is_str_path` accepts any `str`. Naming the
-pattern is more useful to a future reader than the list alone.
+not catch the `ValueError` a NUL byte produces, and `_is_str_path` accepts any `str`.
 
 `provision_server` takes a **required** `effect_id`, and the two ways to get that wrong land
 differently: **omitting** it raises `TypeError` at the call, as any Python call missing an argument
