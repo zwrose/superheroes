@@ -111,53 +111,21 @@ def test_terminate_signals_the_whole_group_before_any_reap():
 # --- round-1 r1-3: the boundary caller's process-group containment, proved deterministically ---
 # (#866, replacing the deleted `test_observe_datastore_identity_timeout_reaps_process_group`,
 # which raced its own timeout against real interpreter cold-start latency in CI and was parked.)
-
-
-def _observe_datastore_identity_function_ast():
-    """Parse `pilot_boundary.observe_datastore_identity`'s own source into its `ast.FunctionDef`."""
-    source = inspect.getsource(pb.observe_datastore_identity)
-    tree = ast.parse(source)
-    func = tree.body[0]
-    assert isinstance(func, ast.FunctionDef) and func.name == "observe_datastore_identity", (
-        "inspect.getsource(pb.observe_datastore_identity) did not parse to a single FunctionDef "
-        "named observe_datastore_identity — got %r" % (ast.dump(tree),)
-    )
-    return func
-
-
-def test_observe_datastore_identity_routes_through_the_shared_runner():
-    # axis: the boundary caller's process-group containment is INHERITED from
-    # `pilot_bounded_run.run_bounded`, not reimplemented locally — so what must never silently
-    # change is that `observe_datastore_identity` still ROUTES through the shared runner rather
-    # than spawning its own subprocess. Checked by AST inspection of the function's own source
-    # (`inspect.getsource` + `ast.parse`, not substring matching), so a rewrite that keeps the
-    # string "run_bounded" in a comment but stops calling it would still redden here.
-    func = _observe_datastore_identity_function_ast()
-    calls = [node for node in ast.walk(func) if isinstance(node, ast.Call)]
-    # Non-vacuity: a parse that found zero `ast.Call` nodes at all would make the routing check
-    # below vacuously fail to find anything to disprove, for the wrong reason.
-    assert calls, "observe_datastore_identity parsed to zero ast.Call nodes at all"
-
-    routes_through_runner = any(
-        isinstance(c.func, ast.Attribute)
-        and c.func.attr == "run_bounded"
-        and isinstance(c.func.value, ast.Name)
-        and c.func.value.id == "pilot_bounded_run"
-        for c in calls
-    )
-    assert routes_through_runner, (
-        "observe_datastore_identity no longer calls pilot_bounded_run.run_bounded — its "
-        "process-group containment is inherited from the shared runner, so this caller must keep "
-        "routing through it rather than spawning its own subprocess (#866 round-1 r1-3)"
-    )
+# Round-2 audit (WO-6) found four real gaps in the first version of this section, fixed below:
+# an untested `start_new_session` assumption (Task 1), an ordering check that ignored `poll` as a
+# reaping event (Task 2), an AST route check with both false-positive and false-negative failure
+# modes — replaced with a runtime spy (Task 3) — and a fake that leaked a blocked reader thread
+# and cost ~2s per run for no reason (Task 4).
 
 
 def _bounded_run_observer_layout(private_tmp):
     """A real observer file satisfying `_validate_observer`'s filesystem checks.
 
-    Its content never runs — `subprocess.Popen` is faked in the tests below — but
-    `pilot_boundary._validate_observer` still stats it for real (regular file, owned by us,
-    not group/other writable, outside every reach root), so it has to actually exist on disk.
+    Content is a real, trivially-succeeding one-line observer (`#!/bin/sh` echoing a distinctive
+    token and exiting 0) — it actually runs in the runtime-spy route test below, and stays inert
+    plumbing (never executed) in the faked-`Popen` timeout test, where content is irrelevant.
+    `_validate_observer` stats the file for real either way (regular file, owned by us, not
+    group/other writable, outside every reach root), so it has to actually exist on disk.
     """
     reach_root = os.path.join(private_tmp, "reach")
     run_cwd = os.path.join(private_tmp, "cwd")
@@ -167,26 +135,75 @@ def _bounded_run_observer_layout(private_tmp):
     os.makedirs(bin_dir)
     script = os.path.join(bin_dir, "observer.sh")
     with open(script, "w", encoding="utf-8") as handle:
-        handle.write("#!/bin/sh\necho unused\n")
+        handle.write("#!/bin/sh\necho distinctive-observer-identity-token\n")
     os.chmod(script, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
     return reach_root, run_cwd, script
 
 
-class _BlockedFakeStdout:
-    """A fake `Popen(...).stdout` whose `read` blocks forever on an Event that is never set.
+def test_observe_datastore_identity_routes_through_the_shared_runner(private_tmp, monkeypatch):
+    # axis: proves EXECUTED routing — a runtime spy wrapped around the real
+    # `pilot_bounded_run.run_bounded` and confirmed to have FIRED — rather than proving the source
+    # text merely contains a matching call. An `ast.walk` (the version this replaces, #866 WO-6
+    # audit) accepts a call that sits in dead code (an unreachable `if False` branch, an uncalled
+    # nested function) and rejects an equally-real route through an import alias, an assigned
+    # callable, or a wrapper helper — both a false positive and a false negative a runtime spy
+    # does not have, because it observes what actually ran. This test proves ROUTING only;
+    # process-group CONTAINMENT itself is proved by the sibling seam test below and by
+    # `pilot_mint`'s grandchild test, not here.
+    reach_root, run_cwd, script = _bounded_run_observer_layout(private_tmp)
+    observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
 
-    This is what makes the run take the TIMEOUT branch without any real subprocess or real
-    wall-clock delay: the reader thread is still alive when `reader.join(timeout=...)` returns,
-    every time, deterministically — there is no cold-start, no scheduler jitter, nothing to race.
+    spy_calls = []
+    real_run_bounded = pbr.run_bounded
+
+    def _spy_run_bounded(*args, **kwargs):
+        spy_calls.append((args, kwargs))
+        return real_run_bounded(*args, **kwargs)
+
+    monkeypatch.setattr(pbr, "run_bounded", _spy_run_bounded)
+
+    result = pb.observe_datastore_identity(
+        observer,
+        connection_detail="postgres://localhost:5432/example_dev",
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        timeout_seconds=5,
+    )
+
+    assert spy_calls, (
+        "observe_datastore_identity never called pilot_bounded_run.run_bounded — its "
+        "process-group containment is inherited from the shared runner, so this caller must keep "
+        "EXECUTING a call through it rather than spawning its own subprocess (#866 round-1 r1-3)"
+    )
+    called_args, _called_kwargs = spy_calls[0]
+    assert called_args[0] == observer["command"], (
+        "run_bounded was called, but not with the observer's own command: got %r, expected %r"
+        % (called_args[0], observer["command"])
+    )
+    assert result["identity"] == "distinctive-observer-identity-token"
+
+
+class _BlockedFakeStdout:
+    """A fake `Popen(...).stdout` whose `read` blocks on an Event, released only by a simulated
+    SIGKILL to the group — modelling what really happens (killing the group closes the inherited
+    pipe) rather than blocking forever and leaking a daemon thread for the rest of the process.
+
+    This is what makes the run take the TIMEOUT branch without any real subprocess and without
+    racing real wall-clock delay: the reader thread is still alive when the first, short
+    `reader.join(timeout=timeout_seconds)` returns — the SIGKILL that unblocks it has not
+    happened yet at that point, deterministically, every time.
     """
 
     def __init__(self, events):
-        self._never = threading.Event()
+        self._released = threading.Event()
         self._events = events
 
     def read(self, _max_bytes):
-        self._never.wait()
-        return b""  # unreachable — the event above is never set
+        self._released.wait()
+        return b""
+
+    def release(self):
+        self._released.set()
 
     def close(self):
         self._events.append(("stdout_close",))
@@ -220,8 +237,22 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
     # REAL `pilot_boundary.observe_datastore_identity` with the process layer faked underneath —
     # the #876 seam-injection pattern (see test_pilot_appctl.py's
     # test_stop_reaped_leader_still_signals_surviving_group_members and siblings). Asserted on the
-    # ORDER of `killpg`/`wait` calls, never on wall-clock, so it cannot be flaky the way the
-    # deleted process-based test was.
+    # ORDER of `Popen`/`killpg`/`wait`/`poll` calls, never on wall-clock, so it cannot be flaky the
+    # way the deleted process-based test was.
+    #
+    # Two things this asserts that a naive fake would let slip through (#866 WO-6 audit, both
+    # confirmed against the code):
+    # 1. `start_new_session=True` on the `Popen` call. `killpg(proc.pid, ...)` only signals the
+    #    observer's whole process group BECAUSE `proc.pid` is deterministically also the pgid —
+    #    true only when the child started its own session/group. A fake that discarded this
+    #    argument (as the first version of this test did) would stay green even if the runner
+    #    stopped starting a new session, or made it caller-selectable and the boundary caller
+    #    chose `False` — exactly the failure the deleted real-process test's surviving grandchild
+    #    would have caught.
+    # 2. Both `proc.wait(...)` AND `proc.poll()` count as reaping events for the ordering check,
+    #    not `wait` alone — `Popen.poll()` can reap a terminated leader in real life, so a `poll`
+    #    call sitting between the two `killpg` calls would release the pgid early while a
+    #    wait-only check stayed green.
     #
     # `timeout_seconds=0.05` is sound here in a way it was NOT in the deleted test: that test
     # needed a REAL grandchild process to finish STARTING before the timeout fired, so a slow or
@@ -229,19 +260,29 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
     # fail at setup rather than at the assertion (#866, CI run 31002921349). Here nothing has to
     # happen before the timeout: the fake reader is blocked by construction, so the timeout firing
     # IS the scenario, deterministically, on the first and every subsequent call. There is no race
-    # left to lose.
+    # left to lose. The fake's blocking `Event` is released by the fake `SIGKILL` (Task 4, #866
+    # WO-6 audit) — modelling the real pipe closing when the group dies — so neither of
+    # `run_bounded`'s two hardcoded 1-second `reader.join` calls actually waits its full second.
     reach_root, run_cwd, script = _bounded_run_observer_layout(private_tmp)
     observer = {"command": [script], "connectionEnvVar": "PILOT_DB_URL"}
 
     events = []
     sleep_calls = []
+    popen_calls = []
+    created_procs = []
     fake_pid = 4242
 
-    def _fake_popen(*_args, **_kwargs):
-        return _FakeTimeoutProc(fake_pid, events)
+    def _fake_popen(*args, **kwargs):
+        popen_calls.append((args, kwargs))
+        proc = _FakeTimeoutProc(fake_pid, events)
+        created_procs.append(proc)
+        return proc
 
     def _fake_killpg(pgid, sig):
         events.append(("killpg", pgid, sig))
+        if sig == signal.SIGKILL and created_procs:
+            # Models reality: killing the whole group closes the pipe the reader is blocked on.
+            created_procs[-1].stdout.release()
 
     def _fake_sleep(seconds):
         sleep_calls.append(seconds)
@@ -260,19 +301,37 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
         )
     assert exc.value.reason == pb.REFUSAL_DATASTORE_OBSERVER_FAILED
 
+    # Task 1: the scheme is only sound because the child started its own session, making its pid
+    # deterministically also its pgid — assert that, not just that killpg targeted that pid.
+    assert popen_calls, "Popen was never called"
+    _popen_args, popen_kwargs = popen_calls[0]
+    assert popen_kwargs.get("start_new_session") is True, (
+        "run_bounded did not start the child in its own session (start_new_session=%r) — "
+        "killpg(proc.pid, ...) only signals the observer's WHOLE group because the child is "
+        "deterministically its own session/group leader; without that, killpg would not reach "
+        "a runaway grandchild (#866 WO-6 audit, Task 1)"
+        % (popen_kwargs.get("start_new_session"),)
+    )
+
     killpg_events = [(e[1], e[2]) for e in events if e[0] == "killpg"]
     assert killpg_events == [(fake_pid, signal.SIGTERM), (fake_pid, signal.SIGKILL)], (
         "expected the WHOLE GROUP signalled (pgid == the child's pid, %d) with both signals, in "
         "that order; got %r" % (fake_pid, killpg_events)
     )
 
-    # One shared, ordered event list across killpg/wait/poll — not three separate lists to
-    # correlate afterwards — so the reap-after-signals check is a single position comparison.
-    wait_indices = [i for i, e in enumerate(events) if e[0] == "wait"]
-    assert wait_indices, "no reap (proc.wait) was recorded at all — event log: %r" % (events,)
+    # Task 2: one shared, ordered event list across Popen/killpg/wait/poll — not three separate
+    # lists to correlate afterwards — so the reap-after-signals check is a single position
+    # comparison. `wait` AND `poll` both count as reaping events: either can release the leader's
+    # pid in real life, so either sitting between the two `killpg` calls is the same defect.
+    reap_indices = [i for i, e in enumerate(events) if e[0] in ("wait", "poll")]
+    assert reap_indices, (
+        "no reaping event (proc.wait or proc.poll) was recorded at all — event log: %r"
+        % (events,)
+    )
     killpg_indices = [i for i, e in enumerate(events) if e[0] == "killpg"]
-    assert max(killpg_indices) < min(wait_indices), (
-        "a reap happened before both signals finished sending — event order was %r" % (events,)
+    assert max(killpg_indices) < min(reap_indices), (
+        "a reaping event (proc.wait or proc.poll) happened before both signals finished "
+        "sending — event order was %r" % (events,)
     )
 
     assert sleep_calls, "the SIGTERM grace sleep never ran"
