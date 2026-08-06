@@ -38,6 +38,13 @@ action that owns it, leaving the rest of the calibration untouched:
 - **Change a single discrete field** (the verify command, the threat model) → a focused guided edit
   through `core_md`.
 - **Re-calibrate a prose-heavy hero layer** → re-run that hero's own (now-internal) calibration.
+- **Tune the guardian calibration** → read the existing `guardian.md` layer first, change the
+  knob you want inside the `guardian-config` JSON fence, and submit the **complete** body (the
+  whole fence with every sibling knob preserved) through `core_md.py write-layer --hero guardian`
+  (owner confirms the body on stdin). `write-layer` replaces the entire layer file — a partial
+  fence silently drops every other guardian knob (thresholds, cadence, coverage, vitals,
+  `reportCard`, …) and the next sweep still reads `configStatus: healthy`. The fence shape is in
+  the guardian skill's `reference/calibration.md`.
 - **Set up a hero skipped at set-up** (FR-6) → list every optional hero not yet set up and not
   previously declined, and offer to run each one's set-up from here. Get the list from the lib —
   never guess which heroes apply:
@@ -163,6 +170,16 @@ action that owns it, leaving the rest of the calibration untouched:
   A Codex pin applies only while that role's engine is `codex`; switching the role to Claude or
   Cursor ignores it. Per-run preflight model overrides have highest precedence, followed by this
   persistent pin, then the shared-tier GPT-5.6 mapping.
+
+- **`enginePreferences.effort`** — a `{role_kind: effort_token}` map under `core.md`'s
+  `enginePreferences` block. Valid role-kind keys are `review`, `review-deep`, `build`, `fix`,
+  `brief-check`, and `pilot` (role **kinds**, not dispatch role names — `build`, never
+  `implementation`). This map governs **Codex model-pin validation** (`engine_pref.normalize_codex_pin_map`
+  calls `resolve_effort` to decide whether a pinned model + effort pair is valid) and **configure
+  display** only — it does **not** set the effort a dispatch actually runs at. Dispatch effort comes
+  from the registry or a per-seat pin (`enginePreferences.seatPins`), resolved through
+  `dispatch_guard` / `seat_map`; use the per-role engine and model-tier tune actions above for
+  those knobs.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

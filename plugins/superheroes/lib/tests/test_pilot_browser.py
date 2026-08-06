@@ -984,6 +984,8 @@ def test_provision_server_journals_and_returns_record():
     sock = os.path.join(tmp, "sock")
     os.makedirs(sock)
     try:
+        begin = pb.begin_provision_server(journal, slot_ref=SLOT_REF, at=NOW)
+        assert begin["ok"] is True
         result = pb.provision_server(
             journal,
             slot_ref=SLOT_REF,
@@ -995,6 +997,7 @@ def test_provision_server_journals_and_returns_record():
             created_at=NOW,
             begin_at=NOW,
             ppid_of=lambda _pid: 100,
+            effect_id=begin["effectId"],
         )
         assert result["ok"] is True
         assert result["record"]["slotRef"] == SLOT_REF
@@ -1004,6 +1007,62 @@ def test_provision_server_journals_and_returns_record():
         assert pj.KIND_BROWSER_SERVER_PROVISIONED in kinds
         end_times = [e["endedAt"] for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_PROVISIONED]
         assert end_times[0] != NOW
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_provision_server_without_effect_id_is_not_callable():
+    # bite-axis: pre-spawn ordering is the only entry point — the legacy
+    # journal-after-the-fact call shape is absent from the signature, so a caller
+    # that omits effect_id fails at call time rather than silently journalling late.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock = os.path.join(tmp, "sock")
+    os.makedirs(sock)
+    try:
+        with pytest.raises(TypeError):
+            pb.provision_server(
+                journal,
+                slot_ref=SLOT_REF,
+                generation=1,
+                socket_dir=sock,
+                server_pid=100,
+                browser_pid=101,
+                pin=VALID_PIN,
+                created_at=NOW,
+                begin_at=NOW,
+                ppid_of=lambda _pid: 100,
+            )
+        assert not os.path.exists(journal)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@pytest.mark.parametrize("bad_effect_id", [None, "", 7])
+def test_provision_server_refuses_unusable_effect_id(bad_effect_id):
+    # bite-axis: an explicitly supplied but unusable effect_id refuses — it never
+    # falls back to opening its own effect after the processes already exist.
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock = os.path.join(tmp, "sock")
+    os.makedirs(sock)
+    try:
+        result = pb.provision_server(
+            journal,
+            slot_ref=SLOT_REF,
+            generation=1,
+            socket_dir=sock,
+            server_pid=100,
+            browser_pid=101,
+            pin=VALID_PIN,
+            created_at=NOW,
+            begin_at=NOW,
+            ppid_of=lambda _pid: 100,
+            effect_id=bad_effect_id,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SERVER_RECORD_INVALID
+        assert not os.path.exists(journal)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

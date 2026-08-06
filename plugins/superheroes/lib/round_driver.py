@@ -85,6 +85,11 @@ CHEAP = "reviewer"
 # with its findings carried as unverified. The code leg's read goes through the constant now.
 REDISPATCH_BUDGET = loop_plan_common.REDISPATCH_BUDGET
 MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
+# Claude-ladder rung for self-recovery escalation — not owner-configurable.
+# escalate() returns None (no escalation recorded) when the fixer vendor's ladder
+# does not contain this pair (codex/cursor ladders omit it).
+_SELF_RECOVERY_FIXER_MODEL = "sonnet-5"
+_SELF_RECOVERY_FIXER_EFFORT = "high"
 
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
@@ -559,7 +564,6 @@ def _default_config(overrides=None):
         "leg": "code",
         "panel": False,
         "code": True,
-        "docMode": False,
         "vendors": ["claude"],
         "fixerVendor": None,  # UNKNOWN by default — auditor independence must DEGRADE, not assume claude (#608)
         "verifyCommand": "none",
@@ -677,7 +681,7 @@ def _seed_resume(state, cfg):
     state["step"] = P_PANEL
     state["fullPanelRan"] = False
     eb = review_loop_plan.entry_bootstrap(records_path, dims)
-    owed = review_loop_plan._further_confirmation_owed(records, doc_mode=cfg.get("docMode", False))
+    owed = review_loop_plan._further_confirmation_owed(records)
     if eb.get("ok") and eb.get("confirmationPending") and owed.get("owed"):
         # The loop stopped mid-confirmation and a further FULL confirmation panel is still owed (the
         # seeded panel was degraded / no qualifying panel has run) — resume by running that panel.
@@ -1982,7 +1986,7 @@ def _settle_delta(state, config):
              or review_round_policy.is_cross_cutting(state.get("_changedSubjectsSincePanel")))
     followup = review_round_policy.confirmation_followup(
         surfaced, state.get("confirmations", 0), cross,
-        max_confirmations=MAX_CONFIRMATIONS, doc_mode=config.get("docMode", False))
+        max_confirmations=MAX_CONFIRMATIONS)
     _record_round(state, "confirmationFollowup", followup)
     if followup.get("park"):
         _park_capped(state, followup.get("reason"))
@@ -2044,7 +2048,7 @@ def _handle_stall(state, config, breaker):
         state["selfRecovered"] = True
         fixer_vendor = config.get("fixerVendor")
         rung = model_registry.escalate(
-            fixer_vendor, config.get("fixerModel", "sonnet-5"), config.get("fixerEffort", "high"))
+            fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
         if rung is not None:
             # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
             # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record

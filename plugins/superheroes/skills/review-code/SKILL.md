@@ -204,7 +204,8 @@ Launch the round's scheduled specialists (round 1: all five) in a **single messa
 | test-reviewer                | test                          | Test          |
 | premortem-reviewer           | premortem                     | Failure-Mode  |
 
-After dispatch, wait for all five agents to return. A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the terminal `dispatch-review` result, which the orchestrator folds. The orchestrator does not read agent transcripts — only those structured outputs.
+After dispatch, wait for all five agents to return. **Codex/cursor seats** run the native `dispatch-review` `--run-dir` + `--max-wait 540` continuation loop until terminal; **claude seats** are native subagents with their own lifecycle (the `await-dispatches` ruling's native-subagent exemption — the runner cannot dispatch them). The in-place fixer stays foreground by design (not an oversight). The **hand-rolled engine fallback** (`auto-fix-loop.md`) does not follow that native shape and still owes the limitation disclosure when used. No native-shape limitation disclosure is owed for seats dispatched through the runner or as claude native subagents under this skill. This skill owns the **bounds** of its own dispatches; the builder's `await-dispatches` rule owns the **channel** for what the builder launches. Full contract: `reference/auto-fix-loop.md` (Settled dispatch contract).
+A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the terminal `dispatch-review` result, which the orchestrator folds. The orchestrator does not read agent transcripts — only those structured outputs.
 
 ### 4. Compile + Dedupe (main context)
 

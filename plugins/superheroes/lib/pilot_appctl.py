@@ -1380,6 +1380,10 @@ def _default_terminate(pgid, sig):
     os.killpg(pgid, sig)
 
 
+def _default_reap(pid):
+    return os.waitpid(pid, os.WNOHANG)
+
+
 def _stop_refused_invalid():
     return {
         "ok": False,
@@ -1391,7 +1395,7 @@ def _stop_refused_invalid():
 
 
 def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
-         check_free=None, wait_seconds=10.0, sleep=None, monotonic=None):
+         check_free=None, wait_seconds=10.0, sleep=None, monotonic=None, reap=None):
     """Stop an app instance with corroborated identity and two observations."""
     try:
         if not _is_callable(now_fn):
@@ -1408,6 +1412,8 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
             return _stop_refused_invalid()
         if monotonic is not None and not _is_callable(monotonic):
             return _stop_refused_invalid()
+        if reap is not None and not _is_callable(reap):
+            return _stop_refused_invalid()
         if not _is_timeout(wait_seconds):
             return _stop_refused_invalid()
 
@@ -1423,6 +1429,8 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
             sleep = time.sleep
         if monotonic is None:
             monotonic = time.monotonic
+        if reap is None:
+            reap = _default_reap
 
         if not isinstance(instance, dict):
             return _stop_refused_invalid()
@@ -1472,34 +1480,68 @@ def stop(instance, *, now_fn, terminate=None, poll_alive=None, corroborate=None,
             }
 
         exit_code = None
+        reaped = False
 
-        if poll_alive(pgid):
+        def reap_once():
+            """Reap `pid` if it has already exited, so liveness stops seeing a zombie.
+
+            `poll_alive` asks `killpg(pgid, 0)`, which keeps answering "alive" for a
+            child that has exited but has not been reaped — a process group still has
+            the zombie as a member. Reaping before each liveness read is what stops an
+            already-dead child from burning the SIGTERM + SIGKILL budget.
+            """
+            nonlocal exit_code, reaped
+            if reaped:
+                return
+            try:
+                waited_pid, status = reap(pid)
+            except ChildProcessError:
+                # Not our child, or already reaped elsewhere: nothing more to collect.
+                reaped = True
+                return
+            except OSError:
+                return
+            if waited_pid == pid:
+                reaped = True
+                exit_code = os.waitstatus_to_exitcode(status)
+
+        def group_alive():
+            """Liveness with our own zombie masked out: reap first, then poll.
+
+            Reaping is never on its own a verdict that the group is gone — the leader
+            can exit while other members of its process group are still running, and
+            those still have to be signalled. `poll_alive` remains the authority.
+
+            Accepted residual: reaping releases the pid, so a signal sent after a
+            successful reap addresses `pgid` by number rather than by pinned identity.
+            A pid recycled into a *group leader* between the reap and the poll below
+            would be signalled instead. The window is the gap between two adjacent
+            syscalls and needs pid wraparound to land exactly here. Closing it needs
+            group-membership enumeration (`ps -o pgid=`); re-corroborating on the
+            leader's pid instead would refuse to signal exactly the surviving-member
+            case above, which is a live process leak — a worse trade. See issue #872.
+            """
+            reap_once()
+            return bool(poll_alive(pgid))
+
+        if group_alive():
             try:
                 terminate(pgid, signal.SIGTERM)
             except OSError:
                 pass
             deadline = monotonic() + wait_seconds
-            while poll_alive(pgid) and monotonic() < deadline:
+            while group_alive() and monotonic() < deadline:
                 sleep(0.05)
-            if poll_alive(pgid):
+            if group_alive():
                 try:
                     terminate(pgid, signal.SIGKILL)
                 except OSError:
                     pass
                 deadline = monotonic() + wait_seconds
-                while poll_alive(pgid) and monotonic() < deadline:
+                while group_alive() and monotonic() < deadline:
                     sleep(0.05)
 
-        try:
-            _pid, status = os.waitpid(pid, os.WNOHANG)
-            if _pid == pid:
-                exit_code = os.waitstatus_to_exitcode(status)
-        except ChildProcessError:
-            pass
-        except OSError:
-            pass
-
-        group_gone = not poll_alive(pgid)
+        group_gone = not group_alive()
         alloc = instance.get("allocation", {})
         host = alloc.get("host", "127.0.0.1")
         port = alloc.get("port", 0)

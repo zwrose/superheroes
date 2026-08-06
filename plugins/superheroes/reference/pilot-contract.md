@@ -1920,7 +1920,11 @@ non-application.
 
 ### Broker admission
 
-Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception.
+Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception for
+the validation failures it recognises. `provision_server` takes a **required** `effect_id`, and the
+two ways to get that wrong land differently: **omitting** it raises `TypeError` at the call, as any
+Python call missing an argument does — a call-shape error, not a recognised validation failure —
+while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
@@ -1944,8 +1948,11 @@ The primary provisioning shape journals **before** processes exist: `begin_provi
 writes the journal `begin` record and returns an `effectId`; the caller spawns the server and
 browser, then `provision_server` closes that effect with `outcome: applied` via the supplied
 `effect_id`. A crash between spawning and recording must replay as *possibly-applied*, never as
-never-happened (#660 §7). The legacy `effect()` wrapper inside `provision_server` (when
-`effect_id` is omitted) remains for callers that journal and spawn in one step.
+never-happened (#660 §7). This is the **only** provisioning shape: `effect_id` is a required
+argument, so omitting it is a `TypeError` at call time, and an explicitly supplied non-string or
+empty `effect_id` refuses (`browser-server-record-invalid`). There is no journal-after-the-fact
+fallback — the legacy `effect()` wrapper was removed in #863 with zero live callers, because a
+crash on that path left no journal trace at all.
 
 Public API in `lib/pilot_browser.py`: `validate_pin`, `verify_pin`, `socket_dir_plan`,
 `create_socket_dir`, `remove_socket_dir`, `assert_browser_is_server_child`,
@@ -1956,11 +1963,6 @@ Public API in `lib/pilot_browser.py`: `validate_pin`, `verify_pin`, `socket_dir_
 
 These are recorded contract facts, not oversights pending silent fix:
 
-- **`provision_server`'s legacy non-pre-spawn path still exists.** A caller that omits the
-  pre-spawn `effect_id` gets the old journal-after-the-fact ordering, which cannot record a crash
-  between spawning and recording. The pre-spawn path (`begin_provision_server` then
-  `provision_server` with `effect_id`) is the documented one; whether the legacy path should be
-  removed is an open API-shape question.
 - **Socket-base worktree containment resolves the calling process's repository, not the slot's
   worktree.** Per-slot worktrees are a framework concept C7 does not own; binding the
   containment check to the slot's tree belongs with the sub-issues that own slot worktrees
@@ -1984,7 +1986,7 @@ These are recorded contract facts, not oversights pending silent fix:
 | `browser-socket-dir-not-directory` | `remove_socket_dir`: path is not a string or not a directory |
 | `browser-socket-dir-unrecognized` | `remove_socket_dir`: path basename does not start with the framework socket-directory prefix (`pb-`), checked before any entries are removed |
 | `browser-socket-dir-unremovable` | `remove_socket_dir`: directory contents cannot be enumerated; an entry cannot be classified or removed safely (including a non-empty subdirectory); or removing the now-empty directory fails |
-| `browser-server-record-invalid` | `provision_server`, `teardown_server`, `admit_server_registry`, or `admit`: server record shape, slot reference, generation, PIDs, pin, or timestamps fail validation; journal write fails |
+| `browser-server-record-invalid` | `provision_server`, `teardown_server`, `admit_server_registry`, or `admit`: server record shape, slot reference, generation, PIDs, pin, or timestamps fail validation; `provision_server`'s required `effect_id` is supplied but is not a non-empty string; journal write fails |
 | `browser-not-server-child` | `assert_browser_is_server_child`: browser PID's parent is not the server PID |
 | `browser-pid-unreadable` | `assert_browser_is_server_child`: parent PID cannot be read from the process table |
 | `browser-terminal-state-unobserved` | `teardown_server`: `observe_exit` does not return a dict with `exited: true` for the server PID or for the browser PID (a dict with `exited: true` and absent `status` is accepted) |

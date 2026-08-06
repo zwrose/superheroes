@@ -779,26 +779,6 @@ def test_stand_up_generation_moved_stops_child():
         shutil.rmtree(tmp)
 
 
-def _pin_poll_alive_to_child(monkeypatch, child_holder):
-    """Pin stop()'s liveness view to the test's own child handle.
-
-    PINNED CONDITION: `pilot_appctl._default_poll_alive`, for the duration of one test.
-    The real one asks `killpg(pgid, 0)`, which keeps answering "alive" for a child that
-    has exited but not yet been reaped — and stand_up's in-lock stop() reaps only after
-    its kill loops, so it burns the full SIGTERM + SIGKILL budget (20s) on a zombie.
-
-    MADE UNOBSERVABLE BY THIS PIN: that production timing. These tests will not notice
-    if stop() gets slower, or faster, against an unreaped child. They pin liveness, not
-    the stop sequence: the real SIGTERM, the real stop(), and the real persistence call
-    all still run.
-    """
-    monkeypatch.setattr(
-        pa,
-        "_default_poll_alive",
-        lambda _pgid: child_holder["proc"].poll() is None,
-    )
-
-
 def _reap_child(child_holder):
     """Failure-safe child cleanup, matching this file's real-process convention."""
     proc = child_holder.get("proc")
@@ -812,7 +792,7 @@ def _reap_child(child_holder):
     proc.wait(timeout=_JOIN_TIMEOUT)
 
 
-def test_stand_up_generation_moved_persists_stop_to_disk(monkeypatch):
+def test_stand_up_generation_moved_persists_stop_to_disk():
     """The in-lock generation-moved site writes the stopped instance record to disk.
 
     Bite axis: DURABILITY of the stop at pilot_appctl.py's generation-moved
@@ -833,7 +813,6 @@ def test_stand_up_generation_moved_persists_stop_to_disk(monkeypatch):
         sock.close()
         launch = _launch_base(cwd, port, f"http://127.0.0.1:{port}/ready")
         phase = {"count": 0}
-        _pin_poll_alive_to_child(monkeypatch, child_holder)
 
         def probe(url, *, timeout):
             if phase["count"] == 0:
@@ -882,7 +861,7 @@ def test_stand_up_generation_moved_persists_stop_to_disk(monkeypatch):
         shutil.rmtree(tmp)
 
 
-def test_stand_up_unreadable_slot_record_persists_stop_to_disk(monkeypatch):
+def test_stand_up_unreadable_slot_record_persists_stop_to_disk():
     """The in-lock unreadable-slot-record site writes the stopped instance record to disk.
 
     Bite axis: DURABILITY of the stop at pilot_appctl.py's unreadable-record
@@ -914,7 +893,6 @@ def test_stand_up_unreadable_slot_record_persists_stop_to_disk(monkeypatch):
             argv=[sleep_bin, "60"],
         )
         phase = {"count": 0}
-        _pin_poll_alive_to_child(monkeypatch, child_holder)
 
         def probe(url, *, timeout):
             if phase["count"] == 0:
@@ -1200,6 +1178,122 @@ def test_stop_group_gone_port_occupied():
         assert r["observed"] is False
     finally:
         occupier.close()
+
+
+def test_stop_exited_child_reaped_before_kill_loops():
+    """An exited-but-unreaped child costs no part of the kill budget.
+
+    Bite axis: ORDERING of the reap against the kill loops. The fakes reproduce the
+    zombie that `killpg(pgid, 0)` cannot see through — liveness answers "alive" until
+    the child is reaped, "gone" afterwards — so the only way to leave the kill loops
+    unentered is to reap before the first liveness read. Asserted on the calls made,
+    not on wall-clock, so it stays honest under a slow or loaded runner.
+    """
+    inst = _instance_record(state=pa.STATE_READY, pid=4242, pgid=4242)
+    state = {"reaped": False}
+    terminate_calls = []
+    sleeps = []
+
+    def fake_reap(pid):
+        assert pid == 4242
+        if state["reaped"]:
+            raise ChildProcessError()
+        state["reaped"] = True
+        return (4242, 0)
+
+    def fake_poll_alive(_pgid):
+        # A zombie is still a member of its process group: alive until reaped.
+        return not state["reaped"]
+
+    r = pa.stop(
+        inst,
+        now_fn=lambda: NOW,
+        corroborate=lambda _i: True,
+        check_free=lambda _h, _p: {"ok": True},
+        reap=fake_reap,
+        poll_alive=fake_poll_alive,
+        terminate=lambda pgid, sig: terminate_calls.append((pgid, sig)),
+        sleep=lambda seconds: sleeps.append(seconds),
+    )
+
+    assert terminate_calls == [], "kill loop entered against an already-exited child"
+    assert sleeps == [], "grace budget consumed against an already-exited child"
+    assert r["ok"] and r["observed"]
+    assert r["exit"] == 0
+
+
+def test_stop_live_child_still_runs_full_kill_sequence():
+    """A child that never dies still gets SIGTERM, the grace wait, then SIGKILL.
+
+    Bite axis: PRESERVATION of the live-child escalation once the reap short-circuit
+    exists. The fake reap always reports "still running", so nothing may be skipped;
+    the clock is driven by the fake sleep, so both grace windows are exercised without
+    real waiting.
+    """
+    inst = _instance_record(state=pa.STATE_READY, pid=4243, pgid=4243)
+    clock = {"t": 0.0}
+    terminate_calls = []
+
+    def fake_sleep(seconds):
+        clock["t"] += seconds
+
+    r = pa.stop(
+        inst,
+        now_fn=lambda: NOW,
+        corroborate=lambda _i: True,
+        check_free=lambda _h, _p: {"ok": True},
+        reap=lambda _pid: (0, 0),
+        poll_alive=lambda _pgid: True,
+        terminate=lambda pgid, sig: terminate_calls.append((pgid, sig)),
+        sleep=fake_sleep,
+        monotonic=lambda: clock["t"],
+    )
+
+    assert terminate_calls == [(4243, signal.SIGTERM), (4243, signal.SIGKILL)]
+    # Both grace windows ran to their deadline: 10s SIGTERM grace + 10s SIGKILL grace.
+    assert clock["t"] >= 20.0
+    assert r["reason"] == pa.REASON_STOP_INDETERMINATE
+    assert r["observed"] is False
+
+
+def test_stop_reaped_leader_still_signals_surviving_group_members():
+    """Reaping the leader is not by itself a verdict that the process group is gone.
+
+    Bite axis: the SHORT-CIRCUIT'S BOUND. A leader can exit while other members of its
+    process group keep running; those still have to be signalled. Here the reap
+    succeeds immediately but liveness stays true, so the kill sequence must still run.
+    """
+    inst = _instance_record(state=pa.STATE_READY, pid=4244, pgid=4244)
+    clock = {"t": 0.0}
+    terminate_calls = []
+
+    def fake_sleep(seconds):
+        clock["t"] += seconds
+
+    r = pa.stop(
+        inst,
+        now_fn=lambda: NOW,
+        corroborate=lambda _i: True,
+        check_free=lambda _h, _p: {"ok": True},
+        reap=lambda _pid: (4244, 0),
+        poll_alive=lambda _pgid: True,
+        terminate=lambda pgid, sig: terminate_calls.append((pgid, sig)),
+        sleep=fake_sleep,
+        monotonic=lambda: clock["t"],
+    )
+
+    assert terminate_calls == [(4244, signal.SIGTERM), (4244, signal.SIGKILL)]
+    assert r["reason"] == pa.REASON_STOP_INDETERMINATE
+    # The leader's status was still collected on the way through.
+    assert r["exit"] == 0
+
+
+def test_stop_non_callable_reap_refused():
+    """A non-callable `reap` seam is refused like every other injected seam."""
+    inst = _instance_record(state=pa.STATE_READY)
+    r = pa.stop(inst, now_fn=lambda: NOW, reap="not-callable")
+    assert r["reason"] == pa.REASON_INSTANCE_RECORD_INVALID
+    assert r["ok"] is False
 
 
 def test_stop_double_idempotent():
