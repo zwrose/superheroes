@@ -4,15 +4,16 @@
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
 - [The `None` convention](#the-none-convention)
+- [The owner-half write — register](#the-owner-half-write--register)
 - [Markers](#markers)
 - [Skeleton](#skeleton)
 
 # The vet receipt — shape
 
 The vet is the **last independent read before the owner's one irreversible act**. This file is the
-shape of the receipt that read leaves behind. When it is written, what else the vet does, and where
-the verdict also goes are the **showrunner** charter's duty 4 — read this one at vet time, and do not
-reconstruct it from memory.
+shape of the receipt that read leaves behind — and, below, the register of the owner-half write it
+points at. **When** it is written and what else the vet does are the **showrunner** charter's duty 4
+— read this one at vet time, and do not reconstruct it from memory.
 
 **Why a shape at all.** The spine below was not designed; it is what receipts across two independent
 advisor sessions had **already converged on**, ratified rather than invented. What had *not* travelled
@@ -111,6 +112,29 @@ a defect in the receipt, because absence is exactly what a reader cannot interpr
 A **triggered** field that did not trigger is simply **absent** — and that is safe only because its
 trigger is greppable in the artifacts, so any reader can re-derive whether it should have fired
 without trusting the receipt's author.
+
+## The owner-half write — register
+
+The receipt above is written for **you and the next advisor**. The `## Advisor vet` slot in the PR
+body is written for **the owner**, and they are not the same document. Reproducing the full vet in
+the slot is the failure this section names — a field owner rejected exactly that, as *"the full vet,
+not the owner half."*
+
+Four elements, in this order:
+
+1. **The verdict.**
+2. **What was checked, in owner terms** — what an independent reader went and looked at, said as
+   consequences rather than as mechanism. Not the probe list.
+3. **What accepting it means** — what the owner still carries after merging.
+4. **What is theirs to decide** — the open calls at the click, or `None`.
+
+**Probes, accounting and dispositions are mechanism.** Where they belong in the slot at all they go
+**collapsed inside `<details>`**, below the four elements, never above them; the pointer to the
+receipt comment carries the rest. Consequence up, mechanism down — the same rule the PR body's own
+two halves run on.
+
+This register is what survived owner contact and became the standing rule. Write to it, rather than
+to whatever the receipt happens to look like.
 
 ## Markers
 

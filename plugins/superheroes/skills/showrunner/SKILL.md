@@ -311,8 +311,8 @@ above).
    - **Post a durable vet receipt on the PR, in the shape the receipt contract defines** —
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
-     field **filled or written `None`**. Read that file at vet time rather than reconstructing the shape
-     here. The spine is what receipts across two independent advisor sessions already converged on; the
+     field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
+     The spine is what receipts across two independent advisor sessions already converged on; the
      `None` is what makes an absence readable, because presence-by-grep cannot tell *not applicable*
      from *forgotten*. **The template is a floor, never a ceiling** — a probes field that reads like a
      form has hollowed out the one field that cannot be. The receipt stands without your context.
@@ -326,10 +326,14 @@ above).
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
      empty (the **workhorse** charter's §11 has the builder create it and governs what it must
      preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
-     below is still yours). **The verdict plus a pointer to the receipt, and nothing else by
-     default:** consequence up, mechanism down — probes, accounting and dispositions are mechanism,
-     but *an independent reader checked this, and this is what they concluded* is the most
-     merge-relevant single fact on the page. **One conditional:**
+     below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
+     **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
+     Probes, accounting and dispositions are **mechanism**: collapse them inside `<details>` below
+     those four, or leave them to the receipt. Consequence up, mechanism down — *an independent
+     reader checked this, and this is what they concluded* is the most merge-relevant single fact on
+     the page, and a slot that reproduces the whole vet has buried it. The register is defined in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md` — read it
+     there at vet time rather than reconstructing it from memory. **One conditional:**
      when the principle check finds an omission, the missing consequence goes **there too**, not only
      in the receipt — recording it only in a document addressed to you repeats the original defect in
      a politer voice. **Never Tier-2 proposals:** *what should we do next* is a different question

@@ -22,7 +22,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `design-forks` — design forks inside ratified scope are your call with disclosure; park only genuinely consequential ones.
 - `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — a zero slice opens the run and returns now without starting an attempt, so progress comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
-- `git-identity` — commits inherit the repo's configured git identity; never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or wrong identity is a park-and-report, not an improvisation.
+- `git-identity` — commits inherit the git identity the worktree resolves (its configured identity — normally this environment's global config); never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or wrong identity is a park-and-report, not an improvisation.
 <!-- launch-doctrine:rulings:end -->
 
 <!-- launch-doctrine:preflight:begin -->

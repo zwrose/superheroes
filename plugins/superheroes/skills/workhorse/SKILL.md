@@ -175,9 +175,12 @@ controls; if it does not, create one (`git worktree add`) and switch to it befor
 shared tree let one session's `git checkout` wipe a sibling's uncommitted work twice — this check puts the
 guarantee where it survives a launch-prompt omission, complementing the playbook's standing rulings).
 
-**Third, and at every commit after — commits inherit the repo's configured git identity; never
+**Third, and at every commit after — commits inherit the git identity the worktree resolves; never
 synthesize one.** Every commit that lands on your branch runs with the identity the worktree is
-**already configured with**. **Never pass `-c user.name` or `-c user.email`** on it, and never
+**already configured with** — repo-local `.git/config` when it is set, otherwise this environment's
+**global** config, exactly as git's normal cascade resolves it. A clone with no repo-local identity
+is the **normal** case, not a missing one: a `git config --local` that comes back empty is not by
+itself the missing-identity condition below. **Never pass `-c user.name` or `-c user.email`** on it, and never
 derive an identity from your own context — an account email you know about *yourself* is not the
 repo's identity, and inferring one is not a fallback. The damage is invisible from inside the build:
 a commit authored under a synthesized identity lands **unverified**, and a downstream gate can
@@ -267,7 +270,7 @@ includes `forfeit-with-engaged-artifact` (final output *did* arrive; our transpo
 it) — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to
 run slow) is **not** a forfeit; anything short of the terminal condition **parks or runs the retry
 ladder** (the #563 sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the
-cross-vendor guarantee if sessions learn it (we#520 was exactly that swap, disclosed but forbidden).
+cross-vendor guarantee if sessions learn it (#520 was exactly that swap, disclosed but forbidden).
 This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an engine not
 configured or available at all — a selection event recorded there); here a *configured* reviewer must
 actually forfeit before Claude stands in.
@@ -799,6 +802,6 @@ curation stay with the advisor.
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
-| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the repo's **configured** identity; `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
+| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. No recorded PID means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |

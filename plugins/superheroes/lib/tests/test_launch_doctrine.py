@@ -434,7 +434,8 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
     # phrases, which would leave the launched payload carrying a conditional invariant. Exact
     # equality means any softening has to edit this literal too — a third, deliberate site.
     assert text == (
-        "commits inherit the repo's configured git identity; never pass `-c user.name` or "
+        "commits inherit the git identity the worktree resolves (its configured identity — "
+        "normally this environment's global config); never pass `-c user.name` or "
         "`-c user.email` and never synthesize one; a missing or wrong identity is a "
         "park-and-report, not an improvisation."
     )

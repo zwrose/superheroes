@@ -49,7 +49,8 @@ RULING_TEXT = {
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
-        "commits inherit the repo's configured git identity; never pass `-c user.name` or "
+        "commits inherit the git identity the worktree resolves (its configured identity — "
+        "normally this environment's global config); never pass `-c user.name` or "
         "`-c user.email` and never synthesize one; a missing or wrong identity is a "
         "park-and-report, not an improvisation."
     ),
