@@ -538,7 +538,9 @@ def test_doc_review_rearms_for_a_compile_layer_only_blocker(tmp_path, capsys):
     assert "reduced or under-evidenced" not in out["reason"]
 
 
-@pytest.mark.parametrize("bad", [None, "Important", ["Important", None], 5, {}])
+# List-element case must contain no genuine blocking string — otherwise the string
+# passes on its own merit rather than on the untrustworthy-shape guard.
+@pytest.mark.parametrize("bad", [None, "Important", [None], 5, {}])
 def test_doc_review_fails_closed_on_untrustworthy_compiled_severities(tmp_path, capsys, bad):
     # #884 review round 2 (architecture-001 / code-001 / security-001): the compile-layer window
     # must never read "I have no trustworthy record" as "nothing was blocking" — that is the FR-8
