@@ -71,7 +71,7 @@ jobs:
           python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -rs \
             --junitxml="$RUNNER_TEMP/out/junit.xml" \
             $XDIST_FLAG 2>&1 | tee "$RUNNER_TEMP/out/pytest.log"
-          EXIT_CODE=$?
+          EXIT_CODE=${PIPESTATUS[0]}
           set -e
           END=$(date +%s)
           WALL_SECONDS=$((END - START))
@@ -120,7 +120,7 @@ jobs:
 
       - name: Compare junit parity across arms
         run: |
-          sed 's/^          //' > "$RUNNER_TEMP/compare_junit.py" <<'PY'
+          cat > "$RUNNER_TEMP/compare_junit.py" <<'PY'
           #!/usr/bin/env python3
           """Compare serial vs parallel pytest junit outcomes for spike #816."""
           from __future__ import annotations
@@ -375,6 +375,58 @@ jobs:
                       msg = f"E5: nonzero exit_code={exit_code} for arm={arm} rep={rep}"
                       print(msg)
                       divergent_reasons.append(msg)
+
+              # E8 — within-arm divergence across replicates
+              for arm in EXPECTED_ARMS:
+                  key_outcomes: dict[str, dict[int, str]] = defaultdict(dict)
+                  for rep in EXPECTED_REPS:
+                      run = runs.get((arm, rep))
+                      if not run:
+                          continue
+                      for test_key, outcome in (run.get("outcomes") or {}).items():
+                          key_outcomes[test_key][rep] = outcome
+                  for test_key, rep_outcomes in sorted(key_outcomes.items()):
+                      if len(set(rep_outcomes.values())) > 1:
+                          rep_detail = ", ".join(
+                              f"rep{r}: {o}" for r, o in sorted(rep_outcomes.items())
+                          )
+                          msg = f"E8: within-arm divergence in {arm}: {test_key} -> {{{rep_detail}}}"
+                          print(msg)
+                          divergent_reasons.append(msg)
+
+              # Cross-arm comparison over full replicate set
+              print("\n=== Cross-arm outcome set diff (all replicates) ===")
+              all_test_keys: set[str] = set()
+              for arm in EXPECTED_ARMS:
+                  for rep in EXPECTED_REPS:
+                      run = runs.get((arm, rep))
+                      if run:
+                          all_test_keys.update((run.get("outcomes") or {}).keys())
+              cross_arm_diffs: list[str] = []
+              for test_key in sorted(all_test_keys):
+                  serial_observed: set[str] = set()
+                  parallel_observed: set[str] = set()
+                  for rep in EXPECTED_REPS:
+                      serial_run = runs.get(("serial", rep))
+                      if serial_run:
+                          outcome = (serial_run.get("outcomes") or {}).get(test_key)
+                          if outcome is not None:
+                              serial_observed.add(outcome)
+                      parallel_run = runs.get(("parallel", rep))
+                      if parallel_run:
+                          outcome = (parallel_run.get("outcomes") or {}).get(test_key)
+                          if outcome is not None:
+                              parallel_observed.add(outcome)
+                  if serial_observed != parallel_observed:
+                      line = (
+                          f"cross-replicate E7: {test_key} "
+                          f"serial_observed={sorted(serial_observed)} "
+                          f"parallel_observed={sorted(parallel_observed)}"
+                      )
+                      print(line)
+                      cross_arm_diffs.append(line)
+                      divergent_reasons.append(line)
+              print(f"Cross-arm set diffs: {len(cross_arm_diffs)}")
 
               # Per-test diff between arms (per rep)
               print("\n=== Per-test outcome diff (serial vs parallel) ===")
