@@ -73,6 +73,7 @@ SLOT_OUTCOMES = frozenset({SLOT_OUTCOME_PROVISIONED, SLOT_OUTCOME_FAILED})
 
 REASON_JOURNAL_UNREADABLE = "journal-unreadable"
 REASON_JOURNAL_WRITE_FAILED = "journal-write-failed"
+REASON_JOURNAL_TORN = "journal-torn"
 REASON_RECORD_INVALID = "journal-record-invalid"
 REASON_KIND_UNKNOWN = "journal-effect-kind-unknown"
 REASON_OUTCOME_INVALID = "journal-outcome-invalid"
@@ -362,19 +363,22 @@ def _verify_end_effect_origin(journal_path, *, slot_ref, effect_id, kind):
     """Verify the effect ID names an open begin of the right kind for this slot.
 
     Precedence (first match wins):
-    1. zero begin-phase records with this effectId → origin-missing
-    2. more than one begin-phase record → origin-ambiguous
-    3. exactly one begin but fails _validate_begin_record → origin-invalid
-    4. exactly one valid begin but kind != argument → origin-kind-mismatch
-    5. exactly one valid begin but slotRef != argument → origin-slot-mismatch
-    6. any end-phase record with this effectId → already-closed
-    7. otherwise → proceed (return None)
+    1. journal torn (last record incomplete) → journal-torn
+    2. zero begin-phase records with this effectId → origin-missing
+    3. more than one begin-phase record → origin-ambiguous
+    4. exactly one begin but fails _validate_begin_record → origin-invalid
+    5. exactly one valid begin but kind != argument → origin-kind-mismatch
+    6. exactly one valid begin but slotRef != argument → origin-slot-mismatch
+    7. any end-phase record with this effectId → already-closed
+    8. otherwise → proceed (return None)
     """
     read_result = _read_journal_text(journal_path)
     if not read_result["ok"]:
         if read_result["missing"]:
             return REASON_ORIGIN_MISSING
         return REASON_JOURNAL_UNREADABLE
+    if read_result["torn"]:
+        return REASON_JOURNAL_TORN
 
     begin_count = 0
     begin_record = None

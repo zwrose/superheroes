@@ -931,6 +931,7 @@ wins):
 
 | Condition | Refusal |
 |---|---|
+| journal torn (last record incomplete, file does not end with newline) | `journal-torn` |
 | zero records with `phase == "begin"` and this `effectId` | `journal-effect-origin-missing` |
 | more than one such begin-phase record | `journal-effect-origin-ambiguous` |
 | exactly one, but it fails begin-record validation | `journal-effect-origin-invalid` |
@@ -941,8 +942,11 @@ wins):
 
 A parseable record counts by its `phase` and `effectId` whether or not it is a valid record. An
 unparseable line cannot match. A torn trailing line is dropped before the scan (same rule as
-replay). A missing journal file is treated as `journal-effect-origin-missing` during close;
-replay still treats a missing journal as `journal-unreadable`.
+replay), but a torn journal **refuses** the close rather than repairing the file — the partial
+tail stays on disk so reclaim and human inspection retain the evidence. `replay()` torn handling
+is unchanged: it still returns `ok: true` with `torn: true` and pairs what it can. A missing
+journal file is treated as `journal-effect-origin-missing` during close; replay still treats a
+missing journal as `journal-unreadable`.
 
 On any refusal, **nothing is appended** — the open `begin` stays open and replays as
 `possibly-applied`.
@@ -993,6 +997,7 @@ from proving applied or not-applied.
 | Token | When returned |
 |---|---|
 | `journal-unreadable` | journal file cannot be read during replay |
+| `journal-torn` | `end_effect`: journal torn (last record incomplete) — close refused, nothing appended |
 | `journal-write-failed` | append or fsync failed |
 | `journal-record-invalid` | record shape, timestamp, or serialisable `detail` fails validation |
 | `journal-effect-kind-unknown` | `kind` is not in `EFFECT_KINDS` |

@@ -1498,6 +1498,41 @@ def test_end_effect_refuses_invalid_kind(tmp_dir):
     assert not os.path.exists(path)
 
 
+def test_end_effect_refuses_torn_journal(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="torn1",
+    )
+    assert begin["ok"] is True
+    with open(path, "ab") as fh:
+        fh.write(b'{"schemaVersion": 1, "phase": "be')
+    with open(path, "rb") as fh:
+        before = fh.read()
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="torn1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
+    with open(path, "rb") as fh:
+        after = fh.read()
+    assert after == before
+
+
+def test_end_effect_refuses_torn_journal_with_no_newline(tmp_dir):
+    path = _journal(tmp_dir)
+    partial = json.dumps(
+        _begin_record(effect_id="torn-nl0"),
+        sort_keys=True,
+    )[:20]
+    with open(path, "wb") as fh:
+        fh.write(partial.encode("utf-8"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="torn-nl0",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
+
+
 def test_end_effect_refuses_unreadable_journal(tmp_dir):
     path = _journal(tmp_dir)
     begin = pj.begin_effect(
