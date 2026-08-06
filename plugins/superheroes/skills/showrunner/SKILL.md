@@ -338,15 +338,19 @@ above).
      in the receipt — recording it only in a document addressed to you repeats the original defect in
      a politer voice. **Never Tier-2 proposals:** *what should we do next* is a different question
      from *do I merge*. **The slot is append-only and yours** — edit your own prior text in place,
-     never the builder's prose; stamp `<!-- superheroes:advisor-vet -->` above what you write.
+     never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
+     empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
+     replacing the reminder, and re-stamp the marker only when a body rewrite has dropped it.
      **Post the receipt first, then write the owner half that points at it** — in that order a
      failure between the two leaves a receipt with no pointer (visible, recoverable), never a verdict
      pointing at a receipt that does not exist. **Check the slot whenever you next read this PR's
      body** — a re-vet, a re-review, or the read before handing it back, not only a formal re-vet —
      comparing its text against your **most recent** vet receipt comment (your canonical copy), not
-     merely whether the marker is there: a rewrite can drop your text (marker gone) or carry an older
-     copy forward over a newer one (marker present, text stale — invisible to a marker check).
-     Re-write your text and re-stamp the marker when either is missing or stale.
+     merely whether the marker is there: a rewrite can drop your text and re-seed the builder's
+     reminder in its place (marker present, reminder back — which reads exactly like a vet that has
+     not happened yet), drop the marker with it (marker gone), or carry an older copy forward over a
+     newer one (marker present, text stale — invisible to a marker check). Re-write your text and
+     re-stamp the marker when any of the three holds.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
      was never an independent axis — the presentation call (duty 5) already says when the owner must
      *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and

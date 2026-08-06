@@ -720,9 +720,10 @@ format.
   written** is the showrunner charter's own duty. If you rewrite the PR body
   later, **carry the slot's existing text forward byte-for-byte** — advisor-authored content is
   never yours to edit, reflow, summarize, shorten, or drop, and re-creating the heading over an
-  advisor write you deleted **is the defect, not compliance with the rule** (the advisor's marker
-  above its text is the only signal telling a silently emptied slot from one not yet written —
-  dropping the text takes the detection signal with it). **Re-read the slot immediately before you
+  advisor write you deleted **is the defect, not compliance with the rule** (the **reminder** is the
+  only signal telling a silently emptied slot from one not yet written — a slot carrying neither
+  reminder nor verdict is a write that was dropped, so re-seeding the reminder over an advisor write
+  you deleted destroys the evidence as well as the verdict). **Re-read the slot immediately before you
   submit the body rewrite, confirm afterwards that it still carries the advisor's actual text — not
   merely that something is there — and if the advisor wrote or extended the slot while you were
   editing, the newer advisor text wins.**
