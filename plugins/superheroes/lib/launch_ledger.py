@@ -838,11 +838,11 @@ def _validate_boundary_block(block, slot, generation):
                 return "fold-bad-field:reserved:boundary-acceptance-required"
         if len(acceptance_reason) > 500:
             return "fold-bad-field:reserved:boundary-acceptance-reason-too-long"
-        if not pilot_provision._is_iso8601_utc(accepted_at):
+        if not pilot_provision.is_iso8601_utc(accepted_at):
             return "fold-bad-field:reserved:boundary-acceptedAt"
     elif accepted_by is not None or accepted_at is not None or acceptance_reason is not None:
         return "fold-bad-field:reserved:boundary-acceptance-forbidden"
-    if not pilot_provision._is_iso8601_utc(block["verifiedAt"]):
+    if not pilot_provision.is_iso8601_utc(block["verifiedAt"]):
         return "fold-bad-field:reserved:boundary-verifiedAt"
     try:
         expected_ref = pilot_slot.format_slot_ref(slot, generation)

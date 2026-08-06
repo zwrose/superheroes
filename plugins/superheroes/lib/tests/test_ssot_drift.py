@@ -788,7 +788,7 @@ def test_showrunner_provisioning_duty_load_bearing_content():
         missing.append("unauthenticated-app-first ordering")
     if "is a no-go" not in lower:
         missing.append("partial-failure no-go rule")
-    if False and "acceptance record (who accepted, when, and why)" not in lower:
+    if "acceptance record (who accepted, when, and why)" not in lower:
         missing.append("weaker-acceptance record")
     if "the launcher carries the slot" not in lower:
         missing.append("launcher-carries-the-slot clause")

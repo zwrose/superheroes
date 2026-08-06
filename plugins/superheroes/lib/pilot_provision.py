@@ -446,7 +446,8 @@ def require_declarations_exercised(block, policy, slot_ref, registry):
     return declarations
 
 
-def _is_iso8601_utc(value):
+def is_iso8601_utc(value):
+    """Return True when ``value`` is an ISO-8601 UTC timestamp with a ``Z`` suffix."""
     if not isinstance(value, str) or not value:
         return False
     text = value.strip()
@@ -457,6 +458,10 @@ def _is_iso8601_utc(value):
     except ValueError:
         return False
     return dt.tzinfo is not None
+
+
+def _is_iso8601_utc(value):
+    return is_iso8601_utc(value)
 
 
 def validate_weaker_acceptance(record):
