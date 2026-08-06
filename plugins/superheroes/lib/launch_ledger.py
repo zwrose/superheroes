@@ -33,6 +33,9 @@ if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
 import file_lock  # noqa: E402
+import pilot_boundary  # noqa: E402
+import pilot_provision  # noqa: E402
+import pilot_slot  # noqa: E402
 
 LEDGER_ROOT_ENV = "SUPERHEROES_LAUNCH_LEDGER_ROOT"
 LEDGER_DIR_NAME = "superheroes-launch-ledger"
@@ -78,7 +81,7 @@ _BATCH_DECLARED_FIELDS = ("batchId", "expectedLaunches")
 _INSPECT_REASON = (
     "zero parks and zero refusals is a signal to inspect, never a clean sheet"
 )
-COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail")
+COUNT_RESULT_BLOCKS = ("counts", "amendments", "lanes", "attempts", "laneDetail", "slots")
 # The count-result blocks the advisor's charter names by hand; the drift test reads THIS.
 CHARTER_NAMED_COUNT_BLOCKS = ("lanes", "attempts", "laneDetail")
 
@@ -700,6 +703,162 @@ def _is_number(value):
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+_BOUNDARY_RECORD_KEYS = frozenset({
+    "slotRef",
+    "result",
+    "provenance",
+    "strength",
+    "match",
+    "policyDigest",
+    "verifiedAt",
+    "weakerAccepted",
+    "acceptedBy",
+    "acceptedAt",
+    "acceptanceReason",
+})
+
+
+def boundary_record(verdict, *, weaker_acceptance=None):
+    """Project a boundary verdict into the flat results-only ledger block."""
+    if not isinstance(verdict, dict):
+        return {"ok": False, "reason": "ledger-boundary-verdict-invalid"}
+    if verdict.get("schemaVersion") != pilot_boundary.BOUNDARY_SCHEMA_VERSION:
+        return {"ok": False, "reason": "ledger-boundary-schema-version"}
+    identity = verdict.get("datastoreIdentity")
+    if not isinstance(identity, dict):
+        return {"ok": False, "reason": "ledger-boundary-datastore-identity-absent"}
+    provenance = identity.get("provenance")
+    if not isinstance(provenance, str) or not provenance:
+        return {"ok": False, "reason": "ledger-boundary-datastore-identity-absent"}
+    strength = identity.get("strength")
+    if strength not in (pilot_boundary.STRENGTH_STRONG, pilot_boundary.STRENGTH_WEAKER):
+        return {"ok": False, "reason": "ledger-boundary-strength-unknown"}
+    match = identity.get("match")
+    if type(match) is not bool:
+        return {"ok": False, "reason": "ledger-boundary-datastore-identity-absent"}
+    slot_ref = verdict.get("slotRef")
+    if not isinstance(slot_ref, str) or not slot_ref:
+        return {"ok": False, "reason": "ledger-boundary-verdict-invalid"}
+    result = verdict.get("result")
+    if not isinstance(result, str) or not result:
+        return {"ok": False, "reason": "ledger-boundary-verdict-invalid"}
+    policy_digest = verdict.get("policyDigest")
+    if not isinstance(policy_digest, str) or not policy_digest:
+        return {"ok": False, "reason": "ledger-boundary-verdict-invalid"}
+    verified_at = verdict.get("verifiedAt")
+    if not isinstance(verified_at, str) or not verified_at:
+        return {"ok": False, "reason": "ledger-boundary-verdict-invalid"}
+
+    acceptance = None
+    if strength == pilot_boundary.STRENGTH_WEAKER:
+        if weaker_acceptance is None:
+            return {"ok": False, "reason": "ledger-boundary-weaker-unaccepted"}
+        try:
+            acceptance = pilot_provision._validate_weaker_acceptance(weaker_acceptance)
+        except pilot_provision.PilotProvisionError:
+            return {"ok": False, "reason": "ledger-boundary-weaker-acceptance-invalid"}
+    elif weaker_acceptance is not None:
+        return {"ok": False, "reason": "ledger-boundary-strong-with-acceptance"}
+
+    weaker_accepted = strength == pilot_boundary.STRENGTH_WEAKER
+    accepted_by = None
+    accepted_at = None
+    acceptance_reason = None
+    if acceptance is not None:
+        accepted_by = acceptance["acceptedBy"]
+        accepted_at = acceptance["acceptedAt"]
+        reason_text = acceptance["reason"]
+        if len(reason_text) > 500:
+            return {"ok": False, "reason": "ledger-boundary-acceptance-reason-too-long"}
+        acceptance_reason = reason_text
+
+    record = {
+        "slotRef": slot_ref,
+        "result": result,
+        "provenance": provenance,
+        "strength": strength,
+        "match": match,
+        "policyDigest": policy_digest,
+        "verifiedAt": verified_at,
+        "weakerAccepted": weaker_accepted,
+        "acceptedBy": accepted_by,
+        "acceptedAt": accepted_at,
+        "acceptanceReason": acceptance_reason,
+    }
+    return {"ok": True, "record": record}
+
+
+def _validate_boundary_block(block, slot, generation):
+    if not isinstance(block, dict):
+        return "fold-bad-field:reserved:boundary"
+    if set(block.keys()) != _BOUNDARY_RECORD_KEYS:
+        return "fold-bad-field:reserved:boundary"
+    if not isinstance(block.get("slotRef"), str) or not block["slotRef"]:
+        return "fold-bad-field:reserved:boundary"
+    if not isinstance(block.get("result"), str) or not block["result"]:
+        return "fold-bad-field:reserved:boundary"
+    if not isinstance(block.get("provenance"), str) or not block["provenance"]:
+        return "fold-bad-field:reserved:boundary"
+    block_strength = block.get("strength")
+    if block_strength not in (
+        pilot_boundary.STRENGTH_STRONG,
+        pilot_boundary.STRENGTH_WEAKER,
+    ):
+        return "fold-bad-field:reserved:boundary"
+    if type(block.get("match")) is not bool:
+        return "fold-bad-field:reserved:boundary"
+    if not isinstance(block.get("policyDigest"), str) or not block["policyDigest"]:
+        return "fold-bad-field:reserved:boundary"
+    if not isinstance(block.get("verifiedAt"), str) or not block["verifiedAt"]:
+        return "fold-bad-field:reserved:boundary"
+    if type(block.get("weakerAccepted")) is not bool:
+        return "fold-bad-field:reserved:boundary"
+    for nullable_field in ("acceptedBy", "acceptedAt", "acceptanceReason"):
+        nullable_value = block.get(nullable_field)
+        if nullable_value is not None and (
+            not isinstance(nullable_value, str) or not nullable_value
+        ):
+            return "fold-bad-field:reserved:boundary"
+    try:
+        expected_ref = pilot_slot.format_slot_ref(slot, generation)
+    except pilot_slot.PilotSlotError:
+        return "fold-bad-field:reserved:boundary"
+    if block["slotRef"] != expected_ref:
+        return "fold-bad-field:reserved:boundary-slotRef"
+    return None
+
+
+def _validate_reserved_optional_fields(rec):
+    slot_present = "slot" in rec
+    generation_present = "generation" in rec
+    boundary_present = "boundary" in rec
+
+    if slot_present and not generation_present:
+        return "fold-bad-field:reserved:slot-generation"
+    if generation_present and not slot_present:
+        return "fold-bad-field:reserved:slot-generation"
+
+    if slot_present:
+        try:
+            pilot_slot.validate_slot_id(rec["slot"])
+        except pilot_slot.PilotSlotError:
+            return "fold-bad-field:reserved:slot"
+        generation = rec["generation"]
+        if not isinstance(generation, int) or isinstance(generation, bool):
+            return "fold-bad-field:reserved:generation"
+        try:
+            pilot_slot.validate_generation(generation)
+        except pilot_slot.PilotSlotError:
+            return "fold-bad-field:reserved:generation"
+
+    if boundary_present:
+        if not slot_present or not generation_present:
+            return "fold-bad-field:reserved:boundary"
+        return _validate_boundary_block(rec["boundary"], rec["slot"], rec["generation"])
+
+    return None
+
+
 def _validate_common(rec):
     for field in _COMMON_FIELDS:
         if field not in rec:
@@ -780,6 +939,10 @@ def _validate_event_fields(rec):
         evidence = rec["evidence"]
         if not isinstance(evidence, str) or not evidence.strip():
             return "fold-missing-evidence:%s" % rec["launchId"]
+    elif event == "reserved":
+        optional_err = _validate_reserved_optional_fields(rec)
+        if optional_err:
+            return optional_err
     return None
 
 
@@ -837,6 +1000,9 @@ def fold(records):
                 "attempts": 0,
                 "started": False,
                 "amendments": [],
+                "slot": rec.get("slot"),
+                "generation": rec.get("generation"),
+                "boundary": rec.get("boundary"),
             }
             continue
 
@@ -1581,6 +1747,7 @@ def _count_indeterminate(batch_id, reason):
         "lanes": {"declared": 0, "resolved": 0},
         "attempts": {"total": 0, "extra": 0, "outcomes": _zero_attempt_outcomes()},
         "laneDetail": [],
+        "slots": [],
         "inspect": False,
         "inspectReason": "",
     }
@@ -1723,6 +1890,30 @@ def count(repo_root, batch_id, env=None):
             elif kind == "evidence":
                 amendments["evidence"] += 1
 
+    slots_block = []
+    for lid in batch_launches:
+        info = folded["launches"][lid]
+        slot = info.get("slot")
+        if slot is None:
+            continue
+        boundary = info.get("boundary")
+        generation = info.get("generation")
+        if boundary is not None:
+            slot_ref = boundary["slotRef"]
+            strength = boundary["strength"]
+            weaker_accepted = boundary["weakerAccepted"]
+        else:
+            slot_ref = pilot_slot.format_slot_ref(slot, generation)
+            strength = None
+            weaker_accepted = False
+        slots_block.append({
+            "slot": slot,
+            "generation": generation,
+            "slotRef": slot_ref,
+            "strength": strength,
+            "weakerAccepted": weaker_accepted,
+        })
+
     inspect = (
         counts["park"] + counts["refusal"] + counts["refusedToLaunch"] == 0
     )
@@ -1742,6 +1933,7 @@ def count(repo_root, batch_id, env=None):
             "outcomes": attempt_outcomes,
         },
         "laneDetail": lane_detail,
+        "slots": slots_block,
         "inspect": inspect,
         "inspectReason": _INSPECT_REASON if inspect else "",
     }

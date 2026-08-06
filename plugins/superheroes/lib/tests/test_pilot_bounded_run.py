@@ -407,3 +407,146 @@ def test_observe_datastore_identity_timeout_signals_whole_group_before_reaping(
     )
 
     assert sleep_calls, "the SIGTERM grace sleep never ran"
+
+
+# --- retain_output=False contract (#830 WO-4) ---------------------------------
+
+
+def _write_executable(path, content):
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write(content)
+    os.chmod(path, 0o700)
+
+
+def _bounded_layout(private_tmp):
+    run_cwd = os.path.join(private_tmp, "cwd")
+    bin_dir = os.path.join(private_tmp, "bin")
+    os.makedirs(run_cwd)
+    os.makedirs(bin_dir)
+    return run_cwd, bin_dir
+
+
+def test_retain_output_false_under_cap(private_tmp):
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    script = os.path.join(bin_dir, "echo.sh")
+    _write_executable(script, "#!/bin/sh\nprintf hello\n")
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=5,
+        max_output_bytes=100,
+        retain_output=False,
+    )
+    assert result["outcome"] == pbr.OUTCOME_COMPLETED
+    assert result["exitCode"] == 0
+    assert result["stdout"] == b""
+    assert result["stdoutBytes"] == 5
+    assert result["stdoutTruncated"] is False
+
+
+def test_retain_output_false_over_cap_is_completed_not_oversize(private_tmp):
+    # axis: truncation is reportable, not refusable — the contract-difference test (#830 WO-4).
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    script = os.path.join(bin_dir, "huge.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "i=0\n"
+        "while [ $i -lt 500 ]; do printf x; i=$((i+1)); done\n",
+    )
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=10,
+        max_output_bytes=100,
+        retain_output=False,
+    )
+    assert result["outcome"] == pbr.OUTCOME_COMPLETED
+    assert result["outcome"] != pbr.OUTCOME_OVERSIZE
+    assert result["exitCode"] == 0
+    assert result["stdout"] == b""
+    assert result["stdoutBytes"] == 100
+    assert result["stdoutTruncated"] is True
+
+
+def test_retain_output_false_nonzero_exit_is_completed(private_tmp):
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    script = os.path.join(bin_dir, "exit7.sh")
+    _write_executable(script, "#!/bin/sh\nexit 7\n")
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=5,
+        max_output_bytes=4096,
+        retain_output=False,
+    )
+    assert result["outcome"] == pbr.OUTCOME_COMPLETED
+    assert result["exitCode"] == 7
+
+
+def test_retain_output_true_over_cap_still_oversize(private_tmp):
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    script = os.path.join(bin_dir, "huge.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "i=0\n"
+        "while [ $i -lt 500 ]; do printf x; i=$((i+1)); done\n",
+    )
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=10,
+        max_output_bytes=100,
+        retain_output=True,
+    )
+    assert result["outcome"] == pbr.OUTCOME_OVERSIZE
+
+
+def test_retain_output_true_completed_carries_byte_fields(private_tmp):
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    script = os.path.join(bin_dir, "echo.sh")
+    _write_executable(script, "#!/bin/sh\nprintf hi\n")
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=5,
+        max_output_bytes=100,
+        retain_output=True,
+    )
+    assert result["outcome"] == pbr.OUTCOME_COMPLETED
+    assert result["stdoutBytes"] == 2
+    assert result["stdoutTruncated"] is False
+
+
+def test_retain_output_false_timeout_kills_grandchild(private_tmp):
+    # axis: process-group containment — a runaway grandchild must not survive timeout (#830 WO-4).
+    run_cwd, bin_dir = _bounded_layout(private_tmp)
+    pid_file = os.path.join(private_tmp, "grandchild.pid")
+    script = os.path.join(bin_dir, "spawn.sh")
+    _write_executable(
+        script,
+        "#!/bin/sh\n"
+        "/bin/sleep 60 &\n"
+        "echo $! > '%s'\n"
+        "/bin/sleep 5\n" % pid_file,
+    )
+    result = pbr.run_bounded(
+        [script],
+        run_cwd=run_cwd,
+        env={},
+        timeout_seconds=1,
+        max_output_bytes=4096,
+        retain_output=False,
+    )
+    assert result["outcome"] == pbr.OUTCOME_TIMEOUT
+    with open(pid_file, encoding="utf-8") as handle:
+        pid = int(handle.read().strip())
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
+

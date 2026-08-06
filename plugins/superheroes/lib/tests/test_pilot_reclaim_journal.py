@@ -559,3 +559,315 @@ def test_filtered_replay_disagreement_blocks_when_unfiltered_required(tmp_path):
     )
     result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
     assert result["reason"] == pr.REASON_ROTATE_NOT_QUIESCENT
+
+
+def _segment_path(slot_dir, journal_path, seq):
+    base = os.path.basename(journal_path)
+    stem, ext = os.path.splitext(base)
+    return os.path.join(slot_dir, "%s.%04d%s" % (stem, seq, ext))
+
+
+def _write_segment_record(path, record):
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(record, sort_keys=True) + "\n")
+
+
+def _setup_slot_dir(slots_dir, slot=_SLOT):
+    slot_dir = os.path.join(slots_dir, slot)
+    os.makedirs(slot_dir, exist_ok=True)
+    return slot_dir
+
+
+def test_aggregate_replay_cross_segment_begin_end_applied(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    _write_segment_record(seg1, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "cross-eff",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    with open(journal, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_END,
+            "effectId": "cross-eff",
+            "slotRef": _SLOT_REF,
+            "outcome": pj.OUTCOME_APPLIED,
+            "at": _NOW2,
+        }, sort_keys=True) + "\n")
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert len(result["effects"]) == 1
+    assert result["effects"][0]["state"] == pj.STATE_APPLIED
+    assert result["effects"][0]["state"] != pj.STATE_POSSIBLY_APPLIED
+
+
+def test_aggregate_replay_segments_folded_in_numeric_order(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg2 = _segment_path(slot_dir, journal, 2)
+    seg10 = _segment_path(slot_dir, journal, 10)
+    _write_segment_record(seg2, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "cross-eff",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    _write_segment_record(seg10, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_END,
+        "effectId": "cross-eff",
+        "slotRef": _SLOT_REF,
+        "outcome": pj.OUTCOME_APPLIED,
+        "at": _NOW2,
+    })
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert result["effects"][0]["state"] == pj.STATE_APPLIED
+
+
+def test_aggregate_replay_begin_seg1_end_seg2_live_absent(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    seg2 = _segment_path(slot_dir, journal, 2)
+    _write_segment_record(seg1, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "cross-eff",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    _write_segment_record(seg2, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_END,
+        "effectId": "cross-eff",
+        "slotRef": _SLOT_REF,
+        "outcome": pj.OUTCOME_APPLIED,
+        "at": _NOW2,
+    })
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert result["effects"][0]["state"] == pj.STATE_APPLIED
+
+
+def test_aggregate_replay_possibly_applied_stays_unresolved(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    _write_segment_record(seg1, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "open-eff",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert result["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+
+
+def test_aggregate_replay_torn_segment_makes_aggregate_torn(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    with open(seg1, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_BEGIN,
+            "effectId": "torn-eff",
+            "slotRef": _SLOT_REF,
+            "kind": pj.KIND_APP_STARTED,
+            "at": _NOW,
+        }, sort_keys=True))
+    with open(journal, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_END,
+            "effectId": "clean-eff",
+            "slotRef": _SLOT_REF,
+            "outcome": pj.OUTCOME_APPLIED,
+            "at": _NOW2,
+        }, sort_keys=True) + "\n")
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert result["torn"] is True
+
+
+def test_aggregate_replay_unreadable_segment_fails(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    os.makedirs(seg1)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_aggregate_replay_gap_emits_anomaly_and_report_blocker(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    seg3 = _segment_path(slot_dir, journal, 3)
+    _write_segment_record(seg1, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    _write_segment_record(seg3, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_END,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "outcome": pj.OUTCOME_APPLIED,
+        "at": _NOW2,
+    })
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    gap_anomalies = [
+        a for a in result["anomalies"]
+        if a.get("reason") == pr.ANOMALY_SEGMENT_SEQUENCE_GAP
+    ]
+    assert gap_anomalies
+    assert gap_anomalies[0]["missingSequence"] == 2
+    entry = {
+        "slot": _SLOT,
+        "slotRef": _SLOT_REF,
+        "outcome": pj.SLOT_OUTCOME_FAILED,
+        "replay": result,
+        "fencing": {"slotRef": _SLOT_REF, "fenced": True},
+    }
+    report = pj.partial_failure_report([entry])
+    assert pj.BLOCK_JOURNAL_ANOMALY in {b["reason"] for b in report["blockers"]}
+
+
+def test_aggregate_replay_first_sequence_above_one_emits_anomaly(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg2 = _segment_path(slot_dir, journal, 2)
+    _write_segment_record(seg2, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    not_one = [
+        a for a in result["anomalies"]
+        if a.get("reason") == pr.ANOMALY_SEGMENT_SEQUENCE_NOT_ONE
+    ]
+    assert not_one
+    assert not_one[0]["firstSequence"] == 2
+
+
+def test_aggregate_replay_segments_present_live_absent_ok(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    begin = {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    }
+    end = {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_END,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "outcome": pj.OUTCOME_APPLIED,
+        "at": _NOW2,
+    }
+    with open(seg1, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(begin, sort_keys=True) + "\n")
+        fh.write(json.dumps(end, sort_keys=True) + "\n")
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert result["effects"][0]["state"] == pj.STATE_APPLIED
+
+
+def test_aggregate_replay_no_segments_no_live_refuses(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_aggregate_replay_invalid_slot_ref_refuses(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref="not-a-ref")
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_SLOT_REF_INVALID
+
+
+def test_aggregate_replay_slot_ref_slot_mismatch_refuses(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref="other-slot@1")
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_SLOT_REF_INVALID
+
+
+def test_aggregate_replay_slot_ref_passes_partial_failure_report(tmp_path):
+    slots_dir = _slots_dir(tmp_path)
+    slot_dir = _setup_slot_dir(slots_dir)
+    journal = _journal_path(slots_dir, _SLOT)
+    seg1 = _segment_path(slot_dir, journal, 1)
+    _write_segment_record(seg1, {
+        "schemaVersion": pj.SCHEMA,
+        "phase": pj.PHASE_BEGIN,
+        "effectId": "eff1",
+        "slotRef": _SLOT_REF,
+        "kind": pj.KIND_APP_STARTED,
+        "at": _NOW,
+    })
+    with open(journal, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_END,
+            "effectId": "eff1",
+            "slotRef": _SLOT_REF,
+            "outcome": pj.OUTCOME_APPLIED,
+            "at": _NOW2,
+        }, sort_keys=True) + "\n")
+    replay = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
+    entry = {
+        "slot": _SLOT,
+        "slotRef": _SLOT_REF,
+        "outcome": pj.SLOT_OUTCOME_PROVISIONED,
+        "replay": replay,
+        "fencing": None,
+    }
+    report = pj.partial_failure_report([entry])
+    assert pj.BLOCK_REPLAY_SLOT_MISMATCH not in {b["reason"] for b in report["blockers"]}
+    assert replay["slotRef"] == _SLOT_REF

@@ -647,6 +647,10 @@ def launch_build(
     max_attempts=None,
     backoff_seconds=None,
     total_deadline_seconds=None,
+    *,
+    slot=None,
+    generation=None,
+    boundary=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
     settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
@@ -667,6 +671,7 @@ def launch_build(
         reason = preflight_result["reason"]
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, premise, preflight_result, None, env,
+            slot=slot, generation=generation, boundary=boundary,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -686,6 +691,7 @@ def launch_build(
         reason = premise_result["reason"]
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, premise, preflight_result, None, env,
+            slot=slot, generation=generation, boundary=boundary,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -704,6 +710,7 @@ def launch_build(
         reserve_result = _try_reserve_for_refusal(
             repo_root, launch_id, issue, premise_result["premise"],
             preflight_result, compose_result, env,
+            slot=slot, generation=generation, boundary=boundary,
         )
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
@@ -734,6 +741,12 @@ def launch_build(
         "modelSource": resolution["source"],
         "modelReason": model_reason if model_reason is not None else "",
     }
+    if slot is not None:
+        reserved["slot"] = slot
+    if generation is not None:
+        reserved["generation"] = generation
+    if boundary is not None:
+        reserved["boundary"] = boundary
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         return _fail(reserve_result["reason"], launchId=launch_id)
@@ -902,7 +915,10 @@ def launch_build(
         return _fail(reason, launchId=launch_id)
 
 
-def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_result, compose_result, env):
+def _try_reserve_for_refusal(
+    repo_root, launch_id, issue, premise, preflight_result, compose_result, env,
+    *, slot=None, generation=None, boundary=None,
+):
     """Best-effort reserve so refusal is accounted. Returns {reserved: bool}."""
     if not isinstance(premise, dict):
         return {"reserved": False}
@@ -944,6 +960,12 @@ def _try_reserve_for_refusal(repo_root, launch_id, issue, premise, preflight_res
         "modelSource": model_source,
         "modelReason": model_reason,
     }
+    if slot is not None:
+        reserved["slot"] = slot
+    if generation is not None:
+        reserved["generation"] = generation
+    if boundary is not None:
+        reserved["boundary"] = boundary
     result = ll.reserve(repo_root, reserved, env=env)
     return {"reserved": result["ok"]}
 
@@ -1002,6 +1024,20 @@ def _cli_launch(args):
         return _fail(dup_reason)
     if premise is None:
         return _fail("premise-missing-field:baseCommit")
+
+    boundary = None
+    if args.boundary is not None:
+        if args.slot is None or args.generation is None:
+            return _fail("launch-boundary-without-slot-generation")
+        boundary_data, boundary_dup = _read_json_file(
+            args.boundary, duplicate_reason="boundary-duplicate-key",
+        )
+        if boundary_dup:
+            return _fail(boundary_dup)
+        if boundary_data is None:
+            return _fail("launch-boundary-unreadable")
+        boundary = boundary_data
+
     return launch_build(
         args.repo_root,
         args.issue,
@@ -1009,6 +1045,9 @@ def _cli_launch(args):
         checks,
         args.log_dir,
         model=args.model,
+        slot=args.slot,
+        generation=args.generation,
+        boundary=boundary,
     )
 
 
@@ -1058,6 +1097,9 @@ def main(argv=None):
     la.add_argument("--checks", required=True)
     la.add_argument("--log-dir", required=True)
     la.add_argument("--model", default=None)
+    la.add_argument("--slot", default=None)
+    la.add_argument("--generation", type=int, default=None)
+    la.add_argument("--boundary", default=None)
     la.set_defaults(func=_cli_launch)
 
     ro = sub.add_parser("record-outcome")
