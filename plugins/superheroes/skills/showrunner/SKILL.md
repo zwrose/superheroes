@@ -593,7 +593,7 @@ above).
    recommending the rest launch; **a report with no healthy slots, an unfenced failed slot, or a
    shared effect recorded as possibly-applied is a no-go**, not a warning. The journal behind it is
    **#823**'s. A rotated slot's history is read across its retained segments as well as its live
-   journal, so a long-running slot's evidence is not lost to rotation — say that plainly.
+   journal, so a long-running slot's evidence is not lost to rotation.
    **Per-account cost is displayed at provisioning, and the owner decides.** Under attended seeding
    there is no framework ceiling on accounts — each additional account costs one owner sign-in at
    wave launch. Display that cost; never invent a count. The natural default is a pair — an account

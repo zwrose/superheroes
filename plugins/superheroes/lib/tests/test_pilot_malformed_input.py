@@ -315,6 +315,12 @@ def _invoke_journal(name, hostile, param):
             if param == "journal_path":
                 return pj.replay(hostile)
             return pj.replay(journal_path, slot_ref=hostile)
+        if name == "replay_sources":
+            if param == "paths":
+                return pj.replay_sources(hostile, slot_ref=SLOT_REF, journal_path=journal_path)
+            if param == "slot_ref":
+                return pj.replay_sources([journal_path], slot_ref=hostile, journal_path=journal_path)
+            return pj.replay_sources([journal_path], slot_ref=SLOT_REF, journal_path=hostile)
         if name == "partial_failure_report":
             return pj.partial_failure_report(hostile)
         raise AssertionError("unhandled journal function %r" % name)
@@ -592,6 +598,8 @@ def _journal_params(name):
         return ("journal_path", "slot_ref", "kind", "at", "detail", "effect_id")
     if name == "replay":
         return ("journal_path", "slot_ref")
+    if name == "replay_sources":
+        return ("paths", "slot_ref", "journal_path")
     if name == "partial_failure_report":
         return ("slots",)
     raise AssertionError("add driver params for new public function %r" % name)
