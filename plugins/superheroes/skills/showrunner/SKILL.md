@@ -484,7 +484,24 @@ above).
    refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
    a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
    batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
-   refusals is a signal to inspect, never a clean sheet**.
+   refusals is a signal to inspect, never a clean sheet**. **`count` reads lanes** (a build intent
+   keyed by issue number — retried attempts belong to one lane) with **`attempts`** beside the
+   terminal tallies and **`laneDetail`** per lane; overlapping same-lane launches still refuse —
+   see `lib/launch_ledger.py` for the authoritative semantics. **After vetting a delivered lane, record
+   the ruling** with `amend --kind vet --value ready|not-ready|parked-blocker --note "<one line>"`. A
+   NOT-READY ruling, and a parked blocker inside a delivered PR, are friction the terminal tallies
+   cannot see. **A second `record-outcome` on a lane that started and then ended with an outcome is
+   recorded, not refused** — a never-started lane is still refused with `outcome-without-started` —
+   it lands as a `reoutcome` amendment and leaves the original terminal outcome untouched,
+   and the CLI exits **non-zero** with `recorded: 'amendment'` (or `'amendment-existing'` on an
+   identical retry) because the caller's requested terminal write did not become the lane's outcome;
+   so a lane handed back twice stops reading as one clean handback. **A terminal record whose evidence
+   later proves wrong is corrected with** `amend --kind evidence`, never by rewriting the record.
+   **When you read `count`, read the `amendments` block beside the terminal tallies** — `rehandback`
+   is a lane that was handed back, ruled not ready, and handed back again. Zero parks with a non-zero
+   `rehandback` is a frictionful wave, not a clean one. **The launch ledger is version-coupled** — a record kind
+   an older plugin build does not understand bricks every ledger door with `fold-unknown-event:<kind>` until you
+   delete the ledger file at the path `ledger_path()` reports.
    **Headless builder launches run on the `opus` tier** — the launcher pins it explicitly rather than
    letting a dispatch inherit whatever tier the account or session happens to default to. **`fable` is
    never a launch default** — it is a judgment-seat tier (advisor and review seats), never a build tier.
