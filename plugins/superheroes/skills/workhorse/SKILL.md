@@ -175,6 +175,20 @@ controls; if it does not, create one (`git worktree add`) and switch to it befor
 shared tree let one session's `git checkout` wipe a sibling's uncommitted work twice — this check puts the
 guarantee where it survives a launch-prompt omission, complementing the playbook's standing rulings).
 
+**Third, and at every commit after — commits inherit the repo's configured git identity; never
+synthesize one.** Every commit that lands on your branch runs with the identity the worktree is
+**already configured with**. **Never pass `-c user.name` or `-c user.email`** on it, and never
+derive an identity from your own context — an account email you know about *yourself* is not the
+repo's identity, and inferring one is not a fallback. The damage is invisible from inside the build:
+a commit authored under a synthesized identity lands **unverified**, and a downstream gate can
+refuse the whole branch for it — a deploy preview did exactly that, and the owner caught it at merge
+time, after review, while three same-wave siblings that simply inherited the configured identity
+were fine. If the repo's identity is **missing or wrong**, that is a **park-and-report** — report
+the identity you actually found (unset, or set to the wrong value) and stop; improvising past it is
+the failure this rule exists to name. (A separate case,
+not an exception to borrow: a **throwaway repo a test fixture creates** has no configured identity
+on a CI runner, so a fixture's own commits still pass an explicit inline one.)
+
 Your own worktree + branch off the issue's base, and **bring the app up** the way test-pilot will
 run it (dev server, any login/seed the app needs to be usable). **No running app (a plugin, library,
 or docs build)?** There is nothing to bring up — say so and skip the app-bring-up; the workspace is
@@ -415,6 +429,15 @@ without a tool call.
   result, progress captures, heartbeat records. The harness-pinned evidence — the probe runs, the two
   proven detached-child recoveries, the six-lane overnight stall, the induction trap — lives in
   dispatch-mechanics § Turn survival; the rule stands on it.
+- **Kill by PID only — never by path or pattern.** When you stop a child you started, the target is
+  **a PID you recorded yourself** (or that PID's process group), read back from your own dispatch
+  record. **A pattern-kill is forbidden** — a `pkill -f` on a path fragment, a command name, or an
+  engine name matches whatever else happens to look like it, and under the parallel load this
+  charter asks for, what it matches is **a sibling session's child**: a builder tidying up its own
+  run matched on a path and killed another session's live child. This is the same discipline as the
+  liveness rule you already carry — act only on direct observation of processes **you own**. If you
+  did not record the PID, you do not have a kill target, and going hunting for one is precisely how
+  you end up holding someone else's.
 - **Long-running external dispatches from a headless session — native shape, polled in-turn.**
   A long-running external dispatch the builder invokes directly from a headless session — an engine
   CLI: the implementer, the brief-check reviewer, or any engine CLI the builder hand-rolls — is
@@ -776,4 +799,6 @@ curation stay with the advisor.
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
+| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the repo's **configured** identity; `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
+| "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. No recorded PID means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |

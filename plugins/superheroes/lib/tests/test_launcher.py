@@ -483,6 +483,20 @@ def test_compose_await_dispatches_ruling_in_prompt(tmp_path):
     assert await_line in result["prompt"]
 
 
+def test_compose_git_identity_ruling_in_prompt(tmp_path):
+  # axis: git-identity ruling text reaches the composed builder prompt
+  # compose_launch verifies only ruling zero is present, so nothing else asserts that this
+  # ruling survives composition into the payload a launched builder actually receives.
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 888, premise)
+    assert result["ok"] is True
+    doctrine = LD.load()
+    identity_line = LD.ruling_line(doctrine, "git-identity")
+    assert identity_line
+    assert identity_line in result["prompt"]
+
+
 def test_compose_ruling_zero_absent(tmp_path):
   # axis: refusal to compose a launch whose ruling 0 it could not verify
     repo = _init_repo(tmp_path / "repo")
