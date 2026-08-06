@@ -920,16 +920,64 @@ End phase (`_build_end_record`):
 Optional `reason` string — `end_effect()` accepts a `reason` with **any** outcome including
 `applied`, not only `not-applied` or `indeterminate`.
 
+### `end_effect()` origin verification
+
+`end_effect(journal_path, *, slot_ref, effect_id, kind, outcome, at, reason=None)` requires
+`kind` — the same effect kind the caller opened with `begin_effect`. The `kind` argument is used
+only for verification; it is **not** written into the end record. On-disk end record shapes and
+`schemaVersion` are unchanged.
+
+Argument validation order: `journal_path` → `slot_ref` → `effect_id` → `kind` → `outcome` →
+`at` → `reason`; first failure wins, all before any file access.
+
+Before appending, the writer scans the journal (under the write lock, in the same lock hold as
+the append) for every parsed record whose `effectId` equals `effect_id`. Write-path preconditions
+run inside the append path before the verify hook: an unwritable parent directory (symlinked
+parent, parent exists but is not a directory, or failed `makedirs`) or a lock that cannot be
+acquired within the timeout refuses `journal-write-failed` before origin verification runs at all.
+Precedence (first match wins):
+
+| Condition | Refusal |
+|---|---|
+| journal cannot be read (non-regular file, I/O error, invalid UTF-8) | `journal-unreadable` |
+| journal file missing | `journal-effect-origin-missing` |
+| journal torn (last record incomplete, file does not end with newline) | `journal-torn` |
+| zero records with `phase == "begin"` and this `effectId` | `journal-effect-origin-missing` |
+| more than one such begin-phase record | `journal-effect-origin-ambiguous` |
+| exactly one, but it fails begin-record validation | `journal-effect-origin-invalid` |
+| exactly one valid begin, but its `kind` != the `kind` argument | `journal-effect-origin-kind-mismatch` |
+| exactly one valid begin, but its `slotRef` != the `slot_ref` argument | `journal-effect-origin-slot-mismatch` |
+| any record with `phase == "end"` and this `effectId` already exists | `journal-effect-already-closed` |
+| otherwise | proceed with the append |
+
+A parseable record counts by its `phase` and `effectId` whether or not it is a valid record. An
+unparseable line cannot match. For `replay()`, a torn trailing line (file does not end with
+newline) is dropped before the record loop — pairing proceeds on the truncated text. On
+`end_effect` close, the torn check returns **before** the record scan: nothing is appended, the
+partial tail stays on disk, and no scan runs. The `journal-torn` refusal fires only while the
+journal still ends mid-record; `begin_effect` does not verify origin, so once any record is
+appended after a tear the file no longer reads as torn and a subsequent close surfaces
+`journal-effect-origin-missing` instead of `journal-torn` — the glued bytes remain on disk but are
+no longer recoverable as a record and no longer detectable as torn. `replay()` torn handling is
+unchanged: it still returns `ok: true` with `torn: true` and pairs what it can. A missing journal
+file is treated as `journal-effect-origin-missing` during close; replay still treats a missing
+journal as `journal-unreadable`.
+
+On any refusal, **nothing is appended** — the open `begin` stays open and replays as
+`possibly-applied`.
+
 ### Durable append
 
 Journal records are appended with durability and safety: opened `O_NOFOLLOW | O_NONBLOCK` with a
 regular-file check, written in a loop until the whole line lands, `fsync`ed, and the **parent
-directory** `fsync`ed. A symlink or FIFO at the journal path is refused (`journal-write-failed`)
-rather than followed or blocked on. Invalid UTF-8 in a journal is `journal-unreadable`, never an
-exception and never silently replaced.
+directory** `fsync`ed. `begin_effect` still refuses a symlink, FIFO, or directory sitting **at** the
+journal path with `journal-write-failed` (its write path is unchanged). `end_effect` reaches the
+special file first through close-time origin verification and refuses `journal-unreadable` before
+the write-side `open`/`fstat` that would have produced `journal-write-failed`. Invalid UTF-8 in a
+journal is `journal-unreadable`, never an exception and never silently replaced.
 
 **Special-file safety:** the journal reader also opens with `O_NOFOLLOW | O_NONBLOCK` and refuses
-a non-regular file at the journal path.
+a non-regular file at the journal path (`replay`, `end_effect` origin verification).
 
 **Type-safety of validation:** every enum/membership check tests that the value is a string
 first, so malformed data produces the documented refusal rather than raising. Public entry points
@@ -965,13 +1013,20 @@ from proving applied or not-applied.
 
 | Token | When returned |
 |---|---|
-| `journal-unreadable` | journal file cannot be read during replay |
-| `journal-write-failed` | append or fsync failed |
+| `journal-unreadable` | journal file cannot be read during replay **or during `end_effect` close-time origin verification** (`replay`, `end_effect`) |
+| `journal-torn` | `end_effect`: journal torn (last record incomplete) — close refused, nothing appended |
+| `journal-write-failed` | parent-directory setup failure (symlinked parent, parent exists but is not a directory, `makedirs` failure), lock acquisition failure, append or fsync failure, or a symlink, FIFO, or directory at the journal path (`begin_effect`, `end_effect` write path) |
 | `journal-record-invalid` | record shape, timestamp, or serialisable `detail` fails validation |
 | `journal-effect-kind-unknown` | `kind` is not in `EFFECT_KINDS` |
 | `journal-outcome-invalid` | `outcome` is not in `END_OUTCOMES` |
 | `journal-slot-ref-invalid` | `slotRef` does not parse |
 | `journal-effect-id-invalid` | `effectId` is missing or does not match the allowed pattern |
+| `journal-effect-origin-missing` | `end_effect`: no begin-phase record carries this `effectId` (including missing journal) |
+| `journal-effect-origin-ambiguous` | `end_effect`: more than one begin-phase record carries this `effectId` |
+| `journal-effect-origin-invalid` | `end_effect`: the single begin-phase record fails validation |
+| `journal-effect-origin-kind-mismatch` | `end_effect`: begin `kind` does not match the `kind` argument |
+| `journal-effect-origin-slot-mismatch` | `end_effect`: begin `slotRef` does not match the `slot_ref` argument |
+| `journal-effect-already-closed` | `end_effect`: an end-phase record for this `effectId` already exists |
 
 ## The partial-failure report
 
@@ -1920,11 +1975,59 @@ non-application.
 
 ### Broker admission
 
-Every public entry point in `pilot_browser.py` refuses rather than raising a builtin exception for
-the validation failures it recognises. `provision_server` takes a **required** `effect_id`, and the
-two ways to get that wrong land differently: **omitting** it raises `TypeError` at the call, as any
-Python call missing an argument does — a call-shape error, not a recognised validation failure —
-while an `effect_id` that is *supplied* but unusable refuses (`browser-server-record-invalid`).
+The broker-admission guarantee does not hold in general: several public entry points in
+`pilot_browser.py` can leak a **builtin** exception once an input gets past outer shape
+validation.
+The raise sites below are **the ones found so far**; two successive hostile-input sweeps have
+each discovered sites the previous sweep missed, so this list is a **floor**, not an inventory —
+it is explicitly **not** established as complete.
+
+- **`validate_pin` raises `PilotBrowserError` by design** — it is exception-only, not a
+  refusal-returning function; callers are expected to catch the domain exception (e.g.
+  `validate_pin(None)` raises `PilotBrowserError: browser-pin-invalid`).
+- **`verify_pin` is a hybrid** — it raises `PilotBrowserError` during its structural-validation
+  phase, then returns `ok`/`reason` dicts for observer failure, version mismatch, and integrity
+  mismatch (seven dict-returning exits in total — six `_fail`, one `_ok`). *This hybrid
+  characterization is from reading those return sites in code, not from an execution receipt — the
+  hostile-input sweep could not drive `verify_pin` past `_validate_observer_safety` in the
+  measurement environment.* `verify_pin` can also raise builtin `ValueError` when a NUL byte
+  appears in the observer executable path (e.g. `command=["/us\x00r/bin/false"]`):
+  `_validate_observer_safety` does `os.stat(executable)` inside a `try/except OSError`, and a NUL
+  in the path raises `ValueError`, which that handler does not catch.
+- **`socket_dir_plan` can raise builtin `TypeError`** when `platform` is unhashable (e.g.
+  `platform=[]` or `platform={}`) — a recognised validation input, not a call-shape error.
+- **`socket_dir_plan` can also raise builtin `UnicodeEncodeError`** when `launch_token` contains a
+  surrogate (e.g. `launch_token="\udc80"`) while measuring the socket path — the same category as
+  its `TypeError` entry above.
+- **`create_socket_dir` can raise builtin `ValueError`** on a NUL-containing path (e.g.
+  `path="a\x00b"`): the `islink`/`lexists` pre-checks return `False` for a NUL path rather than
+  raising, so the path reaches the guarded block, and `os.makedirs` then raises `ValueError` inside
+  a `try/except OSError` that does not catch it.
+- **`plan_topology` can raise builtin `TypeError`** when `accounts` is not iterable despite a valid
+  `slot_ref` (e.g. `plan_topology("slot-a@1", None)` or `plan_topology("slot-a@1", 0)`): `for
+  entry in accounts` executes directly with no iterability check.
+- **`begin_provision_server` and `provision_server` can raise builtin `ValueError`** on a
+  NUL-containing journal path (e.g. `journal_path="a\x00b"`); the failure comes from `os.open` on
+  the lock file inside `pilot_journal._acquire_journal_lock`, reached because `_is_str_path`
+  accepts any `str` and a NUL byte only fails at the syscall — not from opening the journal itself.
+- **`teardown_server` can raise builtin `ValueError`** on a NUL-containing journal path when exit
+  observation reports both processes exited (e.g. `teardown_server("a\x00b", ...,
+  observe_exit=both-exited)`): it is masked **only while exit observation refuses** — the default
+  observer reports not-exited and refuses early with `browser-terminal-state-unobserved`, but with
+  an observer reporting both processes exited it proceeds to journalling and hits the same lock-file
+  `ValueError`; its `except` clauses do not handle it.
+
+A **common cause** runs through most of these: a `try/except OSError` around a path syscall does
+not catch the `ValueError` a NUL byte produces, and `_is_str_path` accepts any `str`.
+
+Several entry points raise builtin `TypeError` on **call-shape errors** — supplying a non-callable
+where a callable is required, or omitting a required argument — rather than refusing. These are
+the same class of mistake as calling the API wrong, not a recognised validation failure that leaks
+through shape checks: **`assert_browser_is_server_child`** when `ppid_of` is not callable (e.g.
+`ppid_of=0`), **`provision_server`** when `ppid_of` is not callable, **`teardown_server`** when
+`observe_exit` is not callable (e.g. `observe_exit=0`), and **`provision_server`** when
+`effect_id` is **omitted** at the call, as any Python call missing an argument does. An
+`effect_id` that is *supplied* but unusable still refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and

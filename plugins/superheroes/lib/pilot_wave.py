@@ -648,6 +648,7 @@ def _run_destructive_step(
                         journal_path,
                         slot_ref=slot_ref,
                         effect_id=effect_id,
+                        kind=pilot_journal.KIND_NAMESPACE_TOUCHED,
                         outcome=_journal_outcome_for_status(result["status"]),
                         at=end_at,
                         reason=result["reason"],

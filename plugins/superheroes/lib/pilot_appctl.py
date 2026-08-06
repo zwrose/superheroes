@@ -827,11 +827,12 @@ def _build_starting_record(launch, *, nonce, now, stdout_path, stderr_path):
     }
 
 
-def _journal_end(journal_path, *, slot_ref, effect_id, outcome, at, reason=None):
+def _journal_end(journal_path, *, slot_ref, effect_id, kind, outcome, at, reason=None):
     return pilot_journal.end_effect(
         journal_path,
         slot_ref=slot_ref,
         effect_id=effect_id,
+        kind=kind,
         outcome=outcome,
         at=at,
         reason=reason,
@@ -893,6 +894,7 @@ def _stand_up_compensate_after_spawn(
             journal_path,
             slot_ref=slot_ref,
             effect_id=effect_id,
+            kind=pilot_journal.KIND_APP_STARTED,
             outcome=pilot_journal.OUTCOME_INDETERMINATE,
             at=now_fn(),
             reason=journal_reason,
@@ -1051,6 +1053,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                 journal_path,
                 slot_ref=launch["slotRef"],
                 effect_id=effect_id,
+                kind=pilot_journal.KIND_APP_STARTED,
                 outcome=pilot_journal.OUTCOME_NOT_APPLIED,
                 at=end_at,
                 reason=str(exc),
@@ -1081,6 +1084,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                 journal_path,
                 slot_ref=launch["slotRef"],
                 effect_id=effect_id,
+                kind=pilot_journal.KIND_APP_STARTED,
                 outcome=pilot_journal.OUTCOME_INDETERMINATE,
                 at=end_at,
                 reason=REASON_INSTANCE_RECORD_WRITE_FAILED,
@@ -1168,6 +1172,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                 journal_path,
                 slot_ref=launch["slotRef"],
                 effect_id=effect_id,
+                kind=pilot_journal.KIND_APP_STARTED,
                 outcome=pilot_journal.OUTCOME_INDETERMINATE,
                 at=end_at,
                 reason=readiness_reason,
@@ -1200,6 +1205,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                     journal_path,
                     slot_ref=launch["slotRef"],
                     effect_id=effect_id,
+                    kind=pilot_journal.KIND_APP_STARTED,
                     outcome=pilot_journal.OUTCOME_INDETERMINATE,
                     at=end_at,
                     reason=REASON_SLOT_STATE_NOT_LAUNCHABLE,
@@ -1240,6 +1246,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
                     journal_path,
                     slot_ref=launch["slotRef"],
                     effect_id=effect_id,
+                    kind=pilot_journal.KIND_APP_STARTED,
                     outcome=pilot_journal.OUTCOME_INDETERMINATE,
                     at=end_at,
                     reason=REASON_GENERATION_MOVED,
@@ -1277,6 +1284,7 @@ def stand_up(launch, *, journal_path, slots_dir_path, now, now_fn, registry, dec
             journal_path,
             slot_ref=launch["slotRef"],
             effect_id=effect_id,
+            kind=pilot_journal.KIND_APP_STARTED,
             outcome=pilot_journal.OUTCOME_APPLIED,
             at=end_at,
         )

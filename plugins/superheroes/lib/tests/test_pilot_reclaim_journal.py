@@ -84,7 +84,7 @@ def _append_paired_effect(journal_path, *, slot_ref=_SLOT_REF, effect_id, kind=p
     )
     assert begin["ok"] is True
     end = pj.end_effect(
-        journal_path, slot_ref=slot_ref, effect_id=effect_id,
+        journal_path, slot_ref=slot_ref, effect_id=effect_id, kind=kind,
         outcome=pj.OUTCOME_APPLIED, at=_NOW2,
     )
     assert end["ok"] is True
@@ -291,10 +291,18 @@ def test_rotate_journal_rejects_orphan_end_anomaly(tmp_path):
     journal = _journal_path(slots_dir, _SLOT)
     slot_ref = "%s@%d" % (_SLOT, record["generation"])
     _fill_journal(journal, _min_pairs(), slot_ref=slot_ref)
-    pj.end_effect(
-        journal, slot_ref=slot_ref, effect_id="orphan1",
-        outcome=pj.OUTCOME_APPLIED, at=_NOW2,
-    )
+    with open(journal, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_END,
+            "effectId": "orphan1",
+            "slotRef": slot_ref,
+            "outcome": pj.OUTCOME_APPLIED,
+            "at": _NOW2,
+        }, sort_keys=True) + "\n")
+    replayed = pj.replay(journal)
+    anomaly_reasons = [a["reason"] for a in replayed["anomalies"]]
+    assert "orphan-end" in anomaly_reasons
     result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
     assert result["reason"] == pr.REASON_ROTATE_NOT_QUIESCENT
 
@@ -311,10 +319,18 @@ def test_rotate_journal_rejects_duplicate_begin_anomaly(tmp_path):
     pj.begin_effect(
         journal, slot_ref=slot_ref, kind=pj.KIND_APP_STARTED, at=_NOW, effect_id="dup1",
     )
-    pj.end_effect(
-        journal, slot_ref=slot_ref, effect_id="dup1",
-        outcome=pj.OUTCOME_APPLIED, at=_NOW2,
-    )
+    with open(journal, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({
+            "schemaVersion": pj.SCHEMA,
+            "phase": pj.PHASE_END,
+            "effectId": "dup1",
+            "slotRef": slot_ref,
+            "outcome": pj.OUTCOME_APPLIED,
+            "at": _NOW2,
+        }, sort_keys=True) + "\n")
+    replayed = pj.replay(journal)
+    anomaly_reasons = [a["reason"] for a in replayed["anomalies"]]
+    assert "duplicate-begin" in anomaly_reasons
     result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
     assert result["reason"] == pr.REASON_ROTATE_NOT_QUIESCENT
 
@@ -331,6 +347,7 @@ def test_rotate_journal_rejects_indeterminate_outcome(tmp_path):
     )
     pj.end_effect(
         journal, slot_ref=slot_ref, effect_id=effect_id,
+        kind=pj.KIND_APP_STARTED,
         outcome=pj.OUTCOME_INDETERMINATE, at=_NOW2,
     )
     result = pr.rotate_journal(slots_dir, _SLOT, journal, now=_NOW)
