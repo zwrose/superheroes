@@ -1,0 +1,433 @@
+name: Spike 816 xdist A/B measurement
+
+on:
+  push:
+    branches: [wh816-xdist-ab]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: measure (${{ matrix.arm }} rep ${{ matrix.rep }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [serial, parallel]
+        rep: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies (validators + tests + import-linter + xdist)
+        run: uv pip install --system pytest pytest-xdist jsonschema pyyaml "import-linter>=2,<3"
+
+      - name: Install jscpd (guardian duplication real-channel tests)
+        run: npm install -g jscpd@5.0.12
+
+      - name: Install coupling collectors (ungate coupling lens real-seam tests)
+        run: npm install -g dependency-cruiser@18 typescript@5
+
+      - name: Install Claude Code CLI (host manifest validation)
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Record environment
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+          {
+            echo "nproc=$(nproc)"
+            echo "python_version=$(python3 -V)"
+            echo "pytest_version=$(python3 -m pytest --version)"
+            echo "xdist_version=$(python3 -c "import xdist; print(xdist.__version__)")"
+            echo "sha=${{ github.sha }}"
+            echo "arm=${{ matrix.arm }}"
+            echo "rep=${{ matrix.rep }}"
+            echo "runner_os=${{ runner.os }}"
+          } | tee "$RUNNER_TEMP/out/env.txt"
+
+      - name: Run measurement
+        run: |
+          mkdir -p "$RUNNER_TEMP/out"
+
+          XDIST_FLAG=""
+          WORKERS=1
+          if [ "${{ matrix.arm }}" = "parallel" ]; then
+            XDIST_FLAG="-n auto"
+            WORKERS=$(nproc)
+          fi
+
+          START=$(date +%s)
+          set +e
+          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -rs \
+            --junitxml="$RUNNER_TEMP/out/junit.xml" \
+            $XDIST_FLAG 2>&1 | tee "$RUNNER_TEMP/out/pytest.log"
+          EXIT_CODE=$?
+          set -e
+          END=$(date +%s)
+          WALL_SECONDS=$((END - START))
+
+          PYTEST_VERSION=$(python3 -m pytest --version 2>&1 | head -1)
+          XDIST_VERSION=$(python3 -c "import xdist; print(xdist.__version__)")
+
+          python3 -c "
+          import json
+          data = {
+              'arm': '${{ matrix.arm }}',
+              'rep': ${{ matrix.rep }},
+              'sha': '${{ github.sha }}',
+              'wall_seconds': $WALL_SECONDS,
+              'exit_code': $EXIT_CODE,
+              'workers': $WORKERS,
+              'pytest_version': '''$PYTEST_VERSION''',
+              'xdist_version': '''$XDIST_VERSION''',
+          }
+          with open('$RUNNER_TEMP/out/result.json', 'w') as f:
+              json.dump(data, f, indent=2)
+          "
+
+      - name: Upload measurement artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: measure-${{ matrix.arm }}-${{ matrix.rep }}
+          path: ${{ runner.temp }}/out/
+          retention-days: 7
+
+  compare:
+    name: compare arms
+    needs: measure
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download all measurement artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: all-artifacts
+
+      - name: Compare junit parity across arms
+        run: |
+          sed 's/^          //' > "$RUNNER_TEMP/compare_junit.py" <<'PY'
+          #!/usr/bin/env python3
+          """Compare serial vs parallel pytest junit outcomes for spike #816."""
+          from __future__ import annotations
+
+          import json
+          import os
+          import statistics
+          import sys
+          import xml.etree.ElementTree as ET
+          from collections import Counter, defaultdict
+          from pathlib import Path
+
+          EXPECTED_ARMS = ("serial", "parallel")
+          EXPECTED_REPS = (1, 2, 3)
+          REQUIRED_RESULT_KEYS = (
+              "arm",
+              "rep",
+              "sha",
+              "wall_seconds",
+              "exit_code",
+              "workers",
+              "pytest_version",
+              "xdist_version",
+          )
+          OUTCOMES = ("passed", "failed", "error", "skipped", "xfailed")
+
+
+          def artifacts_root() -> Path:
+              return Path(os.environ.get("ARTIFACTS_ROOT", "all-artifacts"))
+
+
+          def discover_pairs(root: Path) -> dict[tuple[str, int], dict[str, Path]]:
+              """Map (arm, rep) -> {result.json, junit.xml} paths."""
+              pairs: dict[tuple[str, int], dict[str, Path]] = defaultdict(dict)
+              for result_path in root.rglob("result.json"):
+                  pairs_key = None
+                  try:
+                      with result_path.open(encoding="utf-8") as fh:
+                          data = json.load(fh)
+                  except (OSError, json.JSONDecodeError) as exc:
+                      print(f"MALFORMED result.json at {result_path}: {exc}")
+                      continue
+                  arm = data.get("arm")
+                  rep = data.get("rep")
+                  if arm is None or rep is None:
+                      print(f"MISSING arm/rep in result.json at {result_path}")
+                      continue
+                  pairs_key = (str(arm), int(rep))
+                  pairs[pairs_key]["result"] = result_path
+                  junit_path = result_path.parent / "junit.xml"
+                  if junit_path.is_file():
+                      pairs[pairs_key]["junit"] = junit_path
+              # Also pick up orphan junit.xml files not paired above.
+              for junit_path in root.rglob("junit.xml"):
+                  parent = junit_path.parent
+                  candidate = parent / "result.json"
+                  if candidate.is_file():
+                      continue
+                  print(f"ORPHAN junit.xml without result.json at {junit_path}")
+              return pairs
+
+
+          def load_result(path: Path) -> dict | None:
+              try:
+                  with path.open(encoding="utf-8") as fh:
+                      data = json.load(fh)
+              except (OSError, json.JSONDecodeError) as exc:
+                  print(f"MALFORMED result.json at {path}: {exc}")
+                  return None
+              missing = [k for k in REQUIRED_RESULT_KEYS if k not in data]
+              if missing:
+                  print(f"MISSING keys {missing} in result.json at {path}")
+              return data
+
+
+          def parse_junit(path: Path) -> tuple[dict[str, str] | None, list[str]]:
+              """Return (outcome_map, issues). issues non-empty => unusable map."""
+              issues: list[str] = []
+              if not path.is_file():
+                  issues.append(f"junit.xml absent at {path}")
+                  return None, issues
+              raw = path.read_bytes()
+              if not raw.strip():
+                  issues.append(f"junit.xml empty at {path}")
+                  return None, issues
+              try:
+                  root = ET.fromstring(raw)
+              except ET.ParseError as exc:
+                  issues.append(f"junit.xml unparseable at {path}: {exc}")
+                  return None, issues
+
+              outcome_map: dict[str, str] = {}
+              duplicates: list[str] = []
+              testcases = list(root.iter("testcase"))
+              if not testcases:
+                  issues.append(f"junit.xml has zero testcase elements at {path}")
+                  return None, issues
+
+              for tc in testcases:
+                  classname = tc.get("classname", "")
+                  name = tc.get("name", "")
+                  key = f"{classname}::{name}"
+                  if key in outcome_map:
+                      duplicates.append(key)
+                      continue
+                  outcome = classify_testcase(tc)
+                  outcome_map[key] = outcome
+
+              if duplicates:
+                  issues.append(
+                      f"duplicate classname::name keys in {path}: {', '.join(sorted(set(duplicates)))}"
+                  )
+              return outcome_map, issues
+
+
+          def classify_testcase(tc: ET.Element) -> str:
+              for child in tc:
+                  tag = child.tag.split("}")[-1] if "}" in child.tag else child.tag
+                  if tag == "failure":
+                      return "failed"
+                  if tag == "error":
+                      return "error"
+                  if tag == "skipped":
+                      skip_type = child.get("type", "")
+                      if skip_type == "pytest.xfail":
+                          return "xfailed"
+                      return "skipped"
+              return "passed"
+
+
+          def outcome_counts(outcome_map: dict[str, str]) -> Counter:
+              counts: Counter = Counter({o: 0 for o in OUTCOMES})
+              for outcome in outcome_map.values():
+                  counts[outcome] += 1
+              return counts
+
+
+          def median_and_range(values: list[float]) -> tuple[float | None, float | None, float | None]:
+              if not values:
+                  return None, None, None
+              return statistics.median(values), min(values), max(values)
+
+
+          def main() -> int:
+              root = artifacts_root()
+              divergent_reasons: list[str] = []
+              pairs = discover_pairs(root)
+
+              runs: dict[tuple[str, int], dict] = {}
+
+              # E1 — every expected (arm, rep) must have both files.
+              for arm in EXPECTED_ARMS:
+                  for rep in EXPECTED_REPS:
+                      key = (arm, rep)
+                      entry = pairs.get(key, {})
+                      result_path = entry.get("result")
+                      junit_path = entry.get("junit")
+                      if result_path is None:
+                          msg = f"E1: missing result.json for arm={arm} rep={rep}"
+                          print(msg)
+                          divergent_reasons.append(msg)
+                          continue
+                      if junit_path is None:
+                          msg = f"E1: missing junit.xml for arm={arm} rep={rep}"
+                          print(msg)
+                          divergent_reasons.append(msg)
+                          continue
+
+                      result = load_result(result_path)
+                      if result is None:
+                          divergent_reasons.append(f"malformed result.json for arm={arm} rep={rep}")
+                          continue
+
+                      outcome_map, junit_issues = parse_junit(junit_path)
+                      for issue in junit_issues:
+                          print(issue)
+                          if "zero testcase" in issue:
+                              divergent_reasons.append(f"E3: {issue}")
+                          elif "duplicate classname::name" in issue:
+                              divergent_reasons.append(f"E6: {issue}")
+                          else:
+                              divergent_reasons.append(f"E2: {issue}")
+
+                      runs[key] = {
+                          "result": result,
+                          "outcomes": outcome_map or {},
+                          "junit_issues": junit_issues,
+                      }
+
+              # Per-run table
+              print("\n=== Per-run summary ===")
+              print(
+                  f"{'arm':<8} {'rep':<4} {'sha':<12} {'wall_s':<8} {'exit':<5} "
+                  f"{'workers':<8} passed failed error skip xfail"
+              )
+              for arm in EXPECTED_ARMS:
+                  for rep in EXPECTED_REPS:
+                      key = (arm, rep)
+                      run = runs.get(key)
+                      if not run:
+                          print(f"{arm:<8} {rep:<4} {'MISSING':<12}")
+                          continue
+                      result = run["result"]
+                      counts = outcome_counts(run["outcomes"])
+                      sha = str(result.get("sha", ""))[:12]
+                      print(
+                          f"{arm:<8} {rep:<4} {sha:<12} "
+                          f"{result.get('wall_seconds', '?'):<8} "
+                          f"{result.get('exit_code', '?'):<5} "
+                          f"{result.get('workers', '?'):<8} "
+                          f"{counts['passed']} {counts['failed']} {counts['error']} "
+                          f"{counts['skipped']} {counts['xfailed']}"
+                      )
+
+              # Timing summary per arm
+              print("\n=== Timing summary (wall_seconds) ===")
+              for arm in EXPECTED_ARMS:
+                  walls = [
+                      float(runs[(arm, rep)]["result"]["wall_seconds"])
+                      for rep in EXPECTED_REPS
+                      if (arm, rep) in runs
+                      and runs[(arm, rep)]["result"]
+                      and "wall_seconds" in runs[(arm, rep)]["result"]
+                  ]
+                  med, lo, hi = median_and_range(walls)
+                  if med is None:
+                      print(f"{arm}: no data")
+                  else:
+                      print(f"{arm}: median={med} range=[{lo}, {hi}] (n={len(walls)})")
+
+              # E4 — sha must agree across all runs
+              shas = {
+                  str(run["result"].get("sha"))
+                  for run in runs.values()
+                  if run.get("result") and "sha" in run["result"]
+              }
+              if len(shas) > 1:
+                  msg = f"E4: disagreeing sha values: {sorted(shas)}"
+                  print(msg)
+                  divergent_reasons.append(msg)
+
+              # E5 — any nonzero exit_code
+              for (arm, rep), run in runs.items():
+                  result = run.get("result")
+                  if not result:
+                      continue
+                  exit_code = result.get("exit_code")
+                  if exit_code is None:
+                      print(f"MISSING exit_code in result for arm={arm} rep={rep}")
+                      divergent_reasons.append(f"missing exit_code arm={arm} rep={rep}")
+                  elif exit_code != 0:
+                      msg = f"E5: nonzero exit_code={exit_code} for arm={arm} rep={rep}"
+                      print(msg)
+                      divergent_reasons.append(msg)
+
+              # Per-test diff between arms (per rep)
+              print("\n=== Per-test outcome diff (serial vs parallel) ===")
+              all_diffs: list[str] = []
+              for rep in EXPECTED_REPS:
+                  serial_key = ("serial", rep)
+                  parallel_key = ("parallel", rep)
+                  serial_run = runs.get(serial_key)
+                  parallel_run = runs.get(parallel_key)
+                  if not serial_run or not parallel_run:
+                      continue
+                  serial_map = serial_run.get("outcomes") or {}
+                  parallel_map = parallel_run.get("outcomes") or {}
+                  all_keys = sorted(set(serial_map) | set(parallel_map))
+                  for test_key in all_keys:
+                      s_out = serial_map.get(test_key)
+                      p_out = parallel_map.get(test_key)
+                      if s_out is None:
+                          all_diffs.append(f"rep={rep} E7: {test_key} present only in parallel ({p_out})")
+                      elif p_out is None:
+                          all_diffs.append(f"rep={rep} E7: {test_key} present only in serial ({s_out})")
+                      elif s_out != p_out:
+                          all_diffs.append(
+                              f"rep={rep} outcome mismatch {test_key}: serial={s_out} parallel={p_out}"
+                          )
+
+              diff_count = len(all_diffs)
+              print(f"Total diffs: {diff_count}")
+              for line in all_diffs[:50]:
+                  print(line)
+              if diff_count > 50:
+                  print(f"... ({diff_count - 50} more not shown)")
+
+              for line in all_diffs:
+                  if "E7:" in line:
+                      divergent_reasons.append(line)
+                  elif "outcome mismatch" in line:
+                      divergent_reasons.append(line)
+
+              if diff_count:
+                  divergent_reasons.append(f"per-test diffs: {diff_count}")
+
+              verdict = "CLEAN" if not divergent_reasons else "DIVERGENT"
+              print(f"\nVERDICT: {verdict}")
+              if divergent_reasons:
+                  print("Reasons:")
+                  for reason in divergent_reasons:
+                      print(f"  - {reason}")
+                  return 1
+              return 0
+
+
+          if __name__ == "__main__":
+              sys.exit(main())
+          PY
+          ARTIFACTS_ROOT=all-artifacts python3 "$RUNNER_TEMP/compare_junit.py"
