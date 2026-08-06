@@ -183,8 +183,9 @@ repo's identity, and inferring one is not a fallback. The damage is invisible fr
 a commit authored under a synthesized identity lands **unverified**, and a downstream gate can
 refuse the whole branch for it — a deploy preview did exactly that, and the owner caught it at merge
 time, after review, while three same-wave siblings that simply inherited the configured identity
-were fine. If the repo's identity is **missing or wrong**, that is a **park-and-report** — name what
-is unset and stop; improvising past it is the failure this rule exists to name. (A separate case,
+were fine. If the repo's identity is **missing or wrong**, that is a **park-and-report** — report
+the identity you actually found (unset, or set to the wrong value) and stop; improvising past it is
+the failure this rule exists to name. (A separate case,
 not an exception to borrow: a **throwaway repo a test fixture creates** has no configured identity
 on a CI runner, so a fixture's own commits still pass an explicit inline one.)
 

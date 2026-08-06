@@ -429,8 +429,14 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
     assert parsed["ok"] is True
     assert "git-identity" in LD.RULING_IDS
     text = next(r["text"] for r in parsed["rulings"] if r["id"] == "git-identity")
-    assert "never pass `-c user.name` or `-c user.email`" in text
-    assert "never synthesize one" in text
-    assert "park-and-report" in text
+    # Pinned in full, not by substring. Substring checks would still pass if a coordinated edit
+    # appended an exception clause ("...unless an override is needed") around the asserted
+    # phrases, which would leave the launched payload carrying a conditional invariant. Exact
+    # equality means any softening has to edit this literal too — a third, deliberate site.
+    assert text == (
+        "commits inherit the repo's configured git identity; never pass `-c user.name` or "
+        "`-c user.email` and never synthesize one; a missing or wrong identity is a "
+        "park-and-report, not an improvisation."
+    )
     # The composed payload a launched builder actually receives must carry the line.
     assert "- `git-identity` —" in parsed["rulingsBlock"]
