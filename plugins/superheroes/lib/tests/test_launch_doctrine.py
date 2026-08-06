@@ -438,5 +438,7 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
         "`-c user.email` and never synthesize one; a missing or wrong identity is a "
         "park-and-report, not an improvisation."
     )
-    # The composed payload a launched builder actually receives must carry the line.
-    assert "- `git-identity` —" in parsed["rulingsBlock"]
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py::test_compose_git_identity_ruling_in_prompt — not here. Re-checking the
+    # block for the line at this point would be vacuous: a parsed ruling exists only because
+    # _parse_rulings_block matched that exact line in that exact block.
