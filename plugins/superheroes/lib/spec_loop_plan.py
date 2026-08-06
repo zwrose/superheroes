@@ -179,14 +179,20 @@ def _compiled_severities(compiled_path):
 def _compiled_severities_since(state, since_round):
     """#884: the compile-layer blocking severities recorded on every round from `since_round`
     onward — the compile-layer twin of `_surfaced_severities_since`, unioned with it so the
-    FR-8 follow-up sees a validator-only blocker as the open blocker it is."""
+    FR-8 follow-up sees a validator-only blocker as the open blocker it is.
+
+    #884 review round 2: missing or untrustworthy ``compiledSeverities`` fails closed as
+    ``Critical`` (mirrors ``_surfaced_severities``'s missing-``criticalCount`` rule in
+    ``loop_plan_common.py``) — never treat silence as a clean round."""
     out = []
     for key in sorted((state.get("rounds") or {}), key=lambda k: int(k) if str(k).isdigit() else 0):
         if not str(key).isdigit() or int(key) < since_round:
             continue
         recorded = (state["rounds"][key] or {}).get("compiledSeverities")
-        if isinstance(recorded, list):
+        if isinstance(recorded, list) and all(isinstance(s, str) for s in recorded):
             out.extend(recorded)
+        else:
+            out.append("Critical")
     return out
 
 
@@ -389,10 +395,12 @@ def _next_round_out(session_dir, state, state_ok, round_no, plan, action, mandat
 def cmd_decide(session_dir, round_no, max_rounds, compiled, skipped_blocking, dimensions):
     state_ok, state = load_state(session_dir)
     try:
-        present = loop_state._blocking_present_from_compiled(compiled)
-        blocking_fixed = max(0, present - skipped_blocking)
         if state_ok:
             _round_entry(state, round_no)["compiledSeverities"] = _compiled_severities(compiled)
+        # #884 review round 2 (premortem-004): record BEFORE the read that can raise — the except
+        # branch continues the loop, and a missing record here lands as silence in later windows.
+        present = loop_state._blocking_present_from_compiled(compiled)
+        blocking_fixed = max(0, present - skipped_blocking)
     except (OSError, ValueError, TypeError, AttributeError, KeyError) as exc:
         # fail SAFE toward more review, never toward a silent exit or a skip
         plan = review_round_policy.plan_round(

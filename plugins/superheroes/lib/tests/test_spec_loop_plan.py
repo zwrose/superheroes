@@ -538,6 +538,62 @@ def test_doc_review_rearms_for_a_compile_layer_only_blocker(tmp_path, capsys):
     assert "reduced or under-evidenced" not in out["reason"]
 
 
+@pytest.mark.parametrize("bad", [None, "Important", ["Important", None], 5, {}])
+def test_doc_review_fails_closed_on_untrustworthy_compiled_severities(tmp_path, capsys, bad):
+    # #884 review round 2 (architecture-001 / code-001 / security-001): the compile-layer window
+    # must never read "I have no trustworthy record" as "nothing was blocking" — that is the FR-8
+    # bypass reached by a second door. `None` here means the key is DELETED (legacy / pre-change
+    # state); the rest are present-but-wrong shapes. Driven through the production CLI entry path.
+    session_dir = _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys)
+    ok, state = SLP.load_state(session_dir)
+    assert ok
+    if bad is None:
+        state["rounds"]["3"].pop("compiledSeverities", None)
+    else:
+        state["rounds"]["3"]["compiledSeverities"] = bad
+    SLP.save_state(session_dir, state)
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+
+
+def test_doc_review_fails_closed_when_the_panel_round_compiled_is_unreadable(tmp_path, capsys):
+    # #884 review round 2 (premortem-004): `cmd_decide`'s except branch CONTINUES the loop, so a
+    # round whose compiled.json could not be read must still record a fail-closed severity —
+    # otherwise it lands in a later follow-up window as silence.
+    session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
+    _write_findings(session_dir, "architecture-reviewer", [])
+    _record(capsys, session_dir, 2)
+    _write_compiled(session_dir, [])
+    _decide(capsys, session_dir, 2)
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 3)
+    with open(os.path.join(session_dir, "compiled.json"), "w", encoding="utf-8") as fh:
+        fh.write("{not valid json")
+    out3 = _decide(capsys, session_dir, 3)
+    assert out3["action"] == "review", out3
+    assert "could not read the round artifacts" in out3["reason"], out3
+    ok, state = SLP.load_state(session_dir)
+    assert ok
+    assert state["rounds"]["3"]["compiledSeverities"] == ["Critical"]
+    # The except branch schedules run-all-deep; replace with the scoped plan a blocking panel
+    # would have issued so decide(4) reaches the confirmation-followup chokepoint.
+    plan = SLP.review_round_policy.plan_round(
+        {"round": 4, "dimensions": DIMS,
+         "changedSubjects": SLP._diff_changed_surface(session_dir, 3),
+         "previous": SLP._previous_dims(state, 3)})
+    state["rounds"]["4"]["plan"] = plan
+    SLP.save_state(session_dir, state)
+    for dim in DIMS:
+        _write_findings(session_dir, dim, [])
+    _record(capsys, session_dir, 4)
+    _write_compiled(session_dir, [])
+    out = _decide(capsys, session_dir, 4)
+    assert out["action"] == "review", out
+    assert out["roundKind"] == "confirmation"
+
+
 def test_confirmation_followup_is_reachable_only_through_the_doc_chokepoint():
     # #884 census guard: pin the SET of enclosing functions that may reference the policy rule, not
     # a call-site string. Catches an attribute call, a bare-name call, and a `from ... import`
