@@ -79,7 +79,9 @@ full-deep confirmation at the cap still certifies. The **confirmation-panel budg
 per loop (`MAX_CONFIRMATIONS = 2` in `review_round_policy`); on the `spec_loop_plan` document-review
 path a doc-mode confirmation that reaches that budget parks too, rather than scoped-certifying.
 FR-8's any-open-blocker trigger sits on top of the shared cross-cutting/unknown-surface trigger
-rather than replacing it — an unknown changed surface still fails closed on the doc leg. The earlier
+rather than replacing it — below the confirmation-panel cap an unknown changed surface still fails
+closed on the doc leg; at the cap, with nothing blocking open, the doc leg certifies exactly as code
+review does. The earlier
 three-round phrasing conflated these two caps and is retired. Everything else in
 this section — the full baseline panel, the convergence record, fail-closed on malformed/stale
 receipts — is identical. The re-arm/park **rule** lives once in

@@ -454,7 +454,8 @@ def _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys):
     by the citation validator, whose findings are merged into the pool at the compile layer and
     never land in a dimension findings file (review-spec SKILL.md §compile). The panel therefore
     surfaces NOTHING in scheduler state, the loop still owes a scoped round 4, and decide(4) reaches
-    the confirmation-followup chokepoint with `surfaced == []` and one qualifying panel run.
+    the confirmation-followup chokepoint with the compile-layer Important recorded on round 3's
+    `compiledSeverities` (dimension findings empty) and one qualifying panel run.
     Returns session_dir positioned to decide(4)."""
     session_dir, _ = _reach_round2_with_cheap_arch(tmp_path, capsys)
     _write_findings(session_dir, "architecture-reviewer", [])
@@ -523,32 +524,18 @@ def test_doc_review_parks_at_the_confirmation_cap_with_an_open_blocker(tmp_path,
     assert out["certification"]["lastPanelSurfacedResolved"] is True
 
 
-def test_doc_review_unknown_changed_surface_still_rearms(tmp_path, capsys):
-    # #884 / brief-check briefcheck-001: with nothing blocking surfaced since the panel, doc mode
-    # must NOT certify past an UNKNOWN changed surface. Deleting the panel round's snapshot makes
-    # `_diff_changed_surface` return None, which `is_cross_cutting` maps to True on purpose — the
-    # fail-CLOSED direction code review already takes, and which review-loop.md says is identical
-    # across legs. FR-8 is a floor on top of that rule, never a replacement for it.
+def test_doc_review_rearms_for_a_compile_layer_only_blocker(tmp_path, capsys):
+    # #884 review round 1 (architecture-001 / code-001): review-spec merges the citation
+    # validator's findings at the COMPILE layer, so a validator blocker surfaced BY a confirmation
+    # panel never reaches a dimension findings file. Before this fix the follow-up saw an empty
+    # severity window and certified off the scoped verify — FR-8's exact bypass, and this file
+    # previously ASSERTED that bypass was correct. Driven through the production CLI entry path.
     session_dir = _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys)
-    os.remove(os.path.join(session_dir, "spec-r3.md"))
     out = _decide(capsys, session_dir, 4)
     assert out["action"] == "review", out
     assert out["roundKind"] == "confirmation"
-
-
-def test_doc_review_certifies_when_nothing_open_and_rework_not_cross_cutting(tmp_path, capsys):
-    # #884: the other side of 3.3 — nothing blocking surfaced since the panel AND a rework that is
-    # not cross-cutting still certifies. Doc mode tightens the blocking cells; it does not turn the
-    # loop into a ratchet.
-    session_dir = _confirmation_round3_clean_panel_blocking_in_compiled(tmp_path, capsys)
-    out = _decide(capsys, session_dir, 4)
-    assert out["action"] == "exit_clean", out
-    assert out["nextRound"] is None
-    # #174 finding 4, re-homed by #884: the honest-readout flag is COMPUTED from what the panel
-    # surfaced, not hardcoded. This is the certify side — one qualifying panel ran and it surfaced
-    # nothing, so the flag reads False.
-    assert out["certification"]["fullPanels"] == 1
-    assert out["certification"]["lastPanelSurfacedResolved"] is False
+    assert "open blocking finding" in out["reason"]
+    assert "reduced or under-evidenced" not in out["reason"]
 
 
 def test_confirmation_followup_is_reachable_only_through_the_doc_chokepoint():
