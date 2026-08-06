@@ -721,7 +721,9 @@ format.
   the advisor posts it *before* writing the body, so check for an existing vet-receipt comment
   before posting another); verdict present, reminder gone → **vetted**;
   **neither** present → an advisor write that a body rewrite dropped. A slot with **no marker at all**
-  is a body that predates this contract, not a dropped write. Marker-absence used to carry
+  is read against the advisor's own receipt: **no receipt comment** on the PR means a body that
+  predates this contract (not yet vetted), while **a receipt that exists** means a rewrite dropped the
+  verdict and the marker together. Marker-absence used to carry
   that last signal; once you stamp the marker it cannot, and the reminder carries it instead.
   One limit, stated rather than hidden: a rewrite that drops a written verdict **and** re-seeds this
   reminder lands back on `marker + reminder`, which reads like a vet that has not happened. The body

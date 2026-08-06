@@ -352,8 +352,10 @@ above).
      merely whether the marker is there: a rewrite can drop your text and re-seed the builder's
      reminder in its place (marker present, reminder back — which reads exactly like a vet that has
      not happened yet), drop the marker with it (marker gone), or carry an older copy forward over a
-     newer one (marker present, text stale — invisible to a marker check). Re-write your text and
-     re-stamp the marker when any of the three holds.
+     newer one (marker present, text stale — invisible to a marker check), or drop your text and the
+     marker together (no marker at all — which a **pre-#794** body also looks like; your own receipt
+     is what separates them: a receipt already posted means this is a dropped write). Re-write your
+     text when any of those holds, and **re-stamp the marker only when it is actually gone**.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
      was never an independent axis — the presentation call (duty 5) already says when the owner must
      *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and
