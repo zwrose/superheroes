@@ -1201,9 +1201,10 @@ owner-facing batch report can name who accepted a weaker guarantee and when.
 
 **The `slots` block on `count`.** `COUNT_RESULT_BLOCKS` names `slots` alongside `counts`,
 `amendments`, `lanes`, `attempts`, and `laneDetail`. For every launch in the batch that carried a
-`slot`, `count` emits one entry with `slot`, `generation`, `slotRef`, `strength`, and
-`weakerAccepted`. A slot recorded without a `boundary` block appears with `strength: null` rather
-than being omitted — an absent boundary is itself worth seeing in the batch accounting.
+`slot`, `count` emits one entry with `launchId`, `issue`, `slot`, `generation`, `slotRef`,
+`strength`, `weakerAccepted`, `acceptedBy`, `acceptedAt`, and `acceptanceReason`. A slot recorded
+without a `boundary` block appears with `strength: null` and null acceptance fields rather than
+being omitted — an absent boundary is itself worth seeing in the batch accounting.
 
 **The launcher is the caller.** `launch_build` in `lib/launcher.py` accepts `slot`, `generation`,
 and `boundary` keyword arguments and passes them through on the refusal path via
@@ -1233,8 +1234,13 @@ same exact-match `assert_results_only` with the same documented coverage limit.
 | `fold-bad-field:reserved:boundary-strength` | `strength` is not `strong` or `weaker` |
 | `fold-bad-field:reserved:boundary-match` | `match` is not a boolean |
 | `fold-bad-field:reserved:boundary-policyDigest` | `policyDigest` missing or empty |
-| `fold-bad-field:reserved:boundary-verifiedAt` | `verifiedAt` missing or empty |
+| `fold-bad-field:reserved:boundary-verifiedAt` | `verifiedAt` missing, empty, or not ISO-8601 UTC with `Z` |
 | `fold-bad-field:reserved:boundary-weakerAccepted` | `weakerAccepted` is not a boolean |
+| `fold-bad-field:reserved:boundary-weakerAccepted-strength` | `weakerAccepted` disagrees with `strength` |
+| `fold-bad-field:reserved:boundary-acceptance-required` | `weakerAccepted: true` but an acceptance field is missing or empty |
+| `fold-bad-field:reserved:boundary-acceptance-forbidden` | `weakerAccepted: false` but an acceptance field is present |
+| `fold-bad-field:reserved:boundary-acceptance-reason-too-long` | `acceptanceReason` exceeds 500 characters |
+| `fold-bad-field:reserved:boundary-acceptedAt` | `acceptedAt` is not ISO-8601 UTC with `Z` |
 | `fold-bad-field:reserved:boundary-nullable` | a nullable acceptance field is present but not a non-empty string |
 | `ledger-boundary-verdict-invalid` | `boundary_record`: verdict is not a mapping or required verdict fields are absent |
 | `ledger-boundary-schema-version` | `boundary_record`: verdict `schemaVersion` does not match |
@@ -1244,6 +1250,7 @@ same exact-match `assert_results_only` with the same documented coverage limit.
 | `ledger-boundary-weaker-acceptance-invalid` | `boundary_record`: `weaker_acceptance` fails validation |
 | `ledger-boundary-strong-with-acceptance` | `boundary_record`: strong verdict with a `weaker_acceptance` supplied |
 | `ledger-boundary-acceptance-reason-too-long` | `boundary_record`: acceptance `reason` exceeds 500 characters |
+| `ledger-boundary-material-in-record` | `boundary_record`: composed record carries policy material when `material` is supplied |
 
 ## The identity-probe exercise
 

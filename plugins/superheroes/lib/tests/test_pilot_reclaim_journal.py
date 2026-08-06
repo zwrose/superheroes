@@ -5,6 +5,7 @@ import shutil
 import stat
 import sys
 import tempfile
+import threading
 
 import pytest
 
@@ -974,3 +975,26 @@ def test_aggregate_replay_live_absent_with_segments_ok(tmp_path):
     result = pr.aggregate_replay(slots_dir, _SLOT, journal, slot_ref=_SLOT_REF)
     assert result["ok"] is True
     assert len(result["effects"]) == 1
+
+
+def test_aggregate_replay_lock_timeout_refuses(tmp_path):
+    # axis: aggregate_replay refuses when slot_lock cannot be acquired
+    slots_dir, journal = _segment_with_live_journal(tmp_path)
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold_lock():
+        with pl.slot_lock(slots_dir, _SLOT):
+            held.set()
+            release.wait(timeout=5.0)
+
+    holder = threading.Thread(target=hold_lock)
+    holder.start()
+    assert held.wait(timeout=5.0)
+    result = pr.aggregate_replay(
+        slots_dir, _SLOT, journal, slot_ref=_SLOT_REF, timeout=0.1,
+    )
+    release.set()
+    holder.join(timeout=5.0)
+    assert result["ok"] is False
+    assert result["reason"] == pr.REASON_AGGREGATE_LOCK_UNAVAILABLE

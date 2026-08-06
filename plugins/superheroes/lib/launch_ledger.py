@@ -34,6 +34,7 @@ if _LIB_DIR not in sys.path:
 
 import file_lock  # noqa: E402
 import pilot_boundary  # noqa: E402
+import pilot_policy  # noqa: E402
 import pilot_provision  # noqa: E402
 import pilot_slot  # noqa: E402
 
@@ -718,7 +719,7 @@ _BOUNDARY_RECORD_KEYS = frozenset({
 })
 
 
-def boundary_record(verdict, *, weaker_acceptance=None):
+def boundary_record(verdict, *, weaker_acceptance=None, material=None):
     """Project a boundary verdict into the flat results-only ledger block."""
     if not isinstance(verdict, dict):
         return {"ok": False, "reason": "ledger-boundary-verdict-invalid"}
@@ -785,6 +786,11 @@ def boundary_record(verdict, *, weaker_acceptance=None):
         "acceptedAt": accepted_at,
         "acceptanceReason": acceptance_reason,
     }
+    if material is not None:
+        try:
+            pilot_policy.assert_results_only(record, material)
+        except pilot_policy.PilotPolicyError:
+            return {"ok": False, "reason": "ledger-boundary-material-in-record"}
     return {"ok": True, "record": record}
 
 
@@ -819,6 +825,25 @@ def _validate_boundary_block(block, slot, generation):
             not isinstance(nullable_value, str) or not nullable_value
         ):
             return "fold-bad-field:reserved:boundary-nullable"
+    weaker_accepted = block["weakerAccepted"]
+    is_weaker = block_strength == pilot_boundary.STRENGTH_WEAKER
+    if weaker_accepted != is_weaker:
+        return "fold-bad-field:reserved:boundary-weakerAccepted-strength"
+    accepted_by = block.get("acceptedBy")
+    accepted_at = block.get("acceptedAt")
+    acceptance_reason = block.get("acceptanceReason")
+    if weaker_accepted:
+        for value in (accepted_by, accepted_at, acceptance_reason):
+            if not isinstance(value, str) or not value:
+                return "fold-bad-field:reserved:boundary-acceptance-required"
+        if len(acceptance_reason) > 500:
+            return "fold-bad-field:reserved:boundary-acceptance-reason-too-long"
+        if not pilot_provision._is_iso8601_utc(accepted_at):
+            return "fold-bad-field:reserved:boundary-acceptedAt"
+    elif accepted_by is not None or accepted_at is not None or acceptance_reason is not None:
+        return "fold-bad-field:reserved:boundary-acceptance-forbidden"
+    if not pilot_provision._is_iso8601_utc(block["verifiedAt"]):
+        return "fold-bad-field:reserved:boundary-verifiedAt"
     try:
         expected_ref = pilot_slot.format_slot_ref(slot, generation)
     except pilot_slot.PilotSlotError:
@@ -1909,12 +1934,25 @@ def count(repo_root, batch_id, env=None):
                 slot_ref = None
             strength = None
             weaker_accepted = False
+        if boundary is not None:
+            accepted_by = boundary.get("acceptedBy")
+            accepted_at = boundary.get("acceptedAt")
+            acceptance_reason = boundary.get("acceptanceReason")
+        else:
+            accepted_by = None
+            accepted_at = None
+            acceptance_reason = None
         slots_block.append({
+            "launchId": lid,
+            "issue": info.get("issue"),
             "slot": slot,
             "generation": generation,
             "slotRef": slot_ref,
             "strength": strength,
             "weakerAccepted": weaker_accepted,
+            "acceptedBy": accepted_by,
+            "acceptedAt": accepted_at,
+            "acceptanceReason": acceptance_reason,
         })
 
     inspect = (

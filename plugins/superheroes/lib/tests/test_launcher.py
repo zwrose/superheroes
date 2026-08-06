@@ -1,3 +1,4 @@
+import argparse
 import importlib.util
 import json
 import os
@@ -2308,6 +2309,91 @@ def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monke
     assert captured.get(hb.LAUNCH_ID_ENV) == launch_id
     assert captured.get(hb.HEARTBEAT_ROOT_ENV) == ledger_root
     assert ll.LEDGER_ROOT_ENV not in captured
+    assert L.SLOT_REF_ENV not in captured
+
+
+def test_spawn_attempt_exports_slot_ref_when_supplied(tmp_path, monkeypatch):
+    # axis: slot reference exported only when both slot and generation supplied
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-slot-ref"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-spawn-env",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424243
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env={ll.LEDGER_ROOT_ENV: ledger_root},
+        spawn_fn=capture_spawn,
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is True
+    assert captured.get(L.SLOT_REF_ENV) == "slot-a@1"
+
+
+def test_spawn_attempt_omits_slot_ref_without_generation(tmp_path, monkeypatch):
+    # axis: slot without generation does not export SUPERHEROES_SLOT_REF
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-slot-only"
+    captured = {}
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        captured.update(child_env)
+        class _Proc:
+            pid = 424244
+
+        out_fh.close()
+        err_fh.close()
+        return _Proc()
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    result = L._spawn_attempt(
+        repo,
+        launch_id,
+        1,
+        ["claude", "-p", "test"],
+        os.path.join(log_dir, "out.log"),
+        os.path.join(log_dir, "err.log"),
+        900000,
+        env={ll.LEDGER_ROOT_ENV: ledger_root},
+        spawn_fn=capture_spawn,
+        slot="slot-a",
+        generation=None,
+    )
+    assert L.SLOT_REF_ENV not in captured
 
 
 def test_append_under_lock_refuses_a_fifo_lock_without_blocking(tmp_path, monkeypatch):
@@ -2598,3 +2684,52 @@ def test_cli_launch_generation_zero_refused_by_fold(tmp_path, monkeypatch):
     payload = json.loads(proc.stdout)
     assert payload["ok"] is False
     assert payload["reason"] == "fold-bad-field:reserved:generation"
+
+
+def test_cli_launch_boundary_happy_path_forwards(tmp_path, monkeypatch):
+    # axis: CLI parses --boundary and forwards it to launch_build
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    boundary = {
+        "slotRef": "slot-a@1",
+        "result": "pass",
+        "provenance": "observed",
+        "strength": "strong",
+        "match": True,
+        "policyDigest": "digest123",
+        "verifiedAt": "2026-01-01T00:00:00Z",
+        "weakerAccepted": False,
+        "acceptedBy": None,
+        "acceptedAt": None,
+        "acceptanceReason": None,
+    }
+    boundary_path = tmp_path / "boundary.json"
+    _write_json(boundary_path, boundary)
+    checks_path = tmp_path / "checks.json"
+    premise_path = tmp_path / "premise.json"
+    log_dir = tmp_path / "logs"
+    _write_json(checks_path, _all_checks())
+    _write_json(premise_path, _valid_premise(repo))
+    forwarded = {}
+
+    def capture_launch_build(*args, **kwargs):
+        forwarded.update(kwargs)
+        return {"ok": False, "reason": "injected-stop", "launchId": "l-test"}
+
+    monkeypatch.setattr(L, "launch_build", capture_launch_build)
+    args = argparse.Namespace(
+        repo_root=repo,
+        issue=656,
+        checks=str(checks_path),
+        premise=str(premise_path),
+        log_dir=str(log_dir),
+        model=None,
+        slot="slot-a",
+        generation=1,
+        boundary=str(boundary_path),
+    )
+    result = L._cli_launch(args)
+    assert result["reason"] == "injected-stop"
+    assert forwarded.get("boundary") == boundary
+    assert forwarded.get("slot") == "slot-a"
+    assert forwarded.get("generation") == 1

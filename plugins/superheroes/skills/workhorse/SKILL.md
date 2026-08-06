@@ -183,7 +183,9 @@ is a **refusal**, not a fallback; a builder that quietly self-provisions in that
 self-provisioning race the design moved provisioning to the advisor to prevent (#825, #830). **The
 generation is verified at intake, not assumed.** A slot reference is `<slot>@<generation>`; a
 build that verifies the slot but not the generation can be a stale occupant of a slot that has
-already been reassigned. Verify both, at intake, before any work. Read
+already been reassigned. Verify both, at intake, before any work. When the launch supplied both
+`slot` and `generation`, they arrive in the child environment as `SUPERHEROES_SLOT_REF`
+(`<slot>@<generation>`). Read
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Slot reference format; the
 lifecycle refusal tokens for a missing or stale slot) for the slot-reference format and refusal
 semantics — cite the reference and stop; no mechanism in the charter.

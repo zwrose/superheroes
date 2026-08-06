@@ -25,6 +25,9 @@ import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import model_registry  # noqa: E402
+import pilot_slot  # noqa: E402
+
+SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 
 STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 
@@ -557,11 +560,15 @@ def _spawn_attempt(
     bash_max_timeout_ms,
     env=None,
     spawn_fn=None,
+    slot=None,
+    generation=None,
 ):
     """Spawn one attempt; return dict with ok, proc, reason."""
     spawn = spawn_fn or _default_spawn
     child_env = _scrub_env(env)
     child_env[hb.LAUNCH_ID_ENV] = launch_id
+    if slot is not None and generation is not None:
+        child_env[SLOT_REF_ENV] = pilot_slot.format_slot_ref(slot, generation)
     resolved = ll.resolve_root(repo_root, env=env)
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
@@ -793,6 +800,8 @@ def launch_build(
             stamped["bashMaxTimeoutMs"],
             env=env,
             spawn_fn=spawn_fn,
+            slot=slot,
+            generation=generation,
         )
         if spawn_result.get("refused"):
             return _fail(spawn_result["reason"], launchId=launch_id)

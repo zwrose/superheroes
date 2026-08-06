@@ -82,6 +82,7 @@ REASON_ROTATE_BELOW_THRESHOLD = "reclaim-rotate-below-threshold"
 REASON_ROTATE_SEGMENT_EXISTS = "reclaim-rotate-segment-exists"
 REASON_ROTATE_FAILED = "reclaim-rotate-failed"
 REASON_SEGMENTS_UNREADABLE = "reclaim-segments-unreadable"
+REASON_AGGREGATE_LOCK_UNAVAILABLE = "reclaim-aggregate-lock-unavailable"
 
 ANOMALY_SEGMENT_SEQUENCE_GAP = "segment-sequence-gap"
 ANOMALY_SEGMENT_SEQUENCE_NOT_ONE = "segment-sequence-not-one"
@@ -1120,9 +1121,10 @@ def _live_journal_status(journal_path):
     return "present"
 
 
-def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref):
+def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref, timeout=30.0):
     """Replay retained segments plus the live journal in sequence order."""
     import pilot_journal
+    import pilot_lifecycle
 
     def _refuse(reason):
         return {
@@ -1144,27 +1146,34 @@ def aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref):
     if parsed_slot != slot:
         return _refuse(pilot_journal.REASON_SLOT_REF_INVALID)
 
-    seg_result = journal_segments(slots_dir_path, slot, journal_path)
-    if not seg_result["ok"]:
-        reclaim_reason = seg_result["reason"]
-        if reclaim_reason == REASON_SEGMENTS_UNREADABLE:
-            return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
-        return _refuse(reclaim_reason)
+    try:
+        with pilot_lifecycle.slot_lock(slots_dir_path, slot, timeout=timeout):
+            seg_result = journal_segments(slots_dir_path, slot, journal_path)
+            if not seg_result["ok"]:
+                reclaim_reason = seg_result["reason"]
+                if reclaim_reason == REASON_SEGMENTS_UNREADABLE:
+                    return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+                return _refuse(reclaim_reason)
 
-    slot_dir = os.path.join(slots_dir_path, slot)
-    segment_pairs = _list_journal_segments(slot_dir, journal_path)
-    if segment_pairs is None:
-        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+            slot_dir = os.path.join(slots_dir_path, slot)
+            segment_pairs = _list_journal_segments(slot_dir, journal_path)
+            if segment_pairs is None:
+                return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
 
-    sequences = [seq for seq, _path in segment_pairs]
-    segment_anomalies = _segment_sequence_anomalies(sequences)
-    paths = [path for _seq, path in segment_pairs]
+            sequences = [seq for seq, _path in segment_pairs]
+            segment_anomalies = _segment_sequence_anomalies(sequences)
+            paths = [path for _seq, path in segment_pairs]
 
-    live_status = _live_journal_status(journal_path)
-    if live_status == "unusable":
-        return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
-    if live_status == "present":
-        paths.append(journal_path)
+            live_status = _live_journal_status(journal_path)
+            if live_status == "unusable":
+                return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)
+            if live_status == "present":
+                paths.append(journal_path)
+    except pilot_lifecycle.PilotLifecycleError as exc:
+        reason = exc.args[0] if exc.args else None
+        if reason == pilot_lifecycle.REASON_LOCK_UNAVAILABLE:
+            return _refuse(REASON_AGGREGATE_LOCK_UNAVAILABLE)
+        return _refuse(reason)
 
     if not paths:
         return _refuse(pilot_journal.REASON_JOURNAL_UNREADABLE)

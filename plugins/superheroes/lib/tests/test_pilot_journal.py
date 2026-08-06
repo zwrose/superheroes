@@ -1884,3 +1884,15 @@ def test_replay_sources_unreadable_source_fails(tmp_dir):
     assert result["ok"] is False
     assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
 
+
+def test_replay_sources_cross_source_line_numbers_do_not_collide(tmp_dir):
+    # axis: line numbers are unique across sources so segment anomalies do not
+    # match unrelated live records at the same within-file line number
+    seg = _journal(tmp_dir, "seg.jsonl")
+    live = _journal(tmp_dir, "live.jsonl")
+    _write_line(seg, _end_record(effect_id="orphan-eff", slot_ref="slot-a@1"))
+    _write_line(live, _begin_record(effect_id="live-eff", slot_ref="slot-a@2"))
+    result = pj.replay_sources([seg, live], slot_ref="slot-a@2")
+    assert result["ok"] is True
+    assert result["anomalies"] == []
+

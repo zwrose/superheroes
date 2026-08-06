@@ -3407,11 +3407,16 @@ def test_reserved_slot_generation_fold_and_count_slots(tmp_path, monkeypatch):
     result = ll.count(repo, batch)
     assert result["resolved"] is True
     assert result["slots"] == [{
+        "launchId": "l1",
+        "issue": 656,
         "slot": _SLOT_A,
         "generation": _SLOT_GEN,
         "slotRef": boundary["slotRef"],
         "strength": pilot_boundary.STRENGTH_STRONG,
         "weakerAccepted": False,
+        "acceptedBy": None,
+        "acceptedAt": None,
+        "acceptanceReason": None,
     }]
 
 
@@ -3613,11 +3618,16 @@ def test_count_slot_without_boundary_bad_generation_returns_indeterminate_slotre
     result = ll.count(repo, batch)
     assert result["resolved"] is True
     assert result["slots"] == [{
+        "launchId": launch_id,
+        "issue": 656,
         "slot": _SLOT_A,
         "generation": -1,
         "slotRef": None,
         "strength": None,
         "weakerAccepted": False,
+        "acceptedBy": None,
+        "acceptedAt": None,
+        "acceptanceReason": None,
     }]
 
 
@@ -3650,3 +3660,166 @@ def test_boundary_record_weaker_acceptance_bad_timestamp_refuses():
     result = ll.boundary_record(verdict, weaker_acceptance=acceptance)
     assert result["ok"] is False
     assert result["reason"] == "ledger-boundary-weaker-acceptance-invalid"
+
+
+def test_reserved_boundary_weaker_without_acceptance_fields_refuses():
+    # axis: fold enforces weaker acceptance cross-field invariants
+    block = _strong_boundary_block(
+        strength=pilot_boundary.STRENGTH_WEAKER,
+        weakerAccepted=True,
+        acceptedBy=None,
+        acceptedAt=None,
+        acceptanceReason=None,
+    )
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=block,
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:boundary-acceptance-required"
+
+
+def test_reserved_boundary_strong_with_acceptance_fields_refuses():
+    block = _strong_boundary_block(
+        weakerAccepted=False,
+        acceptedBy="owner",
+        acceptedAt="2026-01-01T00:00:00Z",
+        acceptanceReason="miswired",
+    )
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=block,
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:boundary-acceptance-forbidden"
+
+
+def test_reserved_boundary_weaker_accepted_mismatch_refuses():
+    block = _strong_boundary_block(
+        strength=pilot_boundary.STRENGTH_WEAKER,
+        weakerAccepted=False,
+    )
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=block,
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:boundary-weakerAccepted-strength"
+
+
+def test_reserved_boundary_accepted_at_empty_refuses():
+    block = _strong_boundary_block(
+        strength=pilot_boundary.STRENGTH_WEAKER,
+        weakerAccepted=True,
+        acceptedBy="owner",
+        acceptedAt="",
+        acceptanceReason="accepted weaker guarantee",
+    )
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=block,
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:boundary-nullable"
+
+
+def test_reserved_boundary_verified_at_not_iso_refuses():
+    block = _strong_boundary_block(verifiedAt="not-a-timestamp")
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=block,
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:boundary-verifiedAt"
+
+
+def test_boundary_record_material_reason_refuses_on_compose():
+    # axis: boundary_record scans acceptanceReason when material is supplied
+    policy = dict(_SLOT_POLICY)
+    material = pilot_policy.policy_material(policy)
+    verdict = _passing_verdict(policy, strength=pilot_boundary.STRENGTH_WEAKER)
+    acceptance = {
+        "acceptedBy": "owner",
+        "acceptedAt": "2026-01-01T00:00:00Z",
+        "reason": material["connection-detail"][0],
+    }
+    result = ll.boundary_record(
+        verdict, weaker_acceptance=acceptance, material=material,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-boundary-material-in-record"
+
+
+def test_boundary_record_material_on_reserved_detectable(tmp_path, monkeypatch):
+    # axis: production path — material in acceptanceReason survives to reserved record
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    policy = dict(_SLOT_POLICY)
+    material = pilot_policy.policy_material(policy)
+    verdict = _passing_verdict(policy, strength=pilot_boundary.STRENGTH_WEAKER)
+    acceptance = {
+        "acceptedBy": "owner",
+        "acceptedAt": "2026-01-01T00:00:00Z",
+        "reason": material["connection-detail"][0],
+    }
+    composed = ll.boundary_record(verdict, weaker_acceptance=acceptance)
+    assert composed["ok"] is True
+    batch = "b-material"
+    _declare(repo, batch, 1)
+    rec = _reserved(
+        "l1", batch, ["a"], repo,
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=composed["record"],
+    )
+    ll.reserve(repo, rec)
+    folded = ll.fold(ll.read(repo)["records"])
+    stored = folded["launches"]["l1"]["boundary"]
+    with pytest.raises(pilot_policy.PilotPolicyError):
+        pilot_policy.assert_results_only(stored, material)
+    guarded = ll.boundary_record(
+        verdict, weaker_acceptance=acceptance, material=material,
+    )
+    assert guarded["ok"] is False
+    assert guarded["reason"] == "ledger-boundary-material-in-record"
+
+
+def test_count_slots_join_identifies_refused_lane(tmp_path, monkeypatch):
+    # axis: count slots block joins launchId/issue to identify refused lane's slot
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-join"
+    boundary_a = _strong_boundary_block()
+    boundary_b = _strong_boundary_block(
+        slotRef=pilot_slot.format_slot_ref("slot-b", _SLOT_GEN),
+    )
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved(
+        "l-ok", batch, ["a"], repo,
+        issue=100,
+        slot=_SLOT_A, generation=_SLOT_GEN, boundary=boundary_a,
+    ))
+    ll.reserve(repo, _reserved(
+        "l-refused", batch, ["b"], repo,
+        issue=200,
+        slot="slot-b", generation=_SLOT_GEN, boundary=boundary_b,
+    ))
+    path = _ledger_file(repo, os.environ)
+    _append_raw(path, _started("l-ok"))
+    _append_raw(path, _outcome("l-ok"))
+    _append_raw(path, _refused("l-refused"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    slots_by_launch = {entry["launchId"]: entry for entry in result["slots"]}
+    assert slots_by_launch["l-refused"]["issue"] == 200
+    assert slots_by_launch["l-refused"]["slot"] == "slot-b"
+    assert slots_by_launch["l-ok"]["issue"] == 100
+    refused_lane = next(
+        lane for lane in result["laneDetail"] if lane["issue"] == 200
+    )
+    assert refused_lane["terminalKind"] == "refused"
+    assert result["counts"]["refusedToLaunch"] == 1
+    assert slots_by_launch["l-refused"]["slotRef"] == boundary_b["slotRef"]

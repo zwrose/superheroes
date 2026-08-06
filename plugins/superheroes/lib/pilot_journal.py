@@ -809,9 +809,9 @@ def _stamp_replay(result, journal_path, slot_ref):
     return result
 
 
-def _parse_lines_to_records(lines):
+def _parse_lines_to_records(lines, *, line_offset=0):
     parsed_records = []
-    for line_no, line in enumerate(lines, start=1):
+    for line_no, line in enumerate(lines, start=1 + line_offset):
         if not line.strip():
             continue
         try:
@@ -1040,6 +1040,7 @@ def replay_sources(paths, *, slot_ref=None, journal_path=None):
     parsed_records = []
     aggregate_torn = False
     any_nonempty = False
+    line_offset = 0
 
     for path in paths:
         if not _is_str_path(path):
@@ -1064,9 +1065,11 @@ def replay_sources(paths, *, slot_ref=None, journal_path=None):
             aggregate_torn = True
         if read_result["text"]:
             any_nonempty = True
+            file_lines = read_result["text"].splitlines()
             parsed_records.extend(
-                _parse_lines_to_records(read_result["text"].splitlines())
+                _parse_lines_to_records(file_lines, line_offset=line_offset)
             )
+            line_offset += len(file_lines)
 
     if aggregate_torn and not any_nonempty:
         return _stamp_replay(
