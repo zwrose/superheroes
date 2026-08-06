@@ -1976,8 +1976,9 @@ non-application.
 The broker-admission guarantee does not hold in general: several public entry points in
 `pilot_browser.py` can leak a **builtin** exception once an input gets past outer shape
 validation.
-The raise sites below are **the ones found so far**; a shape-validation-only hostile-input sweep
-missed several of them, so this set is explicitly **not** established as complete.
+The raise sites below are **the ones found so far**; two successive hostile-input sweeps have
+each discovered sites the previous sweep missed, so this list is a **floor**, not an inventory —
+it is explicitly **not** established as complete.
 
 - **`validate_pin` raises `PilotBrowserError` by design** — it is exception-only, not a
   refusal-returning function; callers are expected to catch the domain exception (e.g.
@@ -1993,9 +1994,13 @@ missed several of them, so this set is explicitly **not** established as complet
   in the path raises `ValueError`, which that handler does not catch.
 - **`socket_dir_plan` can raise builtin `TypeError`** when `platform` is unhashable (e.g.
   `platform=[]` or `platform={}`) — a recognised validation input, not a call-shape error.
+- **`socket_dir_plan` can also raise builtin `UnicodeEncodeError`** when `launch_token` contains a
+  surrogate (e.g. `launch_token="\udc80"`) while measuring the socket path — the same category as
+  its `TypeError` entry above.
 - **`create_socket_dir` can raise builtin `ValueError`** on a NUL-containing path (e.g.
-  `path="a\x00b"`): `os.path.islink(path)` and `os.makedirs(path)` sit in a `try/except OSError`,
-  and a NUL path raises `ValueError`, which that handler does not catch.
+  `path="a\x00b"`): the `islink`/`lexists` pre-checks return `False` for a NUL path rather than
+  raising, so the path reaches the guarded block, and `os.makedirs` then raises `ValueError` inside
+  a `try/except OSError` that does not catch it.
 - **`plan_topology` can raise builtin `TypeError`** when `accounts` is not iterable despite a valid
   `slot_ref` (e.g. `plan_topology("slot-a@1", None)` or `plan_topology("slot-a@1", 0)`): `for
   entry in accounts` executes directly with no iterability check.
@@ -2013,10 +2018,14 @@ missed several of them, so this set is explicitly **not** established as complet
 A **common cause** runs through most of these: a `try/except OSError` around a path syscall does
 not catch the `ValueError` a NUL byte produces, and `_is_str_path` accepts any `str`.
 
-`provision_server` takes a **required** `effect_id`, and the two ways to get that wrong land
-differently: **omitting** it raises `TypeError` at the call, as any Python call missing an argument
-does — a call-shape error, not a recognised validation failure — while an `effect_id` that is
-*supplied* but unusable refuses (`browser-server-record-invalid`).
+Several entry points raise builtin `TypeError` on **call-shape errors** — supplying a non-callable
+where a callable is required, or omitting a required argument — rather than refusing. These are
+the same class of mistake as calling the API wrong, not a recognised validation failure that leaks
+through shape checks: **`assert_browser_is_server_child`** when `ppid_of` is not callable (e.g.
+`ppid_of=0`), **`provision_server`** when `ppid_of` is not callable, **`teardown_server`** when
+`observe_exit` is not callable (e.g. `observe_exit=0`), and **`provision_server`** when
+`effect_id` is **omitted** at the call, as any Python call missing an argument does. An
+`effect_id` that is *supplied* but unusable still refuses (`browser-server-record-invalid`).
 
 Every browser instruction travels through the per-generation server, which is why admission is
 where a stale generation dies. `admit` is the fencing chokepoint: it requires `slots_dir` and
