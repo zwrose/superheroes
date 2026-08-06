@@ -128,3 +128,65 @@ def test_resolve_no_calibration_refusal_when_core_present(tmp_path):
             "confirmed", "2026-06-26", "2026-06-26"))
     out = RC.resolve(repo, root=store)
     assert out["calibrationRefusal"] is None
+
+
+def _init_repo(path):
+    import subprocess
+    subprocess.run(["git", "-C", str(path), "init", "-q"], check=True)
+
+
+def _empty_store_root(tmp_path):
+    d = tmp_path / "empty_store"
+    d.mkdir()
+    return str(d)
+
+
+def _ensure_global_unified_layer(repo, store_root):
+    import mode_registry as mr
+    store = mr.ensure_project_store(repo, root=store_root)
+    cfg = os.path.join(store, "config")
+    os.makedirs(cfg, exist_ok=True)
+    layer = os.path.join(cfg, "review-crew.md")
+    with open(layer, "w") as fh:
+        fh.write("## Focus hints\n- code: x\n")
+    return layer
+
+
+def test_resolve_raises_on_unresolvable_root(tmp_path, isolated_default_store_root):
+    import calibration_resolve as cr
+    import pytest
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = isolated_default_store_root
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    with pytest.raises(cr.UnresolvableRootError):
+        RC.resolve(str(repo), root=empty)
+
+
+def test_resolve_fallopen_when_calibration_resolve_unimportable(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    out = RC.resolve(str(tmp_path))
+    assert out["verifyCommand"] == "none"
+    assert out["verifyMode"] is None
+    assert out["tiers"]["fixer"] == "sonnet"
+
+
+def test_resolve_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeypatch):
+    import types
+    import sys
+
+    stub = types.ModuleType("calibration_resolve")
+
+    def _boom(*_a, **_kw):
+        raise RuntimeError("boom")
+
+    stub.resolve = _boom
+    monkeypatch.setitem(sys.modules, "calibration_resolve", stub)
+    out = RC.resolve(str(tmp_path))
+    assert out["verifyCommand"] == "none"
+    assert out["verifyMode"] is None
