@@ -1673,6 +1673,16 @@ def test_end_effect_refuses_invalid_kind(tmp_dir):
     assert not os.path.exists(path)
 
 
+def test_end_effect_argument_precedence_kind_beats_outcome(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="eff1",
+        kind="bogus-kind", outcome="bogus-outcome", at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_KIND_UNKNOWN}
+    assert not os.path.exists(path)
+
+
 def test_end_effect_refuses_torn_journal(tmp_dir):
     path = _journal(tmp_dir)
     begin = pj.begin_effect(

@@ -925,9 +925,15 @@ Optional `reason` string — `end_effect()` accepts a `reason` with **any** outc
 only for verification; it is **not** written into the end record. On-disk end record shapes and
 `schemaVersion` are unchanged.
 
+Argument validation order: `journal_path` → `slot_ref` → `effect_id` → `kind` → `outcome` →
+`at` → `reason`; first failure wins, all before any file access.
+
 Before appending, the writer scans the journal (under the write lock, in the same lock hold as
-the append) for every parsed record whose `effectId` equals `effect_id`. Precedence (first match
-wins):
+the append) for every parsed record whose `effectId` equals `effect_id`. Write-path preconditions
+run inside the append path before the verify hook: an unwritable parent directory (symlinked
+parent, parent exists but is not a directory, or failed `makedirs`) or a lock that cannot be
+acquired within the timeout refuses `journal-write-failed` before origin verification runs at all.
+Precedence (first match wins):
 
 | Condition | Refusal |
 |---|---|
@@ -943,12 +949,17 @@ wins):
 | otherwise | proceed with the append |
 
 A parseable record counts by its `phase` and `effectId` whether or not it is a valid record. An
-unparseable line cannot match. A torn trailing line is dropped before the scan (same rule as
-replay), but a torn journal **refuses** the close rather than repairing the file — the partial
-tail stays on disk so reclaim and human inspection retain the evidence. `replay()` torn handling
-is unchanged: it still returns `ok: true` with `torn: true` and pairs what it can. A missing
-journal file is treated as `journal-effect-origin-missing` during close; replay still treats a
-missing journal as `journal-unreadable`.
+unparseable line cannot match. For `replay()`, a torn trailing line (file does not end with
+newline) is dropped before the record loop — pairing proceeds on the truncated text. On
+`end_effect` close, the torn check returns **before** the record scan: nothing is appended, the
+partial tail stays on disk, and no scan runs. The `journal-torn` refusal fires only while the
+journal still ends mid-record; `begin_effect` does not verify origin, so once any record is
+appended after a tear the file no longer reads as torn and a subsequent close surfaces
+`journal-effect-origin-missing` instead of `journal-torn` — the glued bytes remain on disk but are
+no longer recoverable as a record and no longer detectable as torn. `replay()` torn handling is
+unchanged: it still returns `ok: true` with `torn: true` and pairs what it can. A missing journal
+file is treated as `journal-effect-origin-missing` during close; replay still treats a missing
+journal as `journal-unreadable`.
 
 On any refusal, **nothing is appended** — the open `begin` stays open and replays as
 `possibly-applied`.
@@ -1002,7 +1013,7 @@ from proving applied or not-applied.
 |---|---|
 | `journal-unreadable` | journal file cannot be read during replay **or during `end_effect` close-time origin verification** (`replay`, `end_effect`) |
 | `journal-torn` | `end_effect`: journal torn (last record incomplete) — close refused, nothing appended |
-| `journal-write-failed` | append or fsync failed (`begin_effect`, `end_effect` write path); `begin_effect` also returns this for a symlink, FIFO, or directory at the journal path |
+| `journal-write-failed` | parent-directory setup failure (symlinked parent, parent exists but is not a directory, `makedirs` failure), lock acquisition failure, append or fsync failure, or a symlink, FIFO, or directory at the journal path (`begin_effect`, `end_effect` write path) |
 | `journal-record-invalid` | record shape, timestamp, or serialisable `detail` fails validation |
 | `journal-effect-kind-unknown` | `kind` is not in `EFFECT_KINDS` |
 | `journal-outcome-invalid` | `outcome` is not in `END_OUTCOMES` |
