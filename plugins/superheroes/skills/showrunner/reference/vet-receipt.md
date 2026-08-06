@@ -63,7 +63,7 @@ shape is wrong and the thinking wins.
    item keeps **this vet's ordinal as its proposing ordinal** for the later deferred append. Each
    pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
-   re-derivation),    and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
+   re-derivation), and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
    assigned at the vet that proposed the item (the same vet when proposed and appended together; the
    earlier proposing vet when an append was deferred). **State this vet's own ordinal alongside the
    pending set**, so

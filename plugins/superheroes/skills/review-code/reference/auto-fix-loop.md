@@ -423,6 +423,30 @@ never drop a finding or a lens.
 > a timed-out **fixer** commits no external write and the fix falls open to Claude. A hang becomes a
 > bounded cost, never a stuck loop.
 >
+> **Settled dispatch contract (issue #865).** The reconciliation between this skill's dispatch
+> behaviour and the builder's native-shape rule is **closed** — not an open migration:
+>
+> 1. **External-engine seats (`codex`/`cursor`) satisfy the native-shape rule.** Each runs through
+>    `dispatch-review` with `--run-dir` and `--max-wait 540`, re-invoked on the same run directory
+>    until the structured result is terminal — the originating-verb continuation loop above.
+>    **Claude seats** are native subagents (the `await-dispatches` ruling's native-subagent lifecycle
+>    exemption); the runner cannot dispatch them. A build whose review seats ran through the runner
+>    or as claude native subagents under this skill **owes no native-shape limitation disclosure**
+>    for those seats.
+> 2. **The in-place fixer is a reasoned, permanent exemption — not unfinished work.** It deliberately
+>    stays a foreground Bash dispatch bounded by the `PreToolUse(Bash)` structural floor; see **Why the
+>    in-place fixer is not a `dispatch-write` consumer** above. Adopting the write verb there would
+>    require changing the auto-fix path's checkout model, which is not on the table.
+> 3. **Two owners, one boundary — bounds vs channel.** This skill owns the **bounds** of the
+>    dispatches it launches — slice size (`--max-wait 540`, never zero), structural timeout, retry
+>    ladder, and the standing rule that the caller composes **no** per-dispatch watchdog. The builder's
+>    `await-dispatches` ruling governs the **channel** for dispatches **the builder itself launches**.
+>    Timeout contract stays the skill's; channel duty attaches to what the builder launches.
+> 4. **The native-shape limitation disclosure is retired for runner-dispatched and claude-native
+>    seats**, not blanket. The **hand-rolled engine fallback** below does not follow the native shape
+>    (`--run-dir`, `--max-wait`, originating-verb continuation) — a round that used it **still owes
+>    that disclosure**.
+>
 > **Hand-rolled engine dispatch — stdin form, empty-prompt guard, portable timeout (#563).** Prefer the
 > supervised runner above; when a builder hand-rolls an engine CLI dispatch (exactly when the adapter
 > path fails), three verified rules keep it from wedging:
