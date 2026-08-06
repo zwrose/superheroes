@@ -36,8 +36,10 @@ def _collect_ids(hash_seed):
             _TARGET,
             "--collect-only",
             "-q",
-            # Hermetic: never let a distribution/ordering plugin, or a written cache,
-            # differ between the two runs and mask (or fake) an ID difference.
+            # Pinned condition: xdist/randomly/cacheprovider are disabled so the two runs
+            # differ only in hash seed. Made unobservable by the pin: ID perturbation caused
+            # BY one of those plugins rather than by the `ids=` callable itself — this guard
+            # covers the callable, which is where #894's defect and its class live.
             "-p",
             "no:xdist",
             "-p",
@@ -64,6 +66,8 @@ def test_malformed_input_parametrize_ids_are_process_independent():
     first = _collect_ids("0")
     second = _collect_ids("1")
 
+    # Axis 1 — cross-process AGREEMENT: the same file collects byte-identical node IDs in two
+    # fresh processes. Bites on any `ids=` output that varies with process-local state.
     assert first == second, (
         "two independent --collect-only runs of %s disagree on test IDs — a parametrize `ids=` "
         "is leaking process-local state (a memory address, a hash-ordered repr), which aborts "
@@ -75,6 +79,8 @@ def test_malformed_input_parametrize_ids_are_process_independent():
         )
     )
 
+    # Axis 2 — ADDRESS SHAPE: no collected ID carries a `0x…` pointer. Independent of axis 1,
+    # which two processes can satisfy by chance (or with a constant address literal baked in).
     leaked = sorted({node_id for node_id in first if _ADDRESS.search(node_id)})
     assert not leaked, (
         "test IDs in %s embed a memory address (`0x…`), which differs per process and aborts "
