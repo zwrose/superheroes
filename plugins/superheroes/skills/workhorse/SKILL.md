@@ -422,11 +422,11 @@ without a tool call.
   `dispatch-write` with `--max-wait` (≤ **540 s**, a hard cap the runner **refuses past, never
   clamps** — an over-cap or negative value comes back `unrunnable` with detail
   `max-wait-out-of-range:<value>:allowed=0..540`, nothing opened and nothing spawned, so waiting
-  longer than the cap means **omitting the flag and polling**, never passing a bigger number; the
-  slice you do pass must be **positive** — a zero slice is accepted but returns `running`
-  **without starting an attempt at all**, so it is never a valid dispatch; a `running` result whose
-  attempt count is **zero** means nothing was launched — re-invoke with a positive slice rather than
-  continuing to poll) — **never** wrapped in
+  longer than the cap means **omitting the flag and polling**, never passing a bigger number;
+  a zero slice is a legal **open-and-return-now** — it opens the run and returns `running`
+  **without starting an attempt at all**, so on its own it completes nothing; a `running` result whose
+  attempt count is **zero** means nothing has launched **yet** — re-invoke the same verb on the same
+  `--run-dir` with a positive slice rather than continuing to poll) — **never** wrapped in
   `setsid`/`nohup`,
   because the host grant matches a **prefix** and a wrapped command no longer matches it. Invoke
   through the authorized entrypoint; redirect stdout and stderr to **files, never pipes** (a pipe

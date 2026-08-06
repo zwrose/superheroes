@@ -1,5 +1,6 @@
 import ast
 import fcntl
+import inspect
 import json
 import os
 import signal
@@ -7,6 +8,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 
 import pytest
@@ -395,8 +397,14 @@ def test_record_outcome_already_terminal(tmp_path, monkeypatch):
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
     result = ll.record_outcome(repo, "l1", "handback", "again")
-    assert result["ok"] is False
-    assert result["reason"] == "outcome-already-terminal"
+    assert result == {
+        "ok": True,
+        "reason": None,
+        "recorded": "amendment",
+        "amendmentKind": "reoutcome",
+        "attemptedOutcome": "handback",
+        "terminalOutcome": "handback",
+    }
 
 
 def test_record_outcome_invalid_value(tmp_path, monkeypatch):
@@ -482,8 +490,8 @@ def test_count_indeterminate_on_unresolved_member(tmp_path, monkeypatch):
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-unresolved"
     _declare(repo, batch, 2)
-    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo))
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=101))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=102))
     path = _ledger_file(repo, os.environ)
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     ll.record_outcome(repo, "l1", "handback", "done")
@@ -896,8 +904,8 @@ def test_edge12_count_indeterminate_when_reservations_above_declared(tmp_path, m
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-over"
     _declare(repo, batch, 1)
-    ll.reserve(repo, _reserved("l1", batch, ["a"], repo))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo))
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=201))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=202))
     path = _ledger_file(repo, os.environ)
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
@@ -2152,6 +2160,1119 @@ def test_terminalize_probes_every_started_attempt(tmp_path, monkeypatch):
             live_proc.wait(timeout=5)
         except Exception:
             pass
+
+
+def _amendment(launch_id, kind, value, note):
+    return {
+        "event": "amendment",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "kind": kind,
+        "value": value,
+        "note": note,
+    }
+
+
+# --- WO-864 post-terminal accounting -----------------------------------------
+
+
+def test_rehandback_end_to_end(tmp_path, monkeypatch):
+    # axis: genuine re-handback cycle surfaces in count
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-rehandback"
+    launch = "launch-rehandback"
+    assert _declare(repo, batch, 1)["ok"]
+    assert ll.reserve(repo, _reserved(launch, batch, ["a"], repo))["ok"]
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    first = ll.record_outcome(repo, launch, "handback", "first")
+    assert first == {
+        "ok": True,
+        "reason": None,
+        "recorded": "outcome",
+        "amendmentKind": None,
+        "attemptedOutcome": "handback",
+        "terminalOutcome": "handback",
+    }
+    second = ll.record_outcome(repo, launch, "handback", "second")
+    assert second["ok"] is True
+    assert second["recorded"] == "amendment"
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["handback"] == 1
+    assert result["amendments"]["reoutcome"] == 1
+    assert result["amendments"]["rehandback"] == 1
+    assert result["amendedLaunches"] == 1
+
+
+def test_second_write_on_park_counts_reoutcome_not_rehandback(tmp_path, monkeypatch):
+    # axis: rehandback is handback-over-handback only
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-park-reoutcome"
+    launch = "launch-park"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "park", "blocked")
+    ll.record_outcome(repo, launch, "handback", "retry")
+    result = ll.count(repo, batch)
+    assert result["amendments"]["reoutcome"] == 1
+    assert result["amendments"]["rehandback"] == 0
+
+
+@pytest.mark.parametrize("ruling", list(ll.VET_RULINGS))
+def test_vet_amendment_each_ruling(tmp_path, monkeypatch, ruling):
+    # axis: vet amendments tally per ruling
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-vet-%s" % ruling
+    launch = "launch-vet"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", "done")
+    result = ll.amend(repo, launch, "vet", ruling, "advisor reason")
+    assert result["ok"] is True
+    counted = ll.count(repo, batch)
+    key = "vet" + "".join(part.capitalize() for part in ruling.split("-"))
+    assert counted["amendments"][key] == 1
+    assert counted["amendments"]["total"] == 1
+
+
+def test_evidence_amendment(tmp_path, monkeypatch):
+    # axis: evidence amendments tally
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-evidence"
+    launch = "launch-evidence"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", "original")
+    assert ll.amend(repo, launch, "evidence", "corrected", "typo")["ok"]
+    result = ll.count(repo, batch)
+    assert result["amendments"]["evidence"] == 1
+    assert result["amendedLaunches"] == 1
+
+
+def test_amend_unknown_launch(tmp_path, monkeypatch):
+    # axis: amend-unknown-launch
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    result = ll.amend(repo, "missing", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-unknown-launch"
+
+
+def test_amend_not_terminal(tmp_path, monkeypatch):
+    # axis: amend-not-terminal
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-not-terminal"
+
+
+@pytest.mark.parametrize("kind", ["bogus", 42])
+def test_amend_kind_invalid(tmp_path, monkeypatch, kind):
+    # axis: amend-kind-invalid
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.amend(repo, "l1", kind, "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-kind-invalid:%s" % kind
+
+
+def test_amend_value_invalid_for_vet(tmp_path, monkeypatch):
+    # axis: amend-value-invalid
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.amend(repo, "l1", "vet", "bogus", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-value-invalid:bogus"
+
+
+def test_amend_value_empty(tmp_path, monkeypatch):
+    # axis: amend-value-empty
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.amend(repo, "l1", "vet", "", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-value-empty"
+
+
+def test_amend_note_empty(tmp_path, monkeypatch):
+    # axis: amend-note-empty
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.amend(repo, "l1", "vet", "ready", "")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-note-empty"
+
+
+def test_amend_ledger_unreadable_torn_tail(tmp_path, monkeypatch):
+    # axis: ledger-unreadable on torn tail
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    path = _ledger_file(repo, os.environ)
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    with open(path, "wb") as fh:
+        fh.write(raw.rstrip(b"\n"))
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-unreadable:tornTail"
+
+
+def test_amend_lock_unavailable(tmp_path, monkeypatch):
+    # axis: lock-unavailable
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    lock_result = ll._ensure_lock_file(repo)
+    import file_lock
+    file_lock.acquire(lock_result["path"])
+    os.chmod(lock_result["path"], 0o600)
+    try:
+        result = ll.amend(repo, "l1", "vet", "ready", "reason", lock_timeout=0.1)
+        assert result["ok"] is False
+        assert result["reason"] == "lock-unavailable"
+    finally:
+        file_lock.release(lock_result["path"])
+
+
+def test_amend_ledger_append_failed(tmp_path, monkeypatch):
+    # axis: ledger-append-failed
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    monkeypatch.setattr(ll, "append", lambda *a, **k: False)
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-append-failed"
+
+
+def test_amend_fold_refusal_propagated(tmp_path, monkeypatch):
+    # axis: fold reason propagated unchanged
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    original_fold = ll.fold
+
+    def rejecting_fold(records):
+        if any(r.get("event") == "amendment" for r in records):
+            return {"ok": False, "reason": "fold-reject-amendment",
+                    "launches": {}, "batchDeclarations": {}}
+        return original_fold(records)
+
+    monkeypatch.setattr(ll, "fold", rejecting_fold)
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "fold-reject-amendment"
+
+
+def test_record_outcome_amend_failed(tmp_path, monkeypatch):
+    # axis: amend-failed on second record_outcome
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    monkeypatch.setattr(ll, "amend", lambda *a, **k: {"ok": False, "reason": "lock-unavailable"})
+    result = ll.record_outcome(repo, "l1", "handback", "again")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-failed:lock-unavailable"
+    assert result["recorded"] is None
+
+
+def test_record_outcome_invalid_on_terminal_stays_plain_refusal(tmp_path, monkeypatch):
+    # axis: garbage on terminal lane never becomes amendment
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.record_outcome(repo, "l1", "bogus", "evidence")
+    assert result["ok"] is False
+    assert result["reason"] == "outcome-invalid:bogus"
+    assert result["recorded"] is None
+    result2 = ll.record_outcome(repo, "l1", "handback", "   ")
+    assert result2["ok"] is False
+    assert result2["reason"] == "outcome-evidence-empty"
+    assert result2["recorded"] is None
+
+
+def test_fold_amendment_before_terminal(tmp_path):
+    # axis: fold-amendment-before-terminal
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a")]
+    records.append(_amendment("a", "vet", "ready", "too early"))
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-amendment-before-terminal:a"
+
+
+def test_fold_amendment_orphan(tmp_path):
+    # axis: fold-orphan-event for amendment on unknown launch
+    result = ll.fold([_amendment("orphan", "vet", "ready", "reason")])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-orphan-event:orphan"
+
+
+def test_fold_second_outcome_still_conflicting_terminal(tmp_path):
+    # axis: fold-conflicting-terminal preserved
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a"), _outcome("a")]
+    records.append(_outcome("a"))
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-conflicting-terminal:a"
+
+
+def test_append_accepts_amendment(tmp_path, monkeypatch):
+    # axis: append accepts amendment records
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    count_before = len(ll.read(repo)["records"])
+    assert ll.append(repo, _amendment("l1", "vet", "ready", "reason"))
+    assert len(ll.read(repo)["records"]) == count_before + 1
+
+
+def test_append_under_lock_accepts_amendment(tmp_path, monkeypatch):
+    # axis: append_under_lock accepts amendment on terminal lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.append_under_lock(repo, _amendment("l1", "vet", "ready", "reason"))
+    assert result["ok"] is True
+    assert len(ll.read(repo)["records"]) == count_before + 1
+
+
+def test_count_indeterminate_includes_zero_amendments(tmp_path, monkeypatch):
+    # axis: indeterminate count still carries zeroed amendments
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    result = ll.count(repo, "missing-batch")
+    assert result["indeterminate"] is True
+    assert result["amendments"] == ll._zero_amendments()
+    assert result["amendedLaunches"] == 0
+    assert result["lanes"] == {"declared": 0, "resolved": 0}
+    assert result["attempts"] == {
+        "total": 0, "extra": 0, "outcomes": ll._zero_attempt_outcomes(),
+    }
+    assert result["laneDetail"] == []
+
+
+def test_lane_sequential_retries_same_issue_resolve(tmp_path, monkeypatch):
+    # axis: sequential same-issue rows fold as one lane with attempts
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-retry-lane"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=501))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=501))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["total"] == 1
+    assert result["counts"]["handback"] == 1
+    assert result["attempts"]["total"] == 2
+    assert result["attempts"]["extra"] == 1
+    assert result["attempts"]["outcomes"]["park"] == 1
+    assert result["laneDetail"] == [{
+        "issue": 501,
+        "attempts": 2,
+        "outcome": "handback",
+        "terminalKind": "outcome",
+        "attemptOutcomes": ["park", "handback"],
+    }]
+
+
+def test_lane_concurrent_same_issue_refuses(tmp_path, monkeypatch):
+    # axis: overlapping same-lane launches refuse before unresolved
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-concurrent"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=601))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=601))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:601"
+
+
+def test_lane_concurrent_same_issue_interleaved_refuses(tmp_path, monkeypatch):
+    # axis: the comparison leg of the lane-sequencing guard (earlier_terminal >= later reservedIndex)
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-interleaved"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=602))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=602))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:602"
+
+
+def test_lane_sequential_same_issue_tightest_boundary_resolves(tmp_path, monkeypatch):
+    # axis: strictly sequential rows at the >= boundary resolve as one lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-seq-boundary"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=603))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=603))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    folded = ll.fold(ll.read(repo)["records"])
+    l1 = folded["launches"]["l1"]
+    l2 = folded["launches"]["l2"]
+    assert l1["terminalIndex"] == l2["reservedIndex"] - 1
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["attempts"]["extra"] == 1
+    assert result["counts"]["handback"] == 1
+    assert result["attempts"]["outcomes"]["park"] == 1
+
+
+def test_count_partitions_final_into_counts_not_attempt_outcomes(tmp_path, monkeypatch):
+    # axis: each launch row lands in exactly one tally (counts vs attempts.outcomes)
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-partition"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=701))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="died"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=701))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    counts = result["counts"]
+    outcomes = result["attempts"]["outcomes"]
+    assert counts["handback"] == 1
+    assert outcomes["handback"] == 0
+    assert outcomes["died"] == 1
+    assert counts["died"] == 0
+    counts_sum = sum(counts[k] for k in counts if k != "total")
+    outcomes_sum = sum(outcomes.values())
+    assert counts_sum + outcomes_sum == result["attempts"]["total"]
+
+
+def test_lane_issue_invalid_zero_refuses(tmp_path, monkeypatch):
+    # axis: issue 0 never becomes a lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-issue-zero"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=0))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_lane_issue_invalid_string_refuses(tmp_path, monkeypatch):
+    # axis: non-int issue never becomes a lane
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-issue-str"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue="656"))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_lane_issue_invalid_bool_refuses(tmp_path, monkeypatch):
+    # axis: bool issue never becomes a lane (bool subclasses int)
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-issue-bool"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=True))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_lane_declared_with_zero_rows_refuses(tmp_path, monkeypatch):
+    # axis: fewer distinct lanes than declared is batch-reservation-mismatch
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-missing-lane"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=701))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-reservation-mismatch"
+
+
+def test_lane_final_refused_headline_with_earlier_attempts(tmp_path, monkeypatch):
+    # axis: final refused attempt is headline; earlier outcomes in attempts only
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-final-refused"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=801))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=801))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l2"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["refusedToLaunch"] == 1
+    assert result["counts"]["park"] == 0
+    assert result["attempts"]["outcomes"]["park"] == 1
+
+
+def test_lane_retry_event_between_attempts_no_effect(tmp_path, monkeypatch):
+    # axis: retry between attempts does not affect sequencing or tallies
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-retry-event"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=901))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), {
+        "event": "retry",
+        "launchId": "l1",
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "reason": "spawn",
+        "delaySeconds": 0,
+    })
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=901))
+    _append_raw(_ledger_file(repo, os.environ), _started("l2"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["handback"] == 1
+    assert result["attempts"]["outcomes"]["park"] == 1
+
+
+def test_lane_late_declaration_wins_over_concurrency(tmp_path, monkeypatch):
+    # axis: batch-declaration-after-reservations wins over concurrency guard
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-late-decl-concurrent"
+    path = _ledger_file(repo, os.environ)
+    reserved1 = _reserved("l1", batch, ["a"], repo, issue=1001)
+    reserved1["ts"] = 100.0
+    ll.reserve(repo, reserved1)
+    _append_raw(path, _started("l1"))
+    reserved2 = _reserved("l2", batch, ["a"], repo, issue=1001)
+    reserved2["ts"] = 150.0
+    ll.reserve(repo, reserved2)
+    _append_raw(path, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "expectedLaunches": 1,
+        "ts": 200.0,
+        "schema": ll.SCHEMA,
+    })
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-declaration-after-reservations"
+
+
+def test_count_result_blocks_anchor_to_real_count_keys(tmp_path, monkeypatch):
+    """§11 drift chain: COUNT_RESULT_BLOCKS and CHARTER_NAMED_COUNT_BLOCKS trace to count() keys."""
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-count-blocks"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=501))
+    path = _ledger_file(repo, os.environ)
+    _append_raw(path, _started("l1"))
+    _append_raw(path, _outcome("l1", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    for block in ll.COUNT_RESULT_BLOCKS:
+        assert block in result, (
+            "COUNT_RESULT_BLOCKS name %r not a key of count() result" % block
+        )
+    for block in ll.CHARTER_NAMED_COUNT_BLOCKS:
+        assert block in ll.COUNT_RESULT_BLOCKS, (
+            "CHARTER_NAMED_COUNT_BLOCKS name %r not in COUNT_RESULT_BLOCKS" % block
+        )
+
+
+def test_lane_sequential_reversed_timestamps_still_resolves(tmp_path, monkeypatch):
+    # axis: index-based sequencing ignores reversed wall-clock ts
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-seq-rev-ts"
+    path = _ledger_file(repo, os.environ)
+    _declare(repo, batch, 1)
+    r1 = _reserved("l1", batch, ["a"], repo, issue=701)
+    r1["ts"] = 300.0
+    ll.reserve(repo, r1)
+    s1 = _started("l1")
+    s1["ts"] = 250.0
+    _append_raw(path, s1)
+    o1 = _outcome("l1", outcome="park")
+    o1["ts"] = 200.0
+    _append_raw(path, o1)
+    r2 = _reserved("l2", batch, ["a"], repo, issue=701)
+    r2["ts"] = 100.0
+    ll.reserve(repo, r2)
+    s2 = _started("l2")
+    s2["ts"] = 50.0
+    _append_raw(path, s2)
+    o2 = _outcome("l2", outcome="handback")
+    o2["ts"] = 10.0
+    _append_raw(path, o2)
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["handback"] == 1
+    assert result["counts"]["park"] == 0
+    assert result["attempts"]["outcomes"]["park"] == 1
+    assert result["laneDetail"] == [{
+        "issue": 701,
+        "attempts": 2,
+        "outcome": "handback",
+        "terminalKind": "outcome",
+        "attemptOutcomes": ["park", "handback"],
+    }]
+
+
+def test_lane_overlapping_sequential_timestamps_still_refuses_concurrent(tmp_path, monkeypatch):
+    # axis: index-based concurrency guard ignores sequential-looking ts
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-overlap-seq-ts"
+    path = _ledger_file(repo, os.environ)
+    _declare(repo, batch, 1)
+    r1 = _reserved("l1", batch, ["a"], repo, issue=801)
+    r1["ts"] = 100.0
+    ll.reserve(repo, r1)
+    r2 = _reserved("l2", batch, ["b"], repo, issue=801)
+    r2["ts"] = 500.0
+    ll.reserve(repo, r2)
+    s1 = _started("l1")
+    s1["ts"] = 150.0
+    _append_raw(path, s1)
+    o1 = _outcome("l1", outcome="park")
+    o1["ts"] = 200.0
+    _append_raw(path, o1)
+    s2 = _started("l2")
+    s2["ts"] = 550.0
+    _append_raw(path, s2)
+    o2 = _outcome("l2", outcome="handback")
+    o2["ts"] = 600.0
+    _append_raw(path, o2)
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:801"
+
+
+def test_lane_sequential_nonfinite_timestamp_still_resolves(tmp_path, monkeypatch):
+    # axis: non-finite ts on a sequential lane does not break index-based resolution
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-seq-nan-ts"
+    path = _ledger_file(repo, os.environ)
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=901))
+    _append_raw(path, _started("l1"))
+    o1 = _outcome("l1", outcome="park")
+    o1["ts"] = float("nan")
+    _append_raw(path, o1)
+    ll.reserve(repo, _reserved("l2", batch, ["a"], repo, issue=901))
+    s2 = _started("l2")
+    s2["ts"] = float("inf")
+    _append_raw(path, s2)
+    _append_raw(path, _outcome("l2", outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+
+
+def test_count_duplicate_declaration_beats_invalid_issue(tmp_path, monkeypatch):
+    # axis: declaration validity beats lane-issue validity
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-dup-vs-invalid"
+    _declare(repo, batch, 1)
+    _append_raw(_ledger_file(repo, os.environ), _batch_declared(batch, 1))
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=True))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-duplicate-declaration"
+
+
+def test_count_invalid_issue_beats_reservation_mismatch(tmp_path, monkeypatch):
+    # axis: lane-issue validity beats lane cardinality
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-invalid-vs-mismatch"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=True))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-issue-invalid:l1"
+
+
+def test_count_reservation_mismatch_beats_late_declaration(tmp_path, monkeypatch):
+    # axis: lane cardinality beats late declaration
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-mismatch-vs-late"
+    path = _ledger_file(repo, os.environ)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=1001))
+    _append_raw(path, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "expectedLaunches": 2,
+        "ts": 200.0,
+        "schema": ll.SCHEMA,
+    })
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-reservation-mismatch"
+
+
+def test_count_concurrency_beats_unresolved(tmp_path, monkeypatch):
+    # axis: lane concurrency beats batch-unresolved
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-concurrent-vs-unresolved"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=1101))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=1101))
+    result = ll.count(repo, batch)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-lane-concurrent:1101"
+
+
+@pytest.mark.parametrize("field", ["kind", "value", "note"])
+def test_fold_amendment_missing_field(tmp_path, field):
+    # axis: fold-missing-field:amendment
+    rec = _amendment("a", "vet", "ready", "reason")
+    del rec[field]
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a"), _outcome("a"), rec]
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == "fold-missing-field:amendment:%s" % field
+
+
+def test_terminal_outcome_unchanged_after_amendment(tmp_path, monkeypatch):
+    # axis: terminal record byte-unchanged after amendment; fold projection unchanged too
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    outcome_rec = _outcome("l1", evidence="original-evidence")
+    _append_raw(_ledger_file(repo, os.environ), outcome_rec)
+    path = _ledger_file(repo, os.environ)
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.readlines()
+    outcome_line = [ln for ln in lines if '"event":"outcome"' in ln.replace(" ", "")][0]
+    records_before = ll.read(repo)["records"]
+    folded_before = ll.fold(records_before)
+    info_before = folded_before["launches"]["l1"]
+    ll.amend(repo, "l1", "vet", "not-ready", "advisor ruling")
+    with open(path, encoding="utf-8") as fh:
+        lines_after = fh.readlines()
+    outcome_line_after = [ln for ln in lines_after if '"event":"outcome"' in ln.replace(" ", "")][0]
+    assert outcome_line_after == outcome_line
+    records_after = ll.read(repo)["records"]
+    folded_after = ll.fold(records_after)
+    info_after = folded_after["launches"]["l1"]
+    assert info_after["terminal"] == info_before["terminal"]
+    assert info_after["outcome"] == info_before["outcome"]
+    assert info_after["terminalKind"] == info_before["terminalKind"]
+    assert len(info_after["amendments"]) == len(info_before["amendments"]) + 1
+
+
+# Bite-proof tests (guarded elements) -----------------------------------------
+
+
+def test_bite_fold_amendment_before_terminal_guard(tmp_path):
+    # Bite: fold-amendment-before-terminal guard
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a")]
+    records.append(_amendment("a", "vet", "ready", "too early"))
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert "fold-amendment-before-terminal" in result["reason"]
+
+
+def test_bite_record_outcome_reoutcome_recording(tmp_path, monkeypatch):
+    # Bite: second terminal write recorded as amendment
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.record_outcome(repo, "l1", "handback", "again")
+    assert result["recorded"] == "amendment"
+
+
+def test_bite_count_amendments_tally(tmp_path, monkeypatch):
+    # Bite: amendments tally reaches count
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "bite-count"
+    launch = "l-bite"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", "done")
+    ll.amend(repo, launch, "vet", "ready", "ok")
+    result = ll.count(repo, batch)
+    assert result["amendments"]["total"] == 1
+
+
+def test_bite_rehandback_subset_derivation(tmp_path, monkeypatch):
+    # Bite: rehandback subset is handback-over-handback
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "bite-rehandback"
+    launch_handback = "l-reh-handback"
+    launch_park = "l-reh-park"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved(launch_handback, batch, ["a"], repo, issue=301))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch_handback))
+    ll.record_outcome(repo, launch_handback, "handback", "first")
+    ll.record_outcome(repo, launch_handback, "handback", "second")
+    ll.reserve(repo, _reserved(launch_park, batch, ["b"], repo, issue=302))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch_park))
+    ll.record_outcome(repo, launch_park, "park", "blocked")
+    ll.record_outcome(repo, launch_park, "handback", "retry")
+    result = ll.count(repo, batch)
+    assert result["amendments"]["reoutcome"] == 2
+    assert result["amendments"]["rehandback"] == 1
+    assert result["amendedLaunches"] == 2
+
+
+def test_record_outcome_on_refused_lane_no_amendment(tmp_path, monkeypatch):
+    # axis: refused/never-started lane keeps outcome-without-started, no amendment
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+    count_before = len(ll.read(repo)["records"])
+    result = ll.record_outcome(repo, "l1", "handback", "evidence")
+    assert result["ok"] is False
+    assert result["reason"] == "outcome-without-started"
+    assert result["recorded"] is None
+    assert len(ll.read(repo)["records"]) == count_before
+
+
+def test_record_outcome_concurrent_identical_retry_dedupes_under_lock(tmp_path, monkeypatch):
+    # axis: dedupe and append are one lock transaction; snapshots captured before barrier sync
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-concurrent-dedupe"
+    launch = "launch-concurrent-dedupe"
+    evidence = "identical-evidence"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", evidence)
+
+    real_read = ll.read
+    barrier = threading.Barrier(2, timeout=10)
+    worker_tids = set()
+    shim_state = threading.local()
+
+    def _is_record_outcome_pre_amend_read():
+        chain = [frame.function for frame in inspect.stack()[1:12]]
+        return (
+            "record_outcome" in chain
+            and "amend" not in chain
+            and "terminalize" not in chain
+        )
+
+    def read_shim(repo_root, env=None):
+        tid = threading.get_ident()
+        if tid not in worker_tids:
+            return real_read(repo_root, env=env)
+        if (
+            _is_record_outcome_pre_amend_read()
+            and not getattr(shim_state, "pre_amend_barrier_done", False)
+        ):
+            shim_state.pre_amend_barrier_done = True
+            snapshot = real_read(repo_root, env=env)
+            try:
+                barrier.wait(timeout=10)
+            except threading.BrokenBarrierError as exc:
+                raise AssertionError(
+                    "concurrent record_outcome dedupe: barrier broken or timed out"
+                ) from exc
+            return snapshot
+        return real_read(repo_root, env=env)
+
+    monkeypatch.setattr(ll, "read", read_shim)
+
+    results = [None, None]
+    errors = [None, None]
+
+    def worker(idx):
+        worker_tids.add(threading.get_ident())
+        try:
+            results[idx] = ll.record_outcome(repo, launch, "handback", evidence)
+        except Exception as exc:
+            errors[idx] = exc
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(2)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=30)
+        if thread.is_alive():
+            pytest.fail(
+                "concurrent record_outcome dedupe: thread timed out; "
+                "results=%r errors=%r" % (results, errors)
+            )
+
+    assert errors == [None, None], errors
+    assert results[0]["ok"] is True
+    assert results[1]["ok"] is True
+    recorded = {results[0]["recorded"], results[1]["recorded"]}
+    assert recorded == {"amendment", "amendment-existing"}
+
+    folded = ll.fold(ll.read(repo)["records"])
+    amendments = folded["launches"][launch]["amendments"]
+    reoutcome_amendments = [a for a in amendments if a["kind"] == "reoutcome"]
+    assert len(reoutcome_amendments) == 1
+
+    amendment_events = [
+        r for r in ll.read(repo)["records"]
+        if r.get("event") == "amendment" and r.get("launchId") == launch
+    ]
+    assert len(amendment_events) == 1
+
+    counted = ll.count(repo, batch)
+    assert counted["amendments"]["reoutcome"] == 1
+    assert counted["amendments"]["rehandback"] == 1
+
+
+def test_record_outcome_idempotent_retry(tmp_path, monkeypatch):
+    # axis: byte-identical retry appends one amendment, not two
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "wave-idempotent"
+    launch = "launch-idempotent"
+    assert _declare(repo, batch, 1)["ok"]
+    ll.reserve(repo, _reserved(launch, batch, ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started(launch))
+    ll.record_outcome(repo, launch, "handback", "done")
+    second = ll.record_outcome(repo, launch, "handback", "done")
+    assert second["recorded"] == "amendment"
+    third = ll.record_outcome(repo, launch, "handback", "done")
+    assert third["recorded"] == "amendment-existing"
+    counted = ll.count(repo, batch)
+    assert counted["amendments"]["reoutcome"] == 1
+    assert counted["amendments"]["rehandback"] == 1
+    assert counted["amendedLaunches"] == 1
+
+
+@pytest.mark.parametrize("kind,value,note,reason", [
+    ("bogus", "ready", "n", "fold-bad-amendment-kind:a"),
+    ("vet", 7, "n", "fold-missing-amendment-value:a"),
+    ("vet", "", "n", "fold-missing-amendment-value:a"),
+    ("vet", "ready", "", "fold-missing-amendment-note:a"),
+    ("vet", "maybe", "n", "fold-bad-amendment-value:a"),
+    ("reoutcome", "ready", "n", "fold-bad-amendment-value:a"),
+])
+def test_fold_amendment_field_values(kind, value, note, reason):
+    # axis: fold refuses a malformed amendment record with the exact token, per field
+    records = [_reserved("a", "b", ["x"], "/tmp"), _started("a"), _outcome("a"),
+               _amendment("a", kind, value, note)]
+    result = ll.fold(records)
+    assert result["ok"] is False
+    assert result["reason"] == reason
+
+
+def test_amend_launch_id_invalid(tmp_path, monkeypatch):
+    # axis: amend-launch-id-invalid
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    result = ll.amend(repo, "", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-launch-id-invalid"
+
+
+def test_amend_value_invalid_for_reoutcome(tmp_path, monkeypatch):
+    # axis: amend-value-invalid on reoutcome leg
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    result = ll.amend(repo, "l1", "reoutcome", "bogus", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-value-invalid:bogus"
+
+
+def test_amend_failed_exception(tmp_path, monkeypatch):
+    # axis: amend-failed on unexpected exception inside lock
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("unexpected")
+
+    monkeypatch.setattr(ll, "read", boom)
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-failed"
+
+
+def test_record_outcome_amend_failed_no_double_prefix(tmp_path, monkeypatch):
+    # axis: amend-failed is not double-prefixed in record_outcome
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    monkeypatch.setattr(ll, "amend", lambda *a, **k: {"ok": False, "reason": "amend-failed",
+                                                     "terminalOutcome": None})
+    result = ll.record_outcome(repo, "l1", "handback", "again")
+    assert result["ok"] is False
+    assert result["reason"] == "amend-failed"
+    assert result["recorded"] is None
+
+
+_RECORD_OUTCOME_KEYS = frozenset({
+    "ok", "reason", "recorded", "amendmentKind", "attemptedOutcome", "terminalOutcome",
+})
+
+
+@pytest.mark.parametrize("case", [
+    "invalid_outcome",
+    "empty_evidence",
+    "unknown_launch",
+    "never_started",
+    "fresh_amendment",
+    "deduplicated_retry",
+])
+def test_record_outcome_uniform_keys(tmp_path, monkeypatch, case):
+    # axis: every return branch carries the full key set
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    if case == "invalid_outcome":
+        result = ll.record_outcome(repo, "l1", "bogus", "evidence")
+    elif case == "empty_evidence":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+        result = ll.record_outcome(repo, "l1", "handback", "   ")
+    elif case == "unknown_launch":
+        result = ll.record_outcome(repo, "missing", "handback", "evidence")
+    elif case == "never_started":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _refused("l1"))
+        result = ll.record_outcome(repo, "l1", "handback", "evidence")
+    elif case == "fresh_amendment":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+        _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+        result = ll.record_outcome(repo, "l1", "handback", "again")
+        assert result["recorded"] == "amendment"
+    elif case == "deduplicated_retry":
+        ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+        _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+        _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+        ll.record_outcome(repo, "l1", "handback", "done")
+        result = ll.record_outcome(repo, "l1", "handback", "done")
+        assert result["recorded"] == "amendment-existing"
+    else:
+        raise AssertionError("unknown case: %s" % case)
+    assert set(result.keys()) == _RECORD_OUTCOME_KEYS
+
+
+def test_bite_amend_lock_gate(tmp_path, monkeypatch):
+    # Bite: amend goes through ledger lock
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1"))
+    lock_result = ll._ensure_lock_file(repo)
+    import file_lock
+    file_lock.acquire(lock_result["path"])
+    os.chmod(lock_result["path"], 0o600)
+    try:
+        result = ll.amend(repo, "l1", "vet", "ready", "reason", lock_timeout=0.1)
+        assert result["reason"] == "lock-unavailable"
+    finally:
+        file_lock.release(lock_result["path"])
+
+
+def test_bite_amend_not_terminal_refusal(tmp_path, monkeypatch):
+    # Bite: live lane cannot be amended
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    result = ll.amend(repo, "l1", "vet", "ready", "reason")
+    assert result["reason"] == "amend-not-terminal"
+
+
+def test_bite_terminal_invariant_preservation(tmp_path, monkeypatch):
+    # Bite: amendment never becomes outcome
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    ll.reserve(repo, _reserved("l1", "b1", ["a"], repo))
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    ll.record_outcome(repo, "l1", "handback", "done")
+    ll.amend(repo, "l1", "evidence", "corrected", "fix")
+    folded = ll.fold(ll.read(repo)["records"])
+    info = folded["launches"]["l1"]
+    assert info["outcome"] == "handback"
+    assert info["terminalKind"] == "outcome"
+    assert len(info["amendments"]) == 1
 
 
 def test_terminalize_still_writes_its_terminal(tmp_path, monkeypatch):
