@@ -1878,7 +1878,11 @@ def audit_results_fault(artifact, targets):
         fault = _audit_result_entry_fault(entry, index, target_ids, seen_ids)
         if fault:
             return "%s; resubmit the same phase/attempt/state-hash with a corrected artifact" % fault
-        seen_ids.add(entry["id"])
+        # Re-test the shape rather than trusting the branch above to have run: each branch of
+        # `_audit_result_entry_fault` must be independently neutralizable, so that a bite-proof
+        # mutation of any one of them produces a REFUSAL miss (the axis) instead of a crash here.
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str):
+            seen_ids.add(entry["id"])
     return None
 
 
