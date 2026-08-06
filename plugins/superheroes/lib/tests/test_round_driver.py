@@ -488,8 +488,13 @@ def _assert_shape_refused(d, n, artifact, expected_outcome, must_name, recovery)
     ({"result": "PASS"}, ["got 'PASS'"]),
     ({"result": True}, ["got True"]),
     ({"status": "ok"}, ["`status` is not the driver's key"]),
+    # `json.load` accepts ANY JSON root, so a bare list reaches the guard carrying no keys at all —
+    # the reason must name the ENVELOPE, not report a `result` such a root could never have.
+    ([{"result": "pass"}], ["verify artifact is list, not a result object",
+                            "expected {\"result\":"]),
+    (None, ["verify artifact is NoneType, not a result object"]),
 ], ids=["missing", "explicit-none", "runner-envelope-878", "near-miss-token", "wrong-case",
-        "non-string", "status-key"])
+        "non-string", "status-key", "non-dict-list-root", "non-dict-null-root"])
 def test_submit_verify_malformed_refused(tmp_path, artifact, must_name):
     d, n = _at(tmp_path, RD.P_VERIFY)
     _assert_shape_refused(d, n, artifact, "verify-result-shape", must_name, _GOOD_VERIFY)
@@ -582,13 +587,52 @@ def test_submit_audits_non_list_results_refused(tmp_path):
                           ["`results` is dict, not a list of ruling objects"], good)
 
 
-def test_submit_audits_duplicate_id_refused(tmp_path):
+def test_submit_audits_repeated_id_accepted_the_fold_governs(tmp_path):
+    """A REPEATED id is not a shape fault. Target ids are LINE-LESS (`finding_identity` is
+    `file::normalized-title`), so two distinct fix-batch findings in one file sharing a title
+    produce ONE id — and an orchestrator returning exactly one ruling per target then submits that
+    id twice. Refusing it would be an unresolvable loop: the correction such a refusal names is
+    exactly what the orchestrator already did. `audits.apply_audit_results` already fails closed on
+    the case (`ambiguous`: honor NEITHER ruling), and that handling must be what governs — so a
+    doubled CLEARING ruling is accepted here and still folds to not-discharged."""
     d, n = _at(tmp_path, RD.P_AUDITS)
-    good, targets = _audit_artifact(n)
-    dup = {"results": list(good["results"]) + list(good["results"]),
-           "collectionManifest": good["collectionManifest"]}
-    _assert_shape_refused(d, n, dup, "audit-ruling-shape",
-                          ["repeats id", "exactly one ruling per target"], good)
+    good, _targets = _audit_artifact(n)                  # a `discharged` ruling
+    rid = good["results"][0]["id"]
+    repeated = {"results": list(good["results"]) + list(good["results"]),
+                "collectionManifest": good["collectionManifest"]}
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], repeated)
+    assert out["ok"] is True, out
+    ok, state = RD.load_state(d)
+    assert ok
+    outcomes = state["auditRounds"][-1]["outcomes"]
+    assert [(o["identity"], o["ruling"]) for o in outcomes] == [(rid, "not-discharged")], outcomes
+    assert any(dec.get("kind") == "not-discharged" for dec in state["decisions"]), state["decisions"]
+
+
+def test_submit_audits_two_targets_one_colliding_id_not_refused():
+    """The same collision at the GUARD's own boundary: two targets carrying one line-less id, one
+    ruling submitted per target. This is a unit-level assertion because the loop cannot be driven to
+    two colliding targets with the existing helpers — the panel/synthesis merge collapses two
+    same-identity findings into one, and the path that legitimately produces the collision (the
+    delta-round `(identity, line)` dedupe at `_settle_delta`, #507 R2 residual-3) is not reachable
+    through `_responder`. The chokepoint behavior is pinned by the loop-level test above."""
+    targets = [{"id": "f.py::unchecked return value"}, {"id": "f.py::unchecked return value"}]
+    one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"},
+                       {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"}]
+    assert RD.audit_results_fault({"results": one_ruling_each}, targets) is None
+
+
+@pytest.mark.parametrize("artifact", [None, [{"id": "x", "ruling": "discharged"}]],
+                         ids=["null-root", "list-root"])
+def test_submit_audits_non_dict_artifact_refused(tmp_path, artifact):
+    """`json.load` accepts ANY JSON root, so a `null` or bare-list artifact reaches the submit path.
+    Unrefused it normalizes to `{}` in the fold, consuming ZERO rulings — every target folds
+    `unaudited` → not-discharged with the pending step gone. That is the #885 loss class arriving
+    through a root the `results` checks never inspect."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, _ = _audit_artifact(n)
+    _assert_shape_refused(d, n, artifact, "audit-ruling-shape",
+                          ["not a results object", "expected {\"results\":"], good)
 
 
 def test_submit_audits_non_dict_entry_refused(tmp_path):
@@ -649,7 +693,13 @@ def test_audit_results_fault_pure():
     good = [{"id": "a1", "ruling": "not-discharged"}]
     assert RD.audit_results_fault({"results": good}, [{"id": "a1"}]) is None
     assert RD.audit_results_fault({}, [{"id": "a1"}]) is None
-    assert RD.audit_results_fault(None, []) is None
+    # a non-dict ROOT can carry no rulings at all — refused, naming the envelope (never a `results`
+    # complaint about a root that has no keys)
+    assert "not a results object" in RD.audit_results_fault(None, [])
+    assert "audits artifact is list" in RD.audit_results_fault([{"id": "a1"}], [{"id": "a1"}])
+    # a REPEATED id is not a shape fault — line-less identities legitimately collide; the fold's
+    # `ambiguous` handling governs (test_submit_audits_repeated_id_accepted_the_fold_governs)
+    assert RD.audit_results_fault({"results": good + good}, [{"id": "a1"}, {"id": "a1"}]) is None
     # an empty target set judges no id — the seat-key guard's empty-key rule, audit-side
     assert RD.audit_results_fault({"results": [{"id": "zz", "ruling": "not-discharged"}]}, []) is None
     assert "not an audit target" in RD.audit_results_fault({"results": good}, [{"id": "other"}])

@@ -1780,6 +1780,17 @@ def verify_result_fault(artifact):
     axis: REFUSAL of an unexpressible verify result — not whether the gate passed. A recognized
     `fail`/`timeout` is expressible, so it is accepted here and halts in the fold as it always has.
     """
+    # axis: the ENVELOPE's own shape — the submit CLI loads the artifact with `json.load`, which
+    # accepts ANY root, so a `null` or bare-list artifact arrives here. It was already refused (it
+    # can carry no `result`), but the reason said "carries no usable `result` (got None)", which
+    # misdescribes a root that has no keys at all. Name the envelope the driver consumes instead.
+    if not isinstance(artifact, dict):
+        return ("verify artifact is %s, not a result object; expected {\"result\": \"<one of: %s>\"}"
+                "; resubmit the same phase/attempt/state-hash with a corrected artifact" % (
+                    type(artifact).__name__, ", ".join(sorted(_VERIFY_RESULTS))))
+    # The original normalization stays BELOW the refusal rather than being replaced by it: the branch
+    # above must be independently neutralizable, so a bite-proof mutation of it lands on the axis it
+    # claims (the envelope goes unnamed) instead of crashing on a root that has no `.get`.
     if not isinstance(artifact, dict):
         artifact = {}
     result = artifact.get("result")
@@ -1797,7 +1808,7 @@ def verify_result_fault(artifact):
     return "; ".join(parts)
 
 
-def _audit_result_entry_fault(entry, index, target_ids, seen_ids):
+def _audit_result_entry_fault(entry, index, target_ids):
     """The shape fault (a reason string) in ONE audit-result entry, or None.
 
     `target_ids` is the driver's own set of audit-target ids — a result keyed to an id outside it
@@ -1823,10 +1834,6 @@ def _audit_result_entry_fault(entry, index, target_ids, seen_ids):
         return ("%s is keyed to %r, which is not an audit target of this round; targets: %s; "
                 "re-key the ruling to its target's staged id" % (where, rid,
                                                                 ", ".join(sorted(target_ids))))
-    # axis: uniqueness of the binding — two rulings for one finding leave the fold able to honor none.
-    if rid in seen_ids:
-        return ("%s repeats id %r — more than one ruling claiming one finding is ambiguous and "
-                "none can be honored; submit exactly one ruling per target" % (where, rid))
     ruling = entry.get("ruling")
     # axis: that the verdict token is one the fold has an arm for — never a near-miss word.
     if not isinstance(ruling, str) or ruling not in audits.AUDIT_RULINGS:
@@ -1861,8 +1868,26 @@ def audit_results_fault(artifact, targets):
     the fold: a correctly-shaped ruling the manifest cannot authenticate must still fold to
     not-discharged, never be handed back for a "corrected" resubmit.
 
+    DUPLICATE ids are likewise NOT a shape fault. Target ids come from `finding_identity`, which is
+    `file::normalized-title` — LINE-LESS — so two distinct fix-batch findings in one file sharing a
+    title legitimately produce ONE id, and an orchestrator returning exactly one ruling per target
+    submits it twice. Refusing that would be an unresolvable loop (the correction it names is what
+    the orchestrator already did). `audits.apply_audit_results` already fails closed on the case,
+    marking the id `ambiguous` and honoring NEITHER ruling; that handling stands.
+
     axis: REFUSAL of an audits artifact that cannot express its rulings — not the rulings' merit.
     """
+    # axis: the ENVELOPE's own shape — the submit CLI loads the artifact with `json.load`, which
+    # accepts ANY root, so a `null` or bare-list artifact reaches the fold, normalizes to `{}`, and
+    # folds EVERY target `unaudited` → not-discharged with the pending step gone: the #885 loss class
+    # arriving through a root the `results` checks below never inspect.
+    if not isinstance(artifact, dict):
+        return ("audits artifact is %s, not a results object; expected {\"results\": [{\"id\", "
+                "\"ruling\", \"reason\", ...}]}; resubmit the same phase/attempt/state-hash with a "
+                "corrected artifact" % type(artifact).__name__)
+    # The original absent-`results` test keeps its own non-dict guard rather than leaning on the
+    # branch above: that branch must be independently neutralizable, so a bite-proof mutation of it
+    # lands on the REFUSAL axis (a non-dict artifact walks through) instead of crashing here.
     if not isinstance(artifact, dict) or "results" not in artifact:
         return None
     results = artifact["results"]
@@ -1873,16 +1898,10 @@ def audit_results_fault(artifact, targets):
                 "phase/attempt/state-hash with a corrected artifact" % type(results).__name__)
     target_ids = {t.get("id") for t in targets if isinstance(t, dict)
                   and isinstance(t.get("id"), str)} if isinstance(targets, list) else set()
-    seen_ids = set()
     for index, entry in enumerate(results):
-        fault = _audit_result_entry_fault(entry, index, target_ids, seen_ids)
+        fault = _audit_result_entry_fault(entry, index, target_ids)
         if fault:
             return "%s; resubmit the same phase/attempt/state-hash with a corrected artifact" % fault
-        # Re-test the shape rather than trusting the branch above to have run: each branch of
-        # `_audit_result_entry_fault` must be independently neutralizable, so that a bite-proof
-        # mutation of any one of them produces a REFUSAL miss (the axis) instead of a crash here.
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str):
-            seen_ids.add(entry["id"])
     return None
 
 
