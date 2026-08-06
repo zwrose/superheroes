@@ -930,11 +930,11 @@ def test_effect_end_write_failure_raises(tmp_dir, monkeypatch):
     call_count = 0
     real_write = pj._write_record
 
-    def failing_write(journal_path, record):
+    def failing_write(journal_path, record, verify=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return real_write(journal_path, record)
+            return real_write(journal_path, record, verify=verify)
         return {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
 
     monkeypatch.setattr(pj, "_write_record", failing_write)
@@ -950,11 +950,11 @@ def test_effect_body_raises_end_write_failure_propagates_body(tmp_dir, monkeypat
     call_count = 0
     real_write = pj._write_record
 
-    def failing_write(journal_path, record):
+    def failing_write(journal_path, record, verify=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return real_write(journal_path, record)
+            return real_write(journal_path, record, verify=verify)
         return {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
 
     monkeypatch.setattr(pj, "_write_record", failing_write)
@@ -1381,6 +1381,25 @@ def test_end_effect_refuses_nonexistent_id(tmp_dir):
     assert not os.path.exists(path)
 
 
+def test_end_effect_refuses_missing_begin_in_existing_journal(tmp_dir):
+    path = _journal(tmp_dir)
+    other = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="other-eff",
+    )
+    assert other["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="never-begun",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            assert not (rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "never-begun")
+
+
 def test_end_effect_refuses_wrong_slot(tmp_dir):
     path = _journal(tmp_dir)
     begin = pj.begin_effect(
@@ -1459,7 +1478,7 @@ def test_end_effect_refuses_ambiguous_origin(tmp_dir):
 def test_end_effect_refuses_invalid_origin(tmp_dir):
     path = _journal(tmp_dir)
     bad_begin = _begin_record(effect_id="bad-origin1")
-    bad_begin["kind"] = "bogus-kind"
+    bad_begin["schemaVersion"] = 2
     _write_line(path, bad_begin)
     result = pj.end_effect(
         path, slot_ref=_SLOT_REF, effect_id="bad-origin1",

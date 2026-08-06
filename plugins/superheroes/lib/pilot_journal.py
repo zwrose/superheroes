@@ -11,7 +11,6 @@ import json
 import os
 import re
 import stat
-import threading
 import time
 import uuid
 from datetime import datetime
@@ -107,7 +106,6 @@ _REASON_MAX_LEN = 500
 DETAIL_MAX_BYTES = 8192
 _LOCK_DEFAULT_TIMEOUT = 30.0
 _LOCK_POLL_INTERVAL = 0.05
-_write_verify_hook = threading.local()
 
 _BEGIN_REQUIRED_KEYS = frozenset({
     "schemaVersion", "phase", "effectId", "slotRef", "kind", "at",
@@ -427,8 +425,6 @@ def _write_record(journal_path, record, verify=None):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     fd = None
     hook = verify
-    if hook is None:
-        hook = getattr(_write_verify_hook, "fn", None)
     try:
         if hook is not None:
             refusal = hook()
@@ -561,11 +557,7 @@ def end_effect(journal_path, *, slot_ref, effect_id, kind, outcome, at, reason=N
             kind=kind,
         )
 
-    _write_verify_hook.fn = _verify
-    try:
-        return _write_record(journal_path, record)
-    finally:
-        _write_verify_hook.fn = None
+    return _write_record(journal_path, record, verify=_verify)
 
 
 class _EffectHandle:
