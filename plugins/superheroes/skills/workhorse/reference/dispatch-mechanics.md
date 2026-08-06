@@ -168,7 +168,10 @@ from an engine crash (`engine`).
 
 **Ledger receipt** — every terminal fold appends `result["ledger"]`: `written`, `path`, `why`. The row
 records `reason`, per-attempt telemetry, `stages`, `engagement`, `evidence` (stdout/stderr/journal
-paths), `attribution` (caller-error, our-transport-contract, our-environment, engine-side, unknown —
+paths, plus stand-down records — `stoodDownCount`, `stoodDown`, `stoodDownTruncated` — the
+orphan-child events a supervisor death between spawn and journal append produces, capped at 20
+entries with the cap stated on the row), `attribution` (caller-error, our-transport-contract,
+our-environment, engine-side, unknown —
 a forfeit is presumed self-inflicted until attributed; **unknown is a queue, not a bucket**), and
 `salvage` when detected. The ledger is a **record, never a control input** — nothing reads it to
 decide what a dispatch does. Read standing accounting via
