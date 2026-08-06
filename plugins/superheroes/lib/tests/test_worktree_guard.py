@@ -591,11 +591,90 @@ def test_unparsed_message_verbatim():
     expected = (
         "superheroes worktree guard: could not confidently parse this command's git "
         "invocation — it may include a destructive discard subcommand — so it is refused "
-        "(fail-closed) rather than risk wiping uncommitted work. Commit or `git stash -u` "
-        "your work first, or revert a probe edit with an inverse Edit rather than a git "
-        "discard."
+        "(fail-closed) rather than risk wiping uncommitted work. If this command runs no "
+        "git discard and only mentions one in prose — a PR or issue comment body, a commit "
+        "message — that prose is the trigger: text naming a destructive git subcommand "
+        "(`checkout`, `restore`, `reset`, `clean`, `switch`, `rm`, `checkout-index`, "
+        "`worktree`) reads as a command wherever this guard loses track of the quoting "
+        "around it — a heredoc body, whose lines read as bare command text, or a quote of "
+        "the same kind as the one enclosing it, either backslash-escaped or nested inside a "
+        "`$(...)` substitution. Write the text to a file with a file-writing tool rather "
+        "than a shell heredoc, whose bare lines trip this same refusal, and pass the file: "
+        "`gh ... --body-file <path>`, `git commit -F <path>`. "
+        "If a discard is intended, note that this refusal does not depend on what your tree "
+        "holds, so committing or stashing alone will not clear it: re-issue the command as "
+        "a plain `git ...` invocation this guard can parse. Keep the work you care about by "
+        "committing or `git stash -u` first, and revert a probe edit with an inverse Edit "
+        "rather than a git discard."
     )
     assert wg.unparsed_message() == expected
+
+
+def test_unparsed_message_names_the_prose_case_and_the_file_remedy():
+    """The refusal has to point an operator at the file remedy, not just fail closed (#842)."""
+    message = wg.unparsed_message()
+    assert "prose" in message
+    assert "--body-file" in message
+    assert "commit -F" in message
+
+
+# The shapes that put prose outside the guard's quote tracking, so the text reads as a command.
+# All of them are refused today and stay refused — #842 changes the message, not behavior.
+_PROSE_ONLY_MENTIONS = (
+    # a comment body quoting someone with a backslash-escaped quote of the enclosing kind;
+    # the scanner has no escape handling, so its quote state desynchronizes from the shell's
+    'gh pr comment 1 --body "the reviewer said \\"never: git checkout -- f.txt"',
+    # a heredoc body whose lines are bare command text as far as any shell-text scanner knows
+    "cat > /tmp/note.md <<'EOF'\n"
+    "Revert a probe with an inverse Edit, never git checkout -- f.txt\n"
+    "EOF",
+    # same-delimiter quotes nested inside a command substitution: legal shell, but the scanner
+    # toggles its outer quote state on the inner quotes and the prose reads as bare text
+    'gh pr comment 1 --body "$(echo "never git reset --hard")"',
+)
+
+# The counterpart the message must NOT send an operator away from: prose in a body whose quoting
+# the scanner does track stays allowed, nested other-delimiter quotes included.
+#
+# Deliberately absent: a body carrying backticks inside DOUBLE quotes
+# (`--body "not `git reset --hard`"`). The shell substitutes there, so that command really does
+# run the discard — it is not prose, and this suite must not bless it as safe. The guard allows
+# it today; that gap is the guard's, not this message's, and is filed for the advisor.
+_PROSE_MENTIONS_STILL_ALLOWED = (
+    'gh pr comment 1 --body "never git checkout -- f.txt"',
+    'gh pr comment 1 --body "the reviewer said \'never: git checkout -- f.txt\'"',
+    "gh pr comment 1 --body 'the reviewer said \"never: git checkout -- f.txt\"'",
+    # single-quoted, so the backticks are literal text the shell will not substitute
+    "gh pr comment 1 --body 'revert with an inverse Edit, not `git reset --hard`'",
+    # opposite-delimiter quotes inside a substitution stay tracked; only same-delimiter
+    # quotes desynchronize the scanner, which is why the message says "of the same kind"
+    'gh pr comment 1 --body "$(echo \'never git reset --hard\')"',
+    # a heredoc line is not categorically refused: the scanner is quote-aware within the
+    # line, so a mention inside quotes stays allowed. The message says "bare lines" for this.
+    "cat > /tmp/note.md <<'EOF'\n"
+    'Never run "git reset --hard" here\n'
+    "EOF",
+)
+
+
+def test_classify_prose_only_mention_denies_with_the_prose_hint(tmp_path, monkeypatch):
+    """Prose that only *names* a discard is refused, and the refusal explains why (#842)."""
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    for command in _PROSE_ONLY_MENTIONS:
+        decision, reason = wg.classify(command, repo)
+        assert decision == "deny", command
+        assert reason == wg.unparsed_message(), command
+
+
+def test_classify_prose_in_tracked_quoting_stays_allowed(tmp_path, monkeypatch):
+    """The refusal names the shapes it actually refuses — these bodies are not among them (#842)."""
+    _calibrated(monkeypatch)
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "committed\n")
+    for command in _PROSE_MENTIONS_STILL_ALLOWED:
+        assert wg.classify(command, repo) == ("allow", ""), command
 
 
 # --- unexpected probe state --------------------------------------------------

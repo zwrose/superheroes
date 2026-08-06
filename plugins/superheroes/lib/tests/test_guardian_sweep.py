@@ -1,5 +1,7 @@
+import ast
 import json
 import os
+import re
 
 import guardian_lens as gl
 import guardian_report as gr
@@ -10,6 +12,7 @@ from guardian_fixtures import (
     FixtureLens, benched_fixture_ledger, funnel_conserved, init_calibrated_repo,
     write_guardian_layer, write_ledger,
 )
+from source_access_scan import source_obj_access_keys
 
 
 def _store(tmp_path):
@@ -2086,6 +2089,89 @@ def test_skill_cadence_phrase_matches_cadence_defaults():
     merges, days = (int(matches[0][0]), int(matches[0][1]))
     assert merges == gsw.CADENCE_DEFAULTS["minMerges"]
     assert days == gsw.CADENCE_DEFAULTS["minDays"]
+
+
+def test_calibration_reference_defaults_match_library_constants():
+    """§11 drift guard: calibration.md Keys table ↔ library constants (no hand-typed expect)."""
+    import json
+    import re
+    import guardian_ledger as gled
+    import guardian_vitals as gv
+
+    cal_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "skills", "guardian", "reference",
+        "calibration.md")
+    text = open(cal_path, encoding="utf-8").read()
+
+    def _extract_json_after(marker):
+        m = re.search(re.escape(marker) + r"` = `(\{[^`]*\})`", text)
+        assert m, "calibration.md missing documented default for %s" % marker
+        return json.loads(m.group(1))
+
+    def _extract_paren_int(marker):
+        m = re.search(re.escape(marker) + r"` \((\d+)\)", text)
+        assert m, "calibration.md missing documented default for %s" % marker
+        return int(m.group(1))
+
+    assert _extract_json_after("RED_LINE_THRESHOLDS") == dict(gl.RED_LINE_THRESHOLDS)
+    assert _extract_json_after("CADENCE_DEFAULTS") == dict(gsw.CADENCE_DEFAULTS)
+    assert _extract_json_after("REPORT_CARD_DEFAULTS") == dict(gled.REPORT_CARD_DEFAULTS)
+    assert _extract_json_after("DRIFT_THRESHOLDS") == dict(gv.DRIFT_THRESHOLDS)
+    assert _extract_paren_int("_DEFAULT_VERIFY_BUDGET_SECONDS") == (
+        gsw._DEFAULT_VERIFY_BUDGET_SECONDS)
+    assert _extract_paren_int("_DEFAULT_FIRST_BASELINE_VALIDATE_MAX") == (
+        gsw._DEFAULT_FIRST_BASELINE_VALIDATE_MAX)
+
+
+def _read_config_function_source():
+    gsw_path = os.path.join(os.path.dirname(gsw.__file__), "guardian_sweep.py")
+    source = open(gsw_path, encoding="utf-8").read()
+    tree = ast.parse(source)
+    for node in ast.iter_child_nodes(tree):
+        if isinstance(node, ast.FunctionDef) and node.name == "read_config":
+            lines = source.splitlines(keepends=True)
+            return "".join(lines[node.lineno - 1:node.end_lineno])
+    assert False, "could not locate guardian_sweep.read_config in source"
+
+
+def _read_config_block_keys():
+    """Keys guardian_sweep.read_config reads from the guardian-config block — derived from source."""
+    return source_obj_access_keys(_read_config_function_source(), "block")
+
+
+def _calibration_keys_table_keys(text):
+    """Keys listed in calibration.md ## Keys table — includes alias pairs."""
+    section_m = re.search(r'^## Keys\s*$', text, re.MULTILINE)
+    assert section_m, "calibration.md missing ## Keys section"
+    start = section_m.end()
+    next_section = re.search(r'^## ', text[start:], re.MULTILINE)
+    section_text = text[start:start + next_section.start()] if next_section else text[start:]
+    keys = set()
+    for m in re.finditer(
+            r'^\| `([^`/]+)(?:` / `([^`]+))?` \|', section_text, re.MULTILINE):
+        keys.add(m.group(1))
+        if m.group(2):
+            keys.add(m.group(2))
+    return keys
+
+
+def test_calibration_reference_keys_match_read_config_parser():
+    """§11 drift guard: calibration.md Keys table key set ↔ read_config parser (no hand-typed expect)."""
+    import re
+    cal_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "skills", "guardian", "reference",
+        "calibration.md")
+    text = open(cal_path, encoding="utf-8").read()
+    documented = _calibration_keys_table_keys(text)
+    parsed = _read_config_block_keys()
+    assert documented, (
+        "calibration.md Keys table parsed to empty set — table shape regressed")
+    assert parsed, (
+        "read_config block key extraction parsed to empty — source shape regressed")
+    assert documented == parsed, (
+        "calibration.md Keys table vs read_config parser drift: "
+        "doc-only=%s parser-only=%s"
+        % (sorted(documented - parsed), sorted(parsed - documented)))
 
 
 def test_issue_resolve_respects_aggregate_deadline(monkeypatch, tmp_path):

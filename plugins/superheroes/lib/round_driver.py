@@ -85,6 +85,11 @@ CHEAP = "reviewer"
 # with its findings carried as unverified. The code leg's read goes through the constant now.
 REDISPATCH_BUDGET = loop_plan_common.REDISPATCH_BUDGET
 MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
+# Claude-ladder rung for self-recovery escalation — not owner-configurable.
+# escalate() returns None (no escalation recorded) when the fixer vendor's ladder
+# does not contain this pair (codex/cursor ladders omit it).
+_SELF_RECOVERY_FIXER_MODEL = "sonnet-5"
+_SELF_RECOVERY_FIXER_EFFORT = "high"
 
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
@@ -559,7 +564,6 @@ def _default_config(overrides=None):
         "leg": "code",
         "panel": False,
         "code": True,
-        "docMode": False,
         "vendors": ["claude"],
         "fixerVendor": None,  # UNKNOWN by default — auditor independence must DEGRADE, not assume claude (#608)
         "verifyCommand": "none",
@@ -677,7 +681,7 @@ def _seed_resume(state, cfg):
     state["step"] = P_PANEL
     state["fullPanelRan"] = False
     eb = review_loop_plan.entry_bootstrap(records_path, dims)
-    owed = review_loop_plan._further_confirmation_owed(records, doc_mode=cfg.get("docMode", False))
+    owed = review_loop_plan._further_confirmation_owed(records)
     if eb.get("ok") and eb.get("confirmationPending") and owed.get("owed"):
         # The loop stopped mid-confirmation and a further FULL confirmation panel is still owed (the
         # seeded panel was degraded / no qualifying panel has run) — resume by running that panel.
@@ -931,6 +935,12 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
 
 _PANEL_VENDORS = tuple(model_registry.VENDORS)  # SSOT — never a hand-maintained copy (#563/§11)
 
+# The four artifact-envelope keys `_fold_panel` reads off a panel artifact. They are NOT seat keys.
+# In the legacy shape (no dict-valued `artifact["seats"]`, so the artifact ITSELF is the seats map)
+# these names must be subtracted before judging seat keys; in the explicit `{"seats": {...}}` shape
+# nothing is subtracted, so one of these names appearing INSIDE the seats map is a real mis-key.
+_PANEL_ENVELOPE_KEYS = ("seats", "seatMap", "ranManifest", "canaryResult")
+
 # Derived from dispatch_outcome.py — the single home for not-run reason tokens (#747).
 _DISPATCH_NOT_RUN_REASONS = dispatch_outcome.NOT_RUN_REASONS
 
@@ -1110,6 +1120,54 @@ def _seat_map_configured_vendor(seat_map, dim):
     c = seat_map["seats"].get(dim)
     v = c.get("vendor") if isinstance(c, dict) else None
     return v if isinstance(v, str) and v in _PANEL_VENDORS else None
+
+
+def panel_seat_keys(artifact):
+    """The candidate seat keys of a panel artifact, resolved EXACTLY as `_fold_panel` resolves
+    `seats` — so the guard and the fold can never read different maps.
+
+    Returns a sorted list of string keys. Non-string keys are ignored (the fold's `seats.get(dim)`
+    can never match one). The legacy shape — no dict-valued `artifact["seats"]`, so the artifact
+    itself is the seats map — has `_PANEL_ENVELOPE_KEYS` subtracted; the explicit shape does not.
+    """
+    if not isinstance(artifact, dict):
+        return []
+    if isinstance(artifact.get("seats"), dict):
+        keys = [k for k in artifact["seats"] if isinstance(k, str)]
+    else:
+        keys = [k for k in artifact if isinstance(k, str) and k not in _PANEL_ENVELOPE_KEYS]
+    return sorted(keys)
+
+
+def panel_seat_key_fault(dimensions, artifact):
+    """None when every seat key in `artifact` is a configured dimension; otherwise a reason string
+    naming the offending keys.
+
+    An EMPTY candidate key set is not a mis-key — there is no wrong key to name — so it returns None
+    and `_fold_panel`'s own fail-closed path (every configured dimension folds `missing`, nothing
+    certifies) is left exactly as it is.
+    """
+    dims = ([d for d in dimensions if isinstance(d, str)]
+            if isinstance(dimensions, (list, tuple)) else [])
+    keys = panel_seat_keys(artifact)
+    if not keys:
+        return None
+    if not dims:
+        return None
+    unknown = [k for k in keys if k not in dims]
+    if not unknown:
+        return None
+    stem_to_dim = {AGENT_SUFFIX[d]: d for d in dims if d in AGENT_SUFFIX}
+    hints = [f"{k} is the findings-file stem for {stem_to_dim[k]}"
+             for k in sorted(unknown) if k in stem_to_dim]
+    parts = [
+        "unknown seat key(s): %s" % ", ".join(sorted(unknown)),
+        "configured dimensions: %s" % ", ".join(sorted(dims)),
+        "re-key the seats map and resubmit the same phase/attempt/state-hash",
+    ]
+    if hints:
+        parts.append(", ".join(hints))
+    return "; ".join(parts)
 
 
 def _fold_panel(state, config, artifact):
@@ -1982,7 +2040,7 @@ def _settle_delta(state, config):
              or review_round_policy.is_cross_cutting(state.get("_changedSubjectsSincePanel")))
     followup = review_round_policy.confirmation_followup(
         surfaced, state.get("confirmations", 0), cross,
-        max_confirmations=MAX_CONFIRMATIONS, doc_mode=config.get("docMode", False))
+        max_confirmations=MAX_CONFIRMATIONS)
     _record_round(state, "confirmationFollowup", followup)
     if followup.get("park"):
         _park_capped(state, followup.get("reason"))
@@ -2044,7 +2102,7 @@ def _handle_stall(state, config, breaker):
         state["selfRecovered"] = True
         fixer_vendor = config.get("fixerVendor")
         rung = model_registry.escalate(
-            fixer_vendor, config.get("fixerModel", "sonnet-5"), config.get("fixerEffort", "high"))
+            fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
         if rung is not None:
             # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
             # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
@@ -2669,6 +2727,18 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
                                       "round": pending.get("round"), "attempt": attempt,
                                       "outcome": "hash-mismatch"})
         return {"ok": False, "reason": "state-hash mismatch — the state moved under a stale submit"}
+
+    # #845: the panel seat-key invariant, at the chokepoint. A `seats` map keyed by findings-file
+    # stems instead of `payload.dimensions` submits `ok` today and fails phases later with empty
+    # clusters and every seat `missing` — four recorded occurrences. Refuse HERE, before the fold, so
+    # the pending step survives and recovery is a plain re-keyed resubmit on the same attempt/hash.
+    if phase == P_PANEL:
+        fault = panel_seat_key_fault(_panel_dimensions(state["config"]), artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "seat-key-mismatch"})
+            return {"ok": False, "reason": fault}
 
     # accept: clear the pending, fold, record lastAccepted, advance.
     round_no = pending.get("round")

@@ -33,8 +33,14 @@ _CLASS3_APPEND_ALLOWLIST = {
         "declare_batch",      # holds lock around append(repo_root, ...)
         "reserve",            # holds lock around append(repo_root, ...)
         "terminalize",        # holds lock around repair started + terminal append
+        "amend",              # holds lock around append(repo_root, ...)
     }),
 }
+# Allowlisted writers that must genuinely take the ledger lock. `append` is deliberately
+# absent: it is the validated pass-through whose callers are censused, not a lock holder.
+_CLASS3_LOCK_HOLDING = frozenset({
+    "append_under_lock", "declare_batch", "reserve", "terminalize", "amend",
+})
 _DEFAULT_LEDGER_MODULE_IDS = frozenset({"ll", "launch_ledger"})
 
 # Modules known to import launch_ledger today; population must include them
@@ -1045,6 +1051,56 @@ def test_class3_append_allowlist_names_exist_in_launch_ledger():
         source = fh.read()
     tree = _parse_source(source, _LEDGER_PY)
     _validate_class3_append_allowlist(tree, "launch_ledger.py")
+
+
+def _module_level_function(tree, name):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
+def _function_calls_acquire_lock(func_node):
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "_acquire_lock":
+                return True
+    return False
+
+
+def _function_releases_lock_in_finally(func_node):
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Try):
+            for stmt in node.finalbody:
+                for child in ast.walk(stmt):
+                    if isinstance(child, ast.Call):
+                        func = child.func
+                        if isinstance(func, ast.Name) and func.id == "_release_lock":
+                            return True
+    return False
+
+
+def test_class3_allowlisted_lock_holders_take_and_release_the_lock():
+    # axis: an allowlisted ledger writer really acquires and releases the ledger lock —
+    # allowlisting is not a bypass.
+    with open(_LEDGER_PY, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = _parse_source(source, _LEDGER_PY)
+    missing = []
+    for name in sorted(_CLASS3_LOCK_HOLDING):
+        func_node = _module_level_function(tree, name)
+        if func_node is None:
+            missing.append("%s: not defined at module level" % name)
+            continue
+        if not _function_calls_acquire_lock(func_node):
+            missing.append("%s: no _acquire_lock call" % name)
+        if not _function_releases_lock_in_finally(func_node):
+            missing.append("%s: no _release_lock in try/finally" % name)
+    assert missing == [], (
+        "allowlisted lock-holders must acquire and release the ledger lock: %s"
+        % "; ".join(missing)
+    )
 
 
 def test_class3_from_import_append_boundary():
