@@ -149,7 +149,10 @@ it:
   owner-half slot. **The builder stamps it for you** (workhorse charter §11), together with a
   reminder comment beneath it; you write **beneath the marker**, and your write **replaces the
   reminder**. The slot is **append-only and yours**: you edit your own prior text in place, never the
-  builder's prose. **What the reminder detects is the hidden case:** a body rewrite that
+  builder's prose — with exactly one exception, **the reminder**, which is the sole piece of
+  builder-emitted text you are expected to remove, and which you **must** delete once your verdict is
+  there (a verdict sitting beside a standing reminder makes the signal read "owner-half write still
+  owed" when it is not). **What the reminder detects is the hidden case:** a body rewrite that
   **re-creates the heading but drops your text** leaves the slot looking present and saying nothing
   — a slot carrying **neither** reminder nor verdict is a write that was dropped, distinct from one
   still carrying the reminder, which is a vet not yet written.

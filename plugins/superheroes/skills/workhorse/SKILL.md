@@ -713,7 +713,9 @@ format.
            register under the advisor-vet marker: the verdict; what was checked, in owner terms;
            what accepting it means; what is theirs to decide — plus a pointer to the receipt. -->
 
-  You stamp the marker so the advisor never has to, and the advisor's write **replaces the
+  You stamp the marker so the advisor does not have to on the normal first write — the advisor still
+  re-stamps it when a body rewrite dropped it, and stamps it itself on a body that predates this
+  contract. The advisor's write **replaces the
   reminder** — which is what makes the slot's three states readable from the body alone:
   reminder still present → **the owner-half write is owed** (the receipt itself may already exist —
   the advisor posts it *before* writing the body, so check for an existing vet-receipt comment

@@ -826,7 +826,7 @@ PR-body markers from the retired execution spine survive independently of it:
   carrying neither reminder nor verdict is a write that was dropped. Marker-presence no longer
   separates those two states, because the builder stamps the marker.
   A body predating the contract carries **no marker at all** and reads as *not yet vetted*, not as a dropped write.
-  Because the receipt is posted before the body write, a standing reminder means the **owner-half write** is owed — the receipt may already exist.
+  Because the receipt is posted before the body write, a standing reminder means the **owner-half write** is owed — the receipt may already exist, so the advisor checks for its own existing receipt comment before posting another.
 
 **Omission floor (owner half).** Anything the owner still **carries after merging** appears
 in the PR's owner half, **stated as a consequence**. The checkable floor beneath that
