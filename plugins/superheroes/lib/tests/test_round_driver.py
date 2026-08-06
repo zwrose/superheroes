@@ -653,6 +653,11 @@ def test_audit_results_fault_pure():
     # an empty target set judges no id — the seat-key guard's empty-key rule, audit-side
     assert RD.audit_results_fault({"results": [{"id": "zz", "ruling": "not-discharged"}]}, []) is None
     assert "not an audit target" in RD.audit_results_fault({"results": good}, [{"id": "other"}])
+    # a ruling with no binding id is refused even with NO targets to key against — the id branch
+    # stands on its own, so its bite-proof reddens on the refusal axis rather than on a message
+    assert "no usable `id`" in RD.audit_results_fault(
+        {"results": [{"id": None, "ruling": "not-discharged"}]}, [])
+    assert "results[0] is str" in RD.audit_results_fault({"results": ["discharged"]}, [])
     # the entry index is named so a multi-result artifact says WHICH ruling is wrong
     two = [{"id": "a1", "ruling": "not-discharged"}, {"id": "a2", "ruling": "nope"}]
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
