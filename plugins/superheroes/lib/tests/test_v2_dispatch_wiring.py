@@ -43,9 +43,9 @@ SURFACE = (WORKHORSE, PREFLIGHT) + CONFIG_DOCS
 V2_DISPATCH_ROLES = ("implementer", "pilot")   # the model_tier roles #472 adds
 
 # Retired enginePreferences keys that must never be cited as a live config knob again (plan
-# authoring was retired in #479). Test-local since #820 retired the production tombstone: the
-# list has no production consumer, only this guard.
-RETIRED_ENGINE_KEYS = ("planAuthor",)
+# authoring was retired in #479; timeout/idleTimeout config channel retired in #847). Test-local
+# since #820 retired the production tombstone: the list has no production consumer, only this guard.
+RETIRED_ENGINE_KEYS = ("planAuthor", "timeout", "idleTimeout")
 
 
 def extract_engine_pref_keys(text):
@@ -217,14 +217,22 @@ def test_brief_check_engine_key_wired():
 
 # Axis: a retired key reappearing as a live config knob in calibration prose.
 def test_no_retired_engine_key_in_calibration_prose():
+    all_text = "\n".join(_read(f) for f in SURFACE)
+    cited = extract_engine_pref_keys(all_text)
     for k in RETIRED_ENGINE_KEYS:
-        pattern = r"\b" + re.escape(k) + r"\b"
-        for f in SURFACE:
-            text = _read(f)
-            assert re.search(pattern, text) is None, (
-                f"retired enginePreferences key {k!r} is still cited in {f} — it must never "
-                "re-appear as a live config knob (plan authoring was retired in #479)"
-            )
+        assert k not in cited, (
+            f"retired enginePreferences key {k!r} is still cited in SURFACE — it must never "
+            "re-appear as a live config knob"
+        )
+    # planAuthor is unique enough for a word-boundary prose guard; timeout/idleTimeout are checked
+    # via the §11 extractor above so generic dispatch-timeout prose does not false-fail.
+    pattern = r"\bplanAuthor\b"
+    for f in SURFACE:
+        text = _read(f)
+        assert re.search(pattern, text) is None, (
+            f"retired enginePreferences key 'planAuthor' is still cited in {f} — it must never "
+            "re-appear as a live config knob (plan authoring was retired in #479)"
+        )
 
 
 def test_cited_enginePreferences_keys_are_in_schema():
@@ -253,6 +261,25 @@ def test_engine_role_keys_are_documented():
             f"enginePreferences role key {key!r} is not documented in any of {CONFIG_DOCS} — a "
             "schema key with no owner-facing documentation"
         )
+
+
+def test_documented_effort_role_kinds_match_codex_effort():
+    """§11 drift guard: view-and-tune effort roster ↔ engine_pref._CODEX_EFFORT keys."""
+    tune_md = _read("skills/configure/reference/view-and-tune.md")
+    m = re.search(
+        r'Valid role-kind keys are (.+?) \(role',
+        tune_md, re.DOTALL)
+    assert m, (
+        "view-and-tune.md missing the enginePreferences.effort role-kind roster sentence"
+    )
+    documented = set(re.findall(r'`([^`]+)`', m.group(1)))
+    expected = set(engine_pref._CODEX_EFFORT.keys())
+    assert documented, (
+        "effort role-kind roster parsed to empty — prose shape regressed")
+    assert documented == expected, (
+        "documented effort role kinds vs _CODEX_EFFORT drift: "
+        "doc-only=%s code-only=%s"
+        % (sorted(documented - expected), sorted(expected - documented)))
 
 
 # --- Guard 3: observability wiring ------------------------------------------------------------

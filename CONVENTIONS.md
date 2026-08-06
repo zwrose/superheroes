@@ -667,9 +667,9 @@ codifies standing owner policy — the cursor fable channel is retired in code a
 fable-via-cursor is dead. The default cursor dispatch stays `composer-2.5`. Each
 dispatch carries a role-appropriate timeout
 ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)
-so a stalled external CLI is killed well before the ceiling; an owner may
-override either limit via `enginePreferences`, and an override never disables the
-ceiling.
+so a stalled external CLI is killed well before the ceiling; the ceiling is never
+disabled, and these limits are not owner-configurable through `enginePreferences`
+(that channel was retired as dead surface).
 
 **Seat-map preflight economics** (#610): the composition preflight that decides which vendors are
 live for the panel is **gated, cached, and pin-scoped**. It runs only on panel-dispatching entries —
