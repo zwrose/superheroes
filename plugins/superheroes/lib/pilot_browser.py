@@ -3,7 +3,6 @@
 The framework never installs Playwright or any automation runtime. ``verify_pin`` only observes
 and compares an externally supplied pin against a bounded subprocess observer.
 """
-import contextlib
 import hmac
 import os
 import re

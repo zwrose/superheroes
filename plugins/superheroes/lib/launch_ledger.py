@@ -754,7 +754,7 @@ def boundary_record(verdict, *, weaker_acceptance=None):
         if weaker_acceptance is None:
             return {"ok": False, "reason": "ledger-boundary-weaker-unaccepted"}
         try:
-            acceptance = pilot_provision._validate_weaker_acceptance(weaker_acceptance)
+            acceptance = pilot_provision.validate_weaker_acceptance(weaker_acceptance)
         except pilot_provision.PilotProvisionError:
             return {"ok": False, "reason": "ledger-boundary-weaker-acceptance-invalid"}
     elif weaker_acceptance is not None:
@@ -790,39 +790,39 @@ def boundary_record(verdict, *, weaker_acceptance=None):
 
 def _validate_boundary_block(block, slot, generation):
     if not isinstance(block, dict):
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-shape"
     if set(block.keys()) != _BOUNDARY_RECORD_KEYS:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-keys"
     if not isinstance(block.get("slotRef"), str) or not block["slotRef"]:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-slotRef"
     if not isinstance(block.get("result"), str) or not block["result"]:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-result"
     if not isinstance(block.get("provenance"), str) or not block["provenance"]:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-provenance"
     block_strength = block.get("strength")
     if block_strength not in (
         pilot_boundary.STRENGTH_STRONG,
         pilot_boundary.STRENGTH_WEAKER,
     ):
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-strength"
     if type(block.get("match")) is not bool:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-match"
     if not isinstance(block.get("policyDigest"), str) or not block["policyDigest"]:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-policyDigest"
     if not isinstance(block.get("verifiedAt"), str) or not block["verifiedAt"]:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-verifiedAt"
     if type(block.get("weakerAccepted")) is not bool:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-weakerAccepted"
     for nullable_field in ("acceptedBy", "acceptedAt", "acceptanceReason"):
         nullable_value = block.get(nullable_field)
         if nullable_value is not None and (
             not isinstance(nullable_value, str) or not nullable_value
         ):
-            return "fold-bad-field:reserved:boundary"
+            return "fold-bad-field:reserved:boundary-nullable"
     try:
         expected_ref = pilot_slot.format_slot_ref(slot, generation)
     except pilot_slot.PilotSlotError:
-        return "fold-bad-field:reserved:boundary"
+        return "fold-bad-field:reserved:boundary-slotRef"
     if block["slotRef"] != expected_ref:
         return "fold-bad-field:reserved:boundary-slotRef"
     return None
@@ -1903,7 +1903,10 @@ def count(repo_root, batch_id, env=None):
             strength = boundary["strength"]
             weaker_accepted = boundary["weakerAccepted"]
         else:
-            slot_ref = pilot_slot.format_slot_ref(slot, generation)
+            try:
+                slot_ref = pilot_slot.format_slot_ref(slot, generation)
+            except pilot_slot.PilotSlotError:
+                slot_ref = None
             strength = None
             weaker_accepted = False
         slots_block.append({

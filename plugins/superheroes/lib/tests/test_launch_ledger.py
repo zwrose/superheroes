@@ -3471,7 +3471,7 @@ def test_reserved_boundary_extra_key_refuses():
     )
     result = ll.fold([rec])
     assert result["ok"] is False
-    assert result["reason"] == "fold-bad-field:reserved:boundary"
+    assert result["reason"] == "fold-bad-field:reserved:boundary-keys"
 
 
 def test_reserved_boundary_slotref_disagreement_refuses():
@@ -3580,7 +3580,7 @@ def test_reserved_boundary_not_dict_refuses():
     )
     result = ll.fold([rec])
     assert result["ok"] is False
-    assert result["reason"] == "fold-bad-field:reserved:boundary"
+    assert result["reason"] == "fold-bad-field:reserved:boundary-shape"
 
 
 def test_reserved_boundary_wrong_value_types_refuses():
@@ -3591,7 +3591,34 @@ def test_reserved_boundary_wrong_value_types_refuses():
     )
     result = ll.fold([rec])
     assert result["ok"] is False
-    assert result["reason"] == "fold-bad-field:reserved:boundary"
+    assert result["reason"] == "fold-bad-field:reserved:boundary-match"
+
+
+def test_count_slot_without_boundary_bad_generation_returns_indeterminate_slotref(
+    tmp_path, monkeypatch,
+):
+    # axis: count never raises when format_slot_ref would fail on folded slot metadata
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-bad-gen"
+    launch_id = "l-bad-gen"
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo, slot=_SLOT_A, generation=_SLOT_GEN))
+    ll.append(repo, _started(launch_id))
+    ll.record_outcome(repo, launch_id, "handback", "done")
+    folded = ll.fold(ll.read(repo)["records"])
+    folded["launches"][launch_id]["generation"] = -1
+    folded["launches"][launch_id]["boundary"] = None
+    monkeypatch.setattr(ll, "fold", lambda records: folded)
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["slots"] == [{
+        "slot": _SLOT_A,
+        "generation": -1,
+        "slotRef": None,
+        "strength": None,
+        "weakerAccepted": False,
+    }]
 
 
 def test_boundary_record_verdict_not_dict_refuses():

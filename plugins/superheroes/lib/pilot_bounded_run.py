@@ -55,7 +55,8 @@ def run_bounded(
     With ``retain_output=True`` (the default), stdout is retained up to ``max_output_bytes`` and
     output beyond the cap classifies as ``oversize``. With ``retain_output=False``, stdout is
     counted but never accumulated; truncation is reported on a ``completed`` outcome instead of
-    refusing as ``oversize``.
+    refusing as ``oversize``. A mid-stream read error with ``retain_output=False`` refuses as
+    ``spawn-failed`` rather than reporting zero bytes.
 
     Every run starts its own session (``start_new_session=True``), and every *termination* path
     (timeout, oversize, read failure, unexpected error, or the ``finally`` sweep of a still-running
@@ -118,10 +119,8 @@ def run_bounded(
                         total += len(chunk)
                         if total > max_output_bytes:
                             truncated = True
-                except Exception as exc:  # noqa: BLE001 — match pilot_cleanup's count reset
+                except Exception as exc:  # noqa: BLE001 — the exception itself is never inspected
                     read_error.append(exc)
-                    total = 0
-                    truncated = False
                 count_meta.append((total, truncated))
 
         reader = threading.Thread(target=_read_stdout, daemon=True)
