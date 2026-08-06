@@ -32,9 +32,6 @@ VALID_PIN = {
     "integrityDigest": VALID_DIGEST,
 }
 
-SHORT_BASE = None  # set per-test via _socket_base_outside_worktree()
-
-
 def _socket_base_parent():
     """Return a short writable temp parent for socket bases (SUN_PATH cap)."""
     short_tmp = "/tmp"
@@ -1010,6 +1007,45 @@ def test_provision_server_journals_and_returns_record():
         assert pj.KIND_BROWSER_SERVER_PROVISIONED in kinds
         end_times = [e["endedAt"] for e in replayed["effects"] if e["kind"] == pj.KIND_BROWSER_SERVER_PROVISIONED]
         assert end_times[0] != NOW
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_provision_server_refuses_wrong_kind_effect_id():
+    tmp = _tmp_dir()
+    journal = os.path.join(tmp, "journal.jsonl")
+    sock = os.path.join(tmp, "sock")
+    os.makedirs(sock)
+    try:
+        begin = pb.begin_provision_server(journal, slot_ref=SLOT_REF, at=NOW)
+        assert begin["ok"] is True
+        other = pj.begin_effect(
+            journal, slot_ref=SLOT_REF, kind=pj.KIND_APP_STARTED, at=NOW, effect_id="other-kind",
+        )
+        assert other["ok"] is True
+        result = pb.provision_server(
+            journal,
+            slot_ref=SLOT_REF,
+            generation=1,
+            socket_dir=sock,
+            server_pid=100,
+            browser_pid=101,
+            pin=VALID_PIN,
+            created_at=NOW,
+            begin_at=NOW,
+            ppid_of=lambda _pid: 100,
+            effect_id=other["effectId"],
+        )
+        assert result["ok"] is False
+        assert result["reason"] == pb.REFUSAL_SERVER_RECORD_INVALID
+        assert result.get("detail") == pj.REASON_ORIGIN_KIND_MISMATCH
+        replayed = pj.replay(journal)
+        prov = [
+            e for e in replayed["effects"]
+            if e["kind"] == pj.KIND_BROWSER_SERVER_PROVISIONED
+        ]
+        assert len(prov) == 1
+        assert prov[0]["state"] == pj.STATE_POSSIBLY_APPLIED
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 

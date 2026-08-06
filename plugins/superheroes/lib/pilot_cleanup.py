@@ -82,8 +82,11 @@ ASSURANCE_LIMITS = (
     "prefers them.",
 )
 
-NAMESPACE_PLACEHOLDER = "{namespace}"
-SENTINEL_PLACEHOLDER = "{sentinel}"
+# Both placeholders are read from their one home, never respelled here (#866): `{namespace}`
+# from `pilot_contract` (declaration grammar), `{sentinel}` from `pilot_policy` (containment
+# grammar). This module substitutes them; it does not define them.
+NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
+SENTINEL_PLACEHOLDER = pilot_policy.SENTINEL_PLACEHOLDER
 
 _PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 _SENTINEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
@@ -1425,15 +1428,20 @@ def resurrection_plan(
                 "request": reseed_request,
                 "path": reseed_path,
             },
+            # `owner` names which component performs the step. PR #857 renamed this key to
+            # `responsibleParty` solely to dodge a bug in `assert_results_only`, which matched a
+            # field-name-shaped account name in KEY position and so refused any plan whose step
+            # key spelled a declared account. #870 fixed the guard at its cause; the dodge is
+            # renamed back here (#866) rather than left as a fossil that reads like a design call.
             {
                 "op": "begin-generation",
-                "responsibleParty": "C7",
+                "owner": "C7",
                 "requires": "released",
                 "note": "the generation bump is enforced at the broker; this plan does not perform it",
             },
             {
                 "op": "resume",
-                "responsibleParty": "C7",
+                "owner": "C7",
             },
         ],
     }

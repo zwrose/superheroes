@@ -73,11 +73,18 @@ SLOT_OUTCOMES = frozenset({SLOT_OUTCOME_PROVISIONED, SLOT_OUTCOME_FAILED})
 
 REASON_JOURNAL_UNREADABLE = "journal-unreadable"
 REASON_JOURNAL_WRITE_FAILED = "journal-write-failed"
+REASON_JOURNAL_TORN = "journal-torn"
 REASON_RECORD_INVALID = "journal-record-invalid"
 REASON_KIND_UNKNOWN = "journal-effect-kind-unknown"
 REASON_OUTCOME_INVALID = "journal-outcome-invalid"
 REASON_SLOT_REF_INVALID = "journal-slot-ref-invalid"
 REASON_EFFECT_ID_INVALID = "journal-effect-id-invalid"
+REASON_ORIGIN_MISSING = "journal-effect-origin-missing"
+REASON_ORIGIN_AMBIGUOUS = "journal-effect-origin-ambiguous"
+REASON_ORIGIN_INVALID = "journal-effect-origin-invalid"
+REASON_ORIGIN_KIND_MISMATCH = "journal-effect-origin-kind-mismatch"
+REASON_ORIGIN_SLOT_MISMATCH = "journal-effect-origin-slot-mismatch"
+REASON_ALREADY_CLOSED = "journal-effect-already-closed"
 
 BLOCK_SLOT_ENTRY_INVALID = "report-slot-entry-invalid"
 BLOCK_SLOT_OUTCOME_INVALID = "report-slot-outcome-invalid"
@@ -270,7 +277,153 @@ def _release_journal_lock(lock_fd):
         pass
 
 
-def _write_record(journal_path, record):
+def _read_journal_text(journal_path):
+    """Read a journal fail-closed. Returns a dict:
+       {"ok": bool, "text": str, "torn": bool, "reason": str|None, "missing": bool}
+
+    On failure, ``reason`` is ``REASON_JOURNAL_UNREADABLE`` unless the file is missing
+    (``missing`` is True and ``reason`` is None).
+    """
+    fd = None
+    try:
+        fd = os.open(
+            journal_path,
+            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
+        )
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return {
+                "ok": False,
+                "text": "",
+                "torn": False,
+                "reason": REASON_JOURNAL_UNREADABLE,
+                "missing": False,
+            }
+        raw = b""
+        while True:
+            chunk = os.read(fd, 65536)
+            if not chunk:
+                break
+            raw += chunk
+    except FileNotFoundError:
+        return {
+            "ok": False,
+            "text": "",
+            "torn": False,
+            "reason": None,
+            "missing": True,
+        }
+    except OSError:
+        return {
+            "ok": False,
+            "text": "",
+            "torn": False,
+            "reason": REASON_JOURNAL_UNREADABLE,
+            "missing": False,
+        }
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+    torn = False
+    if raw and not raw.endswith(b"\n"):
+        torn = True
+        last_nl = raw.rfind(b"\n")
+        if last_nl == -1:
+            return {
+                "ok": True,
+                "text": "",
+                "torn": True,
+                "reason": None,
+                "missing": False,
+            }
+        raw = raw[:last_nl + 1]
+
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return {
+            "ok": False,
+            "text": "",
+            "torn": False,
+            "reason": REASON_JOURNAL_UNREADABLE,
+            "missing": False,
+        }
+
+    return {
+        "ok": True,
+        "text": text,
+        "torn": torn,
+        "reason": None,
+        "missing": False,
+    }
+
+
+def _verify_end_effect_origin(journal_path, *, slot_ref, effect_id, kind):
+    """Verify the effect ID names an open begin of the right kind for this slot.
+
+    Precedence (first match wins):
+    1. journal read failure → journal-unreadable (missing file → origin-missing)
+    2. journal torn (last record incomplete) → journal-torn
+    3. zero begin-phase records with this effectId → origin-missing
+    4. more than one begin-phase record → origin-ambiguous
+    5. exactly one begin but fails _validate_begin_record → origin-invalid
+    6. exactly one valid begin but kind != argument → origin-kind-mismatch
+    7. exactly one valid begin but slotRef != argument → origin-slot-mismatch
+    8. any end-phase record with this effectId → already-closed
+    9. otherwise → proceed (return None)
+    """
+    read_result = _read_journal_text(journal_path)
+    if not read_result["ok"]:
+        if read_result["missing"]:
+            return REASON_ORIGIN_MISSING
+        # None reason would read as "proceed" — refuse instead.
+        return read_result["reason"] or REASON_JOURNAL_UNREADABLE
+    if read_result["torn"]:
+        return REASON_JOURNAL_TORN
+
+    begin_count = 0
+    begin_record = None
+    end_exists = False
+
+    for line in read_result["text"].splitlines():
+        if not line.strip():
+            continue
+        try:
+            obj = json.loads(line, parse_constant=_reject_constant)
+        except (ValueError, json.JSONDecodeError):
+            continue
+        if not isinstance(obj, dict):
+            continue
+        if obj.get("effectId") != effect_id:
+            continue
+        phase = obj.get("phase")
+        if phase == PHASE_BEGIN:
+            begin_count += 1
+            if begin_count == 1:
+                begin_record = obj
+        elif phase == PHASE_END:
+            end_exists = True
+
+    if begin_count == 0:
+        return REASON_ORIGIN_MISSING
+    if begin_count > 1:
+        return REASON_ORIGIN_AMBIGUOUS
+    if not _validate_begin_record(begin_record):
+        return REASON_ORIGIN_INVALID
+    if begin_record.get("kind") != kind:
+        return REASON_ORIGIN_KIND_MISMATCH
+    if begin_record.get("slotRef") != slot_ref:
+        return REASON_ORIGIN_SLOT_MISMATCH
+    if end_exists:
+        return REASON_ALREADY_CLOSED
+    return None
+
+
+def _write_record(journal_path, record, verify=None):
     """Durable single-write append. Returns ok/reason dict."""
     if not _journal_path_writable(journal_path):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
@@ -281,6 +434,10 @@ def _write_record(journal_path, record):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     fd = None
     try:
+        if verify is not None:
+            refusal = verify()
+            if refusal is not None:
+                return _fail(refusal)
         _ensure_parent_dir(journal_path)
         # O_NONBLOCK prevents an existing FIFO at journal_path from blocking open
         # before the regular-file fstat check can refuse the write.
@@ -375,14 +532,16 @@ def begin_effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=Non
     return _ok(effectId=effect_id)
 
 
-def end_effect(journal_path, *, slot_ref, effect_id, outcome, at, reason=None):
-    """Append an end-phase journal record."""
+def end_effect(journal_path, *, slot_ref, effect_id, kind, outcome, at, reason=None):
+    """Verify effect origin (required ``kind``) under the write lock, then append an end-phase journal record; refuse without writing when verification fails."""
     if not _is_str_path(journal_path):
         return _fail(REASON_JOURNAL_WRITE_FAILED)
     if not _validate_slot_ref(slot_ref):
         return _fail(REASON_SLOT_REF_INVALID)
     if not _validate_effect_id(effect_id):
         return _fail(REASON_EFFECT_ID_INVALID)
+    if not _is_member(kind, EFFECT_KINDS):
+        return _fail(REASON_KIND_UNKNOWN)
     if not _is_member(outcome, END_OUTCOMES):
         return _fail(REASON_OUTCOME_INVALID)
     if not _is_iso8601_utc(at):
@@ -397,7 +556,16 @@ def end_effect(journal_path, *, slot_ref, effect_id, outcome, at, reason=None):
         at=at,
         reason=reason,
     )
-    return _write_record(journal_path, record)
+
+    def _verify():
+        return _verify_end_effect_origin(
+            journal_path,
+            slot_ref=slot_ref,
+            effect_id=effect_id,
+            kind=kind,
+        )
+
+    return _write_record(journal_path, record, verify=_verify)
 
 
 class _EffectHandle:
@@ -472,6 +640,7 @@ def effect(journal_path, *, slot_ref, kind, at, detail=None, effect_id=None):
             journal_path,
             slot_ref=slot_ref,
             effect_id=handle.effect_id,
+            kind=kind,
             outcome=handle._outcome,
             at=end_at,
             reason=end_reason,
@@ -655,60 +824,28 @@ def replay(journal_path, *, slot_ref=None):
             slot_ref,
         )
 
-    fd = None
-    try:
-        fd = os.open(
-            journal_path,
-            os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
-        )
-        st = os.fstat(fd)
-        if not stat.S_ISREG(st.st_mode):
-            return _stamp_replay(
-                _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
-                journal_path,
-                slot_ref,
-            )
-        raw = b""
-        while True:
-            chunk = os.read(fd, 65536)
-            if not chunk:
-                break
-            raw += chunk
-    except OSError:
+    read_result = _read_journal_text(journal_path)
+    if not read_result["ok"]:
         return _stamp_replay(
-            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
-            journal_path,
-            slot_ref,
-        )
-    finally:
-        if fd is not None:
-            try:
-                os.close(fd)
-            except OSError:
-                pass
-
-    torn = False
-    if raw and not raw.endswith(b"\n"):
-        torn = True
-        last_nl = raw.rfind(b"\n")
-        if last_nl == -1:
-            return _stamp_replay(
-                _ok(effects=[], torn=True, anomalies=[]),
-                journal_path,
-                slot_ref,
-            )
-        raw = raw[:last_nl + 1]
-
-    try:
-        text = raw.decode("utf-8")
-    except UnicodeDecodeError:
-        return _stamp_replay(
-            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            _fail(
+                read_result["reason"] or REASON_JOURNAL_UNREADABLE,
+                effects=[],
+                torn=False,
+                anomalies=[],
+            ),
             journal_path,
             slot_ref,
         )
 
-    lines = text.splitlines()
+    torn = read_result["torn"]
+    if torn and not read_result["text"]:
+        return _stamp_replay(
+            _ok(effects=[], torn=True, anomalies=[]),
+            journal_path,
+            slot_ref,
+        )
+
+    lines = read_result["text"].splitlines()
 
     parsed_records = []
     for line_no, line in enumerate(lines, start=1):

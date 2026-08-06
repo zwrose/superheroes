@@ -87,6 +87,20 @@ def _journal_append_worker(journal_path, worker_id, barrier):
             raise RuntimeError(result["reason"])
 
 
+def _concurrent_end_effect_worker(journal_path, effect_id, barrier, out_queue):
+    import pilot_journal as pj_module
+    barrier.wait(timeout=_CONCURRENCY_BARRIER_TIMEOUT)
+    result = pj_module.end_effect(
+        journal_path,
+        slot_ref="slot-a@1",
+        effect_id=effect_id,
+        kind=pj_module.KIND_APP_STARTED,
+        outcome=pj_module.OUTCOME_APPLIED,
+        at=_TS2,
+    )
+    out_queue.put(result)
+
+
 def _detail_with_encoded_size(target_size):
     padding_len = target_size
     while padding_len >= 0:
@@ -207,7 +221,7 @@ def _begin_end_applied_effect(tmp_dir, kind, *, slot_ref=_SLOT_REF, effect_id="a
     )
     assert result["ok"] is True
     pj.end_effect(
-        path, slot_ref=slot_ref, effect_id=effect_id,
+        path, slot_ref=slot_ref, effect_id=effect_id, kind=kind,
         outcome=pj.OUTCOME_APPLIED, at=_TS2,
     )
     return path
@@ -229,7 +243,7 @@ def test_write_replay_round_trip_each_kind(tmp_dir, kind):
     )
     assert result["ok"] is True
     pj.end_effect(
-        path, slot_ref=_SLOT_REF, effect_id="roundtrip1",
+        path, slot_ref=_SLOT_REF, effect_id="roundtrip1", kind=kind,
         outcome=pj.OUTCOME_APPLIED, at=_TS2,
     )
     replayed = pj.replay(path)
@@ -334,12 +348,34 @@ def test_invalid_non_z_timestamp(tmp_dir):
     assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
 
 
+def _assert_replayed_effect(effect, *, effect_id, kind, scope, slot_ref, state, outcome):
+    assert effect["effectId"] == effect_id
+    assert effect["kind"] == kind
+    assert effect["scope"] == scope
+    assert effect["slotRef"] == slot_ref
+    assert effect["state"] == state
+    assert effect["outcome"] == outcome
+
+
 def test_orphan_end(tmp_dir):
     path = _journal(tmp_dir)
     _write_line(path, _end_record(effect_id="orphan1"))
     replayed = pj.replay(path)
-    assert replayed["anomalies"]
-    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert replayed["ok"] is True
+    assert replayed["torn"] is False
+    assert replayed["anomalies"] == [
+        {"effectId": "orphan1", "line": 1, "reason": "orphan-end"},
+    ]
+    assert len(replayed["effects"]) == 1
+    _assert_replayed_effect(
+        replayed["effects"][0],
+        effect_id="orphan1",
+        kind=pj.KIND_UNKNOWN,
+        scope=pj.SCOPE_SHARED,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=pj.OUTCOME_APPLIED,
+    )
 
 
 def test_duplicate_begin(tmp_dir):
@@ -358,8 +394,39 @@ def test_duplicate_end(tmp_dir):
     _write_line(path, _end_record(effect_id="dupend1"))
     _write_line(path, _end_record(effect_id="dupend1"))
     replayed = pj.replay(path)
-    assert replayed["anomalies"]
-    assert all(e["state"] == pj.STATE_POSSIBLY_APPLIED for e in replayed["effects"])
+    assert replayed["ok"] is True
+    assert replayed["torn"] is False
+    assert replayed["anomalies"] == [
+        {"effectId": "dupend1", "line": 3, "reason": "duplicate-end"},
+    ]
+    assert len(replayed["effects"]) == 3
+    _assert_replayed_effect(
+        replayed["effects"][0],
+        effect_id="dupend1",
+        kind=pj.KIND_APP_STARTED,
+        scope=pj.SCOPE_SLOT,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=None,
+    )
+    _assert_replayed_effect(
+        replayed["effects"][1],
+        effect_id="dupend1",
+        kind=pj.KIND_UNKNOWN,
+        scope=pj.SCOPE_SHARED,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=pj.OUTCOME_APPLIED,
+    )
+    _assert_replayed_effect(
+        replayed["effects"][2],
+        effect_id="dupend1",
+        kind=pj.KIND_UNKNOWN,
+        scope=pj.SCOPE_SHARED,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=pj.OUTCOME_APPLIED,
+    )
 
 
 def test_end_before_begin(tmp_dir):
@@ -376,8 +443,22 @@ def test_slot_ref_disagreement(tmp_dir):
     _write_line(path, _begin_record(effect_id="mismatch1", slot_ref=_SLOT_REF))
     _write_line(path, _end_record(effect_id="mismatch1", slot_ref="slot-a@2"))
     replayed = pj.replay(path)
-    assert replayed["anomalies"]
-    assert replayed["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert replayed["ok"] is True
+    assert replayed["torn"] is False
+    assert replayed["anomalies"] == [
+        {"effectId": "mismatch1", "reason": "slot-ref-mismatch"},
+    ]
+    assert "line" not in replayed["anomalies"][0]
+    assert len(replayed["effects"]) == 1
+    _assert_replayed_effect(
+        replayed["effects"][0],
+        effect_id="mismatch1",
+        kind=pj.KIND_APP_STARTED,
+        scope=pj.SCOPE_SLOT,
+        slot_ref=_SLOT_REF,
+        state=pj.STATE_POSSIBLY_APPLIED,
+        outcome=None,
+    )
 
 
 def test_effect_clean_exit_applied(tmp_dir):
@@ -863,11 +944,11 @@ def test_effect_end_write_failure_raises(tmp_dir, monkeypatch):
     call_count = 0
     real_write = pj._write_record
 
-    def failing_write(journal_path, record):
+    def failing_write(journal_path, record, verify=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return real_write(journal_path, record)
+            return real_write(journal_path, record, verify=verify)
         return {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
 
     monkeypatch.setattr(pj, "_write_record", failing_write)
@@ -883,11 +964,11 @@ def test_effect_body_raises_end_write_failure_propagates_body(tmp_dir, monkeypat
     call_count = 0
     real_write = pj._write_record
 
-    def failing_write(journal_path, record):
+    def failing_write(journal_path, record, verify=None):
         nonlocal call_count
         call_count += 1
         if call_count == 1:
-            return real_write(journal_path, record)
+            return real_write(journal_path, record, verify=verify)
         return {"ok": False, "reason": pj.REASON_JOURNAL_WRITE_FAILED}
 
     monkeypatch.setattr(pj, "_write_record", failing_write)
@@ -1283,3 +1364,471 @@ def test_concurrent_append_flock_short_write_all_lines_parse(tmp_dir):
     assert len(lines) == expected
     for line in lines:
         json.loads(line)
+
+
+# --- WO-883 end_effect origin verification ---
+
+
+def _assert_effect_possibly_applied_no_end(path, effect_id):
+    replayed = pj.replay(path)
+    assert replayed["ok"] is True
+    matching = [e for e in replayed["effects"] if e["effectId"] == effect_id]
+    assert len(matching) == 1
+    assert matching[0]["state"] == pj.STATE_POSSIBLY_APPLIED
+    assert matching[0]["endedAt"] is None
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == effect_id:
+                raise AssertionError("end record found for %s" % effect_id)
+
+
+def test_end_effect_refuses_nonexistent_id(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="missing1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    assert not os.path.exists(path)
+
+
+def test_end_effect_refuses_missing_begin_in_existing_journal(tmp_dir):
+    path = _journal(tmp_dir)
+    other = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="other-eff",
+    )
+    assert other["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="never-begun",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            assert not (rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "never-begun")
+
+
+def test_end_effect_refuses_wrong_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="slot-mis",
+    )
+    assert begin["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref="slot-a@2", effect_id="slot-mis",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_SLOT_MISMATCH}
+    _assert_effect_possibly_applied_no_end(path, "slot-mis")
+
+
+def test_end_effect_refuses_wrong_kind_same_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="kind-mis",
+    )
+    assert begin["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="kind-mis",
+        kind=pj.KIND_BROWSER_SERVER_PROVISIONED,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+    _assert_effect_possibly_applied_no_end(path, "kind-mis")
+
+
+def test_end_effect_precedence_kind_beats_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="prec-ks",
+    )
+    assert begin["ok"] is True
+    result = pj.end_effect(
+        path, slot_ref="slot-a@2", effect_id="prec-ks",
+        kind=pj.KIND_BROWSER_SERVER_PROVISIONED,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+    _assert_effect_possibly_applied_no_end(path, "prec-ks")
+
+
+def test_end_effect_precedence_kind_beats_already_closed(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="prec-kc",
+    )
+    assert begin["ok"] is True
+    first = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="prec-kc",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert first["ok"] is True
+    second = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="prec-kc",
+        kind=pj.KIND_BROWSER_SERVER_PROVISIONED,
+        outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert second == {"ok": False, "reason": pj.REASON_ORIGIN_KIND_MISMATCH}
+    with open(path, encoding="utf-8") as fh:
+        end_lines = []
+        for ln in fh:
+            if not ln.strip():
+                continue
+            rec = json.loads(ln)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "prec-kc":
+                end_lines.append(rec)
+    assert len(end_lines) == 1
+
+
+def test_end_effect_precedence_invalid_origin_beats_kind_and_slot(tmp_dir):
+    path = _journal(tmp_dir)
+    bad_begin = _begin_record(effect_id="prec-io")
+    bad_begin["schemaVersion"] = 2
+    bad_begin["kind"] = pj.KIND_BROWSER_SERVER_PROVISIONED
+    bad_begin["slotRef"] = "slot-a@2"
+    _write_line(path, bad_begin)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="prec-io",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_INVALID}
+    _assert_effect_possibly_applied_no_end(path, "prec-io")
+
+
+def test_end_effect_precedence_origin_missing_beats_already_closed(tmp_dir):
+    path = _journal(tmp_dir)
+    _write_line(path, _end_record(effect_id="only-end"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="only-end",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    with open(path, encoding="utf-8") as fh:
+        end_count = 0
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "only-end":
+                end_count += 1
+    assert end_count == 1
+
+
+def test_end_effect_refuses_already_closed_by_invalid_end(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="inv-end",
+    )
+    assert begin["ok"] is True
+    bad_end = _end_record(effect_id="inv-end")
+    bad_end["schemaVersion"] = 2
+    _write_line(path, bad_end)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="inv-end",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ALREADY_CLOSED}
+    with open(path, encoding="utf-8") as fh:
+        end_count = 0
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "inv-end":
+                end_count += 1
+    assert end_count == 1
+
+
+def test_end_effect_refuses_symlink_journal(tmp_dir):
+    target = os.path.join(tmp_dir, "real.jsonl")
+    journal = os.path.join(tmp_dir, "journal.jsonl")
+    begin = pj.begin_effect(
+        target, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="sym-close",
+    )
+    assert begin["ok"] is True
+    with open(target, "rb") as fh:
+        before = fh.read()
+    os.symlink(target, journal)
+    result = pj.end_effect(
+        journal, slot_ref=_SLOT_REF, effect_id="sym-close",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+    with open(target, "rb") as fh:
+        assert fh.read() == before
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_end_effect_refuses_fifo_journal(tmp_dir):
+    journal = _journal(tmp_dir)
+    os.mkfifo(journal)
+    result = pj.end_effect(
+        journal, slot_ref=_SLOT_REF, effect_id="fifo-close",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+
+
+def test_end_effect_refuses_directory_journal(tmp_dir):
+    journal = _journal(tmp_dir)
+    os.mkdir(journal)
+    result = pj.end_effect(
+        journal, slot_ref=_SLOT_REF, effect_id="dir-close",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+
+
+def test_end_effect_precedence_torn_beats_origin_missing(tmp_dir):
+    path = _journal(tmp_dir)
+    partial = json.dumps(
+        _begin_record(effect_id="other-eff"),
+        sort_keys=True,
+    )[:20]
+    with open(path, "wb") as fh:
+        fh.write(partial.encode("utf-8"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="never-begun",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
+
+
+def test_end_effect_refuses_already_closed(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="closed1",
+    )
+    assert begin["ok"] is True
+    first = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="closed1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert first["ok"] is True
+    second = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="closed1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert second == {"ok": False, "reason": pj.REASON_ALREADY_CLOSED}
+    replayed = pj.replay(path)
+    assert replayed["effects"][0]["state"] == pj.STATE_APPLIED
+    with open(path, encoding="utf-8") as fh:
+        end_lines = []
+        for ln in fh:
+            if not ln.strip():
+                continue
+            rec = json.loads(ln)
+            if rec.get("phase") == pj.PHASE_END:
+                end_lines.append(rec)
+    assert len(end_lines) == 1
+
+
+def test_end_effect_refuses_ambiguous_origin(tmp_dir):
+    path = _journal(tmp_dir)
+    _write_line(path, _begin_record(effect_id="ambig1"))
+    _write_line(path, _begin_record(effect_id="ambig1"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="ambig1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_AMBIGUOUS}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            assert rec.get("phase") != pj.PHASE_END
+    replayed = pj.replay(path)
+    ambig_effects = [e for e in replayed["effects"] if e["effectId"] == "ambig1"]
+    assert len(ambig_effects) == 2
+    assert all(e["state"] == pj.STATE_POSSIBLY_APPLIED for e in ambig_effects)
+
+
+def test_end_effect_refuses_invalid_origin(tmp_dir):
+    path = _journal(tmp_dir)
+    bad_begin = _begin_record(effect_id="bad-origin1")
+    bad_begin["schemaVersion"] = 2
+    _write_line(path, bad_begin)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="bad-origin1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_ORIGIN_INVALID}
+    _assert_effect_possibly_applied_no_end(path, "bad-origin1")
+
+
+def test_end_effect_refuses_invalid_kind(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="eff1",
+        kind="bogus-kind", outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_KIND_UNKNOWN}
+    assert not os.path.exists(path)
+
+
+def test_end_effect_argument_precedence_kind_beats_outcome(tmp_dir):
+    path = _journal(tmp_dir)
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="eff1",
+        kind="bogus-kind", outcome="bogus-outcome", at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_KIND_UNKNOWN}
+    assert not os.path.exists(path)
+
+
+def test_end_effect_refuses_torn_journal(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="torn1",
+    )
+    assert begin["ok"] is True
+    with open(path, "ab") as fh:
+        fh.write(b'{"schemaVersion": 1, "phase": "be')
+    with open(path, "rb") as fh:
+        before = fh.read()
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="torn1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
+    with open(path, "rb") as fh:
+        after = fh.read()
+    assert after == before
+
+
+def test_end_effect_refuses_torn_journal_with_no_newline(tmp_dir):
+    path = _journal(tmp_dir)
+    partial = json.dumps(
+        _begin_record(effect_id="torn-nl0"),
+        sort_keys=True,
+    )[:20]
+    with open(path, "wb") as fh:
+        fh.write(partial.encode("utf-8"))
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="torn-nl0",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_TORN}
+
+
+def test_end_effect_refuses_when_read_reports_no_reason(tmp_dir, monkeypatch):
+    path = _journal(tmp_dir)
+    monkeypatch.setattr(
+        pj,
+        "_read_journal_text",
+        lambda _path: {
+            "ok": False,
+            "text": "",
+            "torn": False,
+            "reason": None,
+            "missing": False,
+        },
+    )
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="no-reason",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+    assert not os.path.exists(path)
+
+
+@pytest.mark.parametrize("junk_line", ["[]", '"junk"', "42"])
+def test_end_effect_scan_ignores_non_dict_lines(tmp_dir, junk_line):
+    path = _journal(tmp_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(junk_line + "\n")
+    refuse = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="no-begin",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert refuse == {"ok": False, "reason": pj.REASON_ORIGIN_MISSING}
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if isinstance(rec, dict) and rec.get("phase") == pj.PHASE_END:
+                raise AssertionError("unexpected end record")
+
+    path2 = _journal(tmp_dir, "with-begin.jsonl")
+    with open(path2, "w", encoding="utf-8") as fh:
+        fh.write(junk_line + "\n")
+    begin = pj.begin_effect(
+        path2, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS,
+        effect_id="with-begin",
+    )
+    assert begin["ok"] is True
+    allow = pj.end_effect(
+        path2, slot_ref=_SLOT_REF, effect_id="with-begin",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert allow["ok"] is True
+
+
+def test_end_effect_refuses_unreadable_journal(tmp_dir):
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="unread1",
+    )
+    assert begin["ok"] is True
+    with open(path, "ab") as fh:
+        fh.write(b"\xff\xfe\n")
+    result = pj.end_effect(
+        path, slot_ref=_SLOT_REF, effect_id="unread1",
+        kind=pj.KIND_APP_STARTED, outcome=pj.OUTCOME_APPLIED, at=_TS2,
+    )
+    assert result == {"ok": False, "reason": pj.REASON_JOURNAL_UNREADABLE}
+    with open(path, "rb") as fh:
+        content = fh.read()
+    assert b'"phase": "end"' not in content
+    replayed = pj.replay(path)
+    assert replayed["ok"] is False
+    assert replayed["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_concurrent_end_effect_exactly_one_close(tmp_dir):
+    multiprocessing.set_start_method("spawn", force=True)
+    path = _journal(tmp_dir)
+    begin = pj.begin_effect(
+        path, slot_ref=_SLOT_REF, kind=pj.KIND_APP_STARTED, at=_TS, effect_id="conc-end1",
+    )
+    assert begin["ok"] is True
+    barrier = multiprocessing.Barrier(2)
+    out_queue = multiprocessing.Queue()
+    processes = []
+    for _ in range(2):
+        proc = multiprocessing.Process(
+            target=_concurrent_end_effect_worker,
+            args=(path, "conc-end1", barrier, out_queue),
+        )
+        processes.append(proc)
+        proc.start()
+    results = [out_queue.get(timeout=_CONCURRENCY_JOIN_TIMEOUT) for _ in range(2)]
+    for proc in processes:
+        proc.join(timeout=_CONCURRENCY_JOIN_TIMEOUT)
+    for proc in processes:
+        assert proc.exitcode == 0, "worker exited with %s" % proc.exitcode
+    ok_count = sum(1 for r in results if r["ok"] is True)
+    already_closed = [
+        r for r in results
+        if not r["ok"] and r["reason"] == pj.REASON_ALREADY_CLOSED
+    ]
+    assert ok_count == 1
+    assert len(already_closed) == 1
+    with open(path, encoding="utf-8") as fh:
+        end_count = 0
+        for line in fh:
+            if not line.strip():
+                continue
+            rec = json.loads(line)
+            if rec.get("phase") == pj.PHASE_END and rec.get("effectId") == "conc-end1":
+                end_count += 1
+    assert end_count == 1
+

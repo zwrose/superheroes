@@ -36,6 +36,9 @@ DECLARATION_KINDS = frozenset({
     "app-lifecycle",
 })
 
+# The one home for the `{namespace}` placeholder: this module validates it on the declared
+# cleanup command, and `pilot_policy` / `pilot_cleanup` read it from here rather than
+# respelling the literal (#866).
 NAMESPACE_PLACEHOLDER = "{namespace}"
 
 REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "pilot-schema-version-unsupported"

@@ -30,8 +30,10 @@ REFUSAL_WEAKER_ACCEPTANCE_INVALID = "provision-weaker-acceptance-invalid"
 REFUSAL_DATASTORE_IDENTITY_STRENGTH_UNKNOWN = "provision-datastore-identity-strength-unknown"
 REFUSAL_MINT_DECLARATION_MISSING = "provision-mint-declaration-missing"
 
-STRENGTH_STRONG = "strong"
-STRENGTH_WEAKER = "weaker"
+# Re-exported from the one home in `pilot_boundary`, which produces the observations these
+# words describe (#866). Kept as module names because callers and tests read them from here.
+STRENGTH_STRONG = pilot_boundary.STRENGTH_STRONG
+STRENGTH_WEAKER = pilot_boundary.STRENGTH_WEAKER
 
 _WEAKER_ACCEPTANCE_KEYS = frozenset({"acceptedBy", "acceptedAt", "reason"})
 

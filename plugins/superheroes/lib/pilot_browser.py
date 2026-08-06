@@ -707,6 +707,7 @@ def provision_server(
         journal_path,
         slot_ref=formatted_ref,
         effect_id=effect_id,
+        kind=pilot_journal.KIND_BROWSER_SERVER_PROVISIONED,
         outcome=pilot_journal.OUTCOME_APPLIED,
         at=end_at,
     )

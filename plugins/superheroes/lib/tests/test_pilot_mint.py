@@ -520,6 +520,28 @@ def test_gate_off_spawn_failed(private_tmp):
     assert result["reason"] == pm.REFUSAL_GATE_OFF_SPAWN_FAILED
 
 
+# axis: a NUL in the argv or in the environment refuses by NAME instead of escaping as an
+# uncaught ValueError out of run_gate_off_test. Popen — not the validators — is where these are
+# rejected, so before #866's shared runner caught ValueError this call raised. (#866 brief check.)
+@pytest.mark.parametrize(
+    ("envelope_command", "environment"),
+    [
+        ([sys.executable, "-c", "import sys\x00"], {}),
+        ([sys.executable, "-c", "pass"], {"PILOT_NUL\x00VAR": "x"}),
+        ([sys.executable, "-c", "pass"], {"PILOT_OK": "value\x00with-nul"}),
+    ],
+)
+def test_gate_off_nul_bearing_input_refuses_by_name(private_tmp, envelope_command, environment):
+    envelope = dict(SAMPLE_ENVELOPE)
+    envelope["gateOffTestCommand"] = envelope_command
+    result = pm.run_gate_off_test(
+        envelope, run_cwd=private_tmp, environment=environment,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pm.REFUSAL_GATE_OFF_SPAWN_FAILED
+    assert result["exitCode"] is None
+
+
 def test_gate_off_invalid_bounds(private_tmp):
     result = pm.run_gate_off_test(
         SAMPLE_ENVELOPE, run_cwd=private_tmp, environment={}, timeout_seconds=None,
