@@ -1,4 +1,13 @@
-"""Integration exercise for C9 resurrection — skipped until B4/B6/C7 land."""
+"""Integration exercise for C9 resurrection — skipped; captured-artifact path retired.
+
+This module was written for resurrection through a stored capture artifact. B4 (#826) landed as
+attended seeding (`lib/pilot_attended.py`), which produces no artifact — an attended slot parks on
+resurrection (`cleanup-attended-reseed-requires-owner`) instead of reseeding. The only live
+resurrection reseed path is minted (B6). A future replacement should exercise minted resurrection
+end-to-end (containment receipt, boundary verdict, mint reseed, generation bump, resume) once C7
+browser-context creation and broker generation enforcement are wired for that path. The unit path
+against A1 fixtures runs in test_pilot_cleanup.py.
+"""
 import os
 import sys
 
@@ -14,9 +23,9 @@ import pilot_contract  # noqa: E402
 import pilot_provision as pp  # noqa: E402
 
 pytestmark = pytest.mark.skip(
-    reason="C9 integration exercise: requires B4 (#826) capture artifacts, B6 (#828) mint client, "
-           "and C7 (#829) browser-context creation + generation bump. Sequenced after those land "
-           "per issue #831; the unit path against A1 fixtures runs in test_pilot_cleanup.py."
+    reason="C9 integration exercise: written for the retired captured-artifact resurrection path; "
+           "attended slots park instead of resurrecting, and minted resurrection is the only reseed "
+           "path left — rewrite against minted reseed + C7 generation bump or delete."
 )
 
 

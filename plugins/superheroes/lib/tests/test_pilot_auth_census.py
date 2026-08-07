@@ -1,7 +1,8 @@
-"""Doc↔code census: B6 auth modules match pilot-contract.md sections 18–21."""
+"""Doc↔code census: auth modules match pilot-contract.md section token tables."""
 import os
 import re
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -10,8 +11,12 @@ _LIB = os.path.realpath(os.path.join(_HERE, ".."))
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import pilot_attended  # noqa: E402
+import pilot_cleanup  # noqa: E402
+import pilot_contract  # noqa: E402
 import pilot_horizon  # noqa: E402
 import pilot_identity  # noqa: E402
+import pilot_lifecycle_exercise  # noqa: E402
 import pilot_mint  # noqa: E402
 
 _PILOT_CONTRACT = os.path.join(
@@ -23,6 +28,8 @@ _NEW_SECTIONS = (
     "## Mid-wave lapse",
     "## Credential validity margin",
     "## Minted sign-in exercises",
+    "## Attended seeding",
+    "## The app-lifecycle exercise",
 )
 
 _TOKEN_HEADER = "| Token | When returned |"
@@ -31,6 +38,8 @@ _IDENTITY_PROBE_TOKEN_SUBHEADER = "### Identity-probe refusal tokens"
 _LAPSE_TOKEN_SUBHEADER = "### Lapse refusal tokens"
 _HORIZON_TOKEN_SUBHEADER = "### Horizon refusal tokens"
 _MINT_TOKEN_SUBHEADER = "### Mint exercise refusal tokens"
+_ATTENDED_TOKEN_SUBHEADER = "### Attended seeding refusal tokens"
+_LIFECYCLE_EXERCISE_TOKEN_SUBHEADER = "### App-lifecycle exercise refusal tokens"
 
 _MODULE_CONFIG = (
     {
@@ -64,6 +73,26 @@ _MODULE_CONFIG = (
             {
                 "heading": _NEW_SECTIONS[3],
                 "token_subheader": _MINT_TOKEN_SUBHEADER,
+            },
+        ),
+    },
+    {
+        "label": "pilot_attended",
+        "module": pilot_attended,
+        "sections": (
+            {
+                "heading": _NEW_SECTIONS[4],
+                "token_subheader": _ATTENDED_TOKEN_SUBHEADER,
+            },
+        ),
+    },
+    {
+        "label": "pilot_lifecycle_exercise",
+        "module": pilot_lifecycle_exercise,
+        "sections": (
+            {
+                "heading": _NEW_SECTIONS[5],
+                "token_subheader": _LIFECYCLE_EXERCISE_TOKEN_SUBHEADER,
             },
         ),
     },
@@ -197,7 +226,12 @@ def _section_code_tokens(module, subheader):
             pilot_identity.REFUSAL_LAPSE_REMINT_UNAVAILABLE,
             pilot_identity.REFUSAL_LAPSE_REMINT_FAILED,
         }
-    if subheader in (_HORIZON_TOKEN_SUBHEADER, _MINT_TOKEN_SUBHEADER):
+    if subheader in (
+        _HORIZON_TOKEN_SUBHEADER,
+        _MINT_TOKEN_SUBHEADER,
+        _ATTENDED_TOKEN_SUBHEADER,
+        _LIFECYCLE_EXERCISE_TOKEN_SUBHEADER,
+    ):
         return _refusal_constants(module)
     raise AssertionError("unknown token subheader %r" % subheader)
 
@@ -420,3 +454,50 @@ def test_census_red_missing_section_heading(monkeypatch):
     monkeypatch.setattr(sys.modules[__name__], "_load_contract", lambda: modified)
     with pytest.raises(AssertionError, match="missing section heading"):
         test_module_token_population_non_vacuous(_MODULE_CONFIG[1])
+
+
+def test_sign_in_paths_frozenset():
+    assert pilot_contract.SIGN_IN_PATHS == frozenset({"attended", "minted"})
+    assert "captured" not in pilot_contract.SIGN_IN_PATHS
+
+
+def test_sign_in_path_dispatch_mappings_total_over_sign_in_paths():
+    assert set(pilot_contract._SIGN_IN_PATH_REQUIRED_BLOCK) == pilot_contract.SIGN_IN_PATHS
+    assert set(pilot_identity._LAPSE_LAPSE_ACTION_BY_SIGN_IN_PATH) == pilot_contract.SIGN_IN_PATHS
+    assert set(pilot_cleanup._RESEED_BY_SIGN_IN_PATH) == pilot_contract.SIGN_IN_PATHS
+
+
+_SIGN_IN_PATH_CAPTURED_LITERAL_RE = re.compile(
+    r"""(?x)
+    sign_in_path\s*=\s*["']captured["']
+    | ["']signInPath["']\s*:\s*["']captured["']
+    | SIGN_IN_PATHS\s*=\s*frozenset\(\{[^}]*["']captured["']
+    """
+)
+
+
+def _sign_in_path_captured_literal_lines(py_path):
+    """Lines using captured as a sign-in path value (not the retired-literal check)."""
+    hits = []
+    with open(py_path, encoding="utf-8") as fh:
+        for line_no, line in enumerate(fh, 1):
+            if "pilot-sign-in-path-retired-captured" in line:
+                continue
+            if py_path.name == "pilot_contract.py" and "sign_in_path == \"captured\"" in line:
+                continue
+            if _SIGN_IN_PATH_CAPTURED_LITERAL_RE.search(line):
+                hits.append((py_path, line_no, line.rstrip()))
+    return hits
+
+
+def test_no_captured_sign_in_path_literal_in_lib_source():
+    lib_root = Path(_LIB)
+    offenders = []
+    for py_path in sorted(lib_root.rglob("*.py")):
+        if "tests" in py_path.parts:
+            continue
+        offenders.extend(_sign_in_path_captured_literal_lines(py_path))
+    assert offenders == [], (
+        "captured sign-in path literal in lib source: %s"
+        % "; ".join("%s:%d %r" % (p, n, t) for p, n, t in offenders)
+    )
