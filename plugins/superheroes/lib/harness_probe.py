@@ -71,18 +71,45 @@ def native_layer_present(context_text) -> bool:
     return any(line.strip() == NATIVE_LAYER_MARKER for line in context_text.splitlines())
 
 
-def _precompact_summary_region(context_text):
-    """Slice of evidence after the harness compaction-summary marker, or None if absent.
+def _is_precompact_structural_boundary(line):
+    """True when ``line`` begins the next harness/log section after the compaction summary."""
+    s = line.strip()
+    if not s:
+        return False
+    if s.startswith("# ") or s == "#":
+        return True
+    if s.startswith("<"):
+        return True
+    if s.startswith("{") or s.startswith("["):
+        return True
+    if s in ("---", "==="):
+        return True
+    return False
 
-    Assumes captured evidence is a session log or summary dump where the harness writes a
-    ``Compaction summary`` heading and the model-generated summary text follows it. Hook
-    payloads and PreCompact instructions may appear earlier in the same file; this anchor
-    limits the token check to the summary region only. It does not prove the token opened
-    the summary — only that it appears after the marker, not solely in hook output."""
-    idx = context_text.rfind(PRECOMPACT_SUMMARY_MARKER)
-    if idx == -1:
+
+def _precompact_summary_region(context_text):
+    """Lines between the compaction-summary heading and the next structural boundary.
+
+    Tripwire over a free-form capture: checks that the token appears in the bounded region
+    after the harness ``Compaction summary`` heading, not in hook echoes or log lines that
+    follow the summary block. Evidence of a healthy PreCompact contract, not proof of one —
+    a capture that interleaves the token into the summary region can still pass, and content
+    after the next structural boundary (markdown heading, XML tag line, JSON line, rule) is
+    excluded from the check."""
+    lines = context_text.splitlines()
+    marker_idx = None
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip() == PRECOMPACT_SUMMARY_MARKER:
+            marker_idx = i
+            break
+    if marker_idx is None:
         return None
-    return context_text[idx + len(PRECOMPACT_SUMMARY_MARKER) :]
+    summary_lines = []
+    for line in lines[marker_idx + 1:]:
+        if _is_precompact_structural_boundary(line):
+            break
+        summary_lines.append(line)
+    return "\n".join(summary_lines)
 
 
 def precompact_evidence_passes(context_text, token) -> tuple[bool, str]:

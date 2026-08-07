@@ -171,6 +171,28 @@ def test_unreadable_transcript_emits_breadcrumb(tmp_path, capsys):
         path.chmod(0o644)
 
 
+def test_unreadable_parent_directory_emits_breadcrumb(tmp_path, capsys):
+    import os
+    import stat
+
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        import pytest
+
+        pytest.skip("root can bypass directory permission bits")
+    secret = tmp_path / "secret"
+    secret.mkdir()
+    transcript = secret / "transcript.jsonl"
+    _write_transcript(transcript, [_user_charter("showrunner")])
+    secret.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    try:
+        assert cd.detect_charter(str(transcript)) is None
+        err = capsys.readouterr().err
+        assert "superheroes charter_detect:" in err
+        assert str(transcript) in err
+    finally:
+        secret.chmod(stat.S_IRWXU)
+
+
 def test_no_charter_transcript_emits_no_breadcrumb(tmp_path, capsys):
     path = tmp_path / "transcript.jsonl"
     _write_transcript(path, [

@@ -111,6 +111,17 @@ def test_precompact_evidence_fails_when_token_only_outside_summary_region():
     assert "absent from generated summary region" in reason
 
 
+def test_precompact_evidence_fails_when_token_only_after_summary_region():
+    evidence = (
+        "Compaction summary\n"
+        "generated summary without the expected token\n"
+        '{"additionalContext": "begin your summary with ZZQX-TOKEN"}\n'
+    )
+    ok, reason = hp.precompact_evidence_passes(evidence, "ZZQX-TOKEN")
+    assert ok is False
+    assert "absent from generated summary region" in reason
+
+
 def test_main_check_precompact_returns_0_when_token_in_summary_region(tmp_path):
     path = tmp_path / "evidence.txt"
     path.write_text(

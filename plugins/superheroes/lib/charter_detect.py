@@ -52,6 +52,13 @@ def detect_charter(transcript_path):
     try:
         if not transcript_path:
             return None
+        try:
+            os.stat(transcript_path)
+        except FileNotFoundError:
+            return None
+        except OSError as exc:
+            _breadcrumb(transcript_path, exc)
+            return None
         if not os.path.isfile(transcript_path):
             return None
         last = None
