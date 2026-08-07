@@ -155,7 +155,7 @@ def test_declares_slots_repo_root_empty():
 
 
 def test_declares_slots_unreadable_profile(tmp_path, monkeypatch):
-    # axis: unreadable profile path → no-config-block
+    # axis: unreadable profile path → calibration-unreadable
     missing = str(tmp_path / "missing-profile.md")
     _patch_resolve(monkeypatch, missing)
     result = pc.declares_slots("/fake/repo")
@@ -233,6 +233,9 @@ def test_declares_slots_credential_set_not_list(tmp_path, monkeypatch):
         "reason": pc.REASON_CREDENTIAL_SET_EMPTY,
         "path": path,
     }
+
+
+def test_declares_slots_invalid_utf8_unknown(tmp_path, monkeypatch):
     # axis: invalid UTF-8 → unknown, no exception escapes
     path = tmp_path / "profile.md"
     path.write_bytes(b"\xff\xfe")
