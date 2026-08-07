@@ -2288,17 +2288,20 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
     assert _round_channels(receipt, 1) == _ALL_CHANNELS
     prose = "\n".join(_round_disclosures(receipt, 1))
     for marker in ("reviewer-fell-open (round 1): seat test-reviewer",
-                   "reviewer-fell-open-provenance-unavailable (round 1): cross-vendor seat(s) "
-                   "security-reviewer",
-                   "reviewer-fell-open-seatmap-unavailable (round 1): live cross-vendor vendor(s) "
-                   "codex",
-                   "vacuous-seat (round 1): seat(s) architecture-reviewer",
-                   "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
-                   "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
-                   "engaged probe recorded for vendor(s) codex",
-                   "canary-failed (round 1): the control probe showed no engagement",
-                   "adapter-provenance (round 1): vendor echo mismatch"):
+                     "reviewer-fell-open-provenance-unavailable (round 1): cross-vendor seat(s) "
+                     "security-reviewer",
+                     "reviewer-fell-open-seatmap-unavailable (round 1): live cross-vendor vendor(s) "
+                     "codex",
+                     "vacuous-seat (round 1): seat(s) architecture-reviewer",
+                     "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
+                     "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
+                     "engaged probe recorded for vendor(s) codex",
+                     "canary-failed (round 1): the control probe showed no engagement"):
         assert marker in prose, marker
+    # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
+    degraded_all = "\n".join(receipt["degraded"])
+    assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
+            in degraded_all)
     # seatMapViolations is a BREACH channel: restoring it must reach the receipt's breach
     # disclosure, not just the round entry.
     assert any(line.startswith("seat-map constraint breach:") and "cross-vendor" in line

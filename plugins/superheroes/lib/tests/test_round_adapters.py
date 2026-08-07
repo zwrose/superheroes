@@ -211,7 +211,8 @@ def test_panel_assembles_to_the_hand_written_artifact(tmp_path):
     # No dispatch manifest and no canary were supplied, so neither key is invented — the driver's
     # own provenance-unavailable / canaryUnverified disclosures stay the ones that fire.
     assert "ranManifest" not in artifact and "canaryResult" not in artifact
-    expected_prov = {"dispatchManifestUnavailable": True, "canaryUnavailable": True}
+    expected_prov = {"byPhase": {RD.P_PANEL: {"dispatchManifestUnavailable": True,
+                                               "canaryUnavailable": True}}}
     # `_fold_panel` pops `provenance` from the submitted artifact; both paths record it durably.
     ok_h, st_h = RD.load_state(str(tmp_path / "hand"))
     ok_a, st_a = RD.load_state(str(tmp_path / "assembled"))
@@ -486,7 +487,7 @@ def test_fold_fail_closed_policy_a_silent_verifier_cluster_is_omitted_not_emptie
     assert after["rounds"]["1"]["verify"]["unverified"], after["rounds"]["1"]["verify"]
     assert after["rounds"]["1"]["verify"]["drops"] == []
     assert after["_verified"], "a silent verifier must not drop the findings"
-    assert after["rounds"]["1"]["adapterProvenance"]["unverifiedClusters"]
+    assert after["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_VERIFIERS]["unverifiedClusters"]
 
 
 def test_fold_fail_closed_policy_a_silent_auditor_leaves_its_target_not_discharged(tmp_path):
@@ -988,4 +989,4 @@ def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
     ok, after = RD.load_state(d)
     assert after["headDiff"] == HEAD
     assert after["rounds"]["1"]["headDiffSource"] == "path"
-    assert after["rounds"]["1"]["adapterProvenance"]["headDiffPathSource"] == "store"
+    assert after["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_FIXER]["headDiffPathSource"] == "store"
