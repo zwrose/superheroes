@@ -197,7 +197,26 @@ def _canary_verified_shape(value):
 
 
 def _adapter_provenance_shape(value):
-    return isinstance(value, dict)
+    if not isinstance(value, dict):
+        return False
+    if "byPhase" in value:
+        return isinstance(value.get("byPhase"), dict)
+    return True
+
+
+def _normalize_adapter_provenance(prov):
+    """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
+    value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
+    if not isinstance(prov, dict):
+        return {}
+    if "byPhase" in prov:
+        by_phase = prov.get("byPhase")
+        if not isinstance(by_phase, dict):
+            return {}
+        return dict(by_phase)
+    if prov:
+        return {"unknown-phase": dict(prov)}
+    return {}
 
 
 # The ONE home for the per-round disclosure channels. `build_receipt` emits exactly these onto each
@@ -1142,13 +1161,27 @@ def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
-def _record_adapter_provenance(state, artifact):
-    """Persist adapter trust disclosures for the receipt/resume path (#720)."""
+def _record_adapter_provenance(state, artifact, phase):
+    """Persist adapter trust disclosures for the receipt/resume path (#720).
+
+    Each phase's disclosures accumulate under `adapterProvenance.byPhase[phase]`; a second fold of
+    the same phase replaces that phase's entry only. A legacy flat value migrates on write to
+    `byPhase["unknown-phase"]` before the new entry is merged."""
     if not isinstance(artifact, dict):
         return
     prov = artifact.pop("provenance", None)
     if isinstance(prov, dict) and prov:
-        _record_round(state, "adapterProvenance", prov)
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        existing = rec.get("adapterProvenance")
+        if isinstance(existing, dict) and "byPhase" in existing:
+            by_phase = existing.get("byPhase")
+            by_phase = dict(by_phase) if isinstance(by_phase, dict) else {}
+        elif isinstance(existing, dict) and existing:
+            by_phase = {"unknown-phase": dict(existing)}
+        else:
+            by_phase = {}
+        by_phase[phase] = dict(prov)
+        rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
 def _fold(state, config, phase, artifact, changed_subjects_seam=None):
@@ -1159,7 +1192,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
     artifact = artifact if isinstance(artifact, dict) else {}
-    _record_adapter_provenance(state, artifact)
+    _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
     elif phase == P_VERIFIERS:
@@ -2760,20 +2793,22 @@ def build_receipt(state, session_dir=None):
                 "canary-failed (round %s): the control probe showed no engagement (%s) — "
                 "cross-vendor seat(s) %s downgraded to never-ran" % (
                     rkey, detail_str, ", ".join(seats_down or [])))
-        prov = rrec.get("adapterProvenance")
-        if isinstance(prov, dict):
+        prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
+        for phase_name, prov in prov_by_phase.items():
+            if not isinstance(prov, dict):
+                continue
             if prov.get("dispatchManifestUnavailable"):
                 degraded.append(
-                    "adapter-provenance (round %s): dispatch manifest unavailable — trusted "
-                    "ranManifest/collectionManifest omitted" % rkey)
+                    "adapter-provenance (round %s, %s): dispatch manifest unavailable — trusted "
+                    "ranManifest/collectionManifest omitted" % (rkey, phase_name))
             mismatch = prov.get("vendorEchoMismatch")
             if isinstance(mismatch, list) and mismatch:
                 parts = ["%s echo=%r manifest=%r" % (row.get("seat"), row.get("echo"),
                                                      row.get("manifest"))
                          for row in mismatch if isinstance(row, dict)]
                 degraded.append(
-                    "adapter-provenance (round %s): vendor echo mismatch on seat(s): %s"
-                    % (rkey, "; ".join(parts)))
+                    "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
+                    % (rkey, phase_name, "; ".join(parts)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
