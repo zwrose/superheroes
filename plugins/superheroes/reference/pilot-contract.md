@@ -13,22 +13,24 @@
 11. [Results travel, never policy](#results-travel-never-policy)
 12. [Provisioning authorization](#provisioning-authorization)
 13. [Seed and mint call shapes](#seed-and-mint-call-shapes)
-14. [Slot reference format](#slot-reference-format)
-15. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
-16. [The provisioning journal](#the-provisioning-journal)
-17. [The partial-failure report](#the-partial-failure-report)
-18. [The launch ledger's slot grammar](#the-launch-ledgers-slot-grammar)
-19. [The identity-probe exercise](#the-identity-probe-exercise)
-20. [Mid-wave lapse](#mid-wave-lapse)
-21. [Credential validity margin](#credential-validity-margin)
-22. [Minted sign-in exercises](#minted-sign-in-exercises)
-23. [Reclaim safety](#reclaim-safety)
-24. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
-25. [Per-slot browser topology](#per-slot-browser-topology)
-26. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
-27. [The provisioning gate](#the-provisioning-gate)
-28. [Per-slot app lifecycle](#per-slot-app-lifecycle)
-29. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
+14. [Attended seeding](#attended-seeding)
+15. [Slot reference format](#slot-reference-format)
+16. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
+17. [The provisioning journal](#the-provisioning-journal)
+18. [The partial-failure report](#the-partial-failure-report)
+19. [The launch ledger's slot grammar](#the-launch-ledgers-slot-grammar)
+20. [The identity-probe exercise](#the-identity-probe-exercise)
+21. [Mid-wave lapse](#mid-wave-lapse)
+22. [Credential validity margin](#credential-validity-margin)
+23. [Minted sign-in exercises](#minted-sign-in-exercises)
+24. [The app-lifecycle exercise](#the-app-lifecycle-exercise)
+25. [Reclaim safety](#reclaim-safety)
+26. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
+27. [Per-slot browser topology](#per-slot-browser-topology)
+28. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
+29. [The provisioning gate](#the-provisioning-gate)
+30. [Per-slot app lifecycle](#per-slot-app-lifecycle)
+31. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
 
 ---
 
@@ -40,7 +42,8 @@ downstream sub-issues build against.
 
 **What this pins:** the optional nested `pilot` key inside `test-pilot-config`; the ten-token
 probe vocabulary (`lib/pilot_probe.py`); slot reference format and account-set types
-(`lib/pilot_slot.py`); seed/mint call shapes and artifact verification (`lib/pilot_seed.py`);
+(`lib/pilot_slot.py`); seed/mint call shapes and artifact verification (`lib/pilot_seed.py` —
+the artifact half is the latent S3 restore seam with no producer in this repository);
 the contract validator (`lib/pilot_contract.py`, wired into `engine.load_profile_config`);
 sub-issue **A3** — the per-slot target boundary (`lib/pilot_boundary.py`), the policy
 document home (`lib/pilot_policy.py`), and the provisioning authorization layer
@@ -49,7 +52,9 @@ allocation (`lib/pilot_lifecycle.py`) plus the provisioning journal and partial-
 report (`lib/pilot_journal.py`); sub-issue **B6** — the identity-probe exercise and
 mid-wave lapse episode (`lib/pilot_identity.py`), the launch-time credential validity
 margin (`lib/pilot_horizon.py`), and minted sign-in exercises (`lib/pilot_mint.py`);
-sub-issue **C9** — the cleanup effect receipt, containment resolution, and resurrection
+sub-issue **B4** — attended seeding (`lib/pilot_attended.py`) and the app-lifecycle exercise
+(`lib/pilot_lifecycle_exercise.py`); sub-issue **C9** — the cleanup effect receipt, containment
+resolution, and resurrection
 planner (`lib/pilot_cleanup.py`, plus the policy's `datastore.containment` declaration);
 and sub-issue **B5** — per-slot app instance control (`lib/pilot_appctl.py`), the wave
 deadline runtime and two-phase teardown (`lib/pilot_wave.py`), and the substrate
@@ -65,8 +70,8 @@ and `DETAIL_MAX_BYTES` bound).
 - The measured operating ceiling and its degradation receipts (**D11b**).
 
 The `"app-lifecycle"` declaration kind's **exercise producer** is sub-issue **B4** (#826) and
-has not landed; a project with no receipt refuses, which is the correct fail-closed state, not a
-gap.
+has landed in `lib/pilot_lifecycle_exercise.py`; a project with no receipt still refuses, which
+is the correct fail-closed state, not a gap.
 
 This document pins schema, vocabulary, validation, and the mechanisms through A3, A2a, and C9;
 browser, broker, and teardown execution remain successor-owned.
@@ -90,7 +95,8 @@ When present, it nests inside the shipped `test-pilot-config` block:
   "mayManageServer": true,
   "pilot": {
     "schemaVersion": 1,
-    "signInPath": "captured",
+    "signInPath": "attended",
+    "attended": {"vehicle": "automation"},
     "credentialSet": [
       {"account": "owner", "role": "resource-owner"},
       {"account": "guest", "role": "share-recipient"}
@@ -121,7 +127,8 @@ The normative `pilot` object shape (shown above under `"pilot":`) is:
 ```json
 {
   "schemaVersion": 1,
-  "signInPath": "captured",
+  "signInPath": "attended",
+  "attended": {"vehicle": "automation"},
   "credentialSet": [
     {"account": "owner", "role": "resource-owner"},
     {"account": "guest", "role": "share-recipient"}
@@ -151,7 +158,9 @@ The normative `pilot` object shape (shown above under `"pilot":`) is:
 | Field | Type | Required | Closed enum / condition | Refusal token |
 |---|---|---|---|---|
 | `schemaVersion` | integer | required | must be `1` | `pilot-schema-version-unsupported` |
-| `signInPath` | string | required | `captured` or `minted` | `pilot-sign-in-path-invalid` |
+| `signInPath` | string | required | `attended` or `minted` | `pilot-sign-in-path-invalid`; `pilot-sign-in-path-retired-captured` (retired literal `captured`); `pilot-sign-in-path-unhandled` (a `SIGN_IN_PATHS` member has no entry in the sign-in-path required-block mapping — completeness guard; fail-closed instead of falling through) |
+| `attended` | object | conditional | required when `signInPath` is `"attended"`; optional otherwise | `pilot-attended-declaration-missing`; `pilot-attended-declaration-invalid` |
+| `attended.vehicle` | string | required when `attended` present | `automation` or `real-chrome` | `pilot-attended-vehicle-invalid` |
 | `credentialSet` | array of objects | required | non-empty | `pilot-credential-set-empty` |
 | `credentialSet[]` entry | object | per entry | must have `account` (non-empty string) and `role` (non-empty string); no duplicate `account` keys | `pilot-credential-set-invalid` (malformed entry); `pilot-account-key-duplicate` (duplicate `account`); `pilot-account-key-invalid` (`account` empty or non-string); `pilot-account-role-missing` (`role` absent or empty) |
 | `credentialSet[].expectedIdentity` | — | **refused** | must not appear inline | `pilot-expected-identity-inline-refused` |
@@ -259,10 +268,11 @@ registry document shape:
 }
 ```
 
-**Declaration kinds:** `identity-probe`, `capture-reduction`, `cleanup-containment`,
+**Declaration kinds:** `identity-probe`, `session-surface`, `cleanup-containment`,
 `mint-gate-off`, `mint-account-allowlist`, `effects-escape`, `operating-ceiling`,
-`app-lifecycle`. The `app-lifecycle` exercise producer is sub-issue **B4** (#826) and has not
-landed; until it lands, a project with no matching exercised record refuses stand-up.
+`app-lifecycle`. The `app-lifecycle` exercise producer has landed in
+`lib/pilot_lifecycle_exercise.py`; a project with no matching exercised record still refuses
+stand-up.
 
 **Two load-bearing rules:**
 
@@ -692,6 +702,66 @@ refusal — the probe would not detect a disabled mint gate.
 | `mint-allowlist-empty` | `allowlist` is missing, empty, or not a JSON array (a Python `list`) of non-empty strings |
 | `mint-account-invalid` | `sentinel` is missing, empty, or not a string |
 | `mint-sentinel-in-allowlist` | `sentinel` appears in the caller-supplied allowlist |
+
+## Attended seeding
+
+Attended seeding lives in `lib/pilot_attended.py`. The model is per-slot **per-account** owner
+sign-in into the live browser context: nothing is captured, stored, or transferred, and the
+session dies with teardown.
+
+`seeding_vehicle(attended_declaration, *, idp_rejects_automation, human_driven_rejected=False)`
+returns a uniform `ok`-keyed dict on both paths. On success: `{"ok": true, "reason": null,
+"vehicle": "<automation|real-chrome>"}`. On refusal: `{"ok": false, "reason": "<token>"}`. Default
+vehicle is `automation`; when the declaration's `vehicle` is `real-chrome`, or when the identity
+provider rejects automation (`idp_rejects_automation`), the vehicle escalates to `real-chrome`.
+When even a human-driven provisioned browser is refused (`human_driven_rejected`), the project
+declares pilot auth unsupported for that mechanism via `attended-vehicle-unsupported-mechanism`;
+**minted sign-in remains available**.
+
+`attended_seeding_plan(slot, generation, accounts, *, sign_in_path, attended_declaration,
+capture_surfaces, expected_identities, ...)` builds one step per `(slotRef, account)` pair. Each
+step carries its own policy-resolved expected identity and the owner prompt. The plan refuses a
+non-attended `sign_in_path`.
+
+`prompt_copy(slot_ref, account, expected_identity, vehicle)` returns deliberately jargon-free
+owner-facing text for one sign-in step.
+
+`verify_at_seed(answer, *, expected_identity)` is the **identity** half of verify-at-seed on the
+attended path (there is no artifact). The signed-in identity must equal the recorded expected
+identity; **any other account, including the owner's own personal account, refuses**. Comparison
+uses `hmac.compare_digest` on UTF-8 bytes. The artifact half (`pilot_seed.verify_artifact`) is not
+on this path because there is no artifact.
+
+`seed_outcome(steps, results)` requires every account to present the **exact** `verify_at_seed`
+success shape: `ok` a real `bool` and `true`, `outcome == "verified"`, `reason` is `null`, and
+`identity` equal to that account's `expectedIdentity` from its step (compared with
+`hmac.compare_digest` on UTF-8 bytes). Anything malformed — a truthy `ok` that is not a real
+`verify_at_seed` success, a missing account, or a mismatched step/result set — refuses with
+`attended-seed-incomplete`, because a slot may not be certified seeded on a result that never
+came from a real verify-at-seed. A well-formed per-account refusal (`ok` is `false` with a
+bool) still refuses the whole slot with that account's `reason`.
+
+`lapse_disposition(answer, *, reprobe_count)` delegates to `pilot_identity.lapse_step` with
+`sign_in_path="attended"` so attended lapse and identity lapse can never disagree.
+
+### Attended seeding refusal tokens
+
+| Token | When returned |
+|---|---|
+| `attended-sign-in-path-not-attended` | `attended_seeding_plan`: `sign_in_path` is not `"attended"` |
+| `attended-vehicle-invalid` | `seeding_vehicle` or plan: vehicle declaration malformed, or bool flags invalid |
+| `attended-vehicle-unsupported-mechanism` | `seeding_vehicle`: human-driven provisioned browser refused — declare pilot auth unsupported for that mechanism |
+| `attended-account-set-empty` | `attended_seeding_plan`: slot account set empty (propagated from slot validation) |
+| `attended-account-set-mismatch` | `attended_seeding_plan`: `expected_identities` keys do not match slot accounts exactly |
+| `attended-expected-identity-missing` | `attended_seeding_plan`: an account's expected identity is `None` |
+| `attended-expected-identity-invalid` | `attended_seeding_plan` or `verify_at_seed`: expected identity missing or not a non-empty string |
+| `attended-identity-mismatch` | `verify_at_seed`: signed-in identity does not equal expected identity |
+| `attended-identity-absent` | `verify_at_seed`: probe returned no identity |
+| `attended-answer-invalid` | `verify_at_seed`: probe answer shape invalid |
+| `attended-slot-ref-invalid` | `attended_seeding_plan`: slot reference or generation invalid |
+| `attended-account-invalid` | `attended_seeding_plan`: account entry malformed |
+| `attended-context-reused` | `attended_seeding_plan`: duplicate `(slotRef, account)` pair |
+| `attended-seed-incomplete` | `seed_outcome`: steps or results incomplete, mismatched, or any account result is not the exact `verify_at_seed` success shape |
 
 ## Slot reference format
 
@@ -1375,7 +1445,7 @@ Infrastructure classifications **never** route to lapse — only `no-session` do
 |---|---|
 | `continue` | Session is valid; wave proceeds |
 | `reprobe` | First `no-session` within budget — exactly one re-probe allowed |
-| `park` | Confirmed lapse on `captured` sign-in path — slot parks (durable transition is A2a/B5) |
+| `park` | Confirmed lapse on `attended` sign-in path — slot parks (durable transition is A2a/B5); attended cannot self-heal because no credential is stored |
 | `remint` | Confirmed lapse on `minted` sign-in path — caller must re-mint before continuing |
 | `defer` | Infrastructure classification or probe transport failure — not a lapse |
 | `refuse` | Identity-class probe token — not a lapse |
@@ -1385,14 +1455,15 @@ Infrastructure classifications **never** route to lapse — only `no-session` do
 `lapse_episode` **owns** the re-probe budget. A caller-supplied `reprobe_count` on
 `lapse_step` can grade individual steps but cannot confirm a lapse — only
 `lapse_episode` performs the second probe. The budget is exactly one re-probe: first
-`no-session` → `reprobe`; second confirmed `no-session` → `park` (captured) or
+`no-session` → `reprobe`; second confirmed `no-session` → `park` (attended) or
 `remint` (minted).
 
-### Captured ⇒ park / minted ⇒ re-mint
+### Attended ⇒ park / minted ⇒ re-mint
 
 After the single re-probe confirms `no-session`:
 
-- **`signInPath: captured`** → `park` with lapse evidence.
+- **`signInPath: attended`** → `park` with lapse evidence. Attended cannot self-heal on lapse
+  because nothing was captured, stored, or transferred — the owner must sign in again.
 - **`signInPath: minted`** → `remint` action; `continue` is returned **only after** a
   supplied `remint` callable actually succeeds. If `remint` is absent, not callable,
   raises, or returns falsy, the episode **parks** (`lapse-remint-unavailable` or
@@ -1409,7 +1480,7 @@ Every return carries the same keys: `action`, `class`, `reason`, `firstReason`,
 
 | Token | When returned |
 |---|---|
-| `lapse-sign-in-path-invalid` | `lapse_step`: `sign_in_path` not in `captured` / `minted` |
+| `lapse-sign-in-path-invalid` | `lapse_step`: `sign_in_path` not in `attended` / `minted` |
 | `lapse-reprobe-budget-invalid` | `lapse_step`: `reprobe_count` not `0` or `1` (bools excluded) |
 | `lapse-probe-not-callable` | `lapse_episode`: probe argument is not callable |
 | `lapse-remint-unavailable` | `lapse_episode`: minted path confirmed lapse but `remint` absent or not callable — episode parks |
@@ -1484,7 +1555,7 @@ before Python 3.11.
 | `horizon-token-claim-missing` | claim (default `exp`) absent from payload |
 | `horizon-token-claim-invalid` | claim value not a finite number with `int(value) >= 1` |
 | `horizon-observation-invalid` | `validate_observation` or constructor input shape invalid |
-| `horizon-sign-in-path-invalid` | `sign_in_path` not in `captured` / `minted` |
+| `horizon-sign-in-path-invalid` | `sign_in_path` not in `attended` / `minted` |
 | `horizon-deadline-invalid` | `deadline_at` not a positive integer (bools excluded) |
 | `horizon-margin-invalid` | `margin_seconds` not a strictly positive integer |
 | `horizon-flag-invalid` | `attended` is not a bool |
@@ -1574,6 +1645,61 @@ real account — only that it is absent from the allowlist
 | `mint-sentinel-minted` | sentinel leg returned 2xx — gate did not refuse |
 | `mint-sentinel-endpoint-absent` | sentinel leg returned 404 — inconclusive, not refusal |
 | `mint-sentinel-unexpected-status` | sentinel leg returned an unclassified status |
+
+## The app-lifecycle exercise
+
+The app-lifecycle exercise lives in `lib/pilot_lifecycle_exercise.py`. It grades an observed
+navigation trace against a slot's declared origin and `permittedRedirects` allowlist so an
+`app-lifecycle` declaration can be exercised before stand-up.
+
+Attended sign-in is the first thing that legitimately leaves the app's own origin — the owner
+signs in through a real identity provider — so the declared `permittedRedirects` allowance
+becomes load-bearing on that path.
+
+`normalize_origin(value)` canonicalizes to `scheme://host[:port]` for http(s) URLs. Malformed URL
+authorities — including `urlsplit` failures and invalid port values such as non-numeric ports
+or out-of-range port numbers — refuse with `lifecycle-exercise-origin-invalid` instead of letting
+a bare `ValueError` escape. Origins are compared exactly, never by string prefix.
+
+`evaluate_trace(trace, *, origin, permitted_redirects)` grades a navigation trace: every visited
+origin must be the declared origin or a permitted redirect; the trace must start and end at the
+declared origin. For grading only, permitted redirects are normalized (canonicalized,
+de-duplicated, and sorted) before comparison — that normalization never reaches the declaration
+digest. A malformed trace entry refuses `lifecycle-exercise-trace-invalid`; a malformed permitted-
+redirect list refuses `lifecycle-exercise-redirect-invalid`.
+
+`app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redirects)` returns the
+digested `declaration` plus `slot`, `generation`, and `policyDigest` as metadata **outside** the
+digest. The `declaration` member is the **raw policy shape** —
+`{"origin": <origin>, "permittedRedirects": <permitted_redirects>}` — byte-for-byte what
+`pilot_provision.declaration_for("app-lifecycle", …)` returns. **Only** that `declaration` member
+is digested; the gate has no normalizer, so the producer must digest exactly what the gate
+digests. Redirect **order is significant** to the digest — the gate does not sort or de-duplicate
+`permittedRedirects`, so the producer must not either; keeping redirect order stable is the policy
+document's concern.
+
+`app_lifecycle_receipt(declaration, result, *, exercised_at)` builds the registry record. The
+result must bind to its declaration; a forged result refuses. On pass, evidence carries origins
+only — never a path, query, or fragment, because a sign-in URL can carry tokens. On fail,
+evidence is pinned to the module's own `REFUSAL_*` tokens only; any other reason is recorded as
+`lifecycle-exercise-refused` so caller-controlled free text never reaches the persisted record.
+
+`require_app_lifecycle_exercised(registry, declaration)` requires a matching exercised record in
+the registry.
+
+### App-lifecycle exercise refusal tokens
+
+| Token | When returned |
+|---|---|
+| `lifecycle-exercise-declaration-slot-invalid` | `app_lifecycle_declaration`: `slot_ref` does not parse |
+| `lifecycle-exercise-declaration-invalid` | `app_lifecycle_declaration`: policy digest missing or empty |
+| `lifecycle-exercise-origin-invalid` | `normalize_origin` or declaration: origin malformed or not http(s) |
+| `lifecycle-exercise-redirect-invalid` | declaration or trace: permitted redirect list malformed |
+| `lifecycle-exercise-trace-invalid` | `evaluate_trace`: trace or URL entry malformed |
+| `lifecycle-exercise-trace-empty` | `evaluate_trace`: trace is empty |
+| `lifecycle-exercise-navigation-escaped` | `evaluate_trace`: visited origin not in allowlist |
+| `lifecycle-exercise-trace-did-not-return` | `evaluate_trace`: trace did not start and end at declared origin |
+| `lifecycle-exercise-receipt-argument-invalid` | `app_lifecycle_receipt`: declaration, result, or timestamp malformed or not bound |
 
 ## Reclaim safety
 
@@ -2002,7 +2128,17 @@ containment on every termination path is unconditional in both modes.
 
 `resurrection_plan` orders: parameterized cleanup → reseed through A1's interface via A3's
 authorization chokepoint → a new generation (**enforced at the broker, C7 — this planner does
-not perform it**) → resume.
+not perform it**) → resume. The `artifact` keyword is not part of the signature.
+
+Sign-in-path dispatch is exhaustive: `"attended"` maps to **`park`** and `"minted"` maps to
+**`resurrect`** with mint reseed steps. An unknown `signInPath` or dispatch kind **raises** rather
+than falling through to mint.
+
+On the **`attended`** sign-in path, `resurrection_plan` returns **`park`** with
+`cleanup-attended-reseed-requires-owner` and carries **no steps** — nothing is cleaned up and
+nothing is reseeded, because the work must be preserved for the owner. Attended cannot
+self-resurrect because no credential was stored. The **`minted`** path is unchanged: containment
+resolved and verdict present → `resurrect` with mint reseed steps.
 
 **Effects-escape rule:** the declaration has no default; an absent or unexercised declaration
 refuses. Where effects **can** escape the datastore (`effectsEscape.canEscape` is `true`), a
@@ -2072,6 +2208,7 @@ false `cleanup-foreign-sentinel-destroyed` containment failure rather than a fal
 | `resurrection-containment-unresolved` | `resurrection_plan`: containment mode is not `permissions`, `receipt`, or `single-slot` |
 | `resurrection-cleanup-containment-unexercised` | `resurrection_plan`: containment mode is `receipt` but `cleanup-containment` declaration is unexercised |
 | `resurrection-verdict-missing` | `resurrection_plan`: no boundary verdict supplied |
+| `cleanup-attended-reseed-requires-owner` | `resurrection_plan`: `signInPath` is `"attended"` — slot parks; no cleanup or reseed steps are planned because the work must be preserved for the owner |
 
 Public API in `lib/pilot_cleanup.py`: `namespace_for_slot`, `foreign_namespaces`,
 `resolve_cleanup_command`, `substitute_sentinel_command`, `mint_sentinel_id`, `plant_sentinel`,
@@ -2280,9 +2417,11 @@ These are recorded contract facts, not oversights pending silent fix:
 
 ## Browser context creation and seed injection
 
-This is the declared seam **S3**'s context-side half: the interface and artifact-integrity
-contract are A1's (#822), the artifacts come from B4 (capture) and B6 (mint client), and
-**context-side injection is C7's** because C7 owns context creation and the capture options.
+This is the declared seam **S3**'s context-side half: A1 (#822) owns the interface and
+artifact-integrity contract; the artifact-restore entry point (`context_spec_from_artifact`) is
+**latent, with no producer** in this repository, kept as the declared S3 seam. Live seeding is
+**attended** (B4, `lib/pilot_attended.py`) or **minted** (B6); **context-side injection is C7's**
+because C7 owns context creation and the capture options.
 
 **No credential is seeded before provisioning gates have run.** `context_spec` refuses to build
 a context spec without a valid `gate_provisioning` receipt whose `slotRef` matches the caller's
@@ -2293,7 +2432,19 @@ list whose entries carry `kind` and `status`, a `datastoreIdentity` carrying `pr
 unparseable caller `slot_ref` rather than allowing it. The receipt is the evidence that the
 boundary, declare-and-exercise, and datastore-identity gates ran — a gate that accepted a
 hand-made dict would not be checking anything. This is the ordering guarantee the design rests
-on; the receipt is checked before `seed_request` runs.
+on; the receipt is checked before live seeding runs.
+
+Both `context_set` and `context_spec` take a required keyword-only `sign_in_path` argument.
+Live-seeding paths (`attended` and `minted`) take **no** artifact; a supplied artifact refuses
+with `context-artifact-refused-on-live-seeding`. A non-string `sign_in_path` (for example a list
+or dict) refuses `context-sign-in-path-invalid` via an `isinstance` check before membership
+testing — it does not raise `TypeError`. Any other invalid `sign_in_path` also refuses
+`context-sign-in-path-invalid`. The returned spec carries `"artifact": None`.
+
+`context_spec_from_artifact(slot_ref, account, artifact, *, capture_surfaces,
+provisioning_receipt)` is the **latent** S3 restore entry point: it builds one context spec from
+a stored artifact via verify-at-seed. **No caller in this repository** reaches it — live seeding
+must pass `sign_in_path` on `context_spec` instead.
 
 A project declares which surface holds its login session, and **the framework requires the
 matching capture options** — `indexedDB: true` for an IndexedDB-held session, `credentials: true`
@@ -2302,13 +2453,13 @@ match must be **exact in both directions**: an option set that the declared surf
 require also refuses, because an unrequired `credentials: true` installs a virtual authenticator
 that displaces real ones.
 
-**Verify-at-seed happens at context creation**, not earlier and not in the caller — the
-artifact's integrity is checked as the context is built, and the spec carries the artifact's
-verified path and hash, never its contents.
+**Verify-at-seed on the latent artifact path** happens at context creation — the artifact's
+integrity is checked as the context is built, and the spec carries the artifact's verified path
+and hash, never its contents. On attended and minted live-seeding paths there is no artifact.
 
 One context per account; `sessionStorage` never reaches a context spec (D7).
 
-Public API in `lib/pilot_context.py`: `context_set`, `context_spec`.
+Public API in `lib/pilot_context.py`: `context_set`, `context_spec`, `context_spec_from_artifact`.
 
 ### Context refusal tokens
 
@@ -2318,8 +2469,9 @@ Public API in `lib/pilot_context.py`: `context_set`, `context_spec`.
 | `context-provisioning-receipt-invalid` | `context_spec`: receipt is not a dict, is missing a required key (`slotRef`, `policyDigest`, `datastoreIdentity`, `declarations`), any required value is `None` or wrong type, `declarations` is empty or an entry lacks `kind` or `status`, `datastoreIdentity` lacks non-empty `provenance`/`strength` or `match` is not `true`, or `policyDigest` is empty |
 | `context-provisioning-receipt-slot-mismatch` | `context_spec`: receipt `slotRef` does not equal the canonical slot reference for the caller's `slot_ref` |
 | `context-options-mismatch` | `context_spec`: `requested_options` is supplied and does not exactly equal `required_context_options(capture_surfaces)` |
-| `context-artifact-missing` | `context_set`: `artifacts` is not a dict, or a required account has no artifact entry |
-| `context-artifact-unknown-account` | `context_set`: `artifacts` contains an account not in the slot's account set |
+| `context-sign-in-path-invalid` | `context_set` or `context_spec`: `sign_in_path` is not a string, or is not in `attended` / `minted` |
+| `context-artifact-refused-on-live-seeding` | `context_set` or `context_spec`: artifact supplied on attended or minted live-seeding path |
+| `context-artifact-missing` | `context_spec_from_artifact`: artifact is `None` |
 | `context-shared-context-refused` | `context_set`: two accounts would share the same context identity |
 
 **Propagated verbatim from `pilot_seed`:** this module does not re-wrap `seed-*` or `artifact-*`
@@ -2344,7 +2496,7 @@ is here. A declaration that has never been exercised is **absent**, and absent *
 | kind | declaration source | applicable when |
 |---|---|---|
 | `identity-probe` | `pilot.identityProbe` | always |
-| `capture-reduction` | `pilot.captureSurface` + `pilot.captureOptions` | always |
+| `session-surface` | `pilot.captureSurface` + `pilot.captureOptions` | always |
 | `cleanup-containment` | `pilot.cleanup` | always |
 | `effects-escape` | `pilot.effectsEscape` | always |
 | `operating-ceiling` | `pilot.administrativeMax` | always |
@@ -2354,7 +2506,7 @@ is here. A declaration that has never been exercised is **absent**, and absent *
 Two load-bearing facts: **mint applicability is policy-side** — a slot whose policy grants
 `mintableAccounts` makes both mint kinds applicable regardless of whether the branch-mutable
 `pilot.mint` block declares mint; a policy grant with no block declaration to exercise now
-refuses (`provision-mint-declaration-missing`) rather than skipping. A captured-sign-in project
+refuses (`provision-mint-declaration-missing`) rather than skipping. An attended-sign-in project
 with no policy mint grant legitimately has no mint declaration, and its mint kinds are recorded
 `not-applicable`, not failed — and **`mint-account-allowlist` is sourced from the policy, never
 the block**, because an inline allowlist is refused precisely to keep it outside branch-mutable

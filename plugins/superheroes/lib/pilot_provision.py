@@ -335,7 +335,7 @@ def _extract_identity_probe(block, _policy, _slot_ref):
     return block["identityProbe"]
 
 
-def _extract_capture_reduction(block, _policy, _slot_ref):
+def _extract_session_surface(block, _policy, _slot_ref):
     return {
         "captureSurface": block["captureSurface"],
         "captureOptions": block["captureOptions"],
@@ -379,8 +379,8 @@ DECLARATION_SOURCES = {
         "extract": _extract_identity_probe,
         "applicable": _always_applicable,
     },
-    "capture-reduction": {
-        "extract": _extract_capture_reduction,
+    "session-surface": {
+        "extract": _extract_session_surface,
         "applicable": _always_applicable,
     },
     "cleanup-containment": {

@@ -19,7 +19,13 @@ PILOT_BLOCK_KEY = "pilot"
 PILOT_SCHEMA_VERSION = 1
 REGISTRY_SCHEMA_VERSION = 1
 
-SIGN_IN_PATHS = frozenset({"captured", "minted"})
+SIGN_IN_PATHS = frozenset({"attended", "minted"})
+ATTENDED_VEHICLES = frozenset({"automation", "real-chrome"})
+
+_SIGN_IN_PATH_REQUIRED_BLOCK = {
+    "attended": "attended",
+    "minted": "mint",
+}
 VALIDITY_PROVENANCE = frozenset({
     "cookie-expiry",
     "token-claim",
@@ -28,7 +34,7 @@ VALIDITY_PROVENANCE = frozenset({
 })
 DECLARATION_KINDS = frozenset({
     "identity-probe",
-    "capture-reduction",
+    "session-surface",
     "cleanup-containment",
     "mint-gate-off",
     "mint-account-allowlist",
@@ -45,6 +51,11 @@ PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 
 REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "pilot-schema-version-unsupported"
 REFUSAL_SIGN_IN_PATH_INVALID = "pilot-sign-in-path-invalid"
+REFUSAL_SIGN_IN_PATH_RETIRED_CAPTURED = "pilot-sign-in-path-retired-captured"
+REFUSAL_SIGN_IN_PATH_UNHANDLED = "pilot-sign-in-path-unhandled"
+REFUSAL_ATTENDED_DECLARATION_MISSING = "pilot-attended-declaration-missing"
+REFUSAL_ATTENDED_DECLARATION_INVALID = "pilot-attended-declaration-invalid"
+REFUSAL_ATTENDED_VEHICLE_INVALID = "pilot-attended-vehicle-invalid"
 REFUSAL_CREDENTIAL_SET_EMPTY = "pilot-credential-set-empty"
 REFUSAL_CREDENTIAL_SET_INVALID = "pilot-credential-set-invalid"
 REFUSAL_ACCOUNT_KEY_DUPLICATE = "pilot-account-key-duplicate"
@@ -89,6 +100,7 @@ _PILOT_TOP_KEYS = frozenset({
     "effectsEscape",
     "policyRef",
     "mint",
+    "attended",
 })
 _CREDENTIAL_ENTRY_KEYS = frozenset({"account", "role"})
 _IDENTITY_PROBE_KEYS = frozenset({"path", "unseededExpectation"})
@@ -96,6 +108,7 @@ _CLEANUP_KEYS = frozenset({"command"})
 _EFFECTS_ESCAPE_KEYS = frozenset({"canEscape", "evidence"})
 _POLICY_REF_KEYS = frozenset({"declaration"})
 _MINT_KEYS = frozenset({"envelope", "sentinelIdentifier"})
+_ATTENDED_KEYS = frozenset({"vehicle"})
 _MINT_ENVELOPE_KEYS = frozenset({
     "enablingFlagEnvVar",
     "enabledScopes",
@@ -158,6 +171,7 @@ def validate_pilot_block(block):
     _validate_administrative_max(block)
     _validate_effects_escape(block)
     _validate_policy_ref(block)
+    _validate_attended(block, sign_in_path)
     _validate_mint(block, sign_in_path)
 
 
@@ -232,8 +246,24 @@ def _validate_schema_version(block):
         )
 
 
+def _verify_sign_in_path_required_block_complete():
+    if set(_SIGN_IN_PATH_REQUIRED_BLOCK) != SIGN_IN_PATHS:
+        raise ValueError("sign-in path required-block mapping incomplete")
+
+
+def _required_block_key(sign_in_path):
+    if sign_in_path not in _SIGN_IN_PATH_REQUIRED_BLOCK:
+        raise PilotContractError(REFUSAL_SIGN_IN_PATH_UNHANDLED, "pilot.signInPath")
+    return _SIGN_IN_PATH_REQUIRED_BLOCK[sign_in_path]
+
+
 def _validate_sign_in_path(block):
     sign_in_path = block.get("signInPath")
+    if sign_in_path == "captured":
+        raise PilotContractError(
+            REFUSAL_SIGN_IN_PATH_RETIRED_CAPTURED,
+            "pilot.signInPath",
+        )
     if sign_in_path not in SIGN_IN_PATHS:
         raise PilotContractError(REFUSAL_SIGN_IN_PATH_INVALID, "pilot.signInPath")
     return sign_in_path
@@ -360,9 +390,33 @@ def _validate_policy_ref(block):
         raise PilotContractError(REFUSAL_POLICY_REF_MISSING, "pilot.policyRef.declaration")
 
 
+def _validate_attended(block, sign_in_path):
+    attended = block.get("attended")
+    if _required_block_key(sign_in_path) == "attended":
+        if attended is None:
+            raise PilotContractError(
+                REFUSAL_ATTENDED_DECLARATION_MISSING,
+                "pilot.attended",
+            )
+    if attended is None:
+        return
+    if not isinstance(attended, dict):
+        raise PilotContractError(
+            REFUSAL_ATTENDED_DECLARATION_INVALID,
+            "pilot.attended",
+        )
+    _check_unknown_keys(attended, _ATTENDED_KEYS, "pilot.attended")
+    vehicle = attended.get("vehicle")
+    if not isinstance(vehicle, str) or not vehicle or vehicle not in ATTENDED_VEHICLES:
+        raise PilotContractError(
+            REFUSAL_ATTENDED_VEHICLE_INVALID,
+            "pilot.attended.vehicle",
+        )
+
+
 def _validate_mint(block, sign_in_path):
     mint = block.get("mint")
-    if sign_in_path == "minted":
+    if _required_block_key(sign_in_path) == "mint":
         if mint is None:
             raise PilotContractError(REFUSAL_MINT_DECLARATION_MISSING, "pilot.mint")
     if mint is None:
@@ -458,6 +512,9 @@ def _is_bool(value):
 
 def _is_int(value):
     return type(value) is int
+
+
+_verify_sign_in_path_required_block_complete()
 
 
 def _nfc_normalize(value):
