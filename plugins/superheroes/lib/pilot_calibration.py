@@ -23,11 +23,27 @@ CAUSE_NO_PILOT_BLOCK = "no-pilot-block"
 CAUSE_CREDENTIAL_SET_EMPTY = "credential-set-empty"
 CAUSE_REPO_ROOT_INVALID = "repo-root-invalid"
 CAUSE_RESOLVER_FAILED = "resolver-failed"
+CAUSE_CALIBRATION_UNRESOLVED = "calibration-unresolved"
 CAUSE_CALIBRATION_UNREADABLE = "calibration-unreadable"
 CAUSE_NO_CONFIG_BLOCK = "no-config-block"
 CAUSE_CONFIG_UNPARSEABLE = "config-unparseable"
 CAUSE_PILOT_BLOCK_MALFORMED = "pilot-block-malformed"
 CAUSE_CREDENTIAL_SET_MALFORMED = "credential-set-malformed"
+
+CAUSE_STATE_MAP = {
+    CAUSE_DECLARED: STATE_DECLARED,
+    CAUSE_NO_CALIBRATION: STATE_ABSENT,
+    CAUSE_NO_PILOT_BLOCK: STATE_ABSENT,
+    CAUSE_CREDENTIAL_SET_EMPTY: STATE_ABSENT,
+    CAUSE_REPO_ROOT_INVALID: STATE_CANNOT_TELL,
+    CAUSE_RESOLVER_FAILED: STATE_CANNOT_TELL,
+    CAUSE_CALIBRATION_UNRESOLVED: STATE_CANNOT_TELL,
+    CAUSE_CALIBRATION_UNREADABLE: STATE_CANNOT_TELL,
+    CAUSE_NO_CONFIG_BLOCK: STATE_CANNOT_TELL,
+    CAUSE_CONFIG_UNPARSEABLE: STATE_CANNOT_TELL,
+    CAUSE_PILOT_BLOCK_MALFORMED: STATE_CANNOT_TELL,
+    CAUSE_CREDENTIAL_SET_MALFORMED: STATE_CANNOT_TELL,
+}
 
 
 def _answer(state, cause, path):
@@ -44,6 +60,15 @@ def declares_slots(repo_root):
     except Exception:
         return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
     if path is None:
+        try:
+            candidates = store.candidate_profile_paths(
+                repo_root, store.store_root())
+        except Exception:
+            return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
+        for candidate in candidates:
+            if os.path.exists(candidate):
+                return _answer(
+                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
         return _answer(STATE_ABSENT, CAUSE_NO_CALIBRATION, None)
     try:
         with open(path, encoding="utf-8") as fh:

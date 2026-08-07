@@ -65,10 +65,17 @@ _SLOT_REMEDY = (
     "[--boundary <FILE PATH>]`."
 )
 
-_CALIBRATION_UNREADABLE_REMEDY = (
+_CALIBRATION_UNREADABLE_REMEDY_WITH_PATH = (
     "The launcher cannot tell whether this project declares pilot slots because pilot "
-    "calibration returned cause `cause`. When a profile path is available, fix or regenerate "
-    "the calibration profile at `path`, then relaunch."
+    "calibration returned cause `cause`. Fix or regenerate the calibration profile at "
+    "`path`, then relaunch."
+)
+
+_CALIBRATION_UNREADABLE_REMEDY_NO_PATH = (
+    "The launcher cannot tell whether this project declares pilot slots because pilot "
+    "calibration returned cause `cause`. No profile path is available — check the repo "
+    "root and the test-pilot store for a readable calibration layer or profile, then "
+    "relaunch."
 )
 
 _SLOT_CALIBRATION_POLICY = {
@@ -78,6 +85,7 @@ _SLOT_CALIBRATION_POLICY = {
     pilot_calibration.CAUSE_CREDENTIAL_SET_EMPTY: "pass",
     pilot_calibration.CAUSE_REPO_ROOT_INVALID: "refuse",
     pilot_calibration.CAUSE_RESOLVER_FAILED: "refuse",
+    pilot_calibration.CAUSE_CALIBRATION_UNRESOLVED: "refuse",
     pilot_calibration.CAUSE_CALIBRATION_UNREADABLE: "refuse",
     pilot_calibration.CAUSE_NO_CONFIG_BLOCK: "refuse",
     pilot_calibration.CAUSE_CONFIG_UNPARSEABLE: "refuse",
@@ -91,6 +99,14 @@ _GATE_REFUSAL_REASONS = frozenset({
     "preflight-slot-reservation-required",
     "preflight-slot-calibration-unreadable",
 })
+
+
+def _calibration_unreadable_remedy(cause, path):
+    if path:
+        return _CALIBRATION_UNREADABLE_REMEDY_WITH_PATH.replace(
+            "`cause`", repr(cause)).replace("`path`", repr(path))
+    return _CALIBRATION_UNREADABLE_REMEDY_NO_PATH.replace(
+        "`cause`", repr(cause))
 
 
 def _scrub_env(env=None):
@@ -390,8 +406,11 @@ def _slot_reservation_gate(
     slot_info = pilot_calibration.declares_slots(repo_root)
     cause = slot_info.get("cause")
     policy = _SLOT_CALIBRATION_POLICY.get(cause)
+    expected_state = pilot_calibration.CAUSE_STATE_MAP.get(cause)
     if (
         policy is None
+        or expected_state is None
+        or slot_info.get("state") != expected_state
         or slot_info.get("state")
         not in (
             pilot_calibration.STATE_DECLARED,
@@ -403,7 +422,7 @@ def _slot_reservation_gate(
             "preflight-slot-calibration-unreadable",
             path=slot_info.get("path"),
             cause=cause,
-            remedy=_CALIBRATION_UNREADABLE_REMEDY,
+            remedy=_calibration_unreadable_remedy(cause, slot_info.get("path")),
         )
     if policy == "pass":
         return None
@@ -412,7 +431,7 @@ def _slot_reservation_gate(
             "preflight-slot-calibration-unreadable",
             path=slot_info.get("path"),
             cause=cause,
-            remedy=_CALIBRATION_UNREADABLE_REMEDY,
+            remedy=_calibration_unreadable_remedy(cause, slot_info.get("path")),
         )
 
     return _fail(

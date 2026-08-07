@@ -1296,6 +1296,27 @@ A reserved-but-never-started lane has no CLI transition today — it is resolved
 launch itself reaches a terminal outcome; `record-outcome` cannot clear it
 (`outcome-without-started`).
 
+**Parallel-gate calibration policy** (`lib/pilot_calibration.py` causes →
+`lib/launcher.py` `_SLOT_CALIBRATION_POLICY`). Each cause belongs to exactly one probe
+`state`; a contradictory `state`/`cause` pair refuses fail-closed. When `path` is absent,
+the refusal `remedy` names the `cause` and what to check (repo root, test-pilot store) rather
+than a null profile path.
+
+| Cause | Probe state | Parallel gate |
+|---|---|---|
+| `declared` | `declared` | continue (slot reservation may still be required) |
+| `no-calibration` | `absent` | pass |
+| `no-pilot-block` | `absent` | pass |
+| `credential-set-empty` | `absent` | pass |
+| `repo-root-invalid` | `cannot-tell` | refuse |
+| `resolver-failed` | `cannot-tell` | refuse |
+| `calibration-unresolved` | `cannot-tell` | refuse |
+| `calibration-unreadable` | `cannot-tell` | refuse |
+| `no-config-block` | `cannot-tell` | refuse |
+| `config-unparseable` | `cannot-tell` | refuse |
+| `pilot-block-malformed` | `cannot-tell` | refuse |
+| `credential-set-malformed` | `cannot-tell` | refuse |
+
 **Results-only scan at the durable write boundary.** `boundary_record` accepts an optional
 `material` argument; when the caller passes it, the composer scans the record it is about to return
 with `assert_results_only` against that policy material and refuses with
@@ -1340,7 +1361,7 @@ stated here rather than implied clean.
 | `ledger-boundary-acceptance-reason-too-long` | `boundary_record`: acceptance `reason` exceeds 500 characters |
 | `ledger-boundary-material-in-record` | `boundary_record`: composed record carries policy material when `material` is supplied |
 | `preflight-slot-reservation-required` | a parallel launch on a slot-calibrated project carries no slot reservation for one or more lanes |
-| `preflight-slot-calibration-unreadable` | a parallel launch on a project whose pilot-slot calibration probe returned `cannot-tell` (unreadable profile, resolver failure, missing or unparseable config block, or malformed `pilot`/`credentialSet`; payload carries `path` and `cause`) |
+| `preflight-slot-calibration-unreadable` | a parallel launch on a project whose pilot-slot calibration probe returned `cannot-tell` (unreadable profile, resolver failure, calibration present but unresolved, missing or unparseable config block, or malformed `pilot`/`credentialSet`; payload carries `path` and `cause`) |
 | `post-reserve-ledger-unreadable` | the post-reserve re-check could not read the launch ledger |
 
 ## The identity-probe exercise

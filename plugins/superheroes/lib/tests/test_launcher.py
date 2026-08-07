@@ -3644,3 +3644,141 @@ def test_launch_build_calibration_unreadable_propagates_cause(tmp_path, monkeypa
     assert result["cause"] == L.pilot_calibration.CAUSE_RESOLVER_FAILED
     assert result["path"] == profile_path
     assert result["remedy"]
+
+
+# --- slot calibration policy census (issue #909 K2) -------------------------
+
+
+_SLOT_CALIBRATION_GATE_EXPECTATIONS = {
+    L.pilot_calibration.CAUSE_DECLARED: "continue",
+    L.pilot_calibration.CAUSE_NO_CALIBRATION: "pass",
+    L.pilot_calibration.CAUSE_NO_PILOT_BLOCK: "pass",
+    L.pilot_calibration.CAUSE_CREDENTIAL_SET_EMPTY: "pass",
+    L.pilot_calibration.CAUSE_REPO_ROOT_INVALID: "refuse",
+    L.pilot_calibration.CAUSE_RESOLVER_FAILED: "refuse",
+    L.pilot_calibration.CAUSE_CALIBRATION_UNRESOLVED: "refuse",
+    L.pilot_calibration.CAUSE_CALIBRATION_UNREADABLE: "refuse",
+    L.pilot_calibration.CAUSE_NO_CONFIG_BLOCK: "refuse",
+    L.pilot_calibration.CAUSE_CONFIG_UNPARSEABLE: "refuse",
+    L.pilot_calibration.CAUSE_PILOT_BLOCK_MALFORMED: "refuse",
+    L.pilot_calibration.CAUSE_CREDENTIAL_SET_MALFORMED: "refuse",
+}
+
+
+def _mock_declares_slots(monkeypatch, state, cause, path=None):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {"state": state, "cause": cause, "path": path},
+    )
+
+
+def test_slot_calibration_cause_policy_census():
+  # axis: every CAUSE_* constant has a policy row and an explicit gate expectation
+    pc = L.pilot_calibration
+    cause_values = {
+        getattr(pc, name)
+        for name in dir(pc)
+        if name.startswith("CAUSE_") and isinstance(getattr(pc, name), str)
+    }
+    policy_keys = set(L._SLOT_CALIBRATION_POLICY.keys())
+    expectation_keys = set(_SLOT_CALIBRATION_GATE_EXPECTATIONS.keys())
+    assert cause_values == policy_keys == expectation_keys
+
+
+@pytest.mark.parametrize(
+    "cause,expected_policy",
+    sorted(_SLOT_CALIBRATION_GATE_EXPECTATIONS.items()),
+)
+def test_slot_gate_policy_per_cause(tmp_path, monkeypatch, cause, expected_policy):
+  # axis: each calibration cause honours its explicit pass/refuse/continue policy
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    state = L.pilot_calibration.CAUSE_STATE_MAP[cause]
+    _mock_declares_slots(monkeypatch, state, cause, path="/fake/profile.md")
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    if expected_policy == "pass":
+        assert result["ok"] is True
+    elif expected_policy == "refuse":
+        assert result["ok"] is False
+        assert result["reason"] == "preflight-slot-calibration-unreadable"
+        assert result["cause"] == cause
+    else:
+        assert result["ok"] is False
+        assert result["reason"] == "preflight-slot-reservation-required"
+
+
+def test_slot_gate_contradictory_state_cause_refuses(tmp_path, monkeypatch):
+  # axis: state/cause mismatch refuses fail-closed like any other cannot-tell
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _mock_declares_slots(
+        monkeypatch,
+        L.pilot_calibration.STATE_ABSENT,
+        L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+        path=None,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+
+
+def test_slot_gate_resolver_failed_remedy_without_path(tmp_path, monkeypatch):
+  # axis: remedy names the cause when no profile path is available
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _mock_declares_slots(
+        monkeypatch,
+        L.pilot_calibration.STATE_CANNOT_TELL,
+        L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+        path=None,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    remedy = result["remedy"]
+    assert L.pilot_calibration.CAUSE_RESOLVER_FAILED in remedy
+    assert "null" not in remedy.lower()
+    assert "`path`" not in remedy
+
+
+def test_slot_gate_policy_bite_refuse_to_pass_no_config_block(tmp_path, monkeypatch):
+  # axis: flipping a refuse row to pass reddens the no-config-block gate test
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    cause = L.pilot_calibration.CAUSE_NO_CONFIG_BLOCK
+    state = L.pilot_calibration.CAUSE_STATE_MAP[cause]
+    _mock_declares_slots(monkeypatch, state, cause, path="/fake/profile.md")
+    ll.declare_batch(repo, "wave-test", 2)
+    saved = L._SLOT_CALIBRATION_POLICY[cause]
+    try:
+        L._SLOT_CALIBRATION_POLICY[cause] = "pass"
+        red = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+        assert red["ok"] is True
+    finally:
+        L._SLOT_CALIBRATION_POLICY[cause] = saved
+    green = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert green["ok"] is False
+    assert green["reason"] == "preflight-slot-calibration-unreadable"
+
+
+def test_slot_gate_policy_bite_pass_to_refuse_no_calibration(tmp_path, monkeypatch):
+  # axis: flipping a pass row to refuse reddens the no-calibration gate test
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    cause = L.pilot_calibration.CAUSE_NO_CALIBRATION
+    state = L.pilot_calibration.CAUSE_STATE_MAP[cause]
+    _mock_declares_slots(monkeypatch, state, cause, path=None)
+    ll.declare_batch(repo, "wave-test", 2)
+    saved = L._SLOT_CALIBRATION_POLICY[cause]
+    try:
+        L._SLOT_CALIBRATION_POLICY[cause] = "refuse"
+        red = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+        assert red["ok"] is False
+        assert red["reason"] == "preflight-slot-calibration-unreadable"
+    finally:
+        L._SLOT_CALIBRATION_POLICY[cause] = saved
+    green = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert green["ok"] is True

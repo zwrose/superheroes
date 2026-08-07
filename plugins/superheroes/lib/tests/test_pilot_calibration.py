@@ -1,5 +1,7 @@
 import json
 import os
+import stat
+import subprocess
 import sys
 
 import pytest
@@ -10,6 +12,30 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_calibration as pc  # noqa: E402
+import store  # noqa: E402
+
+
+_LAYER = (
+    "## Machine-readable config\n\n"
+    "```json test-pilot-config\n"
+    '{"schemaVersion": 1, "pilot": {"credentialSet": [{"account": "a", "role": "admin"}]}}\n'
+    "```\n"
+)
+
+
+def _init_repo(path):
+    path = str(path)
+    subprocess.run(["git", "init", "-q", path], check=True,
+                   capture_output=True, text=True)
+    return path
+
+
+def _write_in_repo_layer(repo, text=_LAYER):
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    p = os.path.join(d, "test-pilot.md")
+    open(p, "w", encoding="utf-8").write(text)
+    return p
 
 
 def _profile_text(config_obj):
@@ -78,8 +104,8 @@ def test_declares_slots_no_pilot_block(tmp_path, monkeypatch):
     }
 
 
-def test_declares_slots_credential_set_empty(tmp_path, monkeypatch):
-    # axis: absent / credential-set-empty when credentialSet is absent or empty
+def test_declares_slots_credential_set_absent(tmp_path, monkeypatch):
+    # axis: absent / credential-set-empty when credentialSet key is absent
     path = _write_profile(
         tmp_path,
         _profile_text({"schemaVersion": 1, "pilot": {}}),
@@ -91,6 +117,62 @@ def test_declares_slots_credential_set_empty(tmp_path, monkeypatch):
         "cause": pc.CAUSE_CREDENTIAL_SET_EMPTY,
         "path": path,
     }
+
+
+def test_declares_slots_credential_set_empty_list(tmp_path, monkeypatch):
+    # axis: absent / credential-set-empty when credentialSet is an empty list
+    path = _write_profile(
+        tmp_path,
+        _profile_text({"schemaVersion": 1, "pilot": {"credentialSet": []}}),
+    )
+    _patch_resolve(monkeypatch, path)
+    result = pc.declares_slots("/fake/repo")
+    assert result == {
+        "state": pc.STATE_ABSENT,
+        "cause": pc.CAUSE_CREDENTIAL_SET_EMPTY,
+        "path": path,
+    }
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses chmod 000")
+def test_declares_slots_unreadable_in_repo_layer(tmp_path, monkeypatch):
+    # axis: cannot-tell / calibration-unresolved when layer exists but is unreadable
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    os.chmod(layer, 0o000)
+    try:
+        result = pc.declares_slots(repo)
+    finally:
+        os.chmod(layer, stat.S_IMODE(os.stat(layer).st_mode) | 0o600)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": layer,
+    }
+
+
+def test_declares_slots_no_candidate_files(tmp_path, monkeypatch):
+    # axis: absent / no-calibration when no candidate calibration path exists
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(pc.store, "store_root", lambda: root)
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_ABSENT,
+        "cause": pc.CAUSE_NO_CALIBRATION,
+        "path": None,
+    }
+
+
+def test_candidate_profile_paths_matches_resolve_precedence(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    candidates = store.candidate_profile_paths(repo, root)
+    assert candidates[0] == os.path.join(
+        repo, ".claude", "test-pilot", "profile.md")
+    assert candidates[-1].endswith(os.path.join("config", "test-pilot.md"))
+    assert os.path.join(repo, ".claude", "superheroes", "test-pilot.md") in candidates
 
 
 @pytest.mark.parametrize("repo_root", [None, ""])
