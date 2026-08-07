@@ -259,6 +259,10 @@ def _noop_recover(monkeypatch):
   monkeypatch.setattr(RD.round_commit, "recover", noop)
 
 
+def _noop_driver_recover(monkeypatch):
+  monkeypatch.setattr(RD, "_commit_recover_or_refuse", lambda *a, **kw: None)
+
+
 def _panel_artifact(session_dir):
   dims = RD._panel_dimensions(_state(session_dir)["config"])
   return {"seats": {dim: {"findings": []} for dim in dims}}
@@ -517,6 +521,16 @@ def test_seam_a_supersede_applied_agrees_on_new_revision(tmp_path, adapters, mon
   assert _commits_empty(d)
 
 
+def test_seam_a_record_ingest_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
+  d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
+  _stop_at_kind(monkeypatch, "record-ingest", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_record_result(d, "dispatch-fixer")
+  RD.cmd_record_result(d, "dispatch-fixer")
+  _assert_record_ingest_agree(d, head_text)
+  assert _commits_empty(d)
+
+
 # --- Group B: orders manifest -----------------------------------------------------------------
 
 @pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
@@ -533,6 +547,18 @@ def test_seam_b_orders_manifest_crash_matrix(tmp_path, adapters, monkeypatch, st
     assert after == before
   else:
     _assert_orders_agree(d, rnd, phase, attempt)
+  assert _commits_empty(d)
+
+
+def test_seam_b_orders_manifest_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
+  d = _orders_setup_fresh(tmp_path)
+  rnd, phase, attempt = 1, RD.P_PANEL, 0
+  _stop_at_kind(monkeypatch, "orders-emit", "sealed", n=0)
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_next(d, _cfg())
+  out = RD.cmd_next(d, _cfg())
+  assert out["ok"], out
+  _assert_orders_agree(d, rnd, phase, attempt)
   assert _commits_empty(d)
 
 
@@ -556,6 +582,19 @@ def test_seam_c_fold_crash_matrix(tmp_path, adapters, monkeypatch, stop_at):
   assert _commits_empty(d)
 
 
+def test_seam_c_fold_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
+  d = _fold_setup(tmp_path, adapters)
+  pend = _pending(d)
+  art = _panel_artifact(d)
+  _stop_at_kind(monkeypatch, "submit-accept", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)), art)
+  out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)), art)
+  assert out["ok"], out
+  _assert_fold_agree(d, pend["phase"], pend["round"], pend["attempt"])
+  assert _commits_empty(d)
+
+
 # --- Group D: attestation ---------------------------------------------------------------------
 
 @pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
@@ -576,6 +615,19 @@ def test_seam_d_attestation_crash_matrix(tmp_path, adapters, monkeypatch, stop_a
   assert _commits_empty(d)
 
 
+def test_seam_d_attestation_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
+  gitdir = _gitdir(str(tmp_path), "attest-driver")
+  d, seq = _orphan_failure(tmp_path, adapters, name="att-driver")
+  _stop_at_kind(monkeypatch, "attest-finalize", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_attest(d, str(seq), "orphaned record; handing back uncertified",
+                  git=_fake_git(gitdir))
+  out = RD.cmd_advance(d, git=_fake_git(gitdir))
+  assert out["ok"], out
+  _assert_attest_agree(d, gitdir)
+  assert _commits_empty(d)
+
+
 # --- Group E: sweep repair --------------------------------------------------------------------
 
 @pytest.mark.parametrize("stop_at", ["staged", "sealed", "applied", "done"])
@@ -591,6 +643,17 @@ def test_seam_e_sweep_repair_crash_matrix(tmp_path, adapters, monkeypatch, stop_
     assert after == before
   else:
     _assert_sweep_repair_agree(d, head_text)
+  assert _commits_empty(d)
+
+
+def test_seam_e_sweep_repair_recovers_via_driver_command(tmp_path, adapters, monkeypatch):
+  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
+  _stop_at_kind(monkeypatch, "head-diff-bind", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_record_result(d, sweep=True)
+  out = RD.cmd_record_result(d, sweep=True)
+  assert out["ok"], out
+  _assert_sweep_repair_agree(d, head_text)
   assert _commits_empty(d)
 
 
@@ -779,3 +842,59 @@ def test_biteproof_sweep_repair_recovery_neutralized(tmp_path, adapters, monkeyp
   stored, err = RR.read_json(spath)
   assert err is None
   assert "headDiffStorePath" not in (stored.get("payload") or {})
+
+
+# --- Group H: driver-path recovery bite-proofs ----------------------------------------------
+
+def test_biteproof_seam_a_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
+  d, _head_path, head_text = _record_ingest_setup(tmp_path, adapters)
+  _stop_at_kind(monkeypatch, "record-ingest", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_record_result(d, "dispatch-fixer")
+  _noop_driver_recover(monkeypatch)
+  RD.cmd_record_result(d, "dispatch-fixer")
+  assert not _commits_empty(d)
+
+
+def test_biteproof_seam_b_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
+  d = _orders_setup_fresh(tmp_path)
+  _stop_at_kind(monkeypatch, "orders-emit", "sealed", n=0)
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_next(d, _cfg())
+  _noop_driver_recover(monkeypatch)
+  RD.cmd_next(d, _cfg())
+  assert not _commits_empty(d)
+
+
+def test_biteproof_seam_c_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
+  d = _fold_setup(tmp_path, adapters)
+  pend = _pending(d)
+  art = _panel_artifact(d)
+  _stop_at_kind(monkeypatch, "submit-accept", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)), art)
+  _noop_driver_recover(monkeypatch)
+  RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)), art)
+  assert not _commits_empty(d)
+
+
+def test_biteproof_seam_d_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
+  gitdir = _gitdir(str(tmp_path), "bite-att-driver")
+  d, seq = _orphan_failure(tmp_path, adapters, name="bite-att-driver")
+  _stop_at_kind(monkeypatch, "attest-finalize", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_attest(d, str(seq), "orphaned record", git=_fake_git(gitdir))
+  _noop_driver_recover(monkeypatch)
+  RD.cmd_advance(d, git=_fake_git(gitdir))
+  with pytest.raises(AssertionError):
+    _assert_attest_agree(d, gitdir)
+
+
+def test_biteproof_seam_e_driver_recovery_not_wired(tmp_path, adapters, monkeypatch):
+  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
+  _stop_at_kind(monkeypatch, "head-diff-bind", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_record_result(d, sweep=True)
+  _noop_driver_recover(monkeypatch)
+  RD.cmd_record_result(d, sweep=True)
+  assert not _commits_empty(d)
