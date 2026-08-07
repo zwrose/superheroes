@@ -25,6 +25,7 @@ import heartbeat as hb  # noqa: E402
 import launch_doctrine  # noqa: E402
 import launch_ledger as ll  # noqa: E402
 import model_registry  # noqa: E402
+import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
@@ -50,6 +51,18 @@ _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
 
 _WORKHORSE_CMD = "/superheroes:workhorse"
+
+_SLOT_REMEDY = (
+    "Provision this wave's pilot slots first (the advisor's duty — the builder never "
+    "self-provisions), then give every lane named in `missing` its own reservation. "
+    "A lane listed by launch id is a live unslotted reservation and cannot be repaired "
+    "in place: drive it to a terminal outcome with "
+    "`launcher.py record-outcome --repo-root <repo-root> --launch-id <id> "
+    "--outcome refusal --evidence <why>`, then relaunch it. Relaunch each lane with: "
+    "`launcher.py launch --repo-root <repo-root> --issue <n> --premise <FILE PATH> "
+    "--checks <FILE PATH> --log-dir <dir> --slot <slot-id> --generation <int> "
+    "[--boundary <FILE PATH>]`."
+)
 
 
 def _scrub_env(env=None):
@@ -114,6 +127,15 @@ def _fail(reason, **extra):
     out = {"ok": False, "reason": reason}
     out.update(extra)
     return out
+
+
+def _preflight_extra(preflight_result):
+    extra = {}
+    if "missing" in preflight_result:
+        extra["missing"] = preflight_result["missing"]
+    if "remedy" in preflight_result:
+        extra["remedy"] = preflight_result["remedy"]
+    return extra
 
 
 def _claude_dispatch_tokens():
@@ -186,6 +208,8 @@ def _ledger_live_state(repo_root, env=None):
             "live": [],
             "unreadable": True,
             "unavailable": False,
+            "detail": {},
+            "declarations": {},
         }
     read_result = ll.read(repo_root, env=env)
     state = read_result["state"]
@@ -196,7 +220,11 @@ def _ledger_live_state(repo_root, env=None):
             "live": [],
             "unreadable": True,
             "unavailable": False,
+            "detail": {},
+            "declarations": {},
         }
+    detail = {}
+    declarations = {}
     if state == "ok":
         folded = ll.fold(read_result["records"])
         if not folded["ok"]:
@@ -206,7 +234,17 @@ def _ledger_live_state(repo_root, env=None):
                 "live": [],
                 "unreadable": True,
                 "unavailable": False,
+                "detail": {},
+                "declarations": {},
             }
+        declarations = folded["batchDeclarations"]
+        for launch_id, info in folded["launches"].items():
+            if not info.get("terminal"):
+                detail[launch_id] = {
+                    "batchId": info["batchId"],
+                    "slot": info.get("slot"),
+                    "generation": info.get("generation"),
+                }
     live = ll.live_launches(read_result["records"])
     return {
         "ok": True,
@@ -214,10 +252,84 @@ def _ledger_live_state(repo_root, env=None):
         "live": live,
         "unreadable": False,
         "unavailable": False,
+        "detail": detail,
+        "declarations": declarations,
     }
 
 
-def walk_preflight(checks_input, repo_root, env=None, doctrine_loader=None):
+def _slot_reservation_gate(
+    repo_root,
+    batch_id,
+    slot,
+    generation,
+    ledger_state,
+    exclude_launch_id=None,
+):
+    """Refuse parallel unslotted launches on slot-calibrated projects. Never raises."""
+    if not isinstance(batch_id, str) or not batch_id.strip():
+        return None
+    if not ledger_state.get("ok") or ledger_state.get("unreadable"):
+        return None
+    slot_info = pilot_calibration.declares_slots(repo_root)
+    if not slot_info.get("declares"):
+        return None
+
+    declarations = ledger_state.get("declarations") or {}
+    detail = ledger_state.get("detail") or {}
+    batch_decls = declarations.get(batch_id, [])
+    max_expected = 0
+    for rec in batch_decls:
+        expected = rec.get("expectedLaunches")
+        if (
+            isinstance(expected, int)
+            and not isinstance(expected, bool)
+            and expected > max_expected
+        ):
+            max_expected = expected
+
+    has_live_in_batch = False
+    for launch_id, info in detail.items():
+        if exclude_launch_id and launch_id == exclude_launch_id:
+            continue
+        if info.get("batchId") == batch_id:
+            has_live_in_batch = True
+            break
+
+    parallel = max_expected > 1 or has_live_in_batch
+    if not parallel:
+        return None
+
+    missing = []
+    if slot is None or generation is None:
+        missing.append("this-launch")
+    for launch_id, info in detail.items():
+        if exclude_launch_id and launch_id == exclude_launch_id:
+            continue
+        if info.get("batchId") != batch_id:
+            continue
+        if info.get("slot") is None:
+            missing.append(launch_id)
+
+    if not missing:
+        return None
+
+    return _fail(
+        "preflight-slot-reservation-required",
+        missing=missing,
+        remedy=_SLOT_REMEDY,
+    )
+
+
+def walk_preflight(
+    checks_input,
+    repo_root,
+    env=None,
+    doctrine_loader=None,
+    *,
+    batch_id=None,
+    slot=None,
+    generation=None,
+):
     """Walk preflight checks. Never raises."""
     loader = doctrine_loader or launch_doctrine.load
     doctrine = loader()
@@ -284,6 +396,16 @@ def walk_preflight(checks_input, repo_root, env=None, doctrine_loader=None):
                     return _fail("preflight-disjointness-required")
             elif ledger_state.get("unreadable"):
                 return _fail("preflight-ledger-unreadable")
+            else:
+                slot_refusal = _slot_reservation_gate(
+                    repo_root,
+                    batch_id,
+                    slot,
+                    generation,
+                    ledger_state,
+                )
+                if slot_refusal is not None:
+                    return slot_refusal
 
         out_checks.append({
             "id": check_id,
@@ -672,8 +794,18 @@ def launch_build(
     launch_id = "launch-%s" % secrets.token_hex(8)
     deadline = time.monotonic() + total_deadline_seconds
 
+    batch_id = premise.get("batchId") if isinstance(premise, dict) else None
+    if not isinstance(batch_id, str) or not batch_id.strip():
+        batch_id = None
+
     preflight_result = walk_preflight(
-        checks_input, repo_root, env=env, doctrine_loader=doctrine_loader,
+        checks_input,
+        repo_root,
+        env=env,
+        doctrine_loader=doctrine_loader,
+        batch_id=batch_id,
+        slot=slot,
+        generation=generation,
     )
     if not preflight_result["ok"]:
         stage = "preflight"
@@ -685,8 +817,16 @@ def launch_build(
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
             if not term["ok"]:
-                return _fail(_terminalization_reason(term, reason), launchId=launch_id)
-        return _fail(reason, launchId=launch_id)
+                return _fail(
+                    _terminalization_reason(term, reason),
+                    launchId=launch_id,
+                    **_preflight_extra(preflight_result),
+                )
+        return _fail(
+            reason,
+            launchId=launch_id,
+            **_preflight_extra(preflight_result),
+        )
 
     premise_result = validate_premise(
         premise,
@@ -759,6 +899,31 @@ def launch_build(
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
         return _fail(reserve_result["reason"], launchId=launch_id)
+
+    ledger_recheck = _ledger_live_state(repo_root, env=env)
+    slot_refusal = _slot_reservation_gate(
+        repo_root,
+        batch_id,
+        slot,
+        generation,
+        ledger_recheck,
+        exclude_launch_id=launch_id,
+    )
+    if slot_refusal is not None:
+        term = _terminalize(
+            repo_root,
+            launch_id,
+            False,
+            "preflight-slot-reservation-required",
+            stage="preflight",
+            env=env,
+        )
+        reason = _terminalization_reason(term, "preflight-slot-reservation-required")
+        return _fail(
+            reason,
+            launchId=launch_id,
+            **_preflight_extra(slot_refusal),
+        )
 
     try:
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
@@ -1007,7 +1172,13 @@ def _cli_preflight(args):
         return _fail(dup_reason)
     if checks is None:
         return _fail("preflight-malformed-input")
-    return walk_preflight(checks, args.repo_root)
+    return walk_preflight(
+        checks,
+        args.repo_root,
+        batch_id=args.batch,
+        slot=args.slot,
+        generation=args.generation,
+    )
 
 
 def _cli_compose(args):
@@ -1092,6 +1263,8 @@ def main(argv=None):
     pf.add_argument("--checks", required=True)
     pf.add_argument("--premise", required=False)
     pf.add_argument("--batch", required=False)
+    pf.add_argument("--slot", default=None)
+    pf.add_argument("--generation", type=int, default=None)
     pf.set_defaults(func=_cli_preflight)
 
     comp = sub.add_parser("compose")
