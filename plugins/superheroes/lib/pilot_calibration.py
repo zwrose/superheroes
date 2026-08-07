@@ -19,6 +19,11 @@ REASON_NO_CONFIG_BLOCK = "no-config-block"
 REASON_CONFIG_UNPARSEABLE = "config-unparseable"
 REASON_NO_PILOT_BLOCK = "no-pilot-block"
 REASON_CREDENTIAL_SET_EMPTY = "credential-set-empty"
+REASON_CALIBRATION_UNREADABLE = "calibration-unreadable"
+
+
+def _unknown_calibration(path, reason):
+    return {"declares": False, "unknown": True, "reason": reason, "path": path}
 
 
 def declares_slots(repo_root):
@@ -35,22 +40,24 @@ def declares_slots(repo_root):
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
+    except UnicodeDecodeError:
+        return _unknown_calibration(path, REASON_CALIBRATION_UNREADABLE)
     except OSError:
-        return {"declares": False, "reason": REASON_NO_CONFIG_BLOCK, "path": path}
+        return _unknown_calibration(path, REASON_CALIBRATION_UNREADABLE)
     match = store.CONFIG_BLOCK_RE.search(text)
     if not match:
         return {"declares": False, "reason": REASON_NO_CONFIG_BLOCK, "path": path}
     try:
         cfg = json.loads(match.group(1))
     except (json.JSONDecodeError, TypeError, ValueError):
-        return {"declares": False, "reason": REASON_CONFIG_UNPARSEABLE, "path": path}
+        return _unknown_calibration(path, REASON_CONFIG_UNPARSEABLE)
     if not isinstance(cfg, dict):
-        return {"declares": False, "reason": REASON_CONFIG_UNPARSEABLE, "path": path}
+        return _unknown_calibration(path, REASON_CONFIG_UNPARSEABLE)
     if pilot_contract.PILOT_BLOCK_KEY not in cfg:
         return {"declares": False, "reason": REASON_NO_PILOT_BLOCK, "path": path}
     pilot = cfg[pilot_contract.PILOT_BLOCK_KEY]
     if not isinstance(pilot, dict):
-        return {"declares": False, "reason": REASON_NO_PILOT_BLOCK, "path": path}
+        return _unknown_calibration(path, REASON_NO_PILOT_BLOCK)
     cred = pilot.get("credentialSet")
     if not isinstance(cred, list) or not cred:
         return {"declares": False, "reason": REASON_CREDENTIAL_SET_EMPTY, "path": path}
