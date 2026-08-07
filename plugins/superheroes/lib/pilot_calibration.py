@@ -59,6 +59,10 @@ def declares_slots(repo_root):
     if not isinstance(pilot, dict):
         return _unknown_calibration(path, REASON_NO_PILOT_BLOCK)
     cred = pilot.get("credentialSet")
-    if not isinstance(cred, list) or not cred:
+    if cred is None:
+        return {"declares": False, "reason": REASON_CREDENTIAL_SET_EMPTY, "path": path}
+    if not isinstance(cred, list):
+        return _unknown_calibration(path, REASON_CREDENTIAL_SET_EMPTY)
+    if not cred:
         return {"declares": False, "reason": REASON_CREDENTIAL_SET_EMPTY, "path": path}
     return {"declares": True, "reason": REASON_DECLARED, "path": path}
