@@ -73,8 +73,7 @@ _seat_map_classify_violations = seat_map.classify_violations
 # --- constants (the DIMENSIONS/AGENT_SUFFIX home, moved off the retired code_loop_plan) --------
 # The code leg is the FIVE shared reviewers. `grounding-reviewer` is spec-leg-only (doc
 # provenance) — deliberately absent here; test_dispatch_tables pins the per-leg subset.
-DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
-              "test-reviewer", "premortem-reviewer"]
+DIMENSIONS = round_phases.DIMENSIONS
 AGENT_SUFFIX = {"architecture-reviewer": "architecture", "code-reviewer": "code",
                 "security-reviewer": "security", "test-reviewer": "test",
                 "premortem-reviewer": "premortem"}
@@ -220,6 +219,11 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
 }
+
+# Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
+# not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
+# and `build_receipt` share the same one home.
+FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 
 # Every OTHER per-round key `_fold_panel` records, named here so the census can close the set: a new
 # `_record_round` key lands in one home or the other, deliberately, or the census fails. None of
@@ -1082,11 +1086,7 @@ def _shard_payload(diff_text, dimensions):
 
 
 def _panel_dimensions(config):
-    dims = config.get("dimensions")
-    if isinstance(dims, (list, tuple)):
-        strings = [d for d in dims if isinstance(d, str)]
-        return strings if strings else list(DIMENSIONS)
-    return list(DIMENSIONS)
+    return round_phases.panel_dimensions(config)
 
 
 def _advance(state, config):
@@ -1159,6 +1159,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
     artifact = artifact if isinstance(artifact, dict) else {}
+    _record_adapter_provenance(state, artifact)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
     elif phase == P_VERIFIERS:
@@ -1426,9 +1427,6 @@ def _fold_panel(state, config, artifact):
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
     :823-827 parity) but its findings ride the round record as UNVERIFIED/provisional — surfaced,
     never silently dropped (coordination note 2)."""
-    prov = artifact.pop("provenance", None) if isinstance(artifact, dict) else None
-    if isinstance(prov, dict) and prov:
-        _record_round(state, "adapterProvenance", prov)
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
     if seat_map:
@@ -2024,43 +2022,8 @@ _VERIFY_RUNNER_ENVELOPE_HINTS = {
 
 
 def verify_result_fault(artifact):
-    """None when a verify artifact carries a RECOGNIZED `result` token; otherwise a reason string
-    naming the expected shape (and, where the artifact carries a known runner-envelope key, the
-    one-line correction).
-
-    A recognized token is returned unchanged to the fold — including `fail` and `timeout`, which are
-    genuine outcomes the fold halts on. Only a missing, None, non-string, or unrecognized `result`
-    is a fault: those are precisely the values `_fold_verify` cannot tell apart from a real failure.
-
-    axis: REFUSAL of an unexpressible verify result — not whether the gate passed. A recognized
-    `fail`/`timeout` is expressible, so it is accepted here and halts in the fold as it always has.
-    """
-    # axis: the ENVELOPE's own shape — the submit CLI loads the artifact with `json.load`, which
-    # accepts ANY root, so a `null` or bare-list artifact arrives here. It was already refused (it
-    # can carry no `result`), but the reason said "carries no usable `result` (got None)", which
-    # misdescribes a root that has no keys at all. Name the envelope the driver consumes instead.
-    if not isinstance(artifact, dict):
-        return ("verify artifact is %s, not a result object; expected {\"result\": \"<one of: %s>\"}"
-                "; resubmit the same phase/attempt/state-hash with a corrected artifact" % (
-                    type(artifact).__name__, ", ".join(sorted(_VERIFY_RESULTS))))
-    # The original normalization stays BELOW the refusal rather than being replaced by it: the branch
-    # above must be independently neutralizable, so a bite-proof mutation of it lands on the axis it
-    # claims (the envelope goes unnamed) instead of crashing on a root that has no `.get`.
-    if not isinstance(artifact, dict):
-        artifact = {}
-    result = artifact.get("result")
-    if isinstance(result, str) and result in _VERIFY_RESULTS:
-        return None
-    parts = [
-        "verify artifact carries no usable `result` (got %r)" % (result,),
-        "expected {\"result\": \"<one of: %s>\"}" % ", ".join(sorted(_VERIFY_RESULTS)),
-        "resubmit the same phase/attempt/state-hash with a corrected artifact",
-    ]
-    hints = [_VERIFY_RUNNER_ENVELOPE_HINTS[k] for k in sorted(_VERIFY_RUNNER_ENVELOPE_HINTS)
-             if k in artifact]
-    if hints:
-        parts.append("; ".join(hints))
-    return "; ".join(parts)
+    """None when a verify artifact carries a RECOGNIZED `result` token; otherwise a reason string."""
+    return round_phases.verify_result_fault(artifact)
 
 
 def _audit_result_entry_fault(entry, index, target_ids):
@@ -2291,7 +2254,6 @@ def _audit_targets(state, config, audit_targets_map):
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
-    _record_adapter_provenance(state, artifact)
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
     targets = state.get("_auditTargets") or []
     # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
@@ -2889,6 +2851,8 @@ def _validate_attested_receipt(receipt):
         return False, "receipt seatMap must be an object"
     if not isinstance(receipt.get("artifacts"), dict):
         return False, "attested receipt artifacts must be an object (path -> sha256)"
+    if not receipt.get("artifacts"):
+        return False, "attested receipt artifacts must not be empty"
     if not isinstance(receipt.get("roster"), dict):
         return False, "attested receipt roster must be an object (seat -> disposition)"
     for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
@@ -3517,19 +3481,42 @@ def _anchor_key(rnd, phase, attempt):
     return "%s:%s:%s" % (rnd, phase, attempt)
 
 
-def _orders_anchor(state, rnd, phase, attempt):
+def _orders_anchor(state, session_dir, rnd, phase, attempt):
     """The EMISSION-TIME dispatch anchor for a phase/attempt, mirrored into state so it rides the
     state-hash chain — or None when nothing was emitted.
 
     Ingestion checks an envelope's hashes against THIS, never against the manifest file on disk: the
-    file is mutable, the mirrored hash is covered by the state hash. With no anchor,
-    `round_records._anchor_check` accepts only the `not-emitted` literal, so an envelope claiming
-    real hashes nobody can verify is still refused."""
+    file is mutable, the mirrored hash is covered by the state hash. With no anchor in state,
+    `_orders_anchor_from_journal` reconstructs one from the journalled `orders-emitted` event."""
     anchors = state.get("_ordersAnchors")
-    if not isinstance(anchors, dict):
-        return None
-    anchor = anchors.get(_anchor_key(rnd, phase, attempt))
-    return anchor if isinstance(anchor, dict) else None
+    if isinstance(anchors, dict):
+        anchor = anchors.get(_anchor_key(rnd, phase, attempt))
+        if isinstance(anchor, dict):
+            return anchor
+    return _orders_anchor_from_journal(session_dir, rnd, phase, attempt)
+
+
+def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
+    """Rebuild the dispatch anchor from the journalled emission hash when state lost the mirror."""
+    for event in reversed(read_journal(session_dir)):
+        if event.get("outcome") != "orders-emitted":
+            continue
+        if event.get("round") != rnd or event.get("phase") != phase or event.get("attempt") != attempt:
+            continue
+        manifest_sha = event.get("manifestSha256")
+        if not isinstance(manifest_sha, str) or not manifest_sha:
+            return None
+        path = _orders_manifest_path(session_dir, rnd, phase, attempt)
+        manifest, err = round_records.read_json(path)
+        seats = {}
+        if err is None and isinstance(manifest, dict):
+            raw = manifest.get("seats")
+            if isinstance(raw, dict):
+                seats = raw
+        return {"manifestSha256": manifest_sha,
+                "orders": {seat: round_records.NOT_EMITTED for seat in seats},
+                "path": path}
+    return None
 
 
 def _seat_dispatch_row(state, seat_key):
@@ -3561,7 +3548,6 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                 "round": rnd, "phase": phase, "attempt": attempt,
                 "orders": round_records.NOT_EMITTED, "seats": seats}
     path = _orders_manifest_path(session_dir, rnd, phase, attempt)
-    round_records.atomic_write_json(path, manifest)
     manifest_sha = round_records.sha256_text(round_records.canonical(manifest))
     anchor = {"manifestSha256": manifest_sha,
               "orders": {seat: round_records.NOT_EMITTED for seat in seats},
@@ -3572,6 +3558,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     anchors[_anchor_key(rnd, phase, attempt)] = anchor
     state["_ordersAnchors"] = anchors
     save_state(session_dir, state)
+    round_records.atomic_write_json(path, manifest)
     _journal_event(session_dir, journal_cmd, "orders-emitted", phase=phase, round=rnd,
                    attempt=attempt, manifestSha256=manifest_sha)
     return anchor
@@ -3612,10 +3599,9 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
 
 def _journal_record_identities(session_dir, rnd, phase):
     """Every record identity this session's journal logged for a phase — `reconcile`'s view of the
-    LOG half of the two-commit window. Payload hashes ride as evidence only; identity is the join
-    key so a superseded hash does not orphan the slot."""
-    out = []
-    seen = set()
+    LOG half of the two-commit window. The latest `payloadSha256` per slot rides with each identity
+    so a supersede whose journal append never landed still reconciles."""
+    latest = {}
     for event in read_journal(session_dir):
         if event.get("phase") != phase or event.get("round") != rnd:
             continue
@@ -3629,11 +3615,13 @@ def _journal_record_identities(session_dir, rnd, phase):
             ident = round_records.record_identity(
                 phase, seat, event.get("occurrence", 0), event.get("attempt"))
         key = round_records._identity_key_from_mapping(ident, default_phase=phase)
-        if key is None or key in seen:
+        if key is None:
             continue
-        seen.add(key)
-        out.append(ident)
-    return out
+        entry = dict(ident)
+        if "payloadSha256" in event:
+            entry["payloadSha256"] = event.get("payloadSha256")
+        latest[key] = entry
+    return list(latest.values())
 
 
 def _seat_for_record_identity(session_dir, ident):
@@ -3705,13 +3693,18 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
     """Copy the fixer's head diff into the STORE beside its envelope and stamp the immutable copy's
     path into the stored payload.
 
-    The stored envelope stays SELF-CONSISTENT: `payloadSha256` is recomputed over the augmented
-    payload (so a later integrity re-read of the store file cannot read as torn) while the seat's
-    own landed hash is preserved verbatim as `landedPayloadSha256` — nothing about what the seat
-    actually landed is lost. Returns (store_path, payload_sha256)."""
+    The blob is published durably FIRST; only then is the envelope bound to it, so a crash cannot
+    leave an envelope naming a missing blob."""
     skey = round_records.storage_key(seat_key, occurrence)
     spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-    diff_path = os.path.join(os.path.dirname(spath), "%s.a%d.headdiff" % (skey, attempt))
+    diff_path = round_records.head_diff_store_path(session_dir, rnd, phase, seat_key, attempt,
+                                                   occurrence)
+    tmp = diff_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, diff_path)
     envelope, err = round_records.read_json(spath)
     if err is not None or not isinstance(envelope, dict):
         return diff_path, None
@@ -3722,13 +3715,39 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
     envelope["payload"] = payload
     envelope["payloadSha256"] = round_records.payload_sha256(payload)
     round_records.atomic_write_json(spath, envelope)
-    tmp = diff_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(content)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, diff_path)
     return diff_path, envelope["payloadSha256"]
+
+
+def _fixer_head_diff_needs_repair(stored):
+    """True when a stored fixer envelope references a head diff that is not durably copied yet."""
+    if not isinstance(stored, dict):
+        return False
+    payload = stored.get("payload")
+    if not isinstance(payload, dict):
+        return False
+    if payload.get("headDiffPath") is None:
+        return False
+    store_path_val = payload.get("headDiffStorePath")
+    if not isinstance(store_path_val, str) or not store_path_val:
+        return True
+    return not os.path.exists(store_path_val)
+
+
+def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence):
+    """Repair a fixer store record whose head-diff blob was not yet bound. Returns (payload_sha, path)."""
+    skey = round_records.storage_key(seat_key, occurrence)
+    spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+    stored, err = round_records.read_json(spath)
+    if err is not None or not isinstance(stored, dict):
+        return None, None
+    if not _fixer_head_diff_needs_repair(stored):
+        return stored.get("payloadSha256"), None
+    payload = stored.get("payload") if isinstance(stored.get("payload"), dict) else {}
+    head_path = payload.get("headDiffPath")
+    content, why = _read_head_diff(head_path)
+    if why is not None:
+        return None, why
+    return _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence)
 
 
 def _pending_of(session_dir, state, cmd):
@@ -3776,7 +3795,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     roster, refusal = _roster_of(session_dir, state, "record-result", phase, rnd, cur_attempt)
     if refusal is not None:
         return refusal
-    anchor = _orders_anchor(state, rnd, phase, cur_attempt)
+    anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
     if sweep:
         return _sweep_record(session_dir, state, "record-result", phase, rnd, cur_attempt, roster,
                              anchor)
@@ -3832,6 +3851,31 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
     with the refusing seat's own reason — a landing nobody could ingest is never skipped in
     silence."""
     for seat_key, occurrence in round_records.roster_slots(roster):
+        if phase != P_FIXER:
+            continue
+        try:
+            spath = round_records.store_path(session_dir, rnd, phase,
+                                             round_records.storage_key(seat_key, occurrence),
+                                             attempt)
+        except ValueError:
+            continue
+        if not os.path.exists(spath):
+            continue
+        stored, _lerr = round_records.read_json(spath)
+        if not _fixer_head_diff_needs_repair(stored):
+            continue
+        rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt,
+                                                   occurrence)
+        if detail == "head-diff-unreadable":
+            payload = stored.get("payload") if isinstance(stored, dict) else {}
+            return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
+                               seat=seat_key, headDiffPath=payload.get("headDiffPath"))
+        if rehashed:
+            _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
+                           seat=seat_key, occurrence=occurrence, payloadSha256=rehashed,
+                           headDiffRepaired=True,
+                           **_journal_identity_fields(phase, seat_key, occurrence, attempt))
+    for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
             lpath = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
@@ -3856,6 +3900,24 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                                seat=_slot_label(result.get("seatKey"), occurrence),
                                detail=result.get("message"))
         if result.get("reason") == "already-stored":
+            if phase == P_FIXER:
+                stored, _stored_err = round_records.read_json(result.get("storePath"))
+                if _fixer_head_diff_needs_repair(stored):
+                    seat = result.get("seatKey")
+                    occurrence = result.get("occurrence") or 0
+                    rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat,
+                                                               attempt, occurrence)
+                    if detail == "head-diff-unreadable":
+                        payload = stored.get("payload") if isinstance(stored, dict) else {}
+                        return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,
+                                           attempt=attempt, seat=seat,
+                                           headDiffPath=payload.get("headDiffPath"))
+                    if rehashed:
+                        _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd,
+                                       attempt=attempt, seat=seat, occurrence=occurrence,
+                                       payloadSha256=rehashed, headDiffRepaired=True,
+                                       **_journal_identity_fields(phase, seat, occurrence, attempt))
+                        recorded.append(_slot_label(seat, occurrence))
             continue
         seat = result.get("seatKey")
         payload_sha = result.get("payloadSha256")
@@ -3918,7 +3980,7 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
                            rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
                                   "that does not exist" % (seat, slots, occurrence))
-    anchor = _orders_anchor(state, rnd, phase, cur_attempt)
+    anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
     row = _seat_dispatch_row(state, seat)
     envelope = {
         "schema": round_records.SEAT_MISSING_SCHEMA,
@@ -4030,7 +4092,7 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
-    anchor = _orders_anchor(state, rnd, phase, attempt)
+    anchor = _orders_anchor(state, session_dir, rnd, phase, attempt)
 
     # 1. reconcile the two-commit window. THE STORE FILE IS AUTHORITATIVE.
     rec = round_records.reconcile(session_dir, rnd, phase,
@@ -4093,7 +4155,8 @@ def _advance_locked(session_dir, state, git=None, broke=None):
         round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt))
     artifact, why = _adapters().assemble(phase, records, state, config,
                                          dispatch_manifest=manifest if _merr is None else None,
-                                         canary=_canary_landings(session_dir, state, rnd, attempt))
+                                         canary=_canary_landings(session_dir, state, rnd, attempt),
+                                         session_dir=session_dir)
     if why is not None or not isinstance(artifact, dict):
         return _refuse_cmd(session_dir, "advance", "assemble-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=why)
@@ -4432,27 +4495,16 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
     save_state(session_dir, state)
     _journal_event(session_dir, "attest", "attested", phase=binding.get("phase"),
                    failure=binding.get("ref"), attestClass=binding.get("class"))
+    side = _publish_sidecar(session_dir, state, git=git)
     receipt = build_attestation_receipt(session_dir, state, binding, note, roster=roster)
-    receipt["artifacts"] = {}
+    receipt["artifacts"] = _session_artifact_hashes(session_dir,
+                                                    exclude=(RECEIPT_FILE, STATE_FILE))
     ok, invalid = validate_receipt(receipt)
     if not ok:
         return _refuse_cmd(session_dir, "attest", "attested-receipt-invalid", fault=FAULT_INTERNAL,
                            detail=invalid)
     path = os.path.join(session_dir, RECEIPT_FILE)
     tmp = path + ".tmp"
-    try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, path)
-    except OSError as exc:
-        return _refuse_cmd(session_dir, "attest", "attested-receipt-unwritable",
-                           fault=FAULT_INTERNAL, detail=str(exc))
-    side = _publish_sidecar(session_dir, state, git=git)
-    receipt["artifacts"] = _session_artifact_hashes(session_dir, exclude=(RECEIPT_FILE,))
-    ok, invalid = validate_receipt(receipt)
-    if not ok:
-        return _refuse_cmd(session_dir, "attest", "attested-receipt-invalid", fault=FAULT_INTERNAL,
-                           detail=invalid)
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
             fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")

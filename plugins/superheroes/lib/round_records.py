@@ -148,23 +148,25 @@ def _identity_key_from_mapping(ident, default_phase=None):
     return _identity_key(phase, seat, occurrence, attempt)
 
 
-def head_diff_store_path_valid(store_path_value, rnd, phase, seat_key, attempt, occurrence=0):
-    """True when `store_path_value` is the driver-owned headdiff path for this slot (structural)."""
+def head_diff_store_path(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
+    """The driver-owned headdiff blob path for one roster slot."""
+    skey = storage_key(seat_key, occurrence)
+    spath = store_path(session_dir, rnd, phase, skey, attempt)
+    return os.path.join(os.path.dirname(spath), "%s.a%d.headdiff" % (skey, attempt))
+
+
+def head_diff_store_path_valid(store_path_value, session_dir, rnd, phase, seat_key, attempt,
+                               occurrence=0):
+    """True when `store_path_value` is exactly this session's store copy for the slot."""
     if not isinstance(store_path_value, str) or not store_path_value:
         return False
+    if not isinstance(session_dir, str) or not session_dir:
+        return False
     try:
-        skey = storage_key(seat_key, occurrence)
-        _require_index("rnd", rnd)
-        _require_token("phase", phase)
-        _require_index("attempt", attempt)
+        expected = head_diff_store_path(session_dir, rnd, phase, seat_key, attempt, occurrence)
     except ValueError:
         return False
-    expected_tail = os.path.join("round-%d" % rnd, "seats", phase,
-                                 "%s.a%d.headdiff" % (skey, attempt))
-    normalized = os.path.normpath(store_path_value)
-    if normalized.endswith(expected_tail):
-        return True
-    return normalized.replace(os.sep, "/").endswith(expected_tail.replace(os.sep, "/"))
+    return os.path.normpath(store_path_value) == os.path.normpath(expected)
 
 
 def _now_iso():
@@ -673,9 +675,10 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         the ONE machinery-failure class here: the log claims a record that does not exist on disk.
         The caller turns it into a refusal naming the seat; nothing here deletes or invents a file.
 
-    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash. Payload hashes
-    ride the journal as evidence only; a supersede leaves the prior hash in the log while the store
-    carries the replacement, and identical payloads on distinct seats must not mask a missing append.
+    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash alone. Payload
+    hashes ride the journal as the revision token: a supersede writes a new store file into the SAME
+    slot, so reconcile must reappend when the store's current token differs from the latest token the
+    journal recorded for that slot.
     """
     identities = []
     for ident in (journal_identities or []):
@@ -683,10 +686,14 @@ def reconcile(session_dir, rnd, phase, journal_identities):
         if key is not None:
             identities.append(ident)
     journal_keys = set()
+    journal_tokens = {}
     for ident in identities:
         key = _identity_key_from_mapping(ident, default_phase=phase)
         if key is not None:
             journal_keys.add(key)
+            token = ident.get("payloadSha256")
+            if token is not None:
+                journal_tokens[key] = token
     try:
         ldir = landing_dir(session_dir, rnd, phase)
         sdir = store_dir(session_dir, rnd, phase)
@@ -714,7 +721,11 @@ def reconcile(session_dir, rnd, phase, journal_identities):
             if key is not None:
                 store_keys.add(key)
                 entry["recordIdentity"] = record_identity(*key)
+                store_token = envelope_cas_token(obj)
+                journaled = journal_tokens.get(key)
                 if key not in journal_keys:
+                    reappend.append(entry)
+                elif journaled is not None and store_token is not None and journaled != store_token:
                     reappend.append(entry)
     orphans = [ident for ident in identities
                if _identity_key_from_mapping(ident, default_phase=phase) not in store_keys]

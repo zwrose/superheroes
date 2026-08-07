@@ -104,9 +104,11 @@ class FakeAdapters(object):
     def missing_policy(self, phase):
         return self.policies.get(phase, "seat-status")
 
-    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None):
+    def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+                 session_dir=None):
         self.assembled.append({"phase": phase, "envelopes": envelopes,
-                               "dispatch_manifest": dispatch_manifest, "canary": canary})
+                               "dispatch_manifest": dispatch_manifest, "canary": canary,
+                               "session_dir": session_dir})
         if self.assemble_reason is not None:
             return None, self.assemble_reason
         if phase == RD.P_PANEL:
@@ -214,7 +216,7 @@ def _session_id(session_dir):
 
 
 def _anchor_hashes(session_dir, rnd, phase, attempt):
-    anchor = RD._orders_anchor(_state(session_dir), rnd, phase, attempt)
+    anchor = RD._orders_anchor(_state(session_dir), session_dir, rnd, phase, attempt)
     if anchor is None:
         return RR.NOT_EMITTED, RR.NOT_EMITTED
     return anchor["manifestSha256"], anchor["orders"].get("*", RR.NOT_EMITTED)
@@ -675,7 +677,7 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
 
     def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
-                                 canary=None):
+                                 canary=None, session_dir=None):
         seats = {}
         for env in (envelopes or []):
             seat = env.get("seat")
@@ -847,7 +849,7 @@ def test_next_emits_orders_manifest_for_bootstrap_dispatch(tmp_path, adapters):
     assert pend["phase"] == RD.P_PANEL
     manifest_path = RD._orders_manifest_path(d, pend["round"], pend["phase"], pend["attempt"])
     assert os.path.exists(manifest_path)
-    anchor = RD._orders_anchor(_state(d), pend["round"], pend["phase"], pend["attempt"])
+    anchor = RD._orders_anchor(_state(d), d, pend["round"], pend["phase"], pend["attempt"])
     assert anchor is not None and anchor["manifestSha256"]
 
 
@@ -860,6 +862,10 @@ def test_advance_reloads_state_after_acquiring_lock(tmp_path, adapters, monkeypa
 
     def counting_load(session_dir, cmd):
         load_count[0] += 1
+        if cmd == "advance":
+            lock_path = RR.session_lock_path(session_dir)
+            assert os.path.exists(lock_path), (
+                "state must load only after the session lock is held")
         state, refusal = original(session_dir, cmd)
         if cmd == "advance" and refusal is None:
             state = dict(state)
@@ -913,7 +919,7 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
         "resultContract": RR.SEAT_RESULT_SCHEMA}
     emitted = [e for e in _outcomes(d, "orders-emitted") if e.get("phase") == RD.P_VERIFIERS]
     assert len(emitted) == 1
-    anchor = RD._orders_anchor(_state(d), 1, RD.P_VERIFIERS, 0)
+    anchor = RD._orders_anchor(_state(d), d, 1, RD.P_VERIFIERS, 0)
     assert anchor["manifestSha256"] == emitted[0]["manifestSha256"]
     # the anchor rides the state-hash chain, and the emitted hash is the one ingestion checks
     assert out["nextAction"]["expectedStateHash"] == RD.state_hash(_state(d))
@@ -1052,7 +1058,8 @@ def test_advance_refuses_a_fold_the_submit_chokepoint_rejects(tmp_path, adapters
     d = _session(tmp_path)
     _record_all_panel_seats(d)
 
-    def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None):
+    def bad_assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+                     session_dir=None):
         return {"seats": {"architecture": {"findings": []}}}, None
 
     adapters.assemble = bad_assemble
@@ -1069,7 +1076,8 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     d = _session(tmp_path)
     _record_all_panel_seats(d)
 
-    def boom(phase, envelopes, state, config, dispatch_manifest=None, canary=None):
+    def boom(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+             session_dir=None):
         raise RuntimeError("adapter exploded")
 
     adapters.assemble = boom
@@ -1361,14 +1369,16 @@ def test_attest_writes_an_uncertified_receipt_with_its_evidence(tmp_path, adapte
     assert "certification" not in receipt
     assert receipt["attestation"]["class"] == "journal-orphan"
     assert receipt["attestation"]["note"] == "orphaned record; handing back uncertified"
-    # sha256 of every artifact under the session dir except the receipt itself (written last)
+    # sha256 of every artifact under the session dir except the receipt and loop-state (the receipt
+    # is written before terminal state is persisted, so STATE_FILE is excluded from the snapshot)
     assert receipt["artifacts"]
     assert RD.RECEIPT_FILE not in receipt["artifacts"]
+    assert RD.STATE_FILE not in receipt["artifacts"]
     for rel, digest in receipt["artifacts"].items():
         assert digest and len(digest) == 64
         with open(os.path.join(d, rel), "rb") as fh:
             assert hashlib.sha256(fh.read()).hexdigest() == digest
-    assert RD.STATE_FILE in receipt["artifacts"]
+    assert RD.STATE_FILE not in receipt["artifacts"]
     # the FULL roster with each seat's disposition
     assert set(receipt["roster"]) == set(RD.DIMENSIONS)
     assert receipt["roster"]["security-reviewer"] == "absent"
@@ -1495,7 +1505,7 @@ def test_death_between_ingest_and_journal_append(tmp_path, adapters):
     _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != "test-reviewer"])
     _land(d, "test-reviewer")
     # ingest WITHOUT the journal half — the kill lands between the two commits
-    anchor = RD._orders_anchor(_state(d), 1, RD.P_PANEL, 0)
+    anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
     ingested = RR.ingest_landing(d, 1, RD.P_PANEL, "test-reviewer", 0, current_attempt=0,
                                  roster=list(RD.DIMENSIONS), anchor=anchor)
     assert ingested["ok"] is True

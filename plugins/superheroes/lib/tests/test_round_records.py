@@ -528,7 +528,9 @@ def test_reconcile_does_not_orphan_a_superseded_payload_hash(tmp_path):
     ]
     out = RR.reconcile(sd, 1, PHASE, journal)
     assert out["journalOrphan"] == []
-    assert out["reappend"] == []
+    assert len(out["reappend"]) == 1
+    stored, _err = RR.read_json(out["reappend"][0]["path"])
+    assert out["reappend"][0]["payloadSha256"] == stored["payloadSha256"]
 
 
 def test_reconcile_distinguishes_identical_payloads_on_different_seats(tmp_path):
@@ -546,6 +548,35 @@ def test_reconcile_distinguishes_identical_payloads_on_different_seats(tmp_path)
     assert out["journalOrphan"] == []
     assert len(out["reappend"]) == 1
     assert out["reappend"][0]["recordIdentity"]["seat"] == OTHER_SEAT
+
+
+def test_reconcile_reappends_when_the_store_revision_is_newer_than_the_journal(tmp_path):
+    """Crash between supersede write and journal append: slot identity is satisfied but the store
+    token moved — reconcile must reappend the newer revision."""
+    sd = _session(tmp_path)
+    first = _env()
+    _land(sd, first)
+    assert _ingest(sd)["ok"] is True
+    second = _env(payload={"findings": ["replaced"]})
+    _land(sd, second)
+    spath = _ingest(sd, supersede=True, expect_sha256=first["payloadSha256"])["storePath"]
+    stored, _err = RR.read_json(spath)
+    assert stored["payloadSha256"] != first["payloadSha256"]
+    journal = [RR.record_identity(PHASE, SEAT, 0, 1)]
+    journal[0]["payloadSha256"] = first["payloadSha256"]
+    out = RR.reconcile(sd, 1, PHASE, journal)
+    assert out["journalOrphan"] == []
+    assert len(out["reappend"]) == 1
+    assert out["reappend"][0]["payloadSha256"] == stored["payloadSha256"]
+
+
+def test_head_diff_store_path_valid_requires_exact_session_store_path(tmp_path):
+    sd = _session(tmp_path)
+    expected = RR.head_diff_store_path(sd, 1, PHASE, SEAT, 1)
+    assert RR.head_diff_store_path_valid(expected, sd, 1, PHASE, SEAT, 1) is True
+    lookalike = os.path.join("/attacker", "round-1", "seats", PHASE,
+                             "%s.a1.headdiff" % RR.storage_key(SEAT))
+    assert RR.head_diff_store_path_valid(lookalike, sd, 1, PHASE, SEAT, 1) is False
 
 
 def test_reconcile_keeps_the_store_file_authoritative(tmp_path):
