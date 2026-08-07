@@ -4,8 +4,9 @@ Compares ``deadline + margin <= credential validity horizon`` per account and pe
 sign-in path, using provenance-bound horizon observations. Unknown provenance
 cannot claim an unattended horizon.
 
-Non-goals: runtime terminus enforcement (B5, #827); reading capture artifacts off
-disk (B4); server-probe transport (caller's responsibility).
+Non-goals: runtime terminus enforcement (B5, #827); horizon observations are derived from the
+live browser context and never read from or written to disk; server-probe transport (caller's
+responsibility).
 """
 import base64
 import calendar

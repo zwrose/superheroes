@@ -493,7 +493,7 @@ def test_wrong_account_leg_infrastructure_inconclusive(token):
 def test_lapse_step_continue_on_identity():
     result = pi.lapse_step(
         {"identity": EXPECTED_ID},
-        sign_in_path="captured",
+        sign_in_path="attended",
         reprobe_count=0,
     )
     assert result["action"] == pi.ACTION_CONTINUE
@@ -502,7 +502,7 @@ def test_lapse_step_continue_on_identity():
 def test_lapse_step_reprobe_on_no_session():
     result = pi.lapse_step(
         {"reason": pilot_probe.REASON_NO_SESSION},
-        sign_in_path="captured",
+        sign_in_path="attended",
         reprobe_count=0,
     )
     assert result["action"] == pi.ACTION_REPROBE
@@ -512,7 +512,7 @@ def test_lapse_step_reprobe_on_no_session():
 def test_lapse_step_park_captured_confirmed():
     result = pi.lapse_step(
         {"reason": pilot_probe.REASON_NO_SESSION},
-        sign_in_path="captured",
+        sign_in_path="attended",
         reprobe_count=1,
     )
     assert result["action"] == pi.ACTION_PARK
@@ -537,7 +537,7 @@ def test_lapse_step_infrastructure_defer(token):
     """Edge 13: each infrastructure token => ACTION_DEFER."""
     result = pi.lapse_step(
         {"reason": token},
-        sign_in_path="captured",
+        sign_in_path="attended",
         reprobe_count=0,
     )
     assert result["action"] == pi.ACTION_DEFER
@@ -554,7 +554,7 @@ def test_lapse_step_identity_refuse(token):
     """Edge 14: each identity-class token => ACTION_REFUSE."""
     result = pi.lapse_step(
         {"reason": token},
-        sign_in_path="captured",
+        sign_in_path="attended",
         reprobe_count=0,
     )
     assert result["action"] == pi.ACTION_REFUSE
@@ -568,10 +568,20 @@ def test_lapse_step_reprobe_budget_two_refused():
     with pytest.raises(pi.PilotIdentityError) as exc:
         pi.lapse_step(
             {"reason": pilot_probe.REASON_NO_SESSION},
-            sign_in_path="captured",
+            sign_in_path="attended",
             reprobe_count=2,
         )
     assert exc.value.reason == pi.REFUSAL_LAPSE_REPROBE_BUDGET_INVALID
+
+
+def test_lapse_step_retired_captured_sign_in_path_invalid():
+    with pytest.raises(pi.PilotIdentityError) as exc:
+        pi.lapse_step(
+            {"reason": pilot_probe.REASON_NO_SESSION},
+            sign_in_path="captured",
+            reprobe_count=0,
+        )
+    assert exc.value.reason == pi.REFUSAL_LAPSE_SIGN_IN_PATH_INVALID
 
 
 def test_lapse_step_sign_in_path_invalid():
@@ -589,7 +599,7 @@ def test_lapse_step_sign_in_path_invalid():
 def test_lapse_episode_continue_on_identity():
     result = pi.lapse_episode(
         lambda: {"identity": EXPECTED_ID},
-        sign_in_path="captured",
+        sign_in_path="attended",
     )
     assert result["action"] == pi.ACTION_CONTINUE
     assert result["probeCalls"] == 1
@@ -601,7 +611,7 @@ def test_lapse_episode_park_captured():
         calls.append(1)
         return {"reason": pilot_probe.REASON_NO_SESSION}
 
-    result = pi.lapse_episode(probe, sign_in_path="captured")
+    result = pi.lapse_episode(probe, sign_in_path="attended")
     assert result["action"] == pi.ACTION_PARK
     assert result["probeCalls"] == 2
     assert len(calls) == 2
@@ -618,7 +628,7 @@ def test_lapse_episode_at_most_two_calls():
         calls += 1
         return {"reason": pilot_probe.REASON_NO_SESSION}
 
-    result = pi.lapse_episode(probe, sign_in_path="captured")
+    result = pi.lapse_episode(probe, sign_in_path="attended")
     assert calls == 2
     assert result["probeCalls"] == 2
     assert result["action"] == pi.ACTION_PARK
@@ -680,14 +690,14 @@ def test_lapse_episode_remint_success():
 
 def test_lapse_episode_probe_not_callable():
     with pytest.raises(pi.PilotIdentityError) as exc:
-        pi.lapse_episode(None, sign_in_path="captured")
+        pi.lapse_episode(None, sign_in_path="attended")
     assert exc.value.reason == pi.REFUSAL_LAPSE_PROBE_NOT_CALLABLE
 
 
 def test_lapse_episode_probe_raises_defer():
     result = pi.lapse_episode(
         lambda: (_ for _ in ()).throw(RuntimeError("fail")),
-        sign_in_path="captured",
+        sign_in_path="attended",
     )
     assert result["action"] == pi.ACTION_DEFER
     assert result["reason"] == pi.REFUSAL_IDENTITY_PROBE_LEG_FAILED
@@ -696,7 +706,7 @@ def test_lapse_episode_probe_raises_defer():
 def test_lapse_episode_first_probe_raises_probe_calls_one():
     result = pi.lapse_episode(
         lambda: (_ for _ in ()).throw(RuntimeError("fail")),
-        sign_in_path="captured",
+        sign_in_path="attended",
     )
     assert result["probeCalls"] == 1
 
@@ -711,7 +721,7 @@ def test_lapse_episode_second_probe_raises_probe_calls_two():
             return {"reason": pilot_probe.REASON_NO_SESSION}
         raise RuntimeError("fail")
 
-    result = pi.lapse_episode(probe, sign_in_path="captured")
+    result = pi.lapse_episode(probe, sign_in_path="attended")
     assert result["probeCalls"] == 2
     assert result["action"] == pi.ACTION_DEFER
 

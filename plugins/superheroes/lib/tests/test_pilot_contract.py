@@ -26,10 +26,11 @@ def _mint_block():
 
 
 def valid_pilot_block():
-    """Return a fresh deep copy of a valid captured pilot block (no mint)."""
+    """Return a fresh deep copy of a valid attended pilot block (no mint)."""
     return copy.deepcopy({
         "schemaVersion": 1,
-        "signInPath": "captured",
+        "signInPath": "attended",
+        "attended": {"vehicle": "automation"},
         "credentialSet": [
             {"account": "owner", "role": "resource-owner"},
             {"account": "guest", "role": "share-recipient"},
@@ -51,7 +52,7 @@ def valid_pilot_block():
 
 
 def valid_pilot_block_with_mint():
-    """Captured sign-in path with optional mint block present."""
+    """Attended sign-in path with optional mint block present."""
     block = valid_pilot_block()
     block["mint"] = copy.deepcopy(_mint_block())
     return block
@@ -228,6 +229,80 @@ def test_forbidden_scopes_array_with_int_member():
 
 def test_sign_in_path_invalid():
     _assert_refusal(lambda b: b.update({"signInPath": "oauth"}), pc.REFUSAL_SIGN_IN_PATH_INVALID)
+
+
+def test_sign_in_path_retired_captured():
+    _assert_refusal(
+        lambda b: b.update({"signInPath": "captured"}),
+        pc.REFUSAL_SIGN_IN_PATH_RETIRED_CAPTURED,
+    )
+
+
+def test_sign_in_path_absent():
+    _assert_refusal(lambda b: b.pop("signInPath"), pc.REFUSAL_SIGN_IN_PATH_INVALID)
+
+
+def test_sign_in_path_non_string():
+    _assert_refusal(lambda b: b.update({"signInPath": 1}), pc.REFUSAL_SIGN_IN_PATH_INVALID)
+
+
+def test_attended_declaration_missing():
+    def mutate(block):
+        block["signInPath"] = "attended"
+        block.pop("attended", None)
+
+    _assert_refusal(mutate, pc.REFUSAL_ATTENDED_DECLARATION_MISSING)
+
+
+def test_attended_declaration_invalid():
+    def mutate(block):
+        block["attended"] = "not-a-mapping"
+
+    _assert_refusal(mutate, pc.REFUSAL_ATTENDED_DECLARATION_INVALID)
+
+
+def test_attended_vehicle_missing():
+    def mutate(block):
+        block["attended"] = {}
+
+    _assert_refusal(mutate, pc.REFUSAL_ATTENDED_VEHICLE_INVALID)
+
+
+def test_attended_vehicle_invalid_chrome():
+    def mutate(block):
+        block["attended"]["vehicle"] = "chrome"
+
+    _assert_refusal(mutate, pc.REFUSAL_ATTENDED_VEHICLE_INVALID)
+
+
+def test_attended_vehicle_empty_string():
+    def mutate(block):
+        block["attended"]["vehicle"] = ""
+
+    _assert_refusal(mutate, pc.REFUSAL_ATTENDED_VEHICLE_INVALID)
+
+
+def test_attended_unknown_field():
+    def mutate(block):
+        block["attended"]["extra"] = 1
+
+    _assert_refusal(mutate, pc.REFUSAL_UNKNOWN_FIELD)
+
+
+def test_attended_present_with_minted_sign_in_path():
+    block = valid_minted_pilot_block()
+    block["attended"] = {"vehicle": "automation"}
+    pc.validate_pilot_block(block)
+
+
+def test_sign_in_path_required_block_completeness_check_raises(monkeypatch):
+    monkeypatch.setattr(
+        pc,
+        "SIGN_IN_PATHS",
+        frozenset({"attended", "minted", "bogus"}),
+    )
+    with pytest.raises(ValueError):
+        pc._verify_sign_in_path_required_block_complete()
 
 
 def test_credential_set_absent():

@@ -66,8 +66,8 @@ The `pilot` key is optional. Do not add it to the live `test-pilot-config` block
 the owner has answered every field — `effectsEscape`, the mint envelope, and expected pilot
 identities have no defaults; an unanswered declaration is absent and absent refuses.
 
-`mint` is required when `signInPath` is `"minted"` and may also be declared on the `"captured"`
-path (the example below shows both); it is optional on the captured path.
+`mint` is required when `signInPath` is `"minted"` and may also be declared on the `"attended"`
+path (the example below shows both); it is optional on the attended path.
 
 Copy the example below **only** once every field is owner-answered. Field definitions,
 refusal tokens, and the probe vocabulary live in
@@ -76,7 +76,8 @@ refusal tokens, and the probe vocabulary live in
 ```json
 {
   "schemaVersion": 1,
-  "signInPath": "captured",
+  "signInPath": "attended",
+  "attended": {"vehicle": "automation"},
   "credentialSet": [
     {"account": "owner", "role": "resource-owner"},
     {"account": "guest", "role": "share-recipient"}

@@ -915,7 +915,8 @@ def _three_slot_policy(store_dir, plant, probe, **overrides):
 def _pilot_block(cleanup_script):
     return {
         "schemaVersion": 1,
-        "signInPath": "captured",
+        "signInPath": "attended",
+        "attended": {"vehicle": "automation"},
         "credentialSet": [{"account": "owner", "role": "resource-owner"}],
         "captureSurface": ["cookies"],
         "captureOptions": {"indexedDB": False, "credentials": False},
@@ -1882,7 +1883,7 @@ def test_guarded_plan_view_replaces_only_the_reseed_request():
                     "nested": {"a": 1},
                 },
             },
-            {"op": "reseed", "request": reseed_request, "path": "captured"},
+            {"op": "reseed", "request": reseed_request, "path": "attended"},
             {
                 "op": "begin-generation",
                 "owner": "C7",
@@ -1914,7 +1915,7 @@ def test_guarded_plan_view_still_refuses_material_outside_the_reseed_request(pri
             {
                 "op": "reseed",
                 "request": {"account": "owner", "slotRef": "slot-a@1"},
-                "path": "captured",
+                "path": "attended",
             },
         ],
     }
@@ -2111,7 +2112,7 @@ def test_resurrection_plan_captured_happy_path(private_tmp):
     assert plan["containment"]["mode"] == pc.MODE_RECEIPT
     assert plan["steps"][0]["op"] == "cleanup"
     assert plan["steps"][1]["op"] == "reseed"
-    assert plan["steps"][1]["path"] == "captured"
+    assert plan["steps"][1]["path"] == "attended"
     assert plan["steps"][2]["op"] == "begin-generation"
     assert plan["steps"][3]["op"] == "resume"
     # axis: the plan-step key is `owner` again (#866 reverting #857's dodge), and this policy
@@ -2279,7 +2280,8 @@ def test_receipt_valid_for_stale_config_interpreter_invoked_script(private_tmp):
     policy = _three_slot_policy(store_dir, plant, probe)
     pilot_block = {
         "schemaVersion": 1,
-        "signInPath": "captured",
+        "signInPath": "attended",
+        "attended": {"vehicle": "automation"},
         "credentialSet": [{"account": "owner", "role": "resource-owner"}],
         "captureSurface": ["cookies"],
         "captureOptions": {"indexedDB": False, "credentials": False},

@@ -51,6 +51,19 @@ ACTION_PARK = "park"
 ACTION_RESURRECT = "resurrect"
 ACTION_REFUSE = "refuse"
 
+_RESEED_BY_SIGN_IN_PATH = {
+    "attended": ("seed", "attended"),
+    "minted": ("mint", "minted"),
+}
+
+
+def _verify_reseed_dispatch_complete():
+    if set(_RESEED_BY_SIGN_IN_PATH) != pilot_contract.SIGN_IN_PATHS:
+        raise ValueError("reseed dispatch mapping incomplete")
+
+
+_verify_reseed_dispatch_complete()
+
 REASON_RECEIPT_VACUOUS = "cleanup-receipt-vacuous"
 REASON_OWN_SENTINEL_SURVIVED = "cleanup-own-sentinel-survived"
 REASON_FOREIGN_SENTINEL_DESTROYED = "cleanup-foreign-sentinel-destroyed"
@@ -1348,7 +1361,10 @@ def resurrection_plan(
     resolved_argv = resolve_cleanup_command(declared_command, namespace)
 
     sign_in_path = pilot_block["signInPath"]
-    if sign_in_path == "captured":
+    if sign_in_path not in _RESEED_BY_SIGN_IN_PATH:
+        raise ValueError("unhandled sign_in_path: %r" % (sign_in_path,))
+    dispatch_kind, reseed_path = _RESEED_BY_SIGN_IN_PATH[sign_in_path]
+    if dispatch_kind == "seed":
         reseed_request = pilot_provision.authorized_seed_request(
             verdict,
             policy,
@@ -1356,7 +1372,6 @@ def resurrection_plan(
             account,
             artifact,
         )
-        reseed_path = "captured"
     else:
         reseed_request = pilot_provision.authorized_mint_request(
             verdict,
@@ -1365,7 +1380,6 @@ def resurrection_plan(
             account,
             mint_envelope,
         )
-        reseed_path = "minted"
 
     plan = {
         "action": ACTION_RESURRECT,

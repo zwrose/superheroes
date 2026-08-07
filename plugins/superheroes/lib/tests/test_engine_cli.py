@@ -52,7 +52,8 @@ def _setup_repo_with_config(tmp_path, config):
 def _valid_pilot_block():
     return {
         "schemaVersion": 1,
-        "signInPath": "captured",
+        "signInPath": "attended",
+        "attended": {"vehicle": "automation"},
         "credentialSet": [{"account": "owner", "role": "resource-owner"}],
         "captureSurface": ["cookies", "localStorage"],
         "captureOptions": {"indexedDB": False, "credentials": False},

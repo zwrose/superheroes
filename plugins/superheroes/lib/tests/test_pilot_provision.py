@@ -935,7 +935,8 @@ def _mint_block():
 def _valid_pilot_block():
     return copy.deepcopy({
         "schemaVersion": 1,
-        "signInPath": "captured",
+        "signInPath": "attended",
+        "attended": {"vehicle": "automation"},
         "credentialSet": [
             {"account": "owner", "role": "resource-owner"},
             {"account": "guest", "role": "share-recipient"},
