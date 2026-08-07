@@ -1734,6 +1734,178 @@ def _fold_fixer(state, config, artifact, changed_subjects_seam=None):
 
 _VERIFY_SKIP = ("skipped", "none", "unverified")
 
+# ---- #885: submit-shape guards (verify + audits) --------------------------------------------
+#
+# A wrong-SHAPE artifact at these two submits used to cost the build its certification receipt
+# silently: the fold recorded the malformed value (`result: None`; a `discharged-but-new-issue`
+# ruling with no usable `newIssues`), failed closed into `halted`/`not-discharged`, and the terminal
+# state was journalled and IMMUTABLE — a corrected resubmit refused. Three recorded losses in one
+# week (#878 submitted `{exitCode, passed, output}`; #880 submitted `newIssue` as a bare string;
+# #883/#892 re-ran an entire panel round rather than hand back uncertified).
+#
+# So these refuse at the chokepoint — BEFORE the fold, exactly as the #845 panel seat-key guard
+# does — leaving the pending step intact so recovery is a corrected resubmit on the same
+# phase/attempt/state-hash. They are SHAPE guards only: an artifact that faithfully expresses what
+# the auditor or the verify runner actually said still folds exactly as it does today, including
+# every deliberate fail-closed path (a real `fail`, a real `timeout`, silence, unauthenticated
+# provenance). The line is "the artifact cannot express a usable answer", never "the answer is bad".
+
+# The verify vocabulary the fold RECOGNIZES. `pass` advances; the skip tokens take the skip arm;
+# `fail` and `timeout` are real reported outcomes the fold halts on deliberately. A value OUTSIDE
+# this set is not an outcome anyone reported — it is a mis-shaped artifact.
+# `test_verify_vocabulary_census` holds this tuple equal to the token/fold-arm table, and
+# `test_submit_verify_recognized_token_accepted` drives each token through the guard to the arm it
+# lands in — together they keep this tuple from drifting away from `_fold_verify`.
+_VERIFY_RESULTS = ("pass", "fail", "timeout") + _VERIFY_SKIP
+
+# Keys of the shapes real orchestrators submitted instead of `{"result": ...}` — the raw runner
+# envelope (#878, #883/#892). Hinting them by name turns a generic shape refusal into the one-line
+# correction the builder needs, the same way the seat-key guard names the findings-file stem.
+_VERIFY_RUNNER_ENVELOPE_HINTS = {
+    "passed": "`passed` is the raw runner envelope's key — the driver consumes {\"result\": "
+              "\"pass\"} (or \"fail\"), never a boolean",
+    "exitCode": "`exitCode` is the raw runner envelope's key — translate it to a `result` token",
+    "status": "`status` is not the driver's key — the driver consumes `result`",
+}
+
+
+def verify_result_fault(artifact):
+    """None when a verify artifact carries a RECOGNIZED `result` token; otherwise a reason string
+    naming the expected shape (and, where the artifact carries a known runner-envelope key, the
+    one-line correction).
+
+    A recognized token is returned unchanged to the fold — including `fail` and `timeout`, which are
+    genuine outcomes the fold halts on. Only a missing, None, non-string, or unrecognized `result`
+    is a fault: those are precisely the values `_fold_verify` cannot tell apart from a real failure.
+
+    axis: REFUSAL of an unexpressible verify result — not whether the gate passed. A recognized
+    `fail`/`timeout` is expressible, so it is accepted here and halts in the fold as it always has.
+    """
+    # axis: the ENVELOPE's own shape — the submit CLI loads the artifact with `json.load`, which
+    # accepts ANY root, so a `null` or bare-list artifact arrives here. It was already refused (it
+    # can carry no `result`), but the reason said "carries no usable `result` (got None)", which
+    # misdescribes a root that has no keys at all. Name the envelope the driver consumes instead.
+    if not isinstance(artifact, dict):
+        return ("verify artifact is %s, not a result object; expected {\"result\": \"<one of: %s>\"}"
+                "; resubmit the same phase/attempt/state-hash with a corrected artifact" % (
+                    type(artifact).__name__, ", ".join(sorted(_VERIFY_RESULTS))))
+    # The original normalization stays BELOW the refusal rather than being replaced by it: the branch
+    # above must be independently neutralizable, so a bite-proof mutation of it lands on the axis it
+    # claims (the envelope goes unnamed) instead of crashing on a root that has no `.get`.
+    if not isinstance(artifact, dict):
+        artifact = {}
+    result = artifact.get("result")
+    if isinstance(result, str) and result in _VERIFY_RESULTS:
+        return None
+    parts = [
+        "verify artifact carries no usable `result` (got %r)" % (result,),
+        "expected {\"result\": \"<one of: %s>\"}" % ", ".join(sorted(_VERIFY_RESULTS)),
+        "resubmit the same phase/attempt/state-hash with a corrected artifact",
+    ]
+    hints = [_VERIFY_RUNNER_ENVELOPE_HINTS[k] for k in sorted(_VERIFY_RUNNER_ENVELOPE_HINTS)
+             if k in artifact]
+    if hints:
+        parts.append("; ".join(hints))
+    return "; ".join(parts)
+
+
+def _audit_result_entry_fault(entry, index, target_ids):
+    """The shape fault (a reason string) in ONE audit-result entry, or None.
+
+    `target_ids` is the driver's own set of audit-target ids — a result keyed to an id outside it
+    can never match a target, so it is the audit-side twin of the #845 seat mis-key. An EMPTY set
+    means the driver has no targets to key against, so no id is judged (mirroring the seat-key
+    guard's empty-key rule) — never a false refusal.
+
+    axis: REFUSAL of a ruling the fold cannot honor as written — not whether the ruling is correct.
+    Each branch below bites on one distinct way an entry fails to express a usable answer.
+    """
+    where = "results[%d]" % index
+    # axis: shape of the entry itself — a non-object can carry no ruling at all.
+    if not isinstance(entry, dict):
+        return "%s is %s, not a ruling object; expected {\"id\", \"ruling\", \"reason\", ...}" % (
+            where, type(entry).__name__)
+    rid = entry.get("id")
+    # axis: presence of a binding id — without one the ruling can never reach any finding.
+    if not isinstance(rid, str) or not rid:
+        return ("%s has no usable `id` (got %r) — a ruling with no finding id can never reach its "
+                "target; expected the target's staged id" % (where, rid))
+    # axis: that the id BINDS to a real target of this round — the audit-side twin of the #845 mis-key.
+    if target_ids and rid not in target_ids:
+        return ("%s is keyed to %r, which is not an audit target of this round; targets: %s; "
+                "re-key the ruling to its target's staged id" % (where, rid,
+                                                                ", ".join(sorted(target_ids))))
+    ruling = entry.get("ruling")
+    # axis: that the verdict token is one the fold has an arm for — never a near-miss word.
+    if not isinstance(ruling, str) or ruling not in audits.AUDIT_RULINGS:
+        return ("%s has an unrecognized `ruling` (got %r); expected one of: %s" % (
+            where, ruling, ", ".join(audits.AUDIT_RULINGS)))
+    # axis: that a CLEARING ruling carries its grounds — a bare discharge is the unproven claim.
+    # The grounds test is `audits.has_usable_reason`, the fold's OWN predicate — one function, not a
+    # second copy of the rule, so the guard can never accept a reason the fold rejects (or refuse one
+    # it would honor). Same shared-home discipline as `has_usable_new_issues` below.
+    if ruling == "discharged" and not audits.has_usable_reason(entry.get("reason")):
+        return ("%s rules `discharged` with no `reason` — a bare discharge is the unproven claim "
+                "the audit fold exists to reject; expected a non-empty `reason` string" % where)
+    # axis: that the NEW-ISSUE payload is usable — the #880 loss, where the receipt understated the
+    # auditor's ruling because `newIssues` carried nothing the fold could emit.
+    if ruling == "discharged-but-new-issue" and not audits.has_usable_new_issues(
+            entry.get("newIssues")):
+        detail = ("%s rules `discharged-but-new-issue` with no usable `newIssues` (got %r); "
+                  "expected a non-empty list of issue objects" % (where, entry.get("newIssues")))
+        if "newIssue" in entry:
+            detail += ("; the artifact carries `newIssue` (singular) — the driver consumes "
+                       "`newIssues`, a LIST")
+        return detail
+    return None
+
+
+def audit_results_fault(artifact, targets):
+    """None when every entry of an audits artifact's `results` expresses a usable ruling; otherwise
+    a reason string naming the expected shape.
+
+    Scope is deliberately SHAPE only. An ABSENT or empty `results` is not a fault — genuine auditor
+    silence is a real answer the fold discloses as `unaudited` and fails closed on. Provenance
+    (the collection-manifest authentication) is a trust boundary, not a shape, and stays entirely in
+    the fold: a correctly-shaped ruling the manifest cannot authenticate must still fold to
+    not-discharged, never be handed back for a "corrected" resubmit.
+
+    DUPLICATE ids are likewise NOT a shape fault. Target ids come from `finding_identity`, which is
+    `file::normalized-title` — LINE-LESS — so two distinct fix-batch findings in one file sharing a
+    title legitimately produce ONE id, and an orchestrator returning exactly one ruling per target
+    submits it twice. Refusing that would be an unresolvable loop (the correction it names is what
+    the orchestrator already did). `audits.apply_audit_results` already fails closed on the case,
+    marking the id `ambiguous` and honoring NEITHER ruling; that handling stands.
+
+    axis: REFUSAL of an audits artifact that cannot express its rulings — not the rulings' merit.
+    """
+    # axis: the ENVELOPE's own shape — the submit CLI loads the artifact with `json.load`, which
+    # accepts ANY root, so a `null` or bare-list artifact reaches the fold, normalizes to `{}`, and
+    # folds EVERY target `unaudited` → not-discharged with the pending step gone: the #885 loss class
+    # arriving through a root the `results` checks below never inspect.
+    if not isinstance(artifact, dict):
+        return ("audits artifact is %s, not a results object; expected {\"results\": [{\"id\", "
+                "\"ruling\", \"reason\", ...}]}; resubmit the same phase/attempt/state-hash with a "
+                "corrected artifact" % type(artifact).__name__)
+    # The original absent-`results` test keeps its own non-dict guard rather than leaning on the
+    # branch above: that branch must be independently neutralizable, so a bite-proof mutation of it
+    # lands on the REFUSAL axis (a non-dict artifact walks through) instead of crashing here.
+    if not isinstance(artifact, dict) or "results" not in artifact:
+        return None
+    results = artifact["results"]
+    # axis: the container's shape — a non-list `results` silently folds to zero rulings today.
+    if not isinstance(results, list):
+        return ("audits artifact `results` is %s, not a list of ruling objects; expected "
+                "{\"results\": [{\"id\", \"ruling\", \"reason\", ...}]}; resubmit the same "
+                "phase/attempt/state-hash with a corrected artifact" % type(results).__name__)
+    target_ids = {t.get("id") for t in targets if isinstance(t, dict)
+                  and isinstance(t.get("id"), str)} if isinstance(targets, list) else set()
+    for index, entry in enumerate(results):
+        fault = _audit_result_entry_fault(entry, index, target_ids)
+        if fault:
+            return "%s; resubmit the same phase/attempt/state-hash with a corrected artifact" % fault
+    return None
+
 
 def _verify_command_configured(config):
     """True when the profile configures a REAL verify command (not absent / `none`). A configured
@@ -2738,6 +2910,31 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact):
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "seat-key-mismatch"})
+            return {"ok": False, "reason": fault}
+
+    # #885: the same chokepoint refusal for the two OTHER submits whose wrong-shape artifacts cost a
+    # build its certification receipt — verify (`{exitCode, passed}` instead of `{"result": "pass"}`)
+    # and audits (`newIssue` instead of `newIssues`). Both fold into a TERMINAL, journalled,
+    # immutable state, so the loss is unrecoverable once folded; refusing here keeps the pending step
+    # alive and makes recovery a corrected resubmit. The journalled outcome is a NON-TERMINAL refusal
+    # event — the loop is never halted by a shape fault.
+    #
+    # axis (both wirings): that the refusal reaches the SUBMIT path — a guard that exists but is not
+    # called at the chokepoint protects nothing. Placed AFTER the echo/hash fences so a stale or
+    # forked submit keeps its own reason, and BEFORE the fold so no state mutates on a refusal.
+    if phase == P_VERIFY:
+        fault = verify_result_fault(artifact)
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "verify-result-shape"})
+            return {"ok": False, "reason": fault}
+    if phase == P_AUDITS:
+        fault = audit_results_fault(artifact, state.get("_auditTargets") or [])
+        if fault:
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "audit-ruling-shape"})
             return {"ok": False, "reason": fault}
 
     # accept: clear the pending, fold, record lastAccepted, advance.
