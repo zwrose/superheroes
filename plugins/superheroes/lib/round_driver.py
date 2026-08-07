@@ -61,6 +61,7 @@ import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
 import round_records  # noqa: E402
+import round_phases  # noqa: E402
 import seat_map  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
@@ -146,17 +147,18 @@ FAULT_CALLER = "caller-error"
 FAULT_INTERNAL = "driver-internal-error"
 
 # Phases (the `action` a `next` emits; each is fulfilled by exactly one orchestrator dispatch).
-P_PANEL = "dispatch-panel"
-P_VERIFIERS = "dispatch-verifiers"
-P_SYNTHESIS = "dispatch-synthesis"
-P_AUDITS = "dispatch-audits"
-P_SCOPED = "dispatch-scoped-finder"
-P_GAPSWEEP = "dispatch-gap-sweep"
-P_VERIFY = "run-verify"
-P_FIXER = "dispatch-fixer"
-P_JUDGMENT = "present-judgment"
-P_STALL = "present-stall-menu"
-P_TERMINAL = "terminal"
+# Re-exported from `round_phases` so external callers keep importing from here.
+P_PANEL = round_phases.P_PANEL
+P_VERIFIERS = round_phases.P_VERIFIERS
+P_SYNTHESIS = round_phases.P_SYNTHESIS
+P_AUDITS = round_phases.P_AUDITS
+P_SCOPED = round_phases.P_SCOPED
+P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_VERIFY = round_phases.P_VERIFY
+P_FIXER = round_phases.P_FIXER
+P_JUDGMENT = round_phases.P_JUDGMENT
+P_STALL = round_phases.P_STALL
+P_TERMINAL = round_phases.P_TERMINAL
 
 # The four stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
 # ONLY for a CONFIRMED-with-receipt finding; the menu payload gates it per-run.
@@ -195,6 +197,10 @@ def _canary_verified_shape(value):
     return isinstance(value, dict) and all(isinstance(k, str) for k in value)
 
 
+def _adapter_provenance_shape(value):
+    return isinstance(value, dict)
+
+
 # The ONE home for the per-round disclosure channels. `build_receipt` emits exactly these onto each
 # round entry, and a `recordsPath` resume restores exactly these out of a durable record's
 # `disclosures` block (#720 — before that, `_seed_resume` restored findings/coverage but no
@@ -212,6 +218,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryUnverified": _str_list,
     "canaryFailed": _canary_failed_shape,
     "canaryVerified": _canary_verified_shape,
+    "adapterProvenance": _adapter_provenance_shape,
 }
 
 # Every OTHER per-round key `_fold_panel` records, named here so the census can close the set: a new
@@ -1128,6 +1135,15 @@ def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
+def _record_adapter_provenance(state, artifact):
+    """Persist adapter trust disclosures for the receipt/resume path (#720)."""
+    if not isinstance(artifact, dict):
+        return
+    prov = artifact.pop("provenance", None)
+    if isinstance(prov, dict) and prov:
+        _record_round(state, "adapterProvenance", prov)
+
+
 def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     """Fold one submitted artifact and advance state. Big switch on phase; each arm delegates the
     JUDGMENT to a pure decider and only records/sequences here. Returns the mutated state.
@@ -1403,6 +1419,9 @@ def _fold_panel(state, config, artifact):
     receiptStale?}. A persistently receipt-missing/stale seat is terminal `missing` (shell
     :823-827 parity) but its findings ride the round record as UNVERIFIED/provisional — surfaced,
     never silently dropped (coordination note 2)."""
+    prov = artifact.pop("provenance", None) if isinstance(artifact, dict) else None
+    if isinstance(prov, dict) and prov:
+        _record_round(state, "adapterProvenance", prov)
     seats = artifact.get("seats") if isinstance(artifact.get("seats"), dict) else artifact
     seat_map = artifact.get("seatMap") if isinstance(artifact.get("seatMap"), dict) else {}
     if seat_map:
@@ -2265,6 +2284,7 @@ def _audit_targets(state, config, audit_targets_map):
 def _fold_audits(state, config, artifact):
     """Consume the fix-audit rulings deterministically (audits.apply_audit_results). Record the
     audit round for the audit-keyed breaker; new-issue candidates join the scoped-finder scan."""
+    _record_adapter_provenance(state, artifact)
     results = artifact.get("results") if isinstance(artifact.get("results"), list) else []
     targets = state.get("_auditTargets") or []
     # The DRIVER records the SELECTED independent auditor per target (its own seating decision).
@@ -2771,6 +2791,20 @@ def build_receipt(state, session_dir=None):
                 "canary-failed (round %s): the control probe showed no engagement (%s) — "
                 "cross-vendor seat(s) %s downgraded to never-ran" % (
                     rkey, detail_str, ", ".join(seats_down or [])))
+        prov = rrec.get("adapterProvenance")
+        if isinstance(prov, dict):
+            if prov.get("dispatchManifestUnavailable"):
+                degraded.append(
+                    "adapter-provenance (round %s): dispatch manifest unavailable — trusted "
+                    "ranManifest/collectionManifest omitted" % rkey)
+            mismatch = prov.get("vendorEchoMismatch")
+            if isinstance(mismatch, list) and mismatch:
+                parts = ["%s echo=%r manifest=%r" % (row.get("seat"), row.get("echo"),
+                                                     row.get("manifest"))
+                         for row in mismatch if isinstance(row, dict)]
+                degraded.append(
+                    "adapter-provenance (round %s): vendor echo mismatch on seat(s): %s"
+                    % (rkey, "; ".join(parts)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
@@ -3401,6 +3435,10 @@ def _journal_event(session_dir, cmd, outcome, **fields):
     return entry
 
 
+def _journal_identity_fields(phase, seat, occurrence, attempt):
+    return {"recordIdentity": round_records.record_identity(phase, seat, occurrence, attempt)}
+
+
 def _refuse_cmd(session_dir, cmd, reason, fault=FAULT_CALLER, phase=None, rnd=None, attempt=None,
                 **extra):
     """Journal a refusal with its fault class and return the refusal body. The `reason` string IS
@@ -3556,26 +3594,44 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
     return out
 
 
-def _journal_payload_hashes(session_dir, rnd, phase):
-    """Every payload hash this session's journal already recorded for a phase — `reconcile`'s view
-    of the LOG half of the two-commit window."""
+def _journal_record_identities(session_dir, rnd, phase):
+    """Every record identity this session's journal logged for a phase — `reconcile`'s view of the
+    LOG half of the two-commit window. Payload hashes ride as evidence only; identity is the join
+    key so a superseded hash does not orphan the slot."""
     out = []
+    seen = set()
     for event in read_journal(session_dir):
         if event.get("phase") != phase or event.get("round") != rnd:
             continue
-        sha = event.get("payloadSha256")
-        if isinstance(sha, str) and sha:
-            out.append(sha)
+        if event.get("outcome") != "recorded":
+            continue
+        ident = event.get("recordIdentity")
+        if not isinstance(ident, dict):
+            seat = event.get("seat")
+            if not isinstance(seat, str) or not seat:
+                continue
+            ident = round_records.record_identity(
+                phase, seat, event.get("occurrence", 0), event.get("attempt"))
+        key = round_records._identity_key_from_mapping(ident, default_phase=phase)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        out.append(ident)
     return out
 
 
-def _seat_for_payload_hash(session_dir, sha):
-    """The seat a journalled payload hash belongs to (for a `journal-orphan` refusal that NAMES the
-    seat), or None when the log does not say."""
-    for event in read_journal(session_dir):
-        if event.get("payloadSha256") == sha and isinstance(event.get("seat"), str):
-            return event["seat"]
-    return None
+def _seat_for_record_identity(session_dir, ident):
+    """The seat label a journalled record identity belongs to (for a `journal-orphan` refusal that
+    NAMES the seat), or None when the log does not say."""
+    if not isinstance(ident, dict):
+        return None
+    seat = ident.get("seat")
+    if not isinstance(seat, str) or not seat:
+        return None
+    occurrence = ident.get("occurrence", 0)
+    if occurrence:
+        return "%s#%d" % (seat, occurrence)
+    return seat
 
 
 def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
@@ -3695,7 +3751,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
             payload, head_path = _fixer_head_diff_landing(session_dir, rnd, phase, seat,
                                                           cur_attempt, occurrence)
         if payload is not None:
-            fault = _adapters().payload_fault(phase, payload, seat)
+            fault = _adapters().payload_fault(phase, payload, seat, record_boundary=True)
             if fault:
                 return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
                                    rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)
@@ -3719,7 +3775,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     payload_sha = out.get("payloadSha256")
     stored = round_records.read_json(out.get("storePath"))[0]
     if isinstance(stored, dict) and stored.get("schema") == round_records.SEAT_RESULT_SCHEMA:
-        fault = _adapters().payload_fault(phase, stored.get("payload"), seat)
+        fault = _adapters().payload_fault(phase, stored.get("payload"), seat, record_boundary=True)
         if fault:
             return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase, rnd=rnd,
                                attempt=cur_attempt, seat=seat, detail=fault)
@@ -3731,7 +3787,8 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     _journal_event(session_dir, "record-result", "recorded", phase=phase, round=rnd,
                    attempt=cur_attempt, seat=seat, occurrence=occurrence,
                    payloadSha256=payload_sha,
-                   superseded=bool(out.get("superseded")), headDiffStorePath=head_store_path)
+                   superseded=bool(out.get("superseded")), headDiffStorePath=head_store_path,
+                   **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
             "occurrence": occurrence, "payloadSha256": payload_sha,
             "superseded": bool(out.get("superseded")),
@@ -3759,7 +3816,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
         payload_sha = result.get("payloadSha256")
         stored = round_records.read_json(result.get("storePath"))[0]
         if isinstance(stored, dict) and stored.get("schema") == round_records.SEAT_RESULT_SCHEMA:
-            fault = _adapters().payload_fault(phase, stored.get("payload"), seat)
+            fault = _adapters().payload_fault(phase, stored.get("payload"), seat, record_boundary=True)
             if fault:
                 return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
                                    attempt=attempt, seat=seat, detail=fault)
@@ -3776,7 +3833,8 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                                                      content, occurrence)
                 payload_sha = rehashed or payload_sha
         _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                       seat=seat, occurrence=occurrence, payloadSha256=payload_sha)
+                       seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+                       **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": attempt, "recorded": recorded}
 
@@ -3849,7 +3907,8 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=out.get("message") or out.get("storePath"))
     _journal_event(session_dir, "record-missing", "recorded", phase=phase, round=rnd,
-                   attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason)
+                   attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason,
+                   **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
             "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}
 
@@ -3929,7 +3988,7 @@ def _advance_locked(session_dir, state, git=None, broke=None):
 
     # 1. reconcile the two-commit window. THE STORE FILE IS AUTHORITATIVE.
     rec = round_records.reconcile(session_dir, rnd, phase,
-                                  _journal_payload_hashes(session_dir, rnd, phase))
+                                  _journal_record_identities(session_dir, rnd, phase))
     # The storage key carries the SLOT, not the seat: a repeated seat key has one file per
     # occurrence, so mapping back to the bare seat would re-ingest slot 0 twice and never slot 1.
     by_storage = {round_records.storage_key(seat, occurrence): (seat, occurrence)
@@ -3946,13 +4005,18 @@ def _advance_locked(session_dir, state, git=None, broke=None):
             return out
     for entry in rec.get("reappend") or []:
         slot = by_storage.get(entry.get("storageKey"))
+        ident = entry.get("recordIdentity")
+        if not isinstance(ident, dict) and slot is not None:
+            ident = round_records.record_identity(phase, slot[0], slot[1], entry.get("attempt"))
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
                        attempt=entry.get("attempt"), seat=slot[0] if slot else None,
                        occurrence=slot[1] if slot else None,
-                       payloadSha256=entry.get("payloadSha256"), reappended=True)
+                       payloadSha256=entry.get("payloadSha256"), reappended=True,
+                       recordIdentity=ident)
     orphans = rec.get("journalOrphan") or []
     if orphans:
-        seats = sorted(set(_seat_for_payload_hash(session_dir, sha) or sha for sha in orphans))
+        seats = sorted(set(_seat_for_record_identity(session_dir, ident) or str(ident)
+                           for ident in orphans))
         return _refuse_cmd(session_dir, "advance", "journal-orphan", fault=FAULT_INTERNAL,
                            phase=phase, rnd=rnd, attempt=attempt, seats=seats,
                            detail="the journal claims record(s) for seat(s) %s that no store file "
@@ -3988,10 +4052,12 @@ def _advance_locked(session_dir, state, git=None, broke=None):
         return _refuse_cmd(session_dir, "advance", "assemble-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=why)
 
+    artifact_for_fold = dict(artifact)
+
     # 5. fold through the EXISTING submit chokepoint (see `cmd_submit`).
     state["_advanceUsed"] = True
     save_state(session_dir, state)
-    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), artifact,
+    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), artifact_for_fold,
                         _via_advance=True)
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,

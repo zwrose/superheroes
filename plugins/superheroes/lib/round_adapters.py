@@ -43,7 +43,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audits  # noqa: E402
 import dispatch_outcome  # noqa: E402
-import round_driver  # noqa: E402
+import round_phases  # noqa: E402
 import round_records  # noqa: E402
 import verification  # noqa: E402
 
@@ -51,14 +51,14 @@ import verification  # noqa: E402
 # phases, seat keys, policies
 # =============================================================================================
 
-P_PANEL = round_driver.P_PANEL
-P_VERIFIERS = round_driver.P_VERIFIERS
-P_SYNTHESIS = round_driver.P_SYNTHESIS
-P_GAPSWEEP = round_driver.P_GAPSWEEP
-P_AUDITS = round_driver.P_AUDITS
-P_SCOPED = round_driver.P_SCOPED
-P_VERIFY = round_driver.P_VERIFY
-P_FIXER = round_driver.P_FIXER
+P_PANEL = round_phases.P_PANEL
+P_VERIFIERS = round_phases.P_VERIFIERS
+P_SYNTHESIS = round_phases.P_SYNTHESIS
+P_GAPSWEEP = round_phases.P_GAPSWEEP
+P_AUDITS = round_phases.P_AUDITS
+P_SCOPED = round_phases.P_SCOPED
+P_VERIFY = round_phases.P_VERIFY
+P_FIXER = round_phases.P_FIXER
 
 # The phases this module assembles. Sourced from `round_driver`'s own constants — never respelled.
 ADAPTER_PHASES = (P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_AUDITS, P_SCOPED, P_VERIFY,
@@ -160,6 +160,7 @@ def roster_for(phase, state, config):
     st = state if isinstance(state, dict) else {}
     cfg = config if isinstance(config, dict) else {}
     if phase == P_PANEL:
+        import round_driver  # noqa: E402 — panel roster shape lives in the driver
         return list(round_driver._panel_dimensions(cfg)), None
     if phase == P_VERIFIERS:
         staged = verification.stage_ids(st.get("_toVerify") or [])
@@ -341,17 +342,20 @@ def _findings_payload_fault(payload, seat_key):
     return _list_of_objects(payload.get("findings"), "findings")
 
 
-def _fixer_payload_fault(payload, seat_key):
+def _fixer_payload_fault(payload, seat_key, record_boundary=False):
     if "fixes" not in payload:
         return _field_missing("fixes")
     if not isinstance(payload.get("fixes"), list):
         return _field_type("fixes", payload.get("fixes"), "a list")
+    if record_boundary and "headDiffStorePath" in payload:
+        return ("`headDiffStorePath` is driver-owned — callers must supply `headDiffPath` only; "
+                "the driver copies the diff into the store at record time")
     fault = _optional_bool(payload, "escalated")
     if fault:
         return fault
     if "headDiff" in payload and not isinstance(payload.get("headDiff"), str):
         return _field_type("headDiff", payload.get("headDiff"), "a string")
-    for field in ("headDiffPath", "headDiffStorePath"):
+    for field in ("headDiffPath",):
         fault = _abs_path(payload, field)
         if fault:
             return fault
@@ -365,6 +369,7 @@ def _fixer_payload_fault(payload, seat_key):
 def _verify_payload_fault(payload, seat_key):
     """Delegates the `result` vocabulary to `round_driver.verify_result_fault` — the driver's OWN
     submit-shape guard, so this adapter can never accept a token the submit path refuses."""
+    import round_driver  # noqa: E402 — lazy: keeps module import one-way with round_driver
     fault = round_driver.verify_result_fault(payload)
     if fault:
         return fault
@@ -425,19 +430,21 @@ _PAYLOAD_CHECKERS = {
     P_SYNTHESIS: _synthesis_payload_fault,
     P_GAPSWEEP: _findings_payload_fault,
     P_SCOPED: _findings_payload_fault,
-    P_FIXER: _fixer_payload_fault,
+    P_FIXER: lambda payload, seat_key: _fixer_payload_fault(payload, seat_key),
     P_VERIFY: _verify_payload_fault,
     P_AUDITS: _audits_payload_fault,
 }
 
 
-def payload_fault(phase, payload, seat_key):
+def payload_fault(phase, payload, seat_key, record_boundary=False):
     """A reason string naming the offending field, or None. Never raises."""
     if phase not in ADAPTER_PHASES:
         return "unknown-phase:%s" % _label(phase)
     if not isinstance(payload, dict):
         return "payload is %s, not an object" % _type_name(payload)
     try:
+        if phase == P_FIXER:
+            return _fixer_payload_fault(payload, seat_key, record_boundary=record_boundary)
         return _PAYLOAD_CHECKERS[phase](payload, seat_key)
     except Exception as exc:  # noqa: BLE001 — a validator that raises must not crash the adapter
         return "payload-validator-error:%s:%s" % (_type_name(exc), exc)
@@ -617,7 +624,9 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, canary):
     elif phase in (P_GAPSWEEP, P_SCOPED):
         artifact = _assemble_findings(roster, indexed)
     elif phase == P_FIXER:
-        artifact = _assemble_fixer(roster, indexed, disclosures)
+        artifact = _assemble_fixer(roster, indexed, disclosures, phase)
+        if artifact is None:
+            return None, "head-diff-store-path-untrusted"
     else:
         artifact = _assemble_verify(roster, indexed)
     if disclosures:
@@ -702,11 +711,16 @@ def _assemble_findings(roster, indexed):
     return {"findings": [dict(f) for f in payload["findings"]]}
 
 
-def _assemble_fixer(roster, indexed, disclosures):
+def _assemble_fixer(roster, indexed, disclosures, phase):
     payload = indexed[(roster[0], 0)]["payload"]
+    envelope = indexed[(roster[0], 0)]["envelope"]
     artifact = dict(payload)
     store_path = artifact.pop("headDiffStorePath", None)
     if isinstance(store_path, str) and store_path:
+        if not round_records.head_diff_store_path_valid(
+                store_path, envelope.get("round"), phase, envelope.get("seat"),
+                envelope.get("attempt"), envelope.get("occurrence", 0)):
+            return None
         # `_resolve_head_diff` opens the path at FOLD time; the immutable store copy is the only
         # path that cannot change under it between record and fold.
         artifact["headDiffPath"] = store_path

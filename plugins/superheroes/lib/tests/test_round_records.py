@@ -483,20 +483,58 @@ def test_reconcile_reports_a_store_copy_the_journal_never_logged_as_reappend(tmp
     env = _env()
     _land(sd, env)
     assert _ingest(sd)["ok"] is True
-    out = RR.reconcile(sd, 1, PHASE, set())
+    out = RR.reconcile(sd, 1, PHASE, [])
     assert out["ingestNow"] == []
     assert [e["payloadSha256"] for e in out["reappend"]] == [env["payloadSha256"]]
     assert out["journalOrphan"] == []
 
 
-def test_reconcile_reports_a_journal_hash_with_no_store_file_as_orphan(tmp_path):
+def test_reconcile_reports_a_journal_identity_with_no_store_file_as_orphan(tmp_path):
     sd = _session(tmp_path)
     env = _env()
     _land(sd, env)
     assert _ingest(sd)["ok"] is True
-    out = RR.reconcile(sd, 1, PHASE, {env["payloadSha256"], "z" * 64})
+    ghost = RR.record_identity(PHASE, OTHER_SEAT, 0, 1)
+    out = RR.reconcile(sd, 1, PHASE, [RR.record_identity(PHASE, SEAT, 0, 1), ghost])
     assert out["reappend"] == []
-    assert out["journalOrphan"] == ["z" * 64]
+    assert out["journalOrphan"] == [ghost]
+
+
+def test_reconcile_does_not_orphan_a_superseded_payload_hash(tmp_path):
+    """Identity-based reconcile: the journal may still carry the pre-supersede hash, but the slot
+    is satisfied by the store file — no `journalOrphan`."""
+    sd = _session(tmp_path)
+    first = _env()
+    _land(sd, first)
+    assert _ingest(sd)["ok"] is True
+    second = _env(payload={"findings": ["replaced"]})
+    _land(sd, second)
+    assert _ingest(sd, supersede=True, expect_sha256=first["payloadSha256"])["ok"] is True
+    journal = [
+        RR.record_identity(PHASE, SEAT, 0, 1),
+        {"phase": PHASE, "seat": SEAT, "occurrence": 0, "attempt": 1,
+         "payloadSha256": first["payloadSha256"]},
+    ]
+    out = RR.reconcile(sd, 1, PHASE, journal)
+    assert out["journalOrphan"] == []
+    assert out["reappend"] == []
+
+
+def test_reconcile_distinguishes_identical_payloads_on_different_seats(tmp_path):
+    """Content hashes are not identities — a journal append for seat B must not be masked by seat A
+    carrying the same payload."""
+    sd = _session(tmp_path)
+    shared = {"findings": []}
+    env_a = _env(payload=shared, seat=SEAT)
+    env_b = _env(payload=shared, seat=OTHER_SEAT)
+    _land(sd, env_a)
+    _land(sd, env_b, seat=OTHER_SEAT)
+    assert _ingest(sd, seat=SEAT)["ok"] is True
+    assert _ingest(sd, seat=OTHER_SEAT)["ok"] is True
+    out = RR.reconcile(sd, 1, PHASE, [RR.record_identity(PHASE, SEAT, 0, 1)])
+    assert out["journalOrphan"] == []
+    assert len(out["reappend"]) == 1
+    assert out["reappend"][0]["recordIdentity"]["seat"] == OTHER_SEAT
 
 
 def test_reconcile_keeps_the_store_file_authoritative(tmp_path):
@@ -507,7 +545,7 @@ def test_reconcile_keeps_the_store_file_authoritative(tmp_path):
     spath = _ingest(sd)["storePath"]
     with open(spath, "rb") as fh:
         before = fh.read()
-    RR.reconcile(sd, 1, PHASE, {"z" * 64})
+    RR.reconcile(sd, 1, PHASE, [])
     with open(spath, "rb") as fh:
         assert fh.read() == before
 
@@ -670,3 +708,57 @@ def test_sidecar_stale_when_the_sidecar_itself_is_invalid():
     stale, reason = RR.sidecar_stale(obj, head_sha="head-sha", receipt_bytes=b"receipt",
                                      session_dir="/tmp/session")
     assert stale is True and reason == "sidecar-invalid:schema-unknown"
+
+
+# --- finding 1: seat-mismatch -----------------------------------------------------------------
+
+def test_refusal_seat_mismatch_before_store(tmp_path):
+    """An envelope whose embedded seat disagrees with the addressed slot is refused with nothing stored."""
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    assert _ingest(sd)["ok"] is True
+    swapped_path = RR.landing_path(sd, 1, PHASE, RR.storage_key(OTHER_SEAT), 1)
+    RR.atomic_write_json(swapped_path, _env(seat=SEAT))
+    refused = _ingest(sd, seat=OTHER_SEAT)
+    assert refused["ok"] is False and refused["reason"] == "seat-mismatch"
+    assert refused["addressedSeat"] == OTHER_SEAT
+    assert refused["envelopeSeat"] == SEAT
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(OTHER_SEAT), 1))
+
+
+# --- finding 4: seat-missing CAS token --------------------------------------------------------
+
+def test_seat_missing_supersede_uses_the_schema_cas_token(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _missing_env())
+    assert _ingest(sd)["ok"] is True
+    _land(sd, _env())
+    assert _ingest(sd, supersede=True)["reason"] == "cas-expect-required"
+    out = _ingest(sd, supersede=True, expect_sha256=RR.MISSING_CAS_TOKEN)
+    assert out["ok"] is True and out["superseded"] is True
+    stored, _err = RR.read_json(out["storePath"])
+    assert stored["schema"] == RR.SEAT_RESULT_SCHEMA
+
+
+# --- finding 7: phase-name drift guard --------------------------------------------------------
+
+def test_phase_name_constants_agree_across_modules():
+    import round_adapters as RA
+    import round_driver as RD
+    import round_phases as RP
+    shared = (
+        ("P_PANEL", RP.P_PANEL),
+        ("P_VERIFIERS", RP.P_VERIFIERS),
+        ("P_SYNTHESIS", RP.P_SYNTHESIS),
+        ("P_AUDITS", RP.P_AUDITS),
+        ("P_SCOPED", RP.P_SCOPED),
+        ("P_GAPSWEEP", RP.P_GAPSWEEP),
+        ("P_VERIFY", RP.P_VERIFY),
+        ("P_FIXER", RP.P_FIXER),
+    )
+    for attr, expected in shared:
+        assert getattr(RD, attr) == expected == getattr(RA, attr)
+    for attr in ("P_JUDGMENT", "P_STALL", "P_TERMINAL"):
+        assert getattr(RD, attr) == getattr(RP, attr)
+    assert RR._PANEL_PHASE_DIRNAME == RP.P_PANEL
+

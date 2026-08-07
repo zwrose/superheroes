@@ -185,6 +185,8 @@ def test_panel_assembles_to_the_hand_written_artifact(tmp_path):
     def build(n, state):
         hand = {"seats": {d: {"findings": []} for d in RD.DIMENSIONS}}
         hand["seats"]["code-reviewer"] = {"findings": list(_A_FINDING)}
+        # Same provenance the assembled path records when no dispatch manifest or canary is supplied.
+        hand["provenance"] = {"dispatchManifestUnavailable": True, "canaryUnavailable": True}
         envelopes = [_result_env(d, dict(hand["seats"][d])) for d in RD.DIMENSIONS]
         return hand, envelopes, {}
 
@@ -193,8 +195,13 @@ def test_panel_assembles_to_the_hand_written_artifact(tmp_path):
     # No dispatch manifest and no canary were supplied, so neither key is invented — the driver's
     # own provenance-unavailable / canaryUnverified disclosures stay the ones that fire.
     assert "ranManifest" not in artifact and "canaryResult" not in artifact
-    assert artifact["provenance"]["dispatchManifestUnavailable"] is True
-    assert artifact["provenance"]["canaryUnavailable"] is True
+    expected_prov = {"dispatchManifestUnavailable": True, "canaryUnavailable": True}
+    # `_fold_panel` pops `provenance` from the submitted artifact; both paths record it durably.
+    ok_h, st_h = RD.load_state(str(tmp_path / "hand"))
+    ok_a, st_a = RD.load_state(str(tmp_path / "assembled"))
+    assert ok_h and ok_a
+    assert st_h["rounds"]["1"]["adapterProvenance"] == expected_prov
+    assert st_a["rounds"]["1"]["adapterProvenance"] == expected_prov
 
 
 def test_panel_confidence_and_tier_ride_into_the_review_record(tmp_path):
@@ -880,19 +887,57 @@ def test_canary_is_a_list_one_probe_per_vendor(tmp_path):
 # durability — the fixer head diff
 # =============================================================================
 
+def test_fixer_payload_refuses_caller_head_diff_store_path(tmp_path):
+    """`headDiffStorePath` is driver-owned — a caller cannot inject a trusted store path."""
+    store = tmp_path / "evil.diff"
+    store.write_text(HEAD, encoding="utf-8")
+    payload = {"fixes": [], "headDiffStorePath": str(store)}
+    fault = RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True)
+    assert fault is not None
+    assert "headDiffStorePath" in fault and "driver-owned" in fault
+    # A/B: headDiffPath alone is still accepted
+    caller = tmp_path / "caller-head.diff"
+    caller.write_text(HEAD, encoding="utf-8")
+    assert RA.payload_fault(RD.P_FIXER, {"fixes": [], "headDiffPath": str(caller)},
+                            RA.SEAT_FIXER) is None
+
+
 def test_fixer_head_diff_path_points_at_the_immutable_store_copy(tmp_path):
     """`_resolve_head_diff` opens the path at FOLD time, so a caller-controlled path can change
     between record and fold. The store copy is the one that cannot."""
-    caller = tmp_path / "caller-head.diff"
-    store = tmp_path / "store-head.diff"
-    caller.write_text("stale\n", encoding="utf-8")
-    store.write_text(HEAD, encoding="utf-8")
-    payload = {"fixes": [], "headDiffPath": str(caller), "headDiffStorePath": str(store)}
-    artifact, reason = RA.assemble(RD.P_FIXER, [_result_env(RA.SEAT_FIXER, payload)], {}, {})
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    pend = RD.new_state(_cfg())
+    pend["round"] = 1
+    attempt = 0
+    seat = RA.SEAT_FIXER
+    skey = RR.storage_key(seat)
+    store_copy = RR.store_path(d, 1, RD.P_FIXER, skey, attempt)
+    os.makedirs(os.path.dirname(store_copy), exist_ok=True)
+    headdiff = os.path.join(os.path.dirname(store_copy), "%s.a%d.headdiff" % (skey, attempt))
+    with open(headdiff, "w", encoding="utf-8") as fh:
+        fh.write(HEAD)
+    payload = {"fixes": [], "headDiffStorePath": headdiff}
+    env = _result_env(seat, payload)
+    env.update({"round": 1, "phase": RD.P_FIXER, "attempt": attempt})
+    artifact, reason = RA.assemble(RD.P_FIXER, [env], pend, _cfg())
     assert reason is None
-    assert artifact["headDiffPath"] == str(store)
+    assert artifact["headDiffPath"] == headdiff
     assert "headDiffStorePath" not in artifact
     assert artifact["provenance"]["headDiffPathSource"] == "store"
+
+
+def test_fixer_rejects_an_untrusted_head_diff_store_path(tmp_path):
+    caller = tmp_path / "caller-head.diff"
+    store = tmp_path / "outside-session-store.diff"
+    caller.write_text(HEAD, encoding="utf-8")
+    store.write_text("evil\n", encoding="utf-8")
+    payload = {"fixes": [], "headDiffPath": str(caller), "headDiffStorePath": str(store)}
+    assert RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True) is not None
+    env = _result_env(RA.SEAT_FIXER, payload)
+    env.update({"round": 1, "phase": RD.P_FIXER, "attempt": 0})
+    artifact, reason = RA.assemble(RD.P_FIXER, [env], {}, {})
+    assert artifact is None and reason == "head-diff-store-path-untrusted"
 
 
 def test_fixer_head_diff_path_without_a_store_copy_is_disclosed(tmp_path):
@@ -906,13 +951,18 @@ def test_fixer_head_diff_path_without_a_store_copy_is_disclosed(tmp_path):
 
 
 def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
-    """End to end: the store path the adapter emits is the one the fold actually reads."""
-    store = tmp_path / "store-head.diff"
-    store.write_text(HEAD, encoding="utf-8")
+    """End to end: the driver-written store path the adapter emits is the one the fold reads."""
     d, n, state = _at(tmp_path, RD.P_FIXER)
-    payload = {"fixes": [], "headDiffStorePath": str(store)}
-    artifact, reason = RA.assemble(RD.P_FIXER, [_result_env(RA.SEAT_FIXER, payload)], state,
-                                   state["config"])
+    skey = RR.storage_key(RA.SEAT_FIXER)
+    store_copy = RR.store_path(d, n["round"], RD.P_FIXER, skey, n["attempt"])
+    headdiff = os.path.join(os.path.dirname(store_copy), "%s.a%d.headdiff" % (skey, n["attempt"]))
+    os.makedirs(os.path.dirname(headdiff), exist_ok=True)
+    with open(headdiff, "w", encoding="utf-8") as fh:
+        fh.write(HEAD)
+    payload = {"fixes": [], "headDiffStorePath": headdiff}
+    env = _result_env(RA.SEAT_FIXER, payload)
+    env.update({"round": n["round"], "phase": RD.P_FIXER, "attempt": n["attempt"]})
+    artifact, reason = RA.assemble(RD.P_FIXER, [env], state, state["config"])
     assert reason is None
     assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)["ok"]
     ok, after = RD.load_state(d)
