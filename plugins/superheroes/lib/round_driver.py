@@ -4438,9 +4438,11 @@ def build_attestation_receipt(session_dir, state, binding, note, roster=None):
     attestation's own evidence, sha256 of every artifact under the session dir, and the full roster
     with each seat's disposition.
 
-    `cmd_attest` finalizes `artifacts` after every other session mutation (including sidecar journal
-    events) so the digest set describes the terminal session — the receipt file itself is excluded
-    because it is written last and cannot hash itself. `roster` may be supplied when `state` is
+    `cmd_attest` finalizes `artifacts` after every other session mutation except the live journal and
+    loop-state: the receipt is written once against the final bytes, then the sidecar is published
+    against that receipt (which appends sidecar-repair journal lines), so `driver-journal.jsonl` and
+    `loop-state.json` are excluded from the digest set — same contract class as STATE_FILE. The
+    receipt file itself is excluded because it is written last and cannot hash itself. `roster` may be supplied when `state` is
     already terminal (pending cleared) but was captured from the failure phase beforehand."""
     receipt = build_receipt(state, session_dir)
     for key in ("certification", "certificationShape", "schemaVersion"):
@@ -4495,10 +4497,9 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
     save_state(session_dir, state)
     _journal_event(session_dir, "attest", "attested", phase=binding.get("phase"),
                    failure=binding.get("ref"), attestClass=binding.get("class"))
-    side = _publish_sidecar(session_dir, state, git=git)
     receipt = build_attestation_receipt(session_dir, state, binding, note, roster=roster)
     receipt["artifacts"] = _session_artifact_hashes(session_dir,
-                                                    exclude=(RECEIPT_FILE, STATE_FILE))
+                                                    exclude=(RECEIPT_FILE, STATE_FILE, JOURNAL_FILE))
     ok, invalid = validate_receipt(receipt)
     if not ok:
         return _refuse_cmd(session_dir, "attest", "attested-receipt-invalid", fault=FAULT_INTERNAL,
@@ -4512,9 +4513,13 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
     except OSError as exc:
         return _refuse_cmd(session_dir, "attest", "attested-receipt-unwritable",
                            fault=FAULT_INTERNAL, detail=str(exc))
+    side = _publish_sidecar(session_dir, state, git=git)
+    if side.get("reason"):
+        return _refuse_cmd(session_dir, "attest", side["reason"], fault=FAULT_INTERNAL,
+                           detail=side.get("detail"))
     return {"ok": True, "verdict": ATTESTED_VERDICT, "receiptPath": path,
             "attestation": receipt["attestation"], "roster": receipt["roster"],
-            "sidecar": side.get("path"), "sidecarReason": side.get("reason")}
+            "sidecar": side.get("path")}
 
 
 def _parse_seat_map(raw):

@@ -1363,17 +1363,52 @@ def _attested_session(tmp_path, adapters, name="att"):
         return d, json.load(fh)
 
 
+def test_attest_publishes_a_fresh_sidecar_against_the_final_receipt(tmp_path, adapters):
+    """Regression: sidecar publication must hash the receipt that `cmd_attest` actually wrote."""
+    gitdir = _gitdir(tmp_path, "_gd-attest-sidecar")
+    d, seq = _orphan_failure(tmp_path, adapters, name="attest-sidecar")
+    out = RD.cmd_attest(d, str(seq), "orphaned record; handing back uncertified",
+                        git=_fake_git(gitdir))
+    assert out["ok"] is True, out
+    assert out["sidecar"] is not None
+    assert out.get("sidecarReason") is None
+
+    receipt_path = os.path.join(d, RD.RECEIPT_FILE)
+    with open(receipt_path, "rb") as fh:
+        receipt_bytes = fh.read()
+    sidecar_path = os.path.join(gitdir, "superheroes", "review-receipt.json")
+    assert out["sidecar"] == sidecar_path
+    assert os.path.exists(sidecar_path)
+    sidecar, err = RR.read_json(sidecar_path)
+    assert err is None
+    stale, _why = RR.sidecar_stale(sidecar, head_sha="a" * 40, receipt_bytes=receipt_bytes,
+                                   session_dir=d)
+    assert stale is False
+
+
+def test_attest_refuses_when_sidecar_publication_fails(tmp_path, adapters):
+    """A sidecar machinery failure must not ride home on `ok: True`."""
+    d, seq = _orphan_failure(tmp_path, adapters, name="attest-sidecar-fail")
+
+    def no_git(cwd, *args):
+        return None
+
+    out = RD.cmd_attest(d, str(seq), "orphaned record; handing back uncertified", git=no_git)
+    assert out["ok"] is False and out["reason"] == "sidecar-gitdir-unresolvable"
+
+
 def test_attest_writes_an_uncertified_receipt_with_its_evidence(tmp_path, adapters):
     d, receipt = _attested_session(tmp_path, adapters)
     assert receipt["verdict"] == RD.ATTESTED_VERDICT
     assert "certification" not in receipt
     assert receipt["attestation"]["class"] == "journal-orphan"
     assert receipt["attestation"]["note"] == "orphaned record; handing back uncertified"
-    # sha256 of every artifact under the session dir except the receipt and loop-state (the receipt
-    # is written before terminal state is persisted, so STATE_FILE is excluded from the snapshot)
+    # sha256 of every artifact under the session dir except the receipt, loop-state, and live journal
+    # (the receipt is written before sidecar publication, which appends sidecar-repair journal lines)
     assert receipt["artifacts"]
     assert RD.RECEIPT_FILE not in receipt["artifacts"]
     assert RD.STATE_FILE not in receipt["artifacts"]
+    assert RD.JOURNAL_FILE not in receipt["artifacts"]
     for rel, digest in receipt["artifacts"].items():
         assert digest and len(digest) == 64
         with open(os.path.join(d, rel), "rb") as fh:
