@@ -2935,3 +2935,235 @@ def test_cli_launch_boundary_happy_path_forwards(tmp_path, monkeypatch):
     assert forwarded.get("boundary") == boundary
     assert forwarded.get("slot") == "slot-a"
     assert forwarded.get("generation") == 1
+
+
+# --- slot reservation gate (issue #909) --------------------------------------
+
+
+def _slot_calibrated(monkeypatch):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {"declares": True, "reason": "declared", "path": None},
+    )
+
+
+def _not_slot_calibrated(monkeypatch):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {"declares": False, "reason": "no-calibration", "path": None},
+    )
+
+
+def _reserve_live_lane(repo, batch_id, launch_id, slot=None, generation=None, surfaces=None):
+    rec = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch_id,
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": surfaces or ["plugins/superheroes/lib/other"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    }
+    if slot is not None:
+        rec["slot"] = slot
+    if generation is not None:
+        rec["generation"] = generation
+    ll.reserve(repo, rec)
+
+
+def test_slot_gate_parallel_unslotted_refuses(tmp_path, monkeypatch):
+  # axis: slot-calibrated + parallel declared + no slot refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert result["missing"] == ["this-launch"]
+    assert "--slot" in result["remedy"]
+    assert "--generation" in result["remedy"]
+
+
+def test_slot_gate_parallel_slotted_passes(tmp_path, monkeypatch):
+  # axis: slot-calibrated + parallel + slot/generation passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(
+        _all_checks(),
+        repo,
+        batch_id="wave-test",
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is True
+
+
+def test_slot_gate_single_lane_unslotted_passes(tmp_path, monkeypatch):
+  # axis: slot-calibrated + single-lane + no slot passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_non_pilot_parallel_passes(tmp_path, monkeypatch):
+  # axis: non-pilot + parallel + no slot passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _not_slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_parallel_by_live_lane(tmp_path, monkeypatch):
+  # axis: parallel by live lane without declaration refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    _reserve_live_lane(repo, "wave-test", "live-1", slot="slot-a", generation=1)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+
+
+def test_slot_gate_unslotted_sibling_refuses(tmp_path, monkeypatch):
+  # axis: slotted launch refuses when unslotted sibling in same batch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    _reserve_live_lane(repo, "wave-test", "sibling-unslotted")
+    result = L.walk_preflight(
+        _all_checks(),
+        repo,
+        batch_id="wave-test",
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert "sibling-unslotted" in result["missing"]
+    assert "this-launch" not in result["missing"]
+
+
+def test_slot_gate_different_batch_unslotted_passes(tmp_path, monkeypatch):
+  # axis: unslotted lane in different batch does not make this launch parallel
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    _reserve_live_lane(repo, "other-batch", "other-live")
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_launch_build_slot_refusal_propagates_missing_and_remedy(tmp_path, monkeypatch):
+  # axis: launch_build propagates missing and remedy on slot refusal
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert result["missing"] == ["this-launch"]
+    assert "--slot" in result["remedy"]
+    assert "--generation" in result["remedy"]
+
+
+def test_cli_preflight_slot_reservation_refusal(tmp_path, monkeypatch):
+  # axis: CLI preflight reproduces launch slot refusal with --batch
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    checks_path = tmp_path / "checks.json"
+    _write_json(checks_path, _all_checks())
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "preflight",
+            "--repo-root", repo,
+            "--checks", str(checks_path),
+            "--batch", "wave-test",
+        ])
+    assert exit_code == 1
+    payload = json.loads(buf.getvalue())
+    assert payload["reason"] == "preflight-slot-reservation-required"
+
+
+def test_launch_build_post_reserve_slot_recheck_refuses(tmp_path, monkeypatch):
+  # axis: post-reserve re-check refuses without spawning when batch became parallel
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    real_compose = L.compose_launch
+
+    def compose_then_sibling(*args, **kwargs):
+        sibling = {
+            "event": "reserved",
+            "launchId": "race-sibling",
+            "ts": time.time(),
+            "schema": ll.SCHEMA,
+            "batchId": "wave-test",
+            "repoId": ll.repo_identity(repo),
+            "issue": 656,
+            "surfaces": ["other/path"],
+            "premise": {},
+            "preflight": {},
+            "argv": [],
+            "doctrineDigest": "d",
+            "model": "m",
+        }
+        ll.reserve(repo, sibling)
+        return real_compose(*args, **kwargs)
+
+    monkeypatch.setattr(L, "compose_launch", compose_then_sibling)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert spawn_called is False
+    records = ll.read(repo)["records"]
+    refused = [
+        r for r in records
+        if r.get("event") == "refused" and r.get("launchId") != "race-sibling"
+    ]
+    assert len(refused) == 1
