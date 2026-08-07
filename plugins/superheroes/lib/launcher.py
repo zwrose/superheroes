@@ -270,9 +270,6 @@ def _slot_reservation_gate(
         return None
     if not ledger_state.get("ok") or ledger_state.get("unreadable"):
         return None
-    slot_info = pilot_calibration.declares_slots(repo_root)
-    if not slot_info.get("declares"):
-        return None
 
     declarations = ledger_state.get("declarations") or {}
     detail = ledger_state.get("detail") or {}
@@ -311,6 +308,10 @@ def _slot_reservation_gate(
             missing.append(launch_id)
 
     if not missing:
+        return None
+
+    slot_info = pilot_calibration.declares_slots(repo_root)
+    if not slot_info.get("declares"):
         return None
 
     return _fail(
@@ -396,16 +397,15 @@ def walk_preflight(
                     return _fail("preflight-disjointness-required")
             elif ledger_state.get("unreadable"):
                 return _fail("preflight-ledger-unreadable")
-            else:
-                slot_refusal = _slot_reservation_gate(
-                    repo_root,
-                    batch_id,
-                    slot,
-                    generation,
-                    ledger_state,
-                )
-                if slot_refusal is not None:
-                    return slot_refusal
+            slot_refusal = _slot_reservation_gate(
+                repo_root,
+                batch_id,
+                slot,
+                generation,
+                ledger_state,
+            )
+            if slot_refusal is not None:
+                return slot_refusal
 
         out_checks.append({
             "id": check_id,

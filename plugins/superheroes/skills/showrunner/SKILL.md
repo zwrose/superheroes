@@ -629,6 +629,12 @@ above).
    **The launcher carries the slot.** When a launch belongs to a wave, supply the slot and generation
    (and the composed boundary result) to the launcher so the ledger records which slot a lane ran in;
    a wave launch recorded without its slot is a batch report that cannot answer "which slot failed".
+   The launcher now **refuses** a parallel launch on a slot-calibrated project when a lane carries no
+   reservation, naming the missing lanes and the command shape in the refusal. A lane already live
+   without a slot must be driven to a terminal outcome and relaunched — slot metadata cannot be
+   amended onto an existing reservation. Read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` for the trigger and refusal
+   contract.
 
 ## When you're tempted
 
