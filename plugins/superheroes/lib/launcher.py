@@ -165,6 +165,8 @@ def _preflight_extra(preflight_result):
         extra["remedy"] = preflight_result["remedy"]
     if "path" in preflight_result:
         extra["path"] = preflight_result["path"]
+    if "cause" in preflight_result:
+        extra["cause"] = preflight_result["cause"]
     return extra
 
 

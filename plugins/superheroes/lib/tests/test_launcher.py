@@ -3599,3 +3599,48 @@ def test_slot_gate_unrecognized_cause_parallel_refuses(tmp_path, monkeypatch):
     assert result["ok"] is False
     assert result["reason"] == "preflight-slot-calibration-unreadable"
     assert result["cause"] == "future-unknown-cause"
+
+
+def test_launch_build_slot_refusal_does_not_carry_cause(tmp_path, monkeypatch):
+  # axis: slot reservation refusal omits cause (not a calibration-unreadable refusal)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert "cause" not in result
+
+
+def test_launch_build_calibration_unreadable_propagates_cause(tmp_path, monkeypatch):
+  # axis: launch_build propagates cause on calibration-unreadable refusal
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    profile_path = "/fake/pilot-calibration.md"
+    _unknown_calibration(
+        monkeypatch,
+        path=profile_path,
+        cause=L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["cause"] == L.pilot_calibration.CAUSE_RESOLVER_FAILED
+    assert result["path"] == profile_path
+    assert result["remedy"]
