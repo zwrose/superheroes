@@ -100,10 +100,26 @@ def recurrent_classes(records, coverage_decisions=None):
     return out
 
 
+# The per-round DISCLOSURE channels ride the durable record under ONE nested object (#720). Before
+# it, a `recordsPath` resume restored findings/coverage but nothing a pre-resume round DISCLOSED, so
+# the resumed run's terminal receipt silently claimed less than the run knew. This module only
+# TRANSPORTS the block: the channel vocabulary and the per-channel shape rules belong to the reader
+# (round_driver.RESUMABLE_DISCLOSURE_CHANNELS), so a new channel needs no schema edit here. Anything
+# that is not a string-keyed object is DROPPED — a record with no block loads with no block, and an
+# absent block must never materialize as fabricated empty channels ("checked and clean").
+DISCLOSURES_FIELD = "disclosures"
+
+
+def _skeleton_disclosures(value):
+    if not isinstance(value, dict):
+        return None
+    return {k: v for k, v in value.items() if isinstance(k, str)}
+
+
 def promote_record(record, dimensions):
     if record.get("schemaVersion") == 2:
         return record
-    return {
+    out = {
         "schemaVersion": 2,
         "round": record.get("round"),
         "kind": "unknown",
@@ -114,6 +130,10 @@ def promote_record(record, dimensions):
         "tokenUsage": {"available": False, "reason": "promoted from schema v1"},
         "confirmationPending": False,
     }
+    disclosures = _skeleton_disclosures(record.get(DISCLOSURES_FIELD))
+    if disclosures is not None:
+        out[DISCLOSURES_FIELD] = disclosures
+    return out
 
 
 def _subject_from_reviewer(name):
@@ -157,7 +177,7 @@ def _dimension_record(name, result, round_no):
     return out, current, carried
 
 
-def record_from_dimension_results(round_no, kind, dimensions, changed_subjects, coverage_decisions, token_usage, confirmation_pending=False):
+def record_from_dimension_results(round_no, kind, dimensions, changed_subjects, coverage_decisions, token_usage, confirmation_pending=False, disclosures=None):
     findings = []
     carried_findings = []
     dimension_records = {}
@@ -166,7 +186,7 @@ def record_from_dimension_results(round_no, kind, dimensions, changed_subjects, 
         dimension_records[name] = dim_record
         findings.extend(current)
         carried_findings.extend(carried)
-    return {
+    record = {
         "schemaVersion": 2,
         "round": round_no,
         "kind": kind,
@@ -178,6 +198,10 @@ def record_from_dimension_results(round_no, kind, dimensions, changed_subjects, 
         "tokenUsage": token_usage or {"available": False, "reason": "missing"},
         "confirmationPending": bool(confirmation_pending),
     }
+    slim = _skeleton_disclosures(disclosures)
+    if slim is not None:
+        record[DISCLOSURES_FIELD] = slim
+    return record
 
 
 def load_records_state(path, dimensions):
@@ -249,7 +273,7 @@ def summarize_record(record):
     rec = record if isinstance(record, dict) else {}
     findings = rec.get("findings") if isinstance(rec.get("findings"), list) else []
     carried = rec.get("carriedFindings") if isinstance(rec.get("carriedFindings"), list) else []
-    return {
+    out = {
         "schemaVersion": rec.get("schemaVersion"),
         "round": rec.get("round"),
         "kind": rec.get("kind"),
@@ -262,6 +286,13 @@ def summarize_record(record):
         "dimensions": {name: _summarize_dimension(d)
                        for name, d in (rec.get("dimensions") or {}).items()},
     }
+    # The disclosure block survives skeletonization (it is small, scalar-ish per-round disclosure
+    # state — never an evidence body) and stays ABSENT when the record has none, so summarize_record
+    # remains idempotent and a pre-#720 file round-trips byte-identically.
+    disclosures = _skeleton_disclosures(rec.get(DISCLOSURES_FIELD))
+    if disclosures is not None:
+        out[DISCLOSURES_FIELD] = disclosures
+    return out
 
 
 def persist_record(path, records, record, expected_hash=None, run_id=None, lease=None):
@@ -405,6 +436,12 @@ def _sanitize_updates(updates):
     up = dict(updates or {})
     if "coverageDecisions" in up:
         up["coverageDecisions"] = _skeleton_coverage_decisions(up.get("coverageDecisions"))
+    if DISCLOSURES_FIELD in up:
+        slim = _skeleton_disclosures(up.get(DISCLOSURES_FIELD))
+        if slim is None:
+            up.pop(DISCLOSURES_FIELD)
+        else:
+            up[DISCLOSURES_FIELD] = slim
     fix = up.get("fix")
     if isinstance(fix, dict) and "deferred" in fix:
         fix = dict(fix)
