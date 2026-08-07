@@ -66,10 +66,24 @@ _SLOT_REMEDY = (
 )
 
 _CALIBRATION_UNREADABLE_REMEDY = (
-    "The pilot calibration profile at `path` could not be read or parsed, so the launcher "
-    "cannot tell whether this project declares pilot slots. Fix or regenerate that profile, "
-    "then relaunch."
+    "The launcher cannot tell whether this project declares pilot slots because pilot "
+    "calibration returned cause `cause`. When a profile path is available, fix or regenerate "
+    "the calibration profile at `path`, then relaunch."
 )
+
+_SLOT_CALIBRATION_POLICY = {
+    pilot_calibration.CAUSE_DECLARED: "continue",
+    pilot_calibration.CAUSE_NO_CALIBRATION: "pass",
+    pilot_calibration.CAUSE_NO_PILOT_BLOCK: "pass",
+    pilot_calibration.CAUSE_CREDENTIAL_SET_EMPTY: "pass",
+    pilot_calibration.CAUSE_REPO_ROOT_INVALID: "refuse",
+    pilot_calibration.CAUSE_RESOLVER_FAILED: "refuse",
+    pilot_calibration.CAUSE_CALIBRATION_UNREADABLE: "refuse",
+    pilot_calibration.CAUSE_NO_CONFIG_BLOCK: "refuse",
+    pilot_calibration.CAUSE_CONFIG_UNPARSEABLE: "refuse",
+    pilot_calibration.CAUSE_PILOT_BLOCK_MALFORMED: "refuse",
+    pilot_calibration.CAUSE_CREDENTIAL_SET_MALFORMED: "refuse",
+}
 
 # A refusal returned before parallelism is computed can never be evidence that the
 # batch is parallel — only post-determination gate refusals belong here.
@@ -372,14 +386,32 @@ def _slot_reservation_gate(
         return None
 
     slot_info = pilot_calibration.declares_slots(repo_root)
-    if slot_info.get("unknown"):
+    cause = slot_info.get("cause")
+    policy = _SLOT_CALIBRATION_POLICY.get(cause)
+    if (
+        policy is None
+        or slot_info.get("state")
+        not in (
+            pilot_calibration.STATE_DECLARED,
+            pilot_calibration.STATE_ABSENT,
+            pilot_calibration.STATE_CANNOT_TELL,
+        )
+    ):
         return _fail(
             "preflight-slot-calibration-unreadable",
             path=slot_info.get("path"),
+            cause=cause,
             remedy=_CALIBRATION_UNREADABLE_REMEDY,
         )
-    if not slot_info.get("declares"):
+    if policy == "pass":
         return None
+    if policy == "refuse":
+        return _fail(
+            "preflight-slot-calibration-unreadable",
+            path=slot_info.get("path"),
+            cause=cause,
+            remedy=_CALIBRATION_UNREADABLE_REMEDY,
+        )
 
     return _fail(
         "preflight-slot-reservation-required",

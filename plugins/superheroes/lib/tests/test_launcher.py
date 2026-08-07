@@ -2944,7 +2944,11 @@ def _slot_calibrated(monkeypatch):
     monkeypatch.setattr(
         L.pilot_calibration,
         "declares_slots",
-        lambda repo_root: {"declares": True, "reason": "declared", "path": None},
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_DECLARED,
+            "cause": L.pilot_calibration.CAUSE_DECLARED,
+            "path": None,
+        },
     )
 
 
@@ -2952,7 +2956,11 @@ def _not_slot_calibrated(monkeypatch):
     monkeypatch.setattr(
         L.pilot_calibration,
         "declares_slots",
-        lambda repo_root: {"declares": False, "reason": "no-calibration", "path": None},
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_ABSENT,
+            "cause": L.pilot_calibration.CAUSE_NO_CALIBRATION,
+            "path": None,
+        },
     )
 
 
@@ -3431,14 +3439,13 @@ def test_preflight_and_launch_agree_after_handback_terminal(tmp_path, monkeypatc
     assert spawn_called is True
 
 
-def _unknown_calibration(monkeypatch, path="/fake/profile.md"):
+def _unknown_calibration(monkeypatch, path="/fake/profile.md", cause="calibration-unreadable"):
     monkeypatch.setattr(
         L.pilot_calibration,
         "declares_slots",
         lambda repo_root: {
-            "declares": False,
-            "unknown": True,
-            "reason": "calibration-unreadable",
+            "state": L.pilot_calibration.STATE_CANNOT_TELL,
+            "cause": cause,
             "path": path,
         },
     )
@@ -3534,6 +3541,61 @@ def test_slot_gate_unknown_calibration_parallel_refusal_path_and_remedy(
     assert result["reason"] == "preflight-slot-calibration-unreadable"
     assert result["path"] == profile_path
     remedy = result["remedy"]
-    assert "profile" in remedy.lower()
+    assert "profile" in remedy.lower() or "calibration" in remedy.lower()
     assert "regenerat" in remedy.lower() or "fix" in remedy.lower()
     assert "missing" not in remedy.lower()
+
+
+def test_slot_gate_resolver_failed_parallel_refuses(tmp_path, monkeypatch):
+  # axis: resolver-failed cannot-tell + parallel refuses with cause in payload
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _unknown_calibration(
+        monkeypatch,
+        path="/fake/pilot-calibration.md",
+        cause=L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["path"] == "/fake/pilot-calibration.md"
+    assert result["cause"] == L.pilot_calibration.CAUSE_RESOLVER_FAILED
+
+
+def test_slot_gate_absent_cause_parallel_passes(tmp_path, monkeypatch):
+  # axis: absent cause on parallel unreserved launch passes (non-pilot project untouched)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_ABSENT,
+            "cause": L.pilot_calibration.CAUSE_NO_PILOT_BLOCK,
+            "path": "/fake/profile.md",
+        },
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_unrecognized_cause_parallel_refuses(tmp_path, monkeypatch):
+  # axis: unrecognized cause fails closed with calibration-unreadable refusal
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_CANNOT_TELL,
+            "cause": "future-unknown-cause",
+            "path": "/fake/profile.md",
+        },
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["cause"] == "future-unknown-cause"

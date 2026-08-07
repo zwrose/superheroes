@@ -13,56 +13,64 @@ if _LIB_DIR not in sys.path:
 import pilot_contract  # noqa: E402
 import store  # noqa: E402
 
-REASON_DECLARED = "declared"
-REASON_NO_CALIBRATION = "no-calibration"
-REASON_NO_CONFIG_BLOCK = "no-config-block"
-REASON_CONFIG_UNPARSEABLE = "config-unparseable"
-REASON_NO_PILOT_BLOCK = "no-pilot-block"
-REASON_CREDENTIAL_SET_EMPTY = "credential-set-empty"
-REASON_CALIBRATION_UNREADABLE = "calibration-unreadable"
+STATE_DECLARED = "declared"
+STATE_ABSENT = "absent"
+STATE_CANNOT_TELL = "cannot-tell"
+
+CAUSE_DECLARED = "declared"
+CAUSE_NO_CALIBRATION = "no-calibration"
+CAUSE_NO_PILOT_BLOCK = "no-pilot-block"
+CAUSE_CREDENTIAL_SET_EMPTY = "credential-set-empty"
+CAUSE_REPO_ROOT_INVALID = "repo-root-invalid"
+CAUSE_RESOLVER_FAILED = "resolver-failed"
+CAUSE_CALIBRATION_UNREADABLE = "calibration-unreadable"
+CAUSE_NO_CONFIG_BLOCK = "no-config-block"
+CAUSE_CONFIG_UNPARSEABLE = "config-unparseable"
+CAUSE_PILOT_BLOCK_MALFORMED = "pilot-block-malformed"
+CAUSE_CREDENTIAL_SET_MALFORMED = "credential-set-malformed"
 
 
-def _unknown_calibration(path, reason):
-    return {"declares": False, "unknown": True, "reason": reason, "path": path}
+def _answer(state, cause, path):
+    return {"state": state, "cause": cause, "path": path}
 
 
 def declares_slots(repo_root):
     """Return whether pilot slots are declared in the project's calibration profile."""
     if not isinstance(repo_root, str) or not repo_root:
-        return {"declares": False, "reason": REASON_NO_CALIBRATION, "path": None}
+        return _answer(STATE_CANNOT_TELL, CAUSE_REPO_ROOT_INVALID, None)
     try:
         info = store.resolve(repo_root, store.store_root())
         path = info.get("profile") if info.get("exists") else None
     except Exception:
-        return {"declares": False, "reason": REASON_NO_CALIBRATION, "path": None}
+        return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
     if path is None:
-        return {"declares": False, "reason": REASON_NO_CALIBRATION, "path": None}
+        return _answer(STATE_ABSENT, CAUSE_NO_CALIBRATION, None)
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
     except UnicodeDecodeError:
-        return _unknown_calibration(path, REASON_CALIBRATION_UNREADABLE)
+        return _answer(STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNREADABLE, path)
     except OSError:
-        return _unknown_calibration(path, REASON_CALIBRATION_UNREADABLE)
+        return _answer(STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNREADABLE, path)
     match = store.CONFIG_BLOCK_RE.search(text)
     if not match:
-        return {"declares": False, "reason": REASON_NO_CONFIG_BLOCK, "path": path}
+        return _answer(STATE_CANNOT_TELL, CAUSE_NO_CONFIG_BLOCK, path)
     try:
         cfg = json.loads(match.group(1))
     except (json.JSONDecodeError, TypeError, ValueError):
-        return _unknown_calibration(path, REASON_CONFIG_UNPARSEABLE)
+        return _answer(STATE_CANNOT_TELL, CAUSE_CONFIG_UNPARSEABLE, path)
     if not isinstance(cfg, dict):
-        return _unknown_calibration(path, REASON_CONFIG_UNPARSEABLE)
+        return _answer(STATE_CANNOT_TELL, CAUSE_CONFIG_UNPARSEABLE, path)
     if pilot_contract.PILOT_BLOCK_KEY not in cfg:
-        return {"declares": False, "reason": REASON_NO_PILOT_BLOCK, "path": path}
+        return _answer(STATE_ABSENT, CAUSE_NO_PILOT_BLOCK, path)
     pilot = cfg[pilot_contract.PILOT_BLOCK_KEY]
     if not isinstance(pilot, dict):
-        return _unknown_calibration(path, REASON_NO_PILOT_BLOCK)
+        return _answer(STATE_CANNOT_TELL, CAUSE_PILOT_BLOCK_MALFORMED, path)
     cred = pilot.get("credentialSet")
     if cred is None:
-        return {"declares": False, "reason": REASON_CREDENTIAL_SET_EMPTY, "path": path}
+        return _answer(STATE_ABSENT, CAUSE_CREDENTIAL_SET_EMPTY, path)
     if not isinstance(cred, list):
-        return _unknown_calibration(path, REASON_CREDENTIAL_SET_EMPTY)
+        return _answer(STATE_CANNOT_TELL, CAUSE_CREDENTIAL_SET_MALFORMED, path)
     if not cred:
-        return {"declares": False, "reason": REASON_CREDENTIAL_SET_EMPTY, "path": path}
-    return {"declares": True, "reason": REASON_DECLARED, "path": path}
+        return _answer(STATE_ABSENT, CAUSE_CREDENTIAL_SET_EMPTY, path)
+    return _answer(STATE_DECLARED, CAUSE_DECLARED, path)
