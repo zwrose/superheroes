@@ -2139,6 +2139,12 @@ def test_resurrection_plan_minted_happy_path(private_tmp):
     )
     assert plan["action"] == pc.ACTION_RESURRECT
     assert plan["steps"][1]["path"] == "minted"
+    # axis: on the minted path the plan-step key is `owner` again (#866 reverting #857's dodge),
+    # and this policy declares a mintable account literally named `owner` — so these two lines are
+    # the regression proof that #870's guard no longer refuses a plan whose step key spells an
+    # account name. Undo #870's carve-out and `resurrection_plan` raises before it returns.
+    assert plan["steps"][2]["owner"] == "C7"
+    assert plan["steps"][3]["owner"] == "C7"
 
 
 def test_resurrection_plan_unauthorized_verdict_propagates(private_tmp):

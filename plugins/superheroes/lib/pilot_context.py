@@ -10,7 +10,6 @@ CONTEXT_SCHEMA_VERSION = 1
 
 REFUSAL_OPTIONS_MISMATCH = "context-options-mismatch"
 REFUSAL_ARTIFACT_MISSING = "context-artifact-missing"
-REFUSAL_ARTIFACT_UNKNOWN_ACCOUNT = "context-artifact-unknown-account"
 REFUSAL_SHARED_CONTEXT_REFUSED = "context-shared-context-refused"
 REFUSAL_PROVISIONING_RECEIPT_MISSING = "context-provisioning-receipt-missing"
 REFUSAL_PROVISIONING_RECEIPT_INVALID = "context-provisioning-receipt-invalid"

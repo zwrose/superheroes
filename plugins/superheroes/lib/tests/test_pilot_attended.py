@@ -47,6 +47,7 @@ def _plan(**kwargs):
         "slot": SLOT,
         "generation": GENERATION,
         "accounts": ACCOUNTS,
+        "sign_in_path": "attended",
         "attended_declaration": {"vehicle": "automation"},
         "capture_surfaces": ["cookies"],
         "expected_identities": _expected_identities(),
@@ -105,7 +106,79 @@ def test_seeding_vehicle_edge2_idp_rejects_not_bool_refused():
         assert result == {"ok": False, "reason": pa.REFUSAL_VEHICLE_INVALID}
 
 
+def test_seeding_vehicle_human_driven_rejected_automation_refused():
+    """Edge 5: human_driven_rejected with automation → unsupported-mechanism."""
+    result = pa.seeding_vehicle(
+        {"vehicle": "automation"},
+        idp_rejects_automation=False,
+        human_driven_rejected=True,
+    )
+    assert result == {"ok": False, "reason": pa.REFUSAL_VEHICLE_UNSUPPORTED_MECHANISM}
+
+
+def test_seeding_vehicle_human_driven_rejected_real_chrome_refused():
+    """Edge 6: human_driven_rejected with real-chrome → unsupported-mechanism."""
+    result = pa.seeding_vehicle(
+        {"vehicle": "real-chrome"},
+        idp_rejects_automation=False,
+        human_driven_rejected=True,
+    )
+    assert result == {"ok": False, "reason": pa.REFUSAL_VEHICLE_UNSUPPORTED_MECHANISM}
+
+
+def test_seeding_vehicle_human_driven_rejected_overrides_idp_escalation():
+    """Edge 7: human_driven_rejected even with idp_rejects_automation → unsupported-mechanism."""
+    result = pa.seeding_vehicle(
+        {"vehicle": "automation"},
+        idp_rejects_automation=True,
+        human_driven_rejected=True,
+    )
+    assert result == {"ok": False, "reason": pa.REFUSAL_VEHICLE_UNSUPPORTED_MECHANISM}
+
+
+def test_seeding_vehicle_human_driven_rejected_not_bool_refused():
+    """Edge 8: human_driven_rejected not a real bool → attended-vehicle-invalid."""
+    for bad in ("yes", 1, None):
+        result = pa.seeding_vehicle(
+            {"vehicle": "automation"},
+            idp_rejects_automation=False,
+            human_driven_rejected=bad,
+        )
+        assert result == {"ok": False, "reason": pa.REFUSAL_VEHICLE_INVALID}
+
+
 # --- attended_seeding_plan ----------------------------------------------------
+
+def test_attended_seeding_plan_minted_sign_in_path_refused():
+    """Edge 1: minted sign_in_path → attended-sign-in-path-not-attended."""
+    result = _plan(sign_in_path="minted")
+    assert result == {"ok": False, "reason": pa.REFUSAL_SIGN_IN_PATH_NOT_ATTENDED}
+
+
+def test_attended_seeding_plan_captured_sign_in_path_refused():
+    """Edge 2: retired captured sign_in_path → attended-sign-in-path-not-attended."""
+    result = _plan(sign_in_path="captured")
+    assert result == {"ok": False, "reason": pa.REFUSAL_SIGN_IN_PATH_NOT_ATTENDED}
+
+
+def test_attended_seeding_plan_invalid_sign_in_path_refused():
+    """Edge 3: None / non-string sign_in_path → attended-sign-in-path-not-attended."""
+    for bad in (None, 123):
+        result = _plan(sign_in_path=bad)
+        assert result == {"ok": False, "reason": pa.REFUSAL_SIGN_IN_PATH_NOT_ATTENDED}
+
+
+def test_attended_seeding_plan_minted_checked_before_account_set():
+    """Edge 4: minted path refused before malformed account set is evaluated."""
+    result = _plan(sign_in_path="minted", accounts=[])
+    assert result == {"ok": False, "reason": pa.REFUSAL_SIGN_IN_PATH_NOT_ATTENDED}
+
+
+def test_attended_seeding_plan_human_driven_rejected_refused():
+    """Edge 10: human_driven_rejected on plan → unsupported-mechanism, no steps."""
+    result = _plan(human_driven_rejected=True)
+    assert result == {"ok": False, "reason": pa.REFUSAL_VEHICLE_UNSUPPORTED_MECHANISM}
+
 
 def test_attended_seeding_plan_ok():
     result = _plan()

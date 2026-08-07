@@ -98,9 +98,18 @@ def _lapse_outcome(action):
     return OUTCOME_REFUSED
 
 
-def seeding_vehicle(attended_declaration, *, idp_rejects_automation):
+def seeding_vehicle(
+    attended_declaration,
+    *,
+    idp_rejects_automation,
+    human_driven_rejected=False,
+):
     """Return the browser vehicle string for attended seeding."""
     # bite-axis: vehicle escalation — real-chrome when declared or when IdP rejects automation.
+    if type(human_driven_rejected) is not bool:
+        return _refusal(REFUSAL_VEHICLE_INVALID)
+    if human_driven_rejected:
+        return _refusal(REFUSAL_VEHICLE_UNSUPPORTED_MECHANISM)
     if type(idp_rejects_automation) is not bool:
         return _refusal(REFUSAL_VEHICLE_INVALID)
     if not isinstance(attended_declaration, dict):
@@ -176,12 +185,19 @@ def attended_seeding_plan(
     generation,
     accounts,
     *,
+    sign_in_path,
     attended_declaration,
     capture_surfaces,
     expected_identities,
     idp_rejects_automation=False,
+    human_driven_rejected=False,
 ):
     """Build the per-account attended sign-in plan for one slot."""
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+        return _refusal(REFUSAL_SIGN_IN_PATH_NOT_ATTENDED)
+    if sign_in_path != "attended":
+        return _refusal(REFUSAL_SIGN_IN_PATH_NOT_ATTENDED)
+
     # bite-axis: account-set alignment — expected_identities keys must match slot accounts exactly.
     try:
         account_set = pilot_slot.slot_account_set(slot, generation, accounts)
@@ -191,6 +207,7 @@ def attended_seeding_plan(
     vehicle_result = seeding_vehicle(
         attended_declaration,
         idp_rejects_automation=idp_rejects_automation,
+        human_driven_rejected=human_driven_rejected,
     )
     if isinstance(vehicle_result, dict):
         return vehicle_result
@@ -219,9 +236,6 @@ def attended_seeding_plan(
         if pair in seen_pairs:
             return _refusal(REFUSAL_CONTEXT_REUSED)
         seen_pairs.add(pair)
-
-        if account not in expected_identities:
-            return _refusal(REFUSAL_ACCOUNT_SET_MISMATCH)
 
         expected_identity = expected_identities[account]
         if expected_identity is None:
