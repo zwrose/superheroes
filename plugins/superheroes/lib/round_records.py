@@ -35,6 +35,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import model_registry  # noqa: E402
+import round_phases  # noqa: E402
 
 # =============================================================================================
 # schema constants
@@ -72,8 +73,12 @@ LOCK_FILE = "session.lock"
 RESERVED_PREFIX = "_"
 DISPATCH_MANIFEST_STEM = "_dispatch"
 CANARY_DIRNAME = "_canary"
-# Single source of truth: `round_driver.P_PANEL`. Respelled to keep the import one-way.
-_PANEL_PHASE_DIRNAME = "dispatch-panel"
+# The panel phase directory name — imported from the shared phase constants module.
+_PANEL_PHASE_DIRNAME = round_phases.P_PANEL
+
+# Compare-and-swap token for a stored `seat-missing/1` envelope. It is NOT a payload hash (those
+# are 64-char hex); a caller cannot satisfy `cas-mismatch` by guessing a real seat-result hash.
+MISSING_CAS_TOKEN = SEAT_MISSING_SCHEMA
 
 # Directory fsync is a no-op (or unsupported) on some exotic/remote filesystems; only these
 # errnos are swallowed. Anything else propagates — a durability failure must not go quiet.
@@ -101,6 +106,65 @@ def payload_sha256(payload):
     """The hash the torn-write detector compares against: sha256 over the payload's canonical
     JSON, so a re-serialization with different key order or spacing still matches."""
     return sha256_text(canonical(payload))
+
+
+def envelope_cas_token(envelope):
+    """The compare-and-swap token for a stored envelope — payload hash for results, a fixed schema
+    literal for seat-missing (which carries no payloadSha256)."""
+    if not isinstance(envelope, dict):
+        return None
+    schema = envelope.get("schema")
+    if schema == SEAT_RESULT_SCHEMA:
+        return envelope.get("payloadSha256")
+    if schema == SEAT_MISSING_SCHEMA:
+        return MISSING_CAS_TOKEN
+    return None
+
+
+def record_identity(phase, seat, occurrence, attempt):
+    """The durable identity of one per-seat store record — the join key for reconcile."""
+    return {"phase": phase, "seat": seat, "occurrence": occurrence, "attempt": attempt}
+
+
+def _identity_key(phase, seat, occurrence, attempt):
+    return (phase, seat, occurrence, attempt)
+
+
+def _identity_key_from_mapping(ident, default_phase=None):
+    if not isinstance(ident, dict):
+        return None
+    seat = ident.get("seat")
+    if not isinstance(seat, str) or not seat:
+        return None
+    occurrence = ident.get("occurrence", 0)
+    if isinstance(occurrence, bool) or not isinstance(occurrence, int) or occurrence < 0:
+        return None
+    attempt = ident.get("attempt")
+    if isinstance(attempt, bool) or not isinstance(attempt, int) or attempt < 0:
+        return None
+    phase = ident.get("phase", default_phase)
+    if not isinstance(phase, str) or not phase:
+        return None
+    return _identity_key(phase, seat, occurrence, attempt)
+
+
+def head_diff_store_path_valid(store_path_value, rnd, phase, seat_key, attempt, occurrence=0):
+    """True when `store_path_value` is the driver-owned headdiff path for this slot (structural)."""
+    if not isinstance(store_path_value, str) or not store_path_value:
+        return False
+    try:
+        skey = storage_key(seat_key, occurrence)
+        _require_index("rnd", rnd)
+        _require_token("phase", phase)
+        _require_index("attempt", attempt)
+    except ValueError:
+        return False
+    expected_tail = os.path.join("round-%d" % rnd, "seats", phase,
+                                 "%s.a%d.headdiff" % (skey, attempt))
+    normalized = os.path.normpath(store_path_value)
+    if normalized.endswith(expected_tail):
+        return True
+    return normalized.replace(os.sep, "/").endswith(expected_tail.replace(os.sep, "/"))
 
 
 def _now_iso():
@@ -406,8 +470,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
     below is a distinct one, and every one of them is fail-closed (nothing is stored):
 
       bootstrap-required, reserved-seat-name, unknown-seat, unknown-occurrence, stale-attempt,
-      landing-missing, landing-torn, attempt-mismatch, occurrence-mismatch, session-mismatch,
-      phase-mismatch, round-mismatch, schema-unknown, missing-reason, store-exists,
+      landing-missing, landing-torn, attempt-mismatch, seat-mismatch, occurrence-mismatch,
+      session-mismatch, phase-mismatch, round-mismatch, schema-unknown, missing-reason, store-exists,
       cas-expect-required, cas-mismatch, manifest-anchor-mismatch, manifest-anchor-unanchored
 
     plus two defensive reasons outside that roster: `invalid-path` (a crafted phase/seat/round
@@ -479,6 +543,8 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
         return _refuse("phase-mismatch", envelopePhase=envelope.get("phase"), phase=phase)
     if envelope.get("round") != rnd:
         return _refuse("round-mismatch", envelopeRound=envelope.get("round"), round=rnd)
+    if envelope.get("seat") != seat_key:
+        return _refuse("seat-mismatch", addressedSeat=seat_key, envelopeSeat=envelope.get("seat"))
 
     schema = envelope.get("schema")
     stored_sha = None
@@ -507,9 +573,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
         if expect_sha256 is None:
             return _refuse("cas-expect-required", storePath=spath)
         current, cur_err = read_json(spath)
-        current_sha = None
-        if cur_err is None and isinstance(current, dict):
-            current_sha = current.get("payloadSha256")
+        current_sha = envelope_cas_token(current) if (cur_err is None and isinstance(current, dict)) else None
         if current_sha != expect_sha256:
             return _refuse("cas-mismatch", expected=expect_sha256, actual=current_sha,
                            storePath=spath)
@@ -599,29 +663,38 @@ def _seat_files(directory):
     return out
 
 
-def reconcile(session_dir, rnd, phase, journal_hashes):
+def reconcile(session_dir, rnd, phase, journal_identities):
     """Recover the two-commit window between "the store file landed" and "the journal recorded it".
 
     THE STORE FILE IS AUTHORITATIVE; the journal is the log. Reconciliation therefore repairs the
     JOURNAL to match the files, never the files to match the journal:
 
       - a landing file with no store copy      -> `ingestNow`      (the ingest half never ran)
-      - a store copy whose payload hash is not in `journal_hashes` -> `reappend` (the append half
-        never ran; the record is real and the log is behind)
-      - a hash in `journal_hashes` with no store file carrying it -> `journalOrphan` — the ONE
-        machinery-failure class here: the log claims a record that does not exist on disk. The
-        caller turns it into a refusal naming the seat; nothing here deletes or invents a file.
+      - a store copy whose record identity is not in `journal_identities` -> `reappend` (the append
+        half never ran; the record is real and the log is behind)
+      - an identity in `journal_identities` with no store file for that slot -> `journalOrphan` —
+        the ONE machinery-failure class here: the log claims a record that does not exist on disk.
+        The caller turns it into a refusal naming the seat; nothing here deletes or invents a file.
 
-    A `seat-missing/1` store copy carries no `payloadSha256`, so it takes no part in the
-    reappend/orphan hash matching (a known residual: journalling for missing seats is keyed by
-    the caller, not by payload hash).
+    Record identity is `(phase, seat, occurrence, attempt)` — NOT the payload hash. Payload hashes
+    ride the journal as evidence only; a supersede leaves the prior hash in the log while the store
+    carries the replacement, and identical payloads on distinct seats must not mask a missing append.
     """
-    hashes = set(h for h in (journal_hashes or []) if isinstance(h, str))
+    identities = []
+    for ident in (journal_identities or []):
+        key = _identity_key_from_mapping(ident, default_phase=phase)
+        if key is not None:
+            identities.append(ident)
+    journal_keys = set()
+    for ident in identities:
+        key = _identity_key_from_mapping(ident, default_phase=phase)
+        if key is not None:
+            journal_keys.add(key)
     try:
         ldir = landing_dir(session_dir, rnd, phase)
         sdir = store_dir(session_dir, rnd, phase)
     except ValueError:
-        return {"ingestNow": [], "reappend": [], "journalOrphan": sorted(hashes)}
+        return {"ingestNow": [], "reappend": [], "journalOrphan": list(identities)}
 
     landings = _seat_files(ldir)
     stores = _seat_files(sdir)
@@ -632,18 +705,23 @@ def reconcile(session_dir, rnd, phase, journal_hashes):
             ingest_now.append(dict(landings[name]))
 
     reappend = []
-    seen = set()
+    store_keys = set()
     for name in sorted(stores):
         entry = dict(stores[name])
         obj, err = read_json(entry["path"])
         sha = obj.get("payloadSha256") if (err is None and isinstance(obj, dict)) else None
         entry["payloadSha256"] = sha
-        if isinstance(sha, str):
-            seen.add(sha)
-            if sha not in hashes:
-                reappend.append(entry)
-    return {"ingestNow": ingest_now, "reappend": reappend,
-            "journalOrphan": sorted(hashes - seen)}
+        if err is None and isinstance(obj, dict):
+            key = _identity_key_from_mapping(
+                record_identity(phase, obj.get("seat"), obj.get("occurrence", 0), obj.get("attempt")))
+            if key is not None:
+                store_keys.add(key)
+                entry["recordIdentity"] = record_identity(*key)
+                if key not in journal_keys:
+                    reappend.append(entry)
+    orphans = [ident for ident in identities
+               if _identity_key_from_mapping(ident, default_phase=phase) not in store_keys]
+    return {"ingestNow": ingest_now, "reappend": reappend, "journalOrphan": orphans}
 
 
 # =============================================================================================

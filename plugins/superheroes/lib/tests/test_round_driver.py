@@ -2245,6 +2245,8 @@ _ALL_CHANNELS = {
     "canaryFailed": {"seats": ["security-reviewer"], "detail": "engaged not true",
                      "evidence": {"probe": "none"}},
     "canaryVerified": {"codex": {"probe": "engaged"}},
+    "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
+                                                  "manifest": "codex"}]},
 }
 
 
@@ -2294,7 +2296,8 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                    "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
                    "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
                    "engaged probe recorded for vendor(s) codex",
-                   "canary-failed (round 1): the control probe showed no engagement"):
+                   "canary-failed (round 1): the control probe showed no engagement",
+                   "adapter-provenance (round 1): vendor echo mismatch"):
         assert marker in prose, marker
     # seatMapViolations is a BREACH channel: restoring it must reach the receipt's breach
     # disclosure, not just the round entry.

@@ -98,7 +98,7 @@ class FakeAdapters(object):
             return [], self.roster_reasons[phase]
         return list(self.rosters.get(phase, [])), None
 
-    def payload_fault(self, phase, payload, seat_key):
+    def payload_fault(self, phase, payload, seat_key, record_boundary=False):
         return self.faults.get(seat_key)
 
     def missing_policy(self, phase):
@@ -648,6 +648,56 @@ def test_record_result_supersede_is_a_compare_and_swap(tmp_path, adapters):
     out = RD.cmd_record_result(d, "code-reviewer", supersede=True,
                                expect_sha256=first["payloadSha256"])
     assert out["ok"] is True and out["superseded"] is True
+
+
+def test_advance_after_supersede_does_not_journal_orphan(tmp_path, adapters):
+    """Reproduction for finding 3: supersede journals both payload hashes, but reconcile keys on
+    slot identity — the same pending phase must advance cleanly."""
+    d = _session(tmp_path)
+    first = _land_and_record(d, "code-reviewer")
+    replacement = {"findings": ["replaced"], "confidence": "high", "seat": "code-reviewer",
+                   "verificationReceipt": {"ran": True}}
+    _land(d, "code-reviewer", payload=replacement)
+    out = RD.cmd_record_result(d, "code-reviewer", supersede=True,
+                               expect_sha256=first["payloadSha256"])
+    assert out["ok"] is True and out["superseded"] is True
+    for seat in RD.DIMENSIONS:
+        if seat == "code-reviewer":
+            continue
+        _land_and_record(d, seat)
+    assert _advance(d, tmp_path)["ok"] is True
+
+
+def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_path, adapters):
+    """Adapter trust disclosures must survive advance into durable state and the terminal receipt."""
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor", "manifest": "codex"}]
+
+    def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
+                                 canary=None):
+        seats = {}
+        for env in (envelopes or []):
+            seat = env.get("seat")
+            if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
+                seats[seat] = {"findings": [], "missing": True}
+            else:
+                seats[seat] = env.get("payload") or {"findings": []}
+        return {"seats": seats,
+                "provenance": {"vendorEchoMismatch": mismatch,
+                               "dispatchManifestUnavailable": True}}, None
+
+    adapters.assemble = assemble_with_provenance
+    assert _advance(d, tmp_path)["ok"] is True
+    prov = _state(d)["rounds"]["1"]["adapterProvenance"]
+    assert prov["vendorEchoMismatch"] == mismatch
+    assert prov["dispatchManifestUnavailable"] is True
+    receipt = RD.build_receipt(_state(d), d)
+    rd = next(r for r in receipt["rounds"] if r["round"] == 1)
+    assert rd["adapterProvenance"] == prov
+    degraded = "\n".join(receipt["degraded"])
+    assert "adapter-provenance (round 1): vendor echo mismatch" in degraded
+    assert "adapter-provenance (round 1): dispatch manifest unavailable" in degraded
 
 
 def test_record_result_refuses_a_payload_fault(tmp_path, adapters):
