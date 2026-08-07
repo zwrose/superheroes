@@ -51,6 +51,54 @@ def _answer(state, cause, path):
     return {"state": state, "cause": cause, "path": path}
 
 
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
+
+def _read_calibration_text(path):
+    """Read a calibration file safely. Returns (text, cause) — exactly one is None."""
+    try:
+        st = os.lstat(path)
+    except FileNotFoundError:
+        return None, "not-found"
+    except OSError:
+        return None, "cannot-tell"
+    mode = st.st_mode
+    if stat.S_ISLNK(mode):
+        try:
+            st = os.stat(path)
+            mode = st.st_mode
+        except FileNotFoundError:
+            return None, "cannot-tell"
+        except OSError:
+            return None, "cannot-tell"
+    if not stat.S_ISREG(mode):
+        return None, "cannot-tell"
+    fd = None
+    try:
+        try:
+            fd = os.open(path, os.O_RDONLY | _O_NONBLOCK)
+        except FileNotFoundError:
+            return None, "not-found"
+        except OSError:
+            return None, "cannot-tell"
+        try:
+            fst = os.fstat(fd)
+        except OSError:
+            return None, "cannot-tell"
+        if not stat.S_ISREG(fst.st_mode):
+            return None, "cannot-tell"
+        with os.fdopen(fd, encoding="utf-8") as fh:
+            fd = None
+            try:
+                text = fh.read()
+            except (OSError, UnicodeDecodeError):
+                return None, "cannot-tell"
+    finally:
+        if fd is not None:
+            os.close(fd)
+    return text, None
+
+
 def declares_slots(repo_root):
     """Return whether pilot slots are declared in the project's calibration profile."""
     if not isinstance(repo_root, str) or not repo_root:
@@ -68,39 +116,10 @@ def declares_slots(repo_root):
             return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
         for candidate in candidates:
             try:
-                try:
-                    st = os.lstat(candidate)
-                except FileNotFoundError:
+                _, read_cause = _read_calibration_text(candidate)
+                if read_cause == "not-found":
                     continue
-                except OSError:
-                    return _answer(
-                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
-                        candidate)
-                mode = st.st_mode
-                if stat.S_ISLNK(mode):
-                    try:
-                        st = os.stat(candidate)
-                        mode = st.st_mode
-                    except FileNotFoundError:
-                        return _answer(
-                            STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
-                            candidate)
-                    except OSError:
-                        return _answer(
-                            STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
-                            candidate)
-                if not stat.S_ISREG(mode):
-                    return _answer(
-                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
-                        candidate)
-                try:
-                    with open(candidate, encoding="utf-8") as fh:
-                        fh.read()
-                except UnicodeDecodeError:
-                    return _answer(
-                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
-                        candidate)
-                except OSError:
+                if read_cause is not None:
                     return _answer(
                         STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
                         candidate)
@@ -109,12 +128,8 @@ def declares_slots(repo_root):
                     STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
                     candidate)
         return _answer(STATE_ABSENT, CAUSE_NO_CALIBRATION, None)
-    try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except UnicodeDecodeError:
-        return _answer(STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNREADABLE, path)
-    except OSError:
+    text, read_cause = _read_calibration_text(path)
+    if read_cause is not None:
         return _answer(STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNREADABLE, path)
     match = store.CONFIG_BLOCK_RE.search(text)
     if not match:

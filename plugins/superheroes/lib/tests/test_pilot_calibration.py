@@ -407,3 +407,57 @@ def test_declares_slots_directory_candidate(tmp_path):
         "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
         "path": candidate,
     }
+
+
+def _legacy_profile_path(repo):
+    return os.path.join(repo, ".claude", "test-pilot", "profile.md")
+
+
+def test_declares_slots_fifo_legacy_selected_profile(tmp_path):
+    # axis: cannot-tell / calibration-unreadable when resolver-selected legacy profile is a FIFO
+    import threading
+    import time
+
+    repo = _init_repo(tmp_path / "repo")
+    legacy_dir = os.path.dirname(_legacy_profile_path(repo))
+    os.makedirs(legacy_dir, exist_ok=True)
+    fifo = _legacy_profile_path(repo)
+    os.mkfifo(fifo)
+
+    result = [None]
+    error = [None]
+
+    def run():
+        try:
+            result[0] = pc.declares_slots(repo)
+        except Exception as exc:
+            error[0] = exc
+
+    start = time.monotonic()
+    thread = threading.Thread(target=run, daemon=True)
+    thread.start()
+    thread.join(timeout=2.0)
+    elapsed = time.monotonic() - start
+    assert not thread.is_alive(), (
+        f"declares_slots hung for {elapsed:.2f}s on FIFO legacy profile")
+    assert error[0] is None
+    assert result[0] == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
+        "path": fifo,
+    }
+
+
+def test_declares_slots_directory_legacy_selected_profile(tmp_path):
+    # axis: cannot-tell / calibration-unreadable when resolver-selected legacy profile is a directory
+    repo = _init_repo(tmp_path / "repo")
+    legacy_dir = os.path.dirname(_legacy_profile_path(repo))
+    os.makedirs(legacy_dir, exist_ok=True)
+    profile_dir = _legacy_profile_path(repo)
+    os.makedirs(profile_dir)
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
+        "path": profile_dir,
+    }
