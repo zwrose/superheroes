@@ -11,6 +11,7 @@
     "architect-spec",
     "audit-debt",
     "configure",
+    "checkpoint",
     "guardian",
     "review-code",
     "review-init",
