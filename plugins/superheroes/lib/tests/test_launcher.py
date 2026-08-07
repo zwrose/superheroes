@@ -3070,6 +3070,19 @@ def test_slot_gate_different_batch_unslotted_passes(tmp_path, monkeypatch):
     assert result["ok"] is True
 
 
+def test_slot_gate_different_batch_unslotted_not_in_missing(tmp_path, monkeypatch):
+  # axis: a live unslotted lane in a DIFFERENT batch never enters `missing` for this batch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-x", 2)
+    _reserve_live_lane(repo, "other-wave", "other-lane")
+    result = L.walk_preflight(
+        _all_checks(), repo, batch_id="wave-x", slot="slot-a", generation=1,
+    )
+    assert result["ok"] is True
+
+
 def test_launch_build_slot_refusal_propagates_missing_and_remedy(tmp_path, monkeypatch):
   # axis: launch_build propagates missing and remedy on slot refusal
     repo = _init_repo(tmp_path / "repo")

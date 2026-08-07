@@ -266,6 +266,8 @@ def _slot_reservation_gate(
     exclude_launch_id=None,
 ):
     """Refuse parallel unslotted launches on slot-calibrated projects. Never raises."""
+    # axis: parallel slot-calibrated launch with unslotted lane(s) — refuse, not presence
+    # disclosure: preflight predicate + launch_build post-reserve re-check; not inside reserve's lock — undeclared-batch races may both pass preflight, re-check refuses at least one before spawn
     if not isinstance(batch_id, str) or not batch_id.strip():
         return None
     if not ledger_state.get("ok") or ledger_state.get("unreadable"):
