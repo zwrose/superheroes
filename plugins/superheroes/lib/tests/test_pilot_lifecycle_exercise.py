@@ -401,12 +401,11 @@ def test_app_lifecycle_receipt_pass_round_trip():
     assert pilot_contract.is_exercised(registry, "app-lifecycle", gate_declaration) is True
 
 
-def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration():
-    """Integration: receipt digest matches pilot_provision.declaration_for gate declaration."""
+def _gate_agreement_policy_block(*, origin, permitted_redirects):
     policy = {
         "schemaVersion": 1,
         "declaration": "test-policy",
-        "protectedTargets": ["https://app.example.com:443"],
+        "protectedTargets": [origin],
         "datastore": {
             "expectedIdentity": "example_dev",
             "connectionDetail": "postgres://localhost:5432/example_dev",
@@ -414,8 +413,8 @@ def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration():
         },
         "slots": {
             "slot-a": {
-                "origin": APP_ORIGIN,
-                "permittedRedirects": [IDP_ORIGIN],
+                "origin": origin,
+                "permittedRedirects": permitted_redirects,
                 "expectedIdentities": {"owner": "pilot-owner@example.test"},
             },
         },
@@ -434,6 +433,26 @@ def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration():
         "effectsEscape": {"canEscape": False, "evidence": "sandboxed"},
         "policyRef": {"declaration": "example-project-pilot-policy"},
     }
+    return policy, block
+
+
+@pytest.mark.parametrize(
+    "origin,permitted_redirects",
+    [
+        (APP_ORIGIN, [IDP_ORIGIN]),
+        ("https://app.example.com:443", ["https://idp.example.com:443"]),
+        ("https://APP.example.com", [IDP_ORIGIN]),
+    ],
+    ids=["canonical", "explicit-default-port", "host-case-variant"],
+)
+def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration(
+    origin, permitted_redirects,
+):
+    """Integration: receipt digest matches pilot_provision.declaration_for gate declaration."""
+    policy, block = _gate_agreement_policy_block(
+        origin=origin,
+        permitted_redirects=permitted_redirects,
+    )
     slot_ref = SLOT_REF
     gate_info = pp.declaration_for("app-lifecycle", block, policy, slot_ref)
     gate_declaration = gate_info["declaration"]
@@ -443,8 +462,14 @@ def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration():
         origin=gate_declaration["origin"],
         permitted_redirects=gate_declaration["permittedRedirects"],
     )
+    assert declaration["declaration"] == gate_declaration
+    trace = [
+        "%s/" % origin,
+        "%s/login?token=secret" % permitted_redirects[0],
+        "%s/callback?code=abc" % origin,
+    ]
     result = ple.evaluate_trace(
-        _sign_in_trace(),
+        trace,
         origin=gate_declaration["origin"],
         permitted_redirects=gate_declaration["permittedRedirects"],
     )
@@ -455,6 +480,40 @@ def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration():
         "records": [record],
     }
     assert pilot_contract.is_exercised(registry, "app-lifecycle", gate_declaration) is True
+
+
+@pytest.mark.parametrize(
+    "permitted_redirects",
+    [
+        "not-a-list",
+        [123],
+        ["https://idp.example:bad"],
+    ],
+    ids=["not-list", "non-string-member", "malformed-authority"],
+)
+def test_app_lifecycle_declaration_invalid_permitted_redirects(permitted_redirects):
+    """Declaration-level redirect validation refuses lifecycle-exercise-redirect-invalid."""
+    with pytest.raises(ple.PilotLifecycleExerciseError) as exc:
+        ple.app_lifecycle_declaration(
+            slot_ref=SLOT_REF,
+            policy_digest=POLICY_DIGEST,
+            origin=APP_ORIGIN,
+            permitted_redirects=permitted_redirects,
+        )
+    assert exc.value.reason == ple.REFUSAL_REDIRECT_INVALID
+
+
+@pytest.mark.parametrize("origin", [None, ""])
+def test_app_lifecycle_declaration_invalid_origin(origin):
+    """Declaration-level origin validation refuses lifecycle-exercise-origin-invalid."""
+    with pytest.raises(ple.PilotLifecycleExerciseError) as exc:
+        ple.app_lifecycle_declaration(
+            slot_ref=SLOT_REF,
+            policy_digest=POLICY_DIGEST,
+            origin=origin,
+            permitted_redirects=[IDP_ORIGIN],
+        )
+    assert exc.value.reason == ple.REFUSAL_ORIGIN_INVALID
 
 
 def test_fail_receipt_not_exercised():

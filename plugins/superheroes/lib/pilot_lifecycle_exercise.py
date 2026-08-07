@@ -228,21 +228,13 @@ def app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redi
     if not isinstance(policy_digest, str) or not policy_digest:
         raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
 
-    if not isinstance(origin, str) or not origin:
-        raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
-
-    if not isinstance(permitted_redirects, list):
-        raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
-    for redirect in permitted_redirects:
-        if not isinstance(redirect, str):
-            raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
-        try:
-            normalize_origin(redirect)
-        except PilotLifecycleExerciseError:
-            raise
-
     try:
         normalize_origin(origin)
+    except PilotLifecycleExerciseError:
+        raise
+
+    try:
+        _normalize_redirect_list(permitted_redirects)
     except PilotLifecycleExerciseError:
         raise
 
