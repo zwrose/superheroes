@@ -619,15 +619,15 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, canary, sessio
     elif phase == P_AUDITS:
         artifact = _assemble_audits(roster, indexed, dispatch_manifest, disclosures)
     elif phase == P_SYNTHESIS:
-        artifact = _assemble_synthesis(roster, indexed)
+        artifact = _assemble_synthesis(roster, indexed, disclosures)
     elif phase in (P_GAPSWEEP, P_SCOPED):
-        artifact = _assemble_findings(roster, indexed)
+        artifact = _assemble_findings(roster, indexed, disclosures)
     elif phase == P_FIXER:
         artifact = _assemble_fixer(roster, indexed, disclosures, phase, session_dir)
         if artifact is None:
             return None, "head-diff-store-path-untrusted"
     else:
-        artifact = _assemble_verify(roster, indexed)
+        artifact = _assemble_verify(roster, indexed, disclosures)
     if disclosures:
         # Read by no fold — a disclosure channel for the orchestrator and the receipt. Every fold
         # this module feeds reads named keys only, so an extra key changes nothing it does.
@@ -697,7 +697,7 @@ def _assemble_audits(roster, indexed, dispatch_manifest, disclosures):
     return artifact
 
 
-def _assemble_synthesis(roster, indexed):
+def _assemble_synthesis(roster, indexed, disclosures):
     payload = indexed[(roster[0], 0)]["payload"]
     grouping = payload.get("grouping")
     if isinstance(grouping, list):
@@ -705,7 +705,7 @@ def _assemble_synthesis(roster, indexed):
     return {"grouping": grouping}
 
 
-def _assemble_findings(roster, indexed):
+def _assemble_findings(roster, indexed, disclosures):
     payload = indexed[(roster[0], 0)]["payload"]
     return {"findings": [dict(f) for f in payload["findings"]]}
 
@@ -731,7 +731,7 @@ def _assemble_fixer(roster, indexed, disclosures, phase, session_dir):
     return artifact
 
 
-def _assemble_verify(roster, indexed):
+def _assemble_verify(roster, indexed, disclosures):
     payload = indexed[(roster[0], 0)]["payload"]
     artifact = {"result": payload.get("result")}
     for field in ("command", "exit", "outputSha256"):
