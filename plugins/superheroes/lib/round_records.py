@@ -147,6 +147,28 @@ def storage_key(seat_key, occurrence=0):
     return key
 
 
+def roster_slots(roster):
+    """[(seat_key, occurrence)] — a roster expanded so a REPEATED key stays addressable.
+
+    THE SINGLE HOME for the slot expansion, so no layer above invents a second one. Identity on
+    every layer that consumes a roster is (seat_key, occurrence), never the seat key alone: two
+    DISTINCT audit targets can legitimately share one id (`finding_identity` is line-less), so a
+    roster carrying the same key twice describes TWO real seats. `storage_key` already gives each
+    its own file; this gives every caller the same enumeration of them.
+
+    Order is preserved, never sorted — it is SEMANTIC on the multi-seat phases (the panel folds in
+    dimension order; the audits artifact lists results in target order). A non-sequence roster
+    expands to no slots rather than raising: the callers all fail closed on an empty roster.
+    """
+    seen = {}
+    slots = []
+    for key in roster if isinstance(roster, (list, tuple)) else []:
+        occurrence = seen.get(key, 0)
+        seen[key] = occurrence + 1
+        slots.append((key, occurrence))
+    return slots
+
+
 # =============================================================================================
 # paths — every builder is fenced inside the session dir
 # =============================================================================================
@@ -312,11 +334,14 @@ def _refuse(reason, **extra):
     return out
 
 
-def _normalize_envelope(envelope):
-    """The store copy: a shallow copy with `round`/`attempt` coerced to int. No key is dropped
-    (an unknown key is a future field, not garbage to discard) and no key is invented, so the
-    stored record stays a faithful copy of what the seat actually landed."""
+def _normalize_envelope(envelope, occurrence=0):
+    """The store copy: a shallow copy with `round`/`attempt` coerced to int and the SLOT's
+    `occurrence` stamped. No key is dropped (an unknown key is a future field, not garbage to
+    discard) and no value is invented — the occurrence stamped is the one this ingestion was
+    addressed to, which is also the slot the file lives in, so the stored record says WHICH of two
+    same-id seats it is rather than leaving the reader to infer it from the filename."""
     out = dict(envelope)
+    out["occurrence"] = occurrence
     for key in ("round", "attempt"):
         value = out.get(key)
         if isinstance(value, bool):
@@ -380,18 +405,23 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
     `{"ok": False, "reason": <str>, ...}`. The `reason` string is the contract — every refusal
     below is a distinct one, and every one of them is fail-closed (nothing is stored):
 
-      bootstrap-required, reserved-seat-name, unknown-seat, stale-attempt, landing-missing,
-      landing-torn, attempt-mismatch, session-mismatch, phase-mismatch, round-mismatch,
-      schema-unknown, missing-reason, store-exists, cas-expect-required, cas-mismatch,
-      manifest-anchor-mismatch, manifest-anchor-unanchored
+      bootstrap-required, reserved-seat-name, unknown-seat, unknown-occurrence, stale-attempt,
+      landing-missing, landing-torn, attempt-mismatch, occurrence-mismatch, session-mismatch,
+      phase-mismatch, round-mismatch, schema-unknown, missing-reason, store-exists,
+      cas-expect-required, cas-mismatch, manifest-anchor-mismatch, manifest-anchor-unanchored
 
     plus two defensive reasons outside that roster: `invalid-path` (a crafted phase/seat/round
     that would escape the session dir) and `bad-argument` (a malformed `attempt`/`occurrence`).
 
-    Two evaluation-order notes, both deliberate:
+    Three evaluation-order notes, all deliberate:
       - `reserved-seat-name` is decided BEFORE `unknown-seat`: a `_`-prefixed key is
         structurally illegal whatever the roster says, and reporting it as merely unknown would
         hide the namespace collision behind a roster typo.
+      - `unknown-occurrence` follows `unknown-seat`, and is its second half: the roster slot is
+        (seat_key, occurrence), so an occurrence past the number of times the key appears
+        addresses a seat that does not exist. Storing it would put a real record in a slot no
+        fold ever reads — silent loss, which is exactly what the enumerated refusals exist to
+        prevent.
       - an UNPARSEABLE landing file is reported `landing-torn`, not a separate reason: a
         half-written host Write is exactly what "torn" names, and it is the same fail-closed
         outcome as a payload-hash mismatch.
@@ -408,6 +438,11 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
                        message="seat %r is not on this phase's roster; valid keys: %s"
                                % (seat_key, ", ".join(valid) if valid else "(none)"),
                        validKeys=valid)
+    slots = valid.count(seat_key)
+    if isinstance(occurrence, int) and not isinstance(occurrence, bool) and occurrence >= slots:
+        return _refuse("unknown-occurrence", occurrence=occurrence, occurrences=slots,
+                       message="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
+                               "that does not exist" % (seat_key, slots, occurrence))
     if attempt != current_attempt:
         return _refuse("stale-attempt", attempt=attempt, currentAttempt=current_attempt)
 
@@ -431,6 +466,12 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
     if envelope.get("attempt") != attempt:
         return _refuse("attempt-mismatch", envelopeAttempt=envelope.get("attempt"),
                        fileAttempt=attempt)
+    if envelope.get("occurrence", occurrence) != occurrence:
+        # The SLOT is the file's identity, and the ingestion names it. An envelope claiming a
+        # different occurrence is a dispatch accounting fault: stamping the slot over the claim
+        # would silently rewrite which of two same-id seats this record is.
+        return _refuse("occurrence-mismatch", envelopeOccurrence=envelope.get("occurrence"),
+                       occurrence=occurrence)
     if envelope.get("session") != session_id:
         return _refuse("session-mismatch", envelopeSession=envelope.get("session"),
                        sessionId=session_id)
@@ -473,9 +514,10 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
             return _refuse("cas-mismatch", expected=expect_sha256, actual=current_sha,
                            storePath=spath)
 
-    atomic_write_json(spath, _normalize_envelope(envelope))
+    atomic_write_json(spath, _normalize_envelope(envelope, occurrence))
     return {"ok": True, "reason": None, "storePath": spath, "payloadSha256": stored_sha,
-            "superseded": bool(exists and supersede), "seatKey": seat_key, "storageKey": skey}
+            "superseded": bool(exists and supersede), "seatKey": seat_key, "storageKey": skey,
+            "occurrence": occurrence}
 
 
 def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None):
@@ -484,29 +526,36 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
     Idempotent by construction: a seat already in the store is reported `already-stored` with
     `ok: True` (re-running a sweep after a crash must not manufacture an error), and a landing
     file that maps to no roster seat is reported with the enumerated `unknown-seat` refusal
-    rather than skipped in silence. Returns one result dict per seat/file, sorted by storage key.
+    rather than skipped in silence. Returns one result dict per SLOT/file, sorted by storage key.
+
+    The sweep walks SLOTS — (seat_key, occurrence) — not bare seat keys: a roster carrying one id
+    twice owes two landings, and sweeping by key alone would claim the first slot's file twice and
+    leave the second's unswept (and then reported as an `unknown-seat` stray).
     """
     results = []
     claimed = set()
-    for seat_key in _roster_keys(roster):
+    for seat_key, occurrence in roster_slots(_roster_keys(roster)):
         try:
-            skey = storage_key(seat_key)
+            skey = storage_key(seat_key, occurrence)
             lpath = landing_path(session_dir, rnd, phase, skey, current_attempt)
             spath = store_path(session_dir, rnd, phase, skey, current_attempt)
         except ValueError as exc:
-            results.append(_refuse("bad-argument", seatKey=seat_key, message=str(exc)))
+            results.append(_refuse("bad-argument", seatKey=seat_key, occurrence=occurrence,
+                                   message=str(exc)))
             continue
         claimed.add(os.path.basename(lpath))
         if not os.path.exists(lpath):
             continue
         if os.path.exists(spath):
             results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,
-                            "storageKey": skey, "storePath": spath})
+                            "storageKey": skey, "storePath": spath, "occurrence": occurrence})
             continue
         out = ingest_landing(session_dir, rnd, phase, seat_key, current_attempt,
-                             current_attempt=current_attempt, roster=roster, anchor=anchor)
+                             current_attempt=current_attempt, roster=roster, anchor=anchor,
+                             occurrence=occurrence)
         out.setdefault("seatKey", seat_key)
         out.setdefault("storageKey", skey)
+        out.setdefault("occurrence", occurrence)
         results.append(out)
 
     valid = _roster_keys(roster)

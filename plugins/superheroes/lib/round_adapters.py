@@ -193,15 +193,11 @@ def _roster_slots(keys):
 
     Two DISTINCT audit targets can legitimately share one id (`finding_identity` is line-less), so
     the roster is occurrence-indexed exactly the way `round_records.storage_key` is: identity is
-    (seat_key, occurrence), never the seat key alone.
+    (seat_key, occurrence), never the seat key alone. The expansion itself is DELEGATED to
+    `round_records.roster_slots` — the driver's advance path enumerates the same slots to read the
+    store, and two independent expansions could disagree about which record is which seat.
     """
-    seen = {}
-    slots = []
-    for key in keys:
-        occurrence = seen.get(key, 0)
-        seen[key] = occurrence + 1
-        slots.append((key, occurrence))
-    return slots
+    return round_records.roster_slots(keys)
 
 
 # =============================================================================================
