@@ -3363,6 +3363,43 @@ def test_launch_build_single_lane_unslotted_spawns_after_handback_terminal(tmp_p
     assert spawn_called is True
 
 
+def test_launch_build_single_lane_unslotted_spawns_after_post_reserve_unreadable_terminal(
+    tmp_path, monkeypatch,
+):
+  # axis: post-reserve-ledger-unreadable terminal does not count toward parallelism
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    _reserve_live_lane(repo, "wave-test", "lane-prior")
+    L._terminalize(
+        repo,
+        "lane-prior",
+        False,
+        "post-reserve-ledger-unreadable",
+        stage="preflight",
+    )
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
 def test_preflight_and_launch_agree_after_handback_terminal(tmp_path, monkeypatch):
   # axis: preflight and launch agree when unrelated terminal lane is in batch
     repo = _init_repo(tmp_path / "repo")

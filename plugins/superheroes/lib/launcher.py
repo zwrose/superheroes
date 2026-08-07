@@ -55,9 +55,10 @@ _WORKHORSE_CMD = "/superheroes:workhorse"
 _SLOT_REMEDY = (
     "Provision this wave's pilot slots first (the advisor's duty — the builder never "
     "self-provisions), then give every lane named in `missing` its own reservation. "
-    "Each launch id in `missing` is a live unslotted lane that must reach a terminal "
-    "state before relaunch — there is no CLI transition today for a reserved-but-never-"
-    "started lane; it is resolved when that launch itself reaches a terminal outcome. "
+    "The literal `this-launch` in `missing` names the launch being attempted — relaunch "
+    "it with `--slot` and `--generation` on the command below. Any other id in `missing` "
+    "is a live unslotted lane that must reach a terminal outcome before relaunch — there "
+    "is no CLI transition today for a reserved-but-never-started lane. "
     "Relaunch each lane with: "
     "`launcher.py launch --repo-root <repo-root> --issue <n> --premise <FILE PATH> "
     "--checks <FILE PATH> --log-dir <dir> --slot <slot-id> --generation <int> "
@@ -70,9 +71,10 @@ _CALIBRATION_UNREADABLE_REMEDY = (
     "then relaunch."
 )
 
+# A refusal returned before parallelism is computed can never be evidence that the
+# batch is parallel — only post-determination gate refusals belong here.
 _GATE_REFUSAL_REASONS = frozenset({
     "preflight-slot-reservation-required",
-    "post-reserve-ledger-unreadable",
     "preflight-slot-calibration-unreadable",
 })
 
