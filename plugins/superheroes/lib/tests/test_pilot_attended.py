@@ -68,17 +68,29 @@ def _verified_result(identity=EXPECTED_ID):
 # --- seeding_vehicle ----------------------------------------------------------
 
 def test_seeding_vehicle_defaults_to_automation():
-    assert pa.seeding_vehicle({"vehicle": "automation"}, idp_rejects_automation=False) == "automation"
+    assert pa.seeding_vehicle({"vehicle": "automation"}, idp_rejects_automation=False) == {
+        "ok": True,
+        "reason": None,
+        "vehicle": "automation",
+    }
 
 
 def test_seeding_vehicle_edge3_automation_with_idp_rejects_escalates_to_real_chrome():
     """Edge 3: automation + idp_rejects_automation=True → real-chrome."""
-    assert pa.seeding_vehicle({"vehicle": "automation"}, idp_rejects_automation=True) == "real-chrome"
+    assert pa.seeding_vehicle({"vehicle": "automation"}, idp_rejects_automation=True) == {
+        "ok": True,
+        "reason": None,
+        "vehicle": "real-chrome",
+    }
 
 
 def test_seeding_vehicle_edge4_real_chrome_stays_real_chrome():
     """Edge 4: real-chrome + idp_rejects_automation=False → real-chrome."""
-    assert pa.seeding_vehicle({"vehicle": "real-chrome"}, idp_rejects_automation=False) == "real-chrome"
+    assert pa.seeding_vehicle({"vehicle": "real-chrome"}, idp_rejects_automation=False) == {
+        "ok": True,
+        "reason": None,
+        "vehicle": "real-chrome",
+    }
 
 
 def test_seeding_vehicle_edge1_not_dict_refused():
@@ -186,6 +198,7 @@ def test_attended_seeding_plan_ok():
     assert result["slotRef"] == SLOT_REF
     assert result["vehicle"] == "automation"
     assert len(result["steps"]) == 2
+    assert [step["account"] for step in result["steps"]] == ["owner", "viewer"]
     assert result["steps"][0]["account"] == "owner"
     assert result["steps"][0]["slotRef"] == SLOT_REF
     assert result["steps"][0]["vehicle"] == "automation"
@@ -197,6 +210,11 @@ def test_attended_seeding_plan_ok():
     assert SLOT_REF in result["steps"][0]["prompt"]
     assert "owner" in result["steps"][0]["prompt"]
     assert EXPECTED_ID in result["steps"][0]["prompt"]
+    assert result["steps"][1]["account"] == "viewer"
+    assert result["steps"][1]["slotRef"] == SLOT_REF
+    assert result["steps"][1]["expectedIdentity"] == OTHER_PILOT_ID
+    assert "viewer" in result["steps"][1]["prompt"]
+    assert OTHER_PILOT_ID in result["steps"][1]["prompt"]
 
 
 def test_attended_seeding_plan_edge5_empty_account_set_refused():
@@ -290,6 +308,15 @@ def test_prompt_copy_no_jargon():
     text = pa.prompt_copy(SLOT_REF, "owner", EXPECTED_ID, "automation")
     for forbidden in ("slotRef", "verify-at-seed", "provenance"):
         assert forbidden not in text
+    assert "Use the dedicated pilot account for this slot, not your personal account." in text
+    assert "Nothing from this sign-in is recorded or saved." in text
+
+
+def test_prompt_copy_real_chrome_required_statements():
+    text = pa.prompt_copy(SLOT_REF, "owner", EXPECTED_ID, "real-chrome")
+    assert "Use the dedicated pilot account for this slot, not your personal account." in text
+    assert "Nothing from this sign-in is recorded or saved." in text
+    assert "Chrome" in text
 
 
 # --- verify_at_seed -----------------------------------------------------------
@@ -374,12 +401,18 @@ def test_verify_at_seed_edge15_non_string_expected_identity_raises():
 
 def test_seed_outcome_all_verified():
     steps = [
-        {"account": "owner"},
-        {"account": "viewer"},
+        {"account": "owner", "expectedIdentity": EXPECTED_ID},
+        {"account": "viewer", "expectedIdentity": OTHER_PILOT_ID},
     ]
     results = {
-        "owner": _verified_result(EXPECTED_ID),
-        "viewer": _verified_result(OTHER_PILOT_ID),
+        "owner": pa.verify_at_seed(
+            {"identity": EXPECTED_ID},
+            expected_identity=EXPECTED_ID,
+        ),
+        "viewer": pa.verify_at_seed(
+            {"identity": OTHER_PILOT_ID},
+            expected_identity=OTHER_PILOT_ID,
+        ),
     }
     result = pa.seed_outcome(steps, results)
     assert result == {
@@ -390,20 +423,88 @@ def test_seed_outcome_all_verified():
     }
 
 
+def test_seed_outcome_rejects_ok_string_false():
+    """Malformed ok type (string) → attended-seed-incomplete."""
+    steps = [{"account": "owner", "expectedIdentity": EXPECTED_ID}]
+    results = {"owner": {"ok": "false"}}
+    result = pa.seed_outcome(steps, results)
+    assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
+
+
+def test_seed_outcome_rejects_bare_ok_true():
+    """Bare ok:True without verify_at_seed shape → attended-seed-incomplete."""
+    steps = [{"account": "owner", "expectedIdentity": EXPECTED_ID}]
+    results = {"owner": {"ok": True}}
+    result = pa.seed_outcome(steps, results)
+    assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
+
+
+def test_seed_outcome_rejects_ok_true_with_refused_outcome():
+    """ok:True with refused outcome → attended-seed-incomplete."""
+    steps = [{"account": "owner", "expectedIdentity": EXPECTED_ID}]
+    results = {
+        "owner": {
+            "ok": True,
+            "outcome": pa.OUTCOME_REFUSED,
+            "reason": pa.REFUSAL_IDENTITY_MISMATCH,
+            "identity": OWNER_PERSONAL_ID,
+        },
+    }
+    result = pa.seed_outcome(steps, results)
+    assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
+
+
+def test_seed_outcome_rejects_ok_string_yes():
+    """Truthy ok string → attended-seed-incomplete."""
+    steps = [{"account": "owner", "expectedIdentity": EXPECTED_ID}]
+    results = {"owner": {"ok": "yes"}}
+    result = pa.seed_outcome(steps, results)
+    assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
+
+
+def test_seed_outcome_rejects_wrong_identity():
+    """ok:True with identity ≠ step expectedIdentity → attended-seed-incomplete."""
+    steps = [{"account": "owner", "expectedIdentity": EXPECTED_ID}]
+    results = {
+        "owner": {
+            "ok": True,
+            "outcome": pa.OUTCOME_VERIFIED,
+            "reason": None,
+            "identity": OTHER_PILOT_ID,
+        },
+    }
+    result = pa.seed_outcome(steps, results)
+    assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
+
+
 def test_seed_outcome_edge16_missing_result_refused():
     """Edge 16: missing result for planned account → attended-seed-incomplete."""
-    steps = [{"account": "owner"}, {"account": "viewer"}]
-    results = {"owner": _verified_result()}
+    steps = [
+        {"account": "owner", "expectedIdentity": EXPECTED_ID},
+        {"account": "viewer", "expectedIdentity": OTHER_PILOT_ID},
+    ]
+    results = {
+        "owner": pa.verify_at_seed(
+            {"identity": EXPECTED_ID},
+            expected_identity=EXPECTED_ID,
+        ),
+    }
     result = pa.seed_outcome(steps, results)
     assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
 
 
 def test_seed_outcome_edge17_extra_result_refused():
     """Edge 17: extra result for unplanned account → attended-seed-incomplete."""
-    steps = [{"account": "owner"}]
+    steps = [{"account": "owner", "expectedIdentity": EXPECTED_ID}]
     results = {
-        "owner": _verified_result(),
-        "viewer": _verified_result(OTHER_PILOT_ID),
+        "owner": pa.verify_at_seed(
+            {"identity": EXPECTED_ID},
+            expected_identity=EXPECTED_ID,
+        ),
+        "viewer": pa.verify_at_seed(
+            {"identity": OTHER_PILOT_ID},
+            expected_identity=OTHER_PILOT_ID,
+        ),
     }
     result = pa.seed_outcome(steps, results)
     assert result == {"ok": False, "reason": pa.REFUSAL_SEED_INCOMPLETE}
@@ -411,16 +512,26 @@ def test_seed_outcome_edge17_extra_result_refused():
 
 def test_seed_outcome_edge18_one_of_three_refused():
     """Edge 18: one of three accounts refused → whole slot refuses."""
-    steps = [{"account": a} for a in ("alpha", "beta", "gamma")]
+    steps = [
+        {"account": "alpha", "expectedIdentity": "alpha@example.test"},
+        {"account": "beta", "expectedIdentity": "beta@example.test"},
+        {"account": "gamma", "expectedIdentity": "gamma@example.test"},
+    ]
     results = {
-        "alpha": _verified_result("alpha@example.test"),
+        "alpha": pa.verify_at_seed(
+            {"identity": "alpha@example.test"},
+            expected_identity="alpha@example.test",
+        ),
         "beta": {
             "ok": False,
             "outcome": pa.OUTCOME_REFUSED,
             "reason": pa.REFUSAL_IDENTITY_MISMATCH,
             "identity": OWNER_PERSONAL_ID,
         },
-        "gamma": _verified_result("gamma@example.test"),
+        "gamma": pa.verify_at_seed(
+            {"identity": "gamma@example.test"},
+            expected_identity="gamma@example.test",
+        ),
     }
     result = pa.seed_outcome(steps, results)
     assert result == {

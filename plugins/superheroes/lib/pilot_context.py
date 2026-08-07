@@ -41,7 +41,7 @@ def context_set(
     slot_ref = account_set["ref"]
     account_list = pilot_slot.account_keys(account_set)
 
-    if sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
         return _refusal(REFUSAL_SIGN_IN_PATH_INVALID)
 
     if artifacts is not None:
@@ -92,7 +92,7 @@ def context_spec(
     if receipt_refusal is not None:
         return _refusal(receipt_refusal)
 
-    if sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
         return _refusal(REFUSAL_SIGN_IN_PATH_INVALID)
 
     # bite-axis: live-seeding paths refuse a supplied artifact — artifact presence must not
