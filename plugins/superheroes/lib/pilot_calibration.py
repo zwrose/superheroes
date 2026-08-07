@@ -66,7 +66,18 @@ def declares_slots(repo_root):
         except Exception:
             return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
         for candidate in candidates:
-            if os.path.exists(candidate):
+            if os.path.lexists(candidate) and not os.path.exists(candidate):
+                return _answer(
+                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
+            if not os.path.lexists(candidate):
+                continue
+            try:
+                with open(candidate, encoding="utf-8") as fh:
+                    fh.read()
+            except UnicodeDecodeError:
+                return _answer(
+                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
+            except OSError:
                 return _answer(
                     STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
         return _answer(STATE_ABSENT, CAUSE_NO_CALIBRATION, None)

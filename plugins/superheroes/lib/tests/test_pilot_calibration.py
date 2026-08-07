@@ -304,3 +304,58 @@ def test_declares_slots_invalid_utf8(tmp_path, monkeypatch):
         "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
         "path": str(path),
     }
+
+
+def test_declares_slots_prose_only_in_repo_layer(tmp_path):
+    # axis: absent / no-calibration when in-repo layer is prose-only (no config block)
+    repo = _init_repo(tmp_path / "repo")
+    _write_in_repo_layer(repo, "# prose only\n")
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_ABSENT,
+        "cause": pc.CAUSE_NO_CALIBRATION,
+        "path": None,
+    }
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses chmod 000")
+def test_declares_slots_unreadable_candidate_chmod(tmp_path):
+    # axis: cannot-tell / calibration-unresolved when candidate exists but is unreadable
+    repo = _init_repo(tmp_path / "repo")
+    layer = _write_in_repo_layer(repo)
+    os.chmod(layer, 0o000)
+    try:
+        result = pc.declares_slots(repo)
+    finally:
+        os.chmod(layer, stat.S_IMODE(os.stat(layer).st_mode) | 0o600)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": layer,
+    }
+
+
+def test_declares_slots_dangling_symlink_candidate(tmp_path):
+    # axis: cannot-tell / calibration-unresolved for dangling symlink candidate
+    repo = _init_repo(tmp_path / "repo")
+    layer_dir = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(layer_dir, exist_ok=True)
+    symlink = os.path.join(layer_dir, "test-pilot.md")
+    os.symlink("/nonexistent/path/to/nowhere", symlink)
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": symlink,
+    }
+
+
+def test_declares_slots_genuinely_empty_project(tmp_path):
+    # axis: absent / no-calibration when no candidate calibration file exists
+    repo = _init_repo(tmp_path / "repo")
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_ABSENT,
+        "cause": pc.CAUSE_NO_CALIBRATION,
+        "path": None,
+    }

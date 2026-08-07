@@ -65,6 +65,13 @@ _SLOT_REMEDY = (
     "[--boundary <FILE PATH>]`."
 )
 
+_CALIBRATION_UNRESOLVED_REMEDY_WITH_PATH = (
+    "The launcher cannot tell whether this project declares pilot slots because pilot "
+    "calibration returned cause `cause`. The launcher found a calibration file it could "
+    "not read or use at `path` — this is not the project's active profile. Fix or "
+    "remove that file, then relaunch."
+)
+
 _CALIBRATION_UNREADABLE_REMEDY_WITH_PATH = (
     "The launcher cannot tell whether this project declares pilot slots because pilot "
     "calibration returned cause `cause`. Fix or regenerate the calibration profile at "
@@ -103,7 +110,12 @@ _GATE_REFUSAL_REASONS = frozenset({
 
 def _calibration_unreadable_remedy(cause, path):
     if path:
-        return _CALIBRATION_UNREADABLE_REMEDY_WITH_PATH.replace(
+        template = (
+            _CALIBRATION_UNRESOLVED_REMEDY_WITH_PATH
+            if cause == pilot_calibration.CAUSE_CALIBRATION_UNRESOLVED
+            else _CALIBRATION_UNREADABLE_REMEDY_WITH_PATH
+        )
+        return template.replace(
             "`cause`", repr(cause)).replace("`path`", repr(path))
     return _CALIBRATION_UNREADABLE_REMEDY_NO_PATH.replace(
         "`cause`", repr(cause))
