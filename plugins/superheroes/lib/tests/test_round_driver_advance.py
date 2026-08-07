@@ -1140,6 +1140,61 @@ def test_sidecar_refuses_when_the_git_dir_cannot_be_resolved(tmp_path, adapters)
     assert out["ok"] is False and out["reason"] == "sidecar-gitdir-unresolvable"
 
 
+def test_sidecar_refuses_when_the_repo_root_is_not_a_repository(tmp_path, monkeypatch):
+    """`store_core`'s shared classification answers `realpath(cwd)` for genuine greenfield — an
+    IDENTITY, not a git dir. The sidecar must REFUSE and write nothing, never take that answer for
+    a git dir and drop `superheroes/review-receipt.json` into a plain working directory. Real git
+    seam (no injection): only a real decline reaches this branch."""
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    repo = str(tmp_path / "repo")                                             # A/B
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    d = _session(tmp_path)
+    state = _state(d)
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "audited-chain"}
+    state["_receiptFinalized"] = True
+    RD.save_state(d, state)
+    RD._write_receipt(d, state)          # a PUBLISHABLE session — the refusal is not a side effect
+    # A/B on the SAME call: a real repository publishes; only the non-repository refuses.
+    state["config"]["repoRoot"] = repo
+    ok = RD._publish_sidecar(d, state)
+    assert ok.get("ok") is True and os.path.exists(ok["path"]), ok
+
+    state["config"]["repoRoot"] = str(plain)
+    out = RD._publish_sidecar(d, state)
+    assert out.get("ok") is not True
+    assert out["reason"] == "sidecar-gitdir-unresolvable"
+    assert not (plain / "superheroes").exists()
+
+
+def test_sidecar_git_dir_is_per_worktree_never_the_shared_common_dir(tmp_path, monkeypatch):
+    """Two sibling worktrees of ONE repository must not publish to the same receipt path — the
+    common dir would collide them. Real git, real `git worktree add`."""
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    wt_a, wt_b = str(tmp_path / "wt_a"), str(tmp_path / "wt_b")
+    subprocess.check_call(["git", "-C", repo, "worktree", "add", "-q", wt_a], cwd=repo)
+    subprocess.check_call(["git", "-C", repo, "worktree", "add", "-q", wt_b], cwd=repo)
+
+    path_a = RD._sidecar_path(RD.store_core.get_worktree_gitdir(wt_a))
+    path_b = RD._sidecar_path(RD.store_core.get_worktree_gitdir(wt_b))
+    assert path_a != path_b
+    assert path_a != RD._sidecar_path(RD.store_core.get_gitdir(wt_a))
+
+
 def test_terminal_sidecar_lands_in_a_real_git_dir(tmp_path, adapters):
     """One end-to-end pass with the REAL git seam — a fake-git-only proof would never show that the
     seam's arguments resolve against a real repository."""

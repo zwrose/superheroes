@@ -127,6 +127,72 @@ def test_get_gitdir_worktrees_share_common_dir(tmp_path):
     assert sc.get_gitdir(repo) == sc.get_gitdir(wt)
 
 
+def test_get_worktree_gitdir_is_per_worktree_not_the_shared_common_dir(tmp_path):
+    """THE SEMANTIC POINT the review sidecar depends on: `get_gitdir` answers the common dir,
+    which every linked worktree SHARES, so routing a per-worktree artifact through it would make
+    two sibling builds write and read one another's file. `get_worktree_gitdir` answers each
+    worktree's OWN git dir. If a future author "simplifies" the sidecar back onto the common dir,
+    this goes red."""
+    repo = _init_repo(tmp_path / "main")
+    (tmp_path / "main" / "f").write_text("x")
+    _git(repo, "add", "f")
+    _git(repo, "commit", "-qm", "init")
+    wt_a = str(tmp_path / "wt_a")
+    wt_b = str(tmp_path / "wt_b")
+    _git(repo, "worktree", "add", "-q", wt_a)
+    _git(repo, "worktree", "add", "-q", wt_b)
+
+    common = sc.get_gitdir(wt_a)
+    own_a = sc.get_worktree_gitdir(wt_a)
+    own_b = sc.get_worktree_gitdir(wt_b)
+
+    assert sc.get_gitdir(wt_b) == common                 # the common dir is SHARED
+    assert own_a != common and own_b != common           # each worktree's own git dir is not
+    assert own_a != own_b                                # ... and siblings never collide
+    assert own_a == os.path.realpath(os.path.join(common, "worktrees", "wt_a"))
+    assert own_b == os.path.realpath(os.path.join(common, "worktrees", "wt_b"))
+    # In the MAIN checkout the two agree — the difference is specific to linked worktrees, which
+    # is exactly why a common-dir-only implementation looks correct until a worktree exists.
+    assert sc.get_worktree_gitdir(repo) == sc.get_gitdir(repo)
+    assert os.path.isabs(own_a) and own_a == os.path.realpath(own_a)
+
+
+def test_get_worktree_gitdir_raises_on_git_unavailable(tmp_path):
+    """Fail closed through the SAME classification `get_gitdir` uses: git that could not RUN is
+    unknown, never an answer. Driven through the injectable seam — no broken repo needed."""
+    repo = _init_repo(tmp_path / "r")
+
+    def unavailable(cwd, *a):
+        return sc.GitResult(None, sc.GIT_UNAVAILABLE, "timeout")
+
+    assert sc.get_worktree_gitdir(repo, run=sc.run_git_result)     # A/B: the real seam answers
+    with pytest.raises(sc.RepoRootUnavailable) as excinfo:
+        sc.get_worktree_gitdir(repo, run=unavailable)
+    assert excinfo.value.git_status == sc.GIT_UNAVAILABLE
+
+
+def test_get_worktree_gitdir_declined_not_a_repository_matches_get_gitdir(tmp_path, monkeypatch):
+    """Where `get_gitdir` returns the declined-not-a-repository outcome, so does this."""
+    plain = str(tmp_path / "plain")
+    os.makedirs(plain)
+    monkeypatch.delenv("GIT_DIR", raising=False)
+    monkeypatch.delenv("GIT_WORK_TREE", raising=False)
+    assert sc.get_worktree_gitdir(plain) == sc.get_gitdir(plain) == os.path.realpath(plain)
+
+
+def test_get_worktree_gitdir_raises_when_git_ancestor_present(tmp_path, monkeypatch):
+    """A decline INSIDE a real repo is indeterminate, not greenfield — same as `get_gitdir`."""
+    repo = _init_repo(tmp_path / "r")
+    sub = tmp_path / "r" / "sub"
+    sub.mkdir()
+
+    def declined(cwd, *a):
+        return sc.GitResult(None, sc.GIT_DECLINED, "fatal: not a git repository")
+
+    with pytest.raises(sc.RepoRootUnavailable):
+        sc.get_worktree_gitdir(str(sub), run=declined)
+
+
 def test_get_gitdir_pre_231_fallback(tmp_path, monkeypatch):
     """get_gitdir falls back to --absolute-git-dir when --path-format=absolute
     and bare --git-common-dir both decline (simulating git < 2.31)."""

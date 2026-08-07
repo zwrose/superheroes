@@ -4050,6 +4050,23 @@ def _sidecar_path(gitdir):
     return os.path.join(gitdir, SIDECAR_DIRNAME, SIDECAR_FILE)
 
 
+def _git_result_seam(run_git):
+    """Adapt the injected plain-output `git` seam to the `run_git_result`-shaped seam
+    `store_core.get_worktree_gitdir` reads through.
+
+    A seam that yields no output is reported UNAVAILABLE, never an authoritative decline: the
+    sidecar must then REFUSE (`sidecar-gitdir-unresolvable`), not fall through the
+    not-a-repository classification onto a working directory."""
+    def run(cwd, *args):
+        out = run_git(cwd, *args)
+        if out:
+            return store_core.GitResult(out, store_core.GIT_OK, None)
+        return store_core.GitResult(
+            None, store_core.GIT_UNAVAILABLE,
+            "injected git seam produced no output for %s at %r" % (" ".join(args), cwd))
+    return run
+
+
 def _publish_sidecar(session_dir, state, git=None):
     """Publish `<gitdir>/superheroes/review-receipt.json` for a terminal session.
 
@@ -4064,10 +4081,23 @@ def _publish_sidecar(session_dir, state, git=None):
     run_git = git or store_core.run_git
     config = state.get("config") or {}
     repo_root = config.get("repoRoot") or os.getcwd()
-    gitdir = run_git(repo_root, "rev-parse", "--absolute-git-dir")
-    if not gitdir:
-        return {"reason": "sidecar-gitdir-unresolvable",
-                "detail": "git could not resolve a git dir for %r" % repo_root}
+    # PER-WORKTREE by contract (§6): `store_core.get_worktree_gitdir`, never `get_gitdir` — the
+    # common-dir is SHARED by every linked worktree, so two sibling builds would publish and read
+    # one another's receipt. Resolution itself lives in store_core (the #742 chokepoint).
+    try:
+        gitdir = store_core.get_worktree_gitdir(
+            repo_root, run=_git_result_seam(git) if git is not None else None)
+    except store_core.RepoRootUnavailable as exc:
+        # An unresolvable git dir is a REFUSAL, never an escaping exception out of `advance`.
+        return {"reason": "sidecar-gitdir-unresolvable", "detail": str(exc)}
+    # On genuine greenfield (no repository at all) that shared classification answers
+    # `realpath(repo_root)` — an IDENTITY, not a git dir. Nothing is written before the HEAD read
+    # below, and `rev-parse HEAD` in a non-repository cannot resolve, so that path still refuses
+    # `sidecar-gitdir-unresolvable` and no sidecar is ever written into a plain directory
+    # (`test_sidecar_refuses_when_the_repo_root_is_not_a_repository`). A `gitdir == repo_root`
+    # guard here would ALSO refuse a bare repository, where `--absolute-git-dir` legitimately
+    # answers the repo root itself — measured: `git rev-parse --absolute-git-dir` in `b.git`
+    # prints `b.git`.
     head_sha = run_git(repo_root, "rev-parse", "HEAD")
     if not head_sha:
         return {"reason": "sidecar-gitdir-unresolvable",
