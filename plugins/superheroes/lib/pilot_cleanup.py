@@ -7,13 +7,12 @@ import json
 import os
 import re
 import secrets
-import signal
 import stat
 import subprocess
-import threading
 import unicodedata
 
 import pilot_boundary
+import pilot_bounded_run
 import pilot_contract
 import pilot_journal
 import pilot_policy
@@ -88,7 +87,7 @@ ASSURANCE_LIMITS = (
 NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
 SENTINEL_PLACEHOLDER = pilot_policy.SENTINEL_PLACEHOLDER
 
-_PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
+_PLACEHOLDER_RE = pilot_contract.PLACEHOLDER_RE
 _SENTINEL_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _HEAD_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _SHA256_HEX_LEN = 64
@@ -257,77 +256,37 @@ def mint_sentinel_id():
 def run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096):
     """Run ``command`` with bounded stdout; report exit code without judging it."""
     try:
-        proc = subprocess.Popen(
+        run = pilot_bounded_run.run_bounded(
             command,
-            cwd=cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            shell=False,
+            run_cwd=cwd,
             env=env,
-            start_new_session=True,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+            retain_output=False,
         )
-    except OSError:
-        raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
-
-    try:
-        pgid = os.getpgid(proc.pid)
-    except (ProcessLookupError, PermissionError):
-        pgid = None
-
-    timed_out = False
-    stdout_bytes = 0
-    stdout_truncated = False
-    try:
-        stdout_holder = []
-
-        def _read_stdout():
-            total = 0
-            truncated = False
-            try:
-                while True:
-                    chunk = proc.stdout.read(65536)
-                    if not chunk:
-                        break
-                    total += len(chunk)
-                    if total > max_output_bytes:
-                        truncated = True
-            except Exception:
-                total = 0
-                truncated = False
-            stdout_holder.append((total, truncated))
-
-        reader = threading.Thread(target=_read_stdout, daemon=True)
-        reader.start()
-        reader.join(timeout=timeout_seconds)
-
-        if reader.is_alive():
-            _terminate_and_wait(proc, pgid, signal_group=True)
-            timed_out = True
-        else:
-            total, truncated = stdout_holder[0] if stdout_holder else (0, False)
-            stdout_truncated = truncated
-            stdout_bytes = min(total, max_output_bytes)
-            try:
-                proc.wait(timeout=timeout_seconds)
-            except subprocess.TimeoutExpired:
-                _terminate_and_wait(proc, pgid, signal_group=True)
-                timed_out = True
-
-        exit_code = None if timed_out else proc.returncode
-        return {
-            "exit": exit_code,
-            "timedOut": timed_out,
-            "stdoutBytes": stdout_bytes,
-            "stdoutTruncated": stdout_truncated,
-        }
     except Exception:
-        _terminate_and_wait(proc, pgid, signal_group=True)
         raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
-    finally:
-        if proc.poll() is None:
-            _terminate_and_wait(proc, pgid)
-        if proc.stdout:
-            proc.stdout.close()
+
+    outcome = run["outcome"]
+    if outcome == pilot_bounded_run.OUTCOME_SPAWN_FAILED:
+        raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
+    if outcome == pilot_bounded_run.OUTCOME_TIMEOUT:
+        return {
+            "exit": None,
+            "timedOut": True,
+            "stdoutBytes": run["stdoutBytes"],
+            "stdoutTruncated": run["stdoutTruncated"],
+        }
+    if outcome == pilot_bounded_run.OUTCOME_COMPLETED:
+        return {
+            "exit": run["exitCode"],
+            "timedOut": False,
+            "stdoutBytes": run["stdoutBytes"],
+            "stdoutTruncated": run["stdoutTruncated"],
+        }
+  # bite-axis: retain_output=False never classifies truncation as oversize — if this fires, the
+  # adapter or runner mode is wrong.
+    raise PilotCleanupError(REFUSAL_PROBE_INDETERMINATE)
 
 
 def _validate_sentinel_declaration(sentinel, *, reach_roots, run_cwd):
@@ -1451,69 +1410,6 @@ def resurrection_plan(
         pilot_policy.policy_material(policy),
     )
     return plan
-
-
-def _terminate_and_wait(proc, pgid, *, signal_group=False):
-    parent_pgid = os.getpgid(os.getpid())
-
-    def _valid_target_pgid():
-        if not isinstance(pgid, int) or pgid <= 0:
-            return None
-        if pgid == parent_pgid:
-            return None
-        return pgid
-
-    def _group_has_members(target):
-        try:
-            os.killpg(target, 0)
-            return True
-        except ProcessLookupError:
-            return False
-        except PermissionError:
-            return False
-
-    def _signal_group_term_then_kill(target):
-        try:
-            os.killpg(target, signal.SIGTERM)
-        except (ProcessLookupError, PermissionError):
-            return
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
-        if _group_has_members(target):
-            try:
-                os.killpg(target, signal.SIGKILL)
-            except (ProcessLookupError, PermissionError):
-                pass
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            pass
-
-    target_pgid = _valid_target_pgid()
-    if signal_group and target_pgid is not None:
-        _signal_group_term_then_kill(target_pgid)
-        return
-
-    if proc.poll() is not None:
-        return
-    try:
-        child_pgid = os.getpgid(proc.pid)
-        os.killpg(child_pgid, signal.SIGTERM)
-        try:
-            proc.wait(timeout=1)
-        except subprocess.TimeoutExpired:
-            os.killpg(child_pgid, signal.SIGKILL)
-            proc.wait()
-    except ProcessLookupError:
-        if proc.poll() is None:
-            proc.terminate()
-            try:
-                proc.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                proc.kill()
-                proc.wait()
 
 
 def _nfc_normalize(value):

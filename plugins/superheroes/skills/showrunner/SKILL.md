@@ -579,6 +579,56 @@ above).
    round-trip that never touches disk — so **780 green config checks were able to coexist undetected
    with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
    must mean in a wave; it does **not** add a ninth check to the eight-check list above.
+10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
+   across multiple accounts, provisioning is yours before any headless builder launches — the builder
+   never self-provisions. **The sequence is load-bearing:** backend identity is only observable on
+   a running app and no credential may exist before the target is verified, so the app comes up
+   **unauthenticated** first — create the worktree and stand up the project (**#827**'s stand-up
+   half), bring the app up without any seeded sign-in, verify the target boundary against that
+   running instance (**#825**'s boundary half), and only then proceed. **Owner-attended seeding** is
+   the next gate: per-slot sign-ins into provisioned browser contexts happen with the owner present
+   — not in the builder. **Then credentials and launch:** mint credentials per slot and launch the
+   headless builders; each builder verifies its slot reference and generation at intake, then the
+   pilot subagent drives the app.
+   **Wave deadline and margin are set at launch, not discovered.** Every wave carries a deadline with
+   margin; a credential whose validity horizon cannot support that deadline plus margin does not get
+   an unattended wave — it runs attended or the project declares a re-checkable server probe. The
+   comparison math is **#828**'s; read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Wave runtime — deadline and
+   teardown) for the margin rule and **do not restate the comparison here**.
+   **Wave teardown is a sequence, and it is #827's.** Teardown is two-phase; an absent handler is
+   not a skipped step — it is a failure that must surface. Read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Wave runtime — deadline and
+   teardown) for the step contract and stop.
+   **The partial-failure report goes to the owner, not around them.** A failed slot may already have
+   started an app, created a credential, or touched shared fixtures, so healthy slots are not safe by
+   assumption. The report enumerates what failed slots touched and confirms they are fenced before
+   recommending the rest launch; **a report with no healthy slots, an unfenced failed slot, or a
+   shared effect recorded as possibly-applied is a no-go**, not a warning. The journal behind it is
+   **#823**'s. A rotated slot's history is read across its retained segments as well as its live
+   journal, so a long-running slot's evidence is not lost to rotation.
+   **Per-account cost is displayed at provisioning, and the owner decides.** Under attended seeding
+   there is no framework ceiling on accounts — each additional account costs one owner sign-in at
+   wave launch. Display that cost; never invent a count. The natural default is a pair — an account
+   that owns a resource and a second it is shared with — which is the minimum that makes an
+   interaction observable at all.
+   **A weaker datastore-identity guarantee is visible, and accepting it is a recorded act.** Where
+   the datastore is not directly reachable the identity is app-reported and carries `strength:
+   "weaker"`. Provisioning **refuses `weaker` by default** and proceeds only on an explicit
+   acceptance record (who accepted, when, and why) supplied at the provisioning call — which runs
+   in the advisor and never reaches the builder. The launch ledger carries the strength and the
+   acceptance onto the batch report, so a weaker-guarantee slot **reads visibly weaker** in the
+   owner-facing count. It is deliberately a record and not a boolean so it cannot be dropped
+   silently.
+   **Policy is enforced here and never travels.** What reaches the builder is a verified **result**;
+   the builder never holds the policy it was judged against, so there is no file in its reach to
+   edit and the rules it was judged against cannot be changed after the judging. The ledger entry
+   carries verification results, never policy material. Mismatch fails closed, in the advisor. Read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Results travel, never
+   policy; Provisioning authorization) for the contract — do not restate the mechanism here.
+   **The launcher carries the slot.** When a launch belongs to a wave, supply the slot and generation
+   (and the composed boundary result) to the launcher so the ledger records which slot a lane ran in;
+   a wave launch recorded without its slot is a batch report that cannot answer "which slot failed".
 
 ## When you're tempted
 

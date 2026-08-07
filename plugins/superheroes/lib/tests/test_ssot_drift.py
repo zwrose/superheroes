@@ -957,14 +957,26 @@ def test_workhorse_git_identity_prose_matches_the_doctrine():
 
 
 def _showrunner_orchestration_duty():
-    """Duty 9 (Orchestration — dispatch and preflight) through the tempted-table heading."""
+    """Duty 9 (Orchestration — dispatch and preflight) through duty 10."""
     text = _read("skills/showrunner/SKILL.md")
     m = re.search(
-        r"9\. \*\*Orchestration.*?(?=\n## When you're tempted)",
+        r"9\. \*\*Orchestration.*?(?=\n10\. \*\*)",
         text,
         re.DOTALL,
     )
     assert m, "showrunner/SKILL.md duty 9 (Orchestration) not found (moved or renumbered?)"
+    return m.group(0)
+
+
+def _showrunner_provisioning_duty():
+    """Duty 10 (Provision slots for an authenticated wave) through the tempted-table heading."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"10\. \*\*Provision slots.*?(?=\n## When you're tempted)",
+        text,
+        re.DOTALL,
+    )
+    assert m, "showrunner/SKILL.md duty 10 (Provision slots) not found (moved or renumbered?)"
     return m.group(0)
 
 
@@ -1037,6 +1049,25 @@ def test_count_result_blocks_in_showrunner_charter():
     assert not missing, (
         "showrunner/SKILL.md duty 9 missing count-result block(s) from "
         "launch_ledger.COUNT_RESULT_BLOCKS: %r" % missing
+    )
+
+
+def test_showrunner_provisioning_duty_load_bearing_content():
+    """§11: duty 10 carries load-bearing provisioning clauses."""
+    duty = _showrunner_provisioning_duty()
+    lower = duty.lower()
+    missing = []
+    if "without any seeded sign-in" not in lower:
+        missing.append("unauthenticated-app-first ordering")
+    if "is a no-go" not in lower:
+        missing.append("partial-failure no-go rule")
+    if "acceptance record (who accepted, when, and why)" not in lower:
+        missing.append("weaker-acceptance record")
+    if "the launcher carries the slot" not in lower:
+        missing.append("launcher-carries-the-slot clause")
+    assert not missing, (
+        "showrunner/SKILL.md duty 10 missing load-bearing element(s): %s"
+        % ", ".join(missing)
     )
 
 

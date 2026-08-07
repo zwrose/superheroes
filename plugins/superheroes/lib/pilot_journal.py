@@ -809,46 +809,9 @@ def _stamp_replay(result, journal_path, slot_ref):
     return result
 
 
-def replay(journal_path, *, slot_ref=None):
-    """Replay journal into effect entries with fail-closed pairing."""
-    if not _is_str_path(journal_path):
-        return _stamp_replay(
-            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
-            journal_path,
-            slot_ref,
-        )
-    if slot_ref is not None and not _validate_slot_ref(slot_ref):
-        return _stamp_replay(
-            _fail(REASON_SLOT_REF_INVALID, effects=[], torn=False, anomalies=[]),
-            journal_path,
-            slot_ref,
-        )
-
-    read_result = _read_journal_text(journal_path)
-    if not read_result["ok"]:
-        return _stamp_replay(
-            _fail(
-                read_result["reason"] or REASON_JOURNAL_UNREADABLE,
-                effects=[],
-                torn=False,
-                anomalies=[],
-            ),
-            journal_path,
-            slot_ref,
-        )
-
-    torn = read_result["torn"]
-    if torn and not read_result["text"]:
-        return _stamp_replay(
-            _ok(effects=[], torn=True, anomalies=[]),
-            journal_path,
-            slot_ref,
-        )
-
-    lines = read_result["text"].splitlines()
-
+def _parse_lines_to_records(lines, *, line_offset=0):
     parsed_records = []
-    for line_no, line in enumerate(lines, start=1):
+    for line_no, line in enumerate(lines, start=1 + line_offset):
         if not line.strip():
             continue
         try:
@@ -885,7 +848,10 @@ def replay(journal_path, *, slot_ref=None):
             "raw": obj if isinstance(obj, dict) else None,
             "phase": phase,
         })
+    return parsed_records
 
+
+def _fold_parsed_records(parsed_records, *, torn, slot_ref):
     anomalies = []
     begins = {}
     ends = {}
@@ -1048,10 +1014,89 @@ def replay(journal_path, *, slot_ref=None):
     else:
         effects = [entry for entry, _from_invalid in effects]
 
+    return _ok(effects=effects, torn=torn, anomalies=anomalies)
+
+
+def replay_sources(paths, *, slot_ref=None, journal_path=None):
+    """Replay an ordered sequence of journal sources into effect entries."""
+    stamp_path = journal_path
+    if not isinstance(paths, (list, tuple)) or len(paths) == 0:
+        return _stamp_replay(
+            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            stamp_path,
+            slot_ref,
+        )
+
+    if stamp_path is None:
+        stamp_path = paths[-1]
+
+    if slot_ref is not None and not _validate_slot_ref(slot_ref):
+        return _stamp_replay(
+            _fail(REASON_SLOT_REF_INVALID, effects=[], torn=False, anomalies=[]),
+            stamp_path,
+            slot_ref,
+        )
+
+    parsed_records = []
+    aggregate_torn = False
+    any_nonempty = False
+    line_offset = 0
+
+    for path in paths:
+        if not _is_str_path(path):
+            return _stamp_replay(
+                _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+                stamp_path,
+                slot_ref,
+            )
+        read_result = _read_journal_text(path)
+        if not read_result["ok"]:
+            return _stamp_replay(
+                _fail(
+                    read_result["reason"] or REASON_JOURNAL_UNREADABLE,
+                    effects=[],
+                    torn=False,
+                    anomalies=[],
+                ),
+                stamp_path,
+                slot_ref,
+            )
+        if read_result["torn"]:
+            aggregate_torn = True
+        if read_result["text"]:
+            any_nonempty = True
+            file_lines = read_result["text"].splitlines()
+            parsed_records.extend(
+                _parse_lines_to_records(file_lines, line_offset=line_offset)
+            )
+            line_offset += len(file_lines)
+
+    if aggregate_torn and not any_nonempty:
+        return _stamp_replay(
+            _ok(effects=[], torn=True, anomalies=[]),
+            stamp_path,
+            slot_ref,
+        )
+
     return _stamp_replay(
-        _ok(effects=effects, torn=torn, anomalies=anomalies),
-        journal_path,
+        _fold_parsed_records(parsed_records, torn=aggregate_torn, slot_ref=slot_ref),
+        stamp_path,
         slot_ref,
+    )
+
+
+def replay(journal_path, *, slot_ref=None):
+    """Replay journal into effect entries with fail-closed pairing."""
+    if not _is_str_path(journal_path):
+        return _stamp_replay(
+            _fail(REASON_JOURNAL_UNREADABLE, effects=[], torn=False, anomalies=[]),
+            journal_path,
+            slot_ref,
+        )
+    return replay_sources(
+        [journal_path],
+        slot_ref=slot_ref,
+        journal_path=journal_path,
     )
 
 

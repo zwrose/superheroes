@@ -119,3 +119,41 @@ def test_consumers_read_the_placeholders_from_their_home():
     assert pilot_cleanup.SENTINEL_PLACEHOLDER is pilot_policy.SENTINEL_PLACEHOLDER
     assert pilot_contract.NAMESPACE_PLACEHOLDER == "{namespace}"
     assert pilot_policy.SENTINEL_PLACEHOLDER == "{sentinel}"
+
+
+def _placeholder_re_compile_sites():
+    """Return [(module, lineno)] for every ``re.compile`` of the placeholder pattern in lib/."""
+    pattern = r"\{[^{}]*\}"
+    sites = []
+    for module in _library_modules():
+        path = os.path.join(_LIB, module)
+        with open(path, "r", encoding="utf-8") as handle:
+            source = handle.read()
+        tree = ast.parse(source, filename=path)
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (
+                isinstance(func, ast.Attribute)
+                and func.attr == "compile"
+                and isinstance(func.value, ast.Name)
+                and func.value.id == "re"
+            ):
+                continue
+            if not node.args:
+                continue
+            arg = node.args[0]
+            if isinstance(arg, ast.Constant) and arg.value == pattern:
+                sites.append((module, node.lineno))
+    return sites
+
+
+def test_placeholder_regex_has_exactly_one_compile_home():
+    # axis: exactly one ``re.compile`` of the placeholder pattern exists in lib/ (#830 WO-4).
+    sites = _placeholder_re_compile_sites()
+    assert len(sites) == 1, (
+        "PLACEHOLDER_RE must be compiled exactly once in lib/; found %d: %s"
+        % (len(sites), ", ".join("%s:%d" % site for site in sites))
+    )
+    assert sites[0][0] == "pilot_contract.py"

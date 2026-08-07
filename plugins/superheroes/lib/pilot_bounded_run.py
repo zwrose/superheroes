@@ -41,14 +41,22 @@ def run_bounded(
     env,
     timeout_seconds,
     max_output_bytes,
+    retain_output=True,
 ):
     """Run ``command`` bounded by wall-clock and stdout bytes; classify how it ended.
 
-    Returns ``{"outcome": <OUTCOME_*>, "exitCode": int|None, "stdout": bytes}``. ``exitCode`` is
-    non-None only for ``completed``; ``stdout`` is the raw bytes read, empty for every non-completed
-    outcome. Never raises for a child's behaviour — a spawn failure, a read failure, and any other
-    unexpected error all classify as ``spawn-failed``, because a caller that cannot see the child's
-    output cannot distinguish them and must refuse either way.
+    Returns ``{"outcome": <OUTCOME_*>, "exitCode": int|None, "stdout": bytes,
+    "stdoutBytes": int, "stdoutTruncated": bool}``. ``exitCode`` is non-None only for
+    ``completed``; ``stdout`` is the raw bytes read when ``retain_output`` is true (empty
+    otherwise). Never raises for a child's behaviour — a spawn failure, a read failure, and any
+    other unexpected error all classify as ``spawn-failed``, because a caller that cannot see the
+    child's output cannot distinguish them and must refuse either way.
+
+    With ``retain_output=True`` (the default), stdout is retained up to ``max_output_bytes`` and
+    output beyond the cap classifies as ``oversize``. With ``retain_output=False``, stdout is
+    counted but never accumulated; truncation is reported on a ``completed`` outcome instead of
+    refusing as ``oversize``. A mid-stream read error with ``retain_output=False`` refuses as
+    ``spawn-failed`` rather than reporting zero bytes.
 
     Every run starts its own session (``start_new_session=True``), and every *termination* path
     (timeout, oversize, read failure, unexpected error, or the ``finally`` sweep of a still-running
@@ -76,7 +84,7 @@ def run_bounded(
         # the exception escaped the runner entirely, past `run_gate_off_test`'s refusal contract
         # and past `observe_datastore_identity`'s. A named refusal is the honest outcome, and it
         # is what makes this module's "never raises for a child's behaviour" claim true.
-        return _result(OUTCOME_SPAWN_FAILED)
+        return _result(OUTCOME_SPAWN_FAILED, max_output_bytes=max_output_bytes)
 
     # With start_new_session=True the child IS the process-group leader, so its pgid is
     # deterministically its own pid — no need to query it back with os.getpgid(proc.pid), which
@@ -87,13 +95,33 @@ def run_bounded(
     reader = None
     try:
         stdout_holder = []
+        count_meta = []
         read_error = []
 
-        def _read_stdout():
-            try:
-                stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
-            except Exception as exc:  # noqa: BLE001 — the exception itself is never inspected
-                read_error.append(exc)
+        if retain_output:
+
+            def _read_stdout():
+                try:
+                    stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
+                except Exception as exc:  # noqa: BLE001 — the exception itself is never inspected
+                    read_error.append(exc)
+
+        else:
+
+            def _read_stdout():
+                total = 0
+                truncated = False
+                try:
+                    while True:
+                        chunk = proc.stdout.read(65536)
+                        if not chunk:
+                            break
+                        total += len(chunk)
+                        if total > max_output_bytes:
+                            truncated = True
+                except Exception as exc:  # noqa: BLE001 — the exception itself is never inspected
+                    read_error.append(exc)
+                count_meta.append((total, truncated))
 
         reader = threading.Thread(target=_read_stdout, daemon=True)
         reader.start()
@@ -102,32 +130,61 @@ def run_bounded(
         if reader.is_alive():
             _terminate(proc, pgid)
             reader.join(timeout=1)
-            return _result(OUTCOME_TIMEOUT)
+            return _result(
+                OUTCOME_TIMEOUT,
+                max_output_bytes=max_output_bytes,
+                counted=count_meta[0] if count_meta else None,
+                retain_output=retain_output,
+            )
 
         if read_error:
             _terminate(proc, pgid)
-            return _result(OUTCOME_SPAWN_FAILED)
+            return _result(OUTCOME_SPAWN_FAILED, max_output_bytes=max_output_bytes)
+
+        if not retain_output:
+            total, truncated = count_meta[0] if count_meta else (0, False)
+            try:
+                proc.wait(timeout=timeout_seconds)
+            except subprocess.TimeoutExpired:
+                _terminate(proc, pgid)
+                reader.join(timeout=1)
+                return _result(
+                    OUTCOME_TIMEOUT,
+                    max_output_bytes=max_output_bytes,
+                    counted=(total, truncated),
+                    retain_output=False,
+                )
+
+            return {
+                "outcome": OUTCOME_COMPLETED,
+                "exitCode": proc.returncode,
+                "stdout": b"",
+                "stdoutBytes": min(total, max_output_bytes),
+                "stdoutTruncated": truncated,
+            }
 
         stdout_bytes = stdout_holder[0] if stdout_holder else b""
         if len(stdout_bytes) > max_output_bytes:
             _terminate(proc, pgid)
-            return _result(OUTCOME_OVERSIZE)
+            return _result(OUTCOME_OVERSIZE, max_output_bytes=max_output_bytes)
 
         try:
             proc.wait(timeout=timeout_seconds)
         except subprocess.TimeoutExpired:
             _terminate(proc, pgid)
             reader.join(timeout=1)
-            return _result(OUTCOME_TIMEOUT)
+            return _result(OUTCOME_TIMEOUT, max_output_bytes=max_output_bytes)
 
         return {
             "outcome": OUTCOME_COMPLETED,
             "exitCode": proc.returncode,
             "stdout": stdout_bytes,
+            "stdoutBytes": len(stdout_bytes),
+            "stdoutTruncated": False,
         }
     except Exception:  # noqa: BLE001 — every unexpected failure is an indeterminate run
         _terminate(proc, pgid)
-        return _result(OUTCOME_SPAWN_FAILED)
+        return _result(OUTCOME_SPAWN_FAILED, max_output_bytes=max_output_bytes)
     finally:
         if proc.poll() is None:
             _terminate(proc, pgid)
@@ -148,8 +205,20 @@ def run_bounded(
             proc.stdout.close()
 
 
-def _result(outcome):
-    return {"outcome": outcome, "exitCode": None, "stdout": b""}
+def _result(outcome, *, max_output_bytes, counted=None, retain_output=True):
+    stdout_bytes = 0
+    stdout_truncated = False
+    if not retain_output and counted is not None:
+        total, truncated = counted
+        stdout_bytes = min(total, max_output_bytes)
+        stdout_truncated = truncated
+    return {
+        "outcome": outcome,
+        "exitCode": None,
+        "stdout": b"",
+        "stdoutBytes": stdout_bytes,
+        "stdoutTruncated": stdout_truncated,
+    }
 
 
 def _terminate(proc, pgid):

@@ -9,6 +9,7 @@ Non-goals (§S6): policy document resolution (A3), generation allocation (A2a).
 """
 import hashlib
 import json
+import re
 import unicodedata
 
 import pilot_probe
@@ -40,6 +41,7 @@ DECLARATION_KINDS = frozenset({
 # cleanup command, and `pilot_policy` / `pilot_cleanup` read it from here rather than
 # respelling the literal (#866).
 NAMESPACE_PLACEHOLDER = "{namespace}"
+PLACEHOLDER_RE = re.compile(r"\{[^{}]*\}")
 
 REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "pilot-schema-version-unsupported"
 REFUSAL_SIGN_IN_PATH_INVALID = "pilot-sign-in-path-invalid"

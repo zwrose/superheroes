@@ -171,6 +171,7 @@ def _journal_state(records):
         "abandoned": None,
         "abandonRequested": False,
         "launching": {},
+        "stoodDown": [],
     }
     for rec in records:
         kind = rec.get("kind")
@@ -219,6 +220,13 @@ def _journal_state(records):
             state["abandoned"] = rec.get("detail")
             if isinstance(rec.get("result"), dict):
                 state["abandonedResult"] = rec["result"]
+        elif kind == "child-stood-down":
+            state["stoodDown"].append({
+                "attempt": rec.get("attempt"),
+                "childPid": rec.get("childPid"),
+                "recordedPid": rec.get("recordedPid"),
+                "at": rec.get("at"),
+            })
     return state
 
 
@@ -852,12 +860,21 @@ def _ledger_evidence(run_dir_real, state, opened):
     for att in sorted(state.get("attempts") or {}):
         stdout_paths.append(os.path.join(run_dir_real, "attempt-%d.stdout" % att))
         stderr_paths.append(os.path.join(run_dir_real, "attempt-%d.stderr" % att))
-    return {
+    stood_down = list(state.get("stoodDown") or [])
+    stood_down_count = len(stood_down)
+    stood_down_truncated = stood_down_count > 20
+    if stood_down_truncated:
+        stood_down = stood_down[:20]
+    evidence = {
         "stdoutPaths": stdout_paths,
         "stderrPaths": stderr_paths,
         "journalPath": _journal_path(run_dir_real),
         "promptPath": opened.get("promptPath"),
+        "stoodDownCount": stood_down_count,
+        "stoodDown": stood_down,
+        "stoodDownTruncated": stood_down_truncated,
     }
+    return evidence
 
 
 def _ledger_stages(result, state, run_dir_real, opened):

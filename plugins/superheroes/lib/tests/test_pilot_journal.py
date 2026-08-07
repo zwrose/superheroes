@@ -1832,3 +1832,67 @@ def test_concurrent_end_effect_exactly_one_close(tmp_dir):
                 end_count += 1
     assert end_count == 1
 
+
+def test_replay_sources_empty_paths_refuses():
+    result = pj.replay_sources([])
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+    assert result["effects"] == []
+    assert result["torn"] is False
+    assert result["anomalies"] == []
+
+
+def test_replay_sources_cross_file_begin_end_resolves_applied(tmp_dir):
+    seg1 = _journal(tmp_dir, "seg1.jsonl")
+    live = _journal(tmp_dir, "live.jsonl")
+    _write_line(seg1, _begin_record(effect_id="cross-eff"))
+    _write_line(live, _end_record(effect_id="cross-eff"))
+    result = pj.replay_sources([seg1, live], slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert len(result["effects"]) == 1
+    assert result["effects"][0]["effectId"] == "cross-eff"
+    assert result["effects"][0]["state"] == pj.STATE_APPLIED
+    assert result["effects"][0]["state"] != pj.STATE_POSSIBLY_APPLIED
+
+
+def test_replay_sources_unresolved_stays_possibly_applied(tmp_dir):
+    seg1 = _journal(tmp_dir, "seg1.jsonl")
+    _write_line(seg1, _begin_record(effect_id="open-eff"))
+    result = pj.replay_sources([seg1], slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert len(result["effects"]) == 1
+    assert result["effects"][0]["state"] == pj.STATE_POSSIBLY_APPLIED
+
+
+def test_replay_sources_torn_source_makes_aggregate_torn(tmp_dir):
+    clean = _journal(tmp_dir, "clean.jsonl")
+    torn = _journal(tmp_dir, "torn.jsonl")
+    _write_line(clean, _begin_record(effect_id="eff1"))
+    _write_line(clean, _end_record(effect_id="eff1"))
+    with open(torn, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(_begin_record(effect_id="eff2"), sort_keys=True))
+    result = pj.replay_sources([torn, clean], slot_ref=_SLOT_REF)
+    assert result["ok"] is True
+    assert result["torn"] is True
+
+
+def test_replay_sources_unreadable_source_fails(tmp_dir):
+    good = _journal(tmp_dir, "good.jsonl")
+    missing = os.path.join(tmp_dir, "missing.jsonl")
+    _write_line(good, _begin_record(effect_id="eff1"))
+    result = pj.replay_sources([missing, good], slot_ref=_SLOT_REF)
+    assert result["ok"] is False
+    assert result["reason"] == pj.REASON_JOURNAL_UNREADABLE
+
+
+def test_replay_sources_cross_source_line_numbers_do_not_collide(tmp_dir):
+    # axis: line numbers are unique across sources so segment anomalies do not
+    # match unrelated live records at the same within-file line number
+    seg = _journal(tmp_dir, "seg.jsonl")
+    live = _journal(tmp_dir, "live.jsonl")
+    _write_line(seg, _end_record(effect_id="orphan-eff", slot_ref="slot-a@1"))
+    _write_line(live, _begin_record(effect_id="live-eff", slot_ref="slot-a@2"))
+    result = pj.replay_sources([seg, live], slot_ref="slot-a@2")
+    assert result["ok"] is True
+    assert result["anomalies"] == []
+

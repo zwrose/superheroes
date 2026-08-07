@@ -17,17 +17,18 @@
 15. [Slot lifecycle and generations](#slot-lifecycle-and-generations)
 16. [The provisioning journal](#the-provisioning-journal)
 17. [The partial-failure report](#the-partial-failure-report)
-18. [The identity-probe exercise](#the-identity-probe-exercise)
-19. [Mid-wave lapse](#mid-wave-lapse)
-20. [Credential validity margin](#credential-validity-margin)
-21. [Minted sign-in exercises](#minted-sign-in-exercises)
-22. [Reclaim safety](#reclaim-safety)
-23. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
-24. [Per-slot browser topology](#per-slot-browser-topology)
-25. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
-26. [The provisioning gate](#the-provisioning-gate)
-27. [Per-slot app lifecycle](#per-slot-app-lifecycle)
-28. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
+18. [The launch ledger's slot grammar](#the-launch-ledgers-slot-grammar)
+19. [The identity-probe exercise](#the-identity-probe-exercise)
+20. [Mid-wave lapse](#mid-wave-lapse)
+21. [Credential validity margin](#credential-validity-margin)
+22. [Minted sign-in exercises](#minted-sign-in-exercises)
+23. [Reclaim safety](#reclaim-safety)
+24. [Cleanup containment and resurrection](#cleanup-containment-and-resurrection)
+25. [Per-slot browser topology](#per-slot-browser-topology)
+26. [Browser context creation and seed injection](#browser-context-creation-and-seed-injection)
+27. [The provisioning gate](#the-provisioning-gate)
+28. [Per-slot app lifecycle](#per-slot-app-lifecycle)
+29. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
 
 ---
 
@@ -1028,6 +1029,42 @@ from proving applied or not-applied.
 | `journal-effect-origin-slot-mismatch` | `end_effect`: begin `slotRef` does not match the `slot_ref` argument |
 | `journal-effect-already-closed` | `end_effect`: an end-phase record for this `effectId` already exists |
 
+### Segment-aware aggregate replay
+
+`replay_sources(paths, *, slot_ref=None, journal_path=None)` in `lib/pilot_journal.py` folds an
+**ordered sequence of journal sources** into one replay result. `replay(journal_path, *,
+slot_ref=None)` is now its single-path case — it delegates to `replay_sources([journal_path], …)`
+with unchanged behaviour.
+
+The fold is over **records**, not over per-file replay results: an effect whose `begin` lands in one
+segment and whose `end` lands in another resolves only when every source's records are concatenated
+and paired together. Folding per-file replay outputs would leave cross-segment effects stuck in
+`possibly-applied` even when the union is complete.
+
+`aggregate_replay(slots_dir_path, slot, journal_path, *, slot_ref)` in `lib/pilot_reclaim.py` lists
+retained segments in numeric sequence order via `journal_segments`, then appends the live journal
+when it is present and readable. `slot_ref` is **required and keyword-only**: a replay result stamped
+`None` is refused downstream by the partial-failure report's provenance check, so the signature makes
+it impossible to forget.
+
+**Fail-closed across sources:** any unreadable source refuses the whole aggregate; any torn source
+makes the aggregate torn; every source's anomalies accumulate; a later good source never repairs an
+earlier bad one. An empty `paths` list refuses (`journal-unreadable`).
+
+**Segment contiguity.** Segment sequence numbers must be contiguous from 1. A gap yields
+`segment-sequence-gap`; a first sequence above 1 yields `segment-sequence-not-one`. Both are
+**anomalies on the aggregate**, which reach the partial-failure report as
+`failed-slot-journal-anomaly`. Without this check, lost segment files disappear from an aggregate
+with no file torn and no refusal.
+
+**The absent live journal has two meanings.** Rotation renames the live journal and deliberately
+does not recreate it, so *segments present and live journal absent* is **normal** after rotation.
+*No segments and no live journal* is **unreadable evidence** and refuses. A path that exists but is a
+symlink, a non-regular file, or unreadable is a **refusal**, never a skip.
+
+**Refusals pass through.** `aggregate_replay` propagates `journal_segments`' own reason —
+`reclaim-journal-outside-slot` stays that, and is not flattened into `journal-unreadable`.
+
 ## The partial-failure report
 
 `partial_failure_report` answers whether healthy slots may launch after one or more slots
@@ -1105,6 +1142,119 @@ not un-touch a shared datastore or un-mint a credential on a shared service.
 
 Sub-issue **C8** renders this report to the owner.
 
+## The launch ledger's slot grammar
+
+The launch ledger (`lib/launch_ledger.py`) can now stamp wave attribution on a `reserved` event.
+Three optional fields — `slot`, `generation`, and `boundary` — travel on that record. `SCHEMA` stays
+`1`; a record written without any of them folds exactly as before. That back-compatibility guarantee
+is the point: older ledgers and launches that never carried slot metadata remain valid.
+
+**All-or-nothing pairing.** `slot` and `generation` are refused unless both are present;
+`boundary` is refused unless both are present. A lone `slot`, a lone `generation`, or a `boundary`
+without its slot pair all refuse at fold time.
+
+**The `boundary` block** is a closed key allowlist matched **exactly** — an unknown key refuses:
+
+| Field | Type | Nullable |
+|---|---|---|
+| `slotRef` | string | no |
+| `result` | string | no |
+| `provenance` | string | no |
+| `strength` | `"strong"` or `"weaker"` | no |
+| `match` | boolean | no |
+| `policyDigest` | string | no |
+| `verifiedAt` | string (ISO-8601 UTC with `Z`) | no |
+| `weakerAccepted` | boolean | no |
+| `acceptedBy` | string | yes |
+| `acceptedAt` | string (ISO-8601 UTC with `Z`) | yes |
+| `acceptanceReason` | string | yes |
+
+```json
+{
+  "slot": "a",
+  "generation": 1,
+  "boundary": {
+    "slotRef": "a@1",
+    "result": "pass",
+    "provenance": "observed",
+    "strength": "strong",
+    "match": true,
+    "policyDigest": "a1b2c3d4e5f60718",
+    "verifiedAt": "2026-08-02T04:00:00Z",
+    "weakerAccepted": false,
+    "acceptedBy": null,
+    "acceptedAt": null,
+    "acceptanceReason": null
+  }
+}
+```
+
+`boundary_record(verdict, *, weaker_acceptance=None)` projects a traveling boundary verdict into
+this flat block. Cross-field invariants: the verdict's `schemaVersion` must match; `datastoreIdentity`
+must be a dict (a passing verdict may carry `null` there, and this refuses it); `weaker` **requires**
+a validated acceptance record (`acceptedBy`, `acceptedAt`, `reason`); `strong` **refuses** one; an
+unknown `strength` refuses; the acceptance `reason` is capped at 500 characters and a longer one
+refuses rather than being truncated.
+
+Weaker acceptance is a **record**, not a boolean, so it cannot be dropped silently and the
+owner-facing batch report can name who accepted a weaker guarantee and when.
+
+**The `slots` block on `count`.** `COUNT_RESULT_BLOCKS` names `slots` alongside `counts`,
+`amendments`, `lanes`, `attempts`, and `laneDetail`. For every launch in the batch that carried a
+`slot`, `count` emits one entry with `launchId`, `issue`, `slot`, `generation`, `slotRef`,
+`strength`, `weakerAccepted`, `acceptedBy`, `acceptedAt`, and `acceptanceReason`. A slot recorded
+without a `boundary` block appears with `strength: null` and null acceptance fields rather than
+being omitted — an absent boundary is itself worth seeing in the batch accounting.
+
+**The launcher is the caller.** `launch_build` in `lib/launcher.py` accepts `slot`, `generation`,
+and `boundary` keyword arguments and passes them through on the refusal path via
+`_try_reserve_for_refusal`, so a wave slot whose launch is refused at preflight, premise, or compose
+is still attributable to its slot. The `launch` CLI exposes the same three fields (`--slot`,
+`--generation`, `--boundary`).
+
+**Results-only scan at the durable write boundary.** `boundary_record` accepts an optional
+`material` argument; when the caller passes it, the composer scans the record it is about to return
+with `assert_results_only` against that policy material and refuses with
+`ledger-boundary-material-in-record` if policy material appears in the composed block. Production
+callers on the `--boundary` CLI route and the `reserve`/`fold` path do not pass `material` by design
+— S2's rule is that policy never travels to where the builder or ledger writer can hold it. The
+advisor holds the policy and **must** pass `material` when it wants that scan. When `material` is not
+passed, `acceptanceReason` is unscanned caller-supplied prose in a durable file; that residual is
+stated here rather than implied clean.
+
+### Slot-grammar refusal tokens
+
+| Token | When returned |
+|---|---|
+| `fold-bad-field:reserved:slot` | `slot` present but fails slot-id validation |
+| `fold-bad-field:reserved:generation` | `generation` present but not a valid integer generation |
+| `fold-bad-field:reserved:slot-generation` | only one of `slot` or `generation` is present |
+| `fold-bad-field:reserved:boundary` | `boundary` present without both `slot` and `generation` |
+| `fold-bad-field:reserved:boundary-shape` | `boundary` is not a mapping |
+| `fold-bad-field:reserved:boundary-keys` | `boundary` key set does not match the closed allowlist exactly |
+| `fold-bad-field:reserved:boundary-slotRef` | `slotRef` missing, empty, or does not match `format_slot_ref(slot, generation)` |
+| `fold-bad-field:reserved:boundary-result` | `result` missing or empty |
+| `fold-bad-field:reserved:boundary-provenance` | `provenance` missing or empty |
+| `fold-bad-field:reserved:boundary-strength` | `strength` is not `strong` or `weaker` |
+| `fold-bad-field:reserved:boundary-match` | `match` is not a boolean |
+| `fold-bad-field:reserved:boundary-policyDigest` | `policyDigest` missing or empty |
+| `fold-bad-field:reserved:boundary-verifiedAt` | `verifiedAt` missing, empty, or not ISO-8601 UTC with `Z` |
+| `fold-bad-field:reserved:boundary-weakerAccepted` | `weakerAccepted` is not a boolean |
+| `fold-bad-field:reserved:boundary-weakerAccepted-strength` | `weakerAccepted` disagrees with `strength` |
+| `fold-bad-field:reserved:boundary-acceptance-required` | `weakerAccepted: true` but an acceptance field is missing or empty |
+| `fold-bad-field:reserved:boundary-acceptance-forbidden` | `weakerAccepted: false` but an acceptance field is present |
+| `fold-bad-field:reserved:boundary-acceptance-reason-too-long` | `acceptanceReason` exceeds 500 characters |
+| `fold-bad-field:reserved:boundary-acceptedAt` | `acceptedAt` is not ISO-8601 UTC with `Z` |
+| `fold-bad-field:reserved:boundary-nullable` | a nullable acceptance field is present but not a non-empty string |
+| `ledger-boundary-verdict-invalid` | `boundary_record`: verdict is not a mapping or required verdict fields are absent |
+| `ledger-boundary-schema-version` | `boundary_record`: verdict `schemaVersion` does not match |
+| `ledger-boundary-datastore-identity-absent` | `boundary_record`: `datastoreIdentity` is not a dict or required identity fields are absent |
+| `ledger-boundary-strength-unknown` | `boundary_record`: identity `strength` is not `strong` or `weaker` |
+| `ledger-boundary-weaker-unaccepted` | `boundary_record`: weaker verdict with no `weaker_acceptance` |
+| `ledger-boundary-weaker-acceptance-invalid` | `boundary_record`: `weaker_acceptance` fails validation |
+| `ledger-boundary-strong-with-acceptance` | `boundary_record`: strong verdict with a `weaker_acceptance` supplied |
+| `ledger-boundary-acceptance-reason-too-long` | `boundary_record`: acceptance `reason` exceeds 500 characters |
+| `ledger-boundary-material-in-record` | `boundary_record`: composed record carries policy material when `material` is supplied |
 
 ## The identity-probe exercise
 
@@ -1632,7 +1782,9 @@ found in a slot directory (default `journal.ndjson` and any non-segment sibling 
 `retired`. The lock does not exclude writers.
 
 Rotation **does not create a new live journal** — `pilot_journal`'s writer opens with `O_CREAT`
-and recreates the live journal on the next append.
+and recreates the live journal on the next append. For replay across retained segments plus the
+live journal, see [Segment-aware aggregate replay](#segment-aware-aggregate-replay) under
+[The provisioning journal](#the-provisioning-journal).
 
 ### Reclaim refusal tokens
 
@@ -1680,6 +1832,7 @@ and recreates the live journal on the next append.
 | `reclaim-rotate-segment-exists` | target segment path already exists |
 | `reclaim-rotate-failed` | `os.rename` of live journal to segment fails |
 | `reclaim-segments-unreadable` | slot directory cannot be listed for segment enumeration |
+| `reclaim-aggregate-lock-unavailable` | `aggregate_replay`: `slot_lock` times out while listing retained journal segments and reading live-journal status |
 
 ### The reassignment acceptance probe
 
@@ -1822,6 +1975,28 @@ verdict.
 Both shared effects — the plant and the cleanup — are wrapped in `pilot_journal`
 `namespace-touched` begin/end pairs, so a crash mid-exercise leaves `possibly-applied` rather
 than a silent gap.
+
+### Bounded runner output modes
+
+`pilot_bounded_run.run_bounded` is the shared bounded child-process runner; `pilot_cleanup.run_bounded`
+is a thin adapter over it with `retain_output=False`. The `retain_output` parameter selects how
+stdout is handled:
+
+- `retain_output=True` (default, unchanged): stdout is retained up to `max_output_bytes`; output
+  beyond the cap classifies as `oversize`.
+- `retain_output=False`: stdout is counted but never accumulated; `stdoutBytes` and
+  `stdoutTruncated` are reported on every outcome; **truncation is reportable on a `completed`
+  outcome, not a refusal**.
+
+The two modes exist because the callers' semantics differ — `pilot_mint` needs the bytes back;
+`pilot_cleanup` only needs exit classification and byte counts. Collapsing the modes would erase
+one of those contracts. Both modes return `stdoutBytes` and `stdoutTruncated`, so the result shape
+is uniform.
+
+Under `retain_output=False`, a **mid-stream read error refuses** as `spawn-failed`, which
+`pilot_cleanup` turns into `cleanup-sentinel-probe-indeterminate` — this is a behaviour change from
+the pre-fold `pilot_cleanup` copy, which could have reported zero bytes on a read failure. Process-group
+containment on every termination path is unconditional in both modes.
 
 ### Resurrection
 

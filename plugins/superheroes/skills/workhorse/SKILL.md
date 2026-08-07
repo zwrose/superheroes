@@ -175,6 +175,21 @@ controls; if it does not, create one (`git worktree add`) and switch to it befor
 shared tree let one session's `git checkout` wipe a sibling's uncommitted work twice — this check puts the
 guarantee where it survives a launch-prompt omission, complementing the playbook's standing rulings).
 
+**Workhorse is verify-or-create.** If the launch supplied a slot, **verify it and use it**;
+otherwise create a worktree exactly as today — both are normal paths, not exceptions. **Slot intake
+runs before your first write** — the same moment as worktree verification, not after preflight. A
+builder **told a slot was supplied refuses rather than silently creating its own** — told-a-slot-was-supplied-but-missing
+is a **refusal**, not a fallback; a builder that quietly self-provisions in that case is the
+self-provisioning race the design moved provisioning to the advisor to prevent (#825, #830). **The
+generation is verified at intake, not assumed.** A slot reference is `<slot>@<generation>`; a
+build that verifies the slot but not the generation can be a stale occupant of a slot that has
+already been reassigned. Verify both, at intake, before any work. When the launch supplied both
+`slot` and `generation`, they arrive in the child environment as `SUPERHEROES_SLOT_REF`
+(`<slot>@<generation>`). Read
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Slot reference format; the
+lifecycle refusal tokens for a missing or stale slot) for the slot-reference format and refusal
+semantics — cite the reference and stop; no mechanism in the charter.
+
 **Third, and at every commit after — commits inherit the git identity the worktree resolves; never
 synthesize one.** Every commit that lands on your branch runs with the identity the worktree is
 **already configured with** — repo-local `.git/config` when it is set, otherwise this environment's
@@ -846,3 +861,4 @@ curation stay with the advisor.
 | "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global — read it with `git config user.email`, never `--local`); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. No recorded PID means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |
+| "The launch said there's a slot but I can't find it — I'll just make a worktree." | A builder told a slot was supplied **refuses**. Self-provisioning is the race the advisor's provisioning duty exists to prevent — park and say the slot is missing. |

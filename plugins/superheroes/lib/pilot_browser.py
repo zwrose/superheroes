@@ -3,7 +3,6 @@
 The framework never installs Playwright or any automation runtime. ``verify_pin`` only observes
 and compares an externally supplied pin against a bounded subprocess observer.
 """
-import contextlib
 import hmac
 import os
 import re
@@ -11,10 +10,10 @@ import stat
 import subprocess
 import sys
 import tempfile
-import threading
 import uuid
 from datetime import datetime, timedelta
 
+import pilot_bounded_run
 import pilot_journal
 import pilot_lifecycle
 import pilot_slot
@@ -249,72 +248,23 @@ def validate_pin(pin):
     return pin
 
 
-def _terminate_and_wait(proc):
-    with contextlib.suppress(Exception):
-        proc.kill()
-        proc.wait(timeout=5)
-
-
 def _run_bounded_observer(command, *, run_cwd, env, timeout_seconds, max_output_bytes):
   # bite-axis: observer execution — subprocess failure, oversized output, or non-single-line
   # UTF-8 stdout yields REFUSAL_PIN_OBSERVER_FAILED; only clean one-line output is returned.
-    try:
-        proc = subprocess.Popen(
-            command,
-            cwd=run_cwd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            shell=False,
-            env=env,
-        )
-    except OSError:
+    run = pilot_bounded_run.run_bounded(
+        command,
+        run_cwd=run_cwd,
+        env=env,
+        timeout_seconds=timeout_seconds,
+        max_output_bytes=max_output_bytes,
+        retain_output=True,
+    )
+    if (
+        run["outcome"] != pilot_bounded_run.OUTCOME_COMPLETED
+        or run["exitCode"] != 0
+    ):
         return None
-    try:
-        stdout_holder = []
-        read_error = []
-
-        def _read_stdout():
-            try:
-                stdout_holder.append(proc.stdout.read(max_output_bytes + 1))
-            except Exception as exc:
-                read_error.append(exc)
-
-        reader = threading.Thread(target=_read_stdout, daemon=True)
-        reader.start()
-        reader.join(timeout=timeout_seconds)
-
-        if reader.is_alive():
-            _terminate_and_wait(proc)
-            return None
-
-        if read_error:
-            _terminate_and_wait(proc)
-            return None
-
-        stdout = stdout_holder[0] if stdout_holder else b""
-
-        if len(stdout) > max_output_bytes:
-            _terminate_and_wait(proc)
-            return None
-
-        try:
-            proc.wait(timeout=timeout_seconds)
-        except subprocess.TimeoutExpired:
-            _terminate_and_wait(proc)
-            return None
-
-        if proc.returncode != 0:
-            return None
-
-        return stdout
-    except Exception:
-        _terminate_and_wait(proc)
-        return None
-    finally:
-        if proc.poll() is None:
-            _terminate_and_wait(proc)
-        if proc.stdout:
-            proc.stdout.close()
+    return run["stdout"]
 
 
 def verify_pin(pin, observer, *, run_cwd, reach_roots=None, timeout_seconds=20, max_output_bytes=4096):
