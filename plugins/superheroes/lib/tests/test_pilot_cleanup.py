@@ -2071,7 +2071,7 @@ def test_resurrection_plan_refuses_missing_verdict(private_tmp):
     assert result["reason"] == pc.REASON_VERDICT_MISSING
 
 
-def test_resurrection_plan_captured_happy_path(private_tmp):
+def test_resurrection_plan_attended_parks_for_owner_reseed(private_tmp):
     policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
     block = _pilot_block(cleanup_script)
@@ -2080,17 +2080,6 @@ def test_resurrection_plan_captured_happy_path(private_tmp):
         _effects_escape_record(block),
         _cleanup_containment_record(block, receipt),
     )
-    artifact_path = os.path.join(private_tmp, "seed.bin")
-    with open(artifact_path, "wb") as handle:
-        handle.write(b"artifact")
-    os.chmod(artifact_path, 0o600)
-    artifact = {
-        "path": artifact_path,
-        "expectedUid": os.getuid(),
-        "expectedMode": 0o600,
-        "sha256": hashlib.sha256(b"artifact").hexdigest(),
-        "captureSurfaces": ["cookies"],
-    }
     plan = pc.resurrection_plan(
         policy,
         block,
@@ -2099,7 +2088,6 @@ def test_resurrection_plan_captured_happy_path(private_tmp):
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
         account="owner",
-        artifact=artifact,
         receipt=receipt,
         cleanup_root=cleanup_repo,
         run_cwd=run_cwd,
@@ -2107,20 +2095,11 @@ def test_resurrection_plan_captured_happy_path(private_tmp):
         identity_provenance="observed",
         identity_strength="strong",
     )
-    assert plan["action"] == pc.ACTION_RESURRECT
+    assert plan["action"] == pc.ACTION_PARK
+    assert plan["reason"] == pc.REASON_ATTENDED_RESEED_REQUIRES_OWNER
     assert plan["slotRef"] == _SLOT_REF
     assert plan["containment"]["mode"] == pc.MODE_RECEIPT
-    assert plan["steps"][0]["op"] == "cleanup"
-    assert plan["steps"][1]["op"] == "reseed"
-    assert plan["steps"][1]["path"] == "attended"
-    assert plan["steps"][2]["op"] == "begin-generation"
-    assert plan["steps"][3]["op"] == "resume"
-    # axis: the plan-step key is `owner` again (#866 reverting #857's dodge), and this policy
-    # declares a mintable account literally named `owner` — so these two lines are also the
-    # regression proof that #870's guard no longer refuses a plan whose step key spells an
-    # account name. Undo #870's carve-out and `resurrection_plan` raises before it returns.
-    assert plan["steps"][2]["owner"] == "C7"
-    assert plan["steps"][3]["owner"] == "C7"
+    assert "steps" not in plan
 
 
 def test_resurrection_plan_minted_happy_path(private_tmp):
@@ -2166,6 +2145,16 @@ def test_resurrection_plan_unauthorized_verdict_propagates(private_tmp):
     policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
     block = _pilot_block(cleanup_script)
+    block["signInPath"] = "minted"
+    block["mint"] = {
+        "envelope": {
+            "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+            "enabledScopes": ["development"],
+            "forbiddenScopes": ["production"],
+            "gateOffTestCommand": ["true"],
+        },
+        "sentinelIdentifier": "pilot-sentinel-no-such-account",
+    }
     receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
     registry = _registry_with(
         _effects_escape_record(block),
@@ -2173,16 +2162,6 @@ def test_resurrection_plan_unauthorized_verdict_propagates(private_tmp):
     )
     verdict = _passing_verdict(policy)
     verdict["result"] = "refuse"
-    artifact_path = os.path.join(private_tmp, "seed.bin")
-    with open(artifact_path, "wb") as handle:
-        handle.write(b"artifact")
-    artifact = {
-        "path": artifact_path,
-        "expectedUid": os.getuid(),
-        "expectedMode": 0o600,
-        "sha256": hashlib.sha256(b"artifact").hexdigest(),
-        "captureSurfaces": ["cookies"],
-    }
     with pytest.raises(pilot_boundary.PilotBoundaryError):
         pc.resurrection_plan(
             policy,
@@ -2192,7 +2171,7 @@ def test_resurrection_plan_unauthorized_verdict_propagates(private_tmp):
             journal_path=os.path.join(private_tmp, "j.jsonl"),
             verdict=verdict,
             account="owner",
-            artifact=artifact,
+            mint_envelope=block["mint"]["envelope"],
             receipt=receipt,
             cleanup_root=cleanup_repo,
             run_cwd=run_cwd,
@@ -2938,17 +2917,6 @@ def test_resurrection_plan_permissions_path(private_tmp):
         "evidence": "isolated datastore",
     }
     registry = _registry_with(_effects_escape_record(block))
-    artifact_path = os.path.join(private_tmp, "seed.bin")
-    with open(artifact_path, "wb") as handle:
-        handle.write(b"artifact")
-    os.chmod(artifact_path, 0o600)
-    artifact = {
-        "path": artifact_path,
-        "expectedUid": os.getuid(),
-        "expectedMode": 0o600,
-        "sha256": hashlib.sha256(b"artifact").hexdigest(),
-        "captureSurfaces": ["cookies"],
-    }
     plan = pc.resurrection_plan(
         policy,
         block,
@@ -2957,9 +2925,9 @@ def test_resurrection_plan_permissions_path(private_tmp):
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
         account="owner",
-        artifact=artifact,
     )
-    assert plan["action"] == pc.ACTION_RESURRECT
+    assert plan["action"] == pc.ACTION_PARK
+    assert plan["reason"] == pc.REASON_ATTENDED_RESEED_REQUIRES_OWNER
     assert plan["containment"]["mode"] == pc.MODE_PERMISSIONS
 
 
@@ -3430,20 +3398,19 @@ def test_resurrection_plan_refuses_connection_detail_in_cleanup_argv(private_tmp
     }
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
     block = _pilot_block(cleanup_script)
+    block["signInPath"] = "minted"
+    block["mint"] = {
+        "envelope": {
+            "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+            "enabledScopes": ["development"],
+            "forbiddenScopes": ["production"],
+            "gateOffTestCommand": ["true"],
+        },
+        "sentinelIdentifier": "pilot-sentinel-no-such-account",
+    }
     connection_detail = policy["datastore"]["connectionDetail"]
     block["cleanup"]["command"] = [cleanup_script, connection_detail, pc.NAMESPACE_PLACEHOLDER]
     registry = _registry_with(_effects_escape_record(block))
-    artifact_path = os.path.join(private_tmp, "seed.bin")
-    with open(artifact_path, "wb") as handle:
-        handle.write(b"artifact")
-    os.chmod(artifact_path, 0o600)
-    artifact = {
-        "path": artifact_path,
-        "expectedUid": os.getuid(),
-        "expectedMode": 0o600,
-        "sha256": hashlib.sha256(b"artifact").hexdigest(),
-        "captureSurfaces": ["cookies"],
-    }
     with pytest.raises(pilot_policy.PilotPolicyError) as exc:
         pc.resurrection_plan(
             policy,
@@ -3453,7 +3420,7 @@ def test_resurrection_plan_refuses_connection_detail_in_cleanup_argv(private_tmp
             journal_path=os.path.join(private_tmp, "j.jsonl"),
             verdict=_passing_verdict(policy),
             account="owner",
-            artifact=artifact,
+            mint_envelope=block["mint"]["envelope"],
         )
     assert exc.value.reason == pilot_policy.REFUSAL_MATERIAL_IN_RESULT
 
@@ -3549,17 +3516,6 @@ def test_cleanup_containment_record_does_not_satisfy_other_slot(private_tmp):
         identity_strength="strong",
     )
     assert receipt_b["result"] == pc.RESULT_PASS
-    artifact_path = os.path.join(private_tmp, "seed-b.bin")
-    with open(artifact_path, "wb") as handle:
-        handle.write(b"artifact")
-    os.chmod(artifact_path, 0o600)
-    artifact = {
-        "path": artifact_path,
-        "expectedUid": os.getuid(),
-        "expectedMode": 0o600,
-        "sha256": hashlib.sha256(b"artifact").hexdigest(),
-        "captureSurfaces": ["cookies"],
-    }
     result = pc.resurrection_plan(
         policy,
         block,
@@ -3568,7 +3524,6 @@ def test_cleanup_containment_record_does_not_satisfy_other_slot(private_tmp):
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy, "slot-b@1"),
         account="owner",
-        artifact=artifact,
         receipt=receipt_b,
         cleanup_root=cleanup_repo,
         run_cwd=run_cwd,
@@ -3587,17 +3542,6 @@ def test_cleanup_containment_record_satisfies_same_slot(private_tmp):
     receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
     record = pc.registry_record(receipt, block["cleanup"])
     registry = _registry_with(_effects_escape_record(block), record)
-    artifact_path = os.path.join(private_tmp, "seed.bin")
-    with open(artifact_path, "wb") as handle:
-        handle.write(b"artifact")
-    os.chmod(artifact_path, 0o600)
-    artifact = {
-        "path": artifact_path,
-        "expectedUid": os.getuid(),
-        "expectedMode": 0o600,
-        "sha256": hashlib.sha256(b"artifact").hexdigest(),
-        "captureSurfaces": ["cookies"],
-    }
     plan = pc.resurrection_plan(
         policy,
         block,
@@ -3606,7 +3550,6 @@ def test_cleanup_containment_record_satisfies_same_slot(private_tmp):
         journal_path=os.path.join(private_tmp, "j.jsonl"),
         verdict=_passing_verdict(policy),
         account="owner",
-        artifact=artifact,
         receipt=receipt,
         cleanup_root=cleanup_repo,
         run_cwd=run_cwd,
@@ -3614,4 +3557,5 @@ def test_cleanup_containment_record_satisfies_same_slot(private_tmp):
         identity_provenance="observed",
         identity_strength="strong",
     )
-    assert plan["action"] == pc.ACTION_RESURRECT
+    assert plan["action"] == pc.ACTION_PARK
+    assert plan["reason"] == pc.REASON_ATTENDED_RESEED_REQUIRES_OWNER
