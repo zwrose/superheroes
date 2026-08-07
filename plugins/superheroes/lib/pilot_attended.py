@@ -10,7 +10,6 @@ import hmac
 
 import pilot_contract
 import pilot_identity
-import pilot_probe
 import pilot_seed
 import pilot_slot
 
@@ -118,10 +117,10 @@ def seeding_vehicle(
     if not isinstance(vehicle, str) or vehicle not in pilot_contract.ATTENDED_VEHICLES:
         return _refusal(REFUSAL_VEHICLE_INVALID)
     if vehicle == "real-chrome":
-        return "real-chrome"
+        return {"ok": True, "reason": None, "vehicle": "real-chrome"}
     if idp_rejects_automation:
-        return "real-chrome"
-    return "automation"
+        return {"ok": True, "reason": None, "vehicle": "real-chrome"}
+    return {"ok": True, "reason": None, "vehicle": "automation"}
 
 
 def prompt_copy(slot_ref, account, expected_identity, vehicle):
@@ -209,10 +208,10 @@ def attended_seeding_plan(
         idp_rejects_automation=idp_rejects_automation,
         human_driven_rejected=human_driven_rejected,
     )
-    if isinstance(vehicle_result, dict):
+    if not vehicle_result["ok"]:
         return vehicle_result
 
-    vehicle = vehicle_result
+    vehicle = vehicle_result["vehicle"]
     slot_ref = account_set["ref"]
     account_list = pilot_slot.account_keys(account_set)
 
@@ -264,6 +263,25 @@ def attended_seeding_plan(
     }
 
 
+def _is_verify_at_seed_success(result, expected_identity):
+    """Return True only for the exact verify_at_seed success shape."""
+    if not isinstance(result, dict):
+        return False
+    if type(result.get("ok")) is not bool or result.get("ok") is not True:
+        return False
+    if result.get("outcome") != OUTCOME_VERIFIED:
+        return False
+    if result.get("reason") is not None:
+        return False
+    identity = result.get("identity")
+    if not isinstance(identity, str) or not identity:
+        return False
+    return hmac.compare_digest(
+        identity.encode("utf-8"),
+        expected_identity.encode("utf-8"),
+    )
+
+
 def seed_outcome(steps, results):
     """Aggregate per-account verify-at-seed results into a slot seeding verdict."""
     # bite-axis: all-accounts-verified — any refusal refuses the whole slot.
@@ -272,15 +290,19 @@ def seed_outcome(steps, results):
     if not isinstance(results, dict):
         return _refusal(REFUSAL_SEED_INCOMPLETE)
 
-    planned_accounts = []
+    planned_steps = []
     for step in steps:
         if not isinstance(step, dict):
             return _refusal(REFUSAL_SEED_INCOMPLETE)
         account = step.get("account")
         if not isinstance(account, str) or not account:
             return _refusal(REFUSAL_SEED_INCOMPLETE)
-        planned_accounts.append(account)
+        expected_identity = step.get("expectedIdentity")
+        if not isinstance(expected_identity, str) or not expected_identity:
+            return _refusal(REFUSAL_SEED_INCOMPLETE)
+        planned_steps.append((account, expected_identity))
 
+    planned_accounts = [account for account, _expected in planned_steps]
     planned_set = set(planned_accounts)
     if len(planned_accounts) != len(planned_set):
         return _refusal(REFUSAL_SEED_INCOMPLETE)
@@ -290,17 +312,19 @@ def seed_outcome(steps, results):
         return _refusal(REFUSAL_SEED_INCOMPLETE)
 
     verified_accounts = []
-    for account in planned_accounts:
+    for account, expected_identity in planned_steps:
         result = results[account]
         if not isinstance(result, dict):
             return _refusal(REFUSAL_SEED_INCOMPLETE)
-        if not result.get("ok"):
+        if type(result.get("ok")) is bool and result.get("ok") is False:
             return {
                 "ok": False,
                 "outcome": OUTCOME_REFUSED,
                 "reason": result.get("reason"),
                 "account": account,
             }
+        if not _is_verify_at_seed_success(result, expected_identity):
+            return _refusal(REFUSAL_SEED_INCOMPLETE)
         verified_accounts.append(account)
 
     return {

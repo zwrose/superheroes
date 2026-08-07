@@ -2147,6 +2147,45 @@ def test_resurrection_plan_minted_happy_path(private_tmp):
     assert plan["steps"][3]["owner"] == "C7"
 
 
+def test_resurrection_plan_unmapped_dispatch_kind_raises(private_tmp, monkeypatch):
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    block = _pilot_block(cleanup_script)
+    block["signInPath"] = "minted"
+    block["mint"] = {
+        "envelope": {
+            "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+            "enabledScopes": ["development"],
+            "forbiddenScopes": ["production"],
+            "gateOffTestCommand": ["true"],
+        },
+        "sentinelIdentifier": "pilot-sentinel-no-such-account",
+    }
+    receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
+    registry = _registry_with(
+        _effects_escape_record(block),
+        _cleanup_containment_record(block, receipt),
+    )
+    monkeypatch.setitem(pc._RESEED_BY_SIGN_IN_PATH, "minted", ("bogus_kind", "minted"))
+    with pytest.raises(ValueError, match="unhandled dispatch_kind"):
+        pc.resurrection_plan(
+            policy,
+            block,
+            _SLOT_REF,
+            registry=registry,
+            journal_path=os.path.join(private_tmp, "j.jsonl"),
+            verdict=_passing_verdict(policy),
+            account="owner",
+            mint_envelope=block["mint"]["envelope"],
+            receipt=receipt,
+            cleanup_root=cleanup_repo,
+            run_cwd=run_cwd,
+            observed_identity="example_dev",
+            identity_provenance="observed",
+            identity_strength="strong",
+        )
+
+
 def test_resurrection_plan_unauthorized_verdict_propagates(private_tmp):
     policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())

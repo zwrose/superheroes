@@ -1275,7 +1275,6 @@ def resurrection_plan(
     journal_path,
     verdict=None,
     account=None,
-    artifact=None,
     mint_envelope=None,
     now=None,
     receipt=None,
@@ -1372,15 +1371,7 @@ def resurrection_plan(
             "slotRef": slot_ref,
             "containment": containment,
         }
-    if dispatch_kind == "seed":
-        reseed_request = pilot_provision.authorized_seed_request(
-            verdict,
-            policy,
-            slot_ref,
-            account,
-            artifact,
-        )
-    else:
+    if dispatch_kind == "mint":
         reseed_request = pilot_provision.authorized_mint_request(
             verdict,
             policy,
@@ -1388,6 +1379,8 @@ def resurrection_plan(
             account,
             mint_envelope,
         )
+    else:
+        raise ValueError("unhandled dispatch_kind: %r" % (dispatch_kind,))
 
     plan = {
         "action": ACTION_RESURRECT,

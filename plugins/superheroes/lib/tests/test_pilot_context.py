@@ -606,6 +606,56 @@ def test_context_spec_refuses_non_string_sign_in_path(artifact_tmp):
     assert result["reason"] == pc.REFUSAL_SIGN_IN_PATH_INVALID
 
 
+def test_context_spec_refuses_list_sign_in_path(artifact_tmp):
+    result = pc.context_spec(
+        "slot1@1",
+        "owner",
+        ["cookies"],
+        provisioning_receipt=_valid_provisioning_receipt("slot1@1"),
+        sign_in_path=["attended"],
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pc.REFUSAL_SIGN_IN_PATH_INVALID
+
+
+def test_context_spec_refuses_dict_sign_in_path(artifact_tmp):
+    result = pc.context_spec(
+        "slot1@1",
+        "owner",
+        ["cookies"],
+        provisioning_receipt=_valid_provisioning_receipt("slot1@1"),
+        sign_in_path={"a": 1},
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pc.REFUSAL_SIGN_IN_PATH_INVALID
+
+
+def test_context_set_refuses_dict_sign_in_path(artifact_tmp):
+    result = pc.context_set(
+        "slot1",
+        1,
+        _accounts("owner"),
+        sign_in_path={"a": 1},
+        capture_surfaces=["cookies"],
+        provisioning_receipt=_valid_provisioning_receipt("slot1@1"),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pc.REFUSAL_SIGN_IN_PATH_INVALID
+
+
+def test_context_set_refuses_list_sign_in_path(artifact_tmp):
+    result = pc.context_set(
+        "slot1",
+        1,
+        _accounts("owner"),
+        sign_in_path=["attended"],
+        capture_surfaces=["cookies"],
+        provisioning_receipt=_valid_provisioning_receipt("slot1@1"),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == pc.REFUSAL_SIGN_IN_PATH_INVALID
+
+
 def test_context_spec_refuses_artifact_on_attended_path(artifact_tmp):
   # bite-axis: live-seeding paths refuse a supplied artifact — attended path with artifact.
     artifact = _make_artifact_simple(artifact_tmp, "owner")
