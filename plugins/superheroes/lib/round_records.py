@@ -342,16 +342,9 @@ def meta_path(session_dir):
 # =============================================================================================
 
 def _fsync_dir(directory):
-    fd = None
-    try:
-        fd = os.open(directory, os.O_RDONLY)
-        os.fsync(fd)
-    except OSError as exc:
-        if exc.errno not in _FSYNC_DIR_TOLERATED:
-            raise
-    finally:
-        if fd is not None:
-            os.close(fd)
+    """Directory fsync with the exotic-filesystem errno allowlist — delegated to ``round_commit``."""
+    import round_commit
+    return round_commit.fsync_dir_tolerant(directory)
 
 
 def atomic_write_json(path, obj):
@@ -360,18 +353,10 @@ def atomic_write_json(path, obj):
     tmp -> flush -> fsync(file) -> os.replace -> fsync(parent dir). The directory fsync is what
     makes the RENAME durable, not just the bytes; its failure is swallowed only for the three
     errnos exotic filesystems raise for an unsupported dir-fsync, and anything else propagates.
+    The durability sequence lives in ``round_commit.atomic_write_bytes`` (lazy import — no cycle).
     """
-    parent = os.path.dirname(os.path.abspath(path))
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(canonical(obj))
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
-    _fsync_dir(parent)
-    return path
+    import round_commit
+    return round_commit.atomic_write_bytes(path, canonical(obj).encode("utf-8"))
 
 
 def read_json(path):
@@ -460,6 +445,116 @@ def _anchor_check(envelope, seat_key, anchor):
     return None
 
 
+def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
+                     supersede=False, expect_sha256=None, anchor=None, occurrence=0):
+    """Every check `ingest_landing` performs, with NO write.
+
+    Returns (plan, refusal). Exactly one is None.
+      plan = {"storePath": <abs>, "envelope": <the normalized envelope dict to write>,
+              "payloadSha256": <str or None>, "superseded": <bool>,
+              "seatKey": ..., "storageKey": ..., "occurrence": ...}
+      refusal = the SAME dict `ingest_landing` returns on refusal today
+                ({"ok": False, "reason": ..., ...extra}).
+    """
+    session_id = _session_id(session_dir)
+    if session_id is None:
+        return None, _refuse("bootstrap-required")
+    if isinstance(seat_key, str) and seat_key.startswith(RESERVED_PREFIX):
+        return None, _refuse("reserved-seat-name")
+    valid = _roster_keys(roster)
+    if not isinstance(seat_key, str) or seat_key not in valid:
+        return None, _refuse("unknown-seat",
+                             message="seat %r is not on this phase's roster; valid keys: %s"
+                                     % (seat_key, ", ".join(valid) if valid else "(none)"),
+                             validKeys=valid)
+    slots = valid.count(seat_key)
+    if isinstance(occurrence, int) and not isinstance(occurrence, bool) and occurrence >= slots:
+        return None, _refuse("unknown-occurrence", occurrence=occurrence, occurrences=slots,
+                             message="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
+                                     "that does not exist" % (seat_key, slots, occurrence))
+    if attempt != current_attempt:
+        return None, _refuse("stale-attempt", attempt=attempt, currentAttempt=current_attempt)
+
+    try:
+        skey = storage_key(seat_key, occurrence)
+    except ValueError as exc:
+        return None, _refuse("bad-argument", message=str(exc))
+    try:
+        lpath = landing_path(session_dir, rnd, phase, skey, attempt)
+        spath = store_path(session_dir, rnd, phase, skey, attempt)
+    except ValueError as exc:
+        reason = "bad-argument" if "non-negative int" in str(exc) else "invalid-path"
+        return None, _refuse(reason, message=str(exc))
+
+    envelope, err = read_json(lpath)
+    if err == "missing":
+        return None, _refuse("landing-missing", landingPath=lpath)
+    if err == "unparseable" or not isinstance(envelope, dict):
+        return None, _refuse("landing-torn", landingPath=lpath)
+
+    if envelope.get("attempt") != attempt:
+        return None, _refuse("attempt-mismatch", envelopeAttempt=envelope.get("attempt"),
+                             fileAttempt=attempt)
+    if envelope.get("occurrence", occurrence) != occurrence:
+        # The SLOT is the file's identity, and the ingestion names it. An envelope claiming a
+        # different occurrence is a dispatch accounting fault: stamping the slot over the claim
+        # would silently rewrite which of two same-id seats this record is.
+        return None, _refuse("occurrence-mismatch", envelopeOccurrence=envelope.get("occurrence"),
+                             occurrence=occurrence)
+    if envelope.get("session") != session_id:
+        return None, _refuse("session-mismatch", envelopeSession=envelope.get("session"),
+                             sessionId=session_id)
+    if envelope.get("phase") != phase:
+        return None, _refuse("phase-mismatch", envelopePhase=envelope.get("phase"), phase=phase)
+    if envelope.get("round") != rnd:
+        return None, _refuse("round-mismatch", envelopeRound=envelope.get("round"), round=rnd)
+    if envelope.get("seat") != seat_key:
+        return None, _refuse("seat-mismatch", addressedSeat=seat_key, envelopeSeat=envelope.get("seat"))
+
+    schema = envelope.get("schema")
+    stored_sha = None
+    if schema == SEAT_RESULT_SCHEMA:
+        stored_sha = payload_sha256(envelope.get("payload"))
+        if stored_sha != envelope.get("payloadSha256"):
+            return None, _refuse("landing-torn", computed=stored_sha,
+                                 declared=envelope.get("payloadSha256"), landingPath=lpath)
+    elif schema == SEAT_MISSING_SCHEMA:
+        if envelope.get("reason") not in MISSING_REASONS:
+            return None, _refuse("missing-reason",
+                                 message="seat-missing reason %r is not one of: %s"
+                                         % (envelope.get("reason"), ", ".join(MISSING_REASONS)))
+    else:
+        return None, _refuse("schema-unknown", schema=schema)
+
+    anchor_reason = _anchor_check(envelope, seat_key, anchor)
+    if anchor_reason is not None:
+        return None, _refuse(anchor_reason, manifestSha256=envelope.get("manifestSha256"),
+                             orderSha256=envelope.get("orderSha256"))
+
+    exists = os.path.exists(spath)
+    if exists and not supersede:
+        return None, _refuse("store-exists", storePath=spath)
+    if supersede:
+        if expect_sha256 is None:
+            return None, _refuse("cas-expect-required", storePath=spath)
+        current, cur_err = read_json(spath)
+        current_sha = envelope_cas_token(current) if (cur_err is None and isinstance(current, dict)) else None
+        if current_sha != expect_sha256:
+            return None, _refuse("cas-mismatch", expected=expect_sha256, actual=current_sha,
+                                 storePath=spath)
+
+    plan = {
+        "storePath": spath,
+        "envelope": _normalize_envelope(envelope, occurrence),
+        "payloadSha256": stored_sha,
+        "superseded": bool(exists and supersede),
+        "seatKey": seat_key,
+        "storageKey": skey,
+        "occurrence": occurrence,
+    }
+    return plan, None
+
+
 def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
                    supersede=False, expect_sha256=None, anchor=None, occurrence=0):
     """Ingest ONE landed seat envelope into the durable store. Never raises on bad input.
@@ -490,97 +585,17 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
         outcome as a payload-hash mismatch.
     The caller journals the outcome; this function does not.
     """
-    session_id = _session_id(session_dir)
-    if session_id is None:
-        return _refuse("bootstrap-required")
-    if isinstance(seat_key, str) and seat_key.startswith(RESERVED_PREFIX):
-        return _refuse("reserved-seat-name")
-    valid = _roster_keys(roster)
-    if not isinstance(seat_key, str) or seat_key not in valid:
-        return _refuse("unknown-seat",
-                       message="seat %r is not on this phase's roster; valid keys: %s"
-                               % (seat_key, ", ".join(valid) if valid else "(none)"),
-                       validKeys=valid)
-    slots = valid.count(seat_key)
-    if isinstance(occurrence, int) and not isinstance(occurrence, bool) and occurrence >= slots:
-        return _refuse("unknown-occurrence", occurrence=occurrence, occurrences=slots,
-                       message="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
-                               "that does not exist" % (seat_key, slots, occurrence))
-    if attempt != current_attempt:
-        return _refuse("stale-attempt", attempt=attempt, currentAttempt=current_attempt)
-
-    try:
-        skey = storage_key(seat_key, occurrence)
-    except ValueError as exc:
-        return _refuse("bad-argument", message=str(exc))
-    try:
-        lpath = landing_path(session_dir, rnd, phase, skey, attempt)
-        spath = store_path(session_dir, rnd, phase, skey, attempt)
-    except ValueError as exc:
-        reason = "bad-argument" if "non-negative int" in str(exc) else "invalid-path"
-        return _refuse(reason, message=str(exc))
-
-    envelope, err = read_json(lpath)
-    if err == "missing":
-        return _refuse("landing-missing", landingPath=lpath)
-    if err == "unparseable" or not isinstance(envelope, dict):
-        return _refuse("landing-torn", landingPath=lpath)
-
-    if envelope.get("attempt") != attempt:
-        return _refuse("attempt-mismatch", envelopeAttempt=envelope.get("attempt"),
-                       fileAttempt=attempt)
-    if envelope.get("occurrence", occurrence) != occurrence:
-        # The SLOT is the file's identity, and the ingestion names it. An envelope claiming a
-        # different occurrence is a dispatch accounting fault: stamping the slot over the claim
-        # would silently rewrite which of two same-id seats this record is.
-        return _refuse("occurrence-mismatch", envelopeOccurrence=envelope.get("occurrence"),
-                       occurrence=occurrence)
-    if envelope.get("session") != session_id:
-        return _refuse("session-mismatch", envelopeSession=envelope.get("session"),
-                       sessionId=session_id)
-    if envelope.get("phase") != phase:
-        return _refuse("phase-mismatch", envelopePhase=envelope.get("phase"), phase=phase)
-    if envelope.get("round") != rnd:
-        return _refuse("round-mismatch", envelopeRound=envelope.get("round"), round=rnd)
-    if envelope.get("seat") != seat_key:
-        return _refuse("seat-mismatch", addressedSeat=seat_key, envelopeSeat=envelope.get("seat"))
-
-    schema = envelope.get("schema")
-    stored_sha = None
-    if schema == SEAT_RESULT_SCHEMA:
-        stored_sha = payload_sha256(envelope.get("payload"))
-        if stored_sha != envelope.get("payloadSha256"):
-            return _refuse("landing-torn", computed=stored_sha,
-                           declared=envelope.get("payloadSha256"), landingPath=lpath)
-    elif schema == SEAT_MISSING_SCHEMA:
-        if envelope.get("reason") not in MISSING_REASONS:
-            return _refuse("missing-reason",
-                           message="seat-missing reason %r is not one of: %s"
-                                   % (envelope.get("reason"), ", ".join(MISSING_REASONS)))
-    else:
-        return _refuse("schema-unknown", schema=schema)
-
-    anchor_reason = _anchor_check(envelope, seat_key, anchor)
-    if anchor_reason is not None:
-        return _refuse(anchor_reason, manifestSha256=envelope.get("manifestSha256"),
-                       orderSha256=envelope.get("orderSha256"))
-
-    exists = os.path.exists(spath)
-    if exists and not supersede:
-        return _refuse("store-exists", storePath=spath)
-    if supersede:
-        if expect_sha256 is None:
-            return _refuse("cas-expect-required", storePath=spath)
-        current, cur_err = read_json(spath)
-        current_sha = envelope_cas_token(current) if (cur_err is None and isinstance(current, dict)) else None
-        if current_sha != expect_sha256:
-            return _refuse("cas-mismatch", expected=expect_sha256, actual=current_sha,
-                           storePath=spath)
-
-    atomic_write_json(spath, _normalize_envelope(envelope, occurrence))
-    return {"ok": True, "reason": None, "storePath": spath, "payloadSha256": stored_sha,
-            "superseded": bool(exists and supersede), "seatKey": seat_key, "storageKey": skey,
-            "occurrence": occurrence}
+    plan, refusal = validate_landing(session_dir, rnd, phase, seat_key, attempt,
+                                     current_attempt=current_attempt, roster=roster,
+                                     supersede=supersede, expect_sha256=expect_sha256,
+                                     anchor=anchor, occurrence=occurrence)
+    if refusal is not None:
+        return refusal
+    atomic_write_json(plan["storePath"], plan["envelope"])
+    return {"ok": True, "reason": None, "storePath": plan["storePath"],
+            "payloadSha256": plan["payloadSha256"], "superseded": plan["superseded"],
+            "seatKey": plan["seatKey"], "storageKey": plan["storageKey"],
+            "occurrence": plan["occurrence"]}
 
 
 def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=None):
@@ -746,6 +761,11 @@ class LockHeld(Exception):
         super().__init__("session lock held by pid %r since %r" % (pid, created_at))
 
 
+# Re-entrant depth for this process only — the on-disk lockfile contract is unchanged; a different
+# process still sees LockHeld. Only same-process nested acquire/release skips the file.
+_session_lock_depth = 0
+
+
 def read_lock(session_dir):
     """The recorded holder `{"pid","createdAt"}`, or None when the lock is absent/unreadable."""
     try:
@@ -762,17 +782,27 @@ def read_lock(session_dir):
 def session_lock(session_dir):
     """Exclusive session lock via `O_CREAT | O_EXCL` — the create IS the mutual exclusion.
 
-    Raises `LockHeld(pid, created_at)` when the lockfile already exists (a nested acquire in the
-    same process raises too — this guards the session dir, not the thread). The lockfile is
-    always removed on exit, INCLUDING on exception, so a raising body never leaves a stale lock.
+    Raises `LockHeld(pid, created_at)` when the lockfile already exists and is owned by a
+    different process. Re-entrant within this process: a nested acquire increments depth and does
+    not touch the lockfile; only the outermost release removes it. The lockfile is always removed
+    on exit, INCLUDING on exception, so a raising body never leaves a stale lock.
     """
+    global _session_lock_depth
     path = session_lock_path(session_dir)
+    if _session_lock_depth > 0:
+        _session_lock_depth += 1
+        try:
+            yield path
+        finally:
+            _session_lock_depth -= 1
+        return
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     try:
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
         holder = read_lock(session_dir) or {}
         raise LockHeld(holder.get("pid"), holder.get("createdAt"))
+    _session_lock_depth = 1
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:
             fh.write(canonical({"pid": os.getpid(), "createdAt": _now_iso()}))
@@ -780,6 +810,7 @@ def session_lock(session_dir):
             os.fsync(fh.fileno())
         yield path
     finally:
+        _session_lock_depth -= 1
         try:
             os.remove(path)
         except OSError:
