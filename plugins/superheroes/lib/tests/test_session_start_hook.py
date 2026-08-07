@@ -8,6 +8,7 @@ import pytest
 
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _HOOK_PATH = os.path.join(_PLUGIN, "hooks", "session_start.py")
+_LIB = os.path.join(_PLUGIN, "lib")
 
 
 def _load_hook(module_name="session_start_under_test"):
@@ -144,7 +145,7 @@ def test_host_flag_reaches_bootstrap(monkeypatch, capsys):
 
     seen = []
 
-    def capture(_cwd, _transcript, _root, host):
+    def capture(_cwd, _transcript, _root, host, source=None):
         seen.append(host)
         return "## stub context"
 
@@ -153,3 +154,42 @@ def test_host_flag_reaches_bootstrap(monkeypatch, capsys):
     _stdin(monkeypatch, {"source": "startup", "cwd": "/tmp"})
     assert mod.main() == 0
     assert seen == ["codex"]
+
+
+def _write_charter_transcript(path, charter):
+    content = (
+        "<command-message>superheroes:%s</command-message>\n"
+        "<command-name>/superheroes:%s</command-name>\n"
+        "<command-args>Issue: #911</command-args>"
+    ) % (charter, charter)
+    rec = {
+        "type": "user",
+        "isSidechain": False,
+        "userType": "external",
+        "message": {"role": "user", "content": content},
+    }
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(json.dumps(rec) + "\n")
+
+
+def test_compact_charter_transcript_injects_recovery_in_hook_output(tmp_path, monkeypatch, capsys):
+    # Axis: compact SessionStart with a charter transcript forwards source and emits recovery text.
+    if _LIB not in sys.path:
+        sys.path.insert(0, _LIB)
+    mod = _load_hook("session_start_compact_charter")
+    transcript = tmp_path / "transcript.jsonl"
+    _write_charter_transcript(transcript, "workhorse")
+    skill_path = os.path.join(_PLUGIN, "skills", "workhorse", "SKILL.md")
+    _stdin(monkeypatch, {
+        "source": "compact",
+        "cwd": str(tmp_path),
+        "transcript_path": str(transcript),
+    })
+    assert mod.main() == 0
+    lines = _stdout_lines(capsys)
+    assert len(lines) == 1
+    out = json.loads(lines[0])
+    ctx = out["hookSpecificOutput"]["additionalContext"]
+    assert "### Charter recovery" in ctx
+    assert skill_path in ctx
+    assert "file on disk is the authority" in ctx

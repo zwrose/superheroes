@@ -7,9 +7,12 @@ contents), and it must never raise. These tests pin the three-record injection
 set (resolved roots, cache hygiene nudge, covenant), the breadcrumb-but-not-leaky
 guard, and the budget-omit accounting (C2).
 """
+import json
 import os
 import re
 import time
+
+import pytest
 
 import session_context as sc
 
@@ -469,3 +472,104 @@ def test_assemble_survives_broken_cache_parent_hint(tmp_path, monkeypatch, capsy
     captured = capsys.readouterr()
     assert "Plugin cache hygiene" in captured.err
     assert "RuntimeError" in captured.err
+
+
+# ---------------------------------------------------------------- charter recovery (#911)
+def _write_transcript(path, records):
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec) + "\n")
+
+
+def _user_charter(charter, *, is_sidechain=False):
+    content = (
+        "<command-message>superheroes:%s</command-message>\n"
+        "<command-name>/superheroes:%s</command-name>\n"
+        "<command-args>Issue: #911</command-args>"
+    ) % (charter, charter)
+    return {
+        "type": "user",
+        "isSidechain": is_sidechain,
+        "userType": "external",
+        "message": {"role": "user", "content": content},
+    }
+
+
+def _workhorse_skill_path():
+    return os.path.join(_PLUGIN_ROOT, "skills", "workhorse", "SKILL.md")
+
+
+def _showrunner_skill_path():
+    return os.path.join(_PLUGIN_ROOT, "skills", "showrunner", "SKILL.md")
+
+
+def test_compact_workhorse_transcript_injects_charter_recovery(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
+    assert "### Charter recovery" in out
+    assert _workhorse_skill_path() in out
+    assert "workhorse" in out
+
+
+def test_compact_showrunner_transcript_injects_charter_recovery(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("showrunner")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
+    assert "### Charter recovery" in out
+    assert _showrunner_skill_path() in out
+    assert "showrunner" in out
+
+
+def test_compact_no_charter_transcript_omits_charter_recovery(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [
+        {"type": "user", "isSidechain": False, "message": {"role": "user", "content": "hello"}},
+    ])
+    out_compact = sc.assemble(
+        str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
+    out_default = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude")
+    assert "### Charter recovery" not in out_compact
+    assert out_compact == out_default
+
+
+def test_compact_subagent_transcript_omits_charter_recovery(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [
+        _user_charter("workhorse", is_sidechain=True),
+        _user_charter("showrunner", is_sidechain=True),
+    ])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
+    assert "### Charter recovery" not in out
+
+
+@pytest.mark.parametrize("source", ["startup", "resume"])
+def test_non_compact_source_omits_charter_recovery(tmp_path, monkeypatch, source):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source=source)
+    assert "### Charter recovery" not in out
+
+
+def test_assemble_without_source_omits_charter_recovery(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("workhorse")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude")
+    assert "### Charter recovery" not in out
+
+
+def test_charter_recovery_never_raises_on_garbage_transcript():
+    assert sc.charter_recovery(None, "compact", _PLUGIN_ROOT) == ""
+    assert sc.charter_recovery("/nonexistent/transcript.jsonl", "compact", _PLUGIN_ROOT) == ""

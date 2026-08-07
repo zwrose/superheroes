@@ -129,6 +129,21 @@ def test_robustness_truncated_final_line_still_returns_earlier_match(tmp_path):
     assert cd.detect_charter(str(path)) == "showrunner"
 
 
+def test_bare_prose_mention_is_not_a_charter_invocation(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [
+        {
+            "type": "user",
+            "isSidechain": False,
+            "message": {
+                "role": "user",
+                "content": "remind me how /superheroes:showrunner routes work",
+            },
+        },
+    ])
+    assert cd.detect_charter(str(path)) is None
+
+
 def test_assistant_quoting_marker_returns_none(tmp_path):
     path = tmp_path / "transcript.jsonl"
     _write_transcript(path, [

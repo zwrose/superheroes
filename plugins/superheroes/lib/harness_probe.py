@@ -29,7 +29,24 @@ Fallback when the tripwire fires: restore the dropped records via a one-commit r
 #629 slim commit (binding fail-direction for #629 — never silently drop context; prefer
 duplication over absence).
 
-Validated against Claude Code 2.1.219. Stdlib-only.
+PreCompact top-level ``additionalContext`` tripwire (#911):
+
+Live-session procedure: wire a throwaway PreCompact hook that emits a top-level
+``additionalContext`` instructing the summarizer to begin its summary with a unique token.
+Run a session with enough turns to compact, invoke ``/compact``, then capture evidence and run::
+
+    python3 lib/harness_probe.py --check-precompact <file> --precompact-token <token>
+
+PASS (exit 0): no ``Hook JSON output validation failed`` in the evidence and the token appears
+in the generated summary.
+
+FAIL (exit 1): validation error present or token absent — TRIPWIRE FIRED.
+
+Fallback when this tripwire fires: the SessionStart recovery block (issue #911 part 2) is the
+durable backstop and keeps working; only summary shaping is lost.
+
+Validated against Claude Code 2.1.219 (native layer) and 2.1.222 (PreCompact top-level key).
+Stdlib-only.
 """
 from __future__ import annotations
 
@@ -37,10 +54,12 @@ import argparse
 import sys
 
 NATIVE_LAYER_MARKER = "# claudeMd"
+PRECOMPACT_VALIDATION_FAILURE = "Hook JSON output validation failed"
 
 SPAWN_PATHS = ("plain chat", "headless -p", "slash-command spawn")
 
 _VALIDATED_VERSION = "2.1.219"
+_PRECOMPACT_VALIDATED_VERSION = "2.1.222"
 
 
 def native_layer_present(context_text) -> bool:
@@ -48,6 +67,19 @@ def native_layer_present(context_text) -> bool:
     if not isinstance(context_text, str):
         return False
     return any(line.strip() == NATIVE_LAYER_MARKER for line in context_text.splitlines())
+
+
+def precompact_evidence_passes(context_text, token) -> tuple[bool, str]:
+    """Return (ok, reason) for PreCompact top-level additionalContext evidence."""
+    if not isinstance(context_text, str):
+        return False, "evidence is not text"
+    if PRECOMPACT_VALIDATION_FAILURE in context_text:
+        return False, f"found {PRECOMPACT_VALIDATION_FAILURE!r}"
+    if not token:
+        return False, "no --precompact-token supplied"
+    if token not in context_text:
+        return False, f"token {token!r} absent from evidence"
+    return True, ""
 
 
 def _procedure_text() -> str:
@@ -67,6 +99,24 @@ FAIL (exit 1): marker absent — TRIPWIRE FIRED; restore the dropped records (on
 """
 
 
+def _precompact_procedure_text() -> str:
+    return f"""Harness PreCompact top-level additionalContext tripwire (Claude Code {_PRECOMPACT_VALIDATED_VERSION})
+
+WHEN: Run on every Claude Code / harness upgrade (~30s), especially after a harness change to hook JSON validation or compaction.
+
+PROCEDURE:
+  1. Wire a throwaway PreCompact hook emitting a top-level additionalContext that instructs
+     the summarizer to begin its summary with a unique token.
+  2. Run a session with enough turns to compact; invoke /compact.
+  3. Capture evidence (session log or summary dump) containing the compaction output.
+  4. Run: python3 lib/harness_probe.py --check-precompact <file> --precompact-token <token>
+
+PASS (exit 0): no {PRECOMPACT_VALIDATION_FAILURE!r} and token present in summary.
+FAIL (exit 1): TRIPWIRE FIRED — SessionStart recovery block remains the durable backstop;
+only summary shaping is lost.
+"""
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(
         description="Tripwire probe for harness native project-context injection (#629).",
@@ -76,10 +126,48 @@ def main(argv=None) -> int:
         metavar="PATH",
         help="Evidence file to check ('-' = stdin). Omit to print the live procedure.",
     )
+    parser.add_argument(
+        "--check-precompact",
+        metavar="PATH",
+        help="PreCompact evidence file to check ('-' = stdin).",
+    )
+    parser.add_argument(
+        "--precompact-token",
+        metavar="TOKEN",
+        help="Expected unique token from the throwaway PreCompact hook (required with --check-precompact).",
+    )
     args = parser.parse_args(argv)
+
+    if args.check_precompact is not None:
+        if not args.precompact_token:
+            print("FAIL: --check-precompact requires --precompact-token")
+            return 1
+        try:
+            if args.check_precompact == "-":
+                context_text = sys.stdin.read()
+            else:
+                with open(args.check_precompact, encoding="utf-8", errors="replace") as fh:
+                    context_text = fh.read()
+        except OSError as exc:
+            print(f"FAIL: cannot read evidence file {args.check_precompact!r}: {exc}")
+            return 1
+        ok, reason = precompact_evidence_passes(context_text, args.precompact_token)
+        if ok:
+            print(
+                "PASS: PreCompact top-level additionalContext accepted and token present "
+                "— harness dependency holds"
+            )
+            return 0
+        print(
+            "FAIL: PreCompact tripwire FIRED (%s); SessionStart recovery block remains "
+            "the durable backstop — only summary shaping is lost" % reason
+        )
+        return 1
 
     if args.check is None:
         print(_procedure_text(), end="")
+        print()
+        print(_precompact_procedure_text(), end="")
         return 0
 
     try:

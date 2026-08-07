@@ -12,6 +12,9 @@
     ],
     "SessionStart": [
       { "hooks": [ { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/session_start.py\" --host claude || true" } ] }
+    ],
+    "PreCompact": [
+      { "hooks": [ { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/compaction_context.py\" || true" } ] }
     ]
   }
 }
