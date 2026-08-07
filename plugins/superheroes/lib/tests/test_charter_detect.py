@@ -156,3 +156,25 @@ def test_assistant_quoting_marker_returns_none(tmp_path):
         },
     ])
     assert cd.detect_charter(str(path)) is None
+
+
+def test_unreadable_transcript_emits_breadcrumb(tmp_path, capsys):
+    path = tmp_path / "transcript.jsonl"
+    path.write_text('{"type":"user"}\n', encoding="utf-8")
+    path.chmod(0o000)
+    try:
+        assert cd.detect_charter(str(path)) is None
+        err = capsys.readouterr().err
+        assert "superheroes charter_detect:" in err
+        assert str(path) in err
+    finally:
+        path.chmod(0o644)
+
+
+def test_no_charter_transcript_emits_no_breadcrumb(tmp_path, capsys):
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [
+        {"type": "user", "isSidechain": False, "message": {"role": "user", "content": "hello"}},
+    ])
+    assert cd.detect_charter(str(path)) is None
+    assert capsys.readouterr().err == ""

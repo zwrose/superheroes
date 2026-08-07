@@ -41,10 +41,10 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 TRANSCRIPT_PATH="<absolute path to this session's transcript>"
 python3 -B -c "
 import sys, os
-sys.path.insert(0, os.path.join('$ROOT_DIR', 'lib'))
+sys.path.insert(0, os.path.join(sys.argv[1], 'lib'))
 import charter_detect
-print(charter_detect.detect_charter('$TRANSCRIPT_PATH'))
-"
+print(charter_detect.detect_charter(sys.argv[2]))
+" "$ROOT_DIR" "$TRANSCRIPT_PATH"
 ```
 
 **If the result is `None`** → refuse with a plain, friendly message: `checkpoint` is for

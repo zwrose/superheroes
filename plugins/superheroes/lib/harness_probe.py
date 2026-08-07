@@ -55,6 +55,8 @@ import sys
 
 NATIVE_LAYER_MARKER = "# claudeMd"
 PRECOMPACT_VALIDATION_FAILURE = "Hook JSON output validation failed"
+# Harness-written heading in captured compaction evidence; the generated summary follows.
+PRECOMPACT_SUMMARY_MARKER = "Compaction summary"
 
 SPAWN_PATHS = ("plain chat", "headless -p", "slash-command spawn")
 
@@ -69,6 +71,20 @@ def native_layer_present(context_text) -> bool:
     return any(line.strip() == NATIVE_LAYER_MARKER for line in context_text.splitlines())
 
 
+def _precompact_summary_region(context_text):
+    """Slice of evidence after the harness compaction-summary marker, or None if absent.
+
+    Assumes captured evidence is a session log or summary dump where the harness writes a
+    ``Compaction summary`` heading and the model-generated summary text follows it. Hook
+    payloads and PreCompact instructions may appear earlier in the same file; this anchor
+    limits the token check to the summary region only. It does not prove the token opened
+    the summary — only that it appears after the marker, not solely in hook output."""
+    idx = context_text.rfind(PRECOMPACT_SUMMARY_MARKER)
+    if idx == -1:
+        return None
+    return context_text[idx + len(PRECOMPACT_SUMMARY_MARKER) :]
+
+
 def precompact_evidence_passes(context_text, token) -> tuple[bool, str]:
     """Return (ok, reason) for PreCompact top-level additionalContext evidence."""
     if not isinstance(context_text, str):
@@ -77,8 +93,11 @@ def precompact_evidence_passes(context_text, token) -> tuple[bool, str]:
         return False, f"found {PRECOMPACT_VALIDATION_FAILURE!r}"
     if not token:
         return False, "no --precompact-token supplied"
-    if token not in context_text:
-        return False, f"token {token!r} absent from evidence"
+    region = _precompact_summary_region(context_text)
+    if region is None:
+        return False, f"compaction summary marker {PRECOMPACT_SUMMARY_MARKER!r} absent from evidence"
+    if token not in region:
+        return False, f"token {token!r} absent from generated summary region"
     return True, ""
 
 

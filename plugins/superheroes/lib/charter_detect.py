@@ -10,6 +10,7 @@ invocations appear early; a tail window would miss them in long sessions).
 import json
 import os
 import re
+import sys
 
 MAX_SCAN_BYTES = 200 * 1024 * 1024
 
@@ -34,6 +35,16 @@ def _charter_from_record(rec):
         return None
     m = _CHARTER_RE.search(content)
     return m.group(1) if m else None
+
+
+def _breadcrumb(transcript_path, exc):
+    """One-line diagnostic to stderr. Path and exception type only — never file contents."""
+    try:
+        sys.stderr.write(
+            "superheroes charter_detect: %s — %s\n" % (transcript_path, type(exc).__name__)
+        )
+    except Exception:
+        pass
 
 
 def detect_charter(transcript_path):
@@ -62,5 +73,6 @@ def detect_charter(transcript_path):
                 if found is not None:
                     last = found
         return last
-    except Exception:
+    except Exception as exc:
+        _breadcrumb(transcript_path, exc)
         return None

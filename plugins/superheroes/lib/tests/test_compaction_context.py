@@ -75,7 +75,13 @@ def test_showrunner_emits_top_level_additional_context(monkeypatch, capsys, tmp_
     assert "additionalContext" in out
     assert "hookSpecificOutput" not in out
     assert "SHOWRUNNER" in out["additionalContext"]
-    assert mod._COMPACTION_SKELETONS["showrunner"] == out["additionalContext"]
+    ctx = out["additionalContext"]
+    assert "Resume-point pointer" in ctx
+    assert "Live build lanes" in ctx
+    assert "Vet ordinal" in ctx
+    assert "Open owner decisions" in ctx
+    assert "hard line" in ctx
+    assert "Verbatim tool output, file diffs" in ctx
 
 
 def test_workhorse_emits_top_level_additional_context(monkeypatch, capsys, tmp_path):
@@ -90,8 +96,14 @@ def test_workhorse_emits_top_level_additional_context(monkeypatch, capsys, tmp_p
     assert "additionalContext" in out
     assert "hookSpecificOutput" not in out
     assert "WORKHORSE" in out["additionalContext"]
-    assert mod._COMPACTION_SKELETONS["workhorse"] == out["additionalContext"]
     assert "SHOWRUNNER" not in out["additionalContext"]
+    ctx = out["additionalContext"]
+    assert "Issue number being built" in ctx
+    assert "Current work order" in ctx
+    assert "Build worktree path and branch name" in ctx
+    assert "receipts have been earned" in ctx
+    assert "open blocker" in ctx
+    assert "Verbatim tool output, file diffs" in ctx
 
 
 def test_no_charter_transcript_is_silent(monkeypatch, capsys, tmp_path):
