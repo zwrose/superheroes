@@ -158,7 +158,7 @@ The normative `pilot` object shape (shown above under `"pilot":`) is:
 | Field | Type | Required | Closed enum / condition | Refusal token |
 |---|---|---|---|---|
 | `schemaVersion` | integer | required | must be `1` | `pilot-schema-version-unsupported` |
-| `signInPath` | string | required | `attended` or `minted` | `pilot-sign-in-path-invalid`; `pilot-sign-in-path-retired-captured` (retired literal `captured`) |
+| `signInPath` | string | required | `attended` or `minted` | `pilot-sign-in-path-invalid`; `pilot-sign-in-path-retired-captured` (retired literal `captured`); `pilot-sign-in-path-unhandled` (a `SIGN_IN_PATHS` member has no entry in the sign-in-path required-block mapping — completeness guard; fail-closed instead of falling through) |
 | `attended` | object | conditional | required when `signInPath` is `"attended"`; optional otherwise | `pilot-attended-declaration-missing`; `pilot-attended-declaration-invalid` |
 | `attended.vehicle` | string | required when `attended` present | `automation` or `real-chrome` | `pilot-attended-vehicle-invalid` |
 | `credentialSet` | array of objects | required | non-empty | `pilot-credential-set-empty` |
@@ -710,11 +710,13 @@ sign-in into the live browser context: nothing is captured, stored, or transferr
 session dies with teardown.
 
 `seeding_vehicle(attended_declaration, *, idp_rejects_automation, human_driven_rejected=False)`
-returns the browser vehicle string. Default is `automation`; when the declaration's `vehicle` is
-`real-chrome`, or when the identity provider rejects automation (`idp_rejects_automation`), the
-vehicle escalates to `real-chrome`. When even a human-driven provisioned browser is refused
-(`human_driven_rejected`), the project declares pilot auth unsupported for that mechanism via
-`attended-vehicle-unsupported-mechanism`; **minted sign-in remains available**.
+returns a uniform `ok`-keyed dict on both paths. On success: `{"ok": true, "reason": null,
+"vehicle": "<automation|real-chrome>"}`. On refusal: `{"ok": false, "reason": "<token>"}`. Default
+vehicle is `automation`; when the declaration's `vehicle` is `real-chrome`, or when the identity
+provider rejects automation (`idp_rejects_automation`), the vehicle escalates to `real-chrome`.
+When even a human-driven provisioned browser is refused (`human_driven_rejected`), the project
+declares pilot auth unsupported for that mechanism via `attended-vehicle-unsupported-mechanism`;
+**minted sign-in remains available**.
 
 `attended_seeding_plan(slot, generation, accounts, *, sign_in_path, attended_declaration,
 capture_surfaces, expected_identities, ...)` builds one step per `(slotRef, account)` pair. Each
@@ -730,8 +732,14 @@ identity; **any other account, including the owner's own personal account, refus
 uses `hmac.compare_digest` on UTF-8 bytes. The artifact half (`pilot_seed.verify_artifact`) is not
 on this path because there is no artifact.
 
-`seed_outcome(steps, results)` requires every account to verify; any refusal refuses the whole
-slot, because a partly-seeded slot is never usable.
+`seed_outcome(steps, results)` requires every account to present the **exact** `verify_at_seed`
+success shape: `ok` a real `bool` and `true`, `outcome == "verified"`, `reason` is `null`, and
+`identity` equal to that account's `expectedIdentity` from its step (compared with
+`hmac.compare_digest` on UTF-8 bytes). Anything malformed — a truthy `ok` that is not a real
+`verify_at_seed` success, a missing account, or a mismatched step/result set — refuses with
+`attended-seed-incomplete`, because a slot may not be certified seeded on a result that never
+came from a real verify-at-seed. A well-formed per-account refusal (`ok` is `false` with a
+bool) still refuses the whole slot with that account's `reason`.
 
 `lapse_disposition(answer, *, reprobe_count)` delegates to `pilot_identity.lapse_step` with
 `sign_in_path="attended"` so attended lapse and identity lapse can never disagree.
@@ -753,7 +761,7 @@ slot, because a partly-seeded slot is never usable.
 | `attended-slot-ref-invalid` | `attended_seeding_plan`: slot reference or generation invalid |
 | `attended-account-invalid` | `attended_seeding_plan`: account entry malformed |
 | `attended-context-reused` | `attended_seeding_plan`: duplicate `(slotRef, account)` pair |
-| `attended-seed-incomplete` | `seed_outcome`: steps or results incomplete or mismatched |
+| `attended-seed-incomplete` | `seed_outcome`: steps or results incomplete, mismatched, or any account result is not the exact `verify_at_seed` success shape |
 
 ## Slot reference format
 
@@ -1648,20 +1656,33 @@ Attended sign-in is the first thing that legitimately leaves the app's own origi
 signs in through a real identity provider — so the declared `permittedRedirects` allowance
 becomes load-bearing on that path.
 
-`normalize_origin(value)` canonicalizes to `scheme://host[:port]` for http(s) URLs. Origins are
-compared exactly, never by string prefix.
+`normalize_origin(value)` canonicalizes to `scheme://host[:port]` for http(s) URLs. Malformed URL
+authorities — including `urlsplit` failures and invalid port values such as non-numeric ports
+or out-of-range port numbers — refuse with `lifecycle-exercise-origin-invalid` instead of letting
+a bare `ValueError` escape. Origins are compared exactly, never by string prefix.
 
 `evaluate_trace(trace, *, origin, permitted_redirects)` grades a navigation trace: every visited
 origin must be the declared origin or a permitted redirect; the trace must start and end at the
-declared origin.
+declared origin. For grading only, permitted redirects are normalized (canonicalized,
+de-duplicated, and sorted) before comparison — that normalization never reaches the declaration
+digest. A malformed trace entry refuses `lifecycle-exercise-trace-invalid`; a malformed permitted-
+redirect list refuses `lifecycle-exercise-redirect-invalid`.
 
-`app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redirects)` builds the
-canonical declaration an app-lifecycle receipt is bound to. Permitted redirects are sorted and
-de-duplicated so redirect **order** cannot invalidate a good receipt.
+`app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redirects)` returns the
+digested `declaration` plus `slot`, `generation`, and `policyDigest` as metadata **outside** the
+digest. The `declaration` member is the **raw policy shape** —
+`{"origin": <origin>, "permittedRedirects": <permitted_redirects>}` — byte-for-byte what
+`pilot_provision.declaration_for("app-lifecycle", …)` returns. **Only** that `declaration` member
+is digested; the gate has no normalizer, so the producer must digest exactly what the gate
+digests. Redirect **order is significant** to the digest — the gate does not sort or de-duplicate
+`permittedRedirects`, so the producer must not either; keeping redirect order stable is the policy
+document's concern.
 
 `app_lifecycle_receipt(declaration, result, *, exercised_at)` builds the registry record. The
-result must bind to its declaration; a forged result refuses. Evidence carries origins only —
-never a path, query, or fragment, because a sign-in URL can carry tokens.
+result must bind to its declaration; a forged result refuses. On pass, evidence carries origins
+only — never a path, query, or fragment, because a sign-in URL can carry tokens. On fail,
+evidence is pinned to the module's own `REFUSAL_*` tokens only; any other reason is recorded as
+`lifecycle-exercise-refused` so caller-controlled free text never reaches the persisted record.
 
 `require_app_lifecycle_exercised(registry, declaration)` requires a matching exercised record in
 the registry.
@@ -2107,7 +2128,11 @@ containment on every termination path is unconditional in both modes.
 
 `resurrection_plan` orders: parameterized cleanup → reseed through A1's interface via A3's
 authorization chokepoint → a new generation (**enforced at the broker, C7 — this planner does
-not perform it**) → resume.
+not perform it**) → resume. The `artifact` keyword is not part of the signature.
+
+Sign-in-path dispatch is exhaustive: `"attended"` maps to **`park`** and `"minted"` maps to
+**`resurrect`** with mint reseed steps. An unknown `signInPath` or dispatch kind **raises** rather
+than falling through to mint.
 
 On the **`attended`** sign-in path, `resurrection_plan` returns **`park`** with
 `cleanup-attended-reseed-requires-owner` and carries **no steps** — nothing is cleaned up and
@@ -2411,7 +2436,9 @@ on; the receipt is checked before live seeding runs.
 
 Both `context_set` and `context_spec` take a required keyword-only `sign_in_path` argument.
 Live-seeding paths (`attended` and `minted`) take **no** artifact; a supplied artifact refuses
-with `context-artifact-refused-on-live-seeding`. An invalid `sign_in_path` refuses
+with `context-artifact-refused-on-live-seeding`. A non-string `sign_in_path` (for example a list
+or dict) refuses `context-sign-in-path-invalid` via an `isinstance` check before membership
+testing — it does not raise `TypeError`. Any other invalid `sign_in_path` also refuses
 `context-sign-in-path-invalid`. The returned spec carries `"artifact": None`.
 
 `context_spec_from_artifact(slot_ref, account, artifact, *, capture_surfaces,
@@ -2442,7 +2469,7 @@ Public API in `lib/pilot_context.py`: `context_set`, `context_spec`, `context_sp
 | `context-provisioning-receipt-invalid` | `context_spec`: receipt is not a dict, is missing a required key (`slotRef`, `policyDigest`, `datastoreIdentity`, `declarations`), any required value is `None` or wrong type, `declarations` is empty or an entry lacks `kind` or `status`, `datastoreIdentity` lacks non-empty `provenance`/`strength` or `match` is not `true`, or `policyDigest` is empty |
 | `context-provisioning-receipt-slot-mismatch` | `context_spec`: receipt `slotRef` does not equal the canonical slot reference for the caller's `slot_ref` |
 | `context-options-mismatch` | `context_spec`: `requested_options` is supplied and does not exactly equal `required_context_options(capture_surfaces)` |
-| `context-sign-in-path-invalid` | `context_set` or `context_spec`: `sign_in_path` not in `attended` / `minted` |
+| `context-sign-in-path-invalid` | `context_set` or `context_spec`: `sign_in_path` is not a string, or is not in `attended` / `minted` |
 | `context-artifact-refused-on-live-seeding` | `context_set` or `context_spec`: artifact supplied on attended or minted live-seeding path |
 | `context-artifact-missing` | `context_spec_from_artifact`: artifact is `None` |
 | `context-shared-context-refused` | `context_set`: two accounts would share the same context identity |

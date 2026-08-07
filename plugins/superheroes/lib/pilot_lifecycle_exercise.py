@@ -62,7 +62,11 @@ def _origin_host_part(host):
 
 
 def normalize_origin(value):
-    """Return canonical ``scheme://host[:port]`` for a URL or origin string."""
+    """Return canonical ``scheme://host[:port]`` for a URL or origin string.
+
+    Malformed authorities refuse with ``lifecycle-exercise-origin-invalid`` instead of
+    letting a bare ``ValueError`` escape from ``urlsplit`` or port parsing.
+    """
     # bite-axis: origin canonicalization — only http(s) with valid host; default ports stripped;
     # never compare origins by string prefix.
     if not isinstance(value, str) or not value:
@@ -210,7 +214,10 @@ def _gate_declaration(declaration):
 
 
 def app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redirects):
-    """Canonical declaration an app-lifecycle receipt is bound to."""
+    """Return the digested declaration plus slot, generation, and policyDigest metadata.
+
+    Only the raw-policy ``declaration`` member is digested; redirect order is significant.
+    """
     # bite-axis: declaration binding — slot ref and policy digest as metadata; the digested
     # declaration matches pilot_provision's raw policy origin and permittedRedirects.
     try:

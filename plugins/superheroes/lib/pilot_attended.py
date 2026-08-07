@@ -103,7 +103,7 @@ def seeding_vehicle(
     idp_rejects_automation,
     human_driven_rejected=False,
 ):
-    """Return the browser vehicle string for attended seeding."""
+    """Return an ok-keyed dict with the browser vehicle on success or a refusal on failure."""
     # bite-axis: vehicle escalation — real-chrome when declared or when IdP rejects automation.
     if type(human_driven_rejected) is not bool:
         return _refusal(REFUSAL_VEHICLE_INVALID)
