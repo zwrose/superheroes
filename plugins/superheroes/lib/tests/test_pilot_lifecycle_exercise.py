@@ -12,6 +12,7 @@ if _LIB not in sys.path:
 
 import pilot_contract  # noqa: E402
 import pilot_lifecycle_exercise as ple  # noqa: E402
+import pilot_provision as pp  # noqa: E402
 
 APP_ORIGIN = "https://app.example.com"
 IDP_ORIGIN = "https://idp.example.com"
@@ -81,6 +82,50 @@ def test_normalize_origin_strips_default_ports_keeps_non_default():
 def test_normalize_origin_lowercases_and_drops_path_query_fragment():
     """Edge 4: scheme/host lowercased; path/query/fragment dropped."""
     assert ple.normalize_origin("HTTPS://APP.EXAMPLE.COM/Path?Q=1#frag") == "https://app.example.com"
+
+
+@pytest.mark.parametrize("value", [
+    "https://app.example:bad",
+    "https://app.example:99999",
+    "https://[::1",
+])
+def test_normalize_origin_refuses_malformed_authority(value):
+    """Malformed port or IPv6 authority refuses lifecycle-exercise-origin-invalid."""
+    with pytest.raises(ple.PilotLifecycleExerciseError) as exc:
+        ple.normalize_origin(value)
+    assert exc.value.reason == ple.REFUSAL_ORIGIN_INVALID
+
+
+def test_normalize_origin_accepts_valid_ipv6_with_port():
+    """Edge 9: valid IPv6 origin normalizes without refusing."""
+    assert ple.normalize_origin("https://[::1]:8443") == "https://[::1]:8443"
+
+
+@pytest.mark.parametrize("value", [
+    "https://app.example:bad",
+    "https://app.example:99999",
+    "https://[::1",
+])
+def test_evaluate_trace_malformed_trace_entry_returns_trace_invalid(value):
+    """Malformed trace URL returns lifecycle-exercise-trace-invalid, never raises."""
+    result = ple.evaluate_trace(
+        [APP_ORIGIN, value, APP_ORIGIN],
+        origin=APP_ORIGIN,
+        permitted_redirects=[IDP_ORIGIN],
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ple.REFUSAL_TRACE_INVALID
+
+
+def test_evaluate_trace_malformed_permitted_redirect_returns_redirect_invalid():
+    """Malformed permitted_redirects member returns redirect-invalid, never raises."""
+    result = ple.evaluate_trace(
+        [APP_ORIGIN],
+        origin=APP_ORIGIN,
+        permitted_redirects=["https://app.example:bad"],
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ple.REFUSAL_REDIRECT_INVALID
 
 
 def test_evaluate_trace_prefix_lookalike_refuses():
@@ -224,13 +269,13 @@ def test_app_lifecycle_declaration_bad_policy_digest(policy_digest):
     assert exc.value.reason == ple.REFUSAL_DECLARATION_INVALID
 
 
-def test_app_lifecycle_declaration_redirect_order_and_duplicates_digest_stable():
-    """Edge 17: redirect order and duplicates produce the same declaration digest."""
+def test_app_lifecycle_declaration_redirect_order_changes_digest():
+    """Redirect order in policy produces different declaration digests (gate does not sort)."""
     decl_a = ple.app_lifecycle_declaration(
         slot_ref=SLOT_REF,
         policy_digest=POLICY_DIGEST,
         origin=APP_ORIGIN,
-        permitted_redirects=[IDP_ORIGIN, OTHER_IDP, IDP_ORIGIN],
+        permitted_redirects=[IDP_ORIGIN, OTHER_IDP],
     )
     decl_b = ple.app_lifecycle_declaration(
         slot_ref=SLOT_REF,
@@ -238,8 +283,11 @@ def test_app_lifecycle_declaration_redirect_order_and_duplicates_digest_stable()
         origin=APP_ORIGIN,
         permitted_redirects=[OTHER_IDP, IDP_ORIGIN],
     )
-    assert decl_a == decl_b
-    assert pilot_contract.declaration_digest(decl_a) == pilot_contract.declaration_digest(decl_b)
+    assert decl_a["declaration"]["permittedRedirects"] == [IDP_ORIGIN, OTHER_IDP]
+    assert decl_b["declaration"]["permittedRedirects"] == [OTHER_IDP, IDP_ORIGIN]
+    digest_a = pilot_contract.declaration_digest(decl_a["declaration"])
+    digest_b = pilot_contract.declaration_digest(decl_b["declaration"])
+    assert digest_a != digest_b
 
 
 @pytest.mark.parametrize("exercised_at", ["", None, 0])
@@ -277,6 +325,21 @@ def test_app_lifecycle_receipt_fail_carries_reason():
     record = ple.app_lifecycle_receipt(declaration, result, exercised_at=EXERCISED_AT)
     assert record["receipt"]["result"] == "fail"
     assert record["receipt"]["evidence"] == ple.REFUSAL_NAVIGATION_ESCAPED
+
+
+def test_app_lifecycle_receipt_fail_rejects_unpinned_reason():
+    """Edge 10: caller reason not in REFUSAL_* tokens is not copied verbatim into evidence."""
+    declaration = _declaration()
+    forged = {
+        "ok": False,
+        "reason": "https://idp.example.com/login?token=secret",
+        "origins": [],
+        "escaped": None,
+    }
+    record = ple.app_lifecycle_receipt(declaration, forged, exercised_at=EXERCISED_AT)
+    assert record["receipt"]["result"] == "fail"
+    assert record["receipt"]["evidence"] == ple.EVIDENCE_REFUSAL_UNPINNED
+    assert "token=secret" not in record["receipt"]["evidence"]
 
 
 def test_app_lifecycle_receipt_evidence_never_carries_url_parts():
@@ -322,8 +385,8 @@ def test_app_lifecycle_declaration_shape():
     assert declaration["slot"] == "slot-a"
     assert declaration["generation"] == 1
     assert declaration["policyDigest"] == POLICY_DIGEST
-    assert declaration["origin"] == "https://app.example.com"
-    assert declaration["permittedRedirects"] == ["https://idp.example.com"]
+    assert declaration["declaration"]["origin"] == APP_ORIGIN
+    assert declaration["declaration"]["permittedRedirects"] == [IDP_ORIGIN]
 
 
 def test_app_lifecycle_receipt_pass_round_trip():
@@ -334,7 +397,64 @@ def test_app_lifecycle_receipt_pass_round_trip():
         "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
         "records": [record],
     }
-    assert pilot_contract.is_exercised(registry, "app-lifecycle", declaration) is True
+    gate_declaration = declaration["declaration"]
+    assert pilot_contract.is_exercised(registry, "app-lifecycle", gate_declaration) is True
+
+
+def test_app_lifecycle_receipt_matches_pilot_provision_gate_declaration():
+    """Integration: receipt digest matches pilot_provision.declaration_for gate declaration."""
+    policy = {
+        "schemaVersion": 1,
+        "declaration": "test-policy",
+        "protectedTargets": ["https://app.example.com:443"],
+        "datastore": {
+            "expectedIdentity": "example_dev",
+            "connectionDetail": "postgres://localhost:5432/example_dev",
+            "observer": None,
+        },
+        "slots": {
+            "slot-a": {
+                "origin": APP_ORIGIN,
+                "permittedRedirects": [IDP_ORIGIN],
+                "expectedIdentities": {"owner": "pilot-owner@example.test"},
+            },
+        },
+    }
+    block = {
+        "schemaVersion": 1,
+        "signInPath": "attended",
+        "attended": {"vehicle": "automation"},
+        "credentialSet": [{"account": "owner", "role": "resource-owner"}],
+        "captureSurface": ["cookies"],
+        "captureOptions": {"indexedDB": False, "credentials": False},
+        "validityProvenance": "server-probe",
+        "identityProbe": {"path": "/api/me", "unseededExpectation": "no-session"},
+        "cleanup": {"command": ["npm", "run", "fixtures:clean"]},
+        "administrativeMax": 4,
+        "effectsEscape": {"canEscape": False, "evidence": "sandboxed"},
+        "policyRef": {"declaration": "example-project-pilot-policy"},
+    }
+    slot_ref = SLOT_REF
+    gate_info = pp.declaration_for("app-lifecycle", block, policy, slot_ref)
+    gate_declaration = gate_info["declaration"]
+    declaration = ple.app_lifecycle_declaration(
+        slot_ref=slot_ref,
+        policy_digest=POLICY_DIGEST,
+        origin=gate_declaration["origin"],
+        permitted_redirects=gate_declaration["permittedRedirects"],
+    )
+    result = ple.evaluate_trace(
+        _sign_in_trace(),
+        origin=gate_declaration["origin"],
+        permitted_redirects=gate_declaration["permittedRedirects"],
+    )
+    assert result["ok"] is True
+    record = ple.app_lifecycle_receipt(declaration, result, exercised_at=EXERCISED_AT)
+    registry = {
+        "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
+        "records": [record],
+    }
+    assert pilot_contract.is_exercised(registry, "app-lifecycle", gate_declaration) is True
 
 
 def test_fail_receipt_not_exercised():
@@ -349,4 +469,4 @@ def test_fail_receipt_not_exercised():
         "schemaVersion": pilot_contract.REGISTRY_SCHEMA_VERSION,
         "records": [record],
     }
-    assert pilot_contract.is_exercised(registry, "app-lifecycle", declaration) is False
+    assert pilot_contract.is_exercised(registry, "app-lifecycle", declaration["declaration"]) is False

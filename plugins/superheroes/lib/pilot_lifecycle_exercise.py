@@ -22,6 +22,20 @@ REFUSAL_NAVIGATION_ESCAPED = "lifecycle-exercise-navigation-escaped"
 REFUSAL_TRACE_DID_NOT_RETURN = "lifecycle-exercise-trace-did-not-return"
 REFUSAL_RECEIPT_ARGUMENT_INVALID = "lifecycle-exercise-receipt-argument-invalid"
 
+EVIDENCE_REFUSAL_UNPINNED = "lifecycle-exercise-refused"
+
+_REFUSAL_TOKENS = frozenset({
+    REFUSAL_DECLARATION_SLOT_INVALID,
+    REFUSAL_DECLARATION_INVALID,
+    REFUSAL_ORIGIN_INVALID,
+    REFUSAL_REDIRECT_INVALID,
+    REFUSAL_TRACE_INVALID,
+    REFUSAL_TRACE_EMPTY,
+    REFUSAL_NAVIGATION_ESCAPED,
+    REFUSAL_TRACE_DID_NOT_RETURN,
+    REFUSAL_RECEIPT_ARGUMENT_INVALID,
+})
+
 
 class PilotLifecycleExerciseError(Exception):
     """App-lifecycle exercise refusal."""
@@ -56,7 +70,10 @@ def normalize_origin(value):
     if any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 for ch in value):
         raise PilotLifecycleExerciseError(REFUSAL_ORIGIN_INVALID)
 
-    parsed = urlsplit(value)
+    try:
+        parsed = urlsplit(value)
+    except ValueError:
+        raise PilotLifecycleExerciseError(REFUSAL_ORIGIN_INVALID)
     scheme = parsed.scheme.lower() if parsed.scheme else ""
     if scheme not in ("http", "https"):
         raise PilotLifecycleExerciseError(REFUSAL_ORIGIN_INVALID)
@@ -67,7 +84,10 @@ def normalize_origin(value):
     if not host:
         raise PilotLifecycleExerciseError(REFUSAL_ORIGIN_INVALID)
 
-    port = parsed.port
+    try:
+        port = parsed.port
+    except ValueError:
+        raise PilotLifecycleExerciseError(REFUSAL_ORIGIN_INVALID)
     host_part = _origin_host_part(host)
     default_port = 80 if scheme == "http" else 443
     if port is None or port == default_port:
@@ -180,10 +200,19 @@ def evaluate_trace(trace, *, origin, permitted_redirects):
     }
 
 
+def _gate_declaration(declaration):
+    if not isinstance(declaration, dict):
+        raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
+    inner = declaration.get("declaration")
+    if not isinstance(inner, dict):
+        raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
+    return inner
+
+
 def app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redirects):
     """Canonical declaration an app-lifecycle receipt is bound to."""
-    # bite-axis: declaration binding — slot ref, policy digest, normalized origin, and sorted
-    # de-duplicated permitted redirects; policy material never travels in the declaration.
+    # bite-axis: declaration binding — slot ref and policy digest as metadata; the digested
+    # declaration matches pilot_provision's raw policy origin and permittedRedirects.
     try:
         slot, generation = pilot_slot.parse_slot_ref(slot_ref)
     except pilot_slot.PilotSlotError:
@@ -192,29 +221,40 @@ def app_lifecycle_declaration(*, slot_ref, policy_digest, origin, permitted_redi
     if not isinstance(policy_digest, str) or not policy_digest:
         raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
 
+    if not isinstance(origin, str) or not origin:
+        raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
+
+    if not isinstance(permitted_redirects, list):
+        raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
+    for redirect in permitted_redirects:
+        if not isinstance(redirect, str):
+            raise PilotLifecycleExerciseError(REFUSAL_DECLARATION_INVALID)
+        try:
+            normalize_origin(redirect)
+        except PilotLifecycleExerciseError:
+            raise
+
     try:
-        normalized_origin = normalize_origin(origin)
+        normalize_origin(origin)
     except PilotLifecycleExerciseError:
         raise
 
-    normalized_redirects = _normalize_redirect_list(permitted_redirects)
-
     return {
+        "declaration": {
+            "origin": origin,
+            "permittedRedirects": permitted_redirects,
+        },
         "slot": slot,
         "generation": generation,
         "policyDigest": policy_digest,
-        "origin": normalized_origin,
-        "permittedRedirects": normalized_redirects,
     }
 
 
 def _validate_evaluate_trace_result(result, declaration):
     """Require result to be a real evaluate_trace return shape bound to declaration."""
-    if not isinstance(declaration, dict):
-        raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
-
-    declared_origin = declaration.get("origin")
-    declared_redirects = declaration.get("permittedRedirects")
+    gate_decl = _gate_declaration(declaration)
+    declared_origin = gate_decl.get("origin")
+    declared_redirects = gate_decl.get("permittedRedirects")
     if not isinstance(declared_origin, str) or not isinstance(declared_redirects, list):
         raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
 
@@ -248,11 +288,20 @@ def _validate_evaluate_trace_result(result, declaration):
             raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
 
     if ok is True:
-        allowed = _allowed_origins(declared_origin, declared_redirects)
+        try:
+            normalized_origin = normalize_origin(declared_origin)
+            normalized_redirects = _normalize_redirect_list(declared_redirects)
+        except PilotLifecycleExerciseError:
+            raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
+        allowed = _allowed_origins(normalized_origin, normalized_redirects)
         for trace_origin in origins:
             if trace_origin not in allowed:
                 raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
-        if not origins or origins[0] != declared_origin or origins[-1] != declared_origin:
+        if (
+            not origins
+            or origins[0] != normalized_origin
+            or origins[-1] != normalized_origin
+        ):
             raise PilotLifecycleExerciseError(REFUSAL_RECEIPT_ARGUMENT_INVALID)
 
     return ok, origins, reason
@@ -277,12 +326,12 @@ def app_lifecycle_receipt(declaration, result, *, exercised_at):
         evidence = "%d origin(s) visited" % len(origins)
         receipt_result = "pass"
     else:
-        evidence = reason
+        evidence = reason if reason in _REFUSAL_TOKENS else EVIDENCE_REFUSAL_UNPINNED
         receipt_result = "fail"
 
     return {
         "kind": "app-lifecycle",
-        "declarationDigest": pilot_contract.declaration_digest(declaration),
+        "declarationDigest": pilot_contract.declaration_digest(_gate_declaration(declaration)),
         "exercisedAt": exercised_at,
         "receipt": {
             "result": receipt_result,
@@ -299,4 +348,6 @@ def require_app_lifecycle_exercised(registry, declaration):
     no freshness or launched-instance binding — the declaration binds slot, generation, and
     policy digest.
     """
-    return pilot_contract.require_exercised(registry, "app-lifecycle", declaration)
+    return pilot_contract.require_exercised(
+        registry, "app-lifecycle", _gate_declaration(declaration),
+    )
