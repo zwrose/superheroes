@@ -136,10 +136,25 @@ def _at(tmp_path, phase, cfg=None, respond=None, name="s"):
 
 
 def _state_without_receipt_keys(state):
-    """Driver state minus the one key that legitimately differs between two artifacts: the hash of
-    the submitted artifact itself."""
+    """Driver state minus keys that legitimately differ between two artifacts or sessions.
+
+    `lastAccepted` carries the submitted artifact hash; `_ordersAnchors` carries a
+    session-id-bound manifest sha256 that differs per session dir even when the fold is
+    otherwise identical."""
     out = dict(state)
     out.pop("lastAccepted", None)
+    anchors = out.get("_ordersAnchors")
+    if isinstance(anchors, dict):
+        stripped = {}
+        for key, anchor in anchors.items():
+            if isinstance(anchor, dict):
+                copy = dict(anchor)
+                copy.pop("manifestSha256", None)
+                copy.pop("path", None)
+                stripped[key] = copy
+            else:
+                stripped[key] = anchor
+        out["_ordersAnchors"] = stripped
     return out
 
 
@@ -155,8 +170,9 @@ def _assert_fold_equivalent(tmp_path, phase, build, cfg=None, respond_factory=No
         lambda: _responder(round1_findings=_A_FINDING))
     d_hand, n_hand, _state_hand = _at(tmp_path, phase, dict(cfg), respond_factory(), name="hand")
     d_asm, n_asm, state_asm = _at(tmp_path, phase, dict(cfg), respond_factory(), name="assembled")
-    assert n_hand["expectedStateHash"] == n_asm["expectedStateHash"], (
-        "the two sessions diverged before the phase under test")
+    for key in ("phase", "round", "attempt", "action"):
+        assert n_hand[key] == n_asm[key], (
+            "the two sessions diverged before the phase under test (%s)" % key)
 
     hand_artifact, envelopes, kwargs = build(n_asm, state_asm)
     artifact, reason = RA.assemble(phase, envelopes, state_asm, state_asm["config"], **kwargs)

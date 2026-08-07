@@ -513,3 +513,10 @@ def test_recording_an_occurrence_outside_the_roster_is_refused(tmp_path, occurre
     spath = round_records.store_path(session_dir, pend["round"], pend["phase"],
                                      round_records.storage_key(tid, occurrence), pend["attempt"])
     assert not os.path.exists(spath), spath
+    lpath = round_records.landing_path(session_dir, pend["round"], pend["phase"],
+                                       round_records.storage_key(tid, occurrence), pend["attempt"])
+    assert os.path.exists(lpath), "record-result may leave the landing; ingest refused before store"
+    out_missing = round_driver.cmd_record_missing(session_dir, tid, pend["attempt"], "forfeit",
+                                                  occurrence=occurrence)
+    assert out_missing["ok"] is False and out_missing["reason"] == "unknown-occurrence", out_missing
+    assert os.path.exists(lpath), "record-missing must not write a landing when one already exists"

@@ -255,26 +255,23 @@ def _require_index(name, value):
 def _guard_within(session_dir, path):
     """Refuse a built path that escapes the session dir.
 
-    The check runs `os.path.commonpath` against the session dir's `os.path.realpath` and accepts
-    only if the candidate — as `os.path.abspath`, or failing that as its own `realpath` — sits
-    strictly underneath it. The second probe exists because a session dir handed in through a
-    symlinked prefix (macOS `/tmp` -> `/private/tmp`, `/var` -> `/private/var`) has a realpath
-    that no `abspath` of a join can match; without it every path on a macOS tmpdir would be
-    refused. The RETURNED path is the un-resolved join, so a caller's paths stay in the spelling
-    it handed in.
-    """
+    Containment is decided on `realpath` of the candidate — a symlink component that resolves
+    outside the session dir must refuse even when the unresolved `abspath` sits lexically under the
+    session root. The session root itself is `realpath(session_dir)` so a caller's spelling of the
+    session prefix (macOS `/tmp` vs `/private/tmp`) does not false-refuse legitimate joins. The
+    RETURNED path is the un-resolved join, so a caller's paths stay in the spelling it handed in."""
     if not isinstance(session_dir, str) or not session_dir:
         raise ValueError("session_dir must be a non-empty str, got %r" % (session_dir,))
     root = os.path.realpath(session_dir)
     candidate = os.path.abspath(path)
-    for probe in (candidate, os.path.realpath(candidate)):
-        try:
-            common = os.path.commonpath([root, probe])
-        except ValueError:  # different drives / mixed absolute-relative
-            continue
-        if common == root and probe != root:
-            return path
-    raise ValueError("path escapes the session dir: %r" % (path,))
+    resolved = os.path.realpath(candidate)
+    try:
+        common = os.path.commonpath([root, resolved])
+    except ValueError:  # different drives / mixed absolute-relative
+        raise ValueError("path escapes the session dir: %r" % (path,))
+    if common != root or resolved == root:
+        raise ValueError("path escapes the session dir: %r" % (path,))
+    return path
 
 
 def round_dir(session_dir, rnd):

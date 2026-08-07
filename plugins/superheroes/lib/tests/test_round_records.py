@@ -179,6 +179,17 @@ def test_path_builders_reject_a_traversal_phase(tmp_path):
             RR.landing_path(sd, 1, phase, RR.storage_key(SEAT), 1)
 
 
+def test_guard_within_refuses_symlink_escape(tmp_path):
+    """A symlink under the session dir whose target is outside must not pass the path fence."""
+    sd = str(tmp_path / "session")
+    os.makedirs(sd)
+    outside = str(tmp_path / "outside")
+    os.makedirs(outside)
+    os.symlink(outside, os.path.join(sd, "round-1"))
+    with pytest.raises(ValueError, match="escapes"):
+        RR.round_dir(sd, 1)
+
+
 def test_path_builders_reject_a_traversal_seat_key(tmp_path):
     sd = _session(tmp_path)
     with pytest.raises(ValueError):

@@ -706,9 +706,16 @@ def test_record_result_refuses_a_payload_fault(tmp_path, adapters):
     assert RD.cmd_record_result(d, "code-reviewer")["ok"] is True      # A/B
     adapters.faults["test-reviewer"] = "findings must be a list"
     _land(d, "test-reviewer")
+    pend = _pending(d)
     out = RD.cmd_record_result(d, "test-reviewer")
     assert out["ok"] is False and out["reason"] == "payload-fault"
     assert out["detail"] == "findings must be a list"
+    spath = RR.store_path(d, pend["round"], pend["phase"], RR.storage_key("test-reviewer"),
+                          pend["attempt"])
+    assert not os.path.exists(spath), "payload-fault must leave no store file"
+    adapters.faults.pop("test-reviewer")
+    _land(d, "test-reviewer")
+    assert RD.cmd_record_result(d, "test-reviewer")["ok"] is True
 
 
 def _fixer_session(tmp_path, adapters, name="fx"):
@@ -833,6 +840,47 @@ def _advance(d, tmp_path, **kw):
     return RD.cmd_advance(d, git=_fake_git(_gitdir(tmp_path)), **kw)
 
 
+def test_next_emits_orders_manifest_for_bootstrap_dispatch(tmp_path, adapters):
+    """Round-1 panel dispatch is created by `next` before any `advance` — it still needs an anchor."""
+    d = _session(tmp_path)
+    pend = _pending(d)
+    assert pend["phase"] == RD.P_PANEL
+    manifest_path = RD._orders_manifest_path(d, pend["round"], pend["phase"], pend["attempt"])
+    assert os.path.exists(manifest_path)
+    anchor = RD._orders_anchor(_state(d), pend["round"], pend["phase"], pend["attempt"])
+    assert anchor is not None and anchor["manifestSha256"]
+
+
+def test_advance_reloads_state_after_acquiring_lock(tmp_path, adapters, monkeypatch):
+    """`cmd_advance` must load state under the session lock, not reuse a pre-lock snapshot."""
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    original = RD._load_driver_state
+    load_count = [0]
+
+    def counting_load(session_dir, cmd):
+        load_count[0] += 1
+        state, refusal = original(session_dir, cmd)
+        if cmd == "advance" and refusal is None:
+            state = dict(state)
+            state["_lockReloadMarker"] = "fresh-under-lock"
+            RD.save_state(session_dir, state)
+        return state, refusal
+
+    monkeypatch.setattr(RD, "_load_driver_state", counting_load)
+    seen = []
+    real = RD._advance_locked
+
+    def capture(session_dir, state, **kw):
+        seen.append(state.get("_lockReloadMarker"))
+        return real(session_dir, state, **kw)
+
+    monkeypatch.setattr(RD, "_advance_locked", capture)
+    assert _advance(d, tmp_path)["ok"] is True
+    assert seen == ["fresh-under-lock"]
+    assert load_count[0] >= 1
+
+
 def test_advance_folds_a_complete_phase_and_emits_the_next_action(tmp_path, adapters):
     d = _session(tmp_path)
     _record_all_panel_seats(d)
@@ -863,7 +911,7 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     assert manifest["seats"]["src/f.py:3"] == {
         "storeKey": RR.storage_key("src/f.py:3"), "vendor": None, "model": None, "engine": None,
         "resultContract": RR.SEAT_RESULT_SCHEMA}
-    emitted = _outcomes(d, "orders-emitted")
+    emitted = [e for e in _outcomes(d, "orders-emitted") if e.get("phase") == RD.P_VERIFIERS]
     assert len(emitted) == 1
     anchor = RD._orders_anchor(_state(d), 1, RD.P_VERIFIERS, 0)
     assert anchor["manifestSha256"] == emitted[0]["manifestSha256"]
@@ -1313,9 +1361,13 @@ def test_attest_writes_an_uncertified_receipt_with_its_evidence(tmp_path, adapte
     assert "certification" not in receipt
     assert receipt["attestation"]["class"] == "journal-orphan"
     assert receipt["attestation"]["note"] == "orphaned record; handing back uncertified"
-    # sha256 of EVERY artifact under the session dir
+    # sha256 of every artifact under the session dir except the receipt itself (written last)
     assert receipt["artifacts"]
-    assert all(len(v) == 64 for v in receipt["artifacts"].values() if v)
+    assert RD.RECEIPT_FILE not in receipt["artifacts"]
+    for rel, digest in receipt["artifacts"].items():
+        assert digest and len(digest) == 64
+        with open(os.path.join(d, rel), "rb") as fh:
+            assert hashlib.sha256(fh.read()).hexdigest() == digest
     assert RD.STATE_FILE in receipt["artifacts"]
     # the FULL roster with each seat's disposition
     assert set(receipt["roster"]) == set(RD.DIMENSIONS)
@@ -1443,8 +1495,9 @@ def test_death_between_ingest_and_journal_append(tmp_path, adapters):
     _record_all_panel_seats(d, seats=[s for s in RD.DIMENSIONS if s != "test-reviewer"])
     _land(d, "test-reviewer")
     # ingest WITHOUT the journal half — the kill lands between the two commits
+    anchor = RD._orders_anchor(_state(d), 1, RD.P_PANEL, 0)
     ingested = RR.ingest_landing(d, 1, RD.P_PANEL, "test-reviewer", 0, current_attempt=0,
-                                 roster=list(RD.DIMENSIONS))
+                                 roster=list(RD.DIMENSIONS), anchor=anchor)
     assert ingested["ok"] is True
     before = open(ingested["storePath"], "rb").read()
     assert not [e for e in _outcomes(d, "recorded") if e["seat"] == "test-reviewer"]

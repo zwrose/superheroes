@@ -2379,19 +2379,26 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
     assert "reviewer-fell-open (round 1)" not in prose
 
 
-def test_resume_does_not_restore_an_empty_channel_as_a_disclosure(tmp_path):
-    """FAIL-CLOSED edge: an EMPTY channel is not a disclosure. A record carrying `[]`/`{}` resumes
-    with no channel at all, so nothing in the receipt can read as "checked and clean"."""
+def test_resume_does_not_restore_an_empty_list_channel_as_a_disclosure(tmp_path):
+    """FAIL-CLOSED edge: an EMPTY list channel is not a disclosure. `canaryVerified` is the one
+    channel whose empty object `{}` still restores on key presence — see G item v21."""
     records = tmp_path / "round-records.json"
     records.write_text(json.dumps([_seed_record(1, {
-        "vacuousSeats": [], "fellOpen": [], "canaryFailed": {}, "canaryVerified": {},
-        "seatMapViolations": [],
+        "vacuousSeats": [], "fellOpen": [], "canaryFailed": {}, "seatMapViolations": [],
     })]))
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     assert state["rounds"] == {}
     receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     assert not any(r["round"] == 1 for r in receipt["rounds"])
     assert not any(line.startswith("seat-map constraint breach:") for line in receipt["degraded"])
+
+
+def test_resume_restores_canary_verified_on_presence_even_when_empty(tmp_path):
+    """`canaryVerified` emits on key presence: an empty object still means a control probe ran."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {"canaryVerified": {}})]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["rounds"]["1"]["canaryVerified"] == {}
 
 
 def test_restored_channel_never_clobbers_a_live_round(tmp_path):
