@@ -2,6 +2,7 @@
 
 Non-goals: no browser launch, no capture, no minting — context specs and S3 enforcement only.
 """
+import pilot_contract
 import pilot_seed
 import pilot_slot
 
@@ -9,11 +10,12 @@ CONTEXT_SCHEMA_VERSION = 1
 
 REFUSAL_OPTIONS_MISMATCH = "context-options-mismatch"
 REFUSAL_ARTIFACT_MISSING = "context-artifact-missing"
-REFUSAL_ARTIFACT_UNKNOWN_ACCOUNT = "context-artifact-unknown-account"
 REFUSAL_SHARED_CONTEXT_REFUSED = "context-shared-context-refused"
 REFUSAL_PROVISIONING_RECEIPT_MISSING = "context-provisioning-receipt-missing"
 REFUSAL_PROVISIONING_RECEIPT_INVALID = "context-provisioning-receipt-invalid"
 REFUSAL_PROVISIONING_RECEIPT_SLOT_MISMATCH = "context-provisioning-receipt-slot-mismatch"
+REFUSAL_SIGN_IN_PATH_INVALID = "context-sign-in-path-invalid"
+REFUSAL_ARTIFACT_REFUSED_ON_LIVE_SEEDING = "context-artifact-refused-on-live-seeding"
 
 _PROVISIONING_RECEIPT_KEYS = frozenset(
     {"slotRef", "policyDigest", "datastoreIdentity", "declarations"},
@@ -25,7 +27,8 @@ def context_set(
     generation,
     accounts,
     *,
-    artifacts,
+    sign_in_path,
+    artifacts=None,
     capture_surfaces,
     provisioning_receipt,
 ):
@@ -38,17 +41,11 @@ def context_set(
     slot_ref = account_set["ref"]
     account_list = pilot_slot.account_keys(account_set)
 
-    if not isinstance(artifacts, dict):
-        return _refusal(REFUSAL_ARTIFACT_MISSING)
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+        return _refusal(REFUSAL_SIGN_IN_PATH_INVALID)
 
-    account_set_keys = set(account_list)
-    for account in account_list:
-        if account not in artifacts:
-            return _refusal(REFUSAL_ARTIFACT_MISSING)
-
-    for account in artifacts:
-        if account not in account_set_keys:
-            return _refusal(REFUSAL_ARTIFACT_UNKNOWN_ACCOUNT)
+    if artifacts is not None:
+        return _refusal(REFUSAL_ARTIFACT_REFUSED_ON_LIVE_SEEDING)
 
     contexts = []
     seen_identities = set()
@@ -61,9 +58,9 @@ def context_set(
         result = context_spec(
             slot_ref,
             account,
-            artifacts[account],
             capture_surfaces,
             provisioning_receipt=provisioning_receipt,
+            sign_in_path=sign_in_path,
         )
         if not result["ok"]:
             return _refusal(result["reason"])
@@ -80,21 +77,77 @@ def context_set(
 def context_spec(
     slot_ref,
     account,
+    capture_surfaces,
+    *,
+    provisioning_receipt,
+    sign_in_path,
+    artifact=None,
+    requested_options=None,
+):
+    """Build one context spec with required capture options for live seeding."""
+    # bite-axis: provisioning receipt — context creation requires a valid gate_provisioning
+    # receipt before seeding runs; missing or invalid receipt refuses before sign-in-path
+    # and artifact checks.
+    receipt_refusal = _validate_provisioning_receipt(provisioning_receipt, slot_ref)
+    if receipt_refusal is not None:
+        return _refusal(receipt_refusal)
+
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+        return _refusal(REFUSAL_SIGN_IN_PATH_INVALID)
+
+    # bite-axis: live-seeding paths refuse a supplied artifact — artifact presence must not
+    # infer attended/minted mode; a broken restore call must not silently become live seeding.
+    if artifact is not None:
+        return _refusal(REFUSAL_ARTIFACT_REFUSED_ON_LIVE_SEEDING)
+
+    # bite-axis: options mismatch — requested_options must equal required_context_options
+    # exactly; any deviation refuses context-options-mismatch before options are returned.
+    try:
+        required_options = pilot_seed.required_context_options(capture_surfaces)
+    except pilot_seed.PilotSeedError as exc:
+        return _refusal(exc.reason)
+
+    if requested_options is not None:
+        if requested_options != required_options:
+            return _refusal(REFUSAL_OPTIONS_MISMATCH)
+        options = requested_options
+    else:
+        options = required_options
+
+    return {
+        "ok": True,
+        "reason": None,
+        "schemaVersion": CONTEXT_SCHEMA_VERSION,
+        "slotRef": slot_ref,
+        "account": account,
+        "contextOptions": options,
+        "artifact": None,
+        "captureSurfaces": list(capture_surfaces),
+    }
+
+
+def context_spec_from_artifact(
+    slot_ref,
+    account,
     artifact,
     capture_surfaces,
     *,
     provisioning_receipt,
     requested_options=None,
 ):
-    """Build one context spec with required capture options and verify-at-seed."""
-    # bite-axis: provisioning receipt — context creation requires a valid gate_provisioning
-    # receipt before seed_request; missing or invalid receipt refuses before seeding runs.
+    """Build one context spec from a stored artifact via verify-at-seed (latent S3 restore seam).
+
+    No caller in this repository invokes this entry point today — it is kept as the declared
+    artifact-restore path for a future restore flow. It is not reachable by passing
+    ``sign_in_path`` on ``context_spec``.
+    """
     receipt_refusal = _validate_provisioning_receipt(provisioning_receipt, slot_ref)
     if receipt_refusal is not None:
         return _refusal(receipt_refusal)
 
-    # bite-axis: options mismatch — requested_options must equal required_context_options
-    # exactly; any deviation refuses context-options-mismatch before seed_request runs.
+    if artifact is None:
+        return _refusal(REFUSAL_ARTIFACT_MISSING)
+
     try:
         required_options = pilot_seed.required_context_options(capture_surfaces)
     except pilot_seed.PilotSeedError as exc:

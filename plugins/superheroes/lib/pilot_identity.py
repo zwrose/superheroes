@@ -5,7 +5,7 @@ fed fabricated answers cannot mint a passing exercise without anything having be
 
 Non-goals: no HTTP or browser driving of its own — browser context creation and credential
 injection are C7's; the durable slot-record mutation that a park performs is A2a's state
-machine driven by B5's wave runtime; capture artifact production is B4's.
+machine driven by B5's wave runtime; attended seeding is B4's.
 """
 import json
 import pilot_contract
@@ -43,6 +43,19 @@ ACTION_PARK = "park"
 ACTION_REMINT = "remint"
 ACTION_DEFER = "defer"
 ACTION_REFUSE = "refuse"
+
+_LAPSE_LAPSE_ACTION_BY_SIGN_IN_PATH = {
+    "attended": ACTION_PARK,
+    "minted": ACTION_REMINT,
+}
+
+
+def _verify_lapse_action_mapping_complete():
+    if set(_LAPSE_LAPSE_ACTION_BY_SIGN_IN_PATH) != pilot_contract.SIGN_IN_PATHS:
+        raise ValueError("lapse action mapping incomplete")
+
+
+_verify_lapse_action_mapping_complete()
 
 
 class PilotIdentityError(Exception):
@@ -364,14 +377,10 @@ def lapse_step(answer, *, sign_in_path, reprobe_count):
                 "class": "lapse",
                 "reason": reason,
             }
-        if sign_in_path == "captured":
-            return {
-                "action": ACTION_PARK,
-                "class": "lapse",
-                "reason": reason,
-            }
+        if sign_in_path not in _LAPSE_LAPSE_ACTION_BY_SIGN_IN_PATH:
+            raise ValueError("unhandled sign_in_path: %r" % (sign_in_path,))
         return {
-            "action": ACTION_REMINT,
+            "action": _LAPSE_LAPSE_ACTION_BY_SIGN_IN_PATH[sign_in_path],
             "class": "lapse",
             "reason": reason,
         }

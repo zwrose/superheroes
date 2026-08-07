@@ -68,7 +68,7 @@ def _margin_kwargs(**overrides):
     base = {
         "deadline_at": 1000,
         "margin_seconds": 100,
-        "sign_in_path": "captured",
+        "sign_in_path": "attended",
         "attended": False,
     }
     base.update(overrides)
@@ -314,7 +314,7 @@ def test_validate_observation_refuses_invalid(observation):
 def test_edge1_unknown_unattended_captured_refuses():
     result = ph.account_margin(
         ph.unknown_observation(),
-        **_margin_kwargs(sign_in_path="captured", attended=False),
+        **_margin_kwargs(sign_in_path="attended", attended=False),
     )
     assert result["ok"] is False
     assert result["reason"] == ph.REFUSAL_UNKNOWN_PROVENANCE_UNATTENDED
@@ -353,7 +353,7 @@ def test_edge5_server_probe_shortfall_refuses():
     obs = ph.server_probe_observation(expires_at=1050, observed_at=1000)
     result = ph.account_margin(
         obs,
-        **_margin_kwargs(deadline_at=1000, margin_seconds=100, sign_in_path="captured"),
+        **_margin_kwargs(deadline_at=1000, margin_seconds=100, sign_in_path="attended"),
     )
     assert result["ok"] is False
     assert result["reason"] == ph.REFUSAL_MARGIN_EXCEEDED
