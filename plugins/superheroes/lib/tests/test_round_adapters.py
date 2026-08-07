@@ -486,6 +486,7 @@ def test_fold_fail_closed_policy_a_silent_verifier_cluster_is_omitted_not_emptie
     assert after["rounds"]["1"]["verify"]["unverified"], after["rounds"]["1"]["verify"]
     assert after["rounds"]["1"]["verify"]["drops"] == []
     assert after["_verified"], "a silent verifier must not drop the findings"
+    assert after["rounds"]["1"]["adapterProvenance"]["unverifiedClusters"]
 
 
 def test_fold_fail_closed_policy_a_silent_auditor_leaves_its_target_not_discharged(tmp_path):
@@ -936,7 +937,7 @@ def test_fixer_head_diff_path_points_at_the_immutable_store_copy(tmp_path):
     payload = {"fixes": [], "headDiffStorePath": headdiff}
     env = _result_env(seat, payload)
     env.update({"round": 1, "phase": RD.P_FIXER, "attempt": attempt})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], pend, _cfg())
+    artifact, reason = RA.assemble(RD.P_FIXER, [env], pend, _cfg(), session_dir=d)
     assert reason is None
     assert artifact["headDiffPath"] == headdiff
     assert "headDiffStorePath" not in artifact
@@ -944,15 +945,18 @@ def test_fixer_head_diff_path_points_at_the_immutable_store_copy(tmp_path):
 
 
 def test_fixer_rejects_an_untrusted_head_diff_store_path(tmp_path):
+    d = str(tmp_path / "session")
+    os.makedirs(d)
     caller = tmp_path / "caller-head.diff"
-    store = tmp_path / "outside-session-store.diff"
     caller.write_text(HEAD, encoding="utf-8")
-    store.write_text("evil\n", encoding="utf-8")
-    payload = {"fixes": [], "headDiffPath": str(caller), "headDiffStorePath": str(store)}
+    skey = RR.storage_key(RA.SEAT_FIXER)
+    lookalike = os.path.join("/attacker", "round-1", "seats", RD.P_FIXER,
+                             "%s.a0.headdiff" % skey)
+    payload = {"fixes": [], "headDiffPath": str(caller), "headDiffStorePath": lookalike}
     assert RA.payload_fault(RD.P_FIXER, payload, RA.SEAT_FIXER, record_boundary=True) is not None
     env = _result_env(RA.SEAT_FIXER, payload)
     env.update({"round": 1, "phase": RD.P_FIXER, "attempt": 0})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], {}, {})
+    artifact, reason = RA.assemble(RD.P_FIXER, [env], {}, {}, session_dir=d)
     assert artifact is None and reason == "head-diff-store-path-untrusted"
 
 
@@ -978,9 +982,10 @@ def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
     payload = {"fixes": [], "headDiffStorePath": headdiff}
     env = _result_env(RA.SEAT_FIXER, payload)
     env.update({"round": n["round"], "phase": RD.P_FIXER, "attempt": n["attempt"]})
-    artifact, reason = RA.assemble(RD.P_FIXER, [env], state, state["config"])
+    artifact, reason = RA.assemble(RD.P_FIXER, [env], state, state["config"], session_dir=d)
     assert reason is None
     assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], artifact)["ok"]
     ok, after = RD.load_state(d)
     assert after["headDiff"] == HEAD
     assert after["rounds"]["1"]["headDiffSource"] == "path"
+    assert after["rounds"]["1"]["adapterProvenance"]["headDiffPathSource"] == "store"

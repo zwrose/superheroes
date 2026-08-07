@@ -2481,15 +2481,20 @@ def test_panel_round_channels_are_all_accounted_for():
         recorded.add(key.value)
     assert len(recorded) >= 9, "the census enumerated %d keys — the parse looks inert" % len(recorded)
 
+    fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
+    assert fold_provenance <= restorable, (
+        "fold provenance channels must be restorable: %s"
+        % sorted(fold_provenance - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
-    assert recorded == restorable | unrestored, (
-        "every _fold_panel round channel needs exactly one home — unaccounted (no resume path): %s; "
+    accounted = restorable | unrestored
+    assert recorded | fold_provenance == accounted, (
+        "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
-        % (sorted(recorded - (restorable | unrestored)),
-           sorted((restorable | unrestored) - recorded)))
+        % (sorted((recorded | fold_provenance) - accounted),
+           sorted(accounted - (recorded | fold_provenance))))
 
 
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():

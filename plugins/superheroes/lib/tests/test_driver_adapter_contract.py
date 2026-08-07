@@ -114,7 +114,7 @@ def _driver_boundary_values(session_dir):
     phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
     roster, reason = round_adapters.roster_for(phase, state, state.get("config") or {})
     assert reason is None, reason
-    anchor = round_driver._orders_anchor(state, rnd, phase, attempt)
+    anchor = round_driver._orders_anchor(state, session_dir, rnd, phase, attempt)
     slots = round_driver._seat_slot_records(session_dir, rnd, phase, attempt, roster)
     envelopes = [env for _seat, _occurrence, env in slots]
     manifest, _merr = round_records.read_json(
@@ -203,8 +203,41 @@ def test_driver_call_sites_cover_adapter_entry_points():
     assert "missing_policy" in inspect.getsource(round_adapters._assemble)
 
 
+def test_round_adapters_never_imports_round_driver():
+    import ast
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "round_adapters.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name != "round_driver"
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module != "round_driver"
+
+
 def test_driver_call_sites_cover_records_entry_points():
     driver_source = inspect.getsource(round_driver)
     for name in ("ingest_landing", "sweep_landing", "reconcile", "landing_path", "store_path"):
         assert name in driver_source
         assert hasattr(round_records, name)
+
+
+def _signature_params(fn):
+    return list(inspect.signature(fn).parameters)
+
+
+def test_fake_adapters_methods_match_round_adapters_signatures():
+    """The advance-test stub must mirror the real adapter entry points — drift breaks every advance test."""
+    fake = _ADV.FakeAdapters()
+    pairs = (
+        ("assemble", fake.assemble, round_adapters.assemble),
+        ("roster_for", fake.roster_for, round_adapters.roster_for),
+        ("payload_fault", fake.payload_fault, round_adapters.payload_fault),
+        ("missing_policy", fake.missing_policy, round_adapters.missing_policy),
+    )
+    for name, stub, real in pairs:
+        assert _signature_params(stub) == _signature_params(real), (
+            "%s signature drift: stub %s vs real %s"
+            % (name, _signature_params(stub), _signature_params(real)))

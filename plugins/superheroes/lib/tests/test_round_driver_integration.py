@@ -115,7 +115,8 @@ def _fake_git(gitdir):
 
 def _anchor_hashes(session_dir, state, pend, seat):
     """The emission-time anchor an envelope must echo (`round_records._anchor_check`)."""
-    anchor = round_driver._orders_anchor(state, pend["round"], pend["phase"], pend["attempt"])
+    anchor = round_driver._orders_anchor(state, session_dir, pend["round"], pend["phase"],
+                                         pend["attempt"])
     if anchor is None:
         return round_records.NOT_EMITTED, round_records.NOT_EMITTED
     return anchor["manifestSha256"], (anchor.get("orders") or {}).get(

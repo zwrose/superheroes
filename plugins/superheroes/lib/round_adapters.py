@@ -147,6 +147,7 @@ def missing_policy(phase):
 # =============================================================================================
 
 def roster_for(phase, state, config):
+
     """(seat keys this phase owes, reason_or_None).
 
     Deterministic. Order is SEMANTIC on every multi-seat phase and is therefore preserved, not
@@ -160,8 +161,7 @@ def roster_for(phase, state, config):
     st = state if isinstance(state, dict) else {}
     cfg = config if isinstance(config, dict) else {}
     if phase == P_PANEL:
-        import round_driver  # noqa: E402 — panel roster shape lives in the driver
-        return list(round_driver._panel_dimensions(cfg)), None
+        return list(round_phases.panel_dimensions(cfg)), None
     if phase == P_VERIFIERS:
         staged = verification.stage_ids(st.get("_toVerify") or [])
         keys = []
@@ -367,10 +367,8 @@ def _fixer_payload_fault(payload, seat_key, record_boundary=False):
 
 
 def _verify_payload_fault(payload, seat_key):
-    """Delegates the `result` vocabulary to `round_driver.verify_result_fault` — the driver's OWN
-    submit-shape guard, so this adapter can never accept a token the submit path refuses."""
-    import round_driver  # noqa: E402 — lazy: keeps module import one-way with round_driver
-    fault = round_driver.verify_result_fault(payload)
+    """Delegates the `result` vocabulary to `round_phases.verify_result_fault`."""
+    fault = round_phases.verify_result_fault(payload)
     if fault:
         return fault
     if "command" in payload and not isinstance(payload.get("command"), str):
@@ -582,15 +580,16 @@ def _normalize_canary(canary):
 # assemble
 # =============================================================================================
 
-def assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None):
+def assemble(phase, envelopes, state, config, dispatch_manifest=None, canary=None,
+             session_dir=None):
     """(artifact_or_None, reason_or_None). NEVER raises."""
     try:
-        return _assemble(phase, envelopes, state, config, dispatch_manifest, canary)
+        return _assemble(phase, envelopes, state, config, dispatch_manifest, canary, session_dir)
     except Exception as exc:  # noqa: BLE001 — the contract is total; a crash must be a reason
         return None, "adapter-internal-error:%s:%s" % (_type_name(exc), exc)
 
 
-def _assemble(phase, envelopes, state, config, dispatch_manifest, canary):
+def _assemble(phase, envelopes, state, config, dispatch_manifest, canary, session_dir):
     if phase not in ADAPTER_PHASES:
         return None, "unknown-phase:%s" % _label(phase)
     if dispatch_manifest is not None and not isinstance(dispatch_manifest, dict):
@@ -624,7 +623,7 @@ def _assemble(phase, envelopes, state, config, dispatch_manifest, canary):
     elif phase in (P_GAPSWEEP, P_SCOPED):
         artifact = _assemble_findings(roster, indexed)
     elif phase == P_FIXER:
-        artifact = _assemble_fixer(roster, indexed, disclosures, phase)
+        artifact = _assemble_fixer(roster, indexed, disclosures, phase, session_dir)
         if artifact is None:
             return None, "head-diff-store-path-untrusted"
     else:
@@ -711,14 +710,16 @@ def _assemble_findings(roster, indexed):
     return {"findings": [dict(f) for f in payload["findings"]]}
 
 
-def _assemble_fixer(roster, indexed, disclosures, phase):
+def _assemble_fixer(roster, indexed, disclosures, phase, session_dir):
     payload = indexed[(roster[0], 0)]["payload"]
     envelope = indexed[(roster[0], 0)]["envelope"]
     artifact = dict(payload)
     store_path = artifact.pop("headDiffStorePath", None)
     if isinstance(store_path, str) and store_path:
+        if not isinstance(session_dir, str) or not session_dir:
+            return None
         if not round_records.head_diff_store_path_valid(
-                store_path, envelope.get("round"), phase, envelope.get("seat"),
+                store_path, session_dir, envelope.get("round"), phase, envelope.get("seat"),
                 envelope.get("attempt"), envelope.get("occurrence", 0)):
             return None
         # `_resolve_head_diff` opens the path at FOLD time; the immutable store copy is the only
