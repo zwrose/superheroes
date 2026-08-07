@@ -123,6 +123,45 @@ def _parse_launcher_source():
         ) from exc
 
 
+def _module_level_functions(tree):
+    return {
+        node.name: node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef)
+    }
+
+
+def _called_module_level_names(func_node, module_funcs):
+    called = set()
+    for node in ast.walk(func_node):
+        if not isinstance(node, ast.Call):
+            continue
+        callee = node.func
+        if isinstance(callee, ast.Name) and callee.id in module_funcs:
+            called.add(callee.id)
+    return called
+
+
+def _gate_closure_function_defs(tree):
+    module_funcs = _module_level_functions(tree)
+    if "_slot_reservation_gate" not in module_funcs:
+        raise AssertionError("_slot_reservation_gate not found in launcher.py")
+    visited = set()
+    worklist = ["_slot_reservation_gate"]
+    closure = []
+    while worklist:
+        name = worklist.pop()
+        if name in visited:
+            continue
+        visited.add(name)
+        func_node = module_funcs[name]
+        closure.append(func_node)
+        for called in _called_module_level_names(func_node, module_funcs):
+            if called not in visited:
+                worklist.append(called)
+    return closure
+
+
 def _fail_reason_literals(func_node):
     tokens = set()
     for node in ast.walk(func_node):
@@ -136,19 +175,22 @@ def _fail_reason_literals(func_node):
         first = node.args[0]
         if isinstance(first, ast.Constant) and isinstance(first.value, str):
             tokens.add(first.value)
+            continue
+        line = getattr(first, "lineno", node.lineno)
+        raise AssertionError(
+            "slot-gate census cannot read _fail() reason at %s:%s: "
+            "reason must be a string literal"
+            % (_LAUNCHER_PY, line)
+        )
     return tokens
 
 
 def _gate_refusal_tokens_from_ast():
     tree, _source = _parse_launcher_source()
-    gate_fn = None
-    for node in tree.body:
-        if isinstance(node, ast.FunctionDef) and node.name == "_slot_reservation_gate":
-            gate_fn = node
-            break
-    if gate_fn is None:
-        raise AssertionError("_slot_reservation_gate not found in launcher.py")
-    return _fail_reason_literals(gate_fn)
+    tokens = set()
+    for func_node in _gate_closure_function_defs(tree):
+        tokens |= _fail_reason_literals(func_node)
+    return tokens
 
 
 def _parallelism_evidence_subset(adjudicated):
