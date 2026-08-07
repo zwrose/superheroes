@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import stat
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -66,20 +67,47 @@ def declares_slots(repo_root):
         except Exception:
             return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
         for candidate in candidates:
-            if os.path.lexists(candidate) and not os.path.exists(candidate):
-                return _answer(
-                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
-            if not os.path.lexists(candidate):
-                continue
             try:
-                with open(candidate, encoding="utf-8") as fh:
-                    fh.read()
-            except UnicodeDecodeError:
+                try:
+                    st = os.lstat(candidate)
+                except FileNotFoundError:
+                    continue
+                except OSError:
+                    return _answer(
+                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                        candidate)
+                mode = st.st_mode
+                if stat.S_ISLNK(mode):
+                    try:
+                        st = os.stat(candidate)
+                        mode = st.st_mode
+                    except FileNotFoundError:
+                        return _answer(
+                            STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                            candidate)
+                    except OSError:
+                        return _answer(
+                            STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                            candidate)
+                if not stat.S_ISREG(mode):
+                    return _answer(
+                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                        candidate)
+                try:
+                    with open(candidate, encoding="utf-8") as fh:
+                        fh.read()
+                except UnicodeDecodeError:
+                    return _answer(
+                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                        candidate)
+                except OSError:
+                    return _answer(
+                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                        candidate)
+            except Exception:
                 return _answer(
-                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
-            except OSError:
-                return _answer(
-                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED, candidate)
+                    STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNRESOLVED,
+                    candidate)
         return _answer(STATE_ABSENT, CAUSE_NO_CALIBRATION, None)
     try:
         with open(path, encoding="utf-8") as fh:

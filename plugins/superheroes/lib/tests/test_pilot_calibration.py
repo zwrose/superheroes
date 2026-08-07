@@ -359,3 +359,51 @@ def test_declares_slots_genuinely_empty_project(tmp_path):
         "cause": pc.CAUSE_NO_CALIBRATION,
         "path": None,
     }
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypasses chmod 000")
+def test_declares_slots_perm_denied_parent_directory(tmp_path):
+    # axis: cannot-tell / calibration-unresolved when parent dir is not traversable (N1)
+    repo = _init_repo(tmp_path / "repo")
+    layer = _write_in_repo_layer(repo)
+    parent = os.path.dirname(layer)
+    os.chmod(parent, 0o000)
+    try:
+        result = pc.declares_slots(repo)
+    finally:
+        os.chmod(parent, stat.S_IMODE(os.stat(parent).st_mode) | 0o700)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": layer,
+    }
+
+
+def test_declares_slots_fifo_candidate(tmp_path):
+    # axis: cannot-tell / calibration-unresolved when candidate is a FIFO (N2)
+    repo = _init_repo(tmp_path / "repo")
+    layer_dir = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(layer_dir, exist_ok=True)
+    fifo = os.path.join(layer_dir, "test-pilot.md")
+    os.mkfifo(fifo)
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": fifo,
+    }
+
+
+def test_declares_slots_directory_candidate(tmp_path):
+    # axis: cannot-tell / calibration-unresolved when candidate path is a directory
+    repo = _init_repo(tmp_path / "repo")
+    layer_dir = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(layer_dir, exist_ok=True)
+    candidate = os.path.join(layer_dir, "test-pilot.md")
+    os.makedirs(candidate)
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": candidate,
+    }
