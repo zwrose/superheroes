@@ -467,37 +467,73 @@ def test_sign_in_path_dispatch_mappings_total_over_sign_in_paths():
     assert set(pilot_cleanup._RESEED_BY_SIGN_IN_PATH) == pilot_contract.SIGN_IN_PATHS
 
 
-_SIGN_IN_PATH_CAPTURED_LITERAL_RE = re.compile(
+_SIGN_IN_PATH_OPERAND = r'(?:sign_in_path|["\']signInPath["\'])'
+_SIGN_IN_PATH_CAPTURED_GATE_RE = re.compile(
     r"""(?x)
     sign_in_path\s*=\s*["']captured["']
     | ["']signInPath["']\s*:\s*["']captured["']
     | SIGN_IN_PATHS\s*=\s*frozenset\(\{[^}]*["']captured["']
+    | """
+    + _SIGN_IN_PATH_OPERAND
+    + r"""\s*(?:==|!=|is\s+not|is)\s*["']captured["']
+    | ["']captured["']\s*(?:==|!=|is\s+not|is)\s*"""
+    + _SIGN_IN_PATH_OPERAND
+    + r"""
+    | """
+    + _SIGN_IN_PATH_OPERAND
+    + r"""\s+in\s+[\(\[\{][^\)\]\}]*["']captured["']
+    | ["']captured["']\s+in\s+"""
+    + _SIGN_IN_PATH_OPERAND
+    + r"""
     """
 )
 
 
-def _sign_in_path_captured_literal_lines(py_path):
-    """Lines using captured as a sign-in path value (not the retired-literal check)."""
+def _sign_in_path_captured_gate_lines(py_path):
+    """Lines using captured as a sign-in path gate (comparison, assignment, or literal)."""
     hits = []
     with open(py_path, encoding="utf-8") as fh:
         for line_no, line in enumerate(fh, 1):
             if "pilot-sign-in-path-retired-captured" in line:
                 continue
-            if py_path.name == "pilot_contract.py" and "sign_in_path == \"captured\"" in line:
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
                 continue
-            if _SIGN_IN_PATH_CAPTURED_LITERAL_RE.search(line):
-                hits.append((py_path, line_no, line.rstrip()))
+            match = _SIGN_IN_PATH_CAPTURED_GATE_RE.search(line)
+            if match is None:
+                continue
+            hash_pos = line.find("#")
+            if hash_pos != -1 and match.start() > hash_pos:
+                continue
+            hits.append((py_path, line_no, line.rstrip()))
     return hits
+
+
+def _format_captured_gate_offenders(offenders):
+    return "; ".join("%s:%d %r" % (p, n, t) for p, n, t in offenders)
 
 
 def test_no_captured_sign_in_path_literal_in_lib_source():
     lib_root = Path(_LIB)
-    offenders = []
+    pilot_contract_hits = []
+    other_offenders = []
     for py_path in sorted(lib_root.rglob("*.py")):
         if "tests" in py_path.parts:
             continue
-        offenders.extend(_sign_in_path_captured_literal_lines(py_path))
-    assert offenders == [], (
+        hits = _sign_in_path_captured_gate_lines(py_path)
+        if py_path.name == "pilot_contract.py":
+            pilot_contract_hits = hits
+        else:
+            other_offenders.extend(hits)
+    assert other_offenders == [], (
         "captured sign-in path literal in lib source: %s"
-        % "; ".join("%s:%d %r" % (p, n, t) for p, n, t in offenders)
+        % _format_captured_gate_offenders(other_offenders)
+    )
+    assert len(pilot_contract_hits) == 1, (
+        "pilot_contract.py must contain exactly one sanctioned captured "
+        "sign-in-path gate (found %d): %s"
+        % (
+            len(pilot_contract_hits),
+            _format_captured_gate_offenders(pilot_contract_hits) or "(none)",
+        )
     )
