@@ -3320,6 +3320,80 @@ def test_launch_build_unslotted_lane_refuses_after_slotted_sibling_refused(tmp_p
     assert spawn_called is False
 
 
+def _terminalize_handback_lane(repo, batch_id, launch_id, slot=None, generation=None):
+    _reserve_live_lane(repo, batch_id, launch_id, slot=slot, generation=generation)
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 424242,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.record_outcome(repo, launch_id, "handback", "done")
+
+
+def test_launch_build_single_lane_unslotted_spawns_after_handback_terminal(tmp_path, monkeypatch):
+  # axis: unrelated terminal lane does not count toward post-reserve parallelism
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    _terminalize_handback_lane(repo, "wave-test", "lane-prior")
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
+def test_preflight_and_launch_agree_after_handback_terminal(tmp_path, monkeypatch):
+  # axis: preflight and launch agree when unrelated terminal lane is in batch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    _terminalize_handback_lane(repo, "wave-test", "lane-prior")
+    checks = _all_checks()
+    preflight = L.walk_preflight(checks, repo, batch_id="wave-test")
+    assert preflight["ok"] is True
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    launch = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        checks,
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert launch["ok"] is True
+    assert spawn_called is True
+
+
 def _unknown_calibration(monkeypatch, path="/fake/profile.md"):
     monkeypatch.setattr(
         L.pilot_calibration,

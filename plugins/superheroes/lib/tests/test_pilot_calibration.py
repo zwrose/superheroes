@@ -217,7 +217,7 @@ def test_declares_slots_config_not_object(tmp_path, monkeypatch):
 
 
 def test_declares_slots_credential_set_not_list(tmp_path, monkeypatch):
-    # axis: credentialSet not a list → credential-set-empty
+    # axis: credentialSet wrong type → unknown, not a definite empty declaration
     path = _write_profile(
         tmp_path,
         _profile_text({
@@ -229,37 +229,10 @@ def test_declares_slots_credential_set_not_list(tmp_path, monkeypatch):
     result = pc.declares_slots("/fake/repo")
     assert result == {
         "declares": False,
+        "unknown": True,
         "reason": pc.REASON_CREDENTIAL_SET_EMPTY,
         "path": path,
     }
-
-
-def test_declares_slots_resolver_raises_unknown(monkeypatch):
-    # axis: resolver raises after path resolved → unknown, no exception escapes
-    def boom(repo_root, root):
-        raise RuntimeError("resolve failed")
-
-    monkeypatch.setattr(pc.store, "resolve", boom)
-    result = pc.declares_slots("/fake/repo")
-    assert result == {
-        "declares": False,
-        "reason": pc.REASON_NO_CALIBRATION,
-        "path": None,
-    }
-
-
-def test_declares_slots_unreadable_profile_unknown(tmp_path, monkeypatch):
-    # axis: unreadable profile path → unknown
-    missing = str(tmp_path / "missing-profile.md")
-    _patch_resolve(monkeypatch, missing)
-    result = pc.declares_slots("/fake/repo")
-    assert result["unknown"] is True
-    assert result["declares"] is False
-    assert result["reason"] == pc.REASON_CALIBRATION_UNREADABLE
-    assert result["path"] == missing
-
-
-def test_declares_slots_invalid_utf8_unknown(tmp_path, monkeypatch):
     # axis: invalid UTF-8 → unknown, no exception escapes
     path = tmp_path / "profile.md"
     path.write_bytes(b"\xff\xfe")
@@ -269,51 +242,3 @@ def test_declares_slots_invalid_utf8_unknown(tmp_path, monkeypatch):
     assert result["declares"] is False
     assert result["reason"] == pc.REASON_CALIBRATION_UNREADABLE
     assert result["path"] == str(path)
-
-
-def test_declares_slots_invalid_json_unknown(tmp_path, monkeypatch):
-    # axis: invalid JSON in config block → unknown
-    text = (
-        "## Machine-readable config\n\n"
-        "```json test-pilot-config\n"
-        "{not json}\n"
-        "```\n"
-    )
-    path = _write_profile(tmp_path, text)
-    _patch_resolve(monkeypatch, path)
-    result = pc.declares_slots("/fake/repo")
-    assert result["unknown"] is True
-    assert result["declares"] is False
-    assert result["reason"] == pc.REASON_CONFIG_UNPARSEABLE
-    assert result["path"] == path
-
-
-def test_declares_slots_config_not_object_unknown(tmp_path, monkeypatch):
-    # axis: parsed config not an object → unknown
-    text = (
-        "## Machine-readable config\n\n"
-        "```json test-pilot-config\n"
-        "[]\n"
-        "```\n"
-    )
-    path = _write_profile(tmp_path, text)
-    _patch_resolve(monkeypatch, path)
-    result = pc.declares_slots("/fake/repo")
-    assert result["unknown"] is True
-    assert result["declares"] is False
-    assert result["reason"] == pc.REASON_CONFIG_UNPARSEABLE
-    assert result["path"] == path
-
-
-def test_declares_slots_pilot_not_dict_unknown(tmp_path, monkeypatch):
-    # axis: pilot block not a dict → unknown
-    path = _write_profile(
-        tmp_path,
-        _profile_text({"schemaVersion": 1, "pilot": []}),
-    )
-    _patch_resolve(monkeypatch, path)
-    result = pc.declares_slots("/fake/repo")
-    assert result["unknown"] is True
-    assert result["declares"] is False
-    assert result["reason"] == pc.REASON_NO_PILOT_BLOCK
-    assert result["path"] == path

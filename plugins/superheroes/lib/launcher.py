@@ -64,6 +64,18 @@ _SLOT_REMEDY = (
     "[--boundary <FILE PATH>]`."
 )
 
+_CALIBRATION_UNREADABLE_REMEDY = (
+    "The pilot calibration profile at `path` could not be read or parsed, so the launcher "
+    "cannot tell whether this project declares pilot slots. Fix or regenerate that profile, "
+    "then relaunch."
+)
+
+_GATE_REFUSAL_REASONS = frozenset({
+    "preflight-slot-reservation-required",
+    "post-reserve-ledger-unreadable",
+    "preflight-slot-calibration-unreadable",
+})
+
 
 def _scrub_env(env=None):
     base = dict(env if env is not None else os.environ)
@@ -201,6 +213,34 @@ def _parse_iso8601(value):
     return dt
 
 
+def _terminal_reason_from_fold(info, records):
+    if not info.get("terminal"):
+        return None
+    if info.get("terminalKind") == "outcome":
+        return info.get("outcome")
+    if info.get("terminalKind") == "refused":
+        idx = info.get("terminalIndex")
+        if idx is not None and 0 <= idx < len(records):
+            rec = records[idx]
+            if isinstance(rec, dict):
+                return rec.get("reason")
+    return None
+
+
+def _gate_parallel_detail(ledger_state):
+    """Lanes that count toward parallelism at the post-reserve slot gate."""
+    live_detail = ledger_state.get("detail") or {}
+    all_detail = ledger_state.get("allDetail") or {}
+    out = dict(live_detail)
+    for launch_id, info in all_detail.items():
+        if launch_id in out:
+            continue
+        reason = info.get("terminalReason")
+        if reason in _GATE_REFUSAL_REASONS:
+            out[launch_id] = info
+    return out
+
+
 def _ledger_live_state(repo_root, env=None):
     lp = ll.ledger_path(repo_root, env=env)
     if not lp["ok"]:
@@ -244,11 +284,13 @@ def _ledger_live_state(repo_root, env=None):
                 "declarations": {},
             }
         declarations = folded["batchDeclarations"]
+        records = read_result["records"]
         for launch_id, info in folded["launches"].items():
             entry = {
                 "batchId": info["batchId"],
                 "slot": info.get("slot"),
                 "generation": info.get("generation"),
+                "terminalReason": _terminal_reason_from_fold(info, records),
             }
             all_detail[launch_id] = entry
             if not info.get("terminal"):
@@ -332,7 +374,7 @@ def _slot_reservation_gate(
         return _fail(
             "preflight-slot-calibration-unreadable",
             path=slot_info.get("path"),
-            remedy=_SLOT_REMEDY,
+            remedy=_CALIBRATION_UNREADABLE_REMEDY,
         )
     if not slot_info.get("declares"):
         return None
@@ -932,7 +974,7 @@ def launch_build(
         ledger_recheck,
         exclude_launch_id=launch_id,
         fail_on_unreadable=True,
-        parallel_detail=ledger_recheck.get("allDetail"),
+        parallel_detail=_gate_parallel_detail(ledger_recheck),
     )
     if slot_refusal is not None:
         refusal_reason = slot_refusal["reason"]
