@@ -461,3 +461,94 @@ def test_declares_slots_directory_legacy_selected_profile(tmp_path):
         "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
         "path": profile_dir,
     }
+
+
+def test_read_calibration_close_oserror_returns_cannot_tell(tmp_path, monkeypatch):
+    # axis: close-time OSError must not escape declares_slots never-raises contract (P1)
+    path = _write_profile(
+        tmp_path,
+        _profile_text({
+            "schemaVersion": 1,
+            "pilot": {"credentialSet": [{"account": "a", "role": "admin"}]},
+        }),
+    )
+    _patch_resolve(monkeypatch, path)
+    real_fdopen = os.fdopen
+
+    class _CloseRaises:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def read(self):
+            return self._fh.read()
+
+        def close(self):
+            raise OSError(5, "EIO")
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            self.close()
+
+    def fake_fdopen(fd, *args, **kwargs):
+        return _CloseRaises(real_fdopen(fd, *args, **kwargs))
+
+    monkeypatch.setattr(os, "fdopen", fake_fdopen)
+    result = pc.declares_slots("/fake/repo")
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
+        "path": path,
+    }
+
+
+def test_read_calibration_open_race_candidate_returns_cannot_tell(tmp_path, monkeypatch):
+    # axis: post-lstat FileNotFoundError at open is cannot-tell, not absent (P2)
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    monkeypatch.setattr(pc.store, "store_root", lambda: root)
+    _patch_resolve(monkeypatch, None, exists=False)
+    real_open = os.open
+
+    def race_open(p, flags, *args, **kwargs):
+        if p == layer:
+            raise FileNotFoundError("vanished after lstat")
+        return real_open(p, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", race_open)
+    result = pc.declares_slots(repo)
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNRESOLVED,
+        "path": layer,
+    }
+    assert result["cause"] != pc.CAUSE_NO_CALIBRATION
+
+
+def test_read_calibration_open_race_selected_profile_returns_cannot_tell(
+        tmp_path, monkeypatch):
+    # axis: post-lstat FileNotFoundError at open on selected profile (P2)
+    path = _write_profile(
+        tmp_path,
+        _profile_text({
+            "schemaVersion": 1,
+            "pilot": {"credentialSet": [{"account": "a", "role": "admin"}]},
+        }),
+    )
+    _patch_resolve(monkeypatch, path)
+    real_open = os.open
+
+    def race_open(p, flags, *args, **kwargs):
+        if p == path:
+            raise FileNotFoundError("vanished after lstat")
+        return real_open(p, flags, *args, **kwargs)
+
+    monkeypatch.setattr(os, "open", race_open)
+    result = pc.declares_slots("/fake/repo")
+    assert result == {
+        "state": pc.STATE_CANNOT_TELL,
+        "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
+        "path": path,
+    }

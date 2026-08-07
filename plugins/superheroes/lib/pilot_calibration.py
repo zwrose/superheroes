@@ -78,7 +78,7 @@ def _read_calibration_text(path):
         try:
             fd = os.open(path, os.O_RDONLY | _O_NONBLOCK)
         except FileNotFoundError:
-            return None, "not-found"
+            return None, "cannot-tell"
         except OSError:
             return None, "cannot-tell"
         try:
@@ -87,12 +87,15 @@ def _read_calibration_text(path):
             return None, "cannot-tell"
         if not stat.S_ISREG(fst.st_mode):
             return None, "cannot-tell"
-        with os.fdopen(fd, encoding="utf-8") as fh:
-            fd = None
-            try:
-                text = fh.read()
-            except (OSError, UnicodeDecodeError):
-                return None, "cannot-tell"
+        try:
+            with os.fdopen(fd, encoding="utf-8") as fh:
+                fd = None
+                try:
+                    text = fh.read()
+                except (OSError, UnicodeDecodeError):
+                    return None, "cannot-tell"
+        except OSError:
+            return None, "cannot-tell"
     finally:
         if fd is not None:
             os.close(fd)
