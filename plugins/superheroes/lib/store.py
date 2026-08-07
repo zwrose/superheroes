@@ -77,7 +77,8 @@ def _entry_dirs(entry_dir):
     return {"blocks_dir": os.path.join(entry_dir, "blocks"),
             "manifests_dir": os.path.join(entry_dir, "manifests"),
             "plans_dir": os.path.join(entry_dir, "plans"),
-            "state_dir": os.path.join(entry_dir, "state")}
+            "state_dir": os.path.join(entry_dir, "state"),
+            "artifacts_dir": os.path.join(entry_dir, "artifacts")}
 
 
 def _legacy_in_repo_profile_path(repo_root):
@@ -158,7 +159,7 @@ def resolve(cwd, root):
     layer). The core_md migration path that deleted profile.md was removed (#724); a legacy
     profile.md now produces a named refusal via core_md.resolve_shared. blocks_dir/manifests_dir
     follow the mode the
-    winning source physically lives in. plans_dir/state_dir ALWAYS point into the global
+    winning source physically lives in. plans_dir/state_dir/artifacts_dir ALWAYS point into the global
     entry (machine-local)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
@@ -166,7 +167,7 @@ def resolve(cwd, root):
     entry_id = g["entry_id"] if g else ident["gitdir_hash"]
     entry_dir = os.path.join(root, "entries", entry_id)
     machine = {k: v for k, v in _entry_dirs(entry_dir).items()
-               if k in ("plans_dir", "state_dir")}
+               if k in ("plans_dir", "state_dir", "artifacts_dir")}
 
     legacy_in_repo = _legacy_in_repo_profile_path(repo_root)
     in_repo = os.path.dirname(legacy_in_repo)
@@ -233,6 +234,8 @@ def create(cwd, location, root):
     d = _entry_dirs(entry_dir)
     os.makedirs(d["plans_dir"], exist_ok=True)
     os.makedirs(d["state_dir"], exist_ok=True)
+    # Do not makedirs artifacts_dir here — pilot_artifacts creates it with 0o700; a
+    # directory pre-created under the ambient umask would be 0o755 and refused.
 
     # #428: a MIGRATED project's calibration lives in the unified layer — create() must
     # point callers (test-pilot-init Step 6 writes the profile at this path) AT THE LAYER,
@@ -270,7 +273,8 @@ def create(cwd, location, root):
     return {"location": location, "exists": os.path.exists(profile),
             "entry_id": entry_id, "profile": profile, "profileSource": profile_source,
             "blocks_dir": blocks, "manifests_dir": manifests,
-            "plans_dir": d["plans_dir"], "state_dir": d["state_dir"]}
+            "plans_dir": d["plans_dir"], "state_dir": d["state_dir"],
+            "artifacts_dir": d["artifacts_dir"]}
 
 
 def decide_location(env_value, interactive, cwd=None, root=None):
