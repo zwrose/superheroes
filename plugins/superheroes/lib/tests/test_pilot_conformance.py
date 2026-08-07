@@ -1,4 +1,5 @@
 """Tests for pilot_conformance.py — headless conformance-run contract (C10)."""
+import json
 import os
 import sys
 
@@ -474,3 +475,280 @@ def test_exercise_record_invalid_result_string_refuses():
 def test_exercise_record_fractional_exercised_at_accepted():
     record = _pass_record(exercised_at="2026-08-07T12:00:00.123456Z")
     assert record["exercisedAt"] == "2026-08-07T12:00:00.123456Z"
+
+
+# --- default_exercises --------------------------------------------------------
+
+def test_default_exercises_surface_union_equals_required_surfaces():
+    """Closed-inventory guarantee: every required surface has exactly one exercise."""
+    # bite-axis: inventory completeness — union of exercise surfaces must equal REQUIRED_SURFACES.
+    exercised = set()
+    for fn in pc.default_exercises():
+        exercised.update(fn.conformance_surfaces)
+    assert exercised == set(pc.REQUIRED_SURFACES)
+
+
+def test_default_exercises_stable_order():
+    names = [fn.conformance_exercise for fn in pc.default_exercises()]
+    assert names == [
+        "artifact-store",
+        "cleanup-end-to-end",
+        "mint-gate-off",
+        "reclaim-sweep",
+        "wave-headless",
+    ]
+
+
+# --- resolve_inputs -----------------------------------------------------------
+
+_MINIMAL_PILOT_JSON = (
+    '"schemaVersion": 1, "signInPath": "attended",'
+    '"attended": {"vehicle": "automation"},'
+    '"credentialSet": [{"account": "owner", "role": "resource-owner"}],'
+    '"captureSurface": ["cookies"],'
+    '"captureOptions": {"indexedDB": false, "credentials": false},'
+    '"validityProvenance": "server-probe",'
+    '"identityProbe": {"path": "/api/me", "unseededExpectation": "no-session"},'
+    '"cleanup": {"command": ["cleanup", "{namespace}"]},'
+    '"administrativeMax": 4,'
+    '"effectsEscape": {"canEscape": false, "evidence": "x"},'
+    '"policyRef": {"declaration": "example-project-pilot-policy"}'
+)
+
+
+def _write_calibration_layer(tmp_path, *, include_mint=False):
+    layer_dir = tmp_path / ".claude" / "superheroes"
+    layer_dir.mkdir(parents=True)
+    pilot_json = "{" + _MINIMAL_PILOT_JSON
+    if include_mint:
+        pilot_json += (
+            ', "mint": {"envelope": {"enablingFlagEnvVar": "ALLOW",'
+            ' "enabledScopes": ["dev"], "forbiddenScopes": ["prod"],'
+            ' "gateOffTestCommand": ["true"]}, "sentinelIdentifier": "x"}'
+        )
+    pilot_json += "}"
+    (layer_dir / "test-pilot.md").write_text(
+        "## config\n\n```json test-pilot-config\n"
+        '{"schemaVersion": 1, "pilot": %s}\n```\n' % pilot_json,
+        encoding="utf-8",
+    )
+
+
+def test_resolve_inputs_no_calibration_all_absent(tmp_path):
+    inputs, resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
+    assert inputs == {}
+    assert len(resolution) == 5
+    assert all(entry["state"] == "absent" for entry in resolution)
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_NO_CALIBRATION
+    assert by_input["mint"]["reason"] == pc.REASON_INPUT_NO_CALIBRATION
+    assert by_input["wave"]["reason"] == pc.REASON_INPUT_NO_SLOTS_DIR
+    assert by_input["reclaim"]["reason"] == pc.REASON_INPUT_NO_SLOTS_DIR
+
+
+def test_resolve_inputs_branch_unresolved_artifacts_absent(tmp_path, monkeypatch):
+    monkeypatch.setattr("store_core.run_git", lambda *_args, **_kwargs: None)
+    _write_calibration_layer(tmp_path)
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        policy_root=str(tmp_path / "policy"),
+        slot_ref="slot-a@1",
+        now=EXERCISED_AT,
+    )
+    assert "artifacts" not in inputs
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["artifacts"]["state"] == "absent"
+    assert by_input["artifacts"]["reason"] == pc.REASON_INPUT_BRANCH_UNRESOLVED
+
+
+def test_resolve_inputs_pilot_block_no_policy_root_cleanup_absent(tmp_path):
+    _write_calibration_layer(tmp_path)
+    inputs, resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
+    assert "cleanup" not in inputs
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_NO_POLICY_ROOT
+
+
+def test_resolve_inputs_wave_and_reclaim_resolved_with_slots_dir(tmp_path):
+    slots_dir = tmp_path / "slots"
+    slots_dir.mkdir()
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        slots_dir=str(slots_dir),
+        slot_ref="slot-a@1",
+        now=EXERCISED_AT,
+    )
+    assert inputs["wave"]["slots_dir"] == str(slots_dir)
+    assert inputs["reclaim"]["slots_dir"] == str(slots_dir)
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["wave"]["state"] == "resolved"
+    assert by_input["reclaim"]["state"] == "resolved"
+
+
+def test_edge10_unreachable_reach_root_cleanup_absent(tmp_path):
+    _write_calibration_layer(tmp_path, include_mint=True)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    slots_dir = tmp_path / "slots"
+    slots_dir.mkdir()
+    missing_reach = str(tmp_path / "no-such-reach")
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        policy_root=str(policy_root),
+        reach_roots=[missing_reach],
+        slots_dir=str(slots_dir),
+        slot_ref="slot-a@1",
+        now=EXERCISED_AT,
+    )
+    assert "cleanup" not in inputs
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["cleanup"]["state"] == "absent"
+    assert by_input["cleanup"]["reason"] is not None
+
+
+# --- CLI ----------------------------------------------------------------------
+
+def _repo_root():
+    return os.path.realpath(os.path.join(_HERE, "..", "..", "..", ".."))
+
+
+def test_cli_stdout_parses_as_json(capsys):
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    payload = json.loads(captured.out)
+    assert "resolution" in payload
+    assert payload["ok"] is False
+    assert captured.err == ""
+
+
+def test_edge1_cli_cwd_not_directory_returns_2(capsys, tmp_path):
+    missing = str(tmp_path / "missing-dir")
+    exit_code = pc.main(["pilot_conformance.py", "run", "--cwd", missing])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == pc.REASON_CLI_CWD_INVALID
+
+
+def test_edge2_cli_now_non_utc_z_returns_2(capsys):
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        "2026-08-07T12:00:00+00:00",
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == pc.REASON_CLI_NOW_INVALID
+
+
+def test_edge3_cli_no_calibration_every_exercise_skipped(capsys):
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    payload = json.loads(captured.out)
+    assert payload["ok"] is False
+    assert payload["unexercised"] == sorted(pc.REQUIRED_SURFACES)
+    assert all(
+        record["result"] == pc.RESULT_SKIPPED
+        for record in payload["exercises"]
+    )
+
+
+def test_edge6_cli_exercise_raises_still_prints_report(monkeypatch, capsys):
+    def _raising(_inputs, _now):
+        raise RuntimeError("boom")
+
+    _raising.conformance_exercise = "raises"
+    _raising.conformance_surfaces = (SAMPLE_SURFACE,)
+
+    monkeypatch.setattr(pc, "default_exercises", lambda: [_raising])
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    payload = json.loads(captured.out)
+    assert payload["exercises"][0]["result"] == pc.RESULT_FAIL
+
+
+def test_edge7_cli_unregistered_exercise_returns_2(monkeypatch, capsys):
+    def _plain(_inputs, _now):
+        return _pass_record()
+
+    monkeypatch.setattr(pc, "default_exercises", lambda: [_plain])
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == pc.REASON_EXERCISE_FN_INVALID
+
+
+def test_edge8_cli_duplicate_exercise_names_returns_2(monkeypatch, capsys):
+    @pc.register("dup", surfaces=[SAMPLE_SURFACE])
+    def first(inputs, now):
+        return _pass_record(exercise="dup", exercised_at=now)
+
+    @pc.register("dup", surfaces=["pilot_wave.wave_anchor"])
+    def second(inputs, now):
+        return _pass_record(exercise="dup", surfaces=["pilot_wave.wave_anchor"], exercised_at=now)
+
+    monkeypatch.setattr(pc, "default_exercises", lambda: [first, second])
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 2
+    assert captured.out == ""
+    assert captured.err.strip() == pc.REASON_EXERCISE_NAME_DUPLICATE
+
+
+def test_edge9_cli_stdout_is_only_json(capsys):
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    assert exit_code == 1
+    json.loads(captured.out)
+    assert captured.out.endswith("\n")
+    assert captured.err == ""
