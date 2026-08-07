@@ -1210,7 +1210,15 @@ being omitted — an absent boundary is itself worth seeing in the batch account
 and `boundary` keyword arguments and passes them through on the refusal path via
 `_try_reserve_for_refusal`, so a wave slot whose launch is refused at preflight, premise, or compose
 is still attributable to its slot. The `launch` CLI exposes the same three fields (`--slot`,
-`--generation`, `--boundary`).
+`--generation`, `--boundary`). The launcher also **refuses** a parallel launch on a slot-calibrated
+project (a `pilot` block with a non-empty `credentialSet`, plus a batch declared with
+`expectedLaunches > 1` or a batch that already has a live lane) that carries no slot reservation,
+with refusal token `preflight-slot-reservation-required`. The refusal payload carries `missing` (the
+lanes lacking a reservation, with the literal `this-launch` standing for the launch being attempted)
+and `remedy` (the command shape). Single-lane launches and projects with no `pilot` block are
+untouched. Enforcement is a preflight check plus a post-reserve re-check, not a predicate inside
+`launch_ledger.reserve`'s lock, so two launches racing on an *undeclared* batch can both pass
+preflight — the post-reserve re-check then refuses at least one of them before any spawn.
 
 **Results-only scan at the durable write boundary.** `boundary_record` accepts an optional
 `material` argument; when the caller passes it, the composer scans the record it is about to return
@@ -1255,6 +1263,7 @@ stated here rather than implied clean.
 | `ledger-boundary-strong-with-acceptance` | `boundary_record`: strong verdict with a `weaker_acceptance` supplied |
 | `ledger-boundary-acceptance-reason-too-long` | `boundary_record`: acceptance `reason` exceeds 500 characters |
 | `ledger-boundary-material-in-record` | `boundary_record`: composed record carries policy material when `material` is supplied |
+| `preflight-slot-reservation-required` | a parallel launch on a slot-calibrated project carries no slot reservation for one or more lanes |
 
 ## The identity-probe exercise
 

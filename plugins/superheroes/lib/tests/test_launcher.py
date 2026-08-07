@@ -3167,3 +3167,31 @@ def test_launch_build_post_reserve_slot_recheck_refuses(tmp_path, monkeypatch):
         if r.get("event") == "refused" and r.get("launchId") != "race-sibling"
     ]
     assert len(refused) == 1
+
+
+def test_slot_gate_disjoint_surfaces_na_parallel_unslotted_refuses(tmp_path, monkeypatch):
+  # axis: slot-calibrated + declared-parallel + disjoint-surfaces na + no slot refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-na", 2)
+    checks = _all_checks(**{
+        "disjoint-surfaces": {"state": "na", "reason": "first lane of the wave"},
+    })
+    result = L.walk_preflight(checks, repo, batch_id="wave-na")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert result["missing"] == ["this-launch"]
+
+
+def test_slot_gate_disjoint_surfaces_na_non_pilot_parallel_passes(tmp_path, monkeypatch):
+  # axis: non-pilot + declared-parallel + disjoint-surfaces na passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _not_slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-na", 2)
+    checks = _all_checks(**{
+        "disjoint-surfaces": {"state": "na", "reason": "first lane of the wave"},
+    })
+    result = L.walk_preflight(checks, repo, batch_id="wave-na")
+    assert result["ok"] is True
