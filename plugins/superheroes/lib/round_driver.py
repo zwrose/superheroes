@@ -3525,18 +3525,34 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster):
 
 # --- the durable per-seat records ---------------------------------------------------------------
 
-def _seat_records(session_dir, rnd, phase, attempt, roster):
-    """{seat_key: stored_envelope_or_None} for the CURRENT attempt, read off the durable store."""
-    out = {}
-    for seat_key in roster:
+def _slot_label(seat_key, occurrence):
+    """How a roster SLOT is named to a caller: `<seat>` at occurrence 0, `<seat>#<n>` beyond it.
+
+    A second seat sharing an id is a real, separately-dispatched seat, so a refusal that named only
+    `<seat>` would read as "the whole target is missing" while its twin sits recorded on disk. The
+    plain form is kept for the overwhelmingly common single-slot case so no existing caller's
+    reason string changes shape."""
+    return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
+
+
+def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
+    """[(seat_key, occurrence, stored_envelope_or_None)] for the CURRENT attempt, off the store.
+
+    Keyed by SLOT, never by seat alone: `round_adapters.roster_for("dispatch-audits", ...)` is
+    occurrence-indexed because two DISTINCT audit targets can legitimately share one id, and a
+    seat-keyed map cannot even represent them — one of the two records would be dropped before any
+    fold saw it. The enumeration is `round_records.roster_slots`, the same one the adapter indexes
+    envelopes with."""
+    out = []
+    for seat_key, occurrence in round_records.roster_slots(roster):
         try:
-            spath = round_records.store_path(session_dir, rnd, phase,
-                                             round_records.storage_key(seat_key), attempt)
+            spath = round_records.store_path(
+                session_dir, rnd, phase, round_records.storage_key(seat_key, occurrence), attempt)
         except ValueError:
-            out[seat_key] = None
+            out.append((seat_key, occurrence, None))
             continue
         obj, err = round_records.read_json(spath)
-        out[seat_key] = obj if (err is None and isinstance(obj, dict)) else None
+        out.append((seat_key, occurrence, obj if (err is None and isinstance(obj, dict)) else None))
     return out
 
 
@@ -3562,11 +3578,11 @@ def _seat_for_payload_hash(session_dir, sha):
     return None
 
 
-def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt):
+def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
     """(payload, head_diff_path) for a landed `dispatch-fixer` envelope, or (None, None)."""
     try:
-        lpath = round_records.landing_path(session_dir, rnd, phase,
-                                           round_records.storage_key(seat_key), attempt)
+        lpath = round_records.landing_path(
+            session_dir, rnd, phase, round_records.storage_key(seat_key, occurrence), attempt)
     except ValueError:
         return None, None
     envelope, err = round_records.read_json(lpath)
@@ -3592,7 +3608,7 @@ def _read_head_diff(path):
         return None, "head-diff-unreadable"
 
 
-def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content):
+def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence=0):
     """Copy the fixer's head diff into the STORE beside its envelope and stamp the immutable copy's
     path into the stored payload.
 
@@ -3600,7 +3616,7 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content):
     payload (so a later integrity re-read of the store file cannot read as torn) while the seat's
     own landed hash is preserved verbatim as `landedPayloadSha256` — nothing about what the seat
     actually landed is lost. Returns (store_path, payload_sha256)."""
-    skey = round_records.storage_key(seat_key)
+    skey = round_records.storage_key(seat_key, occurrence)
     spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
     diff_path = os.path.join(os.path.dirname(spath), "%s.a%d.headdiff" % (skey, attempt))
     tmp = diff_path + ".tmp"
@@ -3640,14 +3656,19 @@ def _roster_of(session_dir, state, cmd, phase, rnd, attempt):
 
 
 def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, expect_sha256=None,
-                      sweep=False):
+                      sweep=False, occurrence=0):
     """Ingest ONE landed seat envelope (or, with `sweep`, every unclaimed landing) into the durable
     store, and journal the outcome carrying its `payloadSha256`.
 
     The ingestion itself — the attempt fence, the torn-write detector, the supersede CAS, the
     manifest anchor — is `round_records`'; this layer supplies the roster (`round_adapters`), the
     emission-time anchor, the per-field payload validation, the fixer's head-diff durability, and
-    the journal."""
+    the journal.
+
+    `occurrence` addresses WHICH roster slot of a repeated seat key this envelope is (default 0 —
+    the only slot a key that appears once has). Two distinct audit targets can legitimately share
+    one id, so without it the second target's result is unaddressable and the first's would be
+    superseded by it."""
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -3672,7 +3693,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
         payload, head_path = (None, None)
         if phase == P_FIXER:
             payload, head_path = _fixer_head_diff_landing(session_dir, rnd, phase, seat,
-                                                          cur_attempt)
+                                                          cur_attempt, occurrence)
         if payload is not None:
             fault = _adapters().payload_fault(phase, payload, seat)
             if fault:
@@ -3690,10 +3711,10 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
                                        current_attempt=cur_attempt, roster=roster,
                                        supersede=supersede, expect_sha256=expect_sha256,
-                                       anchor=anchor)
+                                       anchor=anchor, occurrence=occurrence)
     if not out.get("ok"):
         return _refuse_cmd(session_dir, "record-result", out.get("reason"), phase=phase, rnd=rnd,
-                           attempt=cur_attempt, seat=seat,
+                           attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=out.get("message") or out.get("storePath"))
     payload_sha = out.get("payloadSha256")
     stored = round_records.read_json(out.get("storePath"))[0]
@@ -3705,13 +3726,15 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     head_store_path = None
     if head_content is not None:
         head_store_path, rehashed = _store_head_diff(session_dir, rnd, phase, seat, cur_attempt,
-                                                     head_content)
+                                                     head_content, occurrence)
         payload_sha = rehashed or payload_sha
     _journal_event(session_dir, "record-result", "recorded", phase=phase, round=rnd,
-                   attempt=cur_attempt, seat=seat, payloadSha256=payload_sha,
+                   attempt=cur_attempt, seat=seat, occurrence=occurrence,
+                   payloadSha256=payload_sha,
                    superseded=bool(out.get("superseded")), headDiffStorePath=head_store_path)
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
-            "payloadSha256": payload_sha, "superseded": bool(out.get("superseded")),
+            "occurrence": occurrence, "payloadSha256": payload_sha,
+            "superseded": bool(out.get("superseded")),
             "storePath": out.get("storePath"), "headDiffStorePath": head_store_path}
 
 
@@ -3724,9 +3747,11 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                                           roster=roster, anchor=anchor)
     recorded = []
     for result in results:
+        occurrence = result.get("occurrence") or 0
         if not result.get("ok"):
             return _refuse_cmd(session_dir, cmd, result.get("reason"), phase=phase, rnd=rnd,
-                               attempt=attempt, seat=result.get("seatKey"),
+                               attempt=attempt,
+                               seat=_slot_label(result.get("seatKey"), occurrence),
                                detail=result.get("message"))
         if result.get("reason") == "already-stored":
             continue
@@ -3748,18 +3773,21 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                     return _refuse_cmd(session_dir, cmd, why, phase=phase, rnd=rnd,
                                        attempt=attempt, seat=seat, headDiffPath=head_path)
                 _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
-                                                     content)
+                                                     content, occurrence)
                 payload_sha = rehashed or payload_sha
         _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                       seat=seat, payloadSha256=payload_sha)
-        recorded.append(seat)
+                       seat=seat, occurrence=occurrence, payloadSha256=payload_sha)
+        recorded.append(_slot_label(seat, occurrence))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": attempt, "recorded": recorded}
 
 
-def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None):
+def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, occurrence=0):
     """Record a seat that produced NO artifact: the driver writes the `seat-missing/1` envelope
     itself (there is, by definition, nothing for the seat to land) and ingests it through the same
-    fences as a result — roster, attempt, session, phase, round, anchor."""
+    fences as a result — roster, attempt, session, phase, round, anchor.
+
+    `occurrence` addresses which roster slot of a repeated seat key is absent (default 0), so one
+    of two audit targets sharing an id can be recorded missing WITHOUT claiming its twin is."""
     state, refusal = _load_driver_state(session_dir, "record-missing")
     if refusal is not None:
         return refusal
@@ -3803,24 +3831,27 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None):
         "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "reason": reason,
         "evidence": evidence,
+        "occurrence": occurrence,
     }
     try:
-        lpath = round_records.landing_path(session_dir, rnd, phase,
-                                           round_records.storage_key(seat), cur_attempt)
+        lpath = round_records.landing_path(
+            session_dir, rnd, phase, round_records.storage_key(seat, occurrence), cur_attempt)
     except ValueError as exc:
         return _refuse_cmd(session_dir, "record-missing", "invalid-path", phase=phase, rnd=rnd,
-                           attempt=cur_attempt, seat=seat, detail=str(exc))
+                           attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                           detail=str(exc))
     round_records.atomic_write_json(lpath, envelope)
     out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
-                                       current_attempt=cur_attempt, roster=roster, anchor=anchor)
+                                       current_attempt=cur_attempt, roster=roster, anchor=anchor,
+                                       occurrence=occurrence)
     if not out.get("ok"):
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
-                           attempt=cur_attempt, seat=seat,
+                           attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=out.get("message") or out.get("storePath"))
     _journal_event(session_dir, "record-missing", "recorded", phase=phase, round=rnd,
-                   attempt=cur_attempt, seat=seat, reason=reason)
+                   attempt=cur_attempt, seat=seat, occurrence=occurrence, reason=reason)
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
-            "missingReason": reason, "storePath": out.get("storePath")}
+            "occurrence": occurrence, "missingReason": reason, "storePath": out.get("storePath")}
 
 
 # --- advance -------------------------------------------------------------------------------------
@@ -3899,21 +3930,25 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     # 1. reconcile the two-commit window. THE STORE FILE IS AUTHORITATIVE.
     rec = round_records.reconcile(session_dir, rnd, phase,
                                   _journal_payload_hashes(session_dir, rnd, phase))
-    by_storage = {round_records.storage_key(seat): seat for seat in roster}
+    # The storage key carries the SLOT, not the seat: a repeated seat key has one file per
+    # occurrence, so mapping back to the bare seat would re-ingest slot 0 twice and never slot 1.
+    by_storage = {round_records.storage_key(seat, occurrence): (seat, occurrence)
+                  for seat, occurrence in round_records.roster_slots(roster)}
     for entry in rec.get("ingestNow") or []:
-        seat = by_storage.get(entry.get("storageKey"))
+        slot = by_storage.get(entry.get("storageKey"))
         # A landing from a SUPERSEDED attempt is not this advance's business — the attempt fence in
         # `round_records` owns it, and refusing the advance over a stale leftover would deadlock a
         # phase that is otherwise complete.
-        if seat is None or entry.get("attempt") != attempt:
+        if slot is None or entry.get("attempt") != attempt:
             continue
-        out = cmd_record_result(session_dir, seat, attempt=attempt)
+        out = cmd_record_result(session_dir, slot[0], attempt=attempt, occurrence=slot[1])
         if not out.get("ok"):
             return out
     for entry in rec.get("reappend") or []:
-        seat = by_storage.get(entry.get("storageKey"))
+        slot = by_storage.get(entry.get("storageKey"))
         _journal_event(session_dir, "advance", "recorded", phase=phase, round=rnd,
-                       attempt=entry.get("attempt"), seat=seat,
+                       attempt=entry.get("attempt"), seat=slot[0] if slot else None,
+                       occurrence=slot[1] if slot else None,
                        payloadSha256=entry.get("payloadSha256"), reappended=True)
     orphans = rec.get("journalOrphan") or []
     if orphans:
@@ -3928,9 +3963,10 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     if not swept.get("ok"):
         return swept
 
-    # 3. completeness — EVERY roster seat has a result or a missing envelope for this attempt.
-    records = _seat_records(session_dir, rnd, phase, attempt, roster)
-    absent = sorted(seat for seat, env in records.items() if env is None)
+    # 3. completeness — EVERY roster SLOT has a result or a missing envelope for this attempt.
+    slots = _seat_slot_records(session_dir, rnd, phase, attempt, roster)
+    absent = sorted(_slot_label(seat, occurrence)
+                    for seat, occurrence, env in slots if env is None)
     if absent:
         return _refuse_cmd(session_dir, "advance", "incomplete-roster", phase=phase, rnd=rnd,
                            attempt=attempt, seats=absent,
@@ -3938,6 +3974,11 @@ def _advance_locked(session_dir, state, git=None, broke=None):
                                   % (attempt, ", ".join(absent)))
 
     # 4. assemble the phase artifact — the phase SHAPE is the adapter's, never this layer's.
+    #
+    # The adapter consumes a LIST of envelopes and indexes it by each envelope's own
+    # (seat, occurrence) — the only shape that can carry two seats sharing one id (a seat-keyed
+    # mapping cannot, and `assemble` refuses one outright: `envelopes-not-a-list`).
+    records = [env for _seat, _occurrence, env in slots]
     manifest, _merr = round_records.read_json(
         round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt))
     artifact, why = _adapters().assemble(phase, records, state, config,
@@ -4157,7 +4198,11 @@ def _session_artifact_hashes(session_dir):
 
 
 def _attest_roster(session_dir, state):
-    """{seat: recorded|missing|superseded|absent} for the pending phase's FULL roster."""
+    """{slot: recorded|missing|superseded|absent} for the pending phase's FULL roster.
+
+    Keyed by SLOT (`<seat>` / `<seat>#<n>`) so a repeated seat key reports BOTH of its dispositions
+    — an attestation that collapsed two same-id targets onto one key would under-report the very
+    coverage the attestation exists to disclose."""
     pending = state.get("pending")
     if not isinstance(pending, dict) or not pending.get("phase"):
         return {}
@@ -4171,15 +4216,16 @@ def _attest_roster(session_dir, state):
     roster = [s for s in roster if isinstance(s, str)]
     superseded = set(e.get("seat") for e in read_journal(session_dir) if e.get("superseded"))
     out = {}
-    for seat, env in _seat_records(session_dir, rnd, phase, attempt, roster).items():
+    for seat, occurrence, env in _seat_slot_records(session_dir, rnd, phase, attempt, roster):
+        label = _slot_label(seat, occurrence)
         if env is None:
-            out[seat] = "absent"
+            out[label] = "absent"
         elif seat in superseded:
-            out[seat] = "superseded"
+            out[label] = "superseded"
         elif env.get("schema") == round_records.SEAT_MISSING_SCHEMA:
-            out[seat] = "missing"
+            out[label] = "missing"
         else:
-            out[seat] = "recorded"
+            out[label] = "recorded"
     return out
 
 
@@ -4345,6 +4391,10 @@ def main(argv=None):
     pr.add_argument("--supersede", action="store_true")
     pr.add_argument("--expect-sha256", default=None)
     pr.add_argument("--sweep", action="store_true")
+    pr.add_argument("--occurrence", type=int, default=0,
+                    help="which roster SLOT of a repeated seat key this envelope is (default 0). "
+                         "Two distinct audit targets can legitimately share one id; without this "
+                         "the second is unaddressable")
 
     pm = sub.add_parser("record-missing")
     pm.add_argument("--session-dir", required=True)
@@ -4352,6 +4402,10 @@ def main(argv=None):
     pm.add_argument("--attempt", type=int, required=True)
     pm.add_argument("--reason", required=True, choices=list(round_records.MISSING_REASONS))
     pm.add_argument("--evidence", default=None)
+    pm.add_argument("--occurrence", type=int, default=0,
+                    help="which roster SLOT of a repeated seat key is absent (default 0), so one "
+                         "of two same-id targets can be recorded missing without claiming its "
+                         "twin is")
 
     pa = sub.add_parser("advance")
     pa.add_argument("--session-dir", required=True)
@@ -4476,10 +4530,10 @@ def _dispatch(args):
     elif args.cmd == "record-result":
         out = cmd_record_result(args.session_dir, args.seat, attempt=args.attempt,
                                 supersede=args.supersede, expect_sha256=args.expect_sha256,
-                                sweep=args.sweep)
+                                sweep=args.sweep, occurrence=args.occurrence)
     elif args.cmd == "record-missing":
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
-                                 evidence_path=args.evidence)
+                                 evidence_path=args.evidence, occurrence=args.occurrence)
     elif args.cmd == "advance":
         out = cmd_advance(args.session_dir, break_lock=args.break_lock)
     elif args.cmd == "attest":

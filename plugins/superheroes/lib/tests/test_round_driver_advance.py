@@ -15,7 +15,11 @@ Three disciplines run through every test here:
 
 `round_adapters` (the phase-shape sibling) is substituted here through `sys.modules`: the driver
 imports it at CALL time precisely so it can be, and so this module still imports when the sibling
-is absent.
+is absent. That substitution scopes this file to the DRIVER LAYER — it can never show that the
+driver and the adapter agree about the artifact they pass. `test_round_driver_integration.py` is
+the real-path home for that, and
+`test_this_module_stubs_the_adapter_and_the_real_path_home_does_not` holds the two files'
+division of labour as an assertion rather than a convention.
 """
 import copy
 import hashlib
@@ -106,10 +110,16 @@ class FakeAdapters(object):
         if self.assemble_reason is not None:
             return None, self.assemble_reason
         if phase == RD.P_PANEL:
+            # `envelopes` is a LIST, keyed by each envelope's own `seat` — the real
+            # `round_adapters.assemble` contract (`_index_envelopes` refuses anything else with
+            # `envelopes-not-a-list`). This stub consumed a {seat: envelope} MAPPING while the
+            # driver handed one over, and the agreement of the two shapes is precisely what a
+            # stubbed seam cannot check: see test_round_driver_integration.py.
             seats = {}
-            for seat, env in (envelopes or {}).items():
+            for env in (envelopes or []):
                 if not isinstance(env, dict):
                     continue
+                seat = env.get("seat")
                 if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
                     seats[seat] = {"findings": [], "missing": True}
                 else:
@@ -127,6 +137,46 @@ def adapters(monkeypatch):
     fake = FakeAdapters()
     monkeypatch.setitem(sys.modules, "round_adapters", fake)
     return fake
+
+
+# The real-path sibling. Named here (not just in prose) because the division of labour between the
+# two files is asserted below rather than assumed.
+REAL_PATH_MODULE = "test_round_driver_integration.py"
+
+
+def test_this_module_stubs_the_adapter_and_the_real_path_home_does_not(adapters):
+    """THE DIVISION OF LABOUR, asserted.
+
+    This module substitutes `round_adapters` so it can test the DRIVER LAYER in isolation — the
+    roster/attempt/completeness/journal bookkeeping, every refusal string, the session-death
+    replays. That is legitimate and stays.
+
+    What a stub can NEVER test is whether the two modules AGREE. It did not: the driver handed
+    `assemble` a {seat: envelope} mapping while the adapter's contract is a LIST, so every phase
+    refused `assemble-refused` on the real path while this file was green. `%s` is the real-path
+    home — REAL driver, REAL adapters, no substitution — and this test fails if that file ever
+    starts stubbing the adapter back, which would re-open the exact hole.
+    """ % REAL_PATH_MODULE
+    # this module really is the stubbed one
+    assert sys.modules["round_adapters"] is adapters
+    assert isinstance(adapters, FakeAdapters)
+
+    path = os.path.join(_HERE, REAL_PATH_MODULE)
+    assert os.path.isfile(path), "the real-path home %s is missing" % REAL_PATH_MODULE
+    with open(path, encoding="utf-8") as fh:
+        source = fh.read()
+    assert "import round_adapters" in source, "%s must drive the REAL adapter" % REAL_PATH_MODULE
+    # every spelling that could put a stand-in back in the adapter's place (module substitution or
+    # per-function patching). Prose cannot produce these — only a substitution can.
+    for substitution in ("monkeypatch.setitem", "monkeypatch.setattr",
+                         'sys.modules["round_adapters"] =', "sys.modules['round_adapters'] ="):
+        assert substitution not in source, (
+            "%s must not substitute the adapter (%s) — it is the module that proves the driver "
+            "and the adapter agree" % (REAL_PATH_MODULE, substitution))
+    # the EXACT def line, not a prefix of it: a rename that leaves the old name as a prefix
+    # (`..._DISABLED`) must not read as the fence still being there.
+    assert "def test_adapter_module_is_not_stubbed_in_this_module():" in source, (
+        "%s must keep its own call-time no-stub fence" % REAL_PATH_MODULE)
 
 
 # =============================================================================================
@@ -742,10 +792,13 @@ def test_advance_folds_a_complete_phase_and_emits_the_next_action(tmp_path, adap
     assert out["nextAction"]["phase"] == RD.P_VERIFIERS
     assert _state(d)["step"] == RD.P_VERIFIERS
     assert len(_outcomes(d, "advanced")) == 1
-    # the adapter was asked to assemble from the DURABLE records, keyed by seat
+    # the adapter was asked to assemble from the DURABLE records — a LIST of envelopes, each
+    # carrying its own seat and slot occurrence (the real adapter indexes on that pair)
     call = adapters.assembled[-1]
     assert call["phase"] == RD.P_PANEL
-    assert sorted(call["envelopes"]) == sorted(RD.DIMENSIONS)
+    assert isinstance(call["envelopes"], list)
+    assert sorted(e["seat"] for e in call["envelopes"]) == sorted(RD.DIMENSIONS)
+    assert {e["occurrence"] for e in call["envelopes"]} == {0}
 
 
 def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_path, adapters):
