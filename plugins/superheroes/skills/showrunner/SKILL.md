@@ -311,8 +311,8 @@ above).
    - **Post a durable vet receipt on the PR, in the shape the receipt contract defines** —
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md`: an
      always-present **spine**, plus the fields the PR's own **artifacts** trigger, with every spine
-     field **filled or written `None`**. Read that file at vet time rather than reconstructing the shape
-     here. The spine is what receipts across two independent advisor sessions already converged on; the
+     field **filled or written `None`**. **Read that file at vet time; do not reconstruct the shape from memory.**
+     The spine is what receipts across two independent advisor sessions already converged on; the
      `None` is what makes an absence readable, because presence-by-grep cannot tell *not applicable*
      from *forgotten*. **The template is a floor, never a ceiling** — a probes field that reads like a
      form has hollowed out the one field that cannot be. The receipt stands without your context.
@@ -326,23 +326,36 @@ above).
    - **Write your verdict into the PR's owner half** — the `## Advisor vet` slot the builder leaves
      empty (the **workhorse** charter's §11 has the builder create it and governs what it must
      preserve on a body rewrite; that guarantee is prose with no mechanical check, so the backstop
-     below is still yours). **The verdict plus a pointer to the receipt, and nothing else by
-     default:** consequence up, mechanism down — probes, accounting and dispositions are mechanism,
-     but *an independent reader checked this, and this is what they concluded* is the most
-     merge-relevant single fact on the page. **One conditional:**
+     below is still yours). **Write to the owner-half register:** the **verdict**; **what was checked, in owner terms**;
+     **what accepting it means**; and **what is theirs to decide** — plus a pointer to the receipt.
+     Probes, accounting and dispositions are **mechanism**: collapse them inside `<details>` below
+     those four, or leave them to the receipt. Consequence up, mechanism down — *an independent
+     reader checked this, and this is what they concluded* is the most merge-relevant single fact on
+     the page, and a slot that reproduces the whole vet has buried it. The register is defined in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/vet-receipt.md` — read it
+     there at vet time rather than reconstructing it from memory. **One conditional:**
      when the principle check finds an omission, the missing consequence goes **there too**, not only
      in the receipt — recording it only in a document addressed to you repeats the original defect in
      a politer voice. **Never Tier-2 proposals:** *what should we do next* is a different question
      from *do I merge*. **The slot is append-only and yours** — edit your own prior text in place,
-     never the builder's prose; stamp `<!-- superheroes:advisor-vet -->` above what you write.
+     never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
+     empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
+     replacing the reminder, and re-stamp the marker only when a body rewrite has dropped it.
+     The reminder is the **one** piece of builder-emitted text you are expected to remove, so it is not an
+     exception to "never the builder's prose"; if you ever find your verdict and the reminder both
+     present, the verdict wins — delete the reminder on that read.
      **Post the receipt first, then write the owner half that points at it** — in that order a
      failure between the two leaves a receipt with no pointer (visible, recoverable), never a verdict
      pointing at a receipt that does not exist. **Check the slot whenever you next read this PR's
      body** — a re-vet, a re-review, or the read before handing it back, not only a formal re-vet —
      comparing its text against your **most recent** vet receipt comment (your canonical copy), not
-     merely whether the marker is there: a rewrite can drop your text (marker gone) or carry an older
-     copy forward over a newer one (marker present, text stale — invisible to a marker check).
-     Re-write your text and re-stamp the marker when either is missing or stale.
+     merely whether the marker is there: a rewrite can drop your text and re-seed the builder's
+     reminder in its place (marker present, reminder back — which reads exactly like a vet that has
+     not happened yet), drop the marker with it (marker gone), or carry an older copy forward over a
+     newer one (marker present, text stale — invisible to a marker check), or drop your text and the
+     marker together (no marker at all — which a **pre-#794** body also looks like; your own receipt
+     is what separates them: a receipt already posted means this is a dropped write). Re-write your
+     text when any of those holds, and **re-stamp the marker only when it is actually gone**.
    - **Timing: async by default; what binds you is the show-it level, not attendance.** Interactivity
      was never an independent axis — the presentation call (duty 5) already says when the owner must
      *see* something, so the vet's timing follows from it and mints no new vocabulary. **say it** and

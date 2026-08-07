@@ -175,9 +175,15 @@ controls; if it does not, create one (`git worktree add`) and switch to it befor
 shared tree let one session's `git checkout` wipe a sibling's uncommitted work twice — this check puts the
 guarantee where it survives a launch-prompt omission, complementing the playbook's standing rulings).
 
-**Third, and at every commit after — commits inherit the repo's configured git identity; never
+**Third, and at every commit after — commits inherit the git identity the worktree resolves; never
 synthesize one.** Every commit that lands on your branch runs with the identity the worktree is
-**already configured with**. **Never pass `-c user.name` or `-c user.email`** on it, and never
+**already configured with** — repo-local `.git/config` when it is set, otherwise this environment's
+**global** config, exactly as git's normal cascade resolves it. A clone with no repo-local identity
+is the **normal** case, not a missing one: a `git config --local` that comes back empty is not by
+itself the missing-identity condition below. **Read the resolved identity, not the local one** —
+`git config user.email` and `git config user.name` **without** `--local` (or `git var
+GIT_AUTHOR_IDENT`); an empty answer *there* is the missing-identity condition, and that is the check
+to run before you commit. **Never pass `-c user.name` or `-c user.email`** on it, and never
 derive an identity from your own context — an account email you know about *yourself* is not the
 repo's identity, and inferring one is not a fallback. The damage is invisible from inside the build:
 a commit authored under a synthesized identity lands **unverified**, and a downstream gate can
@@ -267,7 +273,7 @@ includes `forfeit-with-engaged-artifact` (final output *did* arrive; our transpo
 it) — and **not before**: a *risk* of forfeit (a tight step budget, an engine you expect to
 run slow) is **not** a forfeit; anything short of the terminal condition **parks or runs the retry
 ladder** (the #563 sequence), never a pre-emptive swap — a quiet substitute-on-risk erodes the
-cross-vendor guarantee if sessions learn it (we#520 was exactly that swap, disclosed but forbidden).
+cross-vendor guarantee if sessions learn it (#520 was exactly that swap, disclosed but forbidden).
 This is distinct from the engine-*unavailability* fallback of CONVENTIONS `§7.5` (an engine not
 configured or available at all — a selection event recorded there); here a *configured* reviewer must
 actually forfeit before Claude stands in.
@@ -659,7 +665,16 @@ hold, and what must I route?* **Consequence up, mechanism down** — the owner h
 consequences; the build record carries mechanism. The owner half is **not** a summary of the build
 record.
 
-**The owner half** — three fixed headings, always present in this order, each filled or explicitly
+**The body's first line is the close link — `Closes #<issue>.` on its own, above every heading.** A
+close-state sweep of the last 20 merged PRs found **five shipped issues left open** because their
+bodies opened straight into `## What's changing` and carried no functional closing keyword, while
+the builds that opened with `Closes #<issue>.` auto-closed cleanly. A 25% escape rate on one
+mechanical line is the template's job, not the builder's memory. When this PR genuinely must **not**
+close the issue it references — a parent epic, a tracking issue — the first line still names the
+link, with a **non-closing** verb per the issue-linking discipline below. What it is never is
+**absent**.
+
+**The owner half** — the close line above, then three fixed headings, always present in this order, each filled or explicitly
 marked **N/A** where the contract allows, then **`## Advisor vet`**. The owner half is **usually
 short** — a few lines even on a very large PR — and that is the normal case, not a failure of the
 format.
@@ -686,14 +701,43 @@ format.
   — not a silent **None** on the floor's third row. The ranked entry-point levels and the
   presentation standard live in `rubric/review-discipline.md` — cite that home rather than restating
   the ranking here.
-- **`## Advisor vet`** — an empty slot the builder creates; the advisor writes into it. **Shape and
-  contents** live in `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that
-  home); **when it is written** is the showrunner charter's own duty. If you rewrite the PR body
+- **`## Advisor vet`** — an empty slot **the builder creates and pre-stamps**; the advisor writes
+  into it. Emit exactly three things, in this order and nothing between them: the `## Advisor vet`
+  heading; then the marker `<!-- superheroes:advisor-vet -->` on its own line; then, as its **own
+  separate comment below the marker — never nested inside it**, the advisor reminder, verbatim:
+
+      <!-- advisor: BEFORE writing this slot, read the showrunner charter's vet-receipt reference
+           (skills/showrunner/reference/vet-receipt.md inside the superheroes plugin, not this repo).
+           Post the receipt comment FIRST (vet-receipt marker, 8-field spine, explicit None,
+           triggered fields incl. escalation lines), THEN replace this comment with the owner-half
+           register under the advisor-vet marker: the verdict; what was checked, in owner terms;
+           what accepting it means; what is theirs to decide — plus a pointer to the receipt. -->
+
+  You stamp the marker so the advisor does not have to on the normal first write — the advisor still
+  re-stamps it when a body rewrite dropped it, and stamps it itself on a body that predates this
+  contract. The advisor's write **replaces the
+  reminder** — which is what makes the slot's three states readable from the body alone:
+  reminder still present → **the owner-half write is owed** (the receipt itself may already exist —
+  the advisor posts it *before* writing the body, so check for an existing vet-receipt comment
+  before posting another); verdict present, reminder gone → **vetted**;
+  **neither** present → an advisor write that a body rewrite dropped. A slot with **no marker at all**
+  is read against the advisor's own receipt: **no receipt comment** on the PR means a body that
+  predates this contract (not yet vetted), while **a receipt that exists** means a rewrite dropped the
+  verdict and the marker together. Marker-absence used to carry
+  that last signal; once you stamp the marker it cannot, and the reminder carries it instead.
+  One limit, stated rather than hidden: a rewrite that drops a written verdict **and** re-seeds this
+  reminder lands back on `marker + reminder`, which reads like a vet that has not happened. The body
+  alone cannot separate those two; the advisor's own backstop — comparing the slot against its most
+  recent vet-receipt comment (showrunner charter duty 4) — is what does.
+  **Shape and contents** of what the advisor writes — the owner-half register — live in
+  `skills/showrunner/reference/vet-receipt.md` (CONVENTIONS `§10.7` names that home); **when it is
+  written** is the showrunner charter's own duty. If you rewrite the PR body
   later, **carry the slot's existing text forward byte-for-byte** — advisor-authored content is
   never yours to edit, reflow, summarize, shorten, or drop, and re-creating the heading over an
-  advisor write you deleted **is the defect, not compliance with the rule** (the advisor's marker
-  above its text is the only signal telling a silently emptied slot from one not yet written —
-  dropping the text takes the detection signal with it). **Re-read the slot immediately before you
+  advisor write you deleted **is the defect, not compliance with the rule** (the **reminder** is the
+  only signal telling a silently emptied slot from one not yet written — a slot carrying neither
+  reminder nor verdict is a write that was dropped, so re-seeding the reminder over an advisor write
+  you deleted destroys the evidence as well as the verdict). **Re-read the slot immediately before you
   submit the body rewrite, confirm afterwards that it still carries the advisor's actual text — not
   merely that something is there — and if the advisor wrote or extended the slot while you were
   editing, the newer advisor text wins.**
@@ -799,6 +843,6 @@ curation stay with the advisor.
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
-| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the repo's **configured** identity; `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
+| "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global — read it with `git config user.email`, never `--local`); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. No recorded PID means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |

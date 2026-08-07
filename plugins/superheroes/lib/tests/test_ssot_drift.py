@@ -528,11 +528,14 @@ _FLOOR_MARKERS = frozenset({
     "<!-- superheroes:build-record -->",
     "<!-- superheroes:degradations -->",
 })
-# The VET-RECEIPT family (#672 ratified, built in #694) is advisor-authored AT VET, after
-# handback: two of the three live in the vet-receipt comment, not the PR body. It is
-# deliberately NOT propagated to the copy-holders — a build's pre-handback review-code runs in
-# BRANCH mode, before any PR body or vet exists, so requiring these of review-code step 8 would
-# manufacture a finding nothing can satisfy (CONVENTIONS §13: no machinery without a consumer).
+# The VET-RECEIPT family (#672 ratified, built in #694) is keyed by LIFECYCLE and CONSUMER, not by
+# authorship: every one of the three is written or stamped at HANDBACK OR LATER, and the only reader
+# that keys on them is the advisor's own backstop. (Authorship is no longer uniform — #794 moved
+# advisor-vet to builder-emitted, stamped into the empty slot with a reminder comment beneath it,
+# while the other two stay advisor-authored at vet.) It is deliberately NOT propagated to the
+# copy-holders — a build's pre-handback review-code runs in BRANCH mode, before any PR body or vet
+# exists, so requiring these of review-code step 8 would manufacture a finding nothing can satisfy
+# (CONVENTIONS §13: no machinery without a consumer).
 _VET_RECEIPT_MARKERS = frozenset({
     "<!-- superheroes:vet-receipt -->",
     "<!-- superheroes:pending-proposals -->",
@@ -568,7 +571,8 @@ def _omission_floor_expectations_from_home(home):
     assert set(markers) == set(_SECTION_10_7_MARKERS), (
         "unexpected §10.7 marker set: %r — a new marker must be sorted into "
         "_FLOOR_MARKERS (propagates to every copy-holder) or _VET_RECEIPT_MARKERS "
-        "(advisor-authored at vet; must not be required of the copy-holders)" % markers
+        "(vet-receipt family at handback or later; must not be required of the copy-holders)"
+        % markers
     )
     # v12: family membership must be DERIVED from the home, never trusted from the constant.
     # §10.7's missing-marker rule names exactly the floor family, so moving a literal between
@@ -597,6 +601,111 @@ def _omission_floor_expectations_from_home(home):
     ), "§10.7 None vs marker-absence rule not found"
     # Only the floor family propagates to the copy-holders (see _VET_RECEIPT_MARKERS).
     return row_terms, sorted(_FLOOR_MARKERS)
+
+
+def _body_marker_from_conventions(home):
+    """§10.7 distinguishes the PR-body vet marker in prose; derive it rather than typing it.
+
+    LEDGERS.md row 236's named closure: a rename could never slip through, but a valid-for-valid
+    SUBSTITUTION in a stamp instruction (advisor-vet -> vet-receipt) could, because the charter leg
+    only asserted that SOME §10.7-named vet marker was present.
+    """
+    m = re.search(
+        r"- (`<!-- superheroes:[^`]+ -->`) — the only one in the \*\*PR body\*\*",
+        home,
+    )
+    assert m, "§10.7's PR-body marker bullet not found (moved or reworded?)"
+    marker = m.group(1).strip("`")
+    assert marker in _VET_RECEIPT_MARKERS, (
+        "§10.7 names %r as the PR-body marker but it is not in the vet family" % marker
+    )
+    return marker
+
+
+def _showrunner_slot_write_bullet():
+    """Duty 4's 'Write your verdict into the PR's owner half' bullet — the advisor's stamp
+    instruction, and the charter's copy of the owner-half register."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"   - \*\*Write your verdict into the PR's owner half\*\*.*?(?=\n   - \*\*)",
+        text,
+        re.DOTALL,
+    )
+    assert m, (
+        "showrunner/SKILL.md duty-4 slot-write bullet not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _workhorse_close_link_directive_sentence():
+    """§11's close-link directive sentence — the body's first line is the close link."""
+    section = _workhorse_section_11()
+    m = re.search(
+        r"\*\*The body's first line is the close link.*?\*\*",
+        section,
+        re.DOTALL,
+    )
+    assert m, (
+        "workhorse/SKILL.md §11 close-link directive sentence not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _workhorse_git_identity_section2_paragraph():
+    """§2's git-identity cascade paragraph — Third, and at every commit after."""
+    text = _read("skills/workhorse/SKILL.md")
+    m = re.search(
+        r"\*\*Third, and at every commit after.*?(?=\n\nYour own worktree)",
+        text,
+        re.DOTALL,
+    )
+    assert m, (
+        "workhorse/SKILL.md §2 git-identity cascade paragraph not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _workhorse_git_identity_tempted_row():
+    """The tempted-table row for synthesizing git identity on commit."""
+    text = _read("skills/workhorse/SKILL.md")
+    m = re.search(
+        r'\| "Git won\'t say who I am[^|]+\|[^|]+\|',
+        text,
+    )
+    assert m, (
+        "workhorse/SKILL.md git-identity tempted-table row not found (moved or reworded?)"
+    )
+    return m.group(0)
+
+
+def _workhorse_advisor_vet_bullet():
+    """§11's `## Advisor vet` bullet — the builder's stamp instruction and the reminder it seeds."""
+    section = _workhorse_section_11()
+    m = re.search(
+        r"- \*\*`## Advisor vet`\*\*.*?(?=\nThe advisor makes the)",
+        section,
+        re.DOTALL,
+    )
+    assert m, "workhorse/SKILL.md §11 `## Advisor vet` bullet not found (moved or reworded?)"
+    return m.group(0)
+
+
+def _owner_half_register_from_home():
+    """The four register elements, parsed from their authoritative home in vet-receipt.md."""
+    text = _read("skills/showrunner/reference/vet-receipt.md")
+    m = re.search(
+        r"^## The owner-half write — register$\n(.*?)(?=^## )",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, "vet-receipt.md owner-half register section not found (moved or renamed?)"
+    block = m.group(1)
+    items = re.findall(r"^\d+\.\s+\*\*([^*]+)\*\*", block, re.MULTILINE)
+    assert len(items) == 4, "expected four register elements in the home, got %r" % items
+    assert "`<details>`" in block, (
+        "the register's home no longer says mechanism goes collapsed in `<details>`"
+    )
+    return [i.strip().rstrip(".") for i in items]
 
 
 def _assert_omission_floor_matches_home(copy_text, label, home):
@@ -681,6 +790,170 @@ def test_vet_receipt_markers_match_conventions_10_7():
         "showrunner/SKILL.md carries no vet-receipt marker literal at all — it tells the advisor to "
         "stamp one and to re-check it whenever it next reads the PR body"
     )
+
+
+def test_stamp_instructions_name_the_body_marker_specifically():
+    """§10.7 + LEDGERS row 236's named closure: both stamp instructions name the BODY marker.
+
+    A rename already failed loudly. What passed was a valid-for-valid substitution — editing a
+    stamp instruction from advisor-vet to a sibling such as vet-receipt — which would misdirect the
+    stamp and break the detection path. #794 makes the workhorse a stamp-instruction holder too, so
+    both legs are pinned, and both are pinned to a marker DERIVED from §10.7.
+    """
+    body_marker = _body_marker_from_conventions(_conventions_section_10_7())
+    for label, text in (
+        ("showrunner/SKILL.md duty-4 slot-write bullet", _showrunner_slot_write_bullet()),
+        ("workhorse/SKILL.md §11 `## Advisor vet` bullet", _workhorse_advisor_vet_bullet()),
+    ):
+        found = set(re.findall(r"(<!-- superheroes:[^>]+ -->)", text))
+        assert found == {body_marker}, (
+            "%s names marker(s) %r; §10.7 says the PR-body marker is %r — a stamp instruction "
+            "naming any other marker misdirects the stamp" % (label, sorted(found), body_marker)
+        )
+
+
+def test_pr_body_skeleton_stamps_the_marker_and_seeds_the_advisor_reminder():
+    """§10.7 + #794 D1/D3: the §11 skeleton emits the slot marker AND the reminder beneath it.
+
+    D1 exists because the skeleton omitted the marker 7-for-7. D3 exists because pre-stamping the
+    marker destroys the signal that told a dropped advisor write from a vet not yet written — the
+    reminder takes it over, so the two ship together or the detection path is worse than before.
+
+    The builder-authorship assertion catches swapping the builder-stamps imperative for an
+    advisor-stamps claim — D1's original defect reproduced with every other predicate still true.
+    """
+    bullet = _workhorse_advisor_vet_bullet()
+    body_marker = _body_marker_from_conventions(_conventions_section_10_7())
+    assert body_marker in bullet, (
+        "§11's `## Advisor vet` bullet does not emit %r — the slot ships unstamped" % body_marker
+    )
+    reminder = re.search(r"<!-- advisor:.*?-->", bullet, re.DOTALL)
+    assert reminder, (
+        "§11's `## Advisor vet` bullet seeds no `<!-- advisor: ... -->` reminder — a pre-stamped "
+        "marker with no reminder cannot distinguish a dropped advisor write from a vet not yet "
+        "written (#794 D3)"
+    )
+    assert "superheroes:advisor-vet" not in reminder.group(0), (
+        "the reminder nests the marker literal inside another HTML comment; the marker must be "
+        "emitted separately (#794 D3 implementer note)"
+    )
+    assert "vet-receipt.md" in reminder.group(0), (
+        "the reminder does not point the advisor at the receipt contract it exists to name"
+    )
+    assert "FIRST" in reminder.group(0), (
+        "the reminder no longer carries the receipt-first step (FIRST)"
+    )
+    assert "replace this comment" in reminder.group(0), (
+        "the reminder no longer carries the replace-this-comment step"
+    )
+    assert re.search(r"owner-half\s+register", reminder.group(0)), (
+        "the reminder no longer teaches the owner-half register shape"
+    )
+    elements = _owner_half_register_from_home()
+    plain = " ".join(reminder.group(0).split()).replace("**", "").lower()
+    missing = [e for e in elements if e.lower() not in plain]
+    assert not missing, (
+        "§11 advisor reminder is missing register element(s) %r "
+        "(home: skills/showrunner/reference/vet-receipt.md)" % missing
+    )
+    indices = [plain.index(e.lower()) for e in elements]
+    for i in range(len(indices) - 1):
+        assert indices[i] < indices[i + 1], (
+            "§11 advisor reminder register elements out of order: %r before %r"
+            % (elements[i], elements[i + 1])
+        )
+    assert re.search(
+        r"builder creates and pre-stamps|You stamp the marker so the advisor never has to",
+        bullet,
+        re.IGNORECASE,
+    ), (
+        "§11's `## Advisor vet` bullet no longer asserts the builder creates and pre-stamps the slot"
+    )
+    assert not re.search(
+        r"advisor stamps the marker|the builder never stamps",
+        bullet,
+        re.IGNORECASE,
+    ), (
+        "§11's `## Advisor vet` bullet assigns marker stamping to the advisor instead of the builder"
+    )
+    assert bullet.index(body_marker) < bullet.index(reminder.group(0)), (
+        "the reminder must sit BELOW the marker, not above it"
+    )
+
+
+def test_pr_body_skeleton_opens_with_the_close_link():
+    """§11 + the 2026-08-02 rider: the body's first line is the close link.
+
+    A close-state sweep of 20 merged PRs found 5 shipped issues left open for want of this one
+    mechanical line — a 25% escape rate the template owns, not the builder's memory.
+    """
+    directive = _workhorse_close_link_directive_sentence()
+    assert "`Closes #<issue>.`" in directive, (
+        "§11 close-link directive no longer names the `Closes #<issue>.` first line"
+    )
+    assert re.search(r"first line[^.]{0,80}close link", directive, re.IGNORECASE), (
+        "§11 close-link directive names the close link but no longer says it is the body's FIRST line"
+    )
+
+
+def test_owner_half_register_matches_its_home():
+    """§10.7 + #794 D2: the showrunner charter's copy of the register matches vet-receipt.md.
+
+    The charter carries the register compactly because advisors re-read the charter and skip the
+    reference file — which is the failure #794 D4 names. Two copies means this pin.
+    """
+    elements = _owner_half_register_from_home()
+    bullet = _showrunner_slot_write_bullet()
+    plain = bullet.replace("**", "").lower()
+    missing = [e for e in elements if e.lower() not in plain]
+    assert not missing, (
+        "showrunner duty-4 slot-write bullet is missing register element(s) %r "
+        "(home: skills/showrunner/reference/vet-receipt.md)" % missing
+    )
+    indices = [plain.index(e.lower()) for e in elements]
+    for i in range(len(indices) - 1):
+        assert indices[i] < indices[i + 1], (
+            "showrunner duty-4 register elements out of order: %r before %r"
+            % (elements[i], elements[i + 1])
+        )
+    details_idx = plain.index("`<details>`".lower())
+    assert indices[-1] < details_idx, (
+        "showrunner duty-4 register: `<details>` clause must follow the fourth element"
+    )
+    assert "`<details>`" in bullet, (
+        "the charter's register copy no longer sends probes/accounting to `<details>`"
+    )
+    assert "vet-receipt.md" in bullet, (
+        "the charter's register copy no longer points at its authoritative home"
+    )
+
+
+def test_workhorse_git_identity_prose_matches_the_doctrine():
+    """§11 + launch-doctrine: workhorse git-identity prose carries the doctrine's cascade terms.
+
+    Source: launch_doctrine.RULING_TEXT['git-identity'] — the machine-parsed ruling the launcher
+    delivers; the workhorse copies speak in charter voice but must not drift from these terms.
+    """
+    import launch_doctrine as LD
+
+    ruling = LD.RULING_TEXT["git-identity"]
+    required = (
+        "repo-local",
+        "global",
+        "`-c user.name`",
+        "`-c user.email`",
+    )
+    for term in required:
+        assert term in ruling, "doctrine ruling missing load-bearing term %r" % term
+
+    for label, text in (
+        ("workhorse/SKILL.md §2", _workhorse_git_identity_section2_paragraph()),
+        ("workhorse/SKILL.md tempted-table", _workhorse_git_identity_tempted_row()),
+    ):
+        missing = [t for t in required if t not in text]
+        assert not missing, (
+            "%s: git-identity prose drift — missing doctrine term(s) %r" % (label, missing)
+        )
 
 
 def _showrunner_orchestration_duty():

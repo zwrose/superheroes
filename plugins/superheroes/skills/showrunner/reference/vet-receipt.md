@@ -4,15 +4,16 @@
 - [The spine — always present, filled or `None`](#the-spine--always-present-filled-or-none)
 - [Triggered fields — the artifacts raise them, not your memory](#triggered-fields--the-artifacts-raise-them-not-your-memory)
 - [The `None` convention](#the-none-convention)
+- [The owner-half write — register](#the-owner-half-write--register)
 - [Markers](#markers)
 - [Skeleton](#skeleton)
 
 # The vet receipt — shape
 
 The vet is the **last independent read before the owner's one irreversible act**. This file is the
-shape of the receipt that read leaves behind. When it is written, what else the vet does, and where
-the verdict also goes are the **showrunner** charter's duty 4 — read this one at vet time, and do not
-reconstruct it from memory.
+shape of the receipt that read leaves behind — and, below, the register of the owner-half write it
+points at. **When** it is written and what else the vet does are the **showrunner** charter's duty 4
+— read this one at vet time, and do not reconstruct it from memory.
 
 **Why a shape at all.** The spine below was not designed; it is what receipts across two independent
 advisor sessions had **already converged on**, ratified rather than invented. What had *not* travelled
@@ -112,21 +113,62 @@ A **triggered** field that did not trigger is simply **absent** — and that is 
 trigger is greppable in the artifacts, so any reader can re-derive whether it should have fired
 without trusting the receipt's author.
 
+## The owner-half write — register
+
+The receipt above is written for **you and the next advisor**. The `## Advisor vet` slot in the PR
+body is written for **the owner**, and they are not the same document. Reproducing the full vet in
+the slot is the failure this section names — a field owner rejected exactly that, as *"the full vet,
+not the owner half."*
+
+Four elements, in this order:
+
+1. **The verdict.**
+2. **What was checked, in owner terms** — what an independent reader went and looked at, said as
+   consequences rather than as mechanism. Not the probe list.
+3. **What accepting it means** — what the owner still carries after merging.
+4. **What is theirs to decide** — the open calls at the click, or `None`.
+
+**Probes, accounting and dispositions are mechanism.** Where they belong in the slot at all they go
+**collapsed inside `<details>`**, below the four elements, never above them; the pointer to the
+receipt comment carries the rest. Consequence up, mechanism down — the same rule the PR body's own
+two halves run on.
+
+This register is what survived owner contact and became the standing rule. Write to it, rather than
+to whatever the receipt happens to look like.
+
 ## Markers
 
-Three markers, **all written by the advisor at vet time**, after handback:
+Three markers. Two are **written by the advisor at vet time**, after handback; the third —
+`advisor-vet` — is **stamped by the builder** into the empty slot at handback, and you write beneath
+it:
 
 - `<!-- superheroes:vet-receipt -->` — the **first line** of the receipt.
 - `<!-- superheroes:pending-proposals -->` — immediately above spine field 7's **pending** set (its
   body is the items, or the literal `None`).
-- `<!-- superheroes:advisor-vet -->` — stamped inside the PR's `## Advisor vet` owner-half slot,
-  immediately above what you write there. The slot is **append-only and yours**: you edit your own
-  prior text in place, never the builder's prose. **What this marker detects is the hidden case:** a
-  body rewrite that **re-creates the heading but drops your text** leaves the slot looking present and
-  saying nothing — that is a slot whose text was dropped, distinct from one you have not written yet.
-  (A rewrite that drops the heading entirely is visible without it.) The marker alone is **not
-  sufficient**: a slot can be marker-present and text-stale. The showrunner charter's **duty 4**
-  backstop is where the check and remedy live — follow that, not a marker-keyed rule here.
+- `<!-- superheroes:advisor-vet -->` — the boundary of your write inside the PR's `## Advisor vet`
+  owner-half slot. **The builder stamps it for you** (workhorse charter §11), together with a
+  reminder comment beneath it; you write **beneath the marker**, and your write **replaces the
+  reminder**. The slot is **append-only and yours**: you edit your own prior text in place, never the
+  builder's prose — with exactly one exception, **the reminder**, which is the sole piece of
+  builder-emitted text you are expected to remove, and which you **must** delete once your verdict is
+  there (a verdict sitting beside a standing reminder makes the signal read "owner-half write still
+  owed" when it is not). **What the reminder detects is the hidden case:** a body rewrite that
+  **re-creates the heading but drops your text** leaves the slot looking present and saying nothing
+  — a slot carrying **neither** reminder nor verdict is a write that was dropped, distinct from one
+  still carrying the reminder, which is a vet not yet written.
+  A reminder still standing means the **owner-half write** is owed, not necessarily the receipt: you
+  post the receipt first, so a failure between the two leaves the receipt posted and the reminder
+  intact. Check for your own existing receipt comment before posting a second one. (A rewrite that drops the heading
+  entirely is visible without either.) Marker-presence alone is **not sufficient** and no longer
+  separates those two states: re-stamp the marker when a rewrite dropped it, and remember a slot can
+  be marker-present and text-stale. The showrunner charter's **duty 4** backstop is where the check
+  and remedy live — follow that, not a marker-keyed rule here.
+  **A slot with no marker at all** is read against your own receipt, the same canonical copy duty 4's
+  backstop uses: with **no receipt comment** on the PR it is a body written before the builder stamped
+  it (pre-#794) — read it as *not yet vetted*, and stamp the marker yourself when you write; with **a
+  receipt already posted** it is a rewrite that dropped your verdict and the marker together —
+  restore the verdict and re-stamp. The other dropped-write state is **marker present, reminder and
+  verdict both gone**.
 
 **No review seat checks these at review time.** A build's pre-handback review runs in branch mode,
 before a PR body or a vet exists, so their absence during a review is the normal state and is never a
