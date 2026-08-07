@@ -55,10 +55,10 @@ _WORKHORSE_CMD = "/superheroes:workhorse"
 _SLOT_REMEDY = (
     "Provision this wave's pilot slots first (the advisor's duty — the builder never "
     "self-provisions), then give every lane named in `missing` its own reservation. "
-    "A lane listed by launch id is a live unslotted reservation and cannot be repaired "
-    "in place: drive it to a terminal outcome with "
-    "`launcher.py record-outcome --repo-root <repo-root> --launch-id <id> "
-    "--outcome refusal --evidence <why>`, then relaunch it. Relaunch each lane with: "
+    "Each launch id in `missing` is a live unslotted lane that must reach a terminal "
+    "state before relaunch — there is no CLI transition today for a reserved-but-never-"
+    "started lane; it is resolved when that launch itself reaches a terminal outcome. "
+    "Relaunch each lane with: "
     "`launcher.py launch --repo-root <repo-root> --issue <n> --premise <FILE PATH> "
     "--checks <FILE PATH> --log-dir <dir> --slot <slot-id> --generation <int> "
     "[--boundary <FILE PATH>]`."
@@ -135,6 +135,8 @@ def _preflight_extra(preflight_result):
         extra["missing"] = preflight_result["missing"]
     if "remedy" in preflight_result:
         extra["remedy"] = preflight_result["remedy"]
+    if "path" in preflight_result:
+        extra["path"] = preflight_result["path"]
     return extra
 
 
@@ -209,6 +211,7 @@ def _ledger_live_state(repo_root, env=None):
             "unreadable": True,
             "unavailable": False,
             "detail": {},
+            "allDetail": {},
             "declarations": {},
         }
     read_result = ll.read(repo_root, env=env)
@@ -221,9 +224,11 @@ def _ledger_live_state(repo_root, env=None):
             "unreadable": True,
             "unavailable": False,
             "detail": {},
+            "allDetail": {},
             "declarations": {},
         }
     detail = {}
+    all_detail = {}
     declarations = {}
     if state == "ok":
         folded = ll.fold(read_result["records"])
@@ -235,16 +240,19 @@ def _ledger_live_state(repo_root, env=None):
                 "unreadable": True,
                 "unavailable": False,
                 "detail": {},
+                "allDetail": {},
                 "declarations": {},
             }
         declarations = folded["batchDeclarations"]
         for launch_id, info in folded["launches"].items():
+            entry = {
+                "batchId": info["batchId"],
+                "slot": info.get("slot"),
+                "generation": info.get("generation"),
+            }
+            all_detail[launch_id] = entry
             if not info.get("terminal"):
-                detail[launch_id] = {
-                    "batchId": info["batchId"],
-                    "slot": info.get("slot"),
-                    "generation": info.get("generation"),
-                }
+                detail[launch_id] = entry
     live = ll.live_launches(read_result["records"])
     return {
         "ok": True,
@@ -253,6 +261,7 @@ def _ledger_live_state(repo_root, env=None):
         "unreadable": False,
         "unavailable": False,
         "detail": detail,
+        "allDetail": all_detail if state == "ok" else {},
         "declarations": declarations,
     }
 
@@ -264,6 +273,9 @@ def _slot_reservation_gate(
     generation,
     ledger_state,
     exclude_launch_id=None,
+    *,
+    fail_on_unreadable=False,
+    parallel_detail=None,
 ):
     """Refuse parallel unslotted launches on slot-calibrated projects. Never raises."""
     # axis: parallel slot-calibrated launch with unslotted lane(s) — refuse, not presence
@@ -271,10 +283,13 @@ def _slot_reservation_gate(
     if not isinstance(batch_id, str) or not batch_id.strip():
         return None
     if not ledger_state.get("ok") or ledger_state.get("unreadable"):
+        if fail_on_unreadable:
+            return _fail("post-reserve-ledger-unreadable")
         return None
 
     declarations = ledger_state.get("declarations") or {}
     detail = ledger_state.get("detail") or {}
+    parallel_source = parallel_detail if parallel_detail is not None else detail
     batch_decls = declarations.get(batch_id, [])
     max_expected = 0
     for rec in batch_decls:
@@ -286,15 +301,15 @@ def _slot_reservation_gate(
         ):
             max_expected = expected
 
-    has_live_in_batch = False
-    for launch_id, info in detail.items():
+    has_reservation_in_batch = False
+    for launch_id, info in parallel_source.items():
         if exclude_launch_id and launch_id == exclude_launch_id:
             continue
         if info.get("batchId") == batch_id:
-            has_live_in_batch = True
+            has_reservation_in_batch = True
             break
 
-    parallel = max_expected > 1 or has_live_in_batch
+    parallel = max_expected > 1 or has_reservation_in_batch
     if not parallel:
         return None
 
@@ -313,6 +328,12 @@ def _slot_reservation_gate(
         return None
 
     slot_info = pilot_calibration.declares_slots(repo_root)
+    if slot_info.get("unknown"):
+        return _fail(
+            "preflight-slot-calibration-unreadable",
+            path=slot_info.get("path"),
+            remedy=_SLOT_REMEDY,
+        )
     if not slot_info.get("declares"):
         return None
 
@@ -910,17 +931,20 @@ def launch_build(
         generation,
         ledger_recheck,
         exclude_launch_id=launch_id,
+        fail_on_unreadable=True,
+        parallel_detail=ledger_recheck.get("allDetail"),
     )
     if slot_refusal is not None:
+        refusal_reason = slot_refusal["reason"]
         term = _terminalize(
             repo_root,
             launch_id,
             False,
-            "preflight-slot-reservation-required",
+            refusal_reason,
             stage="preflight",
             env=env,
         )
-        reason = _terminalization_reason(term, "preflight-slot-reservation-required")
+        reason = _terminalization_reason(term, refusal_reason)
         return _fail(
             reason,
             launchId=launch_id,

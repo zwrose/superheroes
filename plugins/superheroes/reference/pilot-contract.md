@@ -1289,6 +1289,9 @@ and `remedy` (the command shape). Single-lane launches and projects with no `pil
 untouched. Enforcement is a preflight check plus a post-reserve re-check, not a predicate inside
 `launch_ledger.reserve`'s lock, so two launches racing on an *undeclared* batch can both pass
 preflight — the post-reserve re-check then refuses at least one of them before any spawn.
+A reserved-but-never-started lane has no CLI transition today — it is resolved when that
+launch itself reaches a terminal outcome; `record-outcome` cannot clear it
+(`outcome-without-started`).
 
 **Results-only scan at the durable write boundary.** `boundary_record` accepts an optional
 `material` argument; when the caller passes it, the composer scans the record it is about to return
@@ -1334,6 +1337,8 @@ stated here rather than implied clean.
 | `ledger-boundary-acceptance-reason-too-long` | `boundary_record`: acceptance `reason` exceeds 500 characters |
 | `ledger-boundary-material-in-record` | `boundary_record`: composed record carries policy material when `material` is supplied |
 | `preflight-slot-reservation-required` | a parallel launch on a slot-calibrated project carries no slot reservation for one or more lanes |
+| `preflight-slot-calibration-unreadable` | a parallel launch on a project whose calibration profile cannot be read or parsed |
+| `post-reserve-ledger-unreadable` | the post-reserve re-check could not read the launch ledger |
 
 ## The identity-probe exercise
 
