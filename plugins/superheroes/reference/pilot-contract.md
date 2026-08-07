@@ -31,6 +31,8 @@
 29. [The provisioning gate](#the-provisioning-gate)
 30. [Per-slot app lifecycle](#per-slot-app-lifecycle)
 31. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
+32. [The per-slot artifact store](#the-per-slot-artifact-store)
+33. [The conformance run](#the-conformance-run)
 
 ---
 
@@ -2872,3 +2874,212 @@ slot list makes `complete` false.
 | `wave-park-latch-write-failed` | park latch could not be written or slot lock failed |
 | `wave-park-latch-unreadable` | park latch file is present but cannot be read — reads as latched |
 | `wave-fence-unconfirmed` | destructive step reached before all fence steps are `confirmed` |
+
+## The per-slot artifact store
+
+Run evidence from a pilot execution is retained in an **external per-slot artifact store**
+outside any worktree. The store root is the test-pilot entry's `artifacts_dir`. Each retained
+payload is keyed by `store.artifact_key(branch, slot)` and then by artifact class beneath that
+key. **The slot is mandatory** — the branch-only `artifact_key(branch)` overload is not reachable
+here; every retain call must supply both branch and slot.
+
+### Artifact classes
+
+| Class | Default / opt-in | Redaction basis | Default retention (hours) |
+|---|---|---|---|
+| `step-log` | default | `scrubbed` | 168 |
+| `failure-screenshot` | default | `capture-scope` | 168 |
+| `trace` | opt-in | `archive-member-scrub` | 24 |
+
+`step-log` and `failure-screenshot` persist by default. `trace` is captured only when a run
+explicitly opts in.
+
+### Redaction bases
+
+A class whose redaction cannot be established is **not retained**.
+
+- **`scrubbed`** — the payload text passes through the band's single scrub source
+  (`pr_comment.scrub`), then a **substring** residue scan for every policy-material string;
+  any surviving material refuses retention (`artifact-redaction-unestablished`).
+- **`capture-scope`** — image pixels cannot be scrubbed, so the basis is a capture receipt
+  **bound to the bytes**: a permitted capture scope (`viewport`), plus a sha256 in the receipt
+  that must equal the payload's own digest, plus an image-format check (PNG or JPEG magic) so an
+  archive cannot enter as a screenshot. **Declared limit:** the framework does not and cannot
+  prove that rendered pixels carry no secret — only that the receipt matches the bytes retained.
+- **`archive-member-scrub`** — every archive member is enumerated, decoded as UTF-8, scrubbed, and
+  residue-scanned; the **rewritten** archive is what is retained. A member that cannot be decoded
+  means the framework cannot scrub it, so retention is refused. **Practical consequence:** a trace
+  carrying binary frames is refused.
+
+### Permissions and retention
+
+Directories are created `0o700` and files `0o600`. A store whose mode is looser is refused
+rather than tightened (`artifact-store-permissions-unsafe`). Each artifact carries a **sidecar**
+(`.meta.json`) holding its `expiresAt` deadline; there is **no index file** — a corrupt shared
+index would strand every deadline. Removal happens on the deadline **whether or not anyone read
+the artifact**; a sweep runs **on every write**; a payload whose sidecar cannot be recovered is
+removed rather than retained forever (`artifact-sidecar-unrecoverable`).
+
+### Artifact store refusal tokens
+
+| Token | When returned |
+|---|---|
+| `artifact-class-unknown` | `artifact_class` is not one of the declared classes |
+| `artifact-class-not-opted-in` | an opt-in class (`trace`) is requested without `opted_in=True` |
+| `artifact-slot-invalid` | `slot` is missing, empty, or does not match the slot grammar |
+| `artifact-branch-invalid` | `branch` is missing, empty, or `artifact_key` construction fails |
+| `artifact-retention-invalid` | `retention_hours` is not an integer in the permitted range |
+| `artifact-now-invalid` | `now` is not valid ISO-8601 UTC-Z |
+| `artifact-material-invalid` | `material` is missing, empty, or contains a non-string entry |
+| `artifact-payload-invalid` | payload shape does not match the class (text vs path) |
+| `artifact-payload-unreadable` | payload path is missing, a symlink, not a regular file, or unreadable |
+| `artifact-payload-format-invalid` | capture bytes are not PNG/JPEG, or archive shape is invalid |
+| `artifact-payload-oversize` | text or archive exceeds the configured byte/member limits |
+| `artifact-capture-receipt-invalid` | capture receipt keys, scope, or sha256 do not match the payload |
+| `artifact-redaction-unestablished` | scrub/residue scan failed, or an archive member cannot be decoded and scrubbed |
+| `artifact-store-path-unsafe` | store path is a symlink, not a directory, or otherwise unsafe |
+| `artifact-store-permissions-unsafe` | store directory grants group or other permission bits |
+| `artifact-write-failed` | atomic payload or sidecar write failed |
+| `artifact-sidecar-unrecoverable` | sidecar is missing or corrupt during sweep — payload removed |
+| `artifact-retention-expired` | `expiresAt` is at or before `now` during sweep |
+| `artifact-sweep-failed` | sweep could not unlink a path safely |
+
+## The conformance run
+
+A **conformance run** is a headless pass that exercises declared framework surfaces so a report
+can cite receipts rather than intentions. It drives in-repo library surfaces only — no live app,
+no browser, no network.
+
+### Exercise record and report shapes
+
+An **exercise record** carries exactly these keys:
+
+| Key | Meaning |
+|---|---|
+| `schemaVersion` | integer schema version (currently `1`) |
+| `exercise` | exercise name (`artifact-store`, `cleanup-end-to-end`, …) |
+| `surfaces` | non-empty list of surface names this exercise claims |
+| `result` | one of `pass`, `fail`, `skipped`, `refused` |
+| `reason` | refusal/skip token when `result` is not `pass`; `null` on pass |
+| `evidence` | short human-readable receipt string |
+| `exercisedAt` | ISO-8601 UTC-Z timestamp |
+| `warnings` | list of warning dicts (may be empty) |
+
+A **conformance report** aggregates validated records:
+
+| Key | Meaning |
+|---|---|
+| `schemaVersion` | integer schema version (currently `1`) |
+| `ok` | `true` only when nothing is unexercised and every exercise passed |
+| `exercises` | validated exercise records |
+| `surfaces` | sorted list of surfaces covered by **passing** exercises only |
+| `unexercised` | sorted set difference: required inventory minus covered surfaces |
+| `warnings` | warnings folded from all exercises, each tagged with its exercise name |
+| `resolution` | why inputs could not be resolved — one entry per skipped exercise input |
+
+**Coverage guarantee:** `surfaces` carries **passing** exercises only, `unexercised` is the
+**set difference** against the closed inventory, and `ok` is true only when nothing is unexercised
+and every exercise passed — so a surface with no exercise at all still shows up in
+`unexercised`, and a skipped exercise never reads as covered.
+
+### Required surface inventory
+
+| Surface | Exercise |
+|---|---|
+| `pilot_appctl.assert_unique_endpoints` | `wave-headless` |
+| `pilot_appctl.resolve_invocation` | `wave-headless` |
+| `pilot_artifacts.retain` | `artifact-store` |
+| `pilot_artifacts.sweep` | `artifact-store` |
+| `pilot_cleanup.cleanup_effect_receipt` | `cleanup-end-to-end` |
+| `pilot_cleanup.receipt_valid_for` | `cleanup-end-to-end` |
+| `pilot_cleanup.registry_record` | `cleanup-end-to-end` |
+| `pilot_cleanup.resolve_containment` | `cleanup-end-to-end` |
+| `pilot_cleanup.resurrection_plan` | `cleanup-end-to-end` |
+| `pilot_mint.gate_off_receipt` | `mint-gate-off` |
+| `pilot_mint.run_gate_off_test` | `mint-gate-off` |
+| `pilot_reclaim.sweep` | `reclaim-sweep` |
+| `pilot_wave.admit_work` | `wave-headless` |
+| `pilot_wave.assert_destructive_allowed` | `wave-headless` |
+| `pilot_wave.validate_step_result` | `wave-headless` |
+| `pilot_wave.wave_anchor` | `wave-headless` |
+| `pilot_wave.wave_phase` | `wave-headless` |
+
+### Exercises
+
+**`artifact-store`** — exercises `pilot_artifacts.retain` and `pilot_artifacts.sweep` on a
+real external store: a clean step-log is retained with restrictive permissions, a dirty log is
+refused by redaction, an opt-out trace is refused, and a short-retention artifact is swept on
+deadline. Expected outcome: **pass** when all four expectations hold.
+
+**`cleanup-end-to-end`** — drives the cleanup receipt, registry record, receipt binding,
+containment resolution, and resurrection planner on synthetic inputs. The resurrection plan is
+**produced, never executed**. Expected outcome: **pass** when every step holds and the plan
+action is `resurrect`.
+
+**`mint-gate-off`** — runs `pilot_mint.run_gate_off_test` and builds `pilot_mint.gate_off_receipt`
+from the result. A gate-off run that does not produce a usable receipt is reported as
+**unexercised**, never recorded as exercised. Expected outcome: **pass** when the runner succeeds
+and the receipt is well-formed.
+
+**`reclaim-sweep`** — seeds a past-grace quarantine entry and exercises `pilot_reclaim.sweep`,
+requiring warnings on the seeded entry. Expected outcome: **pass** when sweep warns and retains
+as expected.
+
+**`wave-headless`** — exercises wave deadline math, admission, step validation, destructive
+gates, appctl fencing, and invocation resolution without a browser. Expected outcome: **pass**
+when every headless check holds.
+
+### CLI
+
+```text
+python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+       /lib/pilot_conformance.py run --cwd <path>
+       [--policy-root <path>] [--reach-root <path> ...] [--slots-dir <path>]
+       [--slot-ref <ref>] [--branch <name>] [--slot <id>]
+       [--artifacts-dir <path>] [--now <iso8601-utc-Z>]
+```
+
+Stdout is the report JSON and nothing else; diagnostics go to stderr. **Exit 0** when `ok` is
+true, **exit 1** when it is false (including an all-skipped run — a run that exercised nothing
+is not a pass), **exit 2** on a usage error or a pre-flight refusal.
+
+### Unresolved inputs
+
+Unresolved inputs are **absent, never defaulted**. An input the run cannot resolve is left out of
+the exercise inputs; the exercise reading it returns `skipped`, and the report's `resolution`
+list records why. A substituted default would convert "could not exercise" into "passed".
+
+### Conformance refusal tokens
+
+| Token | When returned |
+|---|---|
+| `conformance-record-invalid` | record dict has wrong keys, schema version, or fails re-validation |
+| `conformance-result-invalid` | `result` is not one of the four allowed strings |
+| `conformance-exercise-name-invalid` | exercise name fails the name grammar |
+| `conformance-exercise-name-duplicate` | two records share the same exercise name in one report |
+| `conformance-surfaces-empty` | `surfaces` is missing or empty |
+| `conformance-surface-unknown` | a surface is not in `REQUIRED_SURFACES` |
+| `conformance-surface-duplicate` | duplicate surface in one record's `surfaces` list |
+| `conformance-reason-invalid` | `reason` shape invalid for the `result` |
+| `conformance-evidence-invalid` | `evidence` missing, too long, or contains control characters |
+| `conformance-exercised-at-invalid` | `exercisedAt` is not valid ISO-8601 UTC-Z |
+| `conformance-required-surfaces-invalid` | `required_surfaces` argument is malformed |
+| `conformance-warning-invalid` | a warning entry is malformed |
+| `conformance-exercise-fn-invalid` | registered exercise function is malformed |
+| `conformance-exercise-raised` | exercise raised an exception without a normalized reason |
+| `conformance-runtime-inputs-missing` | runtime exercise input key absent |
+| `conformance-runtime-inputs-malformed` | runtime exercise input present but wrong shape |
+| `conformance-runtime-slots-dir-invalid` | `slots_dir` missing or not a directory |
+| `conformance-runtime-expectation-unmet` | headless wave/reclaim expectation did not hold |
+| `conformance-runtime-sweep-warnings-empty` | reclaim sweep produced no warnings for seeded entry |
+| `conformance-runtime-gate-off-unverified` | mint gate-off run or receipt could not be verified |
+| `conformance-cleanup-inputs-missing` | cleanup exercise inputs absent |
+| `conformance-cleanup-inputs-malformed` | cleanup exercise inputs present but incomplete |
+| `conformance-cleanup-receipt-not-pass` | cleanup effect receipt did not pass |
+| `conformance-cleanup-registry-invalid` | registry record invalid for a passing receipt |
+| `conformance-cleanup-binding-failed` | `receipt_valid_for` refused |
+| `conformance-cleanup-containment-not-receipt` | containment did not resolve through receipt path |
+| `conformance-cleanup-containment-refused` | containment resolution refused |
+| `conformance-cleanup-plan-not-resurrect` | resurrection plan action was not `resurrect` |
+| `conformance-cleanup-plan-refused` | resurrection plan parked or refused |
+| `conformance-cleanup-plan-executed` | resurrection plan execution entry point was reached |

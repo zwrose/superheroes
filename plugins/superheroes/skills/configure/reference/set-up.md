@@ -76,6 +76,22 @@ python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero test-pilot
 python3 -B "$ROOT_DIR/lib/hero_setup.py" decline --cwd . --hero guardian
 ```
 
+When test-pilot calibration is written and the profile declares a `pilot` block,
+run the headless conformance pass before set-up completes (normative CLI in
+`reference/pilot-contract.md` §The conformance run):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/pilot_conformance.py" run --cwd .
+```
+
+Stdout is the report JSON; stderr carries diagnostics. **Exit 1 is a real
+outcome to report, not an error to swallow** — show which surfaces are
+`unexercised` and why, from the report's `resolution` list. The run **never**
+writes into the repository. A `mint-gate-off` exercise that does not produce a
+usable receipt is reported as **unexercised**, never recorded as exercised —
+configure refuses to claim it.
+
 ## 4.4 — Offer the Show-it surface (optional), decline still completes
 
 Optionally record **where the owner goes to look at a finished change** — the entry point a
