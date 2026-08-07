@@ -906,8 +906,15 @@ def _restore_round_disclosures(state, records):
             continue
         target = state["rounds"].setdefault(key, {})
         for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
-            value = raw.get(chan)
-            if not value or not shape_ok(value):
+            if chan in _DISCLOSE_ON_PRESENCE:
+                if chan not in raw:
+                    continue
+                value = raw.get(chan)
+            else:
+                value = raw.get(chan)
+                if not value:
+                    continue
+            if not shape_ok(value):
                 continue
             target.setdefault(chan, value)
         if not target:
@@ -3114,6 +3121,14 @@ def cmd_next(session_dir, config_overrides=None):
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
     state["pending"] = pending
+    phase = pending.get("phase")
+    if isinstance(phase, str) and phase.startswith("dispatch-"):
+        roster, roster_refusal = _roster_of(session_dir, state, "next", phase,
+                                            pending.get("round"), attempt)
+        if roster_refusal is not None:
+            return roster_refusal
+        _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
+                              journal_cmd="next")
     save_state(session_dir, state)
     _journal_append(session_dir, {"cmd": "next", "phase": pending["phase"],
                                   "round": pending["round"], "attempt": attempt,
@@ -3528,7 +3543,7 @@ def _seat_dispatch_row(state, seat_key):
             "engine": entry.get("engine")}
 
 
-def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster):
+def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance"):
     """Emit the per-attempt orders manifest for a dispatch-* phase, journal `orders-emitted` with
     its sha256, and mirror the anchor into state. Returns the anchor dict.
 
@@ -3556,7 +3571,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster):
         anchors = {}
     anchors[_anchor_key(rnd, phase, attempt)] = anchor
     state["_ordersAnchors"] = anchors
-    _journal_event(session_dir, "advance", "orders-emitted", phase=phase, round=rnd,
+    save_state(session_dir, state)
+    _journal_event(session_dir, journal_cmd, "orders-emitted", phase=phase, round=rnd,
                    attempt=attempt, manifestSha256=manifest_sha)
     return anchor
 
@@ -3634,6 +3650,27 @@ def _seat_for_record_identity(session_dir, ident):
     return seat
 
 
+def _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
+    """(envelope, err) for a landed seat file, or (None, reason). Never raises."""
+    try:
+        lpath = round_records.landing_path(
+            session_dir, rnd, phase, round_records.storage_key(seat_key, occurrence), attempt)
+    except ValueError as exc:
+        return None, str(exc)
+    return round_records.read_json(lpath)
+
+
+def _preflight_payload_fault(phase, envelope, seat_key):
+    """Adapter payload validation on a landing envelope BEFORE ingest. Returns a fault string or
+    None. Only seat-result landings are checked — missing envelopes have no payload contract."""
+    if not isinstance(envelope, dict):
+        return None
+    if envelope.get("schema") != round_records.SEAT_RESULT_SCHEMA:
+        return None
+    return _adapters().payload_fault(phase, envelope.get("payload"), seat_key,
+                                     record_boundary=True)
+
+
 def _fixer_head_diff_landing(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
     """(payload, head_diff_path) for a landed `dispatch-fixer` envelope, or (None, None)."""
     try:
@@ -3675,12 +3712,6 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
     skey = round_records.storage_key(seat_key, occurrence)
     spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
     diff_path = os.path.join(os.path.dirname(spath), "%s.a%d.headdiff" % (skey, attempt))
-    tmp = diff_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(content)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, diff_path)
     envelope, err = round_records.read_json(spath)
     if err is not None or not isinstance(envelope, dict):
         return diff_path, None
@@ -3691,6 +3722,12 @@ def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurr
     envelope["payload"] = payload
     envelope["payloadSha256"] = round_records.payload_sha256(payload)
     round_records.atomic_write_json(spath, envelope)
+    tmp = diff_path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        fh.write(content)
+        fh.flush()
+        os.fsync(fh.fileno())
+    os.replace(tmp, diff_path)
     return diff_path, envelope["payloadSha256"]
 
 
@@ -3746,21 +3783,21 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
 
     # Validate BEFORE storing: a refusal must leave nothing behind.
     if isinstance(seat, str) and seat in roster:
-        payload, head_path = (None, None)
+        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat, cur_attempt,
+                                                 occurrence)
+        fault = _preflight_payload_fault(phase, envelope, seat)
+        if fault:
+            return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
+                               rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)
+        head_content = None
         if phase == P_FIXER:
             payload, head_path = _fixer_head_diff_landing(session_dir, rnd, phase, seat,
                                                           cur_attempt, occurrence)
-        if payload is not None:
-            fault = _adapters().payload_fault(phase, payload, seat, record_boundary=True)
-            if fault:
-                return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase,
-                                   rnd=rnd, attempt=cur_attempt, seat=seat, detail=fault)
-        head_content = None
-        if phase == P_FIXER and head_path is not None:
-            head_content, why = _read_head_diff(head_path)
-            if why is not None:
-                return _refuse_cmd(session_dir, "record-result", why, phase=phase, rnd=rnd,
-                                   attempt=cur_attempt, seat=seat, headDiffPath=head_path)
+            if head_path is not None:
+                head_content, why = _read_head_diff(head_path)
+                if why is not None:
+                    return _refuse_cmd(session_dir, "record-result", why, phase=phase, rnd=rnd,
+                                       attempt=cur_attempt, seat=seat, headDiffPath=head_path)
     else:
         head_content = None
 
@@ -3773,12 +3810,6 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
                            attempt=cur_attempt, seat=_slot_label(seat, occurrence),
                            detail=out.get("message") or out.get("storePath"))
     payload_sha = out.get("payloadSha256")
-    stored = round_records.read_json(out.get("storePath"))[0]
-    if isinstance(stored, dict) and stored.get("schema") == round_records.SEAT_RESULT_SCHEMA:
-        fault = _adapters().payload_fault(phase, stored.get("payload"), seat, record_boundary=True)
-        if fault:
-            return _refuse_cmd(session_dir, "record-result", "payload-fault", phase=phase, rnd=rnd,
-                               attempt=cur_attempt, seat=seat, detail=fault)
     head_store_path = None
     if head_content is not None:
         head_store_path, rehashed = _store_head_diff(session_dir, rnd, phase, seat, cur_attempt,
@@ -3800,6 +3831,20 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
     already stored comes back `already-stored`); ANY refusal in the sweep refuses the whole call,
     with the refusing seat's own reason — a landing nobody could ingest is never skipped in
     silence."""
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        try:
+            skey = round_records.storage_key(seat_key, occurrence)
+            lpath = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+            spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError:
+            continue
+        if not os.path.exists(lpath) or os.path.exists(spath):
+            continue
+        envelope, _lerr = round_records.read_json(lpath)
+        fault = _preflight_payload_fault(phase, envelope, seat_key)
+        if fault:
+            return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
+                               attempt=attempt, seat=seat_key, detail=fault)
     results = round_records.sweep_landing(session_dir, rnd, phase, current_attempt=attempt,
                                           roster=roster, anchor=anchor)
     recorded = []
@@ -3815,11 +3860,6 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
         seat = result.get("seatKey")
         payload_sha = result.get("payloadSha256")
         stored = round_records.read_json(result.get("storePath"))[0]
-        if isinstance(stored, dict) and stored.get("schema") == round_records.SEAT_RESULT_SCHEMA:
-            fault = _adapters().payload_fault(phase, stored.get("payload"), seat, record_boundary=True)
-            if fault:
-                return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
-                                   attempt=attempt, seat=seat, detail=fault)
         if phase == P_FIXER:
             payload = stored.get("payload") if isinstance(stored, dict) else None
             head_path = payload.get("headDiffPath") if isinstance(payload, dict) else None
@@ -3872,6 +3912,12 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
                                            current_attempt=cur_attempt, roster=roster)
         return _refuse_cmd(session_dir, "record-missing", out.get("reason"), phase=phase, rnd=rnd,
                            attempt=cur_attempt, seat=seat, detail=out.get("message"))
+    slots = roster.count(seat)
+    if isinstance(occurrence, int) and not isinstance(occurrence, bool) and occurrence >= slots:
+        return _refuse_cmd(session_dir, "record-missing", "unknown-occurrence", phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                           detail="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
+                                  "that does not exist" % (seat, slots, occurrence))
     anchor = _orders_anchor(state, rnd, phase, cur_attempt)
     row = _seat_dispatch_row(state, seat)
     envelope = {
@@ -3922,9 +3968,6 @@ def cmd_advance(session_dir, break_lock=False, git=None):
     A held lock refuses `advance-locked` naming the holder; `--break-lock` breaks it and JOURNALS
     the broken holder as a `caller-error` (breaking someone else's lock is a caller's decision, and
     it is never attest-eligible)."""
-    state, refusal = _load_driver_state(session_dir, "advance")
-    if refusal is not None:
-        return refusal
     broke = None
     if break_lock:
         holder = round_records.break_lock(session_dir) or {}
@@ -3932,6 +3975,9 @@ def cmd_advance(session_dir, break_lock=False, git=None):
         _journal_event(session_dir, "advance", "lock-broken", fault=FAULT_CALLER, holder=broke)
     try:
         with round_records.session_lock(session_dir):
+            state, refusal = _load_driver_state(session_dir, "advance")
+            if refusal is not None:
+                return refusal
             return _advance_locked(session_dir, state, git=git, broke=broke)
     except round_records.LockHeld as held:
         return _refuse_cmd(session_dir, "advance", "advance-locked",
@@ -4072,18 +4118,6 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     if not ok_after or after is None:
         reason, fault, detail = _state_load_fault(session_dir)
         return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
-    if nxt.get("phase") and str(nxt["phase"]).startswith("dispatch-"):
-        next_roster, refusal = _roster_of(session_dir, after, "advance", nxt["phase"],
-                                          nxt.get("round"), nxt.get("attempt"))
-        if refusal is not None:
-            return refusal
-        _emit_orders_manifest(session_dir, after, nxt.get("round"), nxt["phase"],
-                              nxt.get("attempt"), next_roster)
-        save_state(session_dir, after)
-        # The anchor rides the state hash, so the hash `next` computed before the mirror is stale;
-        # answer with the current one (an idempotent `next` recomputes exactly this).
-        nxt = dict(nxt)
-        nxt["expectedStateHash"] = state_hash(after)
     response = {"ok": True, "folded": {"phase": phase, "round": rnd, "attempt": attempt},
                 "nextAction": nxt, "brokeLock": broke}
     if after.get("terminal"):
@@ -4097,8 +4131,11 @@ def _advance_locked(session_dir, state, git=None, broke=None):
 
 
 def _canary_landings(session_dir, state, rnd, attempt):
-    """The per-vendor control-probe landings for the panel phase, or None. Read-only."""
-    probes = {}
+    """The per-vendor control-probe landings for the panel phase, or None. Read-only.
+
+    Returns a LIST of probe objects — the shape `round_adapters._normalize_canary` consumes — not a
+    vendor-keyed map."""
+    probes = []
     for vendor in _live_vendors(state.get("config") or {}):
         try:
             path = round_records.canary_path(session_dir, rnd, vendor, attempt)
@@ -4106,7 +4143,7 @@ def _canary_landings(session_dir, state, rnd, attempt):
             continue
         obj, err = round_records.read_json(path)
         if err is None and isinstance(obj, dict):
-            probes[vendor] = obj
+            probes.append(obj)
     return probes or None
 
 
@@ -4254,7 +4291,9 @@ def _resolve_failure_ref(session_dir, ref):
                 continue
             if session_id is not None and row.get("sessionId") not in (None, session_id):
                 return None, "attest-session-mismatch"
-            if _attest_recovered(events, 0, row.get("phase")):
+            marker_seq = row.get("seq")
+            start = (marker_seq - 1) if isinstance(marker_seq, int) and marker_seq >= 1 else 0
+            if _attest_recovered(events, start, row.get("phase")):
                 return None, "attest-failure-recovered"
             return {"ref": ref, "kind": "marker", "class": "journal-degraded",
                     "entryHash": want, "phase": row.get("phase"), "event": row}, None
@@ -4276,15 +4315,21 @@ def _resolve_failure_ref(session_dir, ref):
             "phase": event.get("phase"), "event": event}, None
 
 
-def _session_artifact_hashes(session_dir):
+def _session_artifact_hashes(session_dir, exclude=None):
     """sha256 of EVERY file under the session dir, keyed by its path relative to it — the evidence
-    an attested (uncertified) handback rests on, since no certification vouches for it."""
+    an attested (uncertified) handback rests on, since no certification vouches for it.
+
+    `exclude` names relative paths omitted from the digest set — the attestation receipt itself is
+    excluded because it is written after the evidence snapshot and cannot hash itself."""
+    skip = set(exclude or ())
     out = {}
     for root, dirs, files in os.walk(session_dir):
         dirs.sort()
         for name in sorted(files):
             full = os.path.join(root, name)
             rel = os.path.relpath(full, session_dir)
+            if rel in skip:
+                continue
             try:
                 with open(full, "rb") as fh:
                     out[rel] = hashlib.sha256(fh.read()).hexdigest()
@@ -4325,10 +4370,15 @@ def _attest_roster(session_dir, state):
     return out
 
 
-def build_attestation_receipt(session_dir, state, binding, note):
+def build_attestation_receipt(session_dir, state, binding, note, roster=None):
     """The `receipt-attested/1` terminal: verdict `uncertified-manual`, NO certification block, the
     attestation's own evidence, sha256 of every artifact under the session dir, and the full roster
-    with each seat's disposition."""
+    with each seat's disposition.
+
+    `cmd_attest` finalizes `artifacts` after every other session mutation (including sidecar journal
+    events) so the digest set describes the terminal session — the receipt file itself is excluded
+    because it is written last and cannot hash itself. `roster` may be supplied when `state` is
+    already terminal (pending cleared) but was captured from the failure phase beforehand."""
     receipt = build_receipt(state, session_dir)
     for key in ("certification", "certificationShape", "schemaVersion"):
         receipt.pop(key, None)
@@ -4344,8 +4394,7 @@ def build_attestation_receipt(session_dir, state, binding, note):
         "attestedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "stateSchemaVersion": _state_version(state),
     }
-    receipt["artifacts"] = _session_artifact_hashes(session_dir)
-    receipt["roster"] = _attest_roster(session_dir, state)
+    receipt["roster"] = roster if roster is not None else _attest_roster(session_dir, state)
     return receipt
 
 
@@ -4364,7 +4413,27 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
     binding, why = _resolve_failure_ref(session_dir, failure_ref)
     if why is not None:
         return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
-    receipt = build_attestation_receipt(session_dir, state, binding, note)
+    roster = _attest_roster(session_dir, state)
+    state["terminal"] = ATTESTED_VERDICT
+    state["certification"] = None
+    state["_attestation"] = {
+        "failure": binding.get("ref"),
+        "kind": binding.get("kind"),
+        "class": binding.get("class"),
+        "phase": binding.get("phase"),
+        "event": binding.get("event"),
+        "note": note,
+        "attestedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "stateSchemaVersion": _state_version(state),
+    }
+    state["step"] = P_TERMINAL
+    state["pending"] = None
+    state["_receiptFinalized"] = True
+    save_state(session_dir, state)
+    _journal_event(session_dir, "attest", "attested", phase=binding.get("phase"),
+                   failure=binding.get("ref"), attestClass=binding.get("class"))
+    receipt = build_attestation_receipt(session_dir, state, binding, note, roster=roster)
+    receipt["artifacts"] = {}
     ok, invalid = validate_receipt(receipt)
     if not ok:
         return _refuse_cmd(session_dir, "attest", "attested-receipt-invalid", fault=FAULT_INTERNAL,
@@ -4378,18 +4447,19 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
     except OSError as exc:
         return _refuse_cmd(session_dir, "attest", "attested-receipt-unwritable",
                            fault=FAULT_INTERNAL, detail=str(exc))
-    state["terminal"] = ATTESTED_VERDICT
-    state["certification"] = None
-    state["_attestation"] = receipt["attestation"]
-    state["step"] = P_TERMINAL
-    state["pending"] = None
-    # Mark the receipt finalized so no later terminal answer can re-write the attestation into a
-    # certified receipt from in-memory state (the write-once, re-verify-forever rule).
-    state["_receiptFinalized"] = True
-    save_state(session_dir, state)
-    _journal_event(session_dir, "attest", "attested", phase=binding.get("phase"),
-                   failure=binding.get("ref"), attestClass=binding.get("class"))
     side = _publish_sidecar(session_dir, state, git=git)
+    receipt["artifacts"] = _session_artifact_hashes(session_dir, exclude=(RECEIPT_FILE,))
+    ok, invalid = validate_receipt(receipt)
+    if not ok:
+        return _refuse_cmd(session_dir, "attest", "attested-receipt-invalid", fault=FAULT_INTERNAL,
+                           detail=invalid)
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
+        os.replace(tmp, path)
+    except OSError as exc:
+        return _refuse_cmd(session_dir, "attest", "attested-receipt-unwritable",
+                           fault=FAULT_INTERNAL, detail=str(exc))
     return {"ok": True, "verdict": ATTESTED_VERDICT, "receiptPath": path,
             "attestation": receipt["attestation"], "roster": receipt["roster"],
             "sidecar": side.get("path"), "sidecarReason": side.get("reason")}
