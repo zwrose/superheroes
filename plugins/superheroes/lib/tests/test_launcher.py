@@ -3463,3 +3463,77 @@ def test_slot_gate_no_calibration_parallel_passes(tmp_path, monkeypatch):
     ll.declare_batch(repo, "wave-test", 2)
     result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
     assert result["ok"] is True
+
+
+def test_launch_build_parallel_slotted_spawns(tmp_path, monkeypatch):
+  # axis: slot-calibrated + declared-parallel + slot/generation spawns at launch_build
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
+def test_cli_preflight_slot_generation_forwards(tmp_path, monkeypatch):
+  # axis: CLI preflight forwards --slot and --generation on declared-parallel batch
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    checks_path = tmp_path / "checks.json"
+    _write_json(checks_path, _all_checks())
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "preflight",
+            "--repo-root", repo,
+            "--checks", str(checks_path),
+            "--batch", "wave-test",
+            "--slot", "slot-a",
+            "--generation", "1",
+        ])
+    assert exit_code == 0
+    payload = json.loads(buf.getvalue())
+    assert payload["ok"] is True
+
+
+def test_slot_gate_unknown_calibration_parallel_refusal_path_and_remedy(
+    tmp_path, monkeypatch,
+):
+  # axis: calibration-unreadable refusal carries profile path and regeneration remedy
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    profile_path = "/fake/pilot-calibration.md"
+    _unknown_calibration(monkeypatch, path=profile_path)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["path"] == profile_path
+    remedy = result["remedy"]
+    assert "profile" in remedy.lower()
+    assert "regenerat" in remedy.lower() or "fix" in remedy.lower()
+    assert "missing" not in remedy.lower()
