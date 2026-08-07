@@ -52,7 +52,7 @@ ACTION_RESURRECT = "resurrect"
 ACTION_REFUSE = "refuse"
 
 _RESEED_BY_SIGN_IN_PATH = {
-    "attended": ("seed", "attended"),
+    "attended": ("park", None),
     "minted": ("mint", "minted"),
 }
 
@@ -83,6 +83,7 @@ REASON_EFFECTS_ESCAPE_UNEXERCISED = "resurrection-effects-escape-unexercised"
 REASON_CONTAINMENT_UNRESOLVED = "resurrection-containment-unresolved"
 REASON_CONTAINMENT_UNEXERCISED = "resurrection-cleanup-containment-unexercised"
 REASON_VERDICT_MISSING = "resurrection-verdict-missing"
+REASON_ATTENDED_RESEED_REQUIRES_OWNER = "cleanup-attended-reseed-requires-owner"
 
 ASSURANCE_LIMITS = (
     "This receipt is evidence about one execution of one cleanup command. It shows that a "
@@ -1364,6 +1365,13 @@ def resurrection_plan(
     if sign_in_path not in _RESEED_BY_SIGN_IN_PATH:
         raise ValueError("unhandled sign_in_path: %r" % (sign_in_path,))
     dispatch_kind, reseed_path = _RESEED_BY_SIGN_IN_PATH[sign_in_path]
+    if dispatch_kind == "park":
+        return {
+            "action": ACTION_PARK,
+            "reason": REASON_ATTENDED_RESEED_REQUIRES_OWNER,
+            "slotRef": slot_ref,
+            "containment": containment,
+        }
     if dispatch_kind == "seed":
         reseed_request = pilot_provision.authorized_seed_request(
             verdict,
