@@ -124,6 +124,62 @@ JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
 BASE_GUARD_CHECKED = "checked-stat-bound"
 
 
+# --- the per-round disclosure channels (#720) -------------------------------------------------
+# Shape predicates for a channel value coming off a DURABLE record. A record is external input: a
+# channel whose value has the wrong shape is DROPPED on resume rather than restored, because a
+# truthy-but-wrong value would either crash the receipt's prose or emit a false disclosure.
+
+def _str_list(value):
+    return isinstance(value, list) and all(isinstance(x, str) for x in value)
+
+
+def _dict_list(value):
+    return isinstance(value, list) and all(isinstance(x, dict) for x in value)
+
+
+def _canary_failed_shape(value):
+    # build_receipt joins cf["seats"] into prose, so the seat names must be strings.
+    return isinstance(value, dict) and _str_list(value.get("seats") or [])
+
+
+def _canary_verified_shape(value):
+    # build_receipt sorts the vendor keys, so mixed key types would raise.
+    return isinstance(value, dict) and all(isinstance(k, str) for k in value)
+
+
+# The ONE home for the per-round disclosure channels. `build_receipt` emits exactly these onto each
+# round entry, and a `recordsPath` resume restores exactly these out of a durable record's
+# `disclosures` block (#720 — before that, `_seed_resume` restored findings/coverage but no
+# disclosure state, so a resumed run's terminal receipt silently UNDER-DISCLOSED every pre-resume
+# round). Each value is the shape the restore requires. The census test
+# (`test_panel_round_channels_are_all_accounted_for`) closes the set by construction against
+# `_fold_panel`'s recorded keys, so a new channel cannot ship without a resume path.
+RESUMABLE_DISCLOSURE_CHANNELS = {
+    "fellOpen": _dict_list,
+    "fellOpenProvenanceMissing": _str_list,
+    "seatMapUnavailable": _str_list,
+    "seatMapViolations": _dict_list,
+    "vacuousSeats": _str_list,
+    "engagedArtifactSeats": _str_list,
+    "canaryUnverified": _str_list,
+    "canaryFailed": _canary_failed_shape,
+    "canaryVerified": _canary_verified_shape,
+}
+
+# Every OTHER per-round key `_fold_panel` records, named here so the census can close the set: a new
+# `_record_round` key lands in one home or the other, deliberately, or the census fails. None of
+# these is restorable on resume — `compileDrops` and `unverified` carry finding-shaped EVIDENCE rows
+# that round-records.json deliberately never stores (review_memory's persist-skeleton contract), and
+# `seatStatus` / `missingSeats` are the panel's own coverage bookkeeping, owned by the round that
+# actually ran its seats (`seatStatus` is emitted unconditionally, not as a disclosure).
+UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "compileDrops", "unverified", "missingSeats")
+
+# `canaryVerified` is the one channel whose EMPTY value still belongs in the receipt (a control probe
+# that ran and carried an empty evidence object is still a probe that ran), so it emits on PRESENCE.
+# Every other channel emits on truthiness — an empty channel is not a disclosure.
+_DISCLOSE_ON_PRESENCE = ("canaryVerified",)
+
+
 # =============================================================================================
 # canonical json + hashing + journal
 # =============================================================================================
@@ -666,6 +722,7 @@ def _seed_resume(state, cfg):
                     coverage.append(d)
     state["_records"] = records
     state["_coverage"] = coverage
+    _restore_round_disclosures(state, records)
     if not records:
         return
     resume_round = review_loop_plan._resume_round(records)
@@ -688,6 +745,38 @@ def _seed_resume(state, cfg):
         _decision(state, "resume-confirmation",
                   "resumed with a pending confirmation and no qualifying panel — running a full "
                   "confirmation panel (a degraded seed cannot anchor certification)")
+
+
+def _restore_round_disclosures(state, records):
+    """#720: put back the per-round DISCLOSURE channels a `recordsPath` resume would otherwise lose.
+    `build_receipt` reads them out of `state["rounds"]`, so before this a resumed run whose
+    pre-resume rounds had recorded a vacuous seat / fall-open / canary gap / seat-map breach emitted
+    a terminal receipt that silently claimed LESS than the run knew.
+
+    Additive by construction: a channel is written with `setdefault`, so a live post-resume round's
+    own `_record_round` for the same round number always wins and nothing already in the round entry
+    is clobbered. Fail-closed on every edge — a record with no `disclosures` block resumes exactly as
+    before (no key is invented; absence must never read as "checked and clean"), an EMPTY channel is
+    not a disclosure and is left out, a wrong-shaped value is DROPPED while the round still resumes,
+    and a record whose round number is not an integer is skipped rather than keyed on junk."""
+    for rec in records:
+        raw = rec.get(review_memory.DISCLOSURES_FIELD)
+        if not isinstance(raw, dict):
+            continue
+        try:
+            key = str(int(rec.get("round")))
+        except (TypeError, ValueError):
+            continue
+        target = state["rounds"].setdefault(key, {})
+        for chan, shape_ok in RESUMABLE_DISCLOSURE_CHANNELS.items():
+            value = raw.get(chan)
+            if not value or not shape_ok(value):
+                continue
+            target.setdefault(chan, value)
+        if not target:
+            # Nothing survived: leave `rounds` exactly as an older (channel-less) file leaves it,
+            # so a resume never invents an empty round entry in the receipt.
+            state["rounds"].pop(key, None)
 
 
 def load_state(session_dir):
@@ -2412,24 +2501,14 @@ def build_receipt(state, session_dir=None):
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
-        if rec.get("fellOpen"):
-            rd["fellOpen"] = rec.get("fellOpen")
-        if rec.get("fellOpenProvenanceMissing"):
-            rd["fellOpenProvenanceMissing"] = rec.get("fellOpenProvenanceMissing")
-        if rec.get("seatMapUnavailable"):
-            rd["seatMapUnavailable"] = rec.get("seatMapUnavailable")
-        if rec.get("seatMapViolations"):
-            rd["seatMapViolations"] = rec.get("seatMapViolations")
-        if rec.get("vacuousSeats"):
-            rd["vacuousSeats"] = rec.get("vacuousSeats")
-        if rec.get("engagedArtifactSeats"):
-            rd["engagedArtifactSeats"] = rec.get("engagedArtifactSeats")
-        if rec.get("canaryUnverified"):
-            rd["canaryUnverified"] = rec.get("canaryUnverified")
-        if rec.get("canaryFailed"):
-            rd["canaryFailed"] = rec.get("canaryFailed")
-        if rec.get("canaryVerified") is not None:
-            rd["canaryVerified"] = rec.get("canaryVerified")
+        # The per-round disclosure channels ride their ONE home (#720) — the same set a
+        # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
+        # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
+        # channels named by `_DISCLOSE_ON_PRESENCE`.
+        for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+            value = rec.get(chan)
+            if value or (value is not None and chan in _DISCLOSE_ON_PRESENCE):
+                rd[chan] = value
         rounds.append(rd)
     findings = [{"id": f.get("id"), "file": f.get("file"), "line": f.get("line"),
                  "title": f.get("title"), "severity": f.get("severity"),
