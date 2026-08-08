@@ -215,22 +215,23 @@ def _session_id(session_dir):
         return json.load(fh)["sessionId"]
 
 
-def _anchor_hashes(session_dir, rnd, phase, attempt):
+def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
     anchor = RD._orders_anchor(_state(session_dir), session_dir, rnd, phase, attempt)
     if anchor is None:
         return RR.NOT_EMITTED, RR.NOT_EMITTED
-    return anchor["manifestSha256"], anchor["orders"].get("*", RR.NOT_EMITTED)
+    skey = RR.storage_key(seat, occurrence)
+    return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
-def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
+def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     pend = pend or _pending(session_dir)
     # The default payload is SEAT-SPECIFIC on purpose: two seats sharing one payload would share a
     # payload hash, and the journal/store hash matching that `reconcile` runs on would silently
     # conflate them (a deleted record would still look "seen" through its twin's hash).
     payload = {"findings": [], "confidence": "high", "seat": seat,
                "verificationReceipt": {"ran": True}} if payload is None else payload
-    manifest_sha, _order = _anchor_hashes(session_dir, pend["round"], pend["phase"],
-                                          pend["attempt"])
+    manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                             pend["attempt"], seat, occurrence=occurrence)
     env = {
         "schema": RR.SEAT_RESULT_SCHEMA,
         "session": _session_id(session_dir),
@@ -240,23 +241,26 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
         "attempt": pend["attempt"],
         "vendor": "claude",
         "model": "sonnet-5",
-        "dispatchRef": "dispatch-1",
-        "orderSha256": RR.NOT_EMITTED,
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
         "recordedAt": "2026-08-07T00:00:00",
         "payloadSha256": RR.payload_sha256(payload),
         "payload": payload,
     }
+    if occurrence:
+        env["occurrence"] = occurrence
     env.update(over)
     return env
 
 
-def _land(session_dir, seat, payload=None, pend=None, **over):
+def _land(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     """Write a seat's envelope into the LANDING area (what the host does)."""
     pend = pend or _pending(session_dir)
-    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, **over)
-    path = RR.landing_path(session_dir, pend["round"], pend["phase"], RR.storage_key(seat),
-                           pend["attempt"])
+    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, occurrence=occurrence,
+                           **over)
+    path = RR.landing_path(session_dir, pend["round"], pend["phase"],
+                           RR.storage_key(seat, occurrence), pend["attempt"])
     RR.atomic_write_json(path, env)
     return path, env
 
@@ -999,16 +1003,19 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     manifest_path = RD._orders_manifest_path(d, 1, RD.P_VERIFIERS, 0)
     manifest, err = RR.read_json(manifest_path)
     assert err is None
-    assert manifest["seats"]["src/f.py:3"] == {
-        "storeKey": RR.storage_key("src/f.py:3"), "vendor": None, "model": None, "engine": None,
-        "resultContract": RR.SEAT_RESULT_SCHEMA}
+    skey = RR.storage_key("src/f.py:3")
     emitted = [e for e in _outcomes(d, "orders-emitted") if e.get("phase") == RD.P_VERIFIERS]
     assert len(emitted) == 1
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_VERIFIERS, 0)
     assert anchor["manifestSha256"] == emitted[0]["manifestSha256"]
+    seat_entry = manifest["seats"][skey]
+    assert seat_entry["storeKey"] == skey and seat_entry["seat"] == "src/f.py:3"
+    assert seat_entry["orderSha256"] == anchor["orders"][skey]
+    assert anchor["orders"][skey] != RR.NOT_EMITTED
     # the anchor rides the state-hash chain, and the emitted hash is the one ingestion checks
     assert out["nextAction"]["expectedStateHash"] == RD.state_hash(_state(d))
-    assert anchor["orders"]["src/f.py:3"] == RR.NOT_EMITTED
+    assert os.path.exists(seat_entry["orderPath"])
+    assert os.path.exists(seat_entry["envelopeStubPath"])
     # an envelope claiming a DIFFERENT manifest hash is refused against the emission-time anchor
     pend = _pending(d)
     _land(d, "src/f.py:3", pend=pend, manifestSha256="deadbeef")

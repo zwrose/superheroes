@@ -305,6 +305,30 @@ def landing_path(session_dir, rnd, phase, skey, attempt):
                                                    _seat_filename(skey, attempt)))
 
 
+def bare_payload_path(session_dir, rnd, phase, skey, attempt):
+    """Host-seat payload-only landing slot — sibling to the full-envelope `landing_path`."""
+    _require_token("skey", skey)
+    _require_index("attempt", attempt)
+    return _guard_within(session_dir, os.path.join(landing_dir(session_dir, rnd, phase),
+                                                   "%s.a%d.payload.json" % (skey, attempt)))
+
+
+def order_prompt_path(session_dir, rnd, phase, skey, attempt):
+    """`<session>/round-<N>/orders/<phase>/<skey>.a<K>.md` — fenced inside the session dir."""
+    _require_token("phase", phase)
+    _require_index("attempt", attempt)
+    return _guard_within(session_dir, os.path.join(round_dir(session_dir, rnd), "orders", phase,
+                                                   "%s.a%d.md" % (skey, attempt)))
+
+
+def envelope_stub_path(session_dir, rnd, phase, skey, attempt):
+    """Per-slot `seat-result/1` header stub emitted at order time — a projection of the anchor."""
+    _require_token("phase", phase)
+    _require_index("attempt", attempt)
+    return _guard_within(session_dir, os.path.join(round_dir(session_dir, rnd), "orders", phase,
+                                                   "%s.a%d.envelope.json" % (skey, attempt)))
+
+
 def store_path(session_dir, rnd, phase, skey, attempt):
     return _guard_within(session_dir, os.path.join(store_dir(session_dir, rnd, phase),
                                                    _seat_filename(skey, attempt)))
@@ -423,13 +447,15 @@ def _roster_keys(roster):
     return []
 
 
-def _anchor_check(envelope, seat_key, anchor):
+def _anchor_check(envelope, seat_key, anchor, occurrence=0):
     """Bind an envelope to the emission-time dispatch anchor. Returns a refusal reason or None.
 
-    `anchor` is `{"manifestSha256": ..., "orders": {seatKey: sha}}` captured when the dispatch
-    was emitted. With no anchor the ONLY accepted claim is the `not-emitted` literal (PR-1 emits
-    no order prompt files yet); an envelope claiming real hashes with nothing to check them
-    against is `manifest-anchor-unanchored` — an unanchored claim is a claim nobody verified.
+    `anchor` is `{"manifestSha256": ..., "orders": {storageKey: sha}}` captured when the dispatch
+    was emitted. With no anchor the ONLY accepted claim is the `not-emitted` literal (legacy
+    sessions bootstrapped before order files existed); an envelope claiming real hashes with
+    nothing to check them against is `manifest-anchor-unanchored` — an unanchored claim is a claim
+    nobody verified. `NOT_EMITTED` is accepted only when the anchor itself carries `NOT_EMITTED`
+    for that slot.
     """
     env_manifest = envelope.get("manifestSha256")
     env_order = envelope.get("orderSha256")
@@ -439,11 +465,93 @@ def _anchor_check(envelope, seat_key, anchor):
         return "manifest-anchor-unanchored"
     if not isinstance(anchor, dict):
         return "manifest-anchor-mismatch"
+    try:
+        skey = storage_key(seat_key, occurrence)
+    except ValueError:
+        return "manifest-anchor-mismatch"
     orders = anchor.get("orders")
-    want_order = orders.get(seat_key) if isinstance(orders, dict) else None
-    if env_manifest != anchor.get("manifestSha256") or env_order != want_order:
+    want_order = orders.get(skey) if isinstance(orders, dict) else None
+    if want_order is None and isinstance(orders, dict):
+        # Legacy anchors keyed by bare seat key before per-slot hashing landed.
+        want_order = orders.get(seat_key)
+    if env_manifest != anchor.get("manifestSha256"):
+        return "manifest-anchor-mismatch"
+    if env_order == NOT_EMITTED:
+        if want_order != NOT_EMITTED:
+            return "manifest-anchor-mismatch"
+        return None
+    if want_order == NOT_EMITTED:
+        return "manifest-anchor-mismatch"
+    if env_order != want_order:
         return "manifest-anchor-mismatch"
     return None
+
+
+def _is_seat_result_envelope(obj):
+    return isinstance(obj, dict) and obj.get("schema") == SEAT_RESULT_SCHEMA
+
+
+def _wrap_bare_payload(stub, payload, occurrence):
+    """Merge an emitted stub header with a host-seat payload file. Never raises."""
+    if not isinstance(stub, dict):
+        return None
+    envelope = dict(stub)
+    envelope["occurrence"] = occurrence
+    envelope["payload"] = payload
+    envelope["payloadSha256"] = payload_sha256(payload)
+    envelope["recordedAt"] = _now_iso()
+    envelope["payloadHashSource"] = "driver-computed"
+    return envelope
+
+
+def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
+    """Resolve a landing slot to a normalized seat-result envelope.
+
+    Returns (envelope, refusal). Accepts a full envelope at `landing_path` or a bare payload at
+    `bare_payload_path`; both present is `landing-ambiguous`.
+    """
+    try:
+        env_path = landing_path(session_dir, rnd, phase, skey, attempt)
+        bare_path = bare_payload_path(session_dir, rnd, phase, skey, attempt)
+        stub_path = envelope_stub_path(session_dir, rnd, phase, skey, attempt)
+    except ValueError as exc:
+        return None, _refuse("bad-argument", message=str(exc))
+
+    env_exists = os.path.exists(env_path)
+    bare_exists = os.path.exists(bare_path)
+    if env_exists and bare_exists:
+        return None, _refuse("landing-ambiguous", envelopePath=env_path, payloadPath=bare_path,
+                             message="both a full envelope and a bare payload file are present")
+
+    if env_exists:
+        obj, err = read_json(env_path)
+        if err == "unparseable" or not isinstance(obj, dict):
+            return None, _refuse("landing-torn", landingPath=env_path)
+        if _is_seat_result_envelope(obj):
+            out = dict(obj)
+            out["payloadHashSource"] = "seat-declared"
+            return out, None
+        if obj.get("schema") == SEAT_MISSING_SCHEMA:
+            return dict(obj), None
+        if isinstance(obj.get("schema"), str):
+            return dict(obj), None
+        return None, _refuse("landing-torn", landingPath=env_path)
+
+    if bare_exists:
+        payload, err = read_json(bare_path)
+        if err == "unparseable" or not isinstance(payload, dict):
+            return None, _refuse("landing-torn", landingPath=bare_path)
+        stub, stub_err = read_json(stub_path)
+        if stub_err == "missing":
+            return None, _refuse("envelope-stub-missing", stubPath=stub_path)
+        if stub_err == "unparseable" or not isinstance(stub, dict):
+            return None, _refuse("landing-torn", landingPath=stub_path)
+        wrapped = _wrap_bare_payload(stub, payload, occurrence)
+        if wrapped is None:
+            return None, _refuse("landing-torn", landingPath=bare_path)
+        return wrapped, None
+
+    return None, _refuse("landing-missing", landingPath=env_path)
 
 
 def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attempt, roster,
@@ -487,11 +595,10 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
         reason = "bad-argument" if "non-negative int" in str(exc) else "invalid-path"
         return None, _refuse(reason, message=str(exc))
 
-    envelope, err = read_json(lpath)
-    if err == "missing":
-        return None, _refuse("landing-missing", landingPath=lpath)
-    if err == "unparseable" or not isinstance(envelope, dict):
-        return None, _refuse("landing-torn", landingPath=lpath)
+    envelope, landing_refusal = _read_landing_envelope(session_dir, rnd, phase, skey, attempt,
+                                                       occurrence)
+    if landing_refusal is not None:
+        return None, landing_refusal
 
     if envelope.get("attempt") != attempt:
         return None, _refuse("attempt-mismatch", envelopeAttempt=envelope.get("attempt"),
@@ -527,7 +634,7 @@ def validate_landing(session_dir, rnd, phase, seat_key, attempt, *, current_atte
     else:
         return None, _refuse("schema-unknown", schema=schema)
 
-    anchor_reason = _anchor_check(envelope, seat_key, anchor)
+    anchor_reason = _anchor_check(envelope, seat_key, anchor, occurrence=occurrence)
     if anchor_reason is not None:
         return None, _refuse(anchor_reason, manifestSha256=envelope.get("manifestSha256"),
                              orderSha256=envelope.get("orderSha256"))
@@ -565,7 +672,7 @@ def ingest_landing(session_dir, rnd, phase, seat_key, attempt, *, current_attemp
     below is a distinct one, and every one of them is fail-closed (nothing is stored):
 
       bootstrap-required, reserved-seat-name, unknown-seat, unknown-occurrence, stale-attempt,
-      landing-missing, landing-torn, attempt-mismatch, seat-mismatch, occurrence-mismatch,
+      landing-missing, landing-ambiguous, landing-torn, envelope-stub-missing, attempt-mismatch, seat-mismatch, occurrence-mismatch,
       session-mismatch, phase-mismatch, round-mismatch, schema-unknown, missing-reason, store-exists,
       cas-expect-required, cas-mismatch, manifest-anchor-mismatch, manifest-anchor-unanchored
 
@@ -623,7 +730,14 @@ def sweep_landing(session_dir, rnd, phase, *, current_attempt, roster, anchor=No
                                    message=str(exc)))
             continue
         claimed.add(os.path.basename(lpath))
-        if not os.path.exists(lpath):
+        bare_path = None
+        try:
+            bare_path = bare_payload_path(session_dir, rnd, phase, skey, current_attempt)
+            claimed.add(os.path.basename(bare_path))
+        except ValueError:
+            bare_path = None
+        has_landing = os.path.exists(lpath) or (bare_path is not None and os.path.exists(bare_path))
+        if not has_landing:
             continue
         if os.path.exists(spath):
             results.append({"ok": True, "reason": "already-stored", "seatKey": seat_key,

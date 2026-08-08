@@ -113,14 +113,15 @@ def _fake_git(gitdir):
     return run
 
 
-def _anchor_hashes(session_dir, state, pend, seat):
+def _anchor_hashes(session_dir, state, pend, seat, occurrence=0):
     """The emission-time anchor an envelope must echo (`round_records._anchor_check`)."""
     anchor = round_driver._orders_anchor(state, session_dir, pend["round"], pend["phase"],
                                          pend["attempt"])
     if anchor is None:
         return round_records.NOT_EMITTED, round_records.NOT_EMITTED
+    skey = round_records.storage_key(seat, occurrence)
     return anchor["manifestSha256"], (anchor.get("orders") or {}).get(
-        seat, round_records.NOT_EMITTED)
+        skey, round_records.NOT_EMITTED)
 
 
 def _land(session_dir, state, pend, seat, payload, occurrence=0):
@@ -135,7 +136,7 @@ def _land(session_dir, state, pend, seat, payload, occurrence=0):
         "attempt": pend["attempt"],
         "vendor": "claude",
         "model": "sonnet-5",
-        "dispatchRef": "dispatch-1",
+        "dispatchRef": manifest_sha,
         "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
         "recordedAt": "2026-08-07T00:00:00",

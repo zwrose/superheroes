@@ -152,6 +152,7 @@ def _state_without_receipt_keys(state):
                 copy = dict(anchor)
                 copy.pop("manifestSha256", None)
                 copy.pop("path", None)
+                copy.pop("orders", None)
                 stripped[key] = copy
             else:
                 stripped[key] = anchor
