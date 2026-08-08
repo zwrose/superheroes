@@ -3047,7 +3047,8 @@ is not a pass), **exit 2** on a usage error or a pre-flight refusal.
 
 Unresolved inputs are **absent, never defaulted**. An input the run cannot resolve is left out of
 the exercise inputs; the exercise reading it returns `skipped`, and the report's `resolution`
-list records why. A substituted default would convert "could not exercise" into "passed".
+list records why under a `conformance-input-*` token naming **which** input failed and **why**. A
+substituted default would convert "could not exercise" into "passed".
 
 ### Conformance refusal tokens
 
@@ -3067,6 +3068,20 @@ list records why. A substituted default would convert "could not exercise" into 
 | `conformance-warning-invalid` | a warning entry is malformed |
 | `conformance-exercise-fn-invalid` | registered exercise function is malformed |
 | `conformance-exercise-raised` | exercise raised an exception without a normalized reason |
+| `conformance-cli-cwd-invalid` | `--cwd` is not an existing directory (exit 2) |
+| `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
+| `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
+| `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
+| `conformance-input-no-calibration` | pilot block input: calibration config could not be loaded for cwd |
+| `conformance-input-no-material` | artifacts input: policy material list is empty after resolution |
+| `conformance-input-no-mint` | mint input: pilot block has no usable mint envelope or enabling env var |
+| `conformance-input-no-pilot-block` | pilot block input: calibration config has no `pilot` key |
+| `conformance-input-no-policy-root` | policy or cleanup input: `--policy-root` was not supplied |
+| `conformance-input-no-slot` | artifacts or cleanup input: slot name could not be resolved from `--slot` or `--slot-ref` |
+| `conformance-input-no-slot-ref` | wave or cleanup input: `--slot-ref` missing or empty |
+| `conformance-input-no-slots-dir` | wave, reclaim, or cleanup input: `--slots-dir` missing or not a directory |
+| `conformance-input-pilot-block-invalid` | pilot block input: `pilot` value is not a dict or fails pilot-block validation |
+| `conformance-input-policy-unresolved` | policy or cleanup input: declaration missing or policy document could not be resolved |
 | `conformance-runtime-inputs-missing` | runtime exercise input key absent |
 | `conformance-runtime-inputs-malformed` | runtime exercise input present but wrong shape |
 | `conformance-runtime-slots-dir-invalid` | `slots_dir` missing or not a directory |

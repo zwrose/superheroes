@@ -248,19 +248,12 @@ def cleanup_end_to_end_exercise(*, inputs, now):
             evidence="containment resolution refused",
             warnings=warnings,
         )
-    # bite-axis: receipt-path containment — permissions and single-slot modes are not a pass.
-    if mode in (pilot_cleanup.MODE_PERMISSIONS, pilot_cleanup.MODE_SINGLE_SLOT):
-        return _fail_record(
-            now,
-            REASON_CONTAINMENT_NOT_RECEIPT,
-            evidence="containment did not resolve through receipt path",
-            warnings=warnings,
-        )
+    # bite-axis: receipt-path containment — every mode other than receipt fails, including permissions and single-slot.
     if mode != pilot_cleanup.MODE_RECEIPT:
         return _fail_record(
             now,
             REASON_CONTAINMENT_NOT_RECEIPT,
-            evidence="containment mode was not receipt",
+            evidence="containment did not resolve through receipt path",
             warnings=warnings,
         )
 
