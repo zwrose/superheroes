@@ -1741,12 +1741,19 @@ def _fold_gapsweep(state, config, artifact):
     _after_findings_settled(state, config)
 
 
+def _location_id(finding):
+    """Per-LOCATION key: line-less `finding_identity` plus line. Two same-title findings at
+    DIFFERENT lines get DISTINCT keys (#507 R2 v5); audit target ids reuse this form with an
+    occurrence suffix when the same file+title+line repeats in one batch."""
+    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
+
+
 def _judgment_finding_id(finding):
     """The per-LOCATION disposition key for a judgment finding — the line-less `finding_identity`
     PLUS the line. Two same-title tradeoff blockers at DIFFERENT lines get DISTINCT ids, so the
     owner's disposition for one never collides onto the other (the line-less identity did — #507 R2
     v5). The present-judgment payload emits this id and the fold keys the dispositions on it."""
-    return "%s@L%s" % (finding_identity(finding), finding.get("line"))
+    return _location_id(finding)
 
 
 def _route_judgment_blockers(state, blocking):
@@ -2118,12 +2125,11 @@ def audit_results_fault(artifact, targets):
     the fold: a correctly-shaped ruling the manifest cannot authenticate must still fold to
     not-discharged, never be handed back for a "corrected" resubmit.
 
-    DUPLICATE ids are likewise NOT a shape fault. Target ids come from `finding_identity`, which is
-    `file::normalized-title` — LINE-LESS — so two distinct fix-batch findings in one file sharing a
-    title legitimately produce ONE id, and an orchestrator returning exactly one ruling per target
-    submits it twice. Refusing that would be an unresolvable loop (the correction it names is what
-    the orchestrator already did). `audits.apply_audit_results` already fails closed on the case,
-    marking the id `ambiguous` and honoring NEITHER ruling; that handling stands.
+    DUPLICATE ids are likewise NOT a shape fault. A repeated RESULT id is ambiguous — honor none —
+    and `audits.apply_audit_results` already fails closed on that case. Duplicate TARGET ids in a
+    persisted session (minted before per-location ids) are likewise fail-closed in the fold, not
+    refused here. Refusing a repeated result id would be an unresolvable loop when two distinct
+    targets once shared one line-less id and the orchestrator submitted one ruling per target.
 
     axis: REFUSAL of an audits artifact that cannot express its rulings — not the rulings' merit.
     """
@@ -2262,11 +2268,17 @@ def _audit_targets(state, config, audit_targets_map):
     if independence == "degraded":
         state["independenceDegraded"] = True
     targets = []
+    seen_location = {}
     for f in state.get("fixBatch") or []:
         if not isinstance(f, dict):
             continue
+        loc = _location_id(f)
+        n = seen_location.get(loc, 0)
+        seen_location[loc] = n + 1
+        tid = loc if n == 0 else "%s#%d" % (loc, n)
         targets.append({
-            "id": finding_identity(f),
+            "id": tid,
+            "identity": finding_identity(f),
             "file": f.get("file"), "line": f.get("line"), "title": f.get("title"),
             "severity": f.get("severity"),
             # Carry the recurrence class keys so the audit-stall breaker's alias-tolerant match
@@ -2309,9 +2321,10 @@ def _fold_audits(state, config, artifact):
     # the breaker's canonical class key collapses to a title-less `dim::tax::` alias that merges two
     # DISTINCT classKeys sharing dimension/taxonomy into a false stall (#507 R2 v2).
     audit_round = {"round": state["round"], "outcomes": [
-        {"identity": a.get("id"), "ruling": a.get("ruling"), "title": a.get("title"),
-         "classKey": a.get("classKey"), "dimension": a.get("dimension"),
-         "taxonomy": a.get("taxonomy")} for a in outcome["audits"]]}
+        {"identity": a.get("identity") or a.get("id"), "ruling": a.get("ruling"),
+         "title": a.get("title"), "classKey": a.get("classKey"),
+         "dimension": a.get("dimension"), "taxonomy": a.get("taxonomy")}
+        for a in outcome["audits"]]}
     state["auditRounds"].append(audit_round)
     for pid in outcome.get("unauthenticated", []):
         _decision(state, "audit-provenance-fail",
@@ -2436,9 +2449,9 @@ def _settle_delta(state, config):
         # keying on identity alone would silently drop the unresolved audit target (#507 R2 residual-3).
         seen = {(finding_identity(f), f.get("line")) for f in batch}
         for t in nd_targets:
-            tid = t.get("id")
-            key = (tid, t.get("line"))
-            if tid is not None and key not in seen:
+            ident = t.get("identity") or finding_identity(t)
+            key = (ident, t.get("line"))
+            if ident is not None and key not in seen:
                 batch.append(t)
                 seen.add(key)
         if _route_judgment_blockers(state, batch):
@@ -2476,9 +2489,16 @@ def _settle_delta(state, config):
     _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
 
 
-def _batch_severity_is_critical(state, ident):
+def _batch_severity_is_critical(state, target_id):
+    """True when `target_id` names a Critical audit target. `notDischarged` carries target ids
+    (per-location, possibly occurrence-suffixed), so look up severity on `_auditTargets` first;
+    fall back to line-less fixBatch scan only for a pre-change session whose targets lack a match."""
+    for t in state.get("_auditTargets") or []:
+        if isinstance(t, dict) and t.get("id") == target_id \
+                and circuit_breaker.is_critical(t.get("severity")):
+            return True
     for f in state.get("fixBatch") or []:
-        if isinstance(f, dict) and finding_identity(f) == ident \
+        if isinstance(f, dict) and finding_identity(f) == target_id \
                 and circuit_breaker.is_critical(f.get("severity")):
             return True
     return False
@@ -2505,6 +2525,12 @@ def _stalled_critical(state, config, breaker):
     """A stalled identity whose fix batch carried a Critical still counts as an open Critical at the
     cap (fail toward park)."""
     stalled = set(breaker.get("stalledIdentities") or [])
+    for t in state.get("_auditTargets") or []:
+        if not isinstance(t, dict):
+            continue
+        if circuit_breaker.is_critical(t.get("severity")) \
+                and circuit_breaker.audit_target_aliases(t) & stalled:
+            return [t]
     for f in state.get("fixBatch") or []:
         if isinstance(f, dict) and circuit_breaker.is_critical(f.get("severity")) \
                 and finding_identity(f) in stalled:
@@ -2534,7 +2560,8 @@ def _handle_stall(state, config, breaker):
                      else "no escalation rung available — fixer unchanged, escalated:false"))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
         stalled = set(breaker.get("stalledIdentities") or [])
-        batch = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in stalled]
+        batch = [dict(t) for t in (state.get("_auditTargets") or [])
+                 if isinstance(t, dict) and circuit_breaker.audit_target_aliases(t) & stalled]
         state["_fixBatch"] = batch or [dict(f) for f in (state.get("fixBatch") or [])]
         state["step"] = P_FIXER
         return
@@ -3741,10 +3768,11 @@ def _seat_slot_records(session_dir, rnd, phase, attempt, roster):
     """[(seat_key, occurrence, stored_envelope_or_None)] for the CURRENT attempt, off the store.
 
     Keyed by SLOT, never by seat alone: `round_adapters.roster_for("dispatch-audits", ...)` is
-    occurrence-indexed because two DISTINCT audit targets can legitimately share one id, and a
-    seat-keyed map cannot even represent them — one of the two records would be dropped before any
-    fold saw it. The enumeration is `round_records.roster_slots`, the same one the adapter indexes
-    envelopes with."""
+    occurrence-indexed because two DISTINCT audit targets can legitimately share one roster seat
+    key (same per-location id before occurrence suffixing, or a repeated key in the roster list),
+    and a seat-keyed map cannot even represent them — one of the two records would be dropped before
+    any fold saw it. The enumeration is `round_records.roster_slots`, the same one the adapter
+    indexes envelopes with."""
     out = []
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
