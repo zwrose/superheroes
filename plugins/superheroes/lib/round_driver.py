@@ -3520,24 +3520,37 @@ def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None):
 
 
 def _sidecar_target_for_recover(session_dir, state=None, git=None):
-    """Zero-arg callable resolving the sidecar path for ``recover``, or ``None`` when gitdir cannot
-    be resolved — ``round_commit`` then refuses sidecar replay loudly rather than skipping it."""
-    if state is None:
-        ok, loaded = load_state(session_dir)
-        if not ok or loaded is None:
-            return None
-        state = loaded
+    """Zero-arg callable that lazily resolves the sidecar path for ``recover``.
+
+    State load, gitdir resolution, and ``rev-parse HEAD`` run only when the callable is invoked
+    (during ``external-sidecar`` replay), so recovery does not depend on pre-recovery session
+    state or git subprocesses on the common path where no pending commit exists.
+
+    The callable returns an absolute sidecar path, or ``None`` when state will not load, gitdir
+    cannot be resolved, or ``rev-parse HEAD`` fails — ``round_commit`` then refuses sidecar replay
+    loudly rather than skipping it."""
+    supplied_state = state
     run_git = git or store_core.run_git
-    config = state.get("config") or {}
-    repo_root = config.get("repoRoot") or os.getcwd()
-    try:
-        gitdir = store_core.get_worktree_gitdir(
-            repo_root, run=_git_result_seam(git) if git is not None else None)
-    except store_core.RepoRootUnavailable:
-        return None
-    if not run_git(repo_root, "rev-parse", "HEAD"):
-        return None
-    return lambda: _sidecar_path(gitdir)
+
+    def resolve():
+        st = supplied_state
+        if st is None:
+            ok, loaded = load_state(session_dir)
+            if not ok or loaded is None:
+                return None
+            st = loaded
+        config = st.get("config") or {}
+        repo_root = config.get("repoRoot") or os.getcwd()
+        try:
+            gitdir = store_core.get_worktree_gitdir(
+                repo_root, run=_git_result_seam(git) if git is not None else None)
+        except store_core.RepoRootUnavailable:
+            return None
+        if not run_git(repo_root, "rev-parse", "HEAD"):
+            return None
+        return _sidecar_path(gitdir)
+
+    return resolve
 
 
 def _journal_entry_for_commit(session_dir, cmd, outcome, **fields):

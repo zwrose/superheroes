@@ -995,3 +995,53 @@ def test_r5_commands_replay_attest_sidecar_commit(tmp_path, adapters, monkeypatc
   runner(d, gitdir)
   assert _commits_empty(d)
   assert os.path.exists(sidecar)
+
+
+# --- FIX-4 round-2 audit fix (#918) -----------------------------------------------------------
+
+def test_fix4_sidecar_target_resolver_is_lazy(tmp_path, adapters, monkeypatch):
+  d = _session(tmp_path, name="lazy")
+  def _boom_load(*_a, **_k):
+    raise AssertionError("load_state called eagerly")
+  def _boom_git(*_a, **_k):
+    raise AssertionError("git seam called eagerly")
+  monkeypatch.setattr(RD, "load_state", _boom_load)
+  monkeypatch.setattr(RD.store_core, "run_git", _boom_git)
+  monkeypatch.setattr(RD.store_core, "get_worktree_gitdir", _boom_git)
+  target = RD._sidecar_target_for_recover(d)
+  assert callable(target)
+
+
+def test_fix4_cmd_next_no_git_on_common_path(tmp_path, adapters, monkeypatch):
+  d = _session(tmp_path, name="no-git")
+  calls = []
+  real_run_git = RD.store_core.run_git
+  def counting_git(cwd, *args):
+    calls.append(args)
+    return real_run_git(cwd, *args)
+  monkeypatch.setattr(RD.store_core, "run_git", counting_git)
+  def _boom_gitdir(repo_root, run=None):
+    raise AssertionError("get_worktree_gitdir called eagerly")
+  monkeypatch.setattr(RD.store_core, "get_worktree_gitdir", _boom_gitdir)
+  out = RD.cmd_next(d, _cfg())
+  assert out["ok"], out
+  assert calls == []
+
+
+def test_fix4_sidecar_replay_resolves_path(tmp_path, adapters, monkeypatch):
+  d, seq, gitdir = _sealed_attest_commit(tmp_path, adapters, monkeypatch, name="fix4-replay")
+  sidecar = _sidecar_path(gitdir)
+  assert not os.path.exists(sidecar)
+  _recover(d, git=_fake_git(gitdir))
+  assert _commits_empty(d)
+  assert os.path.exists(sidecar)
+
+
+def test_fix4_unresolvable_gitdir_refuses_loudly(tmp_path, adapters, monkeypatch):
+  d, seq, gitdir = _sealed_attest_commit(tmp_path, adapters, monkeypatch, name="fix4-unres")
+  def _fail_gitdir(repo_root, run=None):
+    raise RD.store_core.RepoRootUnavailable("synthetic")
+  monkeypatch.setattr(RD.store_core, "get_worktree_gitdir", _fail_gitdir)
+  with pytest.raises(RC.CommitRefused) as exc:
+    _recover(d, git=_fake_git(gitdir))
+  assert exc.value.reason == "sidecar-target-unresolvable"
