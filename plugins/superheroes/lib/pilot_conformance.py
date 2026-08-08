@@ -76,6 +76,11 @@ REASON_INPUT_POLICY_UNRESOLVED = "conformance-input-policy-unresolved"
 REASON_INPUT_NO_MINT = "conformance-input-no-mint"
 REASON_INPUT_CLEANUP_INCOMPLETE = "conformance-input-cleanup-incomplete"
 REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED = "conformance-input-live-effects-not-permitted"
+REASON_INPUT_NO_REGISTRY_PATH = "conformance-input-no-registry-path"
+REASON_INPUT_REGISTRY_MISSING = "conformance-input-registry-missing"
+REASON_INPUT_REGISTRY_UNREADABLE = "conformance-input-registry-unreadable"
+REASON_INPUT_REGISTRY_INVALID_JSON = "conformance-input-registry-invalid-json"
+REASON_INPUT_REGISTRY_INVALID_SHAPE = "conformance-input-registry-invalid-shape"
 
 EFFECT_BEARING_EXERCISES = frozenset({"cleanup-end-to-end", "mint-gate-off"})
 
@@ -520,6 +525,33 @@ def _build_cleanup_verdict(policy, slot_ref, now):
     )
 
 
+def _load_registry(registry_path):
+    """Load a declaration registry document; return (registry, reason)."""
+    if registry_path is None:
+        return None, REASON_INPUT_NO_REGISTRY_PATH
+    if not os.path.isfile(registry_path):
+        return None, REASON_INPUT_REGISTRY_MISSING
+    try:
+        with open(registry_path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+    except OSError:
+        return None, REASON_INPUT_REGISTRY_UNREADABLE
+    try:
+        doc = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None, REASON_INPUT_REGISTRY_INVALID_JSON
+    if not isinstance(doc, dict):
+        return None, REASON_INPUT_REGISTRY_INVALID_SHAPE
+    import pilot_contract
+
+    if doc.get("schemaVersion") != pilot_contract.REGISTRY_SCHEMA_VERSION:
+        return None, REASON_INPUT_REGISTRY_INVALID_SHAPE
+    records = doc.get("records")
+    if not isinstance(records, list):
+        return None, REASON_INPUT_REGISTRY_INVALID_SHAPE
+    return doc, None
+
+
 def _neutral_cleanup_run_cwd(cwd, reach_roots):
     """Allocate a disposable working directory outside every reach root."""
     import pilot_boundary
@@ -534,7 +566,8 @@ def _neutral_cleanup_run_cwd(cwd, reach_roots):
 
 def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                    slot_ref=None, branch=None, slot=None, artifacts_dir=None,
-                   store_root=None, now=None, allow_live_effects=False):
+                   registry_path=None, store_root=None, now=None,
+                   allow_live_effects=False):
     """Assemble exercise inputs and a per-key resolution audit trail."""
     import pilot_contract
     import pilot_policy
@@ -755,6 +788,37 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
         _resolution_entry(resolution, "wave", resolved=False, reason=REASON_INPUT_NO_SLOTS_DIR)
         _resolution_entry(resolution, "reclaim", resolved=False, reason=REASON_INPUT_NO_SLOTS_DIR)
 
+    registry = None
+    registry_reason = REASON_INPUT_NO_REGISTRY_PATH
+    if registry_path is not None:
+        registry, registry_reason = _load_registry(registry_path)
+
+    declarations_reason = None
+    if pilot_block is None:
+        declarations_reason = pilot_reason
+    elif policy is None:
+        declarations_reason = policy_reason or REASON_INPUT_POLICY_UNRESOLVED
+    elif registry is None:
+        declarations_reason = registry_reason
+    else:
+        import pilot_conformance_declarations
+
+        inputs["declarations"] = pilot_conformance_declarations.declarations_block(
+            pilot_block,
+            policy,
+            registry,
+            now=now,
+        )
+        _resolution_entry(resolution, "declarations", resolved=True)
+
+    if "declarations" not in inputs:
+        _resolution_entry(
+            resolution,
+            "declarations",
+            resolved=False,
+            reason=declarations_reason or REASON_INPUT_NO_REGISTRY_PATH,
+        )
+
     return inputs, resolution
 
 
@@ -780,6 +844,7 @@ def _parse_run_args(args):
     run_parser.add_argument("--branch")
     run_parser.add_argument("--slot")
     run_parser.add_argument("--artifacts-dir")
+    run_parser.add_argument("--registry-path")
     run_parser.add_argument("--now")
     run_parser.add_argument(
         "--allow-live-effects",
@@ -832,6 +897,7 @@ def main(argv):
             branch=parsed.branch,
             slot=parsed.slot,
             artifacts_dir=parsed.artifacts_dir,
+            registry_path=parsed.registry_path,
             now=now,
             allow_live_effects=parsed.allow_live_effects,
         )
@@ -842,6 +908,7 @@ def main(argv):
 
     output = dict(report_data)
     output["resolution"] = resolution
+    output["declarations"] = inputs.get("declarations")
     # bite-axis: stdout/stderr split — report JSON only on stdout; diagnostics belong on stderr.
     sys.stdout.write(json.dumps(output, indent=2) + "\n")
     # bite-axis: all-skipped honesty — ok false must exit 1, never 0.
