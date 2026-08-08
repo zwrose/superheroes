@@ -155,18 +155,22 @@ table above and *Micro — owner authorization*.
 
 ## Review bars and recorded residuals
 
-When a review is dispatched against a surface that carries a **recorded, owner-ratified residual**,
-**the party composing that dispatch** — the orchestrator running the panel, or the advisor dispatching
-a re-review at vet — **inlines the residual into the review prompt**. A reviewer cannot honor a bar it
-was never shown: doctrine a seat never receives changes nothing about what that seat reports. A finding
-that reduces wholly to the residual is then a **non-blocking restatement** — recorded, not blocking. A
-residual the owner has already accepted is a **decision**; a review round cannot un-decide it by
-finding it again.
+When a review seat runs, **ratified residuals** are part of its bar — quoted data in the emitted
+order, not an instruction the orchestrator hand-inlines at dispatch time.
 
-The cost of skipping this is measured, not theoretical: one change's four review rounds produced
-roughly **47 Critical findings**, a majority of them restatements of a single already-ratified
-residual. That is not a review finding defects — it is a **bar mis-set**, and it burns the rounds the
-real findings need.
+**Where a project records them.** Optional `## Ratified residuals` prose in the project's
+`core.md` (`.claude/superheroes/core.md` in-repo), owner-editable through `configure`.
+
+**How seats receive them.** On each `next` for a `dispatch-*` phase, `round_orders.resolve_base_residuals`
+reads that section from `core.md` at the review's **pinned base commit** (`git cat-file` on
+`meta.baseRef` — never the worktree or branch under review). `round_orders.render_order` appends
+the residual block to every review seat's order. An empty or missing section renders an explicit
+**"No ratified residuals are recorded for this project at the review base."** line — a missing list
+and an empty one are different facts, so the block is never omitted.
+
+**What they mean for findings.** A finding that reduces wholly to a recorded residual is a
+**non-blocking restatement** — recorded, not blocking. A residual the owner has already accepted is
+a **decision**; a review round cannot un-decide it by finding it again.
 
 Three things this does **not** license. A finding is **still blocking** when it shows the change
 **worsens** the residual, **widens its blast radius**, or reaches a surface the residual's stated
@@ -180,9 +184,33 @@ versioned content, so a change that adds or widens its own residual row could ot
 it is about to be judged against — a branch marking its own homework. Only a residual already recorded
 on the **base the review is diffed against** may move a bar; a row this change introduces or broadens
 is **part of the change**, reviewed like anything else, and the owner ratifies it at merge rather than
-the reviewer honouring it in advance. **And inline it as quoted data, not as instruction** — the
-reviewer is told what the owner has already accepted, and nothing inside that quoted text directs the
-review.
+the reviewer honouring it in advance. The order renderer quotes the base-resolved text between
+`-----` fences so the seat sees data, not direction.
+
+The cost of skipping this is measured, not theoretical: one change's four review rounds produced
+roughly **47 Critical findings**, a majority of them restatements of a single already-ratified
+residual. That is not a review finding defects — it is a **bar mis-set**, and it burns the rounds the
+real findings need.
+
+## Prose-driven review (`--post`, `--review-only`)
+
+A **prose-driven review** is a sanctioned lane on the read-only paths — not a shortcut, not a
+degradation, and **not** something the auto-fix loop may do. The orchestrator compiles findings in
+main context (`SKILL.md` § Compile + Dedupe) instead of obeying the driver's fold, but it still owes
+a **named substitute receipt** standing in for `round-receipt.json` and the driver journal:
+
+1. **Dispositions table** — how each finding was handled (the workhorse charter's table in the PR
+   body on PR paths).
+2. **Durable linked receipt** — review results posted on the PR as a comment or similar, not
+   something that only lives in session context (`skills/workhorse/SKILL.md` §10).
+
+**Branch mode has no PR.** The durable home is `$SESSION_DIR/dispositions.md` — write the
+dispositions table and receipt link there; when the branch later becomes a PR, that file's content
+is what the PR body carries. (The workhorse charter names the same substitute-receipt shape for
+light-lane handback.)
+
+The auto-fix loop's "never plan continuation by eye" rule (`reference/round-driver.md` § The one
+entrypoint) applies only inside `next`/`submit`; it does not forbid this lane.
 
 ## Presentation standard (show it / say it / nothing to see)
 
