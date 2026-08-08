@@ -259,6 +259,61 @@ def test_edge_payload_path_symlink_refuses(tmp_path):
     assert result["reason"] == pa.REASON_PAYLOAD_UNREADABLE
 
 
+def _open_fd_count():
+    try:
+        return len(os.listdir("/dev/fd"))
+    except OSError:
+        return 0
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_edge_payload_path_fifo_refused(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    fifo = os.path.join(str(tmp_path), "payload.fifo")
+    os.mkfifo(fifo)
+    before = _open_fd_count()
+    result = pa.retain(
+        artifacts,
+        branch=_BRANCH,
+        slot=_SLOT,
+        artifact_class=pa.CLASS_FAILURE_SCREENSHOT,
+        payload_path=fifo,
+        material=_MATERIAL,
+        now=_NOW,
+        capture={"scope": pa.PERMITTED_CAPTURE_SCOPE, "sha256": "0" * 64},
+    )
+    after = _open_fd_count()
+    assert result["reason"] == pa.REASON_PAYLOAD_UNREADABLE
+    assert after == before
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_edge_trace_fifo_payload_refused(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    fifo = os.path.join(str(tmp_path), "trace.fifo")
+    os.mkfifo(fifo)
+    before = _open_fd_count()
+    result = pa.retain(
+        artifacts,
+        branch=_BRANCH,
+        slot=_SLOT,
+        artifact_class=pa.CLASS_TRACE,
+        payload_path=fifo,
+        material=_MATERIAL,
+        now=_NOW,
+        opted_in=True,
+    )
+    after = _open_fd_count()
+    assert result["reason"] == pa.REASON_PAYLOAD_UNREADABLE
+    assert after == before
+
+
+def test_read_regular_file_returns_full_content(tmp_path):
+    data = b"regular-file-payload-bytes"
+    path = _write_file(os.path.join(str(tmp_path), "payload.bin"), data)
+    assert pa._read_regular_file(path) == data
+
+
 def test_edge_screenshot_digest_mismatch_refuses(tmp_path):
     artifacts = _artifacts_dir(tmp_path)
     png = _write_file(os.path.join(str(tmp_path), "shot.png"), _minimal_png())
@@ -745,6 +800,7 @@ def test_edge_trace_malformed_local_header_filename_refuses(tmp_path):
     assert result["reason"] == pa.REASON_PAYLOAD_FORMAT_INVALID
 
 
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
 def test_edge_sidecar_fifo_refused(tmp_path, monkeypatch):
     artifacts = _artifacts_dir(tmp_path)
     kept = _retain_step_log(artifacts)
@@ -758,11 +814,17 @@ def test_edge_sidecar_fifo_refused(tmp_path, monkeypatch):
         return real_isfile(path)
 
     monkeypatch.setattr(os.path, "isfile", isfile_treating_fifo_as_file)
+    sidecar, status = pa._parse_sidecar_file(kept["sidecar"])
+    assert sidecar is None
+    assert status == "invalid"
+    before = _open_fd_count()
     out = pa.sweep(artifacts, now=_NOW)
-    assert os.path.exists(kept["path"])
-    assert os.path.exists(kept["sidecar"])
-    assert any(e["artifactId"] == kept["artifactId"] for e in out["retained"])
-    assert not any(e["artifactId"] == kept["artifactId"] for e in out["removed"])
+    after = _open_fd_count()
+    assert out["ok"]
+    assert after == before
+    assert not any(
+        e["artifactId"] == kept["artifactId"] for e in out["removed"]
+    )
 
 
 def test_sweep_v2_extra_field_retained_with_unknown_schema_warning(tmp_path):

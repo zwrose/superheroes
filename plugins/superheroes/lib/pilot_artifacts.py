@@ -76,6 +76,8 @@ _SIDECAR_REQUIRED_KEYS = frozenset({
     "writtenAt", "expiresAt", "retentionHours", "payload", "bytes", "sha256",
 })
 
+_O_NONBLOCK = getattr(os, "O_NONBLOCK", 0)
+
 _PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 _JPEG_MAGIC = b"\xff\xd8\xff"
 
@@ -313,7 +315,7 @@ def _read_regular_file(path):
     if not isinstance(path, str) or not path:
         return _fail(REASON_PAYLOAD_UNREADABLE)
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | _O_NONBLOCK)
     except OSError:
         return _fail(REASON_PAYLOAD_UNREADABLE)
     try:
@@ -340,7 +342,8 @@ def _read_regular_file(path):
 def _parse_sidecar_file(sidecar_path):
     """Return (sidecar_dict, status) where status is ok|unknown_schema|invalid."""
     try:
-        fd = os.open(sidecar_path, os.O_RDONLY | os.O_NOFOLLOW)
+        # bite-axis: O_NONBLOCK — FIFOs and other blocking file types refuse without hanging.
+        fd = os.open(sidecar_path, os.O_RDONLY | os.O_NOFOLLOW | _O_NONBLOCK)
     except OSError:
         return None, "invalid"
     try:
