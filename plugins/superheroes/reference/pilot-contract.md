@@ -33,6 +33,7 @@
 31. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
 32. [The per-slot artifact store](#the-per-slot-artifact-store)
 33. [The conformance run](#the-conformance-run)
+34. [The acceptance matrix](#the-acceptance-matrix)
 
 ---
 
@@ -3233,3 +3234,152 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cleanup-plan-not-resurrect` | resurrection plan action was not `resurrect` |
 | `conformance-cleanup-plan-refused` | resurrection plan parked or refused |
 | `conformance-cleanup-run-cwd-inside-reach` | cleanup exercise `run_cwd` must be outside all reach roots |
+
+## The acceptance matrix
+
+An **acceptance matrix** states row by row what framework capabilities are exercised by a
+reference project's conformance run, what is a declared limit the owner carries, and what remains
+prose residue. It exists because one project implements the contract end to end — generality cannot
+be validated before shipping without an explicit, pinned matrix.
+
+**Overstatement failure mode:** a matrix row reading `exercised` when nothing actually exercised
+that capability is worse than no matrix, because it launders an assumption into a receipt. Resolution
+downgrades any row whose evidence does not resolve to `unexercised` — never to `not-applicable`.
+
+### Pinned reference
+
+Every matrix carries a **reference** record: `project` (non-empty name), `commit` (a full object
+id), and `dirty` (boolean). A **pin** is an object id — exactly 40 or 64 lowercase hex characters.
+A short sha, branch name, tag, `HEAD`, or mixed-case hex is not a pin and refuses
+`acceptance-reference-commit-invalid`. A dirty reference worktree is recorded and permitted but
+forces the matrix's `ok` to false — a matrix taken against a tree that does not match its pin is not
+a receipt.
+
+### Status vocabulary
+
+| Status | Meaning |
+|---|---|
+| `exercised` | Evidence resolves to a **passing** exercise record from this run whose `surfaces` list contains the cited surface |
+| `attested` | A declaration row matches the cited `kind`, `slotRef`, and `digest` with status `attested` |
+| `unexercised` | The row is applicable but evidence did not resolve |
+| `declared-limit` | A stated framework limit with `limit_id`, `closure_path`, and `ruling` |
+| `prose-residue` | The framework cannot check it; the owner carries it |
+| `not-applicable` | An affirmative author decision that the row does not apply — resolution never produces this |
+
+**`exercised` vs `attested`:** `exercised` binds to a conformance exercise record from **this
+run**. `attested` binds to a registry receipt for the current declaration digest — prior exercise,
+not this run's.
+
+### Evidence pointers
+
+Exercise-backed:
+
+```json
+{"exercise": "<conformance exercise name>", "surface": "<REQUIRED_SURFACES member>"}
+```
+
+Declaration-backed:
+
+```json
+{"kind": "<declaration kind>", "slotRef": "<slot ref>", "digest": "<declaration digest>"}
+```
+
+**Surface-binding rule:** a row may not read `exercised` unless the named passing exercise record's
+`surfaces` list contains the cited surface. Citing a real but unrelated passing record must fail
+resolution.
+
+### Matrix `ok`
+
+`ok` is true only when **all** of these hold:
+
+1. `rows` is non-empty;
+2. no row has status `unexercised`;
+3. the reference is not `dirty`;
+4. `report_data["unexercised"]` is empty;
+5. `report_data["ok"]` is true;
+6. `declarations_block["ok"]` is true.
+
+An empty row list yields `ok: false`.
+
+### Framework declared limits
+
+Seven rows in `FRAMEWORK_DECLARED_LIMITS` (`lib/pilot_acceptance.py`), each `area:
+declared-limit`, `status: declared-limit`:
+
+| `limit_id` | `ruling` |
+|---|---|
+| `results-only-key-position` | `owner-ruled` |
+| `sentinel-account-attestation` | `owner-ruled` |
+| `appctl-stop-pgid-reuse` | `owner-ruled` |
+| `bounded-run-clean-exit-containment` | `owner-ruled` |
+| `residue-scan-encoded-material` | `pending-owner-ruling` |
+| `screenshot-pixels-uninspectable` | `pending-owner-ruling` |
+| `trace-retention-usually-refuses` | `pending-owner-ruling` |
+
+### Extrapolation rows
+
+Five `generality` rows in `EXTRAPOLATION_POINTS` — generalized from one project's shape. Default
+statuses: `sign-in-cardinality` (`prose-residue`, no exercise), `declared-session-surface`
+(`attested` via `session-surface` declaration), `validity-provenance` (`exercised` via
+`horizon-validity` / `pilot_horizon.account_margin`), `one-app-instance-per-slot` (`exercised` via
+`wave-headless` / `pilot_appctl.assert_unique_endpoints`), `filesystem-reclaim` (`exercised` via
+`reclaim-sweep` / `pilot_reclaim.sweep`).
+
+### Tripwire rows and the two-row ownership rule
+
+Four `accepted-limit-tripwire` rows in `TRIPWIRE_ROWS`:
+
+- **`multi-account-class`** — `prose-residue`: enforced at provisioning, not exercised by the
+  conformance run.
+- **`local-development-only`** — `exercised` via `boundary-refusals` /
+  `pilot_boundary.is_local_development_origin`.
+- **`account-owns-nothing`** — `prose-residue` **permanently**: the framework does not detect an
+  account quietly accumulating data.
+- **`account-owns-nothing-probe`** — `exercised` via `ownership-probe` /
+  `pilot_policy.ownership_probe_request` when the project declares an ownership probe.
+
+These are **two rows, permanently**. A passing ownership probe may read `exercised` on the narrow
+probe row; the broad `account-owns-nothing` row stays `prose-residue` no matter what the probe
+returns.
+
+### CLI
+
+```text
+python3 -B pilot_acceptance.py matrix --report-path <json> --project <name> --commit <oid>
+       [--dirty] [--generated-at <iso>] [--format json|markdown]
+```
+
+The report JSON is the output of `pilot_conformance.py run`; `declarations` is read from the
+top-level key. Default format `json`. Matrix JSON on stdout, diagnostics on stderr. **Exit 0** when
+`ok` is true, **exit 1** when it is false (output still prints), **exit 2** on refusal.
+
+### Acceptance-matrix refusal tokens
+
+| Token | When returned |
+|---|---|
+| `acceptance-reference-project-invalid` | `project` is empty, non-string, or contains control characters |
+| `acceptance-reference-commit-invalid` | `commit` is not a full lowercase hex object id |
+| `acceptance-reference-dirty-invalid` | `dirty` is not a real boolean |
+| `acceptance-row-area-invalid` | `area` is empty, non-string, or contains control characters |
+| `acceptance-row-claim-invalid` | `claim` is empty, non-string, or contains control characters |
+| `acceptance-row-status-invalid` | `status` is not in the closed vocabulary |
+| `acceptance-row-evidence-required` | `evidence` missing where required |
+| `acceptance-row-evidence-forbidden` | `evidence` present where forbidden |
+| `acceptance-row-evidence-shape-invalid` | exercise or declaration evidence pointer has wrong keys |
+| `acceptance-row-limit-id-required` | `declared-limit` row missing `limit_id` |
+| `acceptance-row-limit-id-forbidden` | `limit_id` present on a non-limit row |
+| `acceptance-row-closure-path-required` | `declared-limit` row missing `closure_path` |
+| `acceptance-row-closure-path-forbidden` | `closure_path` present on a non-limit row |
+| `acceptance-row-ruling-required` | `declared-limit` row missing `ruling` |
+| `acceptance-row-ruling-invalid` | `ruling` is not `owner-ruled` or `pending-owner-ruling` |
+| `acceptance-row-ruling-forbidden` | `ruling` present on a non-limit row |
+| `acceptance-resolution-exercise-missing` | exercised row cites a nonexistent exercise |
+| `acceptance-resolution-exercise-failed` | exercised row cites a non-passing exercise record |
+| `acceptance-resolution-surface-missing` | exercised row cites a surface not on the passing record |
+| `acceptance-resolution-declaration-missing` | attested row cites no matching declaration row |
+| `acceptance-resolution-declaration-not-attested` | declaration row exists but is not `attested` |
+| `acceptance-cli-report-path-invalid` | `--report-path` missing or empty |
+| `acceptance-cli-report-invalid` | report file unreadable or not a JSON object |
+| `acceptance-cli-declarations-missing` | report has no `declarations` envelope |
+| `acceptance-cli-generated-at-invalid` | `--generated-at` is not valid ISO-8601 UTC-Z |
+| `acceptance-cli-format-invalid` | unknown `--format` value |
