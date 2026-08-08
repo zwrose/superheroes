@@ -501,13 +501,26 @@ def gate_account_classes(policy, slot_ref, block):
     if slot_config is None:
         raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
 
-    account_classes = slot_config.get("accountClasses")
-    credential_set = block["credentialSet"]
-    accounts = [entry["account"] for entry in credential_set]
+    if not isinstance(block, dict):
+        raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
 
-    if account_classes is None:
+    credential_set = block.get("credentialSet")
+    if not isinstance(credential_set, list) or not credential_set:
+        raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+
+    account_classes = slot_config.get("accountClasses")
+    if account_classes is None or not isinstance(account_classes, dict):
         # bite-axis: undeclared account class — every credential-set account must map to a class.
         raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+
+    accounts = []
+    for entry in credential_set:
+        if not isinstance(entry, dict):
+            raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+        account = entry.get("account")
+        if not isinstance(account, str) or not account:
+            raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+        accounts.append(account)
 
     for account in accounts:
         if account not in account_classes:

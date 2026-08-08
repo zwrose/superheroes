@@ -374,7 +374,7 @@ def _is_ipv4_loopback_host(host):
         return False
     first_octet = None
     for part in parts:
-        if not part.isdigit():
+        if not part.isascii() or not part.isdigit():
             return False
         if len(part) > 1 and part[0] == "0":
             return False

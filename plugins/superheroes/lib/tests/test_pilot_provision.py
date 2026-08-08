@@ -1750,3 +1750,72 @@ def test_gate_provisioning_refuses_missing_account_classes():
     with pytest.raises(pp.PilotProvisionError) as exc:
         pp.gate_provisioning(verdict, policy, slot_ref, block, registry)
     assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def _account_class_policy():
+    return {
+        "slots": {
+            "slot-a": {
+                "accountClasses": {"owner": "pilot"},
+            },
+        },
+    }
+
+
+def test_gate_account_classes_empty_credential_set_refuses():
+    policy = _account_class_policy()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", {"credentialSet": []})
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_missing_credential_set_refuses():
+    policy = _account_class_policy()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", {})
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_non_dict_block_refuses():
+    policy = _account_class_policy()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", "not-a-dict")
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_non_dict_entry_refuses():
+    policy = _account_class_policy()
+    block = {"credentialSet": ["not-a-dict"]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_missing_account_refuses_not_key_error():
+    policy = _account_class_policy()
+    block = {"credentialSet": [{"role": "x"}]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_empty_account_refuses():
+    policy = _account_class_policy()
+    block = {"credentialSet": [{"account": ""}]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_non_dict_account_classes_refuses():
+    policy = {
+        "slots": {
+            "slot-a": {
+                "accountClasses": ["not-a-dict"],
+            },
+        },
+    }
+    block = {"credentialSet": [{"account": "owner", "role": "x"}]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED

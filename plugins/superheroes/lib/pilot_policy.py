@@ -45,16 +45,16 @@ _FIELD_NAME_SHAPED_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\Z")
 # neither may be exempted by spelling.
 _KEY_CARVE_OUT_CLASS = "mintable-account"
 
-_TOP_LEVEL_KEYS = frozenset(
+_TOP_LEVEL_REQUIRED_KEYS = frozenset(
     {
         "schemaVersion",
         "declaration",
         "protectedTargets",
         "datastore",
         "slots",
-        "ownershipProbe",
     }
 )
+_TOP_LEVEL_ALLOWED_KEYS = _TOP_LEVEL_REQUIRED_KEYS | frozenset({"ownershipProbe"})
 _DATASTORE_REQUIRED_KEYS = frozenset(
     {"expectedIdentity", "connectionDetail", "observer"}
 )
@@ -191,7 +191,11 @@ def validate_policy(doc):
     """Structural validation of a policy document; returns the document."""
     # bite-axis: document structure — schema version, top-level keys, datastore, slots, and each
     # slot shape must match the policy schema; any structural violation raises REFUSAL_DOCUMENT_INVALID.
-    if not isinstance(doc, dict) or set(doc.keys()) != _TOP_LEVEL_KEYS:
+    if not isinstance(doc, dict):
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    extra = set(doc.keys()) - _TOP_LEVEL_ALLOWED_KEYS
+    missing = _TOP_LEVEL_REQUIRED_KEYS - set(doc.keys())
+    if extra or missing:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
     schema_version = doc["schemaVersion"]
@@ -235,7 +239,7 @@ def validate_policy(doc):
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
         _validate_slot(slot)
 
-    ownership_probe = doc["ownershipProbe"]
+    ownership_probe = doc.get("ownershipProbe")
     if ownership_probe is not None:
         if (
             not isinstance(ownership_probe, dict)

@@ -1161,3 +1161,25 @@ def test_validate_policy_ownership_probe_refuses_malformed(ownership_probe):
     with pytest.raises(pp.PilotPolicyError) as exc:
         pp.validate_policy(doc)
     assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_without_ownership_probe_validates():
+    doc = _sample_policy()
+    del doc["ownershipProbe"]
+    pp.validate_policy(doc)
+
+
+def test_validate_policy_unknown_top_level_key_refuses():
+    doc = _sample_policy()
+    doc["unknownKey"] = True
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_missing_required_top_level_key_refuses():
+    doc = _sample_policy()
+    del doc["slots"]
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID

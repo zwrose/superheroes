@@ -166,6 +166,26 @@ def test_is_local_development_origin_returns_false_without_raising(value):
     assert pb.is_local_development_origin(value) is False
 
 
+def test_is_local_development_origin_rejects_arabic_indic_digit_octet():
+    origin = pb.parse_origin("http://127.0.0.١:5173")
+    assert pb.is_local_development_origin(origin) is False
+
+
+def test_is_local_development_origin_rejects_superscript_digit_without_raising():
+    origin = pb.parse_origin("http://127.0.0.²:5173")
+    assert pb.is_local_development_origin(origin) is False
+
+
+def test_is_local_development_origin_rejects_superscript_digit_in_redirect_host():
+    origin = pb.parse_origin("http://127.0.0.¹:8080")
+    assert pb.is_local_development_origin(origin) is False
+
+
+def test_is_local_development_origin_ascii_loopback_still_passes():
+    origin = pb.parse_origin("http://127.0.0.1:5173")
+    assert pb.is_local_development_origin(origin) is True
+
+
 # --- target_binding locality --------------------------------------------------
 
 def test_target_binding_refuses_non_local_origin():
