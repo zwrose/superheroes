@@ -347,12 +347,46 @@ def test_ownership_probe_nonzero_exit(tmp_dir):
     assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_REFUSED
 
 
-def test_ownership_probe_exit_zero_wrong_body(tmp_dir):
+def test_ownership_probe_exit_zero_unparseable_body(tmp_dir):
     command = _ownership_probe_command('sys.stdout.write("started")')
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
     assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
     assert "merely started" in record["evidence"]
+
+
+def test_ownership_probe_exit_zero_owns_nothing_false(tmp_dir):
+    command = _ownership_probe_command(
+        "sys.stdout.write(json.dumps(dict(ownsNothing=False)))"
+    )
+    record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
+
+
+def test_ownership_probe_exit_zero_owns_nothing_absent(tmp_dir):
+    command = _ownership_probe_command("sys.stdout.write(json.dumps(dict()))")
+    record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
+
+
+def test_ownership_probe_exit_zero_owns_nothing_string_true(tmp_dir):
+    command = _ownership_probe_command(
+        'sys.stdout.write(json.dumps(dict(ownsNothing="true")))'
+    )
+    record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
+
+
+def test_ownership_probe_exit_zero_json_array_body(tmp_dir):
+    command = _ownership_probe_command(
+        "sys.stdout.write(json.dumps([dict(ownsNothing=True)]))"
+    )
+    record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
 
 
 def test_resolve_inputs_ownership_probe_absent_without_live_effects(tmp_path):
