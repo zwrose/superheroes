@@ -2536,23 +2536,38 @@ def _open_audit_target_ids(state):
     return set(nd)
 
 
+def _stalled_open_targets(state, breaker):
+    """Targets that are both stalled (alias match) and still open this round — the single selection
+    rule shared by stall self-recovery and the capped-with-open-critical check."""
+    stalled = set(breaker.get("stalledIdentities") or [])
+    if not stalled:
+        return []
+    open_ids = _open_audit_target_ids(state)
+    matched = []
+    if open_ids is not None:
+        for t in state.get("_auditTargets") or []:
+            if not isinstance(t, dict):
+                continue
+            if t.get("id") not in open_ids:
+                continue
+            if circuit_breaker.audit_target_aliases(t) & stalled:
+                matched.append(t)
+        return matched
+    # Legacy: persisted session without per-location ids — alias-only over fixBatch.
+    # Relies on audit_target_aliases deriving line-less identity from raw findings (no
+    # identity/id/class fields) so stalledIdentities still match — see circuit_breaker._target_aliases.
+    for f in state.get("fixBatch") or []:
+        if isinstance(f, dict) and circuit_breaker.audit_target_aliases(f) & stalled:
+            matched.append(f)
+    return matched
+
+
 def _stalled_critical(state, config, breaker):
     """A stalled identity whose fix batch carried a Critical still counts as an open Critical at the
     cap (fail toward park)."""
-    stalled = set(breaker.get("stalledIdentities") or [])
-    open_ids = _open_audit_target_ids(state)
-    for t in state.get("_auditTargets") or []:
-        if not isinstance(t, dict):
-            continue
-        if open_ids is not None and t.get("id") not in open_ids:
-            continue
-        if circuit_breaker.is_critical(t.get("severity")) \
-                and circuit_breaker.audit_target_aliases(t) & stalled:
+    for t in _stalled_open_targets(state, breaker):
+        if circuit_breaker.is_critical(t.get("severity")):
             return [t]
-    for f in state.get("fixBatch") or []:
-        if isinstance(f, dict) and circuit_breaker.is_critical(f.get("severity")) \
-                and finding_identity(f) in stalled:
-            return [f]
     return []
 
 
@@ -2577,16 +2592,7 @@ def _handle_stall(state, config, breaker):
                   % ("fixer escalated to %r" % (rung,) if rung is not None
                      else "no escalation rung available — fixer unchanged, escalated:false"))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
-        stalled = set(breaker.get("stalledIdentities") or [])
-        open_ids = _open_audit_target_ids(state)
-        batch = []
-        for t in (state.get("_auditTargets") or []):
-            if not isinstance(t, dict):
-                continue
-            if open_ids is not None and t.get("id") not in open_ids:
-                continue
-            if circuit_breaker.audit_target_aliases(t) & stalled:
-                batch.append(dict(t))
+        batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
         state["_fixBatch"] = batch or [dict(f) for f in (state.get("fixBatch") or [])]
         state["step"] = P_FIXER
         return
