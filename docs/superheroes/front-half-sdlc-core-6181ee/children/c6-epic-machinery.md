@@ -18,7 +18,9 @@ single-issue fast path (FR-36).
   post-approval rule and re-entry; FR-34 reciprocity; FR-35's vet row; FR-36 fast path.
 - The R3 checker exists as machine work (script or lib), invoked at filing, intake, and
   the verification pass; exercised once each way (agree = pass, one-byte drift = fail).
-- FR-32's read protocol in the charter: five lenses, scoped rounds, the convergence rule
+- FR-32's read protocol in the charter: five lenses, seat composition per the
+  review-discipline independence rules (maker-family exclusion; advisor-as-author counts as
+  the maker — spec amendment 2026-08-08), scoped rounds, the convergence rule
   (mechanical-only round ends it; authorship extends, re-flagging does not), the
   verification pass, the audit-trail element list, UFR-7's park per R7.
 - UFR-4 propagation duty: amended artifact + log first; unstarted children re-injected;

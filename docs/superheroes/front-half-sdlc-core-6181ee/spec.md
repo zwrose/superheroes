@@ -333,6 +333,13 @@ fresh panel would re-derive).
     with no new hunting; a fix that fails verification returns its parts to unreviewed,
     and they are re-read before filing; the ceiling is the backstop, not the exit
     mechanism, and exhausting it parks (UFR-7).
+  - *Acceptance (rule — seat composition):* the read's seats follow the same independence
+    rules as the plugin's code review
+    [cite: plugins/superheroes/rubric/review-discipline.md § What never changes in any lane]:
+    the package's author is the maker — including the advisor when the advisor authored the
+    package — the author's model family is excluded from every seat, and reviewer
+    unavailability or mid-run loss follows that rubric's rules; this spec adds no separate
+    seat doctrine.
   - *Acceptance (rule — audit):* the round-by-round audit trail is preserved with the
     epic and records: the weight call (its measurables and ceiling), each re-read
     invocation's cause and ceiling, any override sentence, the seats, the lenses run per
@@ -634,6 +641,13 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
 
 ## Amendments
 
+- **2026-08-08 (owner-stamped, substantive):** FR-32 seat composition — the package read's
+  seats follow the same independence rules as code review (maker-family exclusion; the
+  advisor-as-author counts as the maker), by citation to review-discipline rather than a
+  restated rule. Cause: the first live package read was mis-dispatched to seats sharing the
+  author's family and the owner corrected it in-channel; ruled "generally follow the same
+  rules as review-code." Sections touched: FR-32, Amendments. Substantive — a builder
+  implementing the read protocol builds seat composition differently against it.
 - **2026-08-08 (owner-stamped, wording):** recorded the approval date — the owner confirmed in the advisor channel that approval was given 2026-08-07 in the discovery sitting; added the `approved:` frontmatter field. Sections touched: frontmatter, Amendments. Decides nothing a builder could build differently against.
 
 ## Coverage
