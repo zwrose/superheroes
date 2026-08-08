@@ -293,6 +293,44 @@ receipt does not carry `result: "pass"` counts as **absent**.
 | `pilot-declaration-unexercised` | `require_exercised` is called for a declaration that has no matching exercised record |
 | `pilot-declaration-kind-unknown` | `is_exercised` or `require_exercised` is called with a `kind` not in the declaration-kind set |
 
+### Conformance declaration rows
+
+A conformance run can enumerate declaration coverage across **every slot in the policy** and
+**every declaration kind** without stopping at the first refusal. This pass is separate from
+provisioning's `require_declarations_exercised` gate, which raises on the first unexercised kind.
+
+**`attested` is not `exercised`.** `is_exercised` proves a prior registry receipt matches the
+current declaration digest and passed. Reporting that as `exercised` in a configure-time
+conformance run would overstate coverage — the run did not exercise anything. Rows therefore use
+`attested` when a matching registry receipt exists, never `exercised`.
+
+**A kind is not an instance.** `declaration_for(kind, block, policy, slot_ref)` is parameterized
+by slot: `app-lifecycle`, `mint-gate-off`, and `mint-account-allowlist` can differ per slot, and
+their digests differ with them. Rows are keyed by **`(kind, slotRef, declarationDigest)`** and
+enumerate every slot in the policy, not just one.
+
+Each row carries exactly:
+
+| Key | Meaning |
+|---|---|
+| `kind` | declaration kind |
+| `slotRef` | canonical slot reference (`<slot>@<generation>`; generation `1` when enumerating policy slot ids) |
+| `status` | `attested`, `absent`, or `not-applicable` |
+| `declarationDigest` | digest of the current declaration when applicable; `null` when not applicable or refused before extraction |
+| `reason` | `null` when `attested` or `not-applicable`; refusal token when `absent` |
+
+The `declarations` envelope adds `schemaVersion`, `rows`, `attested`, `absent`,
+`notApplicable`, and `ok`. **`ok` is true only when there is at least one row and no row is
+`absent`.** An empty row list is `ok: false` — a vacuous pass is refused.
+
+Rows carry kinds, slot refs, digests, and refusal tokens only — never policy material (origins,
+identities, allowlist entries, or commands). `assert_results_only` enforces this on every row set.
+
+Registry input resolves from `--registry-path` and requires the pilot block, policy document, and
+registry together. When the registry cannot be read, the `declarations` top-level key is `null`
+and resolution records a `conformance-input-*` reason — the run does not synthesize an empty
+registry.
+
 ## The target boundary
 
 A **binding** is a validated per-slot target contract: a canonical slot reference, an exact
@@ -3040,6 +3078,7 @@ A **conformance report** aggregates validated records:
 | `unexercised` | sorted set difference: required inventory minus covered surfaces |
 | `warnings` | warnings folded from all exercises, each tagged with its exercise name |
 | `resolution` | why inputs could not be resolved — one entry per skipped exercise input |
+| `declarations` | declaration row envelope when pilot block, policy, and registry all resolved; `null` otherwise |
 
 **Coverage guarantee:** `surfaces` carries **passing** exercises only, `unexercised` is the
 **set difference** against the closed inventory, and `ok` is true only when nothing is unexercised
@@ -3123,7 +3162,7 @@ python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
        /lib/pilot_conformance.py run --cwd <path>
        [--policy-root <path>] [--reach-root <path> ...] [--slots-dir <path>]
        [--slot-ref <ref>] [--branch <name>] [--slot <id>]
-       [--artifacts-dir <path>] [--now <iso8601-utc-Z>]
+       [--artifacts-dir <path>] [--registry-path <path>] [--now <iso8601-utc-Z>]
        [--allow-live-effects]
 ```
 
@@ -3172,6 +3211,12 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-input-no-slots-dir` | wave, reclaim, or cleanup input: `--slots-dir` missing or not a directory |
 | `conformance-input-pilot-block-invalid` | pilot block input: `pilot` value is not a dict or fails pilot-block validation |
 | `conformance-input-policy-unresolved` | policy or cleanup input: declaration missing or policy document could not be resolved |
+| `conformance-input-no-registry-path` | declarations input: `--registry-path` was not supplied |
+| `conformance-input-registry-missing` | declarations input: registry path does not exist |
+| `conformance-input-registry-unreadable` | declarations input: registry file could not be read |
+| `conformance-input-registry-invalid-json` | declarations input: registry file is not valid JSON |
+| `conformance-input-registry-invalid-shape` | declarations input: registry document is not `{"schemaVersion": 1, "records": [...]}` |
+| `conformance-declaration-row-raised` | declaration row: `declaration_for` raised an exception without a normalized reason token |
 | `conformance-runtime-inputs-missing` | runtime exercise input key absent |
 | `conformance-runtime-inputs-malformed` | runtime exercise input present but wrong shape |
 | `conformance-runtime-slots-dir-invalid` | `slots_dir` missing or not a directory |

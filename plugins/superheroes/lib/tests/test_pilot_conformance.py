@@ -638,7 +638,7 @@ def _write_calibration_layer(tmp_path, *, include_mint=False):
 def test_resolve_inputs_no_calibration_all_absent(tmp_path):
     inputs, resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
     assert inputs == {}
-    assert len(resolution) == 5
+    assert len(resolution) == 6
     assert all(entry["state"] == "absent" for entry in resolution)
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
