@@ -278,6 +278,31 @@ action that owns it, leaving the rest of the calibration untouched:
   }
   ```
 
+- **Pre-authorize owner-judgment review gates** → write a narrow `gate-policy/1` overlay under
+  `core.md`'s `reviewGatePolicy` key (a sibling of `enginePreferences`, not inside it). The
+  shipped default pre-authorizes nothing — every rule added here is a narrow pre-authorization of
+  a gate the driver would otherwise park on. Show the resolved policy layers and rule counts
+  first, then merge only the requested overlay document. Pass `null` (or empty stdin) to remove
+  the overlay and return to shipped-defaults-only.
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf '%s\n' '{"schema":"gate-policy/1","default":"park","rules":[{"gate":"present-judgment","findingClass":"judgment:important","disposition":"skip"}]}' | \
+    python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
+  ```
+
+  To clear the overlay:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  printf 'null\n' | python3 -B "$ROOT_DIR/lib/core_md.py" write-review-gate-policy --cwd .
+  ```
+
+  **Read the result, don't assume success.** `write-review-gate-policy` returns
+  `{action, reason?}`. Only `written` or `noop` means the overlay was saved — surface any other
+  `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command exits 0
+  either way, so check `action`, not exit status.
+
 ## 3 — Switch the storage mode (FR-10), always showing what will move
 
 The switch is the only destructive action — always show **exactly what will move** and require an
