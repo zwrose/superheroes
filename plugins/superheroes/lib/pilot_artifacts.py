@@ -7,12 +7,13 @@ import hashlib
 import io
 import json
 import os
+import re
 import stat
 import sys
 import tempfile
 import zipfile
 import zlib
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 import pr_comment
 import store
@@ -72,6 +73,8 @@ REASON_SIDECAR_PENDING = "artifact-sidecar-pending"
 REASON_RETENTION_EXPIRED = "artifact-retention-expired"
 REASON_SWEEP_FAILED = "artifact-sweep-failed"
 
+_ARTIFACT_ID_RE = re.compile(r"^[0-9a-f]{32}\Z")
+
 _SIDECAR_REQUIRED_KEYS = frozenset({
     "schemaVersion", "class", "branch", "slot", "artifactKey", "basis",
     "writtenAt", "expiresAt", "retentionHours", "payload", "bytes", "sha256",
@@ -121,10 +124,25 @@ def _parse_iso8601_utc(value):
     text = value.strip()
     for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
         try:
-            return datetime.strptime(text, fmt)
+            # bite-axis: grace epoch — parse as aware UTC before any .timestamp() call.
+            return datetime.strptime(text, fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     raise ValueError("unparseable timestamp")
+
+
+def _is_well_formed_artifact_key(key_name):
+    if not isinstance(key_name, str) or "~" not in key_name:
+        return False
+    branch_part, slot = key_name.split("~", 1)
+    if not branch_part or not store.SLOT_RE.match(slot):
+        return False
+    return True
+
+
+def _utc_epoch_from_now(now):
+    """Return the UTC epoch for an ISO-8601 Zulu ``now`` string."""
+    return _parse_iso8601_utc(now).timestamp()
 
 
 def _add_hours_iso8601(now, hours):
@@ -441,7 +459,8 @@ def _remove_artifact(payload_path, sidecar_path, artifacts_dir, artifact_key,
     if not payload_still and not sidecar_still:
         # bite-axis: receipt truthfulness — removed only when unlink succeeded.
         removed.append(_list_entry(artifact_key, artifact_class, artifact_id, reason))
-    elif payload_still:
+    else:
+        # bite-axis: accounting completeness — partial unlink still lands in retained.
         retained.append(_list_entry(artifact_key, artifact_class, artifact_id, None))
 
 
@@ -459,10 +478,22 @@ def _sweep_class_dir(class_dir, key_name, class_name, artifacts_dir, now,
         full = os.path.join(class_dir, name)
         if name.endswith(SIDECAR_SUFFIX) and os.path.isfile(full) and not os.path.islink(full):
             artifact_id = name[:-len(SIDECAR_SUFFIX)]
+            if not _ARTIFACT_ID_RE.match(artifact_id):
+                warnings.append(_list_entry(
+                    key_name, class_name, "", REASON_SWEEP_FAILED))
+                continue
             sidecars[artifact_id] = full
         elif os.path.isfile(full) and not os.path.islink(full) and not name.endswith(SIDECAR_SUFFIX):
+            if not _ARTIFACT_ID_RE.match(name):
+                warnings.append(_list_entry(
+                    key_name, class_name, "", REASON_SWEEP_FAILED))
+                continue
             payloads.add(name)
+        elif os.path.isfile(full) or os.path.isdir(full):
+            warnings.append(_list_entry(
+                key_name, class_name, "", REASON_SWEEP_FAILED))
 
+    # bite-axis: grace epoch — now must convert as UTC, not host-local naive time.
     now_dt = _parse_iso8601_utc(now)
 
     for artifact_id in sorted(payloads):
@@ -558,6 +589,9 @@ def sweep(artifacts_dir, *, now, scope=None):
         key_dir = os.path.join(artifacts_dir, key_name)
         if not os.path.isdir(key_dir) or os.path.islink(key_dir):
             continue
+        if not _is_well_formed_artifact_key(key_name):
+            warnings.append(_list_entry(key_name, "", "", REASON_SWEEP_FAILED))
+            continue
         try:
             classes = os.listdir(key_dir)
         except OSError:
@@ -566,6 +600,11 @@ def sweep(artifacts_dir, *, now, scope=None):
         for class_name in classes:
             class_dir = os.path.join(key_dir, class_name)
             if not os.path.isdir(class_dir) or os.path.islink(class_dir):
+                continue
+            if class_name not in CLASSES:
+                # bite-axis: class membership — only known artifact classes are swept.
+                warnings.append(_list_entry(
+                    key_name, class_name, "", REASON_SWEEP_FAILED))
                 continue
             _sweep_class_dir(
                 class_dir, key_name, class_name, artifacts_dir, now,
@@ -624,6 +663,7 @@ def retain(artifacts_dir, *, branch, slot, artifact_class, payload_text=None,
     if not sweep_result["ok"]:
         return sweep_result
     swept = sweep_result.get("removed", [])
+    sweep_warnings = sweep_result.get("warnings", [])
 
     basis = CLASS_BASIS[artifact_class]
     if basis == BASIS_SCRUBBED:
@@ -698,6 +738,7 @@ def retain(artifacts_dir, *, branch, slot, artifact_class, payload_text=None,
         bytes=len(payload_bytes),
         sha256=digest,
         swept=swept,
+        warnings=sweep_warnings,
     )
     out["class"] = artifact_class
     return out

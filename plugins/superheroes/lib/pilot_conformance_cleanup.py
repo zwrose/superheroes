@@ -74,12 +74,12 @@ def _skipped_record(now, reason=REASON_INPUTS_MISSING):
     )
 
 
-def _fail_record(now, reason, *, evidence, warnings=None):
+def _fail_record(now, reason, *, evidence, warnings=None, fallback=REASON_RECEIPT_NOT_PASS):
     return pilot_conformance.exercise_record(
         exercise=EXERCISE_NAME,
         surfaces=list(_SURFACES),
         result=pilot_conformance.RESULT_FAIL,
-        reason=_token_reason(reason, REASON_RECEIPT_NOT_PASS),
+        reason=_token_reason(reason, fallback),
         evidence=evidence,
         exercised_at=now,
         warnings=warnings,
@@ -272,6 +272,7 @@ def cleanup_end_to_end_exercise(*, inputs, now):
                     validation.get("reason"),
                     evidence="receipt binding check failed",
                     warnings=warnings,
+                    fallback=REASON_BINDING_FAILED,
                 )
 
             containment = pilot_cleanup.resolve_containment(
@@ -292,6 +293,7 @@ def cleanup_end_to_end_exercise(*, inputs, now):
                     containment.get("reason"),
                     evidence="containment resolution refused",
                     warnings=warnings,
+                    fallback=REASON_CONTAINMENT_REFUSED,
                 )
             # bite-axis: receipt-path containment — every mode other than receipt fails.
             if mode != pilot_cleanup.MODE_RECEIPT:
@@ -335,6 +337,7 @@ def cleanup_end_to_end_exercise(*, inputs, now):
                     plan.get("reason"),
                     evidence="resurrection plan refused or parked",
                     warnings=warnings,
+                    fallback=REASON_PLAN_REFUSED,
                 )
             if action != pilot_cleanup.ACTION_RESURRECT:
                 return _fail_record(

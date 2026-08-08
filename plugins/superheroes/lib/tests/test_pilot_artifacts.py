@@ -1,4 +1,5 @@
 """Tests for pilot_artifacts.py — external per-slot artifact store."""
+import calendar
 import hashlib
 import io
 import json
@@ -25,6 +26,14 @@ _BRANCH = "feat/x"
 _SLOT = "admin"
 _MATERIAL = ["secret-token-xyz"]
 _BEARER_SECRET = "Bearer abcdefgh12345678"
+
+
+def _utc_epoch(iso_z):
+    return calendar.timegm(time.strptime(iso_z, "%Y-%m-%dT%H:%M:%SZ"))
+
+
+def _mtime_seconds_before_now(seconds):
+    return _utc_epoch(_NOW) - seconds
 
 
 def _artifacts_dir(tmp_path):
@@ -440,6 +449,12 @@ def test_edge_symlink_artifacts_dir_refused(tmp_path):
     assert result["reason"] == pa.REASON_STORE_PATH_UNSAFE
 
 
+def test_utc_epoch_from_now_matches_calendar_timegm():
+    """bite-axis: grace epoch — module derives UTC epoch independent of host TZ."""
+    expected = _utc_epoch(_NOW)
+    assert pa._utc_epoch_from_now(_NOW) == expected
+
+
 def test_edge_sidecarless_payload_swept_when_past_grace(tmp_path):
     artifacts = _artifacts_dir(tmp_path)
     key = store.artifact_key(_BRANCH, _SLOT)
@@ -447,14 +462,35 @@ def test_edge_sidecarless_payload_swept_when_past_grace(tmp_path):
     os.makedirs(class_dir, mode=0o700)
     orphan = os.path.join(class_dir, "a" * 32)
     _write_file(orphan, b"orphan", mode=0o600)
-    old = time.time() - 36000
-    os.utime(orphan, (old, old))
+    # bite-axis: clock-independent grace — mtime derived from sweep now, not wall clock.
+    mtime = _mtime_seconds_before_now(pa.SIDECARLESS_GRACE_SECONDS + 1)
+    os.utime(orphan, (mtime, mtime))
     out = pa.sweep(artifacts, now=_NOW)
     assert not os.path.exists(orphan)
     assert any(
         e["reason"] == pa.REASON_SIDECAR_UNRECOVERABLE and e["artifactId"] == "a" * 32
         for e in out["removed"]
     )
+
+
+def test_edge_sidecarless_payload_inside_grace_retained(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    key = store.artifact_key(_BRANCH, _SLOT)
+    class_dir = os.path.join(artifacts, key, pa.CLASS_STEP_LOG)
+    os.makedirs(class_dir, mode=0o700)
+    orphan = os.path.join(class_dir, "e" * 32)
+    _write_file(orphan, b"inside-grace", mode=0o600)
+    # bite-axis: injected mtime — one second inside grace, no wall clock.
+    mtime = _mtime_seconds_before_now(pa.SIDECARLESS_GRACE_SECONDS - 1)
+    os.utime(orphan, (mtime, mtime))
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(orphan)
+    assert any(
+        e["artifactId"] == "e" * 32 and e["reason"] == pa.REASON_SIDECAR_PENDING
+        for e in out["warnings"]
+    )
+    assert any(e["artifactId"] == "e" * 32 for e in out["retained"])
+    assert not any(e["artifactId"] == "e" * 32 for e in out["removed"])
 
 
 def test_edge_sidecarless_young_payload_retained_with_pending_warning(tmp_path):
@@ -464,6 +500,8 @@ def test_edge_sidecarless_young_payload_retained_with_pending_warning(tmp_path):
     os.makedirs(class_dir, mode=0o700)
     orphan = os.path.join(class_dir, "c" * 32)
     _write_file(orphan, b"young", mode=0o600)
+    mtime = _mtime_seconds_before_now(pa.SIDECARLESS_GRACE_SECONDS - 1)
+    os.utime(orphan, (mtime, mtime))
     out = pa.sweep(artifacts, now=_NOW)
     assert os.path.exists(orphan)
     assert any(
@@ -945,7 +983,101 @@ def test_sweep_v1_missing_required_key_still_removed(tmp_path):
     )
 
 
-def test_sweep_payload_removed_sidecar_unlink_fails_not_retained(tmp_path, monkeypatch):
+def test_sweep_decoy_home_directory_leaves_unrelated_files(tmp_path):
+    """Mis-supplied artifacts dir must not unlink unrelated nested files."""
+    home = os.path.join(str(tmp_path), "fake-home")
+    decoy = os.path.join(home, "Documents", "notes")
+    os.makedirs(decoy, mode=0o700)
+    os.chmod(home, 0o700)
+    victim = os.path.join(decoy, "README")
+    _write_file(victim, b"keep me", mode=0o600)
+    out = pa.sweep(home, now=_NOW)
+    assert os.path.exists(victim)
+    assert out["removed"] == []
+    assert any(e["reason"] == pa.REASON_SWEEP_FAILED for e in out["warnings"])
+
+
+def test_sweep_decoy_unknown_class_skipped(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    key = store.artifact_key(_BRANCH, _SLOT)
+    notes_dir = os.path.join(artifacts, key, "notes")
+    os.makedirs(notes_dir, mode=0o700)
+    victim = os.path.join(notes_dir, "f" * 32)
+    _write_file(victim, b"decoy", mode=0o600)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(victim)
+    assert out["removed"] == []
+    assert any(
+        e["class"] == "notes" and e["reason"] == pa.REASON_SWEEP_FAILED
+        for e in out["warnings"]
+    )
+
+
+def test_sweep_decoy_invalid_artifact_key_skipped(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    bad_key_dir = os.path.join(artifacts, "not-a-valid-key", pa.CLASS_STEP_LOG)
+    os.makedirs(bad_key_dir, mode=0o700)
+    victim = os.path.join(bad_key_dir, "f" * 32)
+    _write_file(victim, b"decoy", mode=0o600)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(victim)
+    assert out["removed"] == []
+    assert any(e["reason"] == pa.REASON_SWEEP_FAILED for e in out["warnings"])
+
+
+def test_sweep_stray_readme_in_valid_class_left_alone(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    key = store.artifact_key(_BRANCH, _SLOT)
+    class_dir = os.path.join(artifacts, key, pa.CLASS_STEP_LOG)
+    os.makedirs(class_dir, mode=0o700)
+    readme = os.path.join(class_dir, "README")
+    _write_file(readme, b"notes", mode=0o600)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(readme)
+    assert out["removed"] == []
+    assert any(e["reason"] == pa.REASON_SWEEP_FAILED for e in out["warnings"])
+
+
+def test_sweep_accounting_invariant_mixed_tree(tmp_path, monkeypatch):
+    """bite-axis: removed + retained — every examined artifact is accounted for."""
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts, retention_hours=1)
+    later = pa._add_hours_iso8601(_NOW, 2)
+    key = store.artifact_key(_BRANCH, _SLOT)
+    class_dir = os.path.join(artifacts, key, pa.CLASS_STEP_LOG)
+    orphan = os.path.join(class_dir, "a" * 32)
+    _write_file(orphan, b"orphan", mode=0o600)
+    mtime = _mtime_seconds_before_now(pa.SIDECARLESS_GRACE_SECONDS + 1)
+    os.utime(orphan, (mtime, mtime))
+    artifacts_before = 2
+    real_unlink = os.unlink
+
+    def sidecar_unlink_fails(path):
+        if path == kept["sidecar"]:
+            raise OSError("sidecar unlink blocked")
+        return real_unlink(path)
+
+    monkeypatch.setattr(os, "unlink", sidecar_unlink_fails)
+    out = pa.sweep(artifacts, now=later)
+    accounted = len(out["removed"]) + len(out["retained"])
+    assert accounted == artifacts_before
+
+
+def test_retain_carries_scoped_sweep_warnings(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    _retain_step_log(artifacts, payload_text="first log")
+    key = store.artifact_key(_BRANCH, _SLOT)
+    class_dir = os.path.join(artifacts, key, pa.CLASS_STEP_LOG)
+    readme = os.path.join(class_dir, "README")
+    _write_file(readme, b"stray", mode=0o600)
+    result = _retain_step_log(artifacts, payload_text="new log line")
+    assert result["ok"] is True
+    assert any(
+        w["reason"] == pa.REASON_SWEEP_FAILED for w in result["warnings"]
+    )
+
+
+def test_sweep_payload_removed_sidecar_unlink_fails_accounted_in_retained(tmp_path, monkeypatch):
     artifacts = _artifacts_dir(tmp_path)
     kept = _retain_step_log(artifacts, retention_hours=1)
     later = pa._add_hours_iso8601(_NOW, 2)
@@ -960,12 +1092,29 @@ def test_sweep_payload_removed_sidecar_unlink_fails_not_retained(tmp_path, monke
     out = pa.sweep(artifacts, now=later)
     assert not os.path.exists(kept["path"])
     assert os.path.exists(kept["sidecar"])
-    assert not any(e["artifactId"] == kept["artifactId"] for e in out["retained"])
+    assert any(e["artifactId"] == kept["artifactId"] for e in out["retained"])
     assert not any(e["artifactId"] == kept["artifactId"] for e in out["removed"])
     assert any(
         e["artifactId"] == kept["artifactId"] and e["reason"] == pa.REASON_SWEEP_FAILED
         for e in out["warnings"]
     )
+
+
+@pytest.mark.skipif(not hasattr(time, "tzset"), reason="time.tzset not available on this platform")
+def test_sidecarless_grace_survives_under_non_utc_tz(tmp_path, monkeypatch):
+    artifacts = _artifacts_dir(tmp_path)
+    key = store.artifact_key(_BRANCH, _SLOT)
+    class_dir = os.path.join(artifacts, key, pa.CLASS_STEP_LOG)
+    os.makedirs(class_dir, mode=0o700)
+    orphan = os.path.join(class_dir, "d" * 32)
+    _write_file(orphan, b"tz-young", mode=0o600)
+    mtime = _mtime_seconds_before_now(pa.SIDECARLESS_GRACE_SECONDS - 1)
+    os.utime(orphan, (mtime, mtime))
+    monkeypatch.setenv("TZ", "Asia/Kolkata")
+    time.tzset()
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(orphan)
+    assert any(e["artifactId"] == "d" * 32 for e in out["retained"])
 
 
 def test_retain_scoped_sweep_leaves_other_key_untouched(tmp_path):
@@ -975,8 +1124,8 @@ def test_retain_scoped_sweep_leaves_other_key_untouched(tmp_path):
     os.makedirs(other_dir, mode=0o700)
     orphan = os.path.join(other_dir, "d" * 32)
     _write_file(orphan, b"other", mode=0o600)
-    old = time.time() - 36000
-    os.utime(orphan, (old, old))
+    mtime = _mtime_seconds_before_now(pa.SIDECARLESS_GRACE_SECONDS + 1)
+    os.utime(orphan, (mtime, mtime))
     _retain_step_log(artifacts)
     assert os.path.exists(orphan)
     key_dir = os.path.join(artifacts, store.artifact_key(_BRANCH, _SLOT), pa.CLASS_STEP_LOG)
