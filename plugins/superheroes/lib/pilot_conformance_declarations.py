@@ -88,6 +88,7 @@ def _build_row(kind, slot_ref, info, registry):
 def declaration_rows(block, policy, registry, *, now):
     """Return one row per (kind, slot, digest) across every slot in the policy."""
     del now  # reserved for future freshness checks; rows are point-in-time from inputs.
+    pilot_provision._verify_declaration_sources_complete()
     slots = policy.get("slots") if isinstance(policy, dict) else None
     if not isinstance(slots, dict):
         return []
@@ -118,7 +119,16 @@ def declaration_rows(block, policy, registry, *, now):
                     "reason": _normalize_row_reason(exc),
                 })
                 continue
-            rows.append(_build_row(kind, slot_ref, info, registry))
+            try:
+                rows.append(_build_row(kind, slot_ref, info, registry))
+            except Exception as exc:
+                rows.append({
+                    "kind": kind,
+                    "slotRef": slot_ref,
+                    "status": STATUS_ABSENT,
+                    "declarationDigest": None,
+                    "reason": _normalize_row_reason(exc),
+                })
 
     material = pilot_policy.policy_material(policy)
     pilot_policy.assert_results_only(rows, material)

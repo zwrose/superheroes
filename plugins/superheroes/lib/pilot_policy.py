@@ -25,6 +25,8 @@ REFUSAL_DOCUMENT_OWNER_MISMATCH = "policy-document-owner-mismatch"
 REFUSAL_DOCUMENT_MODE_INSECURE = "policy-document-mode-insecure"
 REFUSAL_DOCUMENT_UNREADABLE = "policy-document-unreadable"
 REFUSAL_DOCUMENT_INVALID = "policy-document-invalid"
+REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID = "policy-ownership-probe-account-invalid"
+REFUSAL_OWNERSHIP_PROBE_ACCOUNT_UNDECLARED = "policy-ownership-probe-account-undeclared"
 REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "policy-schema-version-unsupported"
 REFUSAL_MATERIAL_IN_RESULT = "policy-material-in-result"
 REFUSAL_MATERIAL_INVALID = "policy-material-invalid"
@@ -73,7 +75,7 @@ CONTAINMENT_SENTINEL_KEYS = frozenset(
 NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
 SENTINEL_PLACEHOLDER = "{sentinel}"
 ACCOUNT_PLACEHOLDER = "{account}"
-ACCOUNT_CLASS_TOKEN_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+ACCOUNT_CLASS_TOKEN_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}\Z")
 _PLACEHOLDER_RE = pilot_contract.PLACEHOLDER_RE
 _ALLOWED_PLACEHOLDERS = frozenset(
     {NAMESPACE_PLACEHOLDER, SENTINEL_PLACEHOLDER}
@@ -638,6 +640,23 @@ def _validate_ownership_probe_command(command):
     )
 
 
+def _declared_slot_accounts(policy):
+    accounts = set()
+    slots = policy.get("slots")
+    if not isinstance(slots, dict):
+        return accounts
+    for slot in slots.values():
+        if not isinstance(slot, dict):
+            continue
+        identities = slot.get("expectedIdentities")
+        if not isinstance(identities, dict):
+            continue
+        for declared_account in identities:
+            if isinstance(declared_account, str) and declared_account:
+                accounts.add(declared_account)
+    return accounts
+
+
 def ownership_probe_request(policy, account):
     """Return the resolved argv and environment for the policy's ownership probe."""
     validate_policy(policy)
@@ -645,7 +664,11 @@ def ownership_probe_request(policy, account):
     if ownership_probe is None:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     if not isinstance(account, str) or not account:
-        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        raise PilotPolicyError(REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID)
+    if not _FIELD_NAME_SHAPED_RE.match(account):
+        raise PilotPolicyError(REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID)
+    if account not in _declared_slot_accounts(policy):
+        raise PilotPolicyError(REFUSAL_OWNERSHIP_PROBE_ACCOUNT_UNDECLARED)
 
     command = ownership_probe["command"]
     resolved_argv = [command[0]]

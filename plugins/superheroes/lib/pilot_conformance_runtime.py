@@ -404,7 +404,35 @@ def _protected_identity_token(protected_targets):
     return None
 
 
-def _ownership_probe_answer_valid(stdout_bytes):
+def _occupied_boundary_origins(policy, slot):
+    occupied = set()
+    if isinstance(slot, dict):
+        origin = slot.get("origin")
+        if isinstance(origin, str) and origin:
+            occupied.add(origin)
+        redirects = slot.get("permittedRedirects")
+        if isinstance(redirects, list):
+            for redirect in redirects:
+                if isinstance(redirect, str) and redirect:
+                    occupied.add(redirect)
+    protected_targets = policy.get("protectedTargets") if isinstance(policy, dict) else None
+    if isinstance(protected_targets, list):
+        for target in protected_targets:
+            if isinstance(target, str) and "://" in target:
+                occupied.add(target)
+    return occupied
+
+
+def _off_allowlist_origin(policy, slot):
+    occupied = _occupied_boundary_origins(policy, slot)
+    for port in range(59990, 60010):
+        candidate = "http://127.0.0.1:%d" % port
+        if candidate not in occupied:
+            return candidate
+    return _OFF_ALLOWLIST_ORIGIN
+
+
+def _ownership_probe_answer_valid(stdout_bytes, expected_account):
     try:
         text = stdout_bytes.decode("utf-8")
     except UnicodeDecodeError:
@@ -413,7 +441,7 @@ def _ownership_probe_answer_valid(stdout_bytes):
         payload = json.loads(text)
     except (json.JSONDecodeError, TypeError, ValueError):
         return False
-    return isinstance(payload, dict) and payload.get("ownsNothing") is True
+    return isinstance(payload, dict) and payload.get("ownsNothing") is True and payload.get("account") == expected_account
 
 
 @pilot_conformance.register("wave-headless", surfaces=_WAVE_SURFACES)
@@ -941,7 +969,8 @@ def boundary_refusals_exercise(*, inputs, now):
             now,
         )
 
-    off_target = pilot_boundary.check_target(binding, _OFF_ALLOWLIST_ORIGIN)
+    off_allowlist_origin = _off_allowlist_origin(policy, slot)
+    off_target = pilot_boundary.check_target(binding, off_allowlist_origin)
     if (
         off_target.get("ok")
         or off_target.get("reason") != pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
@@ -954,7 +983,7 @@ def boundary_refusals_exercise(*, inputs, now):
             now,
         )
 
-    off_redirect = pilot_boundary.check_redirect(binding, _OFF_ALLOWLIST_ORIGIN)
+    off_redirect = pilot_boundary.check_redirect(binding, off_allowlist_origin)
     if (
         off_redirect.get("ok")
         or off_redirect.get("reason") != pilot_boundary.REFUSAL_REDIRECT_OFF_ALLOWLIST
@@ -967,27 +996,28 @@ def boundary_refusals_exercise(*, inputs, now):
             now,
         )
 
+    evidence_legs = [
+        "off-allowlist target refused",
+        "off-allowlist redirect refused",
+    ]
+
     protected_url = _protected_target_url(protected_targets)
     if protected_url is None:
-        return _failed(
-            "boundary-refusals",
-            _BOUNDARY_SURFACES,
-            REASON_BOUNDARY_EXPECTATION_UNMET,
-            "policy protectedTargets has no URL-shaped entry",
-            now,
-        )
-    protected_target = pilot_boundary.check_target(binding, protected_url)
-    if (
-        protected_target.get("ok")
-        or protected_target.get("reason") != pilot_boundary.REFUSAL_PROTECTED_TARGET
-    ):
-        return _failed(
-            "boundary-refusals",
-            _BOUNDARY_SURFACES,
-            REASON_BOUNDARY_EXPECTATION_UNMET,
-            "protected target refusal token mismatch",
-            now,
-        )
+        evidence_legs.append("protected URL leg skipped (no URL-shaped protectedTargets entry)")
+    else:
+        protected_target = pilot_boundary.check_target(binding, protected_url)
+        if (
+            protected_target.get("ok")
+            or protected_target.get("reason") != pilot_boundary.REFUSAL_PROTECTED_TARGET
+        ):
+            return _failed(
+                "boundary-refusals",
+                _BOUNDARY_SURFACES,
+                REASON_BOUNDARY_EXPECTATION_UNMET,
+                "protected target refusal token mismatch",
+                now,
+            )
+        evidence_legs.append("protected URL refused")
 
     if pilot_boundary.is_local_development_origin(_NON_LOCAL_ORIGIN):
         return _failed(
@@ -1021,35 +1051,49 @@ def boundary_refusals_exercise(*, inputs, now):
                 now,
             )
 
+    evidence_legs.append("non-local origin refused")
+
     protected_identity = _protected_identity_token(protected_targets)
     if protected_identity is None:
-        return _failed(
-            "boundary-refusals",
-            _BOUNDARY_SURFACES,
-            REASON_BOUNDARY_EXPECTATION_UNMET,
-            "policy protectedTargets has no opaque identity entry",
-            now,
+        evidence_legs.append(
+            "protected identity leg skipped (no opaque protectedTargets entry)"
         )
-    identity_refusal = pilot_boundary.check_protected_identity(
-        binding,
-        protected_identity,
-    )
-    if (
-        identity_refusal.get("ok")
-        or identity_refusal.get("reason") != pilot_boundary.REFUSAL_PROTECTED_TARGET
-    ):
+    else:
+        identity_refusal = pilot_boundary.check_protected_identity(
+            binding,
+            protected_identity,
+        )
+        if (
+            identity_refusal.get("ok")
+            or identity_refusal.get("reason") != pilot_boundary.REFUSAL_PROTECTED_TARGET
+        ):
+            return _failed(
+                "boundary-refusals",
+                _BOUNDARY_SURFACES,
+                REASON_BOUNDARY_EXPECTATION_UNMET,
+                "protected identity refusal token mismatch",
+                now,
+            )
+        evidence_legs.append("protected identity refused")
+
+    exercised_legs = [
+        leg
+        for leg in evidence_legs
+        if "skipped" not in leg
+    ]
+    if not exercised_legs:
         return _failed(
             "boundary-refusals",
             _BOUNDARY_SURFACES,
             REASON_BOUNDARY_EXPECTATION_UNMET,
-            "protected identity refusal token mismatch",
+            "no protectedTargets legs could be exercised",
             now,
         )
 
     return _passed(
         "boundary-refusals",
         _BOUNDARY_SURFACES,
-        "boundary target, redirect, protected, and local-development refusals exercised",
+        "; ".join(evidence_legs),
         now,
     )
 
@@ -1122,6 +1166,7 @@ def horizon_validity_exercise(*, inputs, now):
             "comfortable horizon margin was not accepted",
             now,
         )
+    evidence_legs = ["margin covered"]
 
     shortfall_observation = pilot_horizon.server_probe_observation(
         expires_at=deadline_at + margin_seconds - 100,
@@ -1147,6 +1192,7 @@ def horizon_validity_exercise(*, inputs, now):
             "shortfall horizon margin refusal token mismatch",
             now,
         )
+    evidence_legs.append("margin exceeded")
 
     try:
         pilot_horizon.validate_observation({"provenance": "bogus"})
@@ -1158,9 +1204,8 @@ def horizon_validity_exercise(*, inputs, now):
             now,
         )
     except pilot_horizon.PilotHorizonError:
-        pass
+        evidence_legs.append("malformed observation refused")
 
-    evidence_parts = ["margin covered and exceeded; malformed observation refused"]
     if validity_provenance == "unknown":
         unknown = pilot_horizon.unknown_observation()
         unattended = pilot_horizon.account_margin(
@@ -1183,9 +1228,9 @@ def horizon_validity_exercise(*, inputs, now):
                 "unknown provenance unattended refusal token mismatch",
                 now,
             )
-        evidence_parts.append("unknown-provenance-unattended exercised")
+        evidence_legs.append("unknown-provenance-unattended exercised")
     else:
-        evidence_parts.append(
+        evidence_legs.append(
             "unknown-provenance leg not applicable (validityProvenance=%s)"
             % validity_provenance
         )
@@ -1193,7 +1238,7 @@ def horizon_validity_exercise(*, inputs, now):
     return _passed(
         "horizon-validity",
         _HORIZON_SURFACES,
-        "; ".join(evidence_parts),
+        "; ".join(evidence_legs),
         now,
     )
 
@@ -1273,7 +1318,53 @@ def ownership_probe_exercise(*, inputs, now):
             now,
         )
 
+    reach_roots = probe_inputs.get("reach_roots")
+    if not isinstance(reach_roots, list) or not reach_roots:
+        reach_roots = [os.path.realpath(run_cwd)]
+    else:
+        reach_roots = [
+            os.path.realpath(root)
+            for root in reach_roots
+            if isinstance(root, str) and root
+        ]
+        if not reach_roots:
+            return _skipped(
+                "ownership-probe",
+                _OWNERSHIP_PROBE_SURFACES,
+                REASON_INPUTS_MALFORMED,
+                "ownership probe reach_roots missing or wrong type",
+                now,
+            )
+    try:
+        confined_run_cwd = pilot_conformance._neutral_cleanup_run_cwd(run_cwd, reach_roots)
+    except RuntimeError:
+        return _failed(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_OWNERSHIP_PROBE_REFUSED,
+            "ownership probe could not allocate confined run_cwd outside reach roots",
+            now,
+        )
+
+    ownership_probe = policy.get("ownershipProbe")
+    try:
+        pilot_boundary._validate_observer(
+            ownership_probe,
+            connection_detail,
+            reach_roots,
+            confined_run_cwd,
+        )
+    except pilot_boundary.PilotBoundaryError as exc:
+        return _failed(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            exc.reason,
+            "ownership probe command failed confinement checks",
+            now,
+        )
+
     path_value = os.environ.get("PATH", os.defpath)
+    probed_accounts = []
     for account in accounts:
         try:
             request = pilot_policy.ownership_probe_request(policy, account)
@@ -1292,7 +1383,7 @@ def ownership_probe_exercise(*, inputs, now):
         }
         run = pilot_bounded_run.run_bounded(
             request["argv"],
-            run_cwd=run_cwd,
+            run_cwd=confined_run_cwd,
             env=env,
             timeout_seconds=_OWNERSHIP_PROBE_TIMEOUT_SECONDS,
             max_output_bytes=_OWNERSHIP_PROBE_MAX_OUTPUT_BYTES,
@@ -1308,26 +1399,36 @@ def ownership_probe_exercise(*, inputs, now):
                 "ownership probe for account %s exited non-zero" % account,
                 now,
             )
-        if not _ownership_probe_answer_valid(run["stdout"]):
+        if not _ownership_probe_answer_valid(run["stdout"], account):
             return _failed(
                 "ownership-probe",
                 _OWNERSHIP_PROBE_SURFACES,
                 REASON_OWNERSHIP_PROBE_ANSWER_INVALID,
                 (
                     "ownership probe for account %s exited 0 but stdout did not "
-                    "parse as JSON with ownsNothing true; a process that merely "
+                    "parse as JSON with ownsNothing true and matching account; a process that merely "
                     "started is not evidence the account owns nothing"
                 )
                 % account,
                 now,
             )
+        probed_accounts.append(account)
+
+    if set(probed_accounts) != set(accounts):
+        return _failed(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_OWNERSHIP_PROBE_REFUSED,
+            "ownership probe did not exercise every credential-set account",
+            now,
+        )
 
     return _passed(
         "ownership-probe",
         _OWNERSHIP_PROBE_SURFACES,
         (
-            "ownership probe exercised for %d account(s); %s"
-            % (len(accounts), _OWNERSHIP_PROBE_LIMIT_VERBATIM)
+            "ownership probe exercised for accounts %s; %s"
+            % (", ".join(sorted(probed_accounts)), _OWNERSHIP_PROBE_LIMIT_VERBATIM)
         ),
         now,
     )

@@ -1,6 +1,7 @@
 """Tests for boundary-refusals, horizon-validity, and ownership-probe exercises."""
 import os
 import shutil
+import stat
 import sys
 import tempfile
 
@@ -78,12 +79,35 @@ def _ownership_probe_command(body_code, exit_code=0):
     trailer = ""
     if exit_code:
         trailer = "; sys.exit(%d)" % exit_code
-    script = "import json, sys; _acct='%s'; %s%s" % (
-        pp.ACCOUNT_PLACEHOLDER,
-        body_code,
-        trailer,
+    script = (
+        "import json, sys; _acct=sys.argv[1]; "
+        "assert _acct == '%s' or _acct == sys.argv[1]; %s%s"
+    ) % (pp.ACCOUNT_PLACEHOLDER, body_code, trailer)
+    return [sys.executable, "-c", script, pp.ACCOUNT_PLACEHOLDER]
+
+
+def _confined_ownership_probe_command(workspace, body_code, exit_code=0):
+    reach_root = os.path.join(workspace, "reach")
+    os.makedirs(reach_root, exist_ok=True)
+    outer_bin = tempfile.mkdtemp(
+        dir=os.path.dirname(workspace),
+        prefix="ownership-probe-bin-",
     )
-    return [sys.executable, "-c", script]
+    probe_py = os.path.join(outer_bin, "ownership_probe.py")
+    trailer = ""
+    if exit_code:
+        trailer = "\nsys.exit(%d)" % exit_code
+    with open(probe_py, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "_acct = sys.argv[1]\n"
+            + body_code
+            + trailer
+            + "\n"
+        )
+    os.chmod(probe_py, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    return [probe_py, pp.ACCOUNT_PLACEHOLDER]
 
 
 def _run_ownership_probe(tmp_dir, policy, pilot_block, command):
@@ -145,7 +169,7 @@ def test_boundary_refusals_off_allowlist_target_token(monkeypatch):
     policy = _sample_policy()
 
     def fake_check_target(_binding, url):
-        if url == pcr._OFF_ALLOWLIST_ORIGIN:
+        if url == pcr._off_allowlist_origin(policy, policy["slots"]["slot-a"]):
             return {"ok": True, "reason": None}
         return pb.check_target(_binding, url)
 
@@ -163,7 +187,7 @@ def test_boundary_refusals_off_allowlist_redirect_token(monkeypatch):
     real_redirect = pb.check_redirect
 
     def fake_check_redirect(binding, url):
-        if url == pcr._OFF_ALLOWLIST_ORIGIN:
+        if url == pcr._off_allowlist_origin(policy, policy["slots"]["slot-a"]):
             return {"ok": False, "reason": "wrong-token"}
         return real_redirect(binding, url)
 
@@ -244,6 +268,41 @@ def test_boundary_refusals_non_local_declared_origin_fails():
     assert report["ok"] is False
 
 
+def test_boundary_refusals_opaque_only_protected_targets():
+    policy = _sample_policy(protectedTargets=["example_prod"])
+    record = pcr.boundary_refusals_exercise(
+        inputs=_boundary_inputs(policy),
+        now=EXERCISED_AT,
+    )
+    assert record["result"] == pc.RESULT_PASS
+    assert "protected URL leg skipped" in record["evidence"]
+    assert "protected identity refused" in record["evidence"]
+
+
+def test_boundary_refusals_url_only_protected_targets():
+    policy = _sample_policy(protectedTargets=["https://app.example.com:443"])
+    record = pcr.boundary_refusals_exercise(
+        inputs=_boundary_inputs(policy),
+        now=EXERCISED_AT,
+    )
+    assert record["result"] == pc.RESULT_PASS
+    assert "protected URL refused" in record["evidence"]
+    assert "protected identity leg skipped" in record["evidence"]
+
+
+def test_boundary_refusals_both_protected_target_classes():
+    policy = _sample_policy(
+        protectedTargets=["https://app.example.com:443", "example_prod"]
+    )
+    record = pcr.boundary_refusals_exercise(
+        inputs=_boundary_inputs(policy),
+        now=EXERCISED_AT,
+    )
+    assert record["result"] == pc.RESULT_PASS
+    assert "protected URL refused" in record["evidence"]
+    assert "protected identity refused" in record["evidence"]
+
+
 # --- horizon-validity ---------------------------------------------------------
 
 
@@ -259,7 +318,8 @@ def test_horizon_validity_margin_covered_and_exceeded():
         now=EXERCISED_AT,
     )
     assert record["result"] == pc.RESULT_PASS
-    assert "margin covered and exceeded" in record["evidence"]
+    assert "margin covered" in record["evidence"]
+    assert "margin exceeded" in record["evidence"]
     assert "not applicable" in record["evidence"]
 
 
@@ -326,8 +386,9 @@ def test_ownership_probe_undeclared_skip():
 
 
 def test_ownership_probe_multi_account_pass(tmp_dir):
-    command = _ownership_probe_command(
-        "sys.stdout.write(json.dumps(dict(ownsNothing=True)))"
+    command = _confined_ownership_probe_command(
+        tmp_dir,
+        "sys.stdout.write(json.dumps(dict(ownsNothing=True, account=_acct)))",
     )
     pilot_block = _pilot_block(
         credentialSet=[
@@ -335,20 +396,34 @@ def test_ownership_probe_multi_account_pass(tmp_dir):
             {"account": "guest", "role": "guest"},
         ]
     )
-    record = _run_ownership_probe(tmp_dir, _sample_policy(), pilot_block, command)
+    policy = _sample_policy(
+        slots={
+            "slot-a": {
+                "origin": "http://127.0.0.1:5173",
+                "permittedRedirects": ["http://127.0.0.1:5173"],
+                "expectedIdentities": {
+                    "owner": "pilot-owner@example.test",
+                    "guest": "pilot-guest@example.test",
+                },
+            }
+        }
+    )
+    record = _run_ownership_probe(tmp_dir, policy, pilot_block, command)
     assert record["result"] == pc.RESULT_PASS
+    assert "guest" in record["evidence"]
+    assert "owner" in record["evidence"]
     assert pcr._OWNERSHIP_PROBE_LIMIT_VERBATIM in record["evidence"]
 
 
 def test_ownership_probe_nonzero_exit(tmp_dir):
-    command = _ownership_probe_command("pass", exit_code=1)
+    command = _confined_ownership_probe_command(tmp_dir, "pass", exit_code=1)
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
     assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_REFUSED
 
 
 def test_ownership_probe_exit_zero_unparseable_body(tmp_dir):
-    command = _ownership_probe_command('sys.stdout.write("started")')
+    command = _confined_ownership_probe_command(tmp_dir, 'sys.stdout.write("started")')
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
     assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
@@ -356,8 +431,9 @@ def test_ownership_probe_exit_zero_unparseable_body(tmp_dir):
 
 
 def test_ownership_probe_exit_zero_owns_nothing_false(tmp_dir):
-    command = _ownership_probe_command(
-        "sys.stdout.write(json.dumps(dict(ownsNothing=False)))"
+    command = _confined_ownership_probe_command(
+        tmp_dir,
+        "sys.stdout.write(json.dumps(dict(ownsNothing=False, account=_acct)))",
     )
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
@@ -365,15 +441,18 @@ def test_ownership_probe_exit_zero_owns_nothing_false(tmp_dir):
 
 
 def test_ownership_probe_exit_zero_owns_nothing_absent(tmp_dir):
-    command = _ownership_probe_command("sys.stdout.write(json.dumps(dict()))")
+    command = _confined_ownership_probe_command(
+        tmp_dir, "sys.stdout.write(json.dumps(dict(account=_acct)))"
+    )
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
     assert record["reason"] == pcr.REASON_OWNERSHIP_PROBE_ANSWER_INVALID
 
 
 def test_ownership_probe_exit_zero_owns_nothing_string_true(tmp_dir):
-    command = _ownership_probe_command(
-        'sys.stdout.write(json.dumps(dict(ownsNothing="true")))'
+    command = _confined_ownership_probe_command(
+        tmp_dir,
+        'sys.stdout.write(json.dumps(dict(ownsNothing="true", account=_acct)))',
     )
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
@@ -381,8 +460,9 @@ def test_ownership_probe_exit_zero_owns_nothing_string_true(tmp_dir):
 
 
 def test_ownership_probe_exit_zero_json_array_body(tmp_dir):
-    command = _ownership_probe_command(
-        "sys.stdout.write(json.dumps([dict(ownsNothing=True)]))"
+    command = _confined_ownership_probe_command(
+        tmp_dir,
+        "sys.stdout.write(json.dumps([dict(ownsNothing=True, account=_acct)]))",
     )
     record = _run_ownership_probe(tmp_dir, _sample_policy(), _pilot_block(), command)
     assert record["result"] == pc.RESULT_FAIL
@@ -412,6 +492,24 @@ def test_ownership_probe_request_refuses_when_undeclared():
     with pytest.raises(pp.PilotPolicyError) as exc:
         pp.ownership_probe_request(_sample_policy(ownershipProbe=None), "owner")
     assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_ownership_probe_request_refuses_invalid_account_grammar():
+    policy = _policy_with_probe(
+        [sys.executable, "--account", pp.ACCOUNT_PLACEHOLDER]
+    )
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.ownership_probe_request(policy, "--admin")
+    assert exc.value.reason == pp.REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID
+
+
+def test_ownership_probe_request_refuses_undeclared_account():
+    policy = _policy_with_probe(
+        [sys.executable, "--account", pp.ACCOUNT_PLACEHOLDER]
+    )
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.ownership_probe_request(policy, "intruder")
+    assert exc.value.reason == pp.REFUSAL_OWNERSHIP_PROBE_ACCOUNT_UNDECLARED
 
 
 def test_ownership_probe_request_never_substitutes_argv0():
