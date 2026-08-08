@@ -565,3 +565,60 @@ def test_collect_and_render_survive_git_unavailable(tmp_path, monkeypatch):
     assert isinstance(screen, str)
     assert "## Core\n(no core calibration yet)" in screen
     assert "pytest" not in screen
+
+
+def test_render_shows_review_gate_policy_defaults(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Review gate policy" in screen
+    assert "shipped default: gate-policy/1 (0 rules; pre-authorizes nothing)" in screen
+    assert "project overlay: none configured" in screen
+
+
+def test_render_shows_review_gate_policy_overlay(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    repo = str(tmp_path)
+    policy = {
+        "schema": "gate-policy/1",
+        "default": "park",
+        "rules": [{
+            "gate": "present-judgment",
+            "findingClass": "judgment:important",
+            "disposition": "skip",
+        }],
+    }
+    res = core_md.write_review_gate_policy(repo, policy, root=root)
+    assert res["action"] == "written"
+    screen = cv.render(repo, root=root)
+    assert "## Review gate policy" in screen
+    assert "project overlay: gate-policy/1 (1 rules;" in screen
+    assert "shipped default: gate-policy/1 (0 rules; pre-authorizes nothing)" in screen
+
+
+def test_render_shows_review_gate_policy_unreadable_core(tmp_path):
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "core.md"), "not a core document\n")
+    screen = cv.render(str(tmp_path), root=root)
+    assert "## Review gate policy" in screen
+    assert "core.md: unreadable" in screen
+    assert "project overlay: none configured" not in screen
+
+
+def test_render_shows_review_gate_policy_refused_overlay(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    repo = str(tmp_path)
+    path = core_md.core_path(repo, root)
+    text = open(path, encoding="utf-8").read()
+    block = json.loads(core_md._JSON_BLOCK.search(text).group(1))
+    block["reviewGatePolicy"] = {
+        "identity": {"source": path, "schema": "gate-policy/1", "sha256": "0" * 64},
+        "policy": {"schema": "gate-policy/2", "default": "park", "rules": []},
+    }
+    new_body = json.dumps(block, indent=2)
+    new_text = core_md._splice_single_json_block(text, new_body)
+    open(path, "w", encoding="utf-8").write(new_text)
+    screen = cv.render(repo, root=root)
+    assert "project overlay: refused (layer-invalid-schema)" in screen
