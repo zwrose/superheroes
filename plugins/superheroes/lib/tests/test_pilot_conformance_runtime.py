@@ -53,22 +53,27 @@ def _reclaim_inputs(tmp_dir):
 
 
 def _mint_inputs(tmp_dir):
+    leak_marker = "CONFORMANCE_MINT_STDOUT_LEAK_MARKER"
     return {
         "mint": {
             "envelope": {
                 "enablingFlagEnvVar": "PILOT_MINT_ENABLED",
                 "enabledScopes": ["ci"],
                 "forbiddenScopes": ["prod"],
-                "gateOffTestCommand": [sys.executable, "-c", "import sys; sys.exit(0)"],
+                "gateOffTestCommand": [
+                    sys.executable,
+                    "-c",
+                    "import sys; sys.stdout.write('%s'); sys.exit(0)" % leak_marker,
+                ],
             },
             "run_cwd": tmp_dir,
             "environment": {"PILOT_MINT_ENABLED": "1"},
         },
-    }
+    }, leak_marker
 
 
 def _failing_mint_inputs(tmp_dir):
-    inputs = _mint_inputs(tmp_dir)
+    inputs, _marker = _mint_inputs(tmp_dir)
     inputs["mint"]["envelope"] = dict(inputs["mint"]["envelope"])
     inputs["mint"]["envelope"]["gateOffTestCommand"] = [
         sys.executable, "-c", "import sys; sys.exit(1)",
@@ -86,6 +91,54 @@ def test_wave_headless_pass(tmp_dir):
     assert set(record["surfaces"]) == set(pcr._WAVE_SURFACES)
 
 
+def test_reclaim_sweep_leaves_sibling_untouched(tmp_dir):
+    """bite-axis: containment — reclaim exercise must not touch pre-existing slots_dir entries."""
+    slots_dir = _slots_dir(tmp_dir)
+    sibling = os.path.join(slots_dir, "pre-existing-slot")
+    os.makedirs(sibling)
+    marker = os.path.join(sibling, "keep.txt")
+    with open(marker, "w", encoding="utf-8") as handle:
+        handle.write("untouched-by-conformance")
+    before = open(marker, "rb").read()
+
+    record = pcr.reclaim_sweep_exercise(
+        inputs={"reclaim": {"slots_dir": slots_dir}},
+        now=_SWEEP_AT,
+    )
+    assert record["result"] == pc.RESULT_PASS
+    assert open(marker, "rb").read() == before
+    assert set(os.listdir(slots_dir)) == {"pre-existing-slot"}
+
+
+def test_reclaim_sweep_idempotent_on_same_slots_dir(tmp_dir):
+    inputs = _reclaim_inputs(tmp_dir)
+    first = pcr.reclaim_sweep_exercise(inputs=inputs, now=_SWEEP_AT)
+    second = pcr.reclaim_sweep_exercise(inputs=inputs, now=_SWEEP_AT)
+    assert first["result"] == pc.RESULT_PASS
+    assert second["result"] == pc.RESULT_PASS
+
+
+def test_artifact_store_preserves_caller_artifacts_dir(tmp_dir):
+    artifacts_dir = os.path.join(tmp_dir, "artifacts")
+    os.makedirs(artifacts_dir)
+    keeper = os.path.join(artifacts_dir, "keeper.txt")
+    with open(keeper, "w", encoding="utf-8") as handle:
+        handle.write("must survive exercise")
+    before = open(keeper, "rb").read()
+
+    inputs = {
+        "artifacts": {
+            "artifacts_dir": artifacts_dir,
+            "branch": "feat/test",
+            "slot": "slot-a",
+            "material": ["example.test"],
+        },
+    }
+    record = pcr.artifact_store_exercise(inputs=inputs, now=EXERCISED_AT)
+    assert record["result"] == pc.RESULT_PASS
+    assert open(keeper, "rb").read() == before
+
+
 def test_reclaim_sweep_pass(tmp_dir):
     record = pcr.reclaim_sweep_exercise(
         inputs=_reclaim_inputs(tmp_dir),
@@ -101,8 +154,10 @@ def test_reclaim_sweep_pass(tmp_dir):
 
 
 def test_mint_gate_off_pass(tmp_dir):
-    record = pcr.mint_gate_off_exercise(inputs=_mint_inputs(tmp_dir), now=EXERCISED_AT)
+    inputs, _marker = _mint_inputs(tmp_dir)
+    record = pcr.mint_gate_off_exercise(inputs=inputs, now=EXERCISED_AT)
     assert record["result"] == pc.RESULT_PASS
+    assert _marker not in record["evidence"]
     assert "stdout" not in record["evidence"]
 
 
@@ -176,7 +231,7 @@ def test_edge1_exercise_key_absent_skips_reclaim():
 
 
 def test_edge2_required_key_missing_skips_mint(tmp_dir):
-    inputs = _mint_inputs(tmp_dir)
+    inputs, _marker = _mint_inputs(tmp_dir)
     del inputs["mint"]["envelope"]
     record = pcr.mint_gate_off_exercise(inputs=inputs, now=EXERCISED_AT)
     assert record["result"] == pc.RESULT_SKIPPED
@@ -272,7 +327,7 @@ def test_edge8_mint_gate_off_nonzero_exit_fails(tmp_dir):
 def test_edge9_evidence_truncated_before_record():
     long_text = "x" * 600
     normalized = pcr._normalize_evidence(long_text)
-    assert len(normalized) == pcr._EVIDENCE_MAX_LEN
+    assert len(normalized) == pc.EVIDENCE_MAX_LEN
     pc.exercise_record(
         exercise="wave-headless",
         surfaces=[pcr._WAVE_SURFACES[0]],
@@ -290,8 +345,8 @@ def test_edge10_warning_value_truncated():
             "reason": "r" * 300,
         },
     ])
-    assert len(folded[0]["entryName"]) == pcr._WARNING_VALUE_MAX_LEN
-    assert len(folded[0]["reason"]) == pcr._WARNING_VALUE_MAX_LEN
+    assert len(folded[0]["entryName"]) == pc.WARNING_VALUE_MAX_LEN
+    assert len(folded[0]["reason"]) == pc.WARNING_VALUE_MAX_LEN
 
 
 # --- coverage honesty ---------------------------------------------------------
@@ -311,28 +366,95 @@ def test_skipped_never_passes(tmp_dir):
     assert record["result"] != pc.RESULT_PASS
 
 
+def test_mint_gate_off_fail_when_receipt_not_well_formed(monkeypatch, tmp_dir):
+    inputs, _marker = _mint_inputs(tmp_dir)
+
+    def ok_run(*_args, **_kwargs):
+        return {"ok": True, "exitCode": 0, "stdout": b"", "reason": None}
+
+    monkeypatch.setattr(pcr.pilot_mint, "run_gate_off_test", ok_run)
+    monkeypatch.setattr(pcr, "_receipt_well_formed", lambda *_a, **_k: False)
+    record = pcr.mint_gate_off_exercise(inputs=inputs, now=EXERCISED_AT)
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_GATE_OFF_UNVERIFIED
+
+
+def test_mint_gate_off_resolves_command_via_path(tmp_dir, monkeypatch):
+    path_dir = os.path.join(tmp_dir, "bin")
+    os.makedirs(path_dir)
+    script = os.path.join(path_dir, "gate-off-ok")
+    with open(script, "w", encoding="utf-8") as handle:
+        handle.write("#!/bin/sh\nexit 0\n")
+    os.chmod(script, 0o755)
+    inputs, _marker = _mint_inputs(tmp_dir)
+    inputs["mint"]["envelope"] = dict(inputs["mint"]["envelope"])
+    inputs["mint"]["envelope"]["gateOffTestCommand"] = ["gate-off-ok"]
+    inputs["mint"]["environment"] = {
+        "PILOT_MINT_ENABLED": "1",
+        "PATH": path_dir,
+    }
+    record = pcr.mint_gate_off_exercise(inputs=inputs, now=EXERCISED_AT)
+    assert record["result"] == pc.RESULT_PASS
+
+
 # --- bite-proof axis tests (committed guards) ---------------------------------
 
 
-def test_bite_axis_class_a_missing_input_skips_not_passes():
+def test_bite_axis_missing_input_skips_not_passes():
     record = pcr.wave_headless_exercise(inputs=None, now=EXERCISED_AT)
     assert record["result"] == pc.RESULT_SKIPPED
 
 
-def test_bite_axis_class_b_duplicate_endpoint_must_refuse(tmp_dir):
+def test_bite_axis_duplicate_endpoint_must_refuse(monkeypatch, tmp_dir):
+    monkeypatch.setattr(
+        pcr.pilot_appctl,
+        "assert_unique_endpoints",
+        lambda allocations: {"ok": True, "reason": None, "duplicates": []},
+    )
     record = pcr.wave_headless_exercise(inputs=_wave_inputs(tmp_dir), now=EXERCISED_AT)
-    assert record["result"] == pc.RESULT_PASS
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_EXPECTATION_UNMET
 
 
-def test_bite_axis_class_c_past_grace_seed_must_warn(tmp_dir):
+def test_bite_axis_past_grace_seed_must_warn(monkeypatch, tmp_dir):
+    monkeypatch.setattr(
+        pcr.pilot_reclaim,
+        "sweep",
+        lambda slots_dir, now: {
+            "ok": True,
+            "reason": None,
+            "warned": [],
+            "retained": [],
+            "deleted": [],
+        },
+    )
+    monkeypatch.setattr(
+        pcr.pilot_reclaim,
+        "quarantine_entry",
+        lambda *args, **kwargs: {
+            "ok": True,
+            "reason": None,
+            "entryName": "slot-a-gen1-20260802120000",
+            "entryPath": "/tmp/x",
+            "sidecarPath": "/tmp/x.json",
+        },
+    )
     record = pcr.reclaim_sweep_exercise(
         inputs=_reclaim_inputs(tmp_dir),
         now=_SWEEP_AT,
     )
-    assert record["result"] == pc.RESULT_PASS
-    assert record["warnings"]
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_SWEEP_WARNINGS_EMPTY
 
 
-def test_bite_axis_class_d_gate_off_receipt_required(tmp_dir):
-    record = pcr.mint_gate_off_exercise(inputs=_mint_inputs(tmp_dir), now=EXERCISED_AT)
-    assert record["result"] == pc.RESULT_PASS
+def test_bite_axis_gate_off_receipt_required(monkeypatch, tmp_dir):
+    inputs, _marker = _mint_inputs(tmp_dir)
+
+    def ok_run(*_args, **_kwargs):
+        return {"ok": True, "exitCode": 0, "stdout": b"", "reason": None}
+
+    monkeypatch.setattr(pcr.pilot_mint, "run_gate_off_test", ok_run)
+    monkeypatch.setattr(pcr, "_receipt_well_formed", lambda *_a, **_k: False)
+    record = pcr.mint_gate_off_exercise(inputs=inputs, now=EXERCISED_AT)
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pcr.REASON_GATE_OFF_UNVERIFIED

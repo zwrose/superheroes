@@ -1,4 +1,9 @@
-"""Conformance exercise for pilot_cleanup end-to-end containment (C10)."""
+"""Conformance exercise for pilot_cleanup end-to-end containment (C10).
+
+A successful cleanup leader can leave a destructive child running when the command
+exits cleanly after detaching a helper; see ``pilot_bounded_run`` for the declared
+limit on process-group signalling.
+"""
 import pilot_cleanup
 import pilot_conformance
 import pilot_contract
@@ -12,7 +17,6 @@ REASON_CONTAINMENT_NOT_RECEIPT = "conformance-cleanup-containment-not-receipt"
 REASON_CONTAINMENT_REFUSED = "conformance-cleanup-containment-refused"
 REASON_PLAN_NOT_RESURRECT = "conformance-cleanup-plan-not-resurrect"
 REASON_PLAN_REFUSED = "conformance-cleanup-plan-refused"
-REASON_PLAN_EXECUTED = "conformance-cleanup-plan-executed"
 
 EXERCISE_NAME = "cleanup-end-to-end"
 EVIDENCE_PASS = "5/5 steps held; plan produced, not executed"
@@ -41,26 +45,13 @@ _REQUIRED_CLEANUP_KEYS = (
     "mint_envelope",
 )
 
-_plan_execution_reached = False
-
-
-def _plan_execution_entry_point():
-    """Forbidden execution entry — conformance exercises produce plans only."""
-    global _plan_execution_reached
-    _plan_execution_reached = True
-
-
-def _reset_execution_guard():
-    global _plan_execution_reached
-    _plan_execution_reached = False
-
 
 def _token_reason(reason, fallback):
     if (
         isinstance(reason, str)
         and reason
         and not any(ch.isspace() for ch in reason)
-        and len(reason) <= 64
+        and len(reason) <= pilot_conformance.REASON_TOKEN_MAX_LEN
     ):
         return reason
     return fallback
@@ -137,7 +128,7 @@ def _residual_warnings(receipt):
         if not isinstance(state, str) or not state:
             continue
         warnings.append({
-            "namespace": namespace[:200],
+            "namespace": namespace[:pilot_conformance.WARNING_VALUE_MAX_LEN],
             "reason": _token_reason(state, "residual-sentinel"),
         })
     return warnings
@@ -156,8 +147,6 @@ def _effects_escape_record(pilot_block, exercised_at):
 
 @pilot_conformance.register("cleanup-end-to-end", surfaces=_SURFACES)
 def cleanup_end_to_end_exercise(*, inputs, now):
-    _reset_execution_guard()
-
     if not isinstance(inputs, dict):
         return _skipped_record(now)
 
@@ -189,131 +178,137 @@ def cleanup_end_to_end_exercise(*, inputs, now):
 
     warnings = _residual_warnings(receipt)
 
-    # bite-axis: containment — a non-pass receipt must not yield a pass record.
-    if receipt["result"] != pilot_cleanup.RESULT_PASS:
-        return _fail_record(
-            now,
-            receipt.get("reason"),
-            evidence="cleanup receipt did not pass",
-            warnings=warnings,
+    try:
+        # bite-axis: containment — a non-pass receipt must not yield a pass record.
+        if receipt["result"] != pilot_cleanup.RESULT_PASS:
+            return _fail_record(
+                now,
+                receipt.get("reason"),
+                evidence="cleanup receipt did not pass",
+                warnings=warnings,
+            )
+
+        registry_entry = pilot_cleanup.registry_record(receipt, pilot_block["cleanup"])
+        if (
+            registry_entry["kind"] != pilot_cleanup.KIND_CLEANUP_CONTAINMENT
+            or registry_entry["receipt"]["result"] != pilot_cleanup.RESULT_PASS
+        ):
+            return _fail_record(
+                now,
+                REASON_REGISTRY_INVALID,
+                evidence="registry record invalid for passing receipt",
+                warnings=warnings,
+            )
+
+        validation = pilot_cleanup.receipt_valid_for(
+            receipt,
+            policy,
+            pilot_block,
+            slot_ref,
+            cleanup_root=cleanup["cleanup_root"],
+            run_cwd=cleanup["run_cwd"],
+            observed_identity=cleanup["observed_identity"],
+            identity_provenance=cleanup["identity_provenance"],
+            identity_strength=cleanup["identity_strength"],
+        )
+        if not validation["ok"]:
+            return _fail_record(
+                now,
+                validation.get("reason"),
+                evidence="receipt binding check failed",
+                warnings=warnings,
+            )
+
+        containment = pilot_cleanup.resolve_containment(
+            policy,
+            pilot_block,
+            slot_ref,
+            receipt=receipt,
+            cleanup_root=cleanup["cleanup_root"],
+            run_cwd=cleanup["run_cwd"],
+            observed_identity=cleanup["observed_identity"],
+            identity_provenance=cleanup["identity_provenance"],
+            identity_strength=cleanup["identity_strength"],
+        )
+        mode = containment.get("mode")
+        if mode == pilot_cleanup.MODE_REFUSED:
+            return _fail_record(
+                now,
+                containment.get("reason"),
+                evidence="containment resolution refused",
+                warnings=warnings,
+            )
+        # bite-axis: receipt-path containment — every mode other than receipt fails.
+        if mode != pilot_cleanup.MODE_RECEIPT:
+            return _fail_record(
+                now,
+                REASON_CONTAINMENT_NOT_RECEIPT,
+                evidence="containment did not resolve through receipt path",
+                warnings=warnings,
+            )
+
+        registry = {
+            "schemaVersion": 1,
+            "records": [
+                _effects_escape_record(pilot_block, now),
+                registry_entry,
+            ],
+        }
+
+        plan = pilot_cleanup.resurrection_plan(
+            policy,
+            pilot_block,
+            slot_ref,
+            registry=registry,
+            journal_path=cleanup["journal_path"],
+            verdict=cleanup["verdict"],
+            account=cleanup["account"],
+            mint_envelope=cleanup["mint_envelope"],
+            now=now,
+            receipt=receipt,
+            cleanup_root=cleanup["cleanup_root"],
+            run_cwd=cleanup["run_cwd"],
+            observed_identity=cleanup["observed_identity"],
+            identity_provenance=cleanup["identity_provenance"],
+            identity_strength=cleanup["identity_strength"],
         )
 
-    registry_entry = pilot_cleanup.registry_record(receipt, pilot_block["cleanup"])
-    if (
-        registry_entry["kind"] != pilot_cleanup.KIND_CLEANUP_CONTAINMENT
-        or registry_entry["receipt"]["result"] != pilot_cleanup.RESULT_PASS
-    ):
-        return _fail_record(
-            now,
-            REASON_REGISTRY_INVALID,
-            evidence="registry record invalid for passing receipt",
+        action = plan.get("action")
+        if action in (pilot_cleanup.ACTION_PARK, pilot_cleanup.ACTION_REFUSE):
+            return _fail_record(
+                now,
+                plan.get("reason"),
+                evidence="resurrection plan refused or parked",
+                warnings=warnings,
+            )
+        if action != pilot_cleanup.ACTION_RESURRECT:
+            return _fail_record(
+                now,
+                REASON_PLAN_NOT_RESURRECT,
+                evidence="resurrection plan action was not resurrect",
+                warnings=warnings,
+            )
+
+        return pilot_conformance.exercise_record(
+            exercise=EXERCISE_NAME,
+            surfaces=list(_SURFACES),
+            result=pilot_conformance.RESULT_PASS,
+            reason=None,
+            evidence=EVIDENCE_PASS,
+            exercised_at=now,
             warnings=warnings,
         )
-
-    validation = pilot_cleanup.receipt_valid_for(
-        receipt,
-        policy,
-        pilot_block,
-        slot_ref,
-        cleanup_root=cleanup["cleanup_root"],
-        run_cwd=cleanup["run_cwd"],
-        observed_identity=cleanup["observed_identity"],
-        identity_provenance=cleanup["identity_provenance"],
-        identity_strength=cleanup["identity_strength"],
-    )
-    if not validation["ok"]:
+    except Exception as exc:
+        reason = getattr(exc, "reason", None)
+        if not (
+            isinstance(reason, str)
+            and reason
+            and not any(ch.isspace() for ch in reason)
+        ):
+            reason = pilot_conformance.REASON_EXERCISE_RAISED
         return _fail_record(
             now,
-            validation.get("reason"),
-            evidence="receipt binding check failed",
+            reason,
+            evidence="post-plant failure: %s" % type(exc).__name__,
             warnings=warnings,
         )
-
-    containment = pilot_cleanup.resolve_containment(
-        policy,
-        pilot_block,
-        slot_ref,
-        receipt=receipt,
-        cleanup_root=cleanup["cleanup_root"],
-        run_cwd=cleanup["run_cwd"],
-        observed_identity=cleanup["observed_identity"],
-        identity_provenance=cleanup["identity_provenance"],
-        identity_strength=cleanup["identity_strength"],
-    )
-    mode = containment.get("mode")
-    if mode == pilot_cleanup.MODE_REFUSED:
-        return _fail_record(
-            now,
-            containment.get("reason"),
-            evidence="containment resolution refused",
-            warnings=warnings,
-        )
-    # bite-axis: receipt-path containment — every mode other than receipt fails, including permissions and single-slot.
-    if mode != pilot_cleanup.MODE_RECEIPT:
-        return _fail_record(
-            now,
-            REASON_CONTAINMENT_NOT_RECEIPT,
-            evidence="containment did not resolve through receipt path",
-            warnings=warnings,
-        )
-
-    registry = {
-        "schemaVersion": 1,
-        "records": [
-            _effects_escape_record(pilot_block, now),
-            registry_entry,
-        ],
-    }
-
-    plan = pilot_cleanup.resurrection_plan(
-        policy,
-        pilot_block,
-        slot_ref,
-        registry=registry,
-        journal_path=cleanup["journal_path"],
-        verdict=cleanup["verdict"],
-        account=cleanup["account"],
-        mint_envelope=cleanup["mint_envelope"],
-        now=now,
-        receipt=receipt,
-        cleanup_root=cleanup["cleanup_root"],
-        run_cwd=cleanup["run_cwd"],
-        observed_identity=cleanup["observed_identity"],
-        identity_provenance=cleanup["identity_provenance"],
-        identity_strength=cleanup["identity_strength"],
-    )
-
-    action = plan.get("action")
-    if action in (pilot_cleanup.ACTION_PARK, pilot_cleanup.ACTION_REFUSE):
-        return _fail_record(
-            now,
-            plan.get("reason"),
-            evidence="resurrection plan refused or parked",
-            warnings=warnings,
-        )
-    if action != pilot_cleanup.ACTION_RESURRECT:
-        return _fail_record(
-            now,
-            REASON_PLAN_NOT_RESURRECT,
-            evidence="resurrection plan action was not resurrect",
-            warnings=warnings,
-        )
-
-    # bite-axis: plan execution — the exercise produces a plan and must not execute it.
-    if _plan_execution_reached:
-        return _fail_record(
-            now,
-            REASON_PLAN_EXECUTED,
-            evidence="plan execution entry point was reached",
-            warnings=warnings,
-        )
-
-    return pilot_conformance.exercise_record(
-        exercise=EXERCISE_NAME,
-        surfaces=list(_SURFACES),
-        result=pilot_conformance.RESULT_PASS,
-        reason=None,
-        evidence=EVIDENCE_PASS,
-        exercised_at=now,
-        warnings=warnings,
-    )

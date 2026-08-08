@@ -1,4 +1,8 @@
-"""Tests for pilot_conformance_cleanup.py — cleanup end-to-end conformance exercise."""
+"""Tests for pilot_conformance_cleanup.py — cleanup end-to-end conformance exercise.
+
+Canonical cleanup harness construction for conformance tests lives in this module;
+test_pilot_cleanup_integration.py duplicates a similar layout for integration tests.
+"""
 import os
 import subprocess
 import sys
@@ -369,19 +373,46 @@ def test_cleanup_end_to_end_skipped_malformed_cleanup(private_tmp):
 
 # --- plan produced, not executed -----------------------------------------------
 
-def test_plan_produced_not_executed(private_tmp):
-    pcc._reset_execution_guard()
-    record = _run_exercise(private_tmp, _cleanup_correct_script())
-    assert record["result"] == pilot_conformance.RESULT_PASS
-    assert pcc._plan_execution_reached is False
+def test_plan_not_executed_structural_guard():
+    """bite-axis: plan execution — module must not dispatch resurrection plans."""
+    module_path = os.path.join(_LIB, "pilot_conformance_cleanup.py")
+    with open(module_path, encoding="utf-8") as handle:
+        source = handle.read()
+    forbidden = (
+        "subprocess",
+        "os.system",
+        "os.exec",
+        "os.spawn",
+        "execute_plan",
+        "run_bounded",
+    )
+    for name in forbidden:
+        assert name not in source
+    assert "resurrection_plan(" in source
+    assert "plan.get(" in source
 
 
-def test_execution_guard_detects_entry_point():
-    pcc._reset_execution_guard()
-    pcc._plan_execution_entry_point()
-    assert pcc._plan_execution_reached is True
-    pcc._reset_execution_guard()
-    assert pcc._plan_execution_reached is False
+def test_post_plant_exception_returns_fail_with_residual_warnings(private_tmp, monkeypatch):
+    cleanup = _build_cleanup_inputs(private_tmp, _cleanup_correct_script())
+    pass_record = pcc.cleanup_end_to_end_exercise(
+        inputs={"cleanup": cleanup},
+        now=_NOW,
+    )
+    assert pass_record["result"] == pilot_conformance.RESULT_PASS
+    assert pass_record["warnings"]
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("simulated post-plant failure")
+
+    monkeypatch.setattr(pcc.pilot_cleanup, "registry_record", boom)
+    fail_record = pcc.cleanup_end_to_end_exercise(
+        inputs={"cleanup": cleanup},
+        now=_NOW,
+    )
+    assert fail_record["result"] == pilot_conformance.RESULT_FAIL
+    assert fail_record["reason"] == pilot_conformance.REASON_EXERCISE_RAISED
+    assert fail_record["warnings"]
+    assert "post-plant failure" in fail_record["evidence"]
 
 
 # --- registration --------------------------------------------------------------
