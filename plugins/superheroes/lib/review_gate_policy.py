@@ -12,7 +12,7 @@ import json
 import os
 
 import panel_tally
-import round_driver
+import round_phases
 
 GATE_POLICY_SCHEMA = "gate-policy/1"
 GATE_PRESENT_JUDGMENT = "present-judgment"
@@ -20,8 +20,8 @@ GATE_PRESENT_STALL_MENU = "present-stall-menu"
 PARK = "park"
 
 GATES = (GATE_PRESENT_JUDGMENT, GATE_PRESENT_STALL_MENU)
-JUDGMENT_DISPOSITIONS = round_driver.JUDGMENT_DISPOSITIONS
-STALL_CHOICES = round_driver.STALL_CHOICES
+JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
+STALL_CHOICES = round_phases.STALL_CHOICES
 
 STALL_CLASS_ELIGIBLE = "stall:accept-risk-eligible"
 STALL_CLASS_INELIGIBLE = "stall:accept-risk-ineligible"
@@ -38,28 +38,14 @@ def gate_policy_path(root: str | None = None) -> str:
     return os.path.normpath(os.path.join(root, "rubric", "review-gate-policy.json"))
 
 
-def judgment_classifications() -> tuple[str, ...]:
-    """Classification literals on present-judgment payload rows.
-
-    Derived from ``panel_tally.compile_findings`` for tradeoff findings — the only rows
-    ``round_driver`` routes to ``present-judgment``."""
-    sample = [{"file": "x", "line": 1, "title": "t", "severity": "Minor", "tradeoff": True}]
-    compiled = panel_tally.compile_findings(sample)
-    return tuple(sorted({f["classification"] for f in compiled}))
-
-
 def judgment_severities() -> tuple[str, ...]:
     """Lower-cased severity vocabulary from ``panel_tally.SEV_RANK``."""
     return tuple(sev.lower() for sev in panel_tally.SEV_RANK)
 
 
 def judgment_finding_classes() -> frozenset[str]:
-    """Closed enum: ``judgment:<classification>:<severity>`` cross-product."""
-    return frozenset(
-        "judgment:%s:%s" % (cls, sev)
-        for cls in judgment_classifications()
-        for sev in judgment_severities()
-    )
+    """Closed enum: ``judgment:<severity>`` over the severity vocabulary."""
+    return frozenset("judgment:%s" % sev for sev in judgment_severities())
 
 
 def stall_finding_classes() -> frozenset[str]:

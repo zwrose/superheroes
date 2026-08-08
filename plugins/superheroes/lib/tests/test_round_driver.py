@@ -3342,6 +3342,18 @@ _TRADEOFF = {"title": "widen the API", "severity": "Important",
 _TRADEOFF_ID = "f.py::widen the api@L1"
 
 
+def test_judgment_payload_rows_carry_single_classification_literal():
+    """Every present-judgment row must use the one classification literal the gate-policy enum assumes."""
+    state = RD.new_state(_cfg())
+    finding_b = {"title": "narrow the API", "severity": "Minor",
+                 "file": "g.py", "line": 2, "tradeoff": True}
+    state["_judgmentFindings"] = [dict(_TRADEOFF), finding_b]
+    state["step"] = RD.P_JUDGMENT
+    step = RD._advance(state, state["config"])
+    classifications = {row["classification"] for row in step["payload"]["findings"]}
+    assert classifications == {"judgment"}
+
+
 def test_tradeoff_blocker_routes_to_judgment_not_stall():
     """A tradeoff/product-choice blocker routes to the present-judgment gate — NEVER the terminal
     stall menu (the R2a defect: the stall menu dead-ended it so it could never be fixed)."""

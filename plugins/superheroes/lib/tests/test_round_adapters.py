@@ -1073,3 +1073,21 @@ def test_payload_contract_every_checker_phase_has_data():
         assert isinstance(contract.get("required"), list)
         assert isinstance(contract.get("optional"), list)
         assert isinstance(contract.get("enums"), dict)
+
+
+def test_payload_contract_deep_copy_isolates_nested_mutation():
+    phase = RD.P_AUDITS
+    contract1, reason = RA.payload_contract(phase)
+    assert reason is None
+    contract1["required"].append("__mutated__")
+    contract1["optional"].append("__mutated__")
+    for values in contract1["enums"].values():
+        values.append("__mutated__")
+    contract1["conditional"]["__mutated__"] = True
+    contract2, reason2 = RA.payload_contract(phase)
+    assert reason2 is None
+    assert "__mutated__" not in contract2["required"]
+    assert "__mutated__" not in contract2["optional"]
+    for values in contract2["enums"].values():
+        assert "__mutated__" not in values
+    assert "__mutated__" not in contract2["conditional"]

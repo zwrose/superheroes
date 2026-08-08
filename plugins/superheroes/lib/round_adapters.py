@@ -36,6 +36,7 @@ disclosed in `provenance`.
 
 stdlib only; runs on Python 3.9 and 3.12 (no `match`, no PEP-604 runtime annotations).
 """
+import copy
 import os
 import sys
 
@@ -502,7 +503,7 @@ def payload_contract(phase):
         return {}, "unknown-phase:%s" % _label(phase)
     if phase not in _PAYLOAD_CHECKERS:
         return {}, "no-payload-checker:%s" % _label(phase)
-    return dict(_PAYLOAD_CONTRACTS[phase]), None
+    return copy.deepcopy(_PAYLOAD_CONTRACTS[phase]), None
 
 
 def payload_fault(phase, payload, seat_key, record_boundary=False):

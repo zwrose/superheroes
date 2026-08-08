@@ -1,8 +1,10 @@
+import ast
 import hashlib
 import importlib.util
 import json
 import os
 
+import panel_tally
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -49,13 +51,37 @@ def _stall_rule(finding_class, disposition):
     }
 
 
+def test_review_gate_policy_never_imports_round_driver():
+    """AST guard: no import of round_driver anywhere in the module tree (including lazy imports)."""
+    with open(_MOD, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_MOD)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert alias.name != "round_driver"
+        elif isinstance(node, ast.ImportFrom):
+            assert node.module != "round_driver"
+
+
 def test_judgment_finding_class_census_matches_source_vocabularies():
-    expected = {
-        "judgment:%s:%s" % (cls, sev)
-        for cls in RGP.judgment_classifications()
-        for sev in RGP.judgment_severities()
-    }
+    expected = {"judgment:%s" % sev.lower() for sev in panel_tally.SEV_RANK}
     assert set(RGP.judgment_finding_classes()) == expected
+
+
+def test_fail_closed_unknown_judgment_class_id():
+    """Well-formed class id outside the closed enum must park."""
+    result = RGP.resolve_judgment([{"findingClass": "judgment:unknown-severity", "id": "a"}])
+    assert result["action"] == RGP.PARK
+    assert result["reason"] == "gate-policy-unmatched-class:judgment:unknown-severity"
+
+
+def test_fail_closed_severity_without_rule_parks():
+    """Every SEV_RANK severity with shipped empty rules parks when no layer matches."""
+    for sev in panel_tally.SEV_RANK:
+        finding_class = "judgment:%s" % sev.lower()
+        result = RGP.resolve_judgment([{"findingClass": finding_class, "id": "x"}])
+        assert result["action"] == RGP.PARK
+        assert result["reason"] == "gate-policy-unmatched-class:%s" % finding_class
 
 
 def test_overlay_precedes_shipped():
