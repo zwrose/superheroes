@@ -240,6 +240,8 @@ def test_handle_stall_selects_only_alias_matching_target():
     state = RD.new_state(_cfg())
     state["_auditTargets"] = [stalled_target, other]
     state["fixBatch"] = [dict(stalled_target), dict(other)]
+    state["_auditOutcome"] = {"notDischarged": [stalled_target["id"], other["id"]],
+                              "discharged": []}
     breaker = {"reason": "audit-stall", "detail": "x",
                "stalledIdentities": [class_key]}
     RD._handle_stall(state, state["config"], breaker)
@@ -259,6 +261,7 @@ def test_stalled_critical_uses_alias_not_line_less_identity():
     state = RD.new_state(_cfg())
     state["_auditTargets"] = [target]
     state["fixBatch"] = [dict(target)]
+    state["_auditOutcome"] = {"notDischarged": [target["id"]], "discharged": []}
     breaker = {"stalledIdentities": [class_key]}
     crit = RD._stalled_critical(state, state["config"], breaker)
     assert crit == [target]
@@ -420,8 +423,20 @@ def test_audit_target_aliases_matches_outcome_aliases():
 
 
 def test_stalled_critical_legacy_raw_finding_matches_line_less_identity():
-    # axis: legacy session without _auditOutcome must detect stalled Critical via derived alias
+    # axis: legacy leg, plain raw finding → selected by line-less identity
     raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical"}
+    ident = FI.finding_identity(raw)
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = [dict(raw)]
+    breaker = {"stalledIdentities": [ident]}
+    crit = RD._stalled_critical(state, state["config"], breaker)
+    assert crit == [raw]
+
+
+def test_stalled_critical_legacy_classed_finding_matches_line_less_identity():
+    # axis: legacy leg, classed raw finding → selected by line-less identity
+    raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical",
+           "classKey": "code::bug"}
     ident = FI.finding_identity(raw)
     state = RD.new_state(_cfg())
     state["fixBatch"] = [dict(raw)]
