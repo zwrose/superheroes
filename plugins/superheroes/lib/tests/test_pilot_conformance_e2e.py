@@ -85,11 +85,15 @@ def _assert_now_past_quarantine_grace(now):
 
 
 def _assert_gate_off_command_executable(envelope):
+    import shutil
+
     command = envelope.get("gateOffTestCommand")
     assert isinstance(command, list) and command
     first = command[0]
-    if isinstance(first, str) and os.path.sep in first or first.startswith("."):
+    if isinstance(first, str) and (os.path.sep in first or first.startswith(".")):
         assert os.path.isfile(first) and os.access(first, os.X_OK)
+    else:
+        assert shutil.which(first) is not None
 
 
 def _assert_path_under_tmp(path, tmp_root):

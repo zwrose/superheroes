@@ -338,7 +338,7 @@ def test_register_happy_path():
 
     assert my_fn.conformance_exercise == "my-exercise"
     assert my_fn.conformance_surfaces == (SAMPLE_SURFACE,)
-    assert my_fn is my_fn
+    assert callable(my_fn)
 
 
 def test_register_bad_name_at_import():
@@ -433,6 +433,89 @@ def test_run_invalid_return_normalized_to_fail():
     assert record["result"] == pc.RESULT_FAIL
     assert record["reason"] == pc.REASON_RECORD_INVALID
     assert record["evidence"] == "exercise returned an invalid record"
+
+
+def test_run_mismatched_exercise_name_normalized_to_fail():
+    @pc.register("registered-name", surfaces=[SAMPLE_SURFACE])
+    def lying_fn(inputs, now):
+        return _pass_record(exercise="other-name", exercised_at=now)
+
+    result = pc.run([lying_fn], inputs={}, now=EXERCISED_AT)
+    record = result["exercises"][0]
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pc.REASON_RECORD_UNREGISTERED
+
+
+def test_run_unregistered_surface_normalized_to_fail():
+    @pc.register("surface-liar", surfaces=[SAMPLE_SURFACE])
+    def lying_fn(inputs, now):
+        return _pass_record(
+            exercise="surface-liar",
+            surfaces=[SAMPLE_SURFACE, "pilot_wave.wave_anchor"],
+            exercised_at=now,
+        )
+
+    result = pc.run([lying_fn], inputs={}, now=EXERCISED_AT)
+    record = result["exercises"][0]
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pc.REASON_RECORD_UNREGISTERED
+
+
+def test_resolve_inputs_no_artifacts_dir_token(tmp_path, monkeypatch):
+    import json
+
+    from test_pilot_conformance_cleanup import (
+        _cleanup_correct_script,
+        _harness_layout,
+        _three_slot_policy,
+        _write_cleanup_script,
+        _write_scripts,
+    )
+
+    monkeypatch.setattr("store_core.run_git", lambda *_args, **_kwargs: "main")
+    _write_calibration_layer(tmp_path)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    reach_root, _run_cwd, bin_dir, store_dir, cleanup_repo, _journal = _harness_layout(
+        str(tmp_path)
+    )
+    plant, probe = _write_scripts(bin_dir)
+    _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    with open(
+        policy_root / "example-project-pilot-policy.json",
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(policy, handle)
+
+    def resolve_without_artifacts(cwd, root):
+        return {
+            "exists": True,
+            "profile": str(tmp_path / ".claude" / "superheroes" / "test-pilot.md"),
+        }
+
+    monkeypatch.setattr("store.resolve", resolve_without_artifacts)
+
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        policy_root=str(policy_root),
+        reach_roots=[reach_root],
+        slot_ref="slot-a@1",
+        branch="main",
+        slot="slot-a",
+        now=EXERCISED_AT,
+    )
+    assert "artifacts" not in inputs
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["artifacts"]["reason"] == pc.REASON_INPUT_NO_ARTIFACTS_DIR
+
+
+def test_resolve_inputs_mint_environment_includes_path(tmp_path):
+    _write_calibration_layer(tmp_path, include_mint=True)
+    inputs, _resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
+    assert "PATH" in inputs["mint"]["environment"]
+    assert inputs["mint"]["environment"]["PATH"]
 
 
 def test_run_pilot_conformance_error_caught_and_normalized():
@@ -591,11 +674,10 @@ def test_edge10_unreachable_reach_root_cleanup_absent(tmp_path):
     policy_root.mkdir()
     slots_dir = tmp_path / "slots"
     slots_dir.mkdir()
-    missing_reach = str(tmp_path / "no-such-reach")
     inputs, resolution = pc.resolve_inputs(
         str(tmp_path),
         policy_root=str(policy_root),
-        reach_roots=[missing_reach],
+        reach_roots=[str(tmp_path)],
         slots_dir=str(slots_dir),
         slot_ref="slot-a@1",
         now=EXERCISED_AT,
@@ -603,7 +685,7 @@ def test_edge10_unreachable_reach_root_cleanup_absent(tmp_path):
     assert "cleanup" not in inputs
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["cleanup"]["state"] == "absent"
-    assert by_input["cleanup"]["reason"] is not None
+    assert by_input["cleanup"]["reason"] == "policy-root-in-reach"
 
 
 # --- CLI ----------------------------------------------------------------------

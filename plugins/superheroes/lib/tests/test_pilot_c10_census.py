@@ -150,6 +150,46 @@ def test_required_surfaces_match_inventory_table():
     )
 
 
+def _surface_exercise_map_from_registrations():
+    mapping = {}
+    for fn in pc.default_exercises():
+        exercise_name = fn.conformance_exercise
+        for surface in fn.conformance_surfaces:
+            mapping[surface] = exercise_name
+    return mapping
+
+
+def test_surface_exercise_table_matches_registrations():
+    """bite-axis: doc surface table — must agree bidirectionally with default_exercises()."""
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_CONFORMANCE)
+    assert section is not None
+    rows = _parse_markdown_table(section, _SURFACE_HEADER)
+    assert rows is not None
+    doc_map = {row[0].strip("`"): row[1].strip("`") for row in rows}
+    code_map = _surface_exercise_map_from_registrations()
+    missing_from_doc = set(code_map) - set(doc_map)
+    extra_in_doc = set(doc_map) - set(code_map)
+    mismatched = {
+        surface for surface in code_map
+        if surface in doc_map and doc_map[surface] != code_map[surface]
+    }
+    assert (
+        missing_from_doc == set()
+        and extra_in_doc == set()
+        and mismatched == set()
+    ), (
+        "pilot-contract.md surface→exercise mismatch — missing from doc: %s; "
+        "extra in doc: %s; value mismatch: %s (file: %s)"
+        % (
+            ", ".join(sorted(missing_from_doc)) or "(none)",
+            ", ".join(sorted(extra_in_doc)) or "(none)",
+            ", ".join(sorted(mismatched)) or "(none)",
+            _PILOT_CONTRACT,
+        )
+    )
+
+
 def test_artifact_class_table_matches_module():
     doc = _load_contract()
     section = _extract_section(doc, _SECTION_ARTIFACT)

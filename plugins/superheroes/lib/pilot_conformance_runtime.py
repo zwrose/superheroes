@@ -4,15 +4,21 @@ Drives in-repo pilot surfaces without live apps, browsers, or network so a
 conformance report can cite exercise receipts instead of intentions.
 """
 import os
+import shutil
+import stat
 import sys
+import tempfile
+import zipfile
 
 import pilot_appctl
+import pilot_artifacts
 import pilot_conformance
 import pilot_contract
 import pilot_journal
 import pilot_mint
 import pilot_reclaim
 import pilot_wave
+import store
 
 REASON_INPUTS_MISSING = "conformance-runtime-inputs-missing"
 REASON_INPUTS_MALFORMED = "conformance-runtime-inputs-malformed"
@@ -38,18 +44,16 @@ _MINT_SURFACES = [
 
 _RECLAIM_SURFACES = ["pilot_reclaim.sweep"]
 
+_ARTIFACT_SURFACES = ["pilot_artifacts.retain", "pilot_artifacts.sweep"]
+
 _WAVE_LAUNCHED_AT = "2026-08-02T12:00:00Z"
 _WAVE_DEADLINE_SECONDS = 10
 _WAVE_MARGIN_SECONDS = 5
 _WAVE_STEP_OBSERVED_AT = "2026-08-02T12:01:00Z"
 
 _QUARANTINE_AT = "2026-08-02T12:00:00Z"
-_SWEEP_AT = "2026-08-05T16:00:00Z"
 _QUARANTINE_REASON = "stale-occupant"
 _DEFAULT_SLOT_REF = "slot-a@1"
-
-_EVIDENCE_MAX_LEN = 500
-_WARNING_VALUE_MAX_LEN = 200
 
 
 def _has_control_char(value):
@@ -60,8 +64,8 @@ def _normalize_evidence(text):
     if not isinstance(text, str):
         text = str(text)
     cleaned = "".join(ch for ch in text if ord(ch) >= 32)
-    if len(cleaned) > _EVIDENCE_MAX_LEN:
-        return cleaned[:_EVIDENCE_MAX_LEN]
+    if len(cleaned) > pilot_conformance.EVIDENCE_MAX_LEN:
+        return cleaned[:pilot_conformance.EVIDENCE_MAX_LEN]
     return cleaned
 
 
@@ -69,8 +73,8 @@ def _truncate_warning_value(value):
     if not isinstance(value, str):
         value = str(value)
     cleaned = "".join(ch for ch in value if ord(ch) >= 32)
-    if len(cleaned) > _WARNING_VALUE_MAX_LEN:
-        return cleaned[:_WARNING_VALUE_MAX_LEN]
+    if len(cleaned) > pilot_conformance.WARNING_VALUE_MAX_LEN:
+        return cleaned[:pilot_conformance.WARNING_VALUE_MAX_LEN]
     return cleaned
 
 
@@ -123,6 +127,10 @@ def _exercise_key(inputs, key):
 
 def _valid_slots_dir(path):
     return isinstance(path, str) and bool(path) and os.path.isdir(path)
+
+
+def _writable_slots_dir(path):
+    return _valid_slots_dir(path) and os.access(path, os.W_OK)
 
 
 def _wave_receipt(step, slot_ref):
@@ -284,6 +292,11 @@ def _seed_payload_dir(slots_dir):
     return path
 
 
+def _remove_work_dir(work_dir):
+    if work_dir and os.path.isdir(work_dir):
+        shutil.rmtree(work_dir, ignore_errors=True)
+
+
 def _fold_warned(warned):
     folded = []
     for entry in warned:
@@ -403,90 +416,275 @@ def reclaim_sweep_exercise(*, inputs, now):
         )
 
     slots_dir = reclaim_inputs.get("slots_dir")
-    if not _valid_slots_dir(slots_dir):
+    if not _writable_slots_dir(slots_dir):
         return _skipped(
             "reclaim-sweep",
             _RECLAIM_SURFACES,
             REASON_SLOTS_DIR_INVALID,
-            "reclaim slots_dir missing or not a directory",
+            "reclaim slots_dir missing, not a directory, or not writable",
             now,
         )
 
-    source_path = _seed_payload_dir(slots_dir)
-    slot_ref = reclaim_inputs.get("slot_ref", _DEFAULT_SLOT_REF)
-    if not isinstance(slot_ref, str) or not slot_ref:
-        slot_ref = _DEFAULT_SLOT_REF
+    # bite-axis: containment — exercise work stays in a disposable subtree of slots_dir.
+    work_dir = None
+    try:
+        work_dir = tempfile.mkdtemp(dir=slots_dir, prefix="conformance-reclaim-")
+        source_path = _seed_payload_dir(slots_dir)
+        slot_ref = reclaim_inputs.get("slot_ref", _DEFAULT_SLOT_REF)
+        if not isinstance(slot_ref, str) or not slot_ref:
+            slot_ref = _DEFAULT_SLOT_REF
 
-    quarantine = pilot_reclaim.quarantine_entry(
-        slots_dir,
-        source_path,
-        slot_ref=slot_ref,
-        reason=_QUARANTINE_REASON,
-        occupant=_occupant(),
-        now=_QUARANTINE_AT,
-    )
-    if not quarantine["ok"]:
-        return _failed(
+        quarantine = pilot_reclaim.quarantine_entry(
+            work_dir,
+            source_path,
+            slot_ref=slot_ref,
+            reason=_QUARANTINE_REASON,
+            occupant=_occupant(),
+            now=_QUARANTINE_AT,
+        )
+        if not quarantine["ok"]:
+            return _failed(
+                "reclaim-sweep",
+                _RECLAIM_SURFACES,
+                quarantine["reason"],
+                "reclaim quarantine seed failed",
+                now,
+            )
+
+        sweep = pilot_reclaim.sweep(work_dir, now=now)
+        if not sweep["ok"]:
+            return _failed(
+                "reclaim-sweep",
+                _RECLAIM_SURFACES,
+                sweep["reason"],
+                "reclaim sweep refused",
+                now,
+            )
+
+        entry_name = quarantine["entryName"]
+        warned = sweep.get("warned") or []
+        retained = sweep.get("retained") or []
+
+        # bite-axis: sweep fold honesty — past-grace quarantine must warn; empty warned is a fail.
+        if not warned:
+            return _failed(
+                "reclaim-sweep",
+                _RECLAIM_SURFACES,
+                REASON_SWEEP_WARNINGS_EMPTY,
+                "reclaim sweep produced no warnings for seeded past-grace entry",
+                now,
+            )
+
+        warned_names = {entry.get("entryName") for entry in warned}
+        if entry_name not in warned_names:
+            return _failed(
+                "reclaim-sweep",
+                _RECLAIM_SURFACES,
+                REASON_EXPECTATION_UNMET,
+                "seeded quarantine entry missing from sweep warnings",
+                now,
+            )
+
+        retained_names = {entry.get("entryName") for entry in retained}
+        if entry_name not in retained_names:
+            return _failed(
+                "reclaim-sweep",
+                _RECLAIM_SURFACES,
+                REASON_EXPECTATION_UNMET,
+                "seeded quarantine entry not retained by sweep",
+                now,
+            )
+
+        warnings = _fold_warned(warned)
+
+        return _passed(
             "reclaim-sweep",
             _RECLAIM_SURFACES,
-            quarantine["reason"],
-            "reclaim quarantine seed failed",
+            "reclaim sweep warned on past-grace quarantine and warnings folded",
+            now,
+            warnings=warnings,
+        )
+    finally:
+        _remove_work_dir(work_dir)
+
+
+@pilot_conformance.register("artifact-store", surfaces=_ARTIFACT_SURFACES)
+def artifact_store_exercise(*, inputs, now):
+    """Exercise retain + sweep inside a disposable artifact subtree."""
+    pa = pilot_artifacts
+    if not isinstance(inputs, dict):
+        return _skipped(
+            "artifact-store",
+            _ARTIFACT_SURFACES,
+            pa.REASON_MATERIAL_INVALID,
+            "inputs missing or malformed",
             now,
         )
 
-    sweep = pilot_reclaim.sweep(slots_dir, now=now)
-    if not sweep["ok"]:
+    artifacts = inputs.get("artifacts")
+    if not isinstance(artifacts, dict):
+        return _skipped(
+            "artifact-store",
+            _ARTIFACT_SURFACES,
+            pa.REASON_MATERIAL_INVALID,
+            "artifacts input missing or malformed",
+            now,
+        )
+
+    artifacts_dir = artifacts.get("artifacts_dir")
+    branch = artifacts.get("branch")
+    slot = artifacts.get("slot")
+    material = artifacts.get("material")
+    if (
+        not isinstance(artifacts_dir, str)
+        or not isinstance(branch, str)
+        or not isinstance(slot, str)
+        or not isinstance(material, (list, tuple))
+        or not material
+    ):
+        return _skipped(
+            "artifact-store",
+            _ARTIFACT_SURFACES,
+            pa.REASON_MATERIAL_INVALID,
+            "artifacts fields missing or malformed",
+            now,
+        )
+
+    work_dir = None
+    try:
+        work_dir = tempfile.mkdtemp(prefix="conformance-artifacts-")
+        held = 0
+        first_fail = None
+
+        clean = pa.retain(
+            work_dir,
+            branch=branch,
+            slot=slot,
+            artifact_class=pa.CLASS_STEP_LOG,
+            payload_text="step ok",
+            material=material,
+            now=now,
+        )
+        if clean.get("ok"):
+            payload_path = clean["path"]
+            sidecar_path = clean["sidecar"]
+            if (
+                os.path.isfile(payload_path)
+                and os.path.isfile(sidecar_path)
+                and stat.S_IMODE(os.stat(payload_path).st_mode) == pa._FILE_MODE
+                and stat.S_IMODE(os.stat(sidecar_path).st_mode) == pa._FILE_MODE
+            ):
+                held += 1
+            else:
+                first_fail = first_fail or pa.REASON_WRITE_FAILED
+        else:
+            first_fail = first_fail or clean.get("reason")
+
+        dirty_before = 0
+        class_dir = os.path.join(
+            work_dir, store.artifact_key(branch, slot), pa.CLASS_STEP_LOG
+        )
+        if os.path.isdir(class_dir):
+            dirty_before = sum(
+                1 for name in os.listdir(class_dir)
+                if not name.endswith(pa.SIDECAR_SUFFIX)
+                and os.path.isfile(os.path.join(class_dir, name))
+            )
+        dirty = pa.retain(
+            work_dir,
+            branch=branch,
+            slot=slot,
+            artifact_class=pa.CLASS_STEP_LOG,
+            payload_text="failed connecting to %s" % material[0],
+            material=material,
+            now=now,
+        )
+        dirty_after = 0
+        if os.path.isdir(class_dir):
+            dirty_after = sum(
+                1 for name in os.listdir(class_dir)
+                if not name.endswith(pa.SIDECAR_SUFFIX)
+                and os.path.isfile(os.path.join(class_dir, name))
+            )
+        if (
+            not dirty.get("ok")
+            and dirty.get("reason") == pa.REASON_REDACTION_UNESTABLISHED
+            and dirty_after == dirty_before
+        ):
+            held += 1
+        else:
+            first_fail = first_fail or dirty.get("reason") or pa.REASON_REDACTION_UNESTABLISHED
+
+        trace_fd, trace_zip = tempfile.mkstemp(suffix=".zip")
+        os.close(trace_fd)
+        try:
+            with zipfile.ZipFile(trace_zip, "w") as zf:
+                zf.writestr("log.txt", "trace line")
+            trace_refused = pa.retain(
+                work_dir,
+                branch=branch,
+                slot=slot,
+                artifact_class=pa.CLASS_TRACE,
+                payload_path=trace_zip,
+                material=material,
+                now=now,
+                opted_in=False,
+            )
+        finally:
+            try:
+                os.unlink(trace_zip)
+            except OSError:
+                pass
+        if not trace_refused.get("ok") and trace_refused.get("reason") == pa.REASON_CLASS_NOT_OPTED_IN:
+            held += 1
+        else:
+            first_fail = first_fail or trace_refused.get("reason") or pa.REASON_CLASS_NOT_OPTED_IN
+
+        short_now = now
+        short = pa.retain(
+            work_dir,
+            branch=branch,
+            slot=slot,
+            artifact_class=pa.CLASS_STEP_LOG,
+            payload_text="expires soon",
+            material=material,
+            now=short_now,
+            retention_hours=1,
+        )
+        if short.get("ok"):
+            later = pa._add_hours_iso8601(short_now, 2)
+            sweep_out = pa.sweep(work_dir, now=later)
+            removed = sweep_out.get("removed", [])
+            expired = [
+                entry for entry in removed
+                if entry.get("reason") == pa.REASON_RETENTION_EXPIRED
+                and entry.get("artifactId") == short.get("artifactId")
+            ]
+            if expired:
+                held += 1
+            else:
+                first_fail = first_fail or pa.REASON_RETENTION_EXPIRED
+        else:
+            first_fail = first_fail or short.get("reason")
+
+        if held == 4:
+            return _passed(
+                "artifact-store",
+                _ARTIFACT_SURFACES,
+                "4/4 expectations held",
+                now,
+            )
+
         return _failed(
-            "reclaim-sweep",
-            _RECLAIM_SURFACES,
-            sweep["reason"],
-            "reclaim sweep refused",
+            "artifact-store",
+            _ARTIFACT_SURFACES,
+            first_fail or pa.REASON_WRITE_FAILED,
+            "%d/4 expectations held" % held,
             now,
         )
-
-    entry_name = quarantine["entryName"]
-    warned = sweep.get("warned") or []
-    retained = sweep.get("retained") or []
-
-    # bite-axis: sweep fold honesty — past-grace quarantine must warn; empty warned is a fail.
-    if not warned:
-        return _failed(
-            "reclaim-sweep",
-            _RECLAIM_SURFACES,
-            REASON_SWEEP_WARNINGS_EMPTY,
-            "reclaim sweep produced no warnings for seeded past-grace entry",
-            now,
-        )
-
-    warned_names = {entry.get("entryName") for entry in warned}
-    if entry_name not in warned_names:
-        return _failed(
-            "reclaim-sweep",
-            _RECLAIM_SURFACES,
-            REASON_EXPECTATION_UNMET,
-            "seeded quarantine entry missing from sweep warnings",
-            now,
-        )
-
-    retained_names = {entry.get("entryName") for entry in retained}
-    if entry_name not in retained_names:
-        return _failed(
-            "reclaim-sweep",
-            _RECLAIM_SURFACES,
-            REASON_EXPECTATION_UNMET,
-            "seeded quarantine entry not retained by sweep",
-            now,
-        )
-
-    warnings = _fold_warned(warned)
-
-    return _passed(
-        "reclaim-sweep",
-        _RECLAIM_SURFACES,
-        "reclaim sweep warned on past-grace quarantine and warnings folded",
-        now,
-        warnings=warnings,
-    )
+    finally:
+        if work_dir and os.path.isdir(work_dir):
+            shutil.rmtree(work_dir, ignore_errors=True)
 
 
 @pilot_conformance.register("mint-gate-off", surfaces=_MINT_SURFACES)

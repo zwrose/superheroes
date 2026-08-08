@@ -3055,6 +3055,7 @@ substituted default would convert "could not exercise" into "passed".
 | Token | When returned |
 |---|---|
 | `conformance-record-invalid` | record dict has wrong keys, schema version, or fails re-validation |
+| `conformance-record-unregistered` | exercise record names a different exercise or surfaces outside its registration |
 | `conformance-result-invalid` | `result` is not one of the four allowed strings |
 | `conformance-exercise-name-invalid` | exercise name fails the name grammar |
 | `conformance-exercise-name-duplicate` | two records share the same exercise name in one report |
@@ -3072,6 +3073,7 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
 | `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
 | `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
+| `conformance-input-no-artifacts-dir` | artifacts input: artifacts directory could not be resolved |
 | `conformance-input-no-calibration` | pilot block input: calibration config could not be loaded for cwd |
 | `conformance-input-no-material` | artifacts input: policy material list is empty after resolution |
 | `conformance-input-no-mint` | mint input: pilot block has no usable mint envelope or enabling env var |
@@ -3097,4 +3099,3 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cleanup-containment-refused` | containment resolution refused |
 | `conformance-cleanup-plan-not-resurrect` | resurrection plan action was not `resurrect` |
 | `conformance-cleanup-plan-refused` | resurrection plan parked or refused |
-| `conformance-cleanup-plan-executed` | resurrection plan execution entry point was reached |

@@ -13,6 +13,7 @@ import json
 import os
 import re
 import sys
+from datetime import timezone
 
 import store
 
@@ -45,6 +46,7 @@ REQUIRED_SURFACES = (
 )
 
 REASON_RECORD_INVALID = "conformance-record-invalid"
+REASON_RECORD_UNREGISTERED = "conformance-record-unregistered"
 REASON_RESULT_INVALID = "conformance-result-invalid"
 REASON_EXERCISE_NAME_INVALID = "conformance-exercise-name-invalid"
 REASON_EXERCISE_NAME_DUPLICATE = "conformance-exercise-name-duplicate"
@@ -68,6 +70,7 @@ REASON_INPUT_NO_SLOT_REF = "conformance-input-no-slot-ref"
 REASON_INPUT_NO_SLOT = "conformance-input-no-slot"
 REASON_INPUT_BRANCH_UNRESOLVED = "conformance-input-branch-unresolved"
 REASON_INPUT_NO_MATERIAL = "conformance-input-no-material"
+REASON_INPUT_NO_ARTIFACTS_DIR = "conformance-input-no-artifacts-dir"
 REASON_INPUT_POLICY_UNRESOLVED = "conformance-input-policy-unresolved"
 REASON_INPUT_NO_MINT = "conformance-input-no-mint"
 REASON_INPUT_CLEANUP_INCOMPLETE = "conformance-input-cleanup-incomplete"
@@ -76,9 +79,9 @@ REASON_CLI_CWD_INVALID = "conformance-cli-cwd-invalid"
 REASON_CLI_NOW_INVALID = "conformance-cli-now-invalid"
 
 _EXERCISE_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,63}\Z")
-_EVIDENCE_MAX_LEN = 500
-_WARNING_VALUE_MAX_LEN = 200
-_REASON_TOKEN_MAX_LEN = 64
+EVIDENCE_MAX_LEN = 500
+WARNING_VALUE_MAX_LEN = 200
+REASON_TOKEN_MAX_LEN = 64
 
 _REQUIRED_RECORD_KEYS = frozenset({
     "schemaVersion",
@@ -139,7 +142,7 @@ def _validate_reason(result, reason):
         or not reason
         or reason.isspace()
         or any(ch.isspace() for ch in reason)
-        or len(reason) > _REASON_TOKEN_MAX_LEN
+        or len(reason) > REASON_TOKEN_MAX_LEN
     ):
         raise PilotConformanceError(REASON_REASON_INVALID)
 
@@ -148,7 +151,7 @@ def _validate_evidence(evidence):
     if (
         not isinstance(evidence, str)
         or not evidence
-        or len(evidence) > _EVIDENCE_MAX_LEN
+        or len(evidence) > EVIDENCE_MAX_LEN
         or _has_control_char(evidence)
     ):
         raise PilotConformanceError(REASON_EVIDENCE_INVALID)
@@ -182,11 +185,11 @@ def _validate_warnings(warnings):
             if (
                 not isinstance(key, str)
                 or not key
-                or len(key) > _WARNING_VALUE_MAX_LEN
+                or len(key) > WARNING_VALUE_MAX_LEN
                 or _has_control_char(key)
                 or not isinstance(value, str)
                 or not value
-                or len(value) > _WARNING_VALUE_MAX_LEN
+                or len(value) > WARNING_VALUE_MAX_LEN
                 or _has_control_char(value)
             ):
                 raise PilotConformanceError(REASON_WARNING_INVALID)
@@ -333,7 +336,7 @@ def _normalize_exception_reason(exc):
         isinstance(reason, str)
         and reason
         and not any(ch.isspace() for ch in reason)
-        and len(reason) <= _REASON_TOKEN_MAX_LEN
+        and len(reason) <= REASON_TOKEN_MAX_LEN
     ):
         return reason
     return REASON_EXERCISE_RAISED
@@ -353,7 +356,22 @@ def run(exercise_fns, *, inputs, now):
         try:
             returned = fn(inputs=inputs, now=now)
             try:
-                records.append(validate_record(returned))
+                record = validate_record(returned)
+                # bite-axis: registration honesty — record must not claim unregistered coverage.
+                if (
+                    record["exercise"] != exercise_name
+                    or not set(record["surfaces"]).issubset(set(exercise_surfaces))
+                ):
+                    records.append(exercise_record(
+                        exercise=exercise_name,
+                        surfaces=exercise_surfaces,
+                        result=RESULT_FAIL,
+                        reason=REASON_RECORD_UNREGISTERED,
+                        evidence="exercise record claims unregistered coverage",
+                        exercised_at=now,
+                    ))
+                else:
+                    records.append(record)
             except PilotConformanceError:
                 records.append(exercise_record(
                     exercise=exercise_name,
@@ -379,12 +397,11 @@ def run(exercise_fns, *, inputs, now):
 
 def default_exercises():
     """Return registered exercise callables in stable declared order."""
-    import pilot_artifacts
     import pilot_conformance_cleanup
     import pilot_conformance_runtime as runtime
 
     return [
-        pilot_artifacts.conformance_exercise,
+        runtime.artifact_store_exercise,
         pilot_conformance_cleanup.cleanup_end_to_end_exercise,
         runtime.mint_gate_off_exercise,
         runtime.reclaim_sweep_exercise,
@@ -417,6 +434,8 @@ def _load_calibration_config(cwd, store_root):
     """Follow pilot_calibration's resolution path; return (config, profile_path)."""
     import pilot_calibration
 
+    # pilot_calibration's public API (declares_slots) does not expose config extraction;
+    # _read_calibration_text is required to load the pilot block for resolve_inputs.
     try:
         info = store.resolve(cwd, store_root)
         path = info.get("profile") if info.get("exists") else None
@@ -509,7 +528,7 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
     import pilot_policy
 
     if now is None:
-        now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     resolution = []
     inputs = {}
@@ -591,6 +610,8 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
     else:
         if pilot_block is None:
             artifacts_reason = pilot_reason
+        elif resolved_artifacts_dir is None:
+            artifacts_reason = REASON_INPUT_NO_ARTIFACTS_DIR
         elif resolved_branch is None:
             artifacts_reason = REASON_INPUT_BRANCH_UNRESOLVED
         elif not material:
@@ -684,10 +705,11 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
         elif not os.path.isdir(cwd):
             mint_reason = REASON_INPUT_CLEANUP_INCOMPLETE
         else:
+            path_value = os.environ.get("PATH", os.defpath)
             mint = {
                 "envelope": envelope,
                 "run_cwd": cwd,
-                "environment": {env_var: "1"},
+                "environment": {env_var: "1", "PATH": path_value},
             }
 
     if mint is not None:
@@ -765,7 +787,7 @@ def main(argv):
         return 2
 
     if parsed.now is None:
-        now = datetime.datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ")
+        now = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     else:
         try:
             now = _validate_cli_now(parsed.now)
