@@ -44,6 +44,7 @@ MAX_ARCHIVE_MEMBERS = 2000
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
 MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 MAX_TEXT_BYTES = 4 * 1024 * 1024
+MAX_SIDECAR_BYTES = 8192
 SIDECARLESS_GRACE_SECONDS = 300
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
@@ -233,6 +234,26 @@ def _establish_capture(payload_bytes, capture):
     return _fail(REASON_PAYLOAD_FORMAT_INVALID)
 
 
+def _scrub_member_name(name, material):
+    refused = _residue_scan(name, material)
+    if refused is not None:
+        return refused
+    scrubbed = _scrub_text(name, material)
+    if isinstance(scrubbed, dict) and not scrubbed.get("ok", True):
+        return scrubbed
+    if scrubbed != name:
+        return _fail(REASON_REDACTION_UNESTABLISHED)
+    return scrubbed
+
+
+def _fresh_zip_info(source_info, filename):
+    # bite-axis: archive metadata — retained members carry only name, date, and compression.
+    out = zipfile.ZipInfo(filename)
+    out.date_time = source_info.date_time
+    out.compress_type = source_info.compress_type
+    return out
+
+
 def _zip_member_name_safe(name):
     if not name or name.startswith("/"):
         return False
@@ -259,10 +280,9 @@ def _establish_archive(payload_bytes, material):
                 return _fail(REASON_PAYLOAD_OVERSIZE)
             if not _zip_member_name_safe(info.filename):
                 return _fail(REASON_PAYLOAD_FORMAT_INVALID)
-            # bite-axis: member-name residue scan — material in filenames refuses.
-            refused = _residue_scan(info.filename, material)
-            if refused is not None:
-                return refused
+            scrubbed_name = _scrub_member_name(info.filename, material)
+            if isinstance(scrubbed_name, dict) and not scrubbed_name.get("ok", True):
+                return scrubbed_name
 
         out_buf = io.BytesIO()
         out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
@@ -286,7 +306,11 @@ def _establish_archive(payload_bytes, material):
             scrubbed = _scrub_text(text, material)
             if isinstance(scrubbed, dict) and not scrubbed.get("ok", True):
                 return scrubbed
-            out_zip.writestr(info, scrubbed)
+            scrubbed_name = _scrub_member_name(info.filename, material)
+            if isinstance(scrubbed_name, dict) and not scrubbed_name.get("ok", True):
+                return scrubbed_name
+            out_info = _fresh_zip_info(info, scrubbed_name)
+            out_zip.writestr(out_info, scrubbed)
         out_zip.close()
         return out_buf.getvalue()
     finally:
@@ -350,6 +374,9 @@ def _parse_sidecar_file(sidecar_path):
         # bite-axis: sidecar descriptor — non-regular files refuse before read.
         st = os.fstat(fd)
         if not stat.S_ISREG(st.st_mode):
+            return None, "invalid"
+        # bite-axis: sidecar size bound — oversize sidecars are unparseable.
+        if st.st_size > MAX_SIDECAR_BYTES:
             return None, "invalid"
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             obj = json.load(fh)
@@ -471,7 +498,13 @@ def _sweep_class_dir(class_dir, key_name, class_name, artifacts_dir, now,
             )
             continue
         expires_at = sidecar["expiresAt"]
-        # bite-axis: retention removes on deadline — instant comparison, not string.
+        # bite-axis: retention deadline — malformed expiresAt is unrecoverable, never compared.
+        if not _is_iso8601_utc(expires_at):
+            _remove_artifact(
+                payload_path, sidecar_path, artifacts_dir, key_name, class_name,
+                artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, retained, warnings,
+            )
+            continue
         if _parse_iso8601_utc(expires_at) <= now_dt:
             _remove_artifact(
                 payload_path, sidecar_path, artifacts_dir, key_name, class_name,
@@ -678,13 +711,37 @@ def _parse_kv(args, flag, default=None):
     return default
 
 
-def _read_text_file(path):
-    try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
-    except OSError as exc:
-        sys.stderr.write("read error %s: %s\n" % (path, exc))
+def _read_bounded_text_file(path, max_bytes):
+    """Read a regular text file with O_NONBLOCK open and a byte bound."""
+    if not isinstance(path, str) or not path:
         return None
+    try:
+        # bite-axis: CLI read safety — FIFOs and other blocking paths refuse without hanging.
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | _O_NONBLOCK)
+    except OSError:
+        return None
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None
+        if st.st_size > max_bytes:
+            return None
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
+            text = fh.read()
+        fd = None
+        return text
+    except OSError:
+        return None
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def _read_text_file(path):
+    return _read_bounded_text_file(path, MAX_TEXT_BYTES)
 
 
 def main(argv):

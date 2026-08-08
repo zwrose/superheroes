@@ -4,6 +4,7 @@ import io
 import json
 import os
 import stat
+import struct
 import subprocess
 import sys
 import time
@@ -676,6 +677,52 @@ def test_trace_material_in_member_name_refuses(tmp_path):
     assert result["reason"] == pa.REASON_REDACTION_UNESTABLISHED
 
 
+def test_trace_scrubber_token_in_member_name_refuses(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    member = "Bearer abcdefgh12345678.txt"
+    zpath = _write_zip(os.path.join(str(tmp_path), "scrub-name.zip"), [
+        (member, "safe content"),
+    ])
+    result = pa.retain(
+        artifacts,
+        branch=_BRANCH,
+        slot=_SLOT,
+        artifact_class=pa.CLASS_TRACE,
+        payload_path=zpath,
+        material=_MATERIAL,
+        now=_NOW,
+        opted_in=True,
+    )
+    assert result["reason"] == pa.REASON_REDACTION_UNESTABLISHED
+
+
+def test_trace_zip_comment_extra_not_retained(tmp_path):
+    """bite-axis: archive metadata — comment/extra from source ZipInfo are not retained."""
+    artifacts = _artifacts_dir(tmp_path)
+    zpath = os.path.join(str(tmp_path), "meta.zip")
+    with zipfile.ZipFile(zpath, "w") as zf:
+        info = zipfile.ZipInfo("safe.txt")
+        info.comment = b"secret in comment"
+        info.extra = struct.pack("<HH", 0x7075, 4) + b"evil"
+        zf.writestr(info, "clean body")
+    os.chmod(zpath, 0o644)
+    result = pa.retain(
+        artifacts,
+        branch=_BRANCH,
+        slot=_SLOT,
+        artifact_class=pa.CLASS_TRACE,
+        payload_path=zpath,
+        material=_MATERIAL,
+        now=_NOW,
+        opted_in=True,
+    )
+    assert result["ok"] is True
+    with zipfile.ZipFile(result["path"], "r") as zf:
+        for info in zf.infolist():
+            assert info.comment == b""
+            assert info.extra == b""
+
+
 def test_trace_duplicate_member_names_retain_both_contents(tmp_path):
     artifacts = _artifacts_dir(tmp_path)
     zpath = _write_duplicate_name_zip(
@@ -727,6 +774,38 @@ def test_sweep_fractional_expires_at_compares_by_instant(tmp_path):
     out = pa.sweep(artifacts, now="2026-08-07T12:00:00.500000Z")
     assert any(
         e["artifactId"] == kept["artifactId"] and e["reason"] == pa.REASON_RETENTION_EXPIRED
+        for e in out["removed"]
+    )
+
+
+def test_sweep_oversize_sidecar_unrecoverable(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts)
+    with open(kept["sidecar"], "wb") as fh:
+        fh.write(b"x" * (10 * 1024 * 1024))
+    out = pa.sweep(artifacts, now=_NOW)
+    assert not os.path.exists(kept["path"])
+    assert not os.path.exists(kept["sidecar"])
+    assert any(
+        e["artifactId"] == kept["artifactId"]
+        and e["reason"] == pa.REASON_SIDECAR_UNRECOVERABLE
+        for e in out["removed"]
+    )
+
+
+def test_sweep_malformed_expires_at_unrecoverable(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts)
+    with open(kept["sidecar"], encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta["expiresAt"] = "soon"
+    with open(kept["sidecar"], "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert not os.path.exists(kept["path"])
+    assert any(
+        e["artifactId"] == kept["artifactId"]
+        and e["reason"] == pa.REASON_SIDECAR_UNRECOVERABLE
         for e in out["removed"]
     )
 
@@ -953,6 +1032,58 @@ def test_cli_retain_refusal_exit_one(tmp_path):
 
 def test_cli_usage_error_exit_two():
     out = _run_cli("retain")
+    assert out.returncode == 2
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_cli_material_file_fifo_refused(tmp_path):
+    """bite-axis: CLI read safety — FIFO at --material-file refuses without blocking."""
+    artifacts = _artifacts_dir(tmp_path)
+    fifo = os.path.join(str(tmp_path), "mat.fifo")
+    os.mkfifo(fifo)
+    text_file = os.path.join(str(tmp_path), "log.txt")
+    with open(text_file, "w", encoding="utf-8") as fh:
+        fh.write("clean step")
+    out = subprocess.run(
+        [sys.executable, "-B", os.path.join(_LIB, "pilot_artifacts.py"),
+         "retain",
+         "--artifacts-dir", artifacts,
+         "--branch", _BRANCH,
+         "--slot", _SLOT,
+         "--class", pa.CLASS_STEP_LOG,
+         "--material-file", fifo,
+         "--now", _NOW,
+         "--payload-text-file", text_file],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    assert out.returncode == 2
+
+
+@pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="os.mkfifo not available on this platform")
+def test_cli_payload_text_file_fifo_refused(tmp_path):
+    """bite-axis: CLI read safety — FIFO at --payload-text-file refuses without blocking."""
+    artifacts = _artifacts_dir(tmp_path)
+    mat_file = os.path.join(str(tmp_path), "mat.json")
+    with open(mat_file, "w", encoding="utf-8") as fh:
+        json.dump(_MATERIAL, fh)
+    fifo = os.path.join(str(tmp_path), "payload.fifo")
+    os.mkfifo(fifo)
+    out = subprocess.run(
+        [sys.executable, "-B", os.path.join(_LIB, "pilot_artifacts.py"),
+         "retain",
+         "--artifacts-dir", artifacts,
+         "--branch", _BRANCH,
+         "--slot", _SLOT,
+         "--class", pa.CLASS_STEP_LOG,
+         "--material-file", mat_file,
+         "--now", _NOW,
+         "--payload-text-file", fifo],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
     assert out.returncode == 2
 
 

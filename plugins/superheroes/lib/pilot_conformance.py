@@ -58,7 +58,6 @@ REASON_SURFACE_DUPLICATE = "conformance-surface-duplicate"
 REASON_REASON_INVALID = "conformance-reason-invalid"
 REASON_EVIDENCE_INVALID = "conformance-evidence-invalid"
 REASON_EXERCISED_AT_INVALID = "conformance-exercised-at-invalid"
-REASON_REQUIRED_SURFACES_INVALID = "conformance-required-surfaces-invalid"
 REASON_WARNING_INVALID = "conformance-warning-invalid"
 REASON_EXERCISE_FN_INVALID = "conformance-exercise-fn-invalid"
 REASON_EXERCISE_RAISED = "conformance-exercise-raised"
@@ -76,6 +75,9 @@ REASON_INPUT_NO_ARTIFACTS_DIR = "conformance-input-no-artifacts-dir"
 REASON_INPUT_POLICY_UNRESOLVED = "conformance-input-policy-unresolved"
 REASON_INPUT_NO_MINT = "conformance-input-no-mint"
 REASON_INPUT_CLEANUP_INCOMPLETE = "conformance-input-cleanup-incomplete"
+REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED = "conformance-input-live-effects-not-permitted"
+
+EFFECT_BEARING_EXERCISES = frozenset({"cleanup-end-to-end", "mint-gate-off"})
 
 REASON_CLI_CWD_INVALID = "conformance-cli-cwd-invalid"
 REASON_CLI_NOW_INVALID = "conformance-cli-now-invalid"
@@ -242,21 +244,8 @@ def validate_record(record):
     return record
 
 
-def _validate_required_surfaces(required_surfaces):
-    if not isinstance(required_surfaces, (tuple, list)) or not required_surfaces:
-        raise PilotConformanceError(REASON_REQUIRED_SURFACES_INVALID)
-    seen = set()
-    for surface in required_surfaces:
-        if not isinstance(surface, str) or not surface:
-            raise PilotConformanceError(REASON_REQUIRED_SURFACES_INVALID)
-        if surface in seen:
-            raise PilotConformanceError(REASON_REQUIRED_SURFACES_INVALID)
-        seen.add(surface)
-
-
-def report(records, *, required_surfaces=REQUIRED_SURFACES):
+def report(records):
     """Aggregate validated exercise records into a conformance report."""
-    _validate_required_surfaces(required_surfaces)
     if not isinstance(records, list):
         raise PilotConformanceError(REASON_RECORD_INVALID)
 
@@ -272,12 +261,13 @@ def report(records, *, required_surfaces=REQUIRED_SURFACES):
         validated.append(validated_record)
 
     # bite-axis: coverage honesty — only pass records contribute to covered; unexercised is set difference.
+    # bite-axis: closed inventory — report always grades against REQUIRED_SURFACES; no caller override.
     covered = set()
     for record in validated:
         if record["result"] == RESULT_PASS:
             covered.update(record["surfaces"])
 
-    unexercised = sorted(set(required_surfaces) - covered)
+    unexercised = sorted(set(REQUIRED_SURFACES) - covered)
 
     warnings = []
     for record in validated:
@@ -350,6 +340,14 @@ def run(exercise_fns, *, inputs, now):
         raise PilotConformanceError(REASON_EXERCISE_FN_INVALID)
     for fn in exercise_fns:
         _validate_exercise_fn(fn)
+
+    # bite-axis: pre-flight duplicate detection — refuse before any exercise executes.
+    seen_names = set()
+    for fn in exercise_fns:
+        exercise_name = fn.conformance_exercise
+        if exercise_name in seen_names:
+            raise PilotConformanceError(REASON_EXERCISE_NAME_DUPLICATE)
+        seen_names.add(exercise_name)
 
     records = []
     for fn in exercise_fns:
@@ -536,7 +534,7 @@ def _neutral_cleanup_run_cwd(cwd, reach_roots):
 
 def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                    slot_ref=None, branch=None, slot=None, artifacts_dir=None,
-                   store_root=None, now=None):
+                   store_root=None, now=None, allow_live_effects=False):
     """Assemble exercise inputs and a per-key resolution audit trail."""
     import pilot_contract
     import pilot_policy
@@ -638,7 +636,10 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
 
     cleanup = None
     cleanup_reason = pilot_reason if pilot_block is None else None
-    if pilot_block is not None and cleanup_reason is None:
+    # bite-axis: live-effect containment — effect-bearing inputs absent unless explicitly opted in.
+    if not allow_live_effects:
+        cleanup_reason = REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    elif pilot_block is not None and cleanup_reason is None:
         if policy_root is None:
             cleanup_reason = REASON_INPUT_NO_POLICY_ROOT
         elif policy is None:
@@ -711,7 +712,9 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
 
     mint = None
     mint_reason = pilot_reason if pilot_block is None else None
-    if pilot_block is not None and mint_reason is None:
+    if not allow_live_effects:
+        mint_reason = REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    elif pilot_block is not None and mint_reason is None:
         mint_block = pilot_block.get("mint")
         envelope = mint_block.get("envelope") if isinstance(mint_block, dict) else None
         env_var = envelope.get("enablingFlagEnvVar") if isinstance(envelope, dict) else None
@@ -778,6 +781,14 @@ def _parse_run_args(args):
     run_parser.add_argument("--slot")
     run_parser.add_argument("--artifacts-dir")
     run_parser.add_argument("--now")
+    run_parser.add_argument(
+        "--allow-live-effects",
+        action="store_true",
+        help=(
+            "Run cleanup-end-to-end and mint-gate-off against the project's real "
+            "datastore and checkout (the project's own destructive commands)."
+        ),
+    )
     parsed = parser.parse_args(args)
     if parsed.command != "run":
         parser.print_usage(sys.stderr)
@@ -822,6 +833,7 @@ def main(argv):
             slot=parsed.slot,
             artifacts_dir=parsed.artifacts_dir,
             now=now,
+            allow_live_effects=parsed.allow_live_effects,
         )
         report_data = run(default_exercises(), inputs=inputs, now=now)
     except PilotConformanceError as exc:

@@ -299,6 +299,13 @@ def test_report_warnings_include_exercise_key():
     assert result["warnings"] == [{"code": "note", "exercise": "wave-phase"}]
 
 
+def test_report_single_pass_record_ok_false():
+    """bite-axis: closed inventory — one passing record cannot widen ok to True."""
+    result = pc.report([_pass_record()])
+    assert result["ok"] is False
+    assert len(result["unexercised"]) == len(pc.REQUIRED_SURFACES) - 1
+
+
 def test_report_fail_record_does_not_contribute_to_covered():
     records = [
         _pass_record(surfaces=list(pc.REQUIRED_SURFACES[:-1])),
@@ -315,21 +322,6 @@ def test_report_fail_record_does_not_contribute_to_covered():
     assert result["ok"] is False
     assert pc.REQUIRED_SURFACES[-1] in result["unexercised"]
 
-
-def test_edge_required_surfaces_duplicate_refuses():
-    """Edge 14: required_surfaces containing a duplicate refuses."""
-    with pytest.raises(pc.PilotConformanceError) as exc:
-        pc.report([], required_surfaces=("a", "a"))
-    assert exc.value.reason == pc.REASON_REQUIRED_SURFACES_INVALID
-
-
-def test_report_required_surfaces_empty_refuses():
-    with pytest.raises(pc.PilotConformanceError) as exc:
-        pc.report([], required_surfaces=[])
-    assert exc.value.reason == pc.REASON_REQUIRED_SURFACES_INVALID
-
-
-# --- register -------------------------------------------------------------------
 
 def test_register_happy_path():
     @pc.register("my-exercise", surfaces=[SAMPLE_SURFACE])
@@ -378,6 +370,30 @@ def test_edge_run_unregistered_callable_refuses_before_any_runs():
     with pytest.raises(pc.PilotConformanceError) as exc:
         pc.run([plain_fn], inputs={}, now=EXERCISED_AT)
     assert exc.value.reason == pc.REASON_EXERCISE_FN_INVALID
+
+
+def test_run_duplicate_exercise_names_refused_before_execution():
+    """bite-axis: pre-flight duplicate detection — neither exercise runs."""
+    ran = []
+
+    @pc.register("dup-preflight", surfaces=[SAMPLE_SURFACE])
+    def first(inputs, now):
+        ran.append("first")
+        return _pass_record(exercise="dup-preflight", exercised_at=now)
+
+    @pc.register("dup-preflight", surfaces=["pilot_wave.wave_anchor"])
+    def second(inputs, now):
+        ran.append("second")
+        return _pass_record(
+            exercise="dup-preflight",
+            surfaces=["pilot_wave.wave_anchor"],
+            exercised_at=now,
+        )
+
+    with pytest.raises(pc.PilotConformanceError) as exc:
+        pc.run([first, second], inputs={}, now=EXERCISED_AT)
+    assert exc.value.reason == pc.REASON_EXERCISE_NAME_DUPLICATE
+    assert ran == []
 
 
 def test_edge_run_exception_without_reason_normalizes():
@@ -513,7 +529,9 @@ def test_resolve_inputs_no_artifacts_dir_token(tmp_path, monkeypatch):
 
 def test_resolve_inputs_mint_environment_includes_path(tmp_path):
     _write_calibration_layer(tmp_path, include_mint=True)
-    inputs, _resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
+    inputs, _resolution = pc.resolve_inputs(
+        str(tmp_path), now=EXERCISED_AT, allow_live_effects=True,
+    )
     assert "PATH" in inputs["mint"]["environment"]
     assert inputs["mint"]["environment"]["PATH"]
 
@@ -623,8 +641,8 @@ def test_resolve_inputs_no_calibration_all_absent(tmp_path):
     assert len(resolution) == 5
     assert all(entry["state"] == "absent" for entry in resolution)
     by_input = {entry["input"]: entry for entry in resolution}
-    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_NO_CALIBRATION
-    assert by_input["mint"]["reason"] == pc.REASON_INPUT_NO_CALIBRATION
+    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    assert by_input["mint"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
     assert by_input["wave"]["reason"] == pc.REASON_INPUT_NO_SLOTS_DIR
     assert by_input["reclaim"]["reason"] == pc.REASON_INPUT_NO_SLOTS_DIR
 
@@ -649,7 +667,7 @@ def test_resolve_inputs_pilot_block_no_policy_root_cleanup_absent(tmp_path):
     inputs, resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
     assert "cleanup" not in inputs
     by_input = {entry["input"]: entry for entry in resolution}
-    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_NO_POLICY_ROOT
+    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
 
 
 def test_resolve_inputs_wave_and_reclaim_resolved_with_slots_dir(tmp_path):
@@ -681,11 +699,51 @@ def test_edge10_unreachable_reach_root_cleanup_absent(tmp_path):
         slots_dir=str(slots_dir),
         slot_ref="slot-a@1",
         now=EXERCISED_AT,
+        allow_live_effects=True,
     )
     assert "cleanup" not in inputs
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["cleanup"]["state"] == "absent"
     assert by_input["cleanup"]["reason"] == "policy-root-in-reach"
+
+
+_LIVE_EFFECT_SURFACES = frozenset({
+    "pilot_cleanup.cleanup_effect_receipt",
+    "pilot_cleanup.receipt_valid_for",
+    "pilot_cleanup.registry_record",
+    "pilot_cleanup.resolve_containment",
+    "pilot_cleanup.resurrection_plan",
+    "pilot_mint.gate_off_receipt",
+    "pilot_mint.run_gate_off_test",
+})
+
+
+def test_resolve_inputs_default_live_effects_cleanup_mint_absent(tmp_path):
+    """bite-axis: live-effect containment — default resolve leaves effect inputs absent."""
+    _write_calibration_layer(tmp_path, include_mint=True)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    slots_dir = tmp_path / "slots"
+    slots_dir.mkdir()
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        policy_root=str(policy_root),
+        slots_dir=str(slots_dir),
+        slot_ref="slot-a@1",
+        now=EXERCISED_AT,
+    )
+    assert "cleanup" not in inputs
+    assert "mint" not in inputs
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    assert by_input["mint"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+
+
+def test_default_run_report_live_effect_surfaces_unexercised(tmp_path):
+    """bite-axis: live-effect containment — default run reports all seven surfaces unexercised."""
+    report = pc.run(pc.default_exercises(), inputs={}, now=EXERCISED_AT)
+    assert report["ok"] is False
+    assert _LIVE_EFFECT_SURFACES <= set(report["unexercised"])
 
 
 def test_resolve_inputs_cleanup_run_cwd_outside_reach(tmp_path, monkeypatch):
@@ -729,6 +787,7 @@ def test_resolve_inputs_cleanup_run_cwd_outside_reach(tmp_path, monkeypatch):
         branch="main",
         slot="slot-a",
         now=EXERCISED_AT,
+        allow_live_effects=True,
     )
     assert "cleanup" in inputs
     run_cwd = inputs["cleanup"]["run_cwd"]
@@ -847,12 +906,16 @@ def test_edge7_cli_unregistered_exercise_returns_2(monkeypatch, capsys):
 
 
 def test_edge8_cli_duplicate_exercise_names_returns_2(monkeypatch, capsys):
+    ran = []
+
     @pc.register("dup", surfaces=[SAMPLE_SURFACE])
     def first(inputs, now):
+        ran.append("first")
         return _pass_record(exercise="dup", exercised_at=now)
 
     @pc.register("dup", surfaces=["pilot_wave.wave_anchor"])
     def second(inputs, now):
+        ran.append("second")
         return _pass_record(exercise="dup", surfaces=["pilot_wave.wave_anchor"], exercised_at=now)
 
     monkeypatch.setattr(pc, "default_exercises", lambda: [first, second])
@@ -868,6 +931,24 @@ def test_edge8_cli_duplicate_exercise_names_returns_2(monkeypatch, capsys):
     assert exit_code == 2
     assert captured.out == ""
     assert captured.err.strip() == pc.REASON_EXERCISE_NAME_DUPLICATE
+    assert ran == []
+
+
+def test_cli_default_never_resolves_live_effect_inputs(capsys):
+    exit_code = pc.main([
+        "pilot_conformance.py",
+        "run",
+        "--cwd",
+        _repo_root(),
+        "--now",
+        EXERCISED_AT,
+    ])
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    by_input = {entry["input"]: entry for entry in payload["resolution"]}
+    assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    assert by_input["mint"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    assert exit_code == 1
 
 
 def test_edge9_cli_stdout_is_only_json(capsys):

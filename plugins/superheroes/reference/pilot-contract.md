@@ -3011,9 +3011,11 @@ and every exercise passed — so a surface with no exercise at all still shows u
 ### Exercises
 
 **`artifact-store`** — exercises `pilot_artifacts.retain` and `pilot_artifacts.sweep` on a
-real external store: a clean step-log is retained with restrictive permissions, a dirty log is
-refused by redaction, an opt-out trace is refused, and a short-retention artifact is swept on
-deadline. Expected outcome: **pass** when all four expectations hold.
+disposable external store instance (not the configured project's store): a clean step-log is
+retained with restrictive permissions, a dirty log is refused by redaction, an opt-out trace is
+refused, and a short-retention artifact is swept on deadline. The exercise proves the store's
+*behaviour* against that disposable instance, not the configured store's current *state*.
+Expected outcome: **pass** when all four expectations hold.
 
 **`cleanup-end-to-end`** — drives the cleanup receipt, registry record, receipt binding,
 containment resolution, and resurrection planner on synthetic inputs. The resurrection plan is
@@ -3033,6 +3035,27 @@ as expected.
 gates, appctl fencing, and invocation resolution without a browser. Expected outcome: **pass**
 when every headless check holds.
 
+### Effect-bearing exercises
+
+Two exercises execute the **project's own commands against the project's real resources**:
+
+| Exercise | Live effects |
+|---|---|
+| `cleanup-end-to-end` | Plants sentinels, writes the operational slot journal, runs the declared cleanup command against the live datastore |
+| `mint-gate-off` | Runs the declared gate-off command in the live checkout |
+
+Headless exercises (`wave-headless`, `reclaim-sweep`, `artifact-store`) touch only disposable
+subtrees they create themselves.
+
+By default, `resolve_inputs` leaves `cleanup` and `mint` inputs **absent** with
+`conformance-input-live-effects-not-permitted`; those exercises return `skipped`, `ok` is
+`false`, and their surfaces appear in `unexercised` rather than being silently omitted from the
+report. Pass `--allow-live-effects` to resolve and run the effect-bearing pair; the run will
+execute the project's own cleanup and gate-off commands against the project's real datastore and
+checkout. Operators who pass that flag also accept the declared limit that `pilot_bounded_run`
+does not signal the process group when a command exits cleanly after detaching a helper (see
+`pilot_conformance_cleanup.py` module docstring; issue #833 acceptance matrix).
+
 ### CLI
 
 ```text
@@ -3041,6 +3064,7 @@ python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
        [--policy-root <path>] [--reach-root <path> ...] [--slots-dir <path>]
        [--slot-ref <ref>] [--branch <name>] [--slot <id>]
        [--artifacts-dir <path>] [--now <iso8601-utc-Z>]
+       [--allow-live-effects]
 ```
 
 Stdout is the report JSON and nothing else; diagnostics go to stderr. **Exit 0** when `ok` is
@@ -3069,7 +3093,6 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-reason-invalid` | `reason` shape invalid for the `result` |
 | `conformance-evidence-invalid` | `evidence` missing, too long, or contains control characters |
 | `conformance-exercised-at-invalid` | `exercisedAt` is not valid ISO-8601 UTC-Z |
-| `conformance-required-surfaces-invalid` | `required_surfaces` argument is malformed |
 | `conformance-warning-invalid` | a warning entry is malformed |
 | `conformance-exercise-fn-invalid` | registered exercise function is malformed |
 | `conformance-exercise-raised` | exercise raised an exception without a normalized reason |
@@ -3077,6 +3100,7 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
 | `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
 | `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
+| `conformance-input-live-effects-not-permitted` | cleanup or mint input: `--allow-live-effects` was not passed |
 | `conformance-input-no-artifacts-dir` | artifacts input: artifacts directory could not be resolved |
 | `conformance-input-no-calibration` | pilot block input: calibration config could not be loaded for cwd |
 | `conformance-input-no-material` | artifacts input: policy material list is empty after resolution |
