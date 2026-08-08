@@ -741,7 +741,9 @@ def test_trace_zip_comment_extra_not_retained(tmp_path):
     with zipfile.ZipFile(zpath, "w") as zf:
         info = zipfile.ZipInfo("safe.txt")
         info.comment = b"secret in comment"
-        info.extra = struct.pack("<HH", 0x7075, 4) + b"evil"
+        # Vendor-specific ID — not 0x7075 (unicode path); 3.12 validates that header
+        # strictly and rejects archives whose payload is not a real unicode path.
+        info.extra = struct.pack("<HH", 0xBEEF, 4) + b"evil"
         zf.writestr(info, "clean body")
     os.chmod(zpath, 0o644)
     result = pa.retain(
@@ -754,7 +756,7 @@ def test_trace_zip_comment_extra_not_retained(tmp_path):
         now=_NOW,
         opted_in=True,
     )
-    assert result["ok"] is True
+    assert result["ok"] is True, result.get("reason")
     with zipfile.ZipFile(result["path"], "r") as zf:
         for info in zf.infolist():
             assert info.comment == b""
