@@ -712,6 +712,121 @@ def test_sweep_failed_unlink_warns_and_retains_not_removed(tmp_path):
     assert not any(e["artifactId"] == kept["artifactId"] for e in out["removed"])
 
 
+def _write_zip_invalid_local_filename(path):
+    """Central-directory UTF-8 name with invalid UTF-8 bytes in the local header."""
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("validname.txt", "content")
+    with open(path, "r+b") as fh:
+        data = bytearray(fh.read())
+    local = data.index(b"PK\x03\x04")
+    fn_len = int.from_bytes(data[local + 26:local + 28], "little")
+    fn_start = local + 30
+    data[fn_start:fn_start + fn_len] = b"\xff" * fn_len
+    with open(path, "wb") as fh:
+        fh.write(data)
+    os.chmod(path, 0o644)
+    return path
+
+
+def test_edge_trace_malformed_local_header_filename_refuses(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    zpath = os.path.join(str(tmp_path), "bad-local.zip")
+    _write_zip_invalid_local_filename(zpath)
+    result = pa.retain(
+        artifacts,
+        branch=_BRANCH,
+        slot=_SLOT,
+        artifact_class=pa.CLASS_TRACE,
+        payload_path=zpath,
+        material=_MATERIAL,
+        now=_NOW,
+        opted_in=True,
+    )
+    assert result["reason"] == pa.REASON_PAYLOAD_FORMAT_INVALID
+
+
+def test_edge_sidecar_fifo_refused(tmp_path, monkeypatch):
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts)
+    os.remove(kept["sidecar"])
+    os.mkfifo(kept["sidecar"])
+    real_isfile = os.path.isfile
+
+    def isfile_treating_fifo_as_file(path):
+        if path == kept["sidecar"]:
+            return True
+        return real_isfile(path)
+
+    monkeypatch.setattr(os.path, "isfile", isfile_treating_fifo_as_file)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(kept["path"])
+    assert os.path.exists(kept["sidecar"])
+    assert any(e["artifactId"] == kept["artifactId"] for e in out["retained"])
+    assert not any(e["artifactId"] == kept["artifactId"] for e in out["removed"])
+
+
+def test_sweep_v2_extra_field_retained_with_unknown_schema_warning(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts)
+    with open(kept["sidecar"], encoding="utf-8") as fh:
+        meta = json.load(fh)
+    meta["schemaVersion"] = 2
+    meta["futureField"] = "forward-compatible"
+    with open(kept["sidecar"], "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert os.path.exists(kept["path"])
+    assert os.path.exists(kept["sidecar"])
+    assert any(e["artifactId"] == kept["artifactId"] for e in out["retained"])
+    assert any(
+        e["artifactId"] == kept["artifactId"]
+        and e["reason"] == pa.REASON_SIDECAR_SCHEMA_UNKNOWN
+        for e in out["warnings"]
+    )
+    assert not any(e["artifactId"] == kept["artifactId"] for e in out["removed"])
+
+
+def test_sweep_v1_missing_required_key_still_removed(tmp_path):
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts)
+    with open(kept["sidecar"], encoding="utf-8") as fh:
+        meta = json.load(fh)
+    del meta["sha256"]
+    with open(kept["sidecar"], "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    out = pa.sweep(artifacts, now=_NOW)
+    assert not os.path.exists(kept["path"])
+    assert not os.path.exists(kept["sidecar"])
+    assert any(
+        e["artifactId"] == kept["artifactId"]
+        and e["reason"] == pa.REASON_SIDECAR_UNRECOVERABLE
+        for e in out["removed"]
+    )
+
+
+def test_sweep_payload_removed_sidecar_unlink_fails_not_retained(tmp_path, monkeypatch):
+    artifacts = _artifacts_dir(tmp_path)
+    kept = _retain_step_log(artifacts, retention_hours=1)
+    later = pa._add_hours_iso8601(_NOW, 2)
+    real_unlink = os.unlink
+
+    def sidecar_unlink_fails(path):
+        if path == kept["sidecar"]:
+            raise OSError("sidecar unlink blocked")
+        return real_unlink(path)
+
+    monkeypatch.setattr(os, "unlink", sidecar_unlink_fails)
+    out = pa.sweep(artifacts, now=later)
+    assert not os.path.exists(kept["path"])
+    assert os.path.exists(kept["sidecar"])
+    assert not any(e["artifactId"] == kept["artifactId"] for e in out["retained"])
+    assert not any(e["artifactId"] == kept["artifactId"] for e in out["removed"])
+    assert any(
+        e["artifactId"] == kept["artifactId"] and e["reason"] == pa.REASON_SWEEP_FAILED
+        for e in out["warnings"]
+    )
+
+
 def test_retain_scoped_sweep_leaves_other_key_untouched(tmp_path):
     artifacts = _artifacts_dir(tmp_path)
     other_key = store.artifact_key("other-branch", "other")

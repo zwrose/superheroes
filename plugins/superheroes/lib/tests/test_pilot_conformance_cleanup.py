@@ -415,6 +415,62 @@ def test_post_plant_exception_returns_fail_with_residual_warnings(private_tmp, m
     assert "post-plant failure" in fail_record["evidence"]
 
 
+def test_cleanup_receipt_raises_returns_fail_with_residual_warnings(private_tmp):
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    count_file = os.path.join(private_tmp, "probe-count.txt")
+    counting_probe = (
+        "#!/bin/sh\n"
+        'countfile="%s"\n'
+        "if [ -f \"$countfile\" ]; then\n"
+        "  n=$(cat \"$countfile\")\n"
+        "else\n"
+        "  n=0\n"
+        "fi\n"
+        "echo $((n + 1)) > \"$countfile\"\n"
+        "if [ \"$n\" -ge 6 ]; then exit 2; fi\n"
+        'ns="$2"\n'
+        'id="$4"\n'
+        'store="$PILOT_DATASTORE_URL"\n'
+        'if [ -f "$store/$ns/$id" ]; then exit 0; else exit 1; fi\n'
+    ) % count_file
+    plant, _ = _write_scripts(bin_dir)
+    probe_path = os.path.join(bin_dir, "counting-probe.sh")
+    _write_executable(probe_path, counting_probe)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe_path)
+    pilot_block = _pilot_block(cleanup_script)
+    cleanup = {
+        "policy": policy,
+        "pilot_block": pilot_block,
+        "slot_ref": _SLOT_REF,
+        "reach_roots": [reach_root],
+        "run_cwd": run_cwd,
+        "cleanup_root": cleanup_repo,
+        "journal_path": journal_path,
+        "observed_identity": "example_dev",
+        "identity_provenance": "observed",
+        "identity_strength": "strong",
+        "verdict": _passing_verdict(policy),
+        "account": "owner",
+        "mint_envelope": pilot_block["mint"]["envelope"],
+    }
+    record = pcc.cleanup_end_to_end_exercise(inputs={"cleanup": cleanup}, now=_NOW)
+    assert record["result"] == pilot_conformance.RESULT_FAIL
+    assert record["reason"] == pc.REFUSAL_PROBE_INDETERMINATE
+    assert record["warnings"]
+    assert "cleanup receipt construction failed" in record["evidence"]
+
+
+def test_cleanup_run_cwd_inside_reach_refused_by_name(private_tmp):
+    cleanup = _build_cleanup_inputs(private_tmp, _cleanup_correct_script())
+    cleanup["run_cwd"] = cleanup["reach_roots"][0]
+    record = pcc.cleanup_end_to_end_exercise(inputs={"cleanup": cleanup}, now=_NOW)
+    assert record["result"] == pilot_conformance.RESULT_FAIL
+    assert record["reason"] == pcc.REASON_RUN_CWD_INSIDE_REACH
+
+
 # --- registration --------------------------------------------------------------
 
 def test_exercise_registered():

@@ -12,7 +12,9 @@ import datetime
 import json
 import os
 import re
+import shutil
 import sys
+import tempfile
 from datetime import timezone
 
 import store
@@ -520,6 +522,18 @@ def _build_cleanup_verdict(policy, slot_ref, now):
     )
 
 
+def _neutral_cleanup_run_cwd(cwd, reach_roots):
+    """Allocate a disposable working directory outside every reach root."""
+    import pilot_boundary
+
+    for _attempt in range(8):
+        path = tempfile.mkdtemp(prefix="conformance-cleanup-cwd-")
+        if pilot_boundary.is_outside_all_reach_roots(path, reach_roots):
+            return path
+        shutil.rmtree(path, ignore_errors=True)
+    raise RuntimeError("could not allocate neutral cleanup run_cwd outside reach roots")
+
+
 def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                    slot_ref=None, branch=None, slot=None, artifacts_dir=None,
                    store_root=None, now=None):
@@ -670,7 +684,8 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                             "pilot_block": pilot_block,
                             "slot_ref": slot_ref,
                             "reach_roots": reach,
-                            "run_cwd": cwd,
+                            "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
+                            "run_cwd_disposable": True,
                             "cleanup_root": cleanup_root,
                             "journal_path": journal_path,
                             "observed_identity": observed_identity,

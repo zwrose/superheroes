@@ -267,7 +267,14 @@ def _establish_archive(payload_bytes, material):
         for info in infos:
             try:
                 raw = zf.read(info)
-            except (zipfile.BadZipFile, RuntimeError, EOFError, OSError, zlib.error):
+            except (
+                zipfile.BadZipFile,
+                RuntimeError,
+                EOFError,
+                OSError,
+                zlib.error,
+                UnicodeDecodeError,
+            ):
                 return _fail(REASON_PAYLOAD_FORMAT_INVALID)
             try:
                 text = raw.decode("utf-8")
@@ -337,6 +344,10 @@ def _parse_sidecar_file(sidecar_path):
     except OSError:
         return None, "invalid"
     try:
+        # bite-axis: sidecar descriptor — non-regular files refuse before read.
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return None, "invalid"
         with os.fdopen(fd, "r", encoding="utf-8") as fh:
             obj = json.load(fh)
         fd = None
@@ -350,13 +361,13 @@ def _parse_sidecar_file(sidecar_path):
                 pass
     if not isinstance(obj, dict):
         return None, "invalid"
-    if set(obj.keys()) != _SIDECAR_REQUIRED_KEYS:
-        return None, "invalid"
     schema_version = obj.get("schemaVersion")
     if schema_version != SCHEMA:
         if isinstance(schema_version, int):
             # bite-axis: unknown schema retains — forward compatibility must not delete.
             return obj, "unknown_schema"
+        return None, "invalid"
+    if set(obj.keys()) != _SIDECAR_REQUIRED_KEYS:
         return None, "invalid"
     if not _is_iso8601_utc(obj.get("expiresAt")):
         return None, "invalid"
@@ -389,19 +400,18 @@ def _safe_unlink(path, artifacts_dir, warnings, artifact_key="", artifact_class=
 
 def _remove_artifact(payload_path, sidecar_path, artifacts_dir, artifact_key,
                      artifact_class, artifact_id, reason, removed, retained, warnings):
-    ok = True
     if payload_path and os.path.isfile(payload_path):
-        if not _safe_unlink(payload_path, artifacts_dir, warnings,
-                            artifact_key, artifact_class, artifact_id):
-            ok = False
+        _safe_unlink(payload_path, artifacts_dir, warnings,
+                     artifact_key, artifact_class, artifact_id)
     if sidecar_path and os.path.isfile(sidecar_path):
-        if not _safe_unlink(sidecar_path, artifacts_dir, warnings,
-                            artifact_key, artifact_class, artifact_id):
-            ok = False
-    if ok:
+        _safe_unlink(sidecar_path, artifacts_dir, warnings,
+                     artifact_key, artifact_class, artifact_id)
+    payload_still = payload_path and os.path.isfile(payload_path)
+    sidecar_still = sidecar_path and os.path.isfile(sidecar_path)
+    if not payload_still and not sidecar_still:
         # bite-axis: receipt truthfulness — removed only when unlink succeeded.
         removed.append(_list_entry(artifact_key, artifact_class, artifact_id, reason))
-    else:
+    elif payload_still:
         retained.append(_list_entry(artifact_key, artifact_class, artifact_id, None))
 
 

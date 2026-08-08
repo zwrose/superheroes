@@ -110,6 +110,69 @@ def test_reclaim_sweep_leaves_sibling_untouched(tmp_dir):
     assert set(os.listdir(slots_dir)) == {"pre-existing-slot"}
 
 
+def test_reclaim_sweep_leaves_decoy_occupant_payload_untouched(tmp_dir):
+    """bite-axis: containment — legacy occupant-payload path beside slots_dir stays untouched."""
+    slots_dir = _slots_dir(tmp_dir)
+    parent = os.path.dirname(os.path.abspath(slots_dir))
+    decoy = os.path.join(parent, "occupant-payload")
+    os.makedirs(decoy)
+    decoy_marker = os.path.join(decoy, "work.txt")
+    with open(decoy_marker, "w", encoding="utf-8") as handle:
+        handle.write("decoy-must-survive")
+    before = open(decoy_marker, "rb").read()
+
+    record = pcr.reclaim_sweep_exercise(
+        inputs={"reclaim": {"slots_dir": slots_dir}},
+        now=_SWEEP_AT,
+    )
+    assert record["result"] == pc.RESULT_PASS
+    assert open(decoy_marker, "rb").read() == before
+    assert os.path.isdir(decoy)
+
+
+def test_reclaim_sweep_session_root_removed_on_failure(tmp_dir, monkeypatch):
+    slots_dir = _slots_dir(tmp_dir)
+    session_dirs = []
+
+    original_mkdtemp = tempfile.mkdtemp
+
+    def tracking_mkdtemp(*args, **kwargs):
+        path = original_mkdtemp(*args, **kwargs)
+        if kwargs.get("dir") == slots_dir:
+            session_dirs.append(path)
+        return path
+
+    monkeypatch.setattr(tempfile, "mkdtemp", tracking_mkdtemp)
+    monkeypatch.setattr(
+        pcr.pilot_reclaim,
+        "quarantine_entry",
+        lambda *_args, **_kwargs: {"ok": False, "reason": "seed-failed"},
+    )
+
+    record = pcr.reclaim_sweep_exercise(
+        inputs={"reclaim": {"slots_dir": slots_dir}},
+        now=_SWEEP_AT,
+    )
+    assert record["result"] == pc.RESULT_FAIL
+    assert len(session_dirs) == 1
+    assert not os.path.exists(session_dirs[0])
+
+
+def test_reclaim_sweep_two_session_roots_without_collision(tmp_dir):
+    slots_dir = _slots_dir(tmp_dir)
+    first = pcr.reclaim_sweep_exercise(
+        inputs={"reclaim": {"slots_dir": slots_dir}},
+        now=_SWEEP_AT,
+    )
+    second = pcr.reclaim_sweep_exercise(
+        inputs={"reclaim": {"slots_dir": slots_dir}},
+        now=_SWEEP_AT,
+    )
+    assert first["result"] == pc.RESULT_PASS
+    assert second["result"] == pc.RESULT_PASS
+    assert not os.path.exists(os.path.join(os.path.dirname(slots_dir), "occupant-payload"))
+
+
 def test_reclaim_sweep_idempotent_on_same_slots_dir(tmp_dir):
     inputs = _reclaim_inputs(tmp_dir)
     first = pcr.reclaim_sweep_exercise(inputs=inputs, now=_SWEEP_AT)

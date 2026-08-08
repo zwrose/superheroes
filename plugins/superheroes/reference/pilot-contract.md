@@ -3103,3 +3103,4 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cleanup-containment-refused` | containment resolution refused |
 | `conformance-cleanup-plan-not-resurrect` | resurrection plan action was not `resurrect` |
 | `conformance-cleanup-plan-refused` | resurrection plan parked or refused |
+| `conformance-cleanup-run-cwd-inside-reach` | cleanup exercise `run_cwd` must be outside all reach roots |

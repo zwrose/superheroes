@@ -282,9 +282,9 @@ def _occupant():
     }
 
 
-def _seed_payload_dir(slots_dir):
-    parent = os.path.dirname(os.path.abspath(slots_dir))
-    path = os.path.join(parent, "occupant-payload")
+def _seed_payload_dir(session_root):
+    # bite-axis: containment — exercise work stays in a disposable subtree of slots_dir.
+    path = os.path.join(session_root, "occupant-payload")
     os.makedirs(path, exist_ok=True)
     marker = os.path.join(path, "work.txt")
     with open(marker, "w", encoding="utf-8") as handle:
@@ -425,17 +425,18 @@ def reclaim_sweep_exercise(*, inputs, now):
             now,
         )
 
-    # bite-axis: containment — exercise work stays in a disposable subtree of slots_dir.
-    work_dir = None
+    session_root = None
     try:
-        work_dir = tempfile.mkdtemp(dir=slots_dir, prefix="conformance-reclaim-")
-        source_path = _seed_payload_dir(slots_dir)
+        session_root = tempfile.mkdtemp(dir=slots_dir, prefix="conformance-reclaim-")
+        nested_store = os.path.join(session_root, "slot-store")
+        os.makedirs(nested_store)
+        source_path = _seed_payload_dir(session_root)
         slot_ref = reclaim_inputs.get("slot_ref", _DEFAULT_SLOT_REF)
         if not isinstance(slot_ref, str) or not slot_ref:
             slot_ref = _DEFAULT_SLOT_REF
 
         quarantine = pilot_reclaim.quarantine_entry(
-            work_dir,
+            nested_store,
             source_path,
             slot_ref=slot_ref,
             reason=_QUARANTINE_REASON,
@@ -451,7 +452,7 @@ def reclaim_sweep_exercise(*, inputs, now):
                 now,
             )
 
-        sweep = pilot_reclaim.sweep(work_dir, now=now)
+        sweep = pilot_reclaim.sweep(nested_store, now=now)
         if not sweep["ok"]:
             return _failed(
                 "reclaim-sweep",
@@ -505,7 +506,7 @@ def reclaim_sweep_exercise(*, inputs, now):
             warnings=warnings,
         )
     finally:
-        _remove_work_dir(work_dir)
+        _remove_work_dir(session_root)
 
 
 @pilot_conformance.register("artifact-store", surfaces=_ARTIFACT_SURFACES)
