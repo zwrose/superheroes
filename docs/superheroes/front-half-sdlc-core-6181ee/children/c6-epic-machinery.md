@@ -1,6 +1,6 @@
 # C6 — feat(superheroes): decomposition + the epic contract — coverage map, register, package read, verbatim injection
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract (FR-26..FR-36) + UFR-3, UFR-4, UFR-6, UFR-7 — owner-approved 2026-08-07, as-of amendment #4.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract (FR-26..FR-36) + §Spec content FR-22 (consolidated here, round 2) + UFR-3, UFR-4, UFR-6, UFR-7 — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** The advisor's decomposition machinery as charter + tooling: the spec-handoff vet
 and fixed sequence with dated approval (FR-26); the acceptance-level coverage map (FR-27,
@@ -31,14 +31,18 @@ single-issue fast path (FR-36).
 - FR-33's contradiction dispositions as charter text: a package-read spec contradiction
   resolves as a package fix, an owner-stamped spec amendment, or a recorded refutation in
   the audit trail — with an explicit no-silent-spec-edit vet rule.
+- Detective seam preserved: R9's seam lines survive this child's showrunner/workhorse
+  edits, with the survival check recorded in the handback (and re-run after any
+  later-landing rebase per R9's rule).
 - UFR-4 propagation duty, ALL elements: amended artifact + log first; unstarted children
   mechanically re-injected (register text) or re-checked against the coverage map (spec
   text); building children explicitly notified; a RECORDED coverage-map re-check after
   every affected spec amendment (exactly-once allocation re-verified); reciprocal-seam
   amendments propagate through BOTH homes (both registers, or register + stand-in issue
   body per FR-36) and both sides' affected children; substantive class triggers the
-  touched-parts re-read. This child owns ALL propagation machinery — including the wording
-  path's mechanical half (R4's consumer split; C5 owns classification and the log).
+  touched-parts re-read. This child owns ALL of the amendment behavior — classification,
+  the R4 log contract, and propagation, both classes (round-2 consolidation); C5 only
+  renders the Amendments template section as a dependent.
 - One recorded end-to-end package rehearsal IN THIS CHILD'S HANDBACK (round-1 finding
   C14): a decomposition run producing map + register + quoted children, a package-read
   audit trail, exact-text check results, and a graded register vet row — artifacts
@@ -46,7 +50,7 @@ single-issue fast path (FR-36).
 
 **Register text consumed (verbatim):**
 
-> **R3 — The exact-text check.** Register-to-child text agreement is checked by byte-exact comparison of each consumer artifact's quoted register block against the register file it names — an epic child's body against its epic's register, and a single-issue child's body standing in for a register (FR-36's shared-seam rule) against the epic register its quote header names; the check is machine work (a script with a stable invocation and a pass/fail result naming the first differing line), never model judgment; it runs at three points — child filing, child build intake, and the package read's verification pass. **C9 owns FR-31's acceptance criterion whole**: the script AND all three invocation points (the workhorse-intake line and the showrunner filing and verification lines are C9's charter edits); C2 and C6 are dependents that build behavior around the already-landed invocations, owning none of them. **Bootstrap (one-time, disclosed):** until C9 ships, the advisor performs the same byte-exact comparison with a recorded ad-hoc invocation — this package's own filings run under that bootstrap, with the invocation and results preserved in the package-read audit trail.
+> **R3 — The exact-text check.** Register-to-child text agreement is checked by byte-exact comparison of each consumer artifact's quoted register block against the register file it names — an epic child's body against its epic's register, and a single-issue child's body standing in for a register (FR-36's shared-seam rule) against the epic register its quote header names; the check is machine work (a script with a stable invocation and a pass/fail result naming the first differing line), never model judgment; it runs at three points — child filing, child build intake, and the package read's verification pass — and it checks BOTH directions: every quoted block matches byte-exactly, and every entry whose Consumers line names the child is present in that child's body (a missing required quote fails the check the same as a drifted one). **C9 owns FR-31's acceptance criterion whole**: the script AND all three invocation points (the workhorse-intake line and the showrunner filing and verification lines are C9's charter edits); C2 and C6 are dependents that build behavior around the already-landed invocations, owning none of them. **Bootstrap (one-time, disclosed):** until C9 ships, the advisor performs the same byte-exact comparison with a recorded ad-hoc invocation — this package's own filings run under that bootstrap, with the invocation and results preserved in the package-read audit trail.
 
 > **R4 — Amendment classes.** Every post-approval spec amendment is classified `wording` (changes phrasing; decides nothing a builder could build differently against) or `substantive` (anything else — the default when ambiguous, failing closed), and every Amendments-log entry carries: date, owner stamp, class, and the section names it touched; entries are ordered in the log and numbered by order of addition (oldest = 1) — the number is positional, not a new field — and R1's anchor cursor reads that order; a wording amendment's total ceremony is the body edit, the log entry, and mechanical propagation; a substantive amendment additionally triggers the touched-parts re-read (UFR-4) before injection.
 
@@ -55,3 +59,7 @@ single-issue fast path (FR-36).
 > **R7 — The park surface.** A park lands the full park note — what was elicited or found so far, explicitly marked unapproved — on the owner's reading surface at park time: in the advisor's delivery message when the owner is present, else as the opening item of the advisor's next delivery message; a durable copy lands as a comment on the parked item's issue or PR, and the durable copy is for the record — it is never required owner reading.
 
 > **R8 — Closure receipt elements.** The closure receipt enumerates exactly: coverage map complete; all other children merged with green vets; amendments reconciled — meaning the Amendments log is valid against R4's format AND UFR-4's propagation is verified: every affected child carried the amended text or an explicit notice, and the coverage map still allocates every acceptance criterion; one end-to-end validation run against the current spec body with its result stated; aggregated Show-it items; delivered versus deferred/declined named; and NFR conformance checked across the delivery (owner reading load, plain language, guidelines never hardened into gates) — an absent element is named with why.
+
+> **R2 — The issue skeleton.** Every routed issue body carries exactly three required sections in order — `Anchor:`, `What:`, `DoD:` — and nothing else is required; micro-route work is exempt; a routed issue missing a section is a vet finding, and an empty Anchor blocks build-ready marking while empty What/DoD do not block filing.
+
+> **R9 — The detective seam.** Cross-epic seam with the single-issue spec `the-detective-16c561`, recorded here under FR-36's shared-seam rule (the detective child's issue body quotes this entry verbatim and stands in for that side's register): the workhorse charter's diagnosis/fix boundary line (the workhorse never produces a diagnosis receipt) and the showrunner charter's five-check diagnosis-vet duty are the detective child's to land; C2, C3, and C6 (each an editor of those charter surfaces) write around the seam lines, never over them; landing order is free, but the later-landing PR rebases over the earlier and re-verifies the earlier's seam lines survive. The pre-ship routing transition lives where it was made: the detective spec's Assumptions section — this entry and R6 carry only this pointer, no transition semantics.

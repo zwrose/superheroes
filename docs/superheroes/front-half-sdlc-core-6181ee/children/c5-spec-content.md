@@ -1,4 +1,4 @@
-# C5 — feat(superheroes): spec content rules + the amendment machinery
+# C5 — feat(superheroes): spec content rules (amendment machinery is C6's)
 
 **Anchor:** spec `front-half-sdlc-core-6181ee` §Spec content (FR-18..FR-25) — owner-approved 2026-08-07, as-of amendment #4.
 

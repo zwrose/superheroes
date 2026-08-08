@@ -90,3 +90,28 @@ mechanical parks the package under UFR-7.
 
 _Runs with round 3: each fix checked against its finding plus the mechanical sync battery
 (quote exactness, coverage exactly-once — both already passing at this commit)._
+
+### Round 3 result: CONVERGED
+
+All three seats (codex `gpt-5.6-sol` @ xhigh; engaged A 87,535 tok / B 79,625 / C 68,714)
+returned **12 findings, every one wording/synchronization deciding nothing** — the
+convergence rule's mechanical-only class: C6's missing R2/R9 quotes (the consumer list
+promised them; caught by all three seats), two stale-ownership wordings left from the
+round-2 consolidation (C6's UFR-4 parenthetical; C2's as-of-DATE phrasing), and the
+R6/R9 pointers still leaking transition semantics. One sharpening folded into the
+contract: R3's check is now BOTH-directions (byte-exact presence AND consumer-derived
+completeness — a missing required quote fails), closing the blind spot A1r3 exposed in
+the advisor's own bootstrap check.
+
+## Verification pass (final)
+
+Each round-3 fix checked against its finding family: transition pointers now carry zero
+semantics (grep: no transition text outside the detective spec); C6 quotes R2+R9 and
+carries the seam-survival DoD line; the ownership wording is consolidated everywhere;
+C2's cursor wording is number-ordered. Mechanical battery at the converged tree:
+**both-directions exact-text PASS (9/9 children, expected sets derived from Consumers
+lines) · coverage exactly-once CLEAN (declared splits: FR-1, FR-11, UFR-10).**
+
+**The read is CONVERGED at 3 rounds, within the ceiling. Children file after the 0.25.0
+cut per the spec's sequencing assumption — C1 first, then C9, C3 under the FR-5 judgment
+rule; the package's own filings run under R3's disclosed bootstrap until C9 ships.**
