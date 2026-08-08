@@ -121,6 +121,7 @@ def test_apply_audit_results_duplicate_target_ids_fail_closed():
     assert out["notDischarged"] == [collided, collided]
     assert len(out["audits"]) == 2
     assert {a["identity"] for a in out["audits"]} == {FI.finding_identity(t) for t in targets}
+    assert {a["line"] for a in out["audits"]} == {1, 2}
     assert all(a["ruling"] == "not-discharged" for a in out["audits"])
 
 
@@ -139,6 +140,13 @@ def test_apply_audit_results_derives_identity_when_absent():
     t = {"id": "v0", "file": "f.py", "line": 3, "title": "t", "severity": "Important"}
     out = AU.apply_audit_results([t], [])
     assert out["audits"][0]["identity"] == FI.finding_identity(t)
+
+
+def test_apply_audit_results_line_none_when_absent():
+    # axis: missing line on target must yield None on audit entry, never KeyError
+    t = {"id": "v0", "file": "f.py", "title": "t", "severity": "Important"}
+    out = AU.apply_audit_results([t], [])
+    assert out["audits"][0]["line"] is None
 
 
 # --- D5.1: critical severity lookup via target id ------------------------------
@@ -166,13 +174,25 @@ def test_not_discharged_important_does_not_surface_critical():
     state["fixBatch"] = [f]
     state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
     tid = state["_auditTargets"][0]["id"]
-    state["_auditOutcome"] = {"notDischarged": [tid], "discharged": []}
-    state["auditRounds"] = [{"round": 2, "outcomes": []}]
-    state["findings"] = []
     state["confirmations"] = 0
     state["surfacedSinceLastPanel"] = []
+    state["round"] = 3
+    state["findings"] = []
+    state["fullPanelRan"] = False
+    state["auditRounds"] = [{"round": 2, "outcomes": [
+        {"identity": FI.finding_identity(f), "ruling": "discharged"}]}]
+    state["_auditOutcome"] = {"notDischarged": [tid], "discharged": []}
     RD._settle_delta(state, state["config"])
     assert "Critical" not in state.get("surfacedSinceLastPanel", [])
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": [tid]}
+    state["findings"] = []
+    state.pop("_fixBatch", None)
+    state["step"] = None
+    state["terminal"] = None
+    state["_changedSubjects"] = []
+    state["_changedSubjectsSincePanel"] = []
+    RD._settle_delta(state, state["config"])
+    assert not any(d["kind"] == "confirmation-rearm" for d in state["decisions"])
 
 
 def test_critical_not_discharged_rearms_confirmation():
@@ -285,6 +305,36 @@ def test_stalled_critical_excludes_discharged_sibling_same_identity():
     assert crit == [open_tgt]
 
 
+def test_stalled_critical_important_open_critical_discharged_returns_empty():
+    # axis: discharged Critical sibling must not be reported as open Critical at the cap
+    ident = FI.finding_identity(_finding(file="lib/a.py", title="unchecked input", line=10))
+    open_tgt = {"id": "lib/a.py::unchecked input@L10", "identity": ident,
+                "file": "lib/a.py", "line": 10, "title": "unchecked input",
+                "severity": "Important"}
+    closed_tgt = {"id": "lib/a.py::unchecked input@L400", "identity": ident,
+                  "file": "lib/a.py", "line": 400, "title": "unchecked input",
+                  "severity": "Critical"}
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [closed_tgt, open_tgt]
+    state["fixBatch"] = [dict(closed_tgt), dict(open_tgt)]
+    state["_auditOutcome"] = {"notDischarged": [open_tgt["id"]],
+                              "discharged": [closed_tgt["id"]]}
+    breaker = {"stalledIdentities": [ident]}
+    crit = RD._stalled_critical(state, state["config"], breaker)
+    assert crit == []
+
+
+def test_stalled_callers_share_helper_no_duplicate_alias_loops():
+    # axis: stall selection must live in one helper — no independent alias loops in callers
+    import inspect
+    src_critical = inspect.getsource(RD._stalled_critical)
+    src_stall = inspect.getsource(RD._handle_stall)
+    assert "audit_target_aliases" not in src_critical
+    assert "audit_target_aliases" not in src_stall
+    assert "_stalled_open_targets" in src_critical
+    assert "_stalled_open_targets" in src_stall
+
+
 def test_handle_stall_legacy_no_audit_outcome_uses_alias_only():
     # axis: legacy session without _auditOutcome must still select stalled alias (not empty batch)
     ident = FI.finding_identity(_finding(title="stale", line=1))
@@ -353,9 +403,59 @@ def test_settle_delta_same_location_does_not_double_add():
 
 def test_audit_target_aliases_matches_outcome_aliases():
     # axis: audit_target_aliases must agree with _audit_outcome_aliases for stall matching
-    target = {"id": "f.py::t@L1", "identity": "f.py::t", "title": "t",
-              "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1"}
-    outcome = {"identity": "f.py::t", "title": "t",
-               "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1",
-               "ruling": "not-discharged"}
-    assert CB.audit_target_aliases(target) == CB._audit_outcome_aliases(outcome)
+    cases = [
+        ({"id": "f.py::t@L1", "identity": "f.py::t", "title": "t",
+          "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1"},
+         {"identity": "f.py::t", "title": "t",
+          "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1",
+          "ruling": "not-discharged"}),
+        ({"file": "lib/a.py", "title": "unchecked input", "severity": "Critical"},
+         {"file": "lib/a.py", "title": "unchecked input", "ruling": "not-discharged"}),
+        ({"severity": "Important"},
+         {"ruling": "not-discharged"}),
+        ("not-a-dict", "also-not-a-dict"),
+    ]
+    for target, outcome in cases:
+        assert CB.audit_target_aliases(target) == CB._audit_outcome_aliases(outcome)
+
+
+def test_stalled_critical_legacy_raw_finding_matches_line_less_identity():
+    # axis: legacy session without _auditOutcome must detect stalled Critical via derived alias
+    raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical"}
+    ident = FI.finding_identity(raw)
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = [dict(raw)]
+    breaker = {"stalledIdentities": [ident]}
+    crit = RD._stalled_critical(state, state["config"], breaker)
+    assert crit == [raw]
+
+
+def test_handle_stall_legacy_raw_critical_selects_stalled_finding():
+    # axis: legacy _handle_stall must select stalled raw Critical, not fall back to full batch
+    raw = {"file": "lib/a.py", "line": 10, "title": "unchecked input", "severity": "Critical"}
+    ident = FI.finding_identity(raw)
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = [dict(raw)]
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [ident]}
+    RD._handle_stall(state, state["config"], breaker)
+    batch = state.get("_fixBatch") or []
+    assert len(batch) == 1
+    assert batch[0] == raw
+
+
+def test_stalled_open_targets_legacy_empty_fix_batch_returns_empty():
+    # axis: legacy leg with empty fixBatch yields no stalled targets
+    ident = FI.finding_identity(_finding(file="lib/a.py", title="unchecked input"))
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = []
+    breaker = {"stalledIdentities": [ident]}
+    assert RD._stalled_open_targets(state, breaker) == []
+
+
+def test_handle_stall_legacy_empty_fix_batch_falls_back_to_fix_batch():
+    # axis: empty legacy selection must preserve batch-or-fixBatch fallback
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = []
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state.get("_fixBatch") == []

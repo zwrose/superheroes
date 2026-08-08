@@ -305,3 +305,46 @@ def test_audit_breaker_two_consecutive_malformed_outcomes_stall():
     res = check_audit_breaker(rounds, 7)
     assert res["halt"] is True
     assert res["reason"] == "audit-stall"
+
+
+# --- _target_aliases / audit_target_aliases (#915) -----------------------------
+
+from circuit_breaker import audit_target_aliases, _audit_outcome_aliases, _target_aliases
+
+
+def test_target_aliases_raw_finding_derives_line_less_identity():
+    # axis: raw finding with file+title and no identity/id/class fields must not be empty
+    finding = {"file": "lib/a.py", "title": "unchecked input", "severity": "Critical"}
+    aliases = audit_target_aliases(finding)
+    expected = finding_identity(finding)
+    assert expected in aliases
+    assert aliases == {expected}
+
+
+def test_target_aliases_degenerate_record_stays_empty():
+    # axis: record with neither file nor title must never synthesize the "::" key
+    assert _target_aliases({}) == set()
+    assert _target_aliases({"severity": "Critical"}) == set()
+
+
+def test_target_aliases_non_dict_returns_empty():
+    # axis: non-dict record must yield empty alias set without raising
+    assert _target_aliases(None) == set()
+    assert _target_aliases("junk") == set()
+
+
+def test_target_aliases_explicit_identity_unchanged_no_derived_injection():
+    # axis: explicit identity path must not additionally inject a differing derived value
+    target = {"identity": "f.py::explicit", "file": "f.py", "title": "different title"}
+    aliases = audit_target_aliases(target)
+    assert aliases == {"f.py::explicit"}
+
+
+def test_target_aliases_outcome_with_class_key_byte_identical():
+    # axis: outcome carrying identity + classKey must match today's alias construction
+    outcome = {"identity": "f.py::t", "title": "t",
+               "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1",
+               "ruling": "not-discharged"}
+    aliases = _audit_outcome_aliases(outcome)
+    assert "f.py::t" in aliases
+    assert "k" in aliases or any("Security" in a for a in aliases)

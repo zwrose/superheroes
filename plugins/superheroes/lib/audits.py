@@ -172,9 +172,9 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         ident = f.get("identity")
         if not isinstance(ident, str) or not ident:
             ident = finding_identity(f) if isinstance(f, dict) else None
-        base = {"id": fid, "identity": ident, "file": f.get("file"), "title": f.get("title"),
-                "classKey": f.get("classKey"), "dimension": f.get("dimension"),
-                "taxonomy": f.get("taxonomy")}
+        base = {"id": fid, "identity": ident, "file": f.get("file"), "line": f.get("line"),
+                "title": f.get("title"), "classKey": f.get("classKey"),
+                "dimension": f.get("dimension"), "taxonomy": f.get("taxonomy")}
 
         # No matching result (silence) → fail-closed not-discharged, disclosed as unaudited.
         # An ambiguous id is IN seen_ids OR is a duplicate target id — disclosed via `ambiguous`.
