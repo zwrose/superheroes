@@ -181,7 +181,7 @@ def _normalize_golden_machine_paths(text):
     real_root = os.path.realpath(_PLUGIN_ROOT)
     text = text.replace(real_root, "${PLUGIN_ROOT}")
     return re.sub(
-        r"[^\s'\"]+/plugins/superheroes[^\s'\"]*",
+        r"/[^\s'\"()]+/plugins/superheroes[^\s'\"()]*",
         lambda m: "${PLUGIN_ROOT}" + m.group(0).split("/plugins/superheroes", 1)[1],
         text,
     )
@@ -275,7 +275,7 @@ def test_resolve_base_residuals_no_residual_section(tmp_path):
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     text, reason = RO.resolve_base_residuals(repo, base, "core.md")
     assert text == ""
-    assert reason == "no-residual-section"
+    assert reason is None
 
 
 def test_resolve_base_residuals_reads_base_not_worktree(tmp_path):
@@ -392,7 +392,8 @@ def test_golden_host_seat_landing_block_no_stub_copy():
     assert reason is None
     assert "stub" not in text.lower() or "no stub copy" in text.lower()
     assert "Payload landing path" in text
-    assert "Envelope stub (copy header" not in text
+    assert "Envelope stub:" not in text
+    assert "Copy the envelope stub" not in text
 
 
 def test_golden_stdout_channel_panel_order():
@@ -404,7 +405,7 @@ def test_golden_stdout_channel_panel_order():
     text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
     assert reason is None
     assert "stdout" in text.lower() or "final stdout" in text
-    assert "findings file" not in text or "do not write a findings file" in text
+    assert "do not write a findings file" in text
 
 
 # --- FX-1: focus normalization (fix 8) -----------------------------------------
@@ -488,6 +489,64 @@ def test_resolve_order_residuals_unreadable_store(tmp_path, monkeypatch):
     assert text == ""
     assert failure == "core-unreadable-or-absent"
     assert "store file" in prov
+
+
+def test_resolve_order_residuals_empty_store_section_is_not_failure(tmp_path, monkeypatch):
+    import mode_registry as mr
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    facts = {
+        "verifyCommand": "true", "stackTags": [], "threatModel": "t", "patterns": "p",
+        "ratifiedResiduals": "",
+    }
+    CM.write(repo, facts, "confirmed", now="2026-01-01")
+    monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.GLOBAL})
+    text, prov, failure = RO.resolve_order_residuals(repo, "abc123")
+    assert failure is None
+    assert text == ""
+    assert "store file" in prov
+
+
+def test_render_residual_block_empty_store_section_shows_none_recorded(tmp_path, monkeypatch):
+    import mode_registry as mr
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    facts = {
+        "verifyCommand": "true", "stackTags": [], "threatModel": "t", "patterns": "p",
+        "ratifiedResiduals": "",
+    }
+    CM.write(repo, facts, "confirmed", now="2026-01-01")
+    monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.GLOBAL})
+    text, prov, failure = RO.resolve_order_residuals(repo, None)
+    assert failure is None
+    ctx = _base_context(
+        ratified_residuals=text,
+        residuals_provenance=prov,
+        residuals_read_failure=failure,
+        placeholders=_panel_placeholders(),
+    )
+    rendered, reason = RO.render_order(RP.P_PANEL, "seat", ctx)
+    assert reason is None
+    assert "No ratified residuals are recorded" in rendered
+    assert "Residuals could not be read" not in rendered
+
+
+def test_render_residual_block_unreadable_store_shows_failure(tmp_path, monkeypatch):
+    import mode_registry as mr
+    repo = str(tmp_path)
+    monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.GLOBAL})
+    text, prov, failure = RO.resolve_order_residuals(repo, None)
+    assert failure == "core-unreadable-or-absent"
+    ctx = _base_context(
+        ratified_residuals=text,
+        residuals_provenance=prov,
+        residuals_read_failure=failure,
+        placeholders=_panel_placeholders(),
+    )
+    rendered, reason = RO.render_order(RP.P_PANEL, "seat", ctx)
+    assert reason is None
+    assert "Residuals could not be read" in rendered
+    assert "core-unreadable-or-absent" in rendered
 
 
 # --- FX-1: shipped resource guard (fix 1) --------------------------------------

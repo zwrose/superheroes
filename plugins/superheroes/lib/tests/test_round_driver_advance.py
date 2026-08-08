@@ -1025,6 +1025,21 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     assert RD.cmd_record_result(d, "src/f.py:3")["ok"] is True
 
 
+def test_advance_emits_synthesis_verified_json_sidecar(tmp_path, adapters):
+    """Synthesis dispatch writes verified.json from the pending findings payload."""
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    out = _advance(d, tmp_path)              # verifiers: empty roster → synthesis dispatch
+    assert out["ok"] is True
+    assert out["nextAction"]["phase"] == RD.P_SYNTHESIS
+    verified_path = os.path.join(d, "round-1", "verified.json")
+    assert os.path.isfile(verified_path)
+    verified, err = RR.read_json(verified_path)
+    assert err is None
+    assert verified == {"findings": []}
+
+
 def _drop_orders_anchor_mirror(session_dir):
     state = _state(session_dir)
     state.pop("_ordersAnchors", None)
@@ -1299,6 +1314,22 @@ def _repo_with_gate_policy(tmp_path, rules):
     return repo
 
 
+def _repo_without_gate_policy(tmp_path):
+    cm = _load_core_md()
+    repo = str(tmp_path / "repo-no-policy")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
+    in_repo = os.path.join(repo, ".claude", "superheroes", "core.md")
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    with open(in_repo, "w", encoding="utf-8") as fh:
+        fh.write(cm.render_core(facts, "confirmed", "2026-01-01", "2026-01-01"))
+    return repo
+
+
 def _parked_at_owner_gate(tmp_path, adapters, phase, name=None):
     label = name or ("park-" + phase)
     d = _session(tmp_path, name=label)
@@ -1362,37 +1393,26 @@ def test_advance_judgment_partial_match_parks(tmp_path, adapters):
     assert out["ok"] is False and out["reason"] == "advance-judgment-park"
 
 
-def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters, monkeypatch):
+def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters):
     """Fail-closed edge 3: unreadable calibration overlay → park."""
-    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, [{
+    repo = _repo_with_gate_policy(tmp_path, [{
         "gate": "present-judgment",
         "findingClass": "judgment:important",
         "disposition": "skip",
-    }]))
-    cm = _load_core_md()
-
-    def unreadable(**_kw):
-        return cm.ReviewGatePolicyGate(cm.CONFIG_UNREADABLE, None, "corrupt")
-
-    monkeypatch.setattr(RD.core_md, "review_gate_policy_for_gate", unreadable)
+    }])
+    core_path = os.path.join(repo, ".claude", "superheroes", "core.md")
+    with open(core_path, "w", encoding="utf-8") as fh:
+        fh.write("{{{corrupt core\n")
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-judgment-park"
 
 
 def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
-    """Fail-closed edge 4: shipped policy file missing → park."""
-    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, [{
-        "gate": "present-judgment",
-        "findingClass": "judgment:important",
-        "disposition": "skip",
-    }]))
-    cm = _load_core_md()
+    """Fail-closed edge 4: shipped policy file missing with no overlay → park."""
+    repo = _repo_without_gate_policy(tmp_path)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
     import review_gate_policy as rgp
-
-    def no_overlay(**_kw):
-        return cm.ReviewGatePolicyGate(cm.CONFIG_OK, None, None)
-
-    monkeypatch.setattr(RD.core_md, "review_gate_policy_for_gate", no_overlay)
 
     def missing_layer(path=None):
         return {"ok": False, "reason": "gate-policy-shipped-missing", "layer": None}
@@ -1417,6 +1437,8 @@ def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["action"] == {"choice": "accept-the-disclosed-risk"}
+    assert _state(d)["terminal"] == "converged"
 
 
 def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):

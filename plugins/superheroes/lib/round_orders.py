@@ -335,9 +335,9 @@ def resolve_base_residuals(
         if parsed is None:
             return "", "no-core-at-base"
         residuals = parsed.get("ratifiedResiduals") or ""
-        if not isinstance(residuals, str) or not residuals.strip():
+        if not isinstance(residuals, str):
             return "", "no-residual-section"
-        return residuals, None
+        return residuals.strip(), None
     except Exception as exc:  # noqa: BLE001
         return "", "git-cat-file-failed:%s" % exc
 
@@ -367,8 +367,6 @@ def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, 
         if facts is None:
             return "", provenance, "core-unreadable-or-absent"
         text = (facts.get("ratifiedResiduals") or "").strip()
-        if not text:
-            return "", provenance, "no-residual-section"
         return text, provenance, None
     except Exception as exc:  # noqa: BLE001
         return "", None, "residual-read-failed:%s" % exc

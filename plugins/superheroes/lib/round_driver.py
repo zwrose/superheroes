@@ -3832,6 +3832,12 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
             hunks = {}
         path = os.path.join(rdir, "scoped-hunks.json")
         writes.append((path, round_records.canonical(hunks).encode("utf-8")))
+    elif phase == P_SYNTHESIS:
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        path = os.path.join(rdir, "verified.json")
+        writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
     return writes
 
 
@@ -4114,6 +4120,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
+        # STUB(#723): order-input existence class not closed — placeholder set and sidecar set
+        # must derive from one source before a fail-closed guard can land here.
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
