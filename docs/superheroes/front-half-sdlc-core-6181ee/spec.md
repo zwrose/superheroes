@@ -386,6 +386,11 @@ there, and the owner's merge decision doubles as delivery acceptance only when t
 handback names it as such in so many words — an explicit line, never an inference.
   - *Acceptance (rule):* epic machinery activates at two or more children, never below; a
     single-issue spec still ends with an explicit owner delivery decision.
+  - *Acceptance (rule — shared seams):* where a single-issue spec shares a seam with an
+    epic, the seam is recorded in the epic's register and quoted verbatim in the single
+    child's issue body — the issue body stands in for the missing register on the
+    single-issue side; FR-34's reciprocity and UFR-4's amendment propagation read that
+    issue body as the single-issue side's register home.
 
 ### Spec closure
 
@@ -641,6 +646,12 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
 
 ## Amendments
 
+- **2026-08-08 (owner-stamped, substantive):** FR-36 shared seams — a single-issue spec
+  sharing a seam with an epic records the seam in the epic's register, quoted verbatim in
+  the single child's issue body, which stands in for the missing register on that side.
+  Cause: the package read's collisions seat found FR-34 (both registers) unsatisfiable
+  against FR-36 (no register) for the detective seam; owner ruled option (a) in-channel.
+  Sections touched: FR-36, Amendments.
 - **2026-08-08 (owner-stamped, substantive):** FR-32 seat composition — the package read's
   seats follow the same independence rules as code review (maker-family exclusion; the
   advisor-as-author counts as the maker), by citation to review-discipline rather than a
