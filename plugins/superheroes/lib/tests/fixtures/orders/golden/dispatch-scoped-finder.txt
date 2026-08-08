@@ -4,7 +4,7 @@ driver computed from the fixer's head diff — not the whole repository.
 ## Input
 - Scoped hunks (the only files/lines to review): /tmp/superheroes-session-wo4-golden/round-2/scoped-hunks.json
 - Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
-- Base rubric (severity, verification rules, findings format): /plugin/rubric/review-code.md
+- Base rubric (severity, verification rules, panel output format): /plugin/rubric/review-code.md
 - Core calibration (threat model, canonical patterns): /plugin/rubric/core-calibration.md
 - Review-crew layer (scope exclusions, focus hints, conventions): /home/user/proj/.claude/superheroes/layer.md
 - Verification root (read cited files here ONLY): /home/user/proj
@@ -22,18 +22,16 @@ hunks. Only flag code in `+` or `-` lines of the scoped surface.
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding before writing it out.
 - Before flagging "missing X", grep the verification root for X under different names.
-- For Important findings, check callers / reachability before asserting.
+- For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff, the scoped hunks, and the repo.
 
 ## Hard rules
 - Do NOT scan outside the scoped hunks file.
 - Do NOT decide the run's outcome.
 - **Never change the repository, and never claim a run you did not make.**
-
-## Output
-Delivery is per the base rubric's "Findings output format" section. Write candidate findings to
-/tmp/superheroes-session-wo4-golden/round-2/scoped-findings.json as a JSON array — write `[]` rather than skipping the file when you
-have nothing to flag.
+- Deliver per the base rubric's panel output-format section. Write candidate records to
+  /tmp/superheroes-session-wo4-golden/round-2/scoped-findings.json as a JSON array — write `[]` rather than skipping the file when you
+  have nothing to flag.
 
 ## Ratified residuals (owner-ratified, quoted data)
 

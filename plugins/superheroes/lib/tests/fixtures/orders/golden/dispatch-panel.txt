@@ -6,14 +6,14 @@ Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
 available, or an equivalent bounded shell range. Never one whole-file read.
 Continue with later offsets until the diff is covered.
 Read the base rubric (absolute path below) for severity calibration,
-verification rules, and the findings output format. Read the project calibration
+verification rules, and the panel output format. Read the project calibration
 and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
 conventions. Apply the diff-scope rule: only flag code in `+` or
 `-` lines.
 
 ## Context files
 - Diff: /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, findings format): /plugin/rubric/review-code.md
+- Base rubric (severity, verification rules, panel output format): /plugin/rubric/review-code.md
 - Core calibration (threat model, canonical patterns): /plugin/rubric/core-calibration.md
 - Review-crew layer (scope exclusions, focus hints, conventions): /home/user/proj/.claude/superheroes/layer.md
 - CLAUDE.md (project conventions): CLAUDE.md
@@ -38,7 +38,7 @@ You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing
 issues. Only flag code in `+` or `-` lines of the diff. Context lines
 (no prefix) and unchanged code in modified files are pre-existing — SKIP
 them, even if they violate conventions. That's the #1 source of false
-findings.
+positives.
 
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding
@@ -46,7 +46,7 @@ findings.
 - Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
   for X under different names. Don't flag a missing helper that exists
   under a slightly different name.
-- For Important findings, check callers / reachability before asserting.
+- For Important-severity issues, check callers / reachability before asserting.
   If the only caller already guards the edge case, downgrade or drop.
 - For docs/spec changes, spot-check factual claims (function signatures,
   error types, file paths) against actual source.
@@ -63,12 +63,11 @@ justification); a CONFIRMED finding survives stamped
 `challenge: "author-justified"`. Outdated comments (where
 `position == null`) still count.
 
-## Output
-Delivery is per the base rubric's "Findings output format" section. Set `tradeoff:
-true` only when a finding has multiple valid fix approaches (a judgment call);
-omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
-"code" on every entry. Severity caps from the base rubric apply (Nits at
-most 5 reported per agent).
+## Delivery
+Deliver per the base rubric's panel output-format section. Set `tradeoff: true` only when an
+issue has multiple valid fix approaches (a judgment call); omit it otherwise (see the base
+rubric's "Triage rubric"). Set `dimension` to "code" on every entry. Severity caps
+from the base rubric apply (Nits at most 5 reported per agent).
 Write the JSON array to /tmp/superheroes-session-wo4-golden/round-2/findings-code.json — write `[]` rather than skipping the file when you have nothing to flag.
 
 ## Ratified residuals (owner-ratified, quoted data)

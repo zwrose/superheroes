@@ -1,13 +1,16 @@
 """Tests for `round_orders` — template renderer and base residual resolver (#723)."""
 import json
 import os
+import re
 import subprocess
 
 import pytest
 
 import core_md as CM
+import round_adapters as RA
 import round_orders as RO
 import round_phases as RP
+import round_records as RR
 
 _FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "orders")
 _CLAUSE_MANIFEST = os.path.join(_FIXTURES, "clause_manifest.json")
@@ -65,7 +68,6 @@ def _verifier_placeholders():
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "VERIFICATION_ROOT": _REPO,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
-        "VERDICT_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "verdicts-0.json"),
     }
 
 
@@ -110,7 +112,6 @@ def _audits_placeholders():
         "VERIFICATION_ROOT": _REPO,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "TARGET_ID": "finding::auth.py::12",
-        "AUDIT_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "audit-t0.json"),
     }
 
 
@@ -153,7 +154,7 @@ _GOLDEN_CONTEXTS = {
     ),
     RP.P_AUDITS: lambda: _base_context(
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-audits",
-                                  "auditor:t0.a0.json"),
+                                  RR.storage_key("finding::auth.py::12") + ".a0.json"),
         placeholders=_audits_placeholders(),
     ),
     RP.P_SCOPED: lambda: _base_context(
@@ -309,6 +310,42 @@ def test_clause_manifest_survives_in_rendered_orders():
         for clause in clauses:
             assert _clause_in_rendered(clause, text), (
                 "missing clause %r in %s" % (clause, template_name))
+
+
+# --- template contract census --------------------------------------------------
+
+
+def _template_body(phase):
+    path = RO.order_template_path(phase)
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _contract_vocabulary(phase):
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None, reason
+    fields = set()
+    fields.update(contract.get("required") or [])
+    fields.update(contract.get("optional") or [])
+    fields.update((contract.get("conditional") or {}).keys())
+    enum_values = []
+    for values in (contract.get("enums") or {}).values():
+        enum_values.extend(values)
+    return fields, enum_values
+
+
+@pytest.mark.parametrize("phase", list(RO.ORDER_PHASES))
+def test_template_body_does_not_restate_payload_contract(phase):
+    body = _template_body(phase)
+    fields, enum_values = _contract_vocabulary(phase)
+    violations = []
+    for field in sorted(fields):
+        if re.search(r"\b" + re.escape(field) + r"\b", body):
+            violations.append("field %s in %s" % (field, RO.order_template_path(phase)))
+    for value in enum_values:
+        if re.search(r"\b" + re.escape(value) + r"\b", body):
+            violations.append("enum value %r in %s" % (value, RO.order_template_path(phase)))
+    assert not violations, "; ".join(violations)
 
 
 # --- golden fixtures -----------------------------------------------------------

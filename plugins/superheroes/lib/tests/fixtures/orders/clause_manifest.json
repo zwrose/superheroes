@@ -3,7 +3,7 @@
     "only flag code in `+` or\n`-` lines",
     "`file:line` citation required. No citation",
     "You are reviewing CHANGES MADE BY THIS PR/BRANCH",
-    "That's the #1 source of false\nfindings",
+    "That's the #1 source of false\npositives",
     "raise the finding AND note the prior justification",
     "Base rubric (binding) > CLAUDE.md (conventions)",
     "Never one whole-file read",
@@ -15,15 +15,15 @@
     "You are the per-finding verifier for one cluster",
     "You NEVER read the PR's own description, title, or any\nauthor narrative — judge only from the diff and the repo",
     "verdict: \"CONFIRMED\" | \"PLAUSIBLE\" | \"REFUTED\"",
-    "id: the finding's staged id, echoed verbatim",
+    "id: the issue's staged id, echoed verbatim",
     "Never change the repository, and never claim a run you did not make",
-    "Judge only the findings in this cluster",
+    "Judge only the issues in this cluster",
     "Never write a probe into the tree",
-    "exactly one entry per cluster finding"
+    "exactly one entry per cluster issue"
   ],
   "dispatch-synthesis": [
     "Your job is **not** keep/drop",
-    "you group findings that share the same root cause",
+    "you group issues that share the same root cause",
     "coverage guarantee",
     "synthesis drops nothing",
     "CONFIRMED only when a member at the merged (highest) severity is CONFIRMED-with-evidence",
@@ -38,6 +38,6 @@
     "retry ONCE. If it still fails, STOP and report CHECK_FAILED",
     "autofix-probe-",
     "Commit ALL changes in ONE commit",
-    "do NOT guess. Report it under escalated"
+    "do NOT guess. Report it for owner escalation (see Payload contract)"
   ]
 }

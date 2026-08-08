@@ -232,7 +232,7 @@ def test_fail_closed_stall_accept_risk_on_ineligible_class():
             ],
         }
     )
-    loaded = RGP._parse_overlay(overlay)
+    loaded = RGP.parse_overlay(overlay)
     assert loaded["ok"] is False
     assert loaded["reason"] == "layer-disposition-not-allowed"
 
@@ -265,7 +265,7 @@ def test_stall_ineligible_matching_accept_risk_rule_drops_layer():
             ],
         }
     )
-    parsed = RGP._parse_overlay(overlay)
+    parsed = RGP.parse_overlay(overlay)
     assert parsed["ok"] is False
     assert parsed["reason"] == "layer-disposition-not-allowed"
 
@@ -282,7 +282,7 @@ def test_whole_layer_drop_one_invalid_rule_discards_entire_layer():
             ],
         }
     )
-    parsed = RGP._parse_overlay(overlay)
+    parsed = RGP.parse_overlay(overlay)
     assert parsed["ok"] is False
     assert parsed["reason"] == "layer-rule-not-object"
     result = RGP.resolve_judgment([{"findingClass": cls, "id": "a"}], overlay)

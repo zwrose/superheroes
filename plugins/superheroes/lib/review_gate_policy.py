@@ -181,7 +181,7 @@ def load_shipped_layer(path: str | None = None) -> dict:
     return {"ok": True, "reason": None, "layer": layer}
 
 
-def _parse_overlay(overlay: dict | None) -> dict:
+def parse_overlay(overlay: dict | None) -> dict:
     if not overlay:
         return {"ok": False, "reason": "overlay-absent", "layer": None}
     if not isinstance(overlay, dict):
@@ -232,7 +232,7 @@ def _active_layers(overlay: dict | None) -> tuple[list[dict], list[dict]]:
     records: list[dict] = []
     stack: list[dict] = []
 
-    overlay_result = _parse_overlay(overlay)
+    overlay_result = parse_overlay(overlay)
     overlay_identity = None
     if isinstance(overlay, dict) and isinstance(overlay.get("identity"), dict):
         overlay_identity = overlay["identity"]

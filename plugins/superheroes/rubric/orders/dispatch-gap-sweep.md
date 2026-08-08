@@ -4,7 +4,7 @@ concerns.
 
 ## Input
 - Full diff (read in bounded chunks): {{DIFF_PATH}}
-- Base rubric (severity, verification rules, findings format): {{RUBRIC_PATH}}
+- Base rubric (severity, verification rules, panel output format): {{RUBRIC_PATH}}
 - Core calibration (threat model, canonical patterns): {{CORE_PATH}}
 - Review-crew layer (scope exclusions, focus hints, conventions): {{LAYER_PATH}}
 - Verification root (read cited files here ONLY): {{VERIFICATION_ROOT}}
@@ -23,14 +23,12 @@ files are pre-existing — SKIP them, even if they violate conventions.
 ## Verification rules
 - `file:line` citation required. No citation → drop your own finding before writing it out.
 - Before flagging "missing X", grep the verification root for X under different names.
-- For Important findings, check callers / reachability before asserting.
+- For Important-severity issues, check callers / reachability before asserting.
 - Judge only from the diff and the repo — never the PR description or author narrative.
 
 ## Hard rules
 - Do NOT decide the run's outcome or re-run panel seats.
 - **Never change the repository, and never claim a run you did not make.**
-
-## Output
-Delivery is per the base rubric's "Findings output format" section. Write candidate findings to
-{{FINDINGS_OUTPUT_PATH}} as a JSON array — write `[]` rather than skipping the file when you
-have nothing to flag.
+- Deliver per the base rubric's panel output-format section. Write candidate records to
+  {{FINDINGS_OUTPUT_PATH}} as a JSON array — write `[]` rather than skipping the file when you
+  have nothing to flag.

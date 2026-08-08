@@ -195,7 +195,7 @@ def _collect_review_gate_policy(cwd, root):
     overlay_raw = gate.overlay
     overlay_parse = None
     if core_md.review_gate_config_is_ok(gate) and overlay_raw is not None:
-        overlay_parse = review_gate_policy._parse_overlay(overlay_raw)
+        overlay_parse = review_gate_policy.parse_overlay(overlay_raw)
     return {
         "gateStatus": gate.status,
         "gateDetail": gate.detail,
@@ -211,11 +211,9 @@ def _review_gate_policy_lines(data):
     if gate_status == core_md.CONFIG_ABSENT:
         return ["core.md: absent (no calibration overlay possible)"]
     if gate_status == core_md.CONFIG_ROOT_UNAVAILABLE:
-        detail = data.get("gateDetail") or "repo root unavailable"
-        return ["core.md: repo root unavailable (%s)" % detail]
+        return ["core.md: repo root unavailable"]
     if gate_status == core_md.CONFIG_UNREADABLE:
-        detail = data.get("gateDetail") or "unreadable"
-        return ["core.md: unreadable (%s)" % detail]
+        return ["core.md: unreadable"]
 
     lines = []
     shipped = data.get("shipped") or {}
