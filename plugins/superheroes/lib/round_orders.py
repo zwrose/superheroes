@@ -25,6 +25,8 @@ refusal. A successful render contains no literal ``{{...}}`` anywhere.
   * ``landing_path`` — absolute path this seat must write its result to
   * ``envelope_stub_path`` — absolute path to the envelope stub to copy header fields from
   * ``ratified_residuals`` — resolved residual prose (may be empty string)
+  * ``residuals_provenance`` — one line stating which calibration mode produced the list
+  * ``residuals_read_failure`` — unreadable/absent reason, or None when the read succeeded
   * ``payload`` — the phase payload dict from the driver
   * ``host_seat`` — bool; host seats write payload-only, engine seats write the full envelope
 
@@ -44,6 +46,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import core_md  # noqa: E402
+import mode_registry  # noqa: E402
 import round_adapters  # noqa: E402
 import round_phases  # noqa: E402
 
@@ -74,6 +77,8 @@ _COMMON_CONTEXT_KEYS = (
     "landing_path",
     "envelope_stub_path",
     "ratified_residuals",
+    "residuals_provenance",
+    "residuals_read_failure",
     "payload",
     "host_seat",
     "placeholders",
@@ -132,21 +137,42 @@ def _format_payload_contract(phase: str) -> tuple[str | None, str | None]:
     return "\n".join(lines), None
 
 
-def _format_residual_block(ratified_residuals: object) -> str:
-    text = ratified_residuals if isinstance(ratified_residuals, str) else ""
+def _format_residual_block(context: dict) -> str:
+    failure = context.get("residuals_read_failure")
+    provenance = context.get("residuals_provenance")
+    text = context.get("ratified_residuals")
+    text = text if isinstance(text, str) else ""
+    prov_line = provenance if isinstance(provenance, str) and provenance.strip() else ""
+    if isinstance(failure, str) and failure:
+        lines = ["## Ratified residuals", ""]
+        if prov_line:
+            lines.append(prov_line)
+            lines.append("")
+        lines.append("Residuals could not be read: %s." % failure)
+        return "\n".join(lines) + "\n"
     if text.strip():
-        return (
-            "## Ratified residuals (owner-ratified, quoted data)\n\n"
+        lines = [
+            "## Ratified residuals (owner-ratified, quoted data)",
+            "",
+        ]
+        if prov_line:
+            lines.append(prov_line)
+            lines.append("")
+        lines.extend([
             "A finding that reduces wholly to a recorded residual below is a non-blocking "
-            "restatement, not a blocker.\n\n"
-            "-----\n"
-            "%s\n"
-            "-----\n"
-        ) % text.rstrip()
-    return (
-        "## Ratified residuals\n\n"
-        "No ratified residuals are recorded for this project at the review base.\n"
-    )
+            "restatement, not a blocker.",
+            "",
+            "-----",
+            text.rstrip(),
+            "-----",
+        ])
+        return "\n".join(lines) + "\n"
+    lines = ["## Ratified residuals", ""]
+    if prov_line:
+        lines.append(prov_line)
+        lines.append("")
+    lines.append("No ratified residuals are recorded for this project at the review base.")
+    return "\n".join(lines) + "\n"
 
 
 def _format_landing_block(context: dict) -> tuple[str | None, str | None]:
@@ -160,11 +186,9 @@ def _format_landing_block(context: dict) -> tuple[str | None, str | None]:
     lines = ["## Return your result", ""]
     if host_seat:
         lines.extend([
-            "Write **only** your payload artifact to the landing path below. Copy every envelope "
-            "header field from the stub file verbatim; add only the payload described in the "
-            "Payload contract section above.",
+            "Write **only** your payload artifact to the landing path below — no envelope header, "
+            "no stub copy.",
             "",
-            "- Envelope stub (copy header fields verbatim): %s" % stub,
             "- Payload landing path: %s" % landing,
         ])
     else:
@@ -262,7 +286,7 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         landing_block, lreason = _format_landing_block(context)
         if lreason:
             return _refuse(lreason)
-        residual_block = _format_residual_block(context.get("ratified_residuals"))
+        residual_block = _format_residual_block(context)
 
         order = "\n\n".join([body.rstrip(), residual_block.rstrip(),
                              contract_block.rstrip(), landing_block.rstrip()]) + "\n"
@@ -316,3 +340,35 @@ def resolve_base_residuals(
         return residuals, None
     except Exception as exc:  # noqa: BLE001
         return "", "git-cat-file-failed:%s" % exc
+
+
+def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, str | None, str | None]:
+    """Read ratified residuals for order rendering — base-pinned in-repo, store-direct out-of-repo.
+
+    Returns ``(residual_text, provenance_line, failure_reason)``. ``failure_reason`` is set when the
+    calibration read failed or is unreadable; never claim 'none recorded' on a failure."""
+    try:
+        if not isinstance(repo_root, str) or not repo_root.strip():
+            return "", None, "no-repo-root"
+        mode = mode_registry.resolve(repo_root).get("mode")
+        if mode == mode_registry.IN_REPO:
+            provenance = (
+                "Residuals below are read from the review base commit (base-pinned)."
+            )
+            core_rel = ".claude/superheroes/core.md"
+            text, reason = resolve_base_residuals(repo_root, base_oid, core_rel)
+            if reason:
+                return "", provenance, reason
+            return text, provenance, None
+        provenance = (
+            "Residuals below are read from the calibration store file (not base-pinned)."
+        )
+        facts = core_md.read(repo_root)
+        if facts is None:
+            return "", provenance, "core-unreadable-or-absent"
+        text = (facts.get("ratifiedResiduals") or "").strip()
+        if not text:
+            return "", provenance, "no-residual-section"
+        return text, provenance, None
+    except Exception as exc:  # noqa: BLE001
+        return "", None, "residual-read-failed:%s" % exc

@@ -1364,7 +1364,11 @@ def test_advance_judgment_partial_match_parks(tmp_path, adapters):
 
 def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters, monkeypatch):
     """Fail-closed edge 3: unreadable calibration overlay → park."""
-    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, []))
+    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }]))
     cm = _load_core_md()
 
     def unreadable(**_kw):
@@ -1377,8 +1381,18 @@ def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters, monkeypat
 
 def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
     """Fail-closed edge 4: shipped policy file missing → park."""
-    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, []))
+    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }]))
+    cm = _load_core_md()
     import review_gate_policy as rgp
+
+    def no_overlay(**_kw):
+        return cm.ReviewGatePolicyGate(cm.CONFIG_OK, None, None)
+
+    monkeypatch.setattr(RD.core_md, "review_gate_policy_for_gate", no_overlay)
 
     def missing_layer(path=None):
         return {"ok": False, "reason": "gate-policy-shipped-missing", "layer": None}
@@ -1386,6 +1400,23 @@ def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monke
     monkeypatch.setattr(rgp, "load_shipped_layer", missing_layer)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+
+
+def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
+    """Stall gate authorized advance via accept-the-disclosed-risk when eligible."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-stall-menu",
+        "findingClass": "stall:accept-risk-eligible",
+        "disposition": "accept-the-disclosed-risk",
+    }])
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL)
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    state["_acceptRiskEligible"] = True
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out.get("policyApplied") is not None
 
 
 def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):

@@ -49,8 +49,10 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import cli_contract  # noqa: E402
 import audits  # noqa: E402
+import calibration_resolve  # noqa: E402
 import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
+import mode_registry  # noqa: E402
 import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
@@ -3735,6 +3737,100 @@ def _plugin_resource_root():
     return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
 
+def _shipped_rubric_path():
+    return os.path.join(_plugin_resource_root(), "rubric", "review-base.md")
+
+
+def _shipped_escalation_wrapper_path():
+    return os.path.join(_plugin_resource_root(), "lib", "escalation_resolve.py")
+
+
+def _normalize_focus_notes(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return str(value)
+
+
+def _calibration_path_placeholder(path, label):
+    if isinstance(path, str) and path and os.path.isfile(path):
+        return path
+    return "(%s calibration not resolved for this project)" % label
+
+
+def _resolved_calibration_paths(repo_root):
+    """(core_path_or_None, layer_path_or_None) from calibration_resolve — storage-mode aware."""
+    cwd = repo_root if isinstance(repo_root, str) and repo_root else os.getcwd()
+    try:
+        info = calibration_resolve.resolve(cwd)
+    except calibration_resolve.UnresolvableRootError:
+        return None, None
+    core = info.get("dispatch_core")
+    layer = info.get("dispatch_layer")
+    core_path = core if isinstance(core, str) and os.path.isfile(core) else None
+    layer_path = layer if isinstance(layer, str) and os.path.isfile(layer) else None
+    return core_path, layer_path
+
+
+def _seat_is_engine(row):
+    """True when the seat map's vendor is an external engine (codex/cursor)."""
+    return row.get("vendor") in _ENGINE_VENDORS
+
+
+def _shipped_resource_refusal(placeholders):
+    """Refuse when a shipped plugin resource path in placeholders does not exist."""
+    if not isinstance(placeholders, dict):
+        return None
+    checks = (
+        ("RUBRIC_PATH", _shipped_rubric_path()),
+        ("ESCALATION_WRAPPER_PATH", _shipped_escalation_wrapper_path()),
+    )
+    for name, expected in checks:
+        emitted = placeholders.get(name)
+        if emitted == expected and not os.path.isfile(expected):
+            return "shipped-resource-missing:%s" % name
+    return None
+
+
+def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
+    """[(path, bytes)] sidecars named in orders, derived from the phase payload."""
+    writes = []
+    rdir = round_records.round_dir(session_dir, rnd)
+    payload = pending_payload if isinstance(pending_payload, dict) else {}
+    if phase == P_VERIFIERS:
+        clusters = payload.get("clusters")
+        if not isinstance(clusters, list):
+            clusters = []
+        clusters_dir = os.path.join(rdir, "clusters")
+        for index, cluster in enumerate(clusters):
+            if not isinstance(cluster, dict):
+                cluster = {}
+            path = os.path.join(clusters_dir, "%d.json" % index)
+            writes.append((path, round_records.canonical(cluster).encode("utf-8")))
+    elif phase == P_AUDITS:
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        audit_dir = os.path.join(rdir, "audit-targets")
+        for index, (seat_key, occurrence) in enumerate(round_records.roster_slots(roster)):
+            target = targets[index] if index < len(targets) else {}
+            if not isinstance(target, dict):
+                target = {}
+            skey = round_records.storage_key(seat_key, occurrence)
+            path = os.path.join(audit_dir, "%s.json" % skey)
+            writes.append((path, round_records.canonical(target).encode("utf-8")))
+    elif phase == P_SCOPED:
+        hunks = payload.get("hunks")
+        if not isinstance(hunks, dict):
+            hunks = {}
+        path = os.path.join(rdir, "scoped-hunks.json")
+        writes.append((path, round_records.canonical(hunks).encode("utf-8")))
+    return writes
+
+
 def _session_meta(session_dir):
     obj, err = round_records.read_json(os.path.join(session_dir, round_records.META_FILE))
     return obj if (err is None and isinstance(obj, dict)) else {}
@@ -3778,17 +3874,17 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     rdir = round_records.round_dir(session_dir, rnd)
     diff_path = _ensure_round_diff(session_dir, rnd, state)
-    plugin_root = _plugin_resource_root()
-    rubric_path = os.path.join(plugin_root, "rubric", "review-code.md")
-    core_path = os.path.join(plugin_root, "rubric", "core-calibration.md")
-    layer_path = os.path.join(repo_root, ".claude", "superheroes", "layer.md")
+    rubric_path = _shipped_rubric_path()
+    core_resolved, layer_resolved = _resolved_calibration_paths(repo_root)
+    core_path = _calibration_path_placeholder(core_resolved, "Core")
+    layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer")
     payload = pending_payload if isinstance(pending_payload, dict) else {}
     ph = {}
 
     if phase == P_PANEL:
         dim = AGENT_SUFFIX.get(seat_key, seat_key)
         row = _seat_dispatch_row(state, seat_key)
-        channel = "stdout" if row.get("engine") in _ENGINE_VENDORS else "file"
+        channel = "stdout" if _seat_is_engine(row) else "file"
         ph = {
             "MODE": meta.get("mode") or cfg.get("mode") or "branch",
             "REPO": meta.get("repo") or cfg.get("repo") or "unknown",
@@ -3799,7 +3895,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": os.path.join(session_dir, "repo"),
             "PRIOR_COMMENTS_PATH": os.path.join(session_dir, "prior-comments.json"),
-            "FOCUS_NOTES": meta.get("focusNotes") or cfg.get("focusNotes") or "",
+            "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim,
             "CHANNEL": channel,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % dim),
@@ -3862,7 +3958,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
             "REPO_ROOT": repo_root,
-            "ESCALATION_WRAPPER_PATH": os.path.join(plugin_root, "lib", "fixer_escalation.py"),
+            "ESCALATION_WRAPPER_PATH": _shipped_escalation_wrapper_path(),
             "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
             "ROUND": str(rnd),
         }
@@ -3872,32 +3968,34 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
                                 pending_payload):
     row = _seat_dispatch_row(state, seat_key)
-    host_seat = row.get("engine") not in _ENGINE_VENDORS
+    host_seat = not _seat_is_engine(row)
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
-    residuals, _res_reason = round_orders.resolve_base_residuals(
-        (state.get("config") or {}).get("repoRoot") or _session_meta(session_dir).get("repoRoot"),
-        (state.get("config") or {}).get("baseRef") or _session_meta(session_dir).get("baseRef"),
-        ".claude/superheroes/core.md")
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir)
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    base_ref = cfg.get("baseRef") or meta.get("baseRef")
+    residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
     if not isinstance(residuals, str):
         residuals = ""
+    core_resolved, layer_resolved = _resolved_calibration_paths(repo_root)
     return {
         "session_dir": session_dir,
         "round": rnd,
         "attempt": attempt,
         "diff_path": _ensure_round_diff(session_dir, rnd, state),
-        "rubric_path": os.path.join(_plugin_resource_root(), "rubric", "review-code.md"),
-        "core_path": os.path.join(_plugin_resource_root(), "rubric", "core-calibration.md"),
-        "layer_path": os.path.join(
-            (state.get("config") or {}).get("repoRoot") or os.getcwd(),
-            ".claude", "superheroes", "layer.md"),
-        "repo_root": (state.get("config") or {}).get("repoRoot") or os.getcwd(),
+        "rubric_path": _shipped_rubric_path(),
+        "core_path": core_resolved or "",
+        "layer_path": layer_resolved or "",
+        "repo_root": repo_root,
         "landing_path": paths["landing_path"],
         "envelope_stub_path": paths["envelope_stub_path"],
         "ratified_residuals": residuals,
+        "residuals_provenance": prov,
+        "residuals_read_failure": res_failure,
         "payload": pending_payload if isinstance(pending_payload, dict) else {},
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
-                                              state.get("config") or {}, pending_payload,
+                                              cfg, pending_payload,
                                               session_dir, rnd, paths),
     }, paths
 
@@ -4008,6 +4106,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         skey = round_records.storage_key(seat_key, occurrence)
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload)
+        resource_reason = _shipped_resource_refusal(context.get("placeholders"))
+        if resource_reason is not None:
+            raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
@@ -4042,11 +4143,14 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     journal_entry = _journal_entry_for_commit(session_dir, journal_cmd, "orders-emitted",
                                               phase=phase, round=rnd, attempt=attempt,
                                               manifestSha256=manifest_sha)
+    sidecar_writes = _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload)
     try:
         c = round_commit.begin(session_dir, "orders-emit")
         c.add_replace_file(os.path.join(session_dir, STATE_FILE),
                            _canonical(state).encode("utf-8"))
         c.add_replace_file(path, round_records.canonical(manifest).encode("utf-8"))
+        for sidecar_path, sidecar_bytes in sidecar_writes:
+            c.add_replace_file(sidecar_path, sidecar_bytes)
         for order_path, order_bytes, stub_path, order_sha, row, occurrence, seat_key in rendered:
             c.add_replace_file(order_path, order_bytes)
             # Projection of the anchor, never the authority — ingestion validates the mirrored hash.

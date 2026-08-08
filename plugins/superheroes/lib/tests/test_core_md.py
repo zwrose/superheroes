@@ -3069,6 +3069,21 @@ def test_write_review_gate_policy_written_and_read_roundtrip(tmp_path):
     assert gate.overlay["policy"]["rules"] == policy["rules"]
 
 
+def test_confirm_preserves_review_gate_policy_after_write(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
+    CM.write(repo, facts, "provisional", root=store, now="2026-06-26")
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    record = CM.read(repo, root=store)
+    assert record is not None
+    assert record.get("reviewGatePolicy") is not None
+    assert record["reviewGatePolicy"]["policy"]["rules"] == policy["rules"]
+
+
 def test_write_review_gate_policy_clear_overlay(tmp_path):
     repo, store = _write_core_for_pin_tests(tmp_path)
     policy = _valid_gate_policy([_judgment_skip_rule()])

@@ -7,7 +7,7 @@ new issues.
   fixer's head diff hunk(s) covering this target.
 - Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
 - Verification root (read cited files here ONLY): /home/user/proj
-- Severity rubric (the only tiers; calibration): /plugin/rubric/review-code.md
+- Severity rubric (the only tiers; calibration): /private/tmp/sh723-pr2/plugins/superheroes/rubric/review-base.md
 - Project conventions: CLAUDE.md and the project profile.
 - Target identifier (echo verbatim in your result): finding::auth.py::12
 
@@ -24,6 +24,8 @@ finding and whether any new issues were introduced. Cite quoted support for ever
 - Transport keys use the per-location target identifier — never a line-less identity alias.
 
 ## Ratified residuals (owner-ratified, quoted data)
+
+Residuals below are read from the review base commit (base-pinned).
 
 A finding that reduces wholly to a recorded residual below is a non-blocking restatement, not a blocker.
 

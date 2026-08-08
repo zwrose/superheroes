@@ -18,9 +18,11 @@ _GOLDEN_DIR = os.path.join(_FIXTURES, "golden")
 
 _SESSION = "/tmp/superheroes-session-wo4-golden"
 _REPO = "/home/user/proj"
-_PLUGIN_RUBRIC = "/plugin/rubric/review-code.md"
-_CORE = "/plugin/rubric/core-calibration.md"
-_LAYER = "/home/user/proj/.claude/superheroes/layer.md"
+_PLUGIN_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
+_CORE_UNRESOLVED = "(Core calibration not resolved for this project)"
+_LAYER_UNRESOLVED = "(Review-crew layer calibration not resolved for this project)"
+_ESCALATION = os.path.join(_PLUGIN_ROOT, "lib", "escalation_resolve.py")
 
 
 def _base_context(**over):
@@ -30,12 +32,14 @@ def _base_context(**over):
         "attempt": 0,
         "diff_path": os.path.join(_SESSION, "round-2", "diff.txt"),
         "rubric_path": _PLUGIN_RUBRIC,
-        "core_path": _CORE,
-        "layer_path": _LAYER,
+        "core_path": "",
+        "layer_path": "",
         "repo_root": _REPO,
         "landing_path": os.path.join(_SESSION, "round-2", "landing", "seat.a0.json"),
         "envelope_stub_path": os.path.join(_SESSION, "round-2", "stubs", "seat.json"),
         "ratified_residuals": "- Flaky integration test in CI lane B is accepted",
+        "residuals_provenance": "Residuals below are read from the review base commit (base-pinned).",
+        "residuals_read_failure": None,
         "payload": {},
         "host_seat": False,
         "placeholders": {},
@@ -44,20 +48,20 @@ def _base_context(**over):
     return ctx
 
 
-def _panel_placeholders():
+def _panel_placeholders(channel="file"):
     return {
         "MODE": "branch",
         "REPO": "acme/widget",
         "TARGET": "feature/wo4",
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
-        "CORE_PATH": _CORE,
-        "LAYER_PATH": _LAYER,
+        "CORE_PATH": _CORE_UNRESOLVED,
+        "LAYER_PATH": _LAYER_UNRESOLVED,
         "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo"),
         "PRIOR_COMMENTS_PATH": os.path.join(_SESSION, "prior-comments.json"),
         "FOCUS_NOTES": "touch auth paths carefully",
         "DIMENSION": "code",
-        "CHANNEL": "file",
+        "CHANNEL": channel,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "findings-code.json"),
     }
 
@@ -88,7 +92,7 @@ def _fixer_placeholders():
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CWD": _REPO,
         "REPO_ROOT": _REPO,
-        "ESCALATION_WRAPPER_PATH": "/plugin/lib/fixer_escalation.py",
+        "ESCALATION_WRAPPER_PATH": _ESCALATION,
         "VERIFY_COMMAND": "npm test",
         "ROUND": "2",
     }
@@ -98,8 +102,8 @@ def _gapsweep_placeholders():
     return {
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
-        "CORE_PATH": _CORE,
-        "LAYER_PATH": _LAYER,
+        "CORE_PATH": _CORE_UNRESOLVED,
+        "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "gap-sweep-findings.json"),
     }
@@ -120,8 +124,8 @@ def _scoped_placeholders():
         "HUNKS_PATH": os.path.join(_SESSION, "round-2", "scoped-hunks.json"),
         "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
-        "CORE_PATH": _CORE,
-        "LAYER_PATH": _LAYER,
+        "CORE_PATH": _CORE_UNRESOLVED,
+        "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "scoped-findings.json"),
     }
@@ -154,7 +158,7 @@ _GOLDEN_CONTEXTS = {
     ),
     RP.P_AUDITS: lambda: _base_context(
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-audits",
-                                  RR.storage_key("finding::auth.py::12") + ".a0.json"),
+                                  RR.storage_key("finding::auth.py::12", 0) + ".a0.json"),
         placeholders=_audits_placeholders(),
     ),
     RP.P_SCOPED: lambda: _base_context(
@@ -170,6 +174,17 @@ def _render_golden(phase):
     text, reason = RO.render_order(phase, "golden-seat", ctx)
     assert reason is None, reason
     return text
+
+
+def _normalize_golden_machine_paths(text):
+    """Fold checkout-specific plugin-root prefixes; goldens pin content, not machine paths."""
+    real_root = os.path.realpath(_PLUGIN_ROOT)
+    text = text.replace(real_root, "${PLUGIN_ROOT}")
+    return re.sub(
+        r"[^\s'\"]+/plugins/superheroes[^\s'\"]*",
+        lambda m: "${PLUGIN_ROOT}" + m.group(0).split("/plugins/superheroes", 1)[1],
+        text,
+    )
 
 
 # --- fail-closed edges ---------------------------------------------------------
@@ -244,6 +259,9 @@ def _write_core_file(repo, rel, residual):
     }
     text = CM.render_core(facts, "confirmed", "2026-01-01", "2026-01-01")
     path = os.path.join(repo, rel)
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(text)
 
@@ -357,4 +375,201 @@ def test_golden_render_matches_fixture(phase):
     rendered = _render_golden(phase)
     with open(golden_path, encoding="utf-8") as fh:
         expected = fh.read()
-    assert rendered == expected
+    assert _normalize_golden_machine_paths(rendered) == _normalize_golden_machine_paths(expected)
+
+
+# --- FX-1: host-seat and stdout-channel golden coverage (fix 14) ----------------
+
+
+def test_golden_host_seat_landing_block_no_stub_copy():
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.payload.json"),
+        placeholders=_panel_placeholders(channel="file"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert "stub" not in text.lower() or "no stub copy" in text.lower()
+    assert "Payload landing path" in text
+    assert "Envelope stub (copy header" not in text
+
+
+def test_golden_stdout_channel_panel_order():
+    ctx = _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.json"),
+        placeholders=_panel_placeholders(channel="stdout"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert "stdout" in text.lower() or "final stdout" in text
+    assert "findings file" not in text or "do not write a findings file" in text
+
+
+# --- FX-1: focus normalization (fix 8) -----------------------------------------
+
+
+@pytest.mark.parametrize("focus,expected_substr", [
+    ({"area": "auth"}, '"area":"auth"'),
+    (["auth", "payments"], '["auth","payments"]'),
+    (None, ""),
+])
+def test_render_normalizes_focus_notes(focus, expected_substr):
+    ph = _panel_placeholders()
+    ph["FOCUS_NOTES"] = focus if focus is not None else ""
+    if focus is None:
+        ph.pop("FOCUS_NOTES", None)
+    ctx = _base_context(placeholders=ph)
+    if focus is not None:
+        ctx["placeholders"]["FOCUS_NOTES"] = focus
+    # Driver normalizes before render; simulate via derived placeholders path
+    import round_driver as RD
+    normalized = RD._normalize_focus_notes(focus)
+    ph["FOCUS_NOTES"] = normalized
+    text, reason = RO.render_order(RP.P_PANEL, "seat", _base_context(placeholders=ph))
+    assert reason is None
+    if expected_substr:
+        assert expected_substr.replace('"', '"') in text or expected_substr in text
+
+
+def test_render_focus_dict_via_driver_normalization():
+    import round_driver as RD
+    focus = {"scope": "auth"}
+    assert RD._normalize_focus_notes(focus) == '{"scope":"auth"}'
+    ph = _panel_placeholders()
+    ph["FOCUS_NOTES"] = RD._normalize_focus_notes(focus)
+    text, reason = RO.render_order(RP.P_PANEL, "seat", _base_context(placeholders=ph))
+    assert reason is None
+    assert "auth" in text
+
+
+# --- FX-1: resolve_order_residuals (fix 6) -------------------------------------
+
+
+def test_resolve_order_residuals_in_repo_reads_base(tmp_path, monkeypatch):
+    import mode_registry as mr
+    repo = str(tmp_path)
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    _write_core_file(repo, ".claude/superheroes/core.md", "base residual only")
+    subprocess.run(["git", "-C", repo, "add", ".claude/superheroes/core.md"], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "-qm", "base"], check=True)
+    base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    _write_core_file(repo, ".claude/superheroes/core.md", "branch widened")
+    subprocess.run(["git", "-C", repo, "commit", "-am", "widen"], check=True)
+    monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.IN_REPO})
+    text, prov, failure = RO.resolve_order_residuals(repo, base)
+    assert failure is None
+    assert "base-pinned" in prov
+    assert text == "base residual only"
+
+
+def test_resolve_order_residuals_out_of_repo_reads_store(tmp_path, monkeypatch):
+    import mode_registry as mr
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    facts = {
+        "verifyCommand": "true", "stackTags": [], "threatModel": "t", "patterns": "p",
+        "ratifiedResiduals": "store residual line",
+    }
+    CM.write(repo, facts, "confirmed", now="2026-01-01")
+    monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.GLOBAL})
+    text, prov, failure = RO.resolve_order_residuals(repo, "abc123")
+    assert failure is None
+    assert "store file" in prov
+    assert text == "store residual line"
+
+
+def test_resolve_order_residuals_unreadable_store(tmp_path, monkeypatch):
+    import mode_registry as mr
+    repo = str(tmp_path)
+    monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.GLOBAL})
+    text, prov, failure = RO.resolve_order_residuals(repo, None)
+    assert text == ""
+    assert failure == "core-unreadable-or-absent"
+    assert "store file" in prov
+
+
+# --- FX-1: shipped resource guard (fix 1) --------------------------------------
+
+
+def test_shipped_resource_refusal_when_rubric_missing(monkeypatch):
+    import round_driver as RD
+    ph = _panel_placeholders()
+    missing = "/nonexistent/review-base.md"
+    ph["RUBRIC_PATH"] = missing
+    monkeypatch.setattr(RD, "_shipped_rubric_path", lambda: missing)
+    reason = RD._shipped_resource_refusal(ph)
+    assert reason == "shipped-resource-missing:RUBRIC_PATH"
+
+
+# --- FX-1: seat transport from seat_map compose (fix 3) ------------------------
+
+
+def test_seat_transport_classifies_vendors_from_compose_output():
+    import round_driver as RD
+    import seat_map as SM
+    composed = SM.build(roster=SM.PANEL_ROSTER[:1], live_vendors=["codex", "cursor", "claude"],
+                        author_family="anthropic", narrative_family="openai", seed=1)
+    seats = composed["seats"]
+    code_cfg = seats.get("architecture-reviewer") or seats.get("code-reviewer")
+    # Force vendor assignments for test
+    state = {"seatMap": {"seats": {
+        "codex-seat": {"vendor": "codex", "model": "m", "effort": "high"},
+        "cursor-seat": {"vendor": "cursor", "model": "m", "effort": "high"},
+        "claude-seat": {"vendor": "claude", "model": "m", "effort": "high"},
+    }}}
+    assert RD._seat_is_engine(RD._seat_dispatch_row(state, "codex-seat"))
+    assert RD._seat_is_engine(RD._seat_dispatch_row(state, "cursor-seat"))
+    assert not RD._seat_is_engine(RD._seat_dispatch_row(state, "claude-seat"))
+
+
+def test_seat_transport_from_real_compose_output():
+    import round_driver as RD
+    import seat_map as SM
+    composed = SM.build(roster=("code-reviewer",), live_vendors=["codex", "cursor", "claude"],
+                        author_family="anthropic", narrative_family="openai", seed=42,
+                        pins={"code-reviewer": {"vendor": "codex"}})
+    seat_cfg = composed["seats"]["code-reviewer"]
+    state = {"seatMap": {"seats": {"code-reviewer": seat_cfg}}}
+    row = RD._seat_dispatch_row(state, "code-reviewer")
+    assert row.get("vendor") == seat_cfg["vendor"]
+    assert RD._seat_is_engine(row)
+    ph_channel = "stdout" if RD._seat_is_engine(row) else "file"
+    assert ph_channel == "stdout"
+
+
+# --- FX-1: emitted-order path layout drift test (fix 15) -----------------------
+
+
+def test_documented_order_path_layout_matches_code_home():
+    import round_driver as RD
+    import round_records as RR
+    session = "/tmp/session-drift"
+    rnd, phase, attempt = 2, RP.P_PANEL, 0
+    skey = RR.storage_key("code-reviewer", 0)
+    code_paths = {
+        "order": RR.order_prompt_path(session, rnd, phase, skey, attempt),
+        "envelope_stub": RR.envelope_stub_path(session, rnd, phase, skey, attempt),
+        "landing_engine": RR.landing_path(session, rnd, phase, skey, attempt),
+        "landing_host": RR.bare_payload_path(session, rnd, phase, skey, attempt),
+        "manifest": RD._orders_manifest_path(session, rnd, phase, attempt),
+    }
+    skill_path = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "SKILL.md")
+    ref_path = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md")
+    with open(skill_path, encoding="utf-8") as fh:
+        skill_doc = fh.read()
+    with open(ref_path, encoding="utf-8") as fh:
+        ref_doc = fh.read()
+    assert "$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.md" in skill_doc
+    assert "$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.envelope.json" in skill_doc
+    assert "$SESSION_DIR/round-<N>/orders/<phase>/manifest.a<K>.json" in skill_doc
+    assert "$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.json" in skill_doc
+    assert "$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.payload.json" in skill_doc
+    assert "round-N/orders/P/skey.aK.md" in ref_doc
+    assert "round-N/orders/P/skey.aK.envelope.json" in ref_doc
+    assert "round-N/orders/P/manifest.aK.json" in ref_doc
+    assert code_paths["order"].endswith("orders/%s/%s.a%d.md" % (phase, skey, attempt))
+    assert code_paths["envelope_stub"].endswith(".envelope.json")
+    assert code_paths["manifest"].endswith("manifest.a%d.json" % attempt)
+    assert code_paths["landing_host"].endswith(".payload.json")

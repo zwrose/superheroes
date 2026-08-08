@@ -101,7 +101,7 @@ def existing_directory(value: str) -> str:
         raise argparse.ArgumentTypeError(f"{path!r} does not exist")
     if os.path.isfile(path) or not os.path.isdir(path):
         raise argparse.ArgumentTypeError(f"{path!r} exists but is not a directory")
-    return os.path.realpath(path)
+    return path
 
 
 existing_directory.__cli_contract__ = "existing-directory"  # type: ignore[attr-defined]

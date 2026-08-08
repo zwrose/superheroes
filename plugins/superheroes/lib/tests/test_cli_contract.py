@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import json
 import os
 import subprocess
 import sys
@@ -88,6 +89,28 @@ def test_dispatch_cli_argument_census():
         assert missing == [], (
             f"{module_name} has undeclared caller-supplied arguments: {missing}"
         )
+
+
+def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    symlink = tmp_path / "run-link"
+    symlink.symlink_to(real_dir)
+    repo = _git_repo(tmp_path)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("review this", encoding="utf-8")
+    rc = ED.main([
+        "dispatch-review",
+        "--engine", "cursor",
+        "--effort", "high",
+        "--prompt-path", str(prompt),
+        "--repo-root", str(repo),
+        "--run-dir", str(symlink),
+    ])
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out.strip())
+    assert result["ok"] is False
+    assert result["detail"] == "run-dir-is-symlink"
 
 
 def test_role_rejects_valid_vendor_name():

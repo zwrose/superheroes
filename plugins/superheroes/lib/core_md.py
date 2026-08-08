@@ -90,6 +90,9 @@ def render_core(facts, status, created, updated):
         "stackTags": list(facts.get("stackTags") or []),
         "enginePreferences": dict(facts.get("enginePreferences") or {}),
     }
+    overlay = facts.get(REVIEW_GATE_POLICY_KEY)
+    if isinstance(overlay, dict):
+        block[REVIEW_GATE_POLICY_KEY] = dict(overlay)
     show_it = (facts.get("showItSurface") or "").strip()
     show_it_block = ""
     if show_it:
@@ -1526,7 +1529,7 @@ def confirm(cwd, *, root=None, now=None):
                 return {"action": "noop", "record": existing}
             facts = {k: existing[k] for k in (
                 "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
-                "ratifiedResiduals")}
+                "ratifiedResiduals", REVIEW_GATE_POLICY_KEY)}
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
