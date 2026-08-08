@@ -548,3 +548,78 @@ def test_f6_commit_id_collision(tmp_path):
     assert exc.value.reason == "commit-id-collision"
     assert exc.value.detail == cid
     assert open(intent_path, "rb").read() == intent_bytes
+
+
+# --- FIX-3 review round 1 (#918) -------------------------------------------------------------
+
+def test_r1_stage_fsyncs_parts_dir_before_sealed(tmp_path, monkeypatch):
+    sd = _session(tmp_path)
+    recorded = []
+    sealed_seen = []
+    real_fsync = RC.fsync_dir_strict
+    commit_dir = os.path.join(RC.commits_root(sd), COMMIT_ID)
+    parts_dir = os.path.join(commit_dir, RC._PARTS)
+    sealed_path = os.path.join(commit_dir, RC._SEALED)
+
+    def _recording_fsync(directory):
+        recorded.append(directory)
+        sealed_seen.append(os.path.exists(sealed_path))
+        return real_fsync(directory)
+
+    monkeypatch.setattr(RC, "fsync_dir_strict", _recording_fsync)
+    c = _two_replace_commit(sd)
+    c.run()
+    assert parts_dir in recorded
+    parts_idx = recorded.index(parts_dir)
+    assert sealed_seen[parts_idx] is False
+
+
+def test_r2_ensure_parent_fsyncs_parent_after_child_created(tmp_path, monkeypatch):
+    sd = _session(tmp_path)
+    deep = os.path.join(sd, "a", "b", "c", "deep.txt")
+    created = []
+    fsync_events = []
+    real_fsync = RC.fsync_dir_strict
+    real_makedirs = os.makedirs
+
+    def _tracking_makedirs(path, *args, **kwargs):
+        real_makedirs(path, *args, **kwargs)
+        created.append(os.path.realpath(path))
+
+    def _recording_fsync(directory):
+        directory = os.path.realpath(directory)
+        fsync_events.append((directory, list(created)))
+        return real_fsync(directory)
+
+    monkeypatch.setattr(os, "makedirs", _tracking_makedirs)
+    monkeypatch.setattr(RC, "fsync_dir_strict", _recording_fsync)
+    c = RC.begin(sd, "deep", commit_id="9" * 32)
+    c.add_replace_file(deep, b"staged-bytes")
+    c.run()
+
+    session_real = os.path.realpath(sd)
+    new_dirs = [os.path.join(session_real, "a"),
+                os.path.join(session_real, "a", "b"),
+                os.path.join(session_real, "a", "b", "c")]
+    for new_dir in new_dirs:
+        parent = os.path.dirname(new_dir)
+        assert any(directory == parent and new_dir in seen_created
+                   for directory, seen_created in fsync_events), (
+            "parent %r not fsynced after child %r existed" % (parent, new_dir))
+
+
+def test_r6_stage_oserror_becomes_commit_staging_failed(tmp_path, monkeypatch):
+    sd = _session(tmp_path)
+    real_fsync = os.fsync
+
+    def _boom(fd):
+        raise OSError(28, "no space left on device")
+
+    monkeypatch.setattr(os, "fsync", _boom)
+    c = _two_replace_commit(sd, commit_id="c" * 32)
+    with pytest.raises(RC.CommitRefused) as exc:
+        c.run()
+    assert exc.value.reason == "commit-staging-failed"
+    result = RC.recover(sd)
+    assert "c" * 32 in result["discarded"]
+    assert not os.path.exists(os.path.join(sd, "one.txt"))

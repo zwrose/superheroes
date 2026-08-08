@@ -3079,7 +3079,9 @@ def cmd_next(session_dir, config_overrides=None):
     record layer refuse `bootstrap-required` per seat later."""
     try:
         with round_records.session_lock(session_dir):
-            refusal = _commit_recover_or_refuse(session_dir, "next", sidecar_target=None)
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "next",
+                                                sidecar_target=sidecar_target)
             if refusal is not None:
                 return refusal
             return _cmd_next_locked(session_dir, config_overrides)
@@ -3206,7 +3208,9 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     stronger, and it never permits anything the per-phase rule forbids."""
     try:
         with round_records.session_lock(session_dir):
-            refusal = _commit_recover_or_refuse(session_dir, "submit", sidecar_target=None)
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "submit",
+                                                sidecar_target=sidecar_target)
             if refusal is not None:
                 return refusal
             prep = _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact,
@@ -3941,7 +3945,9 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     superseded by it."""
     try:
         with round_records.session_lock(session_dir):
-            refusal = _commit_recover_or_refuse(session_dir, "record-result", sidecar_target=None)
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "record-result",
+                                                sidecar_target=sidecar_target)
             if refusal is not None:
                 return refusal
             return _cmd_record_result_locked(session_dir, seat=seat, attempt=attempt,
@@ -4052,7 +4058,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
             payload = stored.get("payload") if isinstance(stored, dict) else {}
             return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
                                seat=seat_key, headDiffPath=payload.get("headDiffPath"))
-        if rehashed and detail is not None and isinstance(detail, round_commit.CommitRefused):
+        if isinstance(detail, round_commit.CommitRefused):
             return _commit_refused_response(session_dir, cmd, detail, phase=phase, rnd=rnd,
                                           attempt=attempt, seat=seat_key)
     for seat_key, occurrence in round_records.roster_slots(roster):
@@ -4092,7 +4098,7 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                         return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,
                                            attempt=attempt, seat=seat,
                                            headDiffPath=payload.get("headDiffPath"))
-                    if rehashed and isinstance(detail, round_commit.CommitRefused):
+                    if isinstance(detail, round_commit.CommitRefused):
                         return _commit_refused_response(session_dir, cmd, detail, phase=phase,
                                                       rnd=rnd, attempt=attempt, seat=seat)
                     if rehashed:
@@ -4141,7 +4147,9 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
     of two audit targets sharing an id can be recorded missing WITHOUT claiming its twin is."""
     try:
         with round_records.session_lock(session_dir):
-            refusal = _commit_recover_or_refuse(session_dir, "record-missing", sidecar_target=None)
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "record-missing",
+                                                sidecar_target=sidecar_target)
             if refusal is not None:
                 return refusal
             return _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path,
@@ -4696,25 +4704,27 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
 
     Refuses outright if any terminal receipt already exists — an attestation is what a session
     writes INSTEAD of a terminal receipt, never over one."""
-    state, refusal = _load_driver_state(session_dir, "attest")
-    if refusal is not None:
-        return refusal
     if not isinstance(note, str) or not note.strip():
         return _refuse_cmd(session_dir, "attest", "attest-note-required")
-    if os.path.exists(os.path.join(session_dir, RECEIPT_FILE)) or state.get("terminal"):
-        return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
-    binding, why = _resolve_failure_ref(session_dir, failure_ref)
-    if why is not None:
-        return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
-    artifact_snapshot = _session_artifact_hashes(session_dir,
-                                                 exclude=(RECEIPT_FILE, STATE_FILE, JOURNAL_FILE))
     try:
         with round_records.session_lock(session_dir):
-            sidecar_target = _sidecar_target_for_recover(session_dir, state=state, git=git)
+            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
             refusal = _commit_recover_or_refuse(session_dir, "attest",
                                                 sidecar_target=sidecar_target)
             if refusal is not None:
                 return refusal
+            state, refusal = _load_driver_state(session_dir, "attest")
+            if refusal is not None:
+                return refusal
+            if os.path.exists(os.path.join(session_dir, RECEIPT_FILE)) or state.get("terminal"):
+                return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
+            binding, why = _resolve_failure_ref(session_dir, failure_ref)
+            if why is not None:
+                return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
+            artifact_snapshot = _session_artifact_hashes(session_dir,
+                                                         exclude=(RECEIPT_FILE, STATE_FILE,
+                                                                  JOURNAL_FILE,
+                                                                  round_records.LOCK_FILE))
             return _cmd_attest_locked(session_dir, failure_ref, note, git=git, state=state,
                                     binding=binding, artifact_snapshot=artifact_snapshot)
     except round_records.LockHeld as held:

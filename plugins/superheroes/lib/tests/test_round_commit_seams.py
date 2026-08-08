@@ -898,3 +898,100 @@ def test_biteproof_seam_e_driver_recovery_not_wired(tmp_path, adapters, monkeypa
   _noop_driver_recover(monkeypatch)
   RD.cmd_record_result(d, sweep=True)
   assert not _commits_empty(d)
+
+
+# --- FIX-3 review round 1 (#918) -------------------------------------------------------------
+
+def _sealed_attest_commit(tmp_path, adapters, monkeypatch, name="r5"):
+  gitdir = _gitdir(str(tmp_path), name + "-git")
+  d, seq = _orphan_failure(tmp_path, adapters, name=name)
+  _stop_at_kind(monkeypatch, "attest-finalize", "sealed")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_attest(d, str(seq), "orphaned record", git=_fake_git(gitdir))
+  assert not _commits_empty(d)
+  return d, seq, gitdir
+
+
+def _sidecar_path(gitdir):
+  return os.path.join(gitdir, "superheroes", "review-receipt.json")
+
+
+def test_r3_attest_replays_orders_emit_before_state_use(tmp_path, adapters, monkeypatch):
+  d = _orders_setup_fresh(tmp_path)
+  _stop_at_kind(monkeypatch, "orders-emit", "sealed", n=0)
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_next(d, _cfg())
+  manifest_path = RD._orders_manifest_path(d, 1, RD.P_PANEL, 0)
+  assert not os.path.exists(manifest_path)
+  assert not _commits_empty(d)
+  RD.cmd_attest(d, "1", "note")
+  assert os.path.exists(manifest_path)
+  anchor = RD._orders_anchor(_state(d), d, 1, RD.P_PANEL, 0)
+  assert anchor is not None
+  assert anchor["manifestSha256"] == hashlib.sha256(_read_bytes(manifest_path)).hexdigest()
+  assert _commits_empty(d)
+
+
+def test_r3_attest_terminal_check_sees_recovery_replay(tmp_path, adapters, monkeypatch):
+  gitdir = _gitdir(str(tmp_path), "r3-term-git")
+  d, seq = _orphan_failure(tmp_path, adapters, name="r3-term")
+  _stop_at_kind(monkeypatch, "attest-finalize", "applied")
+  with pytest.raises(RC.StopPoint):
+    RD.cmd_attest(d, str(seq), "first note", git=_fake_git(gitdir))
+  os.remove(os.path.join(d, RD.RECEIPT_FILE))
+  state = _state(d)
+  state.pop("terminal", None)
+  RD.save_state(d, state)
+  out = RD.cmd_attest(d, str(seq), "second note", git=_fake_git(gitdir))
+  assert out["ok"] is False
+  assert out["reason"] == "terminal-receipt-exists"
+
+
+def test_r4_sweep_record_refuses_on_head_diff_commit_refused(tmp_path, adapters, monkeypatch):
+  d, _head_path, head_text = _sweep_repair_setup(tmp_path, adapters)
+  out = RD.cmd_record_result(d, sweep=True)
+  assert out["ok"] is True
+
+  d2 = _fixer_session(tmp_path, adapters, name="r4-refuse")
+  head_path2 = str(tmp_path / "r4-head.diff")
+  with open(head_path2, "w", encoding="utf-8") as fh:
+    fh.write("diff --git a/f.py b/f.py\n+sweep-fixed\n")
+  _land(d2, "dispatch-fixer", payload={"fixes": [], "headDiffPath": head_path2})
+  out_rec = RD.cmd_record_result(d2, "dispatch-fixer")
+  assert out_rec["ok"], out_rec
+  spath = out_rec["storePath"]
+  blob = out_rec["headDiffStorePath"]
+  stored, _ = RR.read_json(spath)
+  del stored["payload"]["headDiffStorePath"]
+  RR.atomic_write_json(spath, stored)
+  os.remove(blob)
+
+  def _refuse(*_a, **_k):
+    raise RC.CommitRefused("commit-id-collision", "synthetic")
+
+  monkeypatch.setattr(RD, "_store_head_diff", _refuse)
+  out2 = RD.cmd_record_result(d2, sweep=True)
+  assert out2["ok"] is False
+  assert out2["reason"] == "commit-id-collision"
+
+
+@pytest.mark.parametrize("cmd_name,runner", [
+    ("next", lambda d, gitdir: RD.cmd_next(d)),
+    ("submit", lambda d, gitdir: RD.cmd_submit(
+        d, _pending(d)["phase"], _pending(d)["attempt"],
+        RD.state_hash(_state(d)), _panel_artifact(d))),
+    ("record-result", lambda d, gitdir: RD.cmd_record_result(d, "code-reviewer")),
+    ("record-missing", lambda d, gitdir: RD.cmd_record_missing(
+        d, "security-reviewer", _pending(d)["attempt"], "forfeit")),
+])
+def test_r5_commands_replay_attest_sidecar_commit(tmp_path, adapters, monkeypatch,
+                                                  cmd_name, runner):
+  d, seq, gitdir = _sealed_attest_commit(tmp_path, adapters, monkeypatch, name="r5-" + cmd_name)
+  monkeypatch.setattr(RD.store_core, "get_worktree_gitdir",
+                      lambda repo_root, run=None: gitdir)
+  monkeypatch.setattr(RD.store_core, "run_git", _fake_git(gitdir))
+  sidecar = _sidecar_path(gitdir)
+  assert not os.path.exists(sidecar)
+  runner(d, gitdir)
+  assert _commits_empty(d)
+  assert os.path.exists(sidecar)
