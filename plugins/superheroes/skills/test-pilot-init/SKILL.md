@@ -116,6 +116,28 @@ trade-offs AND a recommendation derived from what you detected.
 Report what was written and where; remind the user that `test-pilot-plan`
 picks it up from here.
 
+### Conformance run (when `pilot` block is declared)
+
+After calibration is written, and **only when** the profile declares a `pilot`
+block, run the headless conformance pass (normative CLI in
+`reference/pilot-contract.md` §The conformance run):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/pilot_conformance.py" run --cwd .
+```
+
+Stdout is the report JSON; stderr carries diagnostics. **Exit 1 is a real
+outcome to report, not an error to swallow** — show the operator which
+surfaces came back `unexercised` and why, from the report's `resolution`
+list. The run **never** writes into the repository when `--allow-live-effects`
+is not passed. The `cleanup-end-to-end` and `mint-gate-off` exercises are
+reported as **unexercised** unless the operator explicitly passes
+`--allow-live-effects`; opting in runs the project's own destructive cleanup
+and gate-off commands against live datastore and checkout resources. A
+`mint-gate-off` exercise that does not produce a usable receipt is reported as
+**unexercised**, never recorded as exercised — configure refuses to claim it.
+
 ### Pilot block (optional)
 
 The nested `pilot` key inside `test-pilot-config` is **omitted entirely** unless the owner

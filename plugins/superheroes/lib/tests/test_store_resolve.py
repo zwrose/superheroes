@@ -61,6 +61,7 @@ def test_resolve_none_when_nothing_exists(tmp_path):
     # state/plans are computed even with no profile (machine-local, always global)
     assert r["state_dir"].startswith(root)
     assert r["plans_dir"].startswith(root)
+    assert r["artifacts_dir"].startswith(root)
 
 
 def test_resolve_layer_only_in_repo(tmp_path):
@@ -76,6 +77,7 @@ def test_resolve_layer_only_in_repo(tmp_path):
     base = os.path.join(repo, ".claude", "test-pilot")
     assert r["blocks_dir"] == os.path.join(base, "blocks")
     assert r["manifests_dir"] == os.path.join(base, "manifests")
+    assert r["artifacts_dir"].startswith(root)
     # engine can load the config block straight from the layer path resolve() returned
     import engine
     assert engine.load_profile_config(r["profile"])["baseUrl"] == "http://localhost:3000"
@@ -92,6 +94,7 @@ def test_resolve_layer_only_global(tmp_path, monkeypatch):
     assert r["profileSource"] == "layer"
     assert r["profile"] == layer
     assert r["blocks_dir"].startswith(root)  # machine-local entry, not in-repo
+    assert r["artifacts_dir"].startswith(root)
     import engine
     assert engine.load_profile_config(r["profile"])["baseUrl"] == "http://localhost:3000"
 
@@ -165,12 +168,17 @@ def test_in_repo_profile_wins_but_state_stays_global(tmp_path):
     # The deliberate divergence from review-crew's store design:
     assert r["state_dir"].startswith(root)
     assert r["plans_dir"].startswith(root)
+    assert r["artifacts_dir"].startswith(root)
 
 
 def test_create_global_then_resolve(tmp_path):
     repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
     root = str(tmp_path / "store")
     c = store.create(repo, "global", root)
+    assert c["artifacts_dir"].startswith(root)
+    assert not os.path.exists(c["artifacts_dir"])
+    assert os.path.isdir(c["plans_dir"])
+    assert os.path.isdir(c["state_dir"])
     open(c["profile"], "w").write("# p\n")
     r = store.resolve(repo, root)
     assert r["location"] == "global"
