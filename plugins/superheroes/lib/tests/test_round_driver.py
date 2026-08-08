@@ -37,6 +37,7 @@ def _load(name):
 
 RD = _load("round_driver")
 LPC = _load("loop_plan_common")
+FI = _load("finding_identity")
 
 # --- diffs --------------------------------------------------------------------
 
@@ -616,16 +617,17 @@ def test_submit_audits_non_list_results_refused(tmp_path):
 
 
 def test_submit_audits_repeated_id_accepted_the_fold_governs(tmp_path):
-    """A REPEATED id is not a shape fault. Target ids are LINE-LESS (`finding_identity` is
-    `file::normalized-title`), so two distinct fix-batch findings in one file sharing a title
-    produce ONE id — and an orchestrator returning exactly one ruling per target then submits that
-    id twice. Refusing it would be an unresolvable loop: the correction such a refusal names is
-    exactly what the orchestrator already did. `audits.apply_audit_results` already fails closed on
-    the case (`ambiguous`: honor NEITHER ruling), and that handling must be what governs — so a
-    doubled CLEARING ruling is accepted here and still folds to not-discharged."""
+    """A REPEATED result id is not a shape fault — an orchestrator can submit the same ruling
+    twice (e.g. one clearing ruling echoed for each slot that shared a result key). Refusing it
+    would be an unresolvable loop: the correction such a refusal names is exactly what the
+    orchestrator already did. Per-location target ids (`file::title@L<line>`) do not prevent a
+    duplicated RESULT id; the pre-#915 case of duplicate target ids in a persisted session is the
+    other way the collision arises. `audits.apply_audit_results` already fails closed on the case
+    (`ambiguous`: honor NEITHER ruling), and that handling must be what governs — so a doubled
+    CLEARING ruling is accepted here and still folds to not-discharged. The fold records outcomes
+    under the line-less `finding_identity`, not the per-location target id."""
     d, n = _at(tmp_path, RD.P_AUDITS)
     good, targets = _audit_artifact(n)                  # a `discharged` ruling
-    rid = good["results"][0]["id"]
     repeated = {"results": list(good["results"]) + list(good["results"]),
                 "collectionManifest": good["collectionManifest"]}
     out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], repeated)
@@ -633,18 +635,20 @@ def test_submit_audits_repeated_id_accepted_the_fold_governs(tmp_path):
     ok, state = RD.load_state(d)
     assert ok
     outcomes = state["auditRounds"][-1]["outcomes"]
-    line_less = targets[0].get("identity") or rid.split("@L")[0]
-    assert [(o["identity"], o["ruling"]) for o in outcomes] == [(line_less, "not-discharged")], outcomes
+    expected_identity = FI.finding_identity(targets[0])
+    assert [(o["identity"], o["ruling"]) for o in outcomes] == [(expected_identity, "not-discharged")], outcomes
+    assert "@L" not in expected_identity
     assert any(dec.get("kind") == "not-discharged" for dec in state["decisions"]), state["decisions"]
 
 
 def test_submit_audits_two_targets_one_colliding_id_not_refused():
     """The same collision at the GUARD's own boundary: two targets carrying one line-less id, one
-    ruling submitted per target. This is a unit-level assertion because the loop cannot be driven to
-    two colliding targets with the existing helpers — the panel/synthesis merge collapses two
-    same-identity findings into one, and the path that legitimately produces the collision (the
-    delta-round `(identity, line)` dedupe at `_settle_delta`, #507 R2 residual-3) is not reachable
-    through `_responder`. The chokepoint behavior is pinned by the loop-level test above."""
+    ruling submitted per target. After #915, audit rosters mint distinct per-location target ids, so
+    this collision is reachable only for a session persisted before that change (or any caller that
+    deliberately supplies the legacy id shape). This is a unit-level assertion because the loop
+    cannot be driven to two colliding targets with the existing helpers — the panel/synthesis merge
+    collapses two same-identity findings into one. The chokepoint behavior is pinned by the
+    loop-level test above."""
     targets = [{"id": "f.py::unchecked return value"}, {"id": "f.py::unchecked return value"}]
     one_ruling_each = [{"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"},
                        {"id": "f.py::unchecked return value", "ruling": "discharged", "reason": "r"}]
