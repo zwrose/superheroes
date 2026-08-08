@@ -1,0 +1,43 @@
+{
+  "dispatch-panel": [
+    "only flag code in `+` or\n`-` lines",
+    "`file:line` citation required. No citation",
+    "You are reviewing CHANGES MADE BY THIS PR/BRANCH",
+    "That's the #1 source of false\npositives",
+    "raise the finding AND note the prior justification",
+    "Base rubric (binding) > CLAUDE.md (conventions)",
+    "Never one whole-file read",
+    "Set `dimension` to",
+    "Nits at most 5 reported per agent",
+    "This is the ONLY source of truth for verifying code"
+  ],
+  "dispatch-verifiers": [
+    "You are the per-finding verifier for one cluster",
+    "You NEVER read the PR's own description, title, or any\nauthor narrative — judge only from the diff and the repo",
+    "verdict: \"CONFIRMED\" | \"PLAUSIBLE\" | \"REFUTED\"",
+    "id: the issue's staged id, echoed verbatim",
+    "Never change the repository, and never claim a run you did not make",
+    "Judge only the issues in this cluster",
+    "Never write a probe into the tree",
+    "exactly one entry per cluster issue"
+  ],
+  "dispatch-synthesis": [
+    "Your job is **not** keep/drop",
+    "you group issues that share the same root cause",
+    "coverage guarantee",
+    "synthesis drops nothing",
+    "CONFIRMED only when a member at the merged (highest) severity is CONFIRMED-with-evidence",
+    "Echo staged ids verbatim",
+    "every survivor id appears exactly once"
+  ],
+  "dispatch-fixer": [
+    "You are the fixer for one round of an auto-fix code-review loop",
+    "gate it with the fixer file-scope guard",
+    "if `allow` is false (or `degraded` is true), DO NOT edit that file",
+    "Fix ONLY what the findings call for. No unrelated refactors (YAGNI)",
+    "retry ONCE. If it still fails, STOP and report CHECK_FAILED",
+    "autofix-probe-",
+    "Commit ALL changes in ONE commit",
+    "do NOT guess. Report it for owner escalation (see Payload contract)"
+  ]
+}

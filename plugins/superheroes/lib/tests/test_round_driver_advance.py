@@ -215,22 +215,23 @@ def _session_id(session_dir):
         return json.load(fh)["sessionId"]
 
 
-def _anchor_hashes(session_dir, rnd, phase, attempt):
+def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
     anchor = RD._orders_anchor(_state(session_dir), session_dir, rnd, phase, attempt)
     if anchor is None:
         return RR.NOT_EMITTED, RR.NOT_EMITTED
-    return anchor["manifestSha256"], anchor["orders"].get("*", RR.NOT_EMITTED)
+    skey = RR.storage_key(seat, occurrence)
+    return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
-def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
+def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     pend = pend or _pending(session_dir)
     # The default payload is SEAT-SPECIFIC on purpose: two seats sharing one payload would share a
     # payload hash, and the journal/store hash matching that `reconcile` runs on would silently
     # conflate them (a deleted record would still look "seen" through its twin's hash).
     payload = {"findings": [], "confidence": "high", "seat": seat,
                "verificationReceipt": {"ran": True}} if payload is None else payload
-    manifest_sha, _order = _anchor_hashes(session_dir, pend["round"], pend["phase"],
-                                          pend["attempt"])
+    manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                             pend["attempt"], seat, occurrence=occurrence)
     env = {
         "schema": RR.SEAT_RESULT_SCHEMA,
         "session": _session_id(session_dir),
@@ -240,23 +241,26 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
         "attempt": pend["attempt"],
         "vendor": "claude",
         "model": "sonnet-5",
-        "dispatchRef": "dispatch-1",
-        "orderSha256": RR.NOT_EMITTED,
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
         "recordedAt": "2026-08-07T00:00:00",
         "payloadSha256": RR.payload_sha256(payload),
         "payload": payload,
     }
+    if occurrence:
+        env["occurrence"] = occurrence
     env.update(over)
     return env
 
 
-def _land(session_dir, seat, payload=None, pend=None, **over):
+def _land(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     """Write a seat's envelope into the LANDING area (what the host does)."""
     pend = pend or _pending(session_dir)
-    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, **over)
-    path = RR.landing_path(session_dir, pend["round"], pend["phase"], RR.storage_key(seat),
-                           pend["attempt"])
+    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, occurrence=occurrence,
+                           **over)
+    path = RR.landing_path(session_dir, pend["round"], pend["phase"],
+                           RR.storage_key(seat, occurrence), pend["attempt"])
     RR.atomic_write_json(path, env)
     return path, env
 
@@ -999,16 +1003,19 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     manifest_path = RD._orders_manifest_path(d, 1, RD.P_VERIFIERS, 0)
     manifest, err = RR.read_json(manifest_path)
     assert err is None
-    assert manifest["seats"]["src/f.py:3"] == {
-        "storeKey": RR.storage_key("src/f.py:3"), "vendor": None, "model": None, "engine": None,
-        "resultContract": RR.SEAT_RESULT_SCHEMA}
+    skey = RR.storage_key("src/f.py:3")
     emitted = [e for e in _outcomes(d, "orders-emitted") if e.get("phase") == RD.P_VERIFIERS]
     assert len(emitted) == 1
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_VERIFIERS, 0)
     assert anchor["manifestSha256"] == emitted[0]["manifestSha256"]
+    seat_entry = manifest["seats"][skey]
+    assert seat_entry["storeKey"] == skey and seat_entry["seat"] == "src/f.py:3"
+    assert seat_entry["orderSha256"] == anchor["orders"][skey]
+    assert anchor["orders"][skey] != RR.NOT_EMITTED
     # the anchor rides the state-hash chain, and the emitted hash is the one ingestion checks
     assert out["nextAction"]["expectedStateHash"] == RD.state_hash(_state(d))
-    assert anchor["orders"]["src/f.py:3"] == RR.NOT_EMITTED
+    assert os.path.exists(seat_entry["orderPath"])
+    assert os.path.exists(seat_entry["envelopeStubPath"])
     # an envelope claiming a DIFFERENT manifest hash is refused against the emission-time anchor
     pend = _pending(d)
     _land(d, "src/f.py:3", pend=pend, manifestSha256="deadbeef")
@@ -1016,6 +1023,49 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     # A/B: the envelope carrying the anchored hash records fine
     _land(d, "src/f.py:3", pend=pend)
     assert RD.cmd_record_result(d, "src/f.py:3")["ok"] is True
+
+
+def _drop_orders_anchor_mirror(session_dir):
+    state = _state(session_dir)
+    state.pop("_ordersAnchors", None)
+    RD.save_state(session_dir, state)
+
+
+def test_tampered_manifest_rebuild_refuses_ingest(tmp_path, adapters):
+    """A/B — journal rebuild re-verifies manifest bytes; tampering refuses ingestion."""
+    seat = "src/f.py:3"
+
+    def _emit_verifiers_orders(name):
+        d = _session(tmp_path, name=name)
+        adapters.rosters[RD.P_VERIFIERS] = [seat]
+        _record_all_panel_seats(d)
+        assert _advance(d, tmp_path)["ok"] is True
+        return d
+
+    # A: untampered manifest — mirror dropped, rebuild succeeds, ingest accepts
+    ok_session = _emit_verifiers_orders("untampered")
+    _drop_orders_anchor_mirror(ok_session)
+    assert RD._orders_anchor(_state(ok_session), ok_session, 1, RD.P_VERIFIERS, 0) is not None
+    pend = _pending(ok_session)
+    _land(ok_session, seat, pend=pend)
+    assert RD.cmd_record_result(ok_session, seat)["ok"] is True
+
+    # B: one orderSha256 edited — rebuild fails closed, ingest refuses
+    bad_session = _emit_verifiers_orders("tampered")
+    manifest_path = RD._orders_manifest_path(bad_session, 1, RD.P_VERIFIERS, 0)
+    anchor_before = RD._orders_anchor(_state(bad_session), bad_session, 1, RD.P_VERIFIERS, 0)
+    manifest_sha = anchor_before["manifestSha256"]
+    order_sha = anchor_before["orders"][RR.storage_key(seat)]
+    _drop_orders_anchor_mirror(bad_session)
+    manifest, err = RR.read_json(manifest_path)
+    assert err is None
+    skey = RR.storage_key(seat)
+    manifest["seats"][skey]["orderSha256"] = "f" * 64
+    RR.atomic_write_json(manifest_path, manifest)
+    assert RD._orders_anchor(_state(bad_session), bad_session, 1, RD.P_VERIFIERS, 0) is None
+    pend = _pending(bad_session)
+    _land(bad_session, seat, pend=pend, manifestSha256=manifest_sha, orderSha256=order_sha)
+    assert RD.cmd_record_result(bad_session, seat)["reason"] == "manifest-anchor-unanchored"
 
 
 def test_advance_refuses_an_incomplete_roster_naming_every_missing_seat(tmp_path, adapters):
@@ -1185,8 +1235,8 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     (RD.P_STALL, "advance-stall-park"),
 ], ids=["judgment", "stall"])
 def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, phase, reason):
-    """A/B — the same `advance` on a dispatch phase folds; the two OWNER gates park
-    unconditionally, because the shipped default pre-authorizes nothing."""
+    """A/B — the same `advance` on a dispatch phase folds; without a calibration overlay the two
+    OWNER gates park because the shipped default pre-authorizes nothing."""
     ok_session = _session(tmp_path, name="folds-" + reason)
     _record_all_panel_seats(ok_session)
     assert _advance(ok_session, tmp_path)["ok"] is True
@@ -1195,6 +1245,14 @@ def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, ph
     state = _state(d)
     state["step"] = phase
     state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
+    if phase == RD.P_JUDGMENT:
+        state["_judgmentFindings"] = [
+            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
+             "tradeoff": True}]
+        state["_judgmentMechanical"] = []
+    if phase == RD.P_STALL:
+        state["_stallChoices"] = [c for c in RD.STALL_CHOICES if c != "accept-the-disclosed-risk"]
+        state["_acceptRiskEligible"] = False
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == reason
@@ -1209,6 +1267,176 @@ def test_run_loop_judgment_default_is_unchanged(tmp_path):
     assert RD._run_seam({"io": {}}, RD.P_JUDGMENT, payload, RD.new_state(_cfg()), _cfg()) == {
         "dispositions": [{"id": "f1", "disposition": "fix-as-suggested"},
                          {"id": "f2", "disposition": "fix-as-suggested"}]}
+
+
+# =============================================================================================
+# §4b gate-policy auto-advance (#723 WO-7)
+# =============================================================================================
+
+def _load_core_md():
+    path = os.path.join(_LIB, "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md_advance", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _repo_with_gate_policy(tmp_path, rules):
+    cm = _load_core_md()
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
+    in_repo = os.path.join(repo, ".claude", "superheroes", "core.md")
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    with open(in_repo, "w", encoding="utf-8") as fh:
+        fh.write(cm.render_core(facts, "confirmed", "2026-01-01", "2026-01-01"))
+    policy = {"schema": "gate-policy/1", "default": "park", "rules": rules}
+    assert cm.write_review_gate_policy(repo, policy, root=None)["action"] == "written"
+    return repo
+
+
+def _parked_at_owner_gate(tmp_path, adapters, phase, name=None):
+    label = name or ("park-" + phase)
+    d = _session(tmp_path, name=label)
+    state = _state(d)
+    state["step"] = phase
+    state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
+    if phase == RD.P_JUDGMENT:
+        state["_judgmentFindings"] = [
+            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
+             "tradeoff": True}]
+        state["_judgmentMechanical"] = []
+    if phase == RD.P_STALL:
+        state["_stallChoices"] = list(RD.STALL_CHOICES)
+        state["_acceptRiskEligible"] = False
+    RD.save_state(d, state)
+    return d
+
+
+def _judgment_session_with_repo(tmp_path, adapters, repo, severity="Important", name="judgment"):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_JUDGMENT, name=name)
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    state["_judgmentFindings"] = [
+        {"title": "widen the API", "severity": severity, "file": "f.py", "line": 1, "tradeoff": True}]
+    RD.save_state(d, state)
+    return d
+
+
+def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["action"] == {"dispositions": [
+        {"findingClass": "judgment:important", "disposition": "skip"}]}
+    assert _state(d)["terminal"] == "converged"
+    found = [p for p in os.listdir(os.path.join(d, "round-1")) if p.startswith("gate-policy.")]
+    assert found, "expected gate-policy archive under round-1"
+    receipt = RD.build_receipt(_state(d), d)
+    assert receipt.get("policyApplied")
+
+
+def test_advance_judgment_partial_match_parks(tmp_path, adapters):
+    """Fail-closed edge 1: some rows match and some do not → park with advance-judgment-park."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    state = _state(d)
+    state["_judgmentFindings"].append(
+        {"title": "other", "severity": "Minor", "file": "g.py", "line": 2, "tradeoff": True})
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+
+
+def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters, monkeypatch):
+    """Fail-closed edge 3: unreadable calibration overlay → park."""
+    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, []))
+    cm = _load_core_md()
+
+    def unreadable(**_kw):
+        return cm.ReviewGatePolicyGate(cm.CONFIG_UNREADABLE, None, "corrupt")
+
+    monkeypatch.setattr(RD.core_md, "review_gate_policy_for_gate", unreadable)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+
+
+def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
+    """Fail-closed edge 4: shipped policy file missing → park."""
+    d = _judgment_session_with_repo(tmp_path, adapters, _repo_with_gate_policy(tmp_path, []))
+    import review_gate_policy as rgp
+
+    def missing_layer(path=None):
+        return {"ok": False, "reason": "gate-policy-shipped-missing", "layer": None}
+
+    monkeypatch.setattr(rgp, "load_shipped_layer", missing_layer)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+
+
+def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):
+    """Fail-closed edge 2: accept-the-disclosed-risk is not offerable for ineligible stall class."""
+    cm = _load_core_md()
+    repo = _repo_with_gate_policy(tmp_path, [])
+    invalid = {
+        "schema": "gate-policy/1",
+        "default": "park",
+        "rules": [{
+            "gate": "present-stall-menu",
+            "findingClass": "stall:accept-risk-ineligible",
+            "disposition": "accept-the-disclosed-risk",
+        }],
+    }
+    assert cm.write_review_gate_policy(repo, invalid, root=None)["action"] == "refused"
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL)
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-stall-park"
+
+
+def test_advance_has_no_caller_supplied_policy_route():
+    """Gate policy is calibration-only — no advance flag may inject rules."""
+    parser = RD.build_parser()
+    for _path, action in __import__("cli_contract").iter_caller_supplied_actions(parser):
+        assert "policy" not in action.dest
+        for opt in action.option_strings:
+            assert "policy" not in opt.lower()
+    source = open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
+    assert "GATE_POLICY_ENV" not in source
+    assert 'os.environ.get("GATE_POLICY' not in source
+    assert "config.get(\"gatePolicy" not in source
+
+
+def test_policy_applied_records_match_and_action_not_identities_only(tmp_path, adapters):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "fix-as-suggested",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True
+    applied = out["policyApplied"]
+    assert applied["matches"]
+    assert applied["matches"][0].get("rule")
+    assert applied["action"]
+    assert _state(d)["step"] == RD.P_FIXER
 
 
 def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):

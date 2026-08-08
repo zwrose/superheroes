@@ -19,9 +19,12 @@ obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`.
 Round 1 is always a full `reviewer-deep` baseline panel. Rounds 2+ are **delta rounds**: fix
 audits over the just-fixed findings plus a scoped finder over the fix's new surface — a full panel
 runs again only on the #174 re-arm triggers (Critical surfaced since the last qualifying panel, or
-cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). The
-orchestrator never plans, records, or decides continuation by eye — it calls `next`, dispatches
-exactly one action, and `submit`s the artifact.
+cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). On
+the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
+calls `next`, dispatches the emitted order (or fulfills a gate action), and `submit`s the
+artifact. **Prose-driven review** on the read-only paths (`--post`, `--review-only`) is a different
+lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
+is not governed by this loop contract.
 
 Degraded / single-vendor environments stay **on** the mandated path: the same driver, the same
 journal, and `independence: "degraded"` stamps on audit targets and the terminal certification
@@ -50,6 +53,12 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 `next` that passes it is refused with `diff-path-not-fresh-state` — check raw stdout and the
 driver journal; the driver does not crash.
 
+**Why session-birth only.** The first `next` binds the round-1 diff artifact into session state
+(`config.diff`, `reviewedDiff`, and the base-guard stat binding). Rounds 2+ regenerate the diff
+from the shell per `SKILL.md` Setup; the driver refuses a later `--diff-path` because swapping the
+round-1 artifact mid-session would break the pin/stat contract the base guard stamped at birth.
+Same discipline as `--vendors` / `--fixer-vendor` on non-fresh state.
+
 After fulfilling the emitted action, fold the artifact:
 
 ```bash
@@ -70,6 +79,38 @@ step and hash. An exact duplicate `submit` (same phase/attempt/artifact) returns
 Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit` to
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
 `$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
+
+## Emitted orders
+
+Every `next` whose `phase` starts with `dispatch-` emits, atomically in one `orders-emit` commit:
+
+- one **order file** per roster slot (`round_orders.render_order` over `rubric/orders/<phase>.md`);
+- one **envelope stub** per slot (`seat-result/1` header fields knowable at emission — session,
+  round, phase, seat, attempt, vendor, model, `dispatchRef`, `orderSha256`, `manifestSha256` — but
+  not `recordedAt` / `payloadSha256`);
+- an **orders manifest** listing every slot's `orderPath`, `envelopeStubPath`, and hashes.
+
+Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
+
+| Artifact | Path |
+| --- | --- |
+| Order | `$SESSION_DIR/round-N/orders/P/skey.aK.md` |
+| Envelope stub | `$SESSION_DIR/round-N/orders/P/skey.aK.envelope.json` |
+| Manifest | `$SESSION_DIR/round-N/orders/P/manifest.aK.json` |
+
+**Landing shapes** (`round_records.ingest_landing`):
+
+| Seat kind | Landing path | What the seat writes |
+| --- | --- | --- |
+| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | Full `seat-result/1` envelope (stub header + payload) |
+| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest |
+
+Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
+stub header fields verbatim and never recompute hashes.
+
+The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
+`orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
+they disagree).
 
 ## Base guard
 
@@ -145,6 +186,34 @@ while `origin` still matches there; `meta.repoRoot` lets the driver refuse `base
 when the field is absent or disagrees with `--repo-root`.
 
 ## Actions and payloads
+
+### Owner gates and gate policy (`present-judgment`, `present-stall-menu`)
+
+When the loop reaches an owner-judgment or audit-stall gate, `advance` (the record-layer subcommand
+that folds landed seats without a hand `submit`) resolves an **owner-calibrated gate policy** before
+parking: the shipped default in `rubric/review-gate-policy.json` (`gate-policy/1`, **zero rules**,
+`default: "park"` — pre-authorizes nothing) plus an optional project overlay under `core.md`'s
+`reviewGatePolicy` key (sibling of `enginePreferences`, owner-editable through `configure`). Overlay
+rules are evaluated **before** the shipped layer; the first matching rule wins. **Judgment is
+all-or-nothing** — `resolve_judgment` must find a rule for **every** finding row or the whole gate
+parks (`gate-policy-unmatched-class:<class>`). Stall resolution is per stall class
+(`stall:accept-risk-eligible` vs `stall:accept-risk-ineligible`).
+
+When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). On the
+orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice; gate
+policy pre-authorization is what lets `advance` fold without stopping.
+
+**Ownership boundary (stated narrowly).** The overlay lives on the same ownership surface as
+`enginePreferences` — an honest-agent boundary, **not** a security boundary. No CLI flag can
+substitute a policy: exactly two fixed sources are read (shipped file + optional `core.md` overlay).
+Resolution returns a `layers` audit (each layer's `identity` carries `source`, `schema`, `sha256`)
+so a substitution is visible after the fact. A builder **can** change `core.md`; claiming they
+cannot is an overclaim.
+
+Gate-policy refusal reasons (in addition to the advance park tokens above):
+`gate-policy-no-valid-layer`, `gate-policy-judgment-input-not-list`,
+`gate-policy-judgment-row-not-object`, `gate-policy-judgment-row-missing-class`,
+`gate-policy-unknown-stall-class`, `gate-policy-unmatched-class:<findingClass>`.
 
 | `action` / `phase` | Orchestrator fulfills |
 | --- | --- |

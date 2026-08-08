@@ -66,8 +66,15 @@ ENGINE_PINS_REASON_INPUT_UNPARSEABLE = "engine-pins-input-unparseable"
 ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
 ENGINE_PINS_REASON_INVALID = "engine-pins-invalid"
 ENGINE_PINS_REASON_ROUND_TRIP = "engine-pins-round-trip-refused"
+REVIEW_GATE_POLICY_KEY = "reviewGatePolicy"
+GATE_POLICY_REASON_INPUT_UNPARSEABLE = "gate-policy-input-unparseable"
+GATE_POLICY_REASON_NOT_A_MAPPING = "gate-policy-not-a-mapping"
+GATE_POLICY_REASON_INVALID = "gate-policy-invalid"
+GATE_POLICY_REASON_ROUND_TRIP = "gate-policy-round-trip-refused"
 
 CoreGateConfig = collections.namedtuple("CoreGateConfig", "prefs status detail")
+ReviewGatePolicyGate = collections.namedtuple(
+    "ReviewGatePolicyGate", "status overlay detail")
 
 _PROV = re.compile(
     r"<!--\s*superheroes-core:\s*schemaVersion=(\d+)\s+status=(\w+)\s+"
@@ -87,16 +94,21 @@ def render_core(facts, status, created, updated):
     show_it_block = ""
     if show_it:
         show_it_block = "## Show-it surface\n\n%s\n\n" % show_it
+    ratified = (facts.get("ratifiedResiduals") or "").strip()
+    ratified_block = ""
+    if ratified:
+        ratified_block = "## Ratified residuals\n\n%s\n\n" % ratified
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
         "## Threat model\n\n%s\n\n"
         "## Canonical patterns\n\n%s\n\n"
-        "%s"
+        "%s%s"
         "```json superheroes-core\n%s\n```\n"
         % (SCHEMA_VERSION, status, created, updated,
            (facts.get("threatModel") or "").strip(),
            (facts.get("patterns") or "").strip(),
            show_it_block,
+           ratified_block,
            json.dumps(block, indent=2))
     )
 
@@ -145,15 +157,20 @@ def parse_core(text):
         status, created, updated = "provisional", "", ""
     tags = block.get("stackTags")
     prefs = block.get("enginePreferences")
+    overlay = block.get(REVIEW_GATE_POLICY_KEY)
+    if overlay is not None and not isinstance(overlay, dict):
+        overlay = None
     return {
         "schemaVersion": int(block["schemaVersion"]),
         "status": status,
         "verifyCommand": block.get("verifyCommand"),
         "stackTags": list(tags) if isinstance(tags, list) else [],
         "enginePreferences": dict(prefs) if isinstance(prefs, dict) else {},
+        "reviewGatePolicy": dict(overlay) if isinstance(overlay, dict) else None,
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
         "showItSurface": _section(text, "Show-it surface"),
+        "ratifiedResiduals": _section(text, "Ratified residuals"),
         "created": created,
         "updated": updated,
     }
@@ -300,6 +317,50 @@ def engine_preferences_for_gate(*, cwd=None, root=None, profile_path=None):
         )
 
 
+def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
+    """Readable core.md gate accessor for the review-gate-policy calibration overlay.
+
+    Uses the same existence/readability classification as ``engine_preferences_for_gate`` so
+    *no overlay configured* (``CONFIG_OK`` with no ``reviewGatePolicy`` key) is distinct from
+    *core.md unreadable* (``CONFIG_UNREADABLE``) and from *core.md absent* (``CONFIG_ABSENT``).
+    Never raises."""
+    gate_cfg = engine_preferences_for_gate(
+        cwd=cwd, root=root, profile_path=profile_path)
+    if gate_cfg.status == CONFIG_ABSENT:
+        return ReviewGatePolicyGate(CONFIG_ABSENT, None, None)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return ReviewGatePolicyGate(CONFIG_ROOT_UNAVAILABLE, None, gate_cfg.detail)
+    if gate_cfg.status == CONFIG_UNREADABLE:
+        return ReviewGatePolicyGate(CONFIG_UNREADABLE, None, gate_cfg.detail)
+    path = None
+    try:
+        if profile_path:
+            layer = os.path.realpath(profile_path)
+            path = os.path.join(os.path.dirname(layer), "core.md")
+        else:
+            cwd = cwd or os.getcwd()
+            path = core_path(cwd, root)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError) as exc:
+        return ReviewGatePolicyGate(
+            CONFIG_UNREADABLE,
+            None,
+            gate_refusal_detail(exc, at=path),
+        )
+    facts = parse_core(text)
+    if facts is None:
+        return ReviewGatePolicyGate(
+            CONFIG_UNREADABLE,
+            None,
+            "corrupt or unreadable core.md at %s" % path,
+        )
+    overlay = facts.get("reviewGatePolicy")
+    if overlay is None:
+        return ReviewGatePolicyGate(CONFIG_OK, None, None)
+    return ReviewGatePolicyGate(CONFIG_OK, dict(overlay), None)
+
+
 def read(cwd, root=None):
     """Pure read of core.md → the fact dict + `behind`, or None (absent/corrupt — UFR-1).
     Older schemaVersion is upgraded IN MEMORY only (no write-back; at v1 there are no
@@ -328,9 +389,11 @@ def read(cwd, root=None):
         "verifyCommand": facts["verifyCommand"],
         "stackTags": facts["stackTags"],
         "enginePreferences": facts["enginePreferences"],
+        "reviewGatePolicy": facts.get("reviewGatePolicy"),
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
         "showItSurface": facts["showItSurface"],
+        "ratifiedResiduals": facts["ratifiedResiduals"],
         "behind": behind,
         "created": facts["created"],
         "updated": facts["updated"],
@@ -419,6 +482,33 @@ def gate_config_usable_prefs(cfg):
     if cfg.status == CONFIG_OK:
         return cfg.prefs if isinstance(cfg.prefs, dict) else {}
     return {}
+
+
+def review_gate_config_is_absent(gate):
+    """True when no core.md is present at the resolved gate path."""
+    return gate.status == CONFIG_ABSENT
+
+
+def review_gate_config_is_unreadable(gate):
+    """True when core.md exists but cannot be read for review-gate-policy overlay purposes."""
+    return gate.status == CONFIG_UNREADABLE
+
+
+def review_gate_config_is_refusal(gate):
+    """True when ``review_gate_policy_for_gate`` status refuses usable overlay read."""
+    return gate.status not in _GATE_USABLE_STATUSES
+
+
+def review_gate_config_is_ok(gate):
+    """True when core.md is readable for review-gate-policy overlay purposes."""
+    return gate.status == CONFIG_OK
+
+
+def review_gate_config_refusal_detail(gate):
+    """Return the detail string for a refusal status, or ``None`` when usable/absent."""
+    if not review_gate_config_is_refusal(gate):
+        return None
+    return gate.detail
 
 
 def gate_config_refusal(cfg):
@@ -1019,6 +1109,167 @@ def write_engine_pref_pins(cwd, key, pins, *, root=None):
         return {"action": "written"}
 
 
+def _gate_policy_round_trip_ok(orig, new_parsed):
+    """True when the candidate changes only ``reviewGatePolicy`` in the json block."""
+    if new_parsed is None:
+        return False
+    orig_facts = {k: v for k, v in orig.items() if k != REVIEW_GATE_POLICY_KEY}
+    new_facts = {k: v for k, v in new_parsed.items() if k != REVIEW_GATE_POLICY_KEY}
+    if set(orig_facts) != set(new_facts):
+        return False
+    for key in orig_facts:
+        if orig_facts[key] != new_facts[key]:
+            return False
+    return True
+
+
+def _gate_policy_write_refusal(policy):
+    """Validate a gate-policy/1 policy dict for write-time storage. Returns a specific reason."""
+    import hashlib
+    import review_gate_policy as rgp
+
+    if not isinstance(policy, dict):
+        return "policy must be a JSON object"
+    schema = policy.get("schema")
+    if schema != rgp.GATE_POLICY_SCHEMA:
+        return "schema must be %s (got %r)" % (rgp.GATE_POLICY_SCHEMA, schema)
+    default = policy.get("default")
+    if default != rgp.PARK:
+        return "default must be %r (got %r)" % (rgp.PARK, default)
+    rules_raw = policy.get("rules")
+    if not isinstance(rules_raw, list):
+        return "rules must be a list"
+    for index, rule in enumerate(rules_raw):
+        if not isinstance(rule, dict):
+            return "rules[%d] must be an object" % index
+        gate = rule.get("gate")
+        if gate not in rgp.GATES:
+            return "rules[%d].gate must be one of %s (got %r)" % (
+                index, ", ".join(rgp.GATES), gate)
+        finding_class = rule.get("findingClass")
+        known = rgp._known_finding_classes(gate)
+        if not isinstance(finding_class, str) or finding_class not in known:
+            return "rules[%d].findingClass must be one of %s (got %r)" % (
+                index, ", ".join(sorted(known)), finding_class)
+        disposition = rule.get("disposition")
+        allowed = rgp._allowed_dispositions(gate, finding_class)
+        if not isinstance(disposition, str) or disposition not in allowed:
+            return "rules[%d].disposition for gate %s class %s must be one of %s (got %r)" % (
+                index, gate, finding_class, ", ".join(allowed), disposition)
+    source = "calibration/write-check"
+    raw = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    layer, reason = rgp._validate_layer(policy, source=source, sha256=digest)
+    if layer is None:
+        return reason or GATE_POLICY_REASON_INVALID
+    return None
+
+
+def _build_gate_policy_overlay(policy, source_path):
+    """Wrap a validated policy dict in the overlay envelope review_gate_policy consumes."""
+    import hashlib
+    import review_gate_policy as rgp
+
+    raw = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return {
+        "identity": {
+            "source": source_path,
+            "schema": rgp.GATE_POLICY_SCHEMA,
+            "sha256": hashlib.sha256(raw).hexdigest(),
+        },
+        "policy": policy,
+    }
+
+
+def write_review_gate_policy(cwd, policy, *, root=None):
+    """Lock-guarded surgical write of ``reviewGatePolicy`` in the superheroes-core json block.
+
+  The ONE writer of the project calibration overlay for owner-judgment gate pre-authorization.
+  ``policy`` is a gate-policy/1 document (schema/rules/default); pass ``None`` to remove the
+  overlay. Never raises."""
+    if mode_registry.ensure_project_store(cwd, root) is None:
+        mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+        return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE}
+    gate_cfg = engine_preferences_for_gate(cwd=cwd, root=root)
+    if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
+        return {"action": "deferred",
+                "reason": GATE_REASON_ROOT_UNAVAILABLE, "detail": gate_cfg.detail}
+    if policy is not None:
+        refusal = _gate_policy_write_refusal(policy)
+        if refusal is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (GATE_POLICY_REASON_INVALID, refusal)}
+    structural = profile_structural_refusal(cwd, root=root)
+    if structural is not None:
+        return {"action": "refused", "reason": structural}
+    with mode_registry.config_lock(cwd, root) as got:
+        if not got:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED})
+            return {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_LOCK_CONTENDED}
+        record = read(cwd, root)
+        if record is None:
+            cls = _classify_core_md_at_path(core_path(cwd, root))
+            if cls.status == CONFIG_ABSENT:
+                return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_ABSENT}
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if record.get("behind"):
+            return {
+                "action": "behind",
+                "reason": BUILDER_DISPATCH_DEFER_SCHEMA_BEHIND,
+                "record": record,
+            }
+        try:
+            path = core_path(cwd, root)
+        except RepoRootUnavailable as exc:
+            return {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        try:
+            with open(path, encoding="utf-8") as fh:
+                text = fh.read()
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE,
+            }
+        orig = parse_core(text)
+        if orig is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        blocks = list(_JSON_BLOCK.finditer(text))
+        if len(blocks) != 1:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        block, duplicate_key = _loads_rejecting_duplicate_keys(blocks[0].group(1))
+        if duplicate_key is not None:
+            return {"action": "refused",
+                    "reason": "%s:%s" % (DUPLICATE_CORE_KEY_REASON, duplicate_key)}
+        if block is None or not isinstance(block, dict):
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if policy is None:
+            block.pop(REVIEW_GATE_POLICY_KEY, None)
+        else:
+            block[REVIEW_GATE_POLICY_KEY] = _build_gate_policy_overlay(policy, path)
+        new_body = json.dumps(block, indent=2)
+        new_text = _splice_single_json_block(text, new_body)
+        if new_text is None:
+            return {"action": "refused", "reason": BUILDER_DISPATCH_REASON_UNPARSEABLE}
+        if new_text == text:
+            return {"action": "noop"}
+        new_parsed = parse_core(new_text)
+        if not _gate_policy_round_trip_ok(orig, new_parsed):
+            return {"action": "refused", "reason": GATE_POLICY_REASON_ROUND_TRIP}
+        try:
+            store_core.atomic_write(path, new_text)
+        except OSError:
+            mark_pending(cwd, root, detail={"reason": BUILDER_DISPATCH_DEFER_STORE_UNWRITABLE})
+            return {
+                "action": "deferred",
+                "reason": BUILDER_DISPATCH_DEFER_WRITE_FAILED,
+            }
+        clear_pending(cwd, root)
+        return {"action": "written"}
+
+
 def layer_path(cwd, hero, root=None):
     """Mode-aware path to a hero layer file, co-located with core.md."""
     return os.path.join(os.path.dirname(core_path(cwd, root)), hero + ".md")
@@ -1274,7 +1525,8 @@ def confirm(cwd, *, root=None, now=None):
             if existing.get("status") == "confirmed":
                 return {"action": "noop", "record": existing}
             facts = {k: existing[k] for k in (
-                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
+                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
+                "ratifiedResiduals")}
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
@@ -1384,6 +1636,9 @@ def main(argv):
     epp.add_argument("--key", choices=ENGINE_PREF_PIN_KEYS, required=True)
     epp.add_argument("--cwd", default=".")
     epp.add_argument("--root", default=None)
+    rgp = sub.add_parser("write-review-gate-policy")  # reviewGatePolicy overlay
+    rgp.add_argument("--cwd", default=".")
+    rgp.add_argument("--root", default=None)
     args = ap.parse_args(argv)
     if args.cmd == "resolve":
         try:
@@ -1456,6 +1711,29 @@ def main(argv):
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0
             out = write_engine_pref_pins(args.cwd, args.key, pins, root=args.root)
+        except RepoRootUnavailable as exc:
+            out = {"action": "deferred",
+                    "reason": GATE_REASON_ROOT_UNAVAILABLE,
+                    "detail": gate_refusal_detail(exc)}
+        except Exception:
+            out = {"action": "deferred", "reason": BUILDER_DISPATCH_DEFER_CLI_FAILED}
+    elif args.cmd == "write-review-gate-policy":
+        try:
+            raw = sys.stdin.read()
+            if raw.strip() == "" or raw.strip() == "null":
+                policy = None
+            else:
+                try:
+                    policy = json.loads(raw)
+                except ValueError:
+                    out = {"action": "refused", "reason": GATE_POLICY_REASON_INPUT_UNPARSEABLE}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if not isinstance(policy, dict):
+                    out = {"action": "refused", "reason": GATE_POLICY_REASON_NOT_A_MAPPING}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+            out = write_review_gate_policy(args.cwd, policy, root=args.root)
         except RepoRootUnavailable as exc:
             out = {"action": "deferred",
                     "reason": GATE_REASON_ROOT_UNAVAILABLE,

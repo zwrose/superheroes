@@ -192,7 +192,21 @@ Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` b
 
 ### 3. Dispatch Specialists in Parallel
 
-Launch the round's scheduled specialists (round 1: all five) in a **single message with parallel reviewer dispatches** so they run in parallel, each dispatched by its reviewer name (resolve dispatch via the host tool map). The specialist dispatch prompt template and dispatch instructions are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` — read it when building each subagent prompt. Dispatch each seat through **its seat-map-assigned engine+model** (`$SEAT_MAP.seats[<reviewer>]` → `.vendor`/`.model`): a `claude` seat runs the named subagent at its tier model; a `codex`/`cursor` seat dispatches through `engine_adapter.py` (read-only sandbox) with that seat's resolved `.model` — persona and `$RUBRIC` unchanged, each returns its dimension's findings JSON. An unreadable or missing slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). Submit the panel with `ranManifest: {<dim>: <vendor>}` built from your OWN dispatch records (which vendor actually produced each seat's folded findings — claude for any seat re-run on Claude after a forfeit) **and** the composed `$SEAT_MAP` JSON as `seatMap` — that field carries the map's degradations (including `same-family`) and violations into the driver's certification shape and exit disclosure; an unexcused violation marks the shape `-constraint-violated`, and omitting `seatMap` silently drops those disclosures; the driver emits the fall-open disclosure from `ranManifest` as machinery, so you do not hand-write it. Omitting the manifest for a cross-vendor panel is itself disclosed (provenance-unavailable). Per-seat dispatch + grounding-seat detail: `reference/auto-fix-loop.md`.
+On every `next` whose `phase` starts with `dispatch-`, `round_driver.py` **emits** each roster seat's complete order before you dispatch anything: one markdown file per slot, an envelope stub carrying the full known `seat-result/1` header, and a manifest hashed into the session anchor. **Dispatch the emitted order text** — do not hand-compose prompts from templates. Per-seat engine/channel mechanics (stdout vs file, `dispatch-review` runner, canary probes) live in `reference/auto-fix-loop.md`; the prompt bodies live in `rubric/orders/<phase>.md` and are rendered into the session by the driver.
+
+**Where the files are (round `<N>`, phase `<phase>`, attempt `<K>`, storage key `<skey>` — the filename-safe key the manifest uses, not the bare reviewer name):**
+
+| Artifact | Path |
+| --- | --- |
+| Order (dispatch this) | `$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.md` |
+| Envelope stub (header fields the seat must copy verbatim) | `$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.envelope.json` |
+| Dispatch manifest (every slot's `orderPath`, `envelopeStubPath`, hashes) | `$SESSION_DIR/round-<N>/orders/<phase>/manifest.a<K>.json` |
+| Landing — **engine** seat (`codex`/`cursor`) | `$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.json` — write the **full envelope** (stub header + payload) |
+| Landing — **host** seat (`claude` native subagent) | `$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.payload.json` — write **only** the payload; copy every stub header field verbatim into the ingested envelope |
+
+No seat is ever asked to transcribe an `orderSha256`, `manifestSha256`, or storage path — those ride in the stub the driver emitted. After landings exist, `record-result` / `advance` ingest them (see `reference/round-driver.md`).
+
+Launch the round's scheduled specialists (round 1: all five) in a **single message with parallel reviewer dispatches**. Dispatch each seat through **its seat-map-assigned engine+model** (`$SEAT_MAP.seats[<reviewer>]` → `.vendor`/`.model`): a `claude` seat runs the named subagent at its tier model with the **order file contents** as the prompt; a `codex`/`cursor` seat dispatches through `engine_dispatch.py dispatch-review` (read-only sandbox) with that seat's resolved `.model`. An unreadable or missing slot is the same `cannot-certify` signal, re-run on Claude (UFR-7). Submit the panel with `ranManifest: {<dim>: <vendor>}` built from your OWN dispatch records **and** the composed `$SEAT_MAP` JSON as `seatMap`. Per-seat dispatch + grounding-seat detail: `reference/auto-fix-loop.md`.
 
 **Per-agent substitutions** (reviewer name → findings filename stem → dimension label):
 
@@ -209,7 +223,9 @@ A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/finding
 
 ### 4. Compile + Dedupe (main context)
 
-On the **read-only paths** (`--post`, `--review-only`), the orchestrator compiles in main context. On the **auto-fix loop**, the same mechanical steps run inside `round_driver.py` when panel/scoped findings are submitted — obey the driver's `next`/`submit` instead of reimplementing compile by hand.
+On the **read-only paths** (`--post`, `--review-only`), the orchestrator compiles in main context — a **prose-driven review** (sanctioned lane; not a shortcut and not available inside the auto-fix loop). It owes a substitute receipt instead of the driver's `round-receipt.json`: the dispositions table plus the durable receipt the workhorse charter requires (`skills/workhorse/SKILL.md` §10 — link review results on the PR). Branch mode has no PR: write both to `$SESSION_DIR/dispositions.md`; when the branch later becomes a PR, that file's content is what the PR body carries. Full contract: `rubric/review-discipline.md` § Prose-driven review.
+
+On the **auto-fix loop**, compile is driver-owned — obey `next`/`submit` instead of reimplementing compile by hand.
 
 Collect findings (read-only path only) from file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from stdout-channel seats via their folded `dispatch-review` results. Apply, in order:
 

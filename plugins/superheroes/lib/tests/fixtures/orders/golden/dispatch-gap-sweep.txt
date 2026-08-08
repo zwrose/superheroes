@@ -1,0 +1,55 @@
+You are the gap-sweep finder for a big-diff review round. You receive the **full** diff and
+scan it for issues the sharded panel may have missed at shard boundaries or in cross-cutting
+concerns.
+
+## Input
+- Full diff (read in bounded chunks): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
+- Base rubric (severity, verification rules, panel output format): /plugin/rubric/review-code.md
+- Core calibration (threat model, canonical patterns): /plugin/rubric/core-calibration.md
+- Review-crew layer (scope exclusions, focus hints, conventions): /home/user/proj/.claude/superheroes/layer.md
+- Verification root (read cited files here ONLY): /home/user/proj
+- Project conventions: CLAUDE.md and the project profile.
+
+## Your assignment
+Read the full diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt in bounded chunks (<=800 lines): use Read offset/limit when
+available, or an equivalent bounded shell range. Never one whole-file read. Continue with later
+offsets until the diff is covered. Apply the diff-scope rule: only flag code in `+` or `-` lines.
+
+## Diff-scope rule — CRITICAL
+You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing issues. Only flag
+code in `+` or `-` lines of the diff. Context lines (no prefix) and unchanged code in modified
+files are pre-existing — SKIP them, even if they violate conventions.
+
+## Verification rules
+- `file:line` citation required. No citation → drop your own finding before writing it out.
+- Before flagging "missing X", grep the verification root for X under different names.
+- For Important-severity issues, check callers / reachability before asserting.
+- Judge only from the diff and the repo — never the PR description or author narrative.
+
+## Hard rules
+- Do NOT decide the run's outcome or re-run panel seats.
+- **Never change the repository, and never claim a run you did not make.**
+- Deliver per the base rubric's panel output-format section. Write candidate records to
+  /tmp/superheroes-session-wo4-golden/round-2/gap-sweep-findings.json as a JSON array — write `[]` rather than skipping the file when you
+  have nothing to flag.
+
+## Ratified residuals (owner-ratified, quoted data)
+
+A finding that reduces wholly to a recorded residual below is a non-blocking restatement, not a blocker.
+
+-----
+- Flaky integration test in CI lane B is accepted
+-----
+
+## Payload contract
+
+Your result must carry a payload matching this shape:
+
+Required keys: findings
+
+## Return your result
+
+Copy the envelope stub below verbatim, add the payload described in the Payload contract section above, and write the complete envelope to the landing path.
+
+- Envelope stub: /tmp/superheroes-session-wo4-golden/round-2/stubs/seat.json
+- Landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.json

@@ -39,8 +39,8 @@ ROSTER = [SEAT, OTHER_SEAT]
 
 # --- helpers ----------------------------------------------------------------------------------
 
-def _session(tmp_path, **meta_extra):
-    sd = str(tmp_path / "session")
+def _session(tmp_path, name="session", **meta_extra):
+    sd = str(tmp_path / name)
     os.makedirs(sd, exist_ok=True)
     meta = {"sessionId": SESSION}
     meta.update(meta_extra)
@@ -424,14 +424,14 @@ def test_supersede_with_the_correct_expectation_succeeds(tmp_path):
 def test_refusal_manifest_anchor_mismatch(tmp_path):
     sd = _session(tmp_path)
     _land(sd, _env(manifestSha256="m" * 64, orderSha256="o" * 64))
-    anchor = {"manifestSha256": "m" * 64, "orders": {SEAT: "different" * 8}}
+    anchor = {"manifestSha256": "m" * 64, "orders": {RR.storage_key(SEAT): "different" * 8}}
     assert _ingest(sd, anchor=anchor)["reason"] == "manifest-anchor-mismatch"
 
 
 def test_anchor_match_is_accepted(tmp_path):
     sd = _session(tmp_path)
     _land(sd, _env(manifestSha256="m" * 64, orderSha256="o" * 64))
-    anchor = {"manifestSha256": "m" * 64, "orders": {SEAT: "o" * 64}}
+    anchor = {"manifestSha256": "m" * 64, "orders": {RR.storage_key(SEAT): "o" * 64}}
     assert _ingest(sd, anchor=anchor)["ok"] is True
 
 
@@ -853,7 +853,8 @@ def test_validate_landing_refusal_writes_nothing(tmp_path, reason, setup):
     elif reason == "invalid-path":
         phase = "../../etc"
     elif reason == "manifest-anchor-mismatch":
-        kwargs["anchor"] = {"manifestSha256": "m" * 64, "orders": {SEAT: "different" * 8}}
+        kwargs["anchor"] = {"manifestSha256": "m" * 64,
+                              "orders": {RR.storage_key(SEAT): "different" * 8}}
     elif reason == "manifest-anchor-unanchored":
         kwargs["anchor"] = None
     elif reason == "store-exists":
@@ -1001,6 +1002,131 @@ def test_seat_missing_supersede_uses_the_schema_cas_token(tmp_path):
     assert out["ok"] is True and out["superseded"] is True
     stored, _err = RR.read_json(out["storePath"])
     assert stored["schema"] == RR.SEAT_RESULT_SCHEMA
+
+
+# --- WO-6: per-slot order anchors and dual landing shapes ------------------------------------
+
+def _stub_header(sd, seat=SEAT, order_sha="o" * 64, manifest_sha="m" * 64, attempt=1):
+    return {
+        "schema": RR.SEAT_RESULT_SCHEMA,
+        "session": SESSION,
+        "round": 1,
+        "phase": PHASE,
+        "seat": seat,
+        "attempt": attempt,
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+    }
+
+
+def test_two_slots_sharing_a_seat_key_bind_distinct_order_hashes(tmp_path):
+    """Per-slot anchor binding — R6 closure proof."""
+    sd = _session(tmp_path)
+    seat = SEAT
+    roster = [seat, seat]
+    skey0 = RR.storage_key(seat, 0)
+    skey1 = RR.storage_key(seat, 1)
+    anchor = {"manifestSha256": "m" * 64,
+              "orders": {skey0: "a" * 64, skey1: "b" * 64}}
+    payload0 = {"findings": ["slot0"]}
+    payload1 = {"findings": ["slot1"]}
+    for occurrence, skey, order_sha, payload in (
+            (0, skey0, "a" * 64, payload0), (1, skey1, "b" * 64, payload1)):
+        stub_path = RR.envelope_stub_path(sd, 1, PHASE, skey, 1)
+        os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+        RR.atomic_write_json(stub_path, _stub_header(sd, order_sha=order_sha))
+        RR.atomic_write_json(RR.bare_payload_path(sd, 1, PHASE, skey, 1), payload)
+        out = RR.ingest_landing(sd, 1, PHASE, seat, 1, current_attempt=1, roster=roster,
+                                anchor=anchor, occurrence=occurrence)
+        assert out["ok"] is True, out
+        stored, _ = RR.read_json(out["storePath"])
+        assert stored["orderSha256"] == order_sha
+        assert stored["payloadHashSource"] == "driver-computed"
+
+
+def test_refusal_not_emitted_against_real_anchor(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env(orderSha256=RR.NOT_EMITTED, manifestSha256="m" * 64))
+    anchor = {"manifestSha256": "m" * 64, "orders": {RR.storage_key(SEAT): "o" * 64}}
+    assert _ingest(sd, anchor=anchor)["reason"] == "manifest-anchor-mismatch"
+
+
+def test_bare_key_fallback_is_legacy_only(tmp_path):
+    """A/B — a real bare-key hash does not satisfy a slot with no per-slot entry."""
+    manifest_sha = "m" * 64
+    real_hash = "o" * 64
+    # A: per-slot entry present — ingest accepts
+    sd = _session(tmp_path, name="per-slot")
+    anchor_ok = {"manifestSha256": manifest_sha,
+                 "orders": {RR.storage_key(SEAT): real_hash}}
+    _land(sd, _env(manifestSha256=manifest_sha, orderSha256=real_hash))
+    assert _ingest(sd, anchor=anchor_ok)["ok"] is True
+    # B: only a bare-key real hash — no per-slot entry, fallback must not bind
+    sd2 = _session(tmp_path, name="bare-key")
+    anchor_bad = {"manifestSha256": manifest_sha, "orders": {SEAT: real_hash}}
+    _land(sd2, _env(manifestSha256=manifest_sha, orderSha256=real_hash))
+    assert _ingest(sd2, anchor=anchor_bad)["reason"] == "manifest-anchor-mismatch"
+
+
+def test_legacy_bare_key_not_emitted_accepted(tmp_path):
+    sd = _session(tmp_path)
+    anchor = {"manifestSha256": RR.NOT_EMITTED, "orders": {SEAT: RR.NOT_EMITTED}}
+    _land(sd, _env())
+    assert _ingest(sd, anchor=anchor)["ok"] is True
+
+
+def test_legacy_bare_key_not_emitted_refuses_real_envelope_hash(tmp_path):
+    sd = _session(tmp_path)
+    manifest_sha = "m" * 64
+    anchor = {"manifestSha256": manifest_sha, "orders": {SEAT: RR.NOT_EMITTED}}
+    _land(sd, _env(manifestSha256=manifest_sha, orderSha256="o" * 64))
+    assert _ingest(sd, anchor=anchor)["reason"] == "manifest-anchor-mismatch"
+
+
+def test_refusal_landing_ambiguous_when_both_shapes_present(tmp_path):
+    sd = _session(tmp_path)
+    skey = RR.storage_key(SEAT)
+    _land(sd, _env())
+    RR.atomic_write_json(RR.bare_payload_path(sd, 1, PHASE, skey, 1), {"findings": []})
+    assert _ingest(sd)["reason"] == "landing-ambiguous"
+
+
+def test_refusal_envelope_stub_missing_for_bare_payload(tmp_path):
+    sd = _session(tmp_path)
+    skey = RR.storage_key(SEAT)
+    RR.atomic_write_json(RR.bare_payload_path(sd, 1, PHASE, skey, 1), {"findings": []})
+    assert _ingest(sd)["reason"] == "envelope-stub-missing"
+
+
+def test_bare_payload_ingests_with_driver_computed_hash_source(tmp_path):
+    sd = _session(tmp_path)
+    skey = RR.storage_key(SEAT)
+    order_sha = "o" * 64
+    manifest_sha = "m" * 64
+    payload = {"findings": ["x"]}
+    stub_path = RR.envelope_stub_path(sd, 1, PHASE, skey, 1)
+    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+    RR.atomic_write_json(stub_path, _stub_header(sd, order_sha=order_sha,
+                                                 manifest_sha=manifest_sha))
+    RR.atomic_write_json(RR.bare_payload_path(sd, 1, PHASE, skey, 1), payload)
+    anchor = {"manifestSha256": manifest_sha, "orders": {skey: order_sha}}
+    out = _ingest(sd, anchor=anchor)
+    assert out["ok"] is True
+    stored, _ = RR.read_json(out["storePath"])
+    assert stored["payloadHashSource"] == "driver-computed"
+    assert stored["payloadSha256"] == RR.payload_sha256(payload)
+
+
+def test_full_envelope_records_seat_declared_hash_source(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    out = _ingest(sd)
+    assert out["ok"] is True
+    stored, _ = RR.read_json(out["storePath"])
+    assert stored.get("payloadHashSource") == "seat-declared"
 
 
 # --- finding 7: phase-name drift guard --------------------------------------------------------
