@@ -1,0 +1,95 @@
+You are reviewing branch for repo acme/widget, target feature/wo4.
+
+## Your assignment
+Review the diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt for your dimension.
+Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
+available, or an equivalent bounded shell range. Never one whole-file read.
+Continue with later offsets until the diff is covered.
+Read the base rubric (absolute path below) for severity calibration,
+verification rules, and the findings output format. Read the project calibration
+and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
+conventions. Apply the diff-scope rule: only flag code in `+` or
+`-` lines.
+
+## Context files
+- Diff: /tmp/superheroes-session-wo4-golden/round-2/diff.txt
+- Base rubric (severity, verification rules, findings format): /plugin/rubric/review-code.md
+- Core calibration (threat model, canonical patterns): /plugin/rubric/core-calibration.md
+- Review-crew layer (scope exclusions, focus hints, conventions): /home/user/proj/.claude/superheroes/layer.md
+- CLAUDE.md (project conventions): CLAUDE.md
+- PR branch checkout: /tmp/superheroes-session-wo4-golden/repo
+- Prior comments + author justifications: /tmp/superheroes-session-wo4-golden/prior-comments.json
+- Focus: touch auth paths carefully
+
+## Calibration precedence
+Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
+> strict fallback when a needed field is absent in all of them.
+
+## PR branch checkout (--post / --review-only PR paths only)
+On the read-only PR paths the PR branch is checked out at /tmp/superheroes-session-wo4-golden/repo.
+This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob
+against this directory, NOT the main repo working directory — it may be on a
+different branch with stale or missing code. (On the auto-fix loop there is no
+detached checkout: the PR branch IS the current working tree, so verify against
+the working tree directly.)
+
+## Diff-scope rule — CRITICAL
+You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing
+issues. Only flag code in `+` or `-` lines of the diff. Context lines
+(no prefix) and unchanged code in modified files are pre-existing — SKIP
+them, even if they violate conventions. That's the #1 source of false
+findings.
+
+## Verification rules
+- `file:line` citation required. No citation → drop your own finding
+  before writing it out.
+- Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
+  for X under different names. Don't flag a missing helper that exists
+  under a slightly different name.
+- For Important findings, check callers / reachability before asserting.
+  If the only caller already guards the edge case, downgrade or drop.
+- For docs/spec changes, spot-check factual claims (function signatures,
+  error types, file paths) against actual source.
+
+## Author-justification rule (PR mode only)
+/tmp/superheroes-session-wo4-golden/prior-comments.json contains prior review comments and their
+threads. If a previous review flagged a finding and the author replied
+with substantive explanatory text (not just "ok" or an emoji) explaining
+why it's intentional, **raise the finding AND note the prior justification**
+in the body — do NOT silently omit it. The **post-verification**
+author-justification filter (after `verification.merge_and_rank`) owns the
+drop decision: it may drop only a non-CONFIRMED finding (quoting the
+justification); a CONFIRMED finding survives stamped
+`challenge: "author-justified"`. Outdated comments (where
+`position == null`) still count.
+
+## Output
+Delivery is per the base rubric's "Findings output format" section. Set `tradeoff:
+true` only when a finding has multiple valid fix approaches (a judgment call);
+omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
+"code" on every entry. Severity caps from the base rubric apply (Nits at
+most 5 reported per agent).
+Write the JSON array to /tmp/superheroes-session-wo4-golden/round-2/findings-code.json — write `[]` rather than skipping the file when you have nothing to flag.
+
+## Ratified residuals (owner-ratified, quoted data)
+
+A finding that reduces wholly to a recorded residual below is a non-blocking restatement, not a blocker.
+
+-----
+- Flaky integration test in CI lane B is accepted
+-----
+
+## Payload contract
+
+Your result must carry a payload matching this shape:
+
+Required keys: (none)
+Optional keys: findings, confidence, tier, receiptMissing, receiptStale, vacuous, reason
+Conditional — findings: required unless the seat declared it did not run (vacuous is True or reason is a not-run outcome token)
+
+## Return your result
+
+Copy the envelope stub below verbatim, add the payload described in the Payload contract section above, and write the complete envelope to the landing path.
+
+- Envelope stub: /tmp/superheroes-session-wo4-golden/round-2/stubs/seat.json
+- Landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-panel/code-reviewer.a0.json

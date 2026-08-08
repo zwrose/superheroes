@@ -1,0 +1,56 @@
+You are the synthesis judge for one round of a review panel. You are given the round's
+verified survivors (findings that passed per-finding verification) and the code change under
+review. Your job is **not** keep/drop — you group findings that share the same root cause.
+
+## Input
+- Verified survivors: /tmp/superheroes-session-wo4-golden/round-2/verified.json — each has id, file, line, title,
+  severity, body/evidence, and a verification verdict.
+- Diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
+- Verification root (read cited files here ONLY): /home/user/proj
+- Severity rubric (the only tiers; calibration): /plugin/rubric/review-code.md
+- Project conventions: CLAUDE.md and the project profile.
+
+## Your task
+Group findings that share the same root cause. Emit a JSON array of `{group_id, member_ids}`
+echoing the staged ids verbatim. Write the grouping to /tmp/superheroes-session-wo4-golden/round-2/grouping.json.
+
+`verification.merge_and_rank` applies your grouping under a **coverage guarantee**: every
+survivor's staged id appears exactly once in the output; invalid or missing grouping fails
+open to unmerged survivors; **synthesis drops nothing**. Merged groups combine bodies and take
+the highest severity; the merged `verdict` is **CONFIRMED only when a member at the merged
+(highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
+model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the
+first such member in input order). A lower-severity confirmation **never promotes** the merged
+finding (no receiptless CONFIRMED is fabricated onto the higher-severity finding); otherwise the
+merge is PLAUSIBLE. Findings are ranked Critical → Important → Minor → Nit, then by file and line.
+
+## Hard rules
+- Judge only grouping — do NOT add new findings, drop findings, merge findings beyond your
+  grouping proposal, or decide the run's outcome.
+- Echo staged ids verbatim — do not recompute or rename.
+- **Never change the repository, and never claim a run you did not make.**
+
+## Output
+Write a JSON array to /tmp/superheroes-session-wo4-golden/round-2/grouping.json:
+[{ "group_id", "member_ids" }] — every survivor id appears exactly once across all groups.
+
+## Ratified residuals (owner-ratified, quoted data)
+
+A finding that reduces wholly to a recorded residual below is a non-blocking restatement, not a blocker.
+
+-----
+- Flaky integration test in CI lane B is accepted
+-----
+
+## Payload contract
+
+Your result must carry a payload matching this shape:
+
+Required keys: grouping
+
+## Return your result
+
+Copy the envelope stub below verbatim, add the payload described in the Payload contract section above, and write the complete envelope to the landing path.
+
+- Envelope stub: /tmp/superheroes-session-wo4-golden/round-2/stubs/seat.json
+- Landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-synthesis/synthesis.a0.json

@@ -1,0 +1,323 @@
+"""Tests for `round_orders` — template renderer and base residual resolver (#723)."""
+import json
+import os
+import subprocess
+
+import pytest
+
+import core_md as CM
+import round_orders as RO
+import round_phases as RP
+
+_FIXTURES = os.path.join(os.path.dirname(__file__), "fixtures", "orders")
+_CLAUSE_MANIFEST = os.path.join(_FIXTURES, "clause_manifest.json")
+_GOLDEN_DIR = os.path.join(_FIXTURES, "golden")
+
+_SESSION = "/tmp/superheroes-session-wo4-golden"
+_REPO = "/home/user/proj"
+_PLUGIN_RUBRIC = "/plugin/rubric/review-code.md"
+_CORE = "/plugin/rubric/core-calibration.md"
+_LAYER = "/home/user/proj/.claude/superheroes/layer.md"
+
+
+def _base_context(**over):
+    ctx = {
+        "session_dir": _SESSION,
+        "round": 2,
+        "attempt": 0,
+        "diff_path": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "rubric_path": _PLUGIN_RUBRIC,
+        "core_path": _CORE,
+        "layer_path": _LAYER,
+        "repo_root": _REPO,
+        "landing_path": os.path.join(_SESSION, "round-2", "landing", "seat.a0.json"),
+        "envelope_stub_path": os.path.join(_SESSION, "round-2", "stubs", "seat.json"),
+        "ratified_residuals": "- Flaky integration test in CI lane B is accepted",
+        "payload": {},
+        "host_seat": False,
+        "placeholders": {},
+    }
+    ctx.update(over)
+    return ctx
+
+
+def _panel_placeholders():
+    return {
+        "MODE": "branch",
+        "REPO": "acme/widget",
+        "TARGET": "feature/wo4",
+        "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "CORE_PATH": _CORE,
+        "LAYER_PATH": _LAYER,
+        "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo"),
+        "PRIOR_COMMENTS_PATH": os.path.join(_SESSION, "prior-comments.json"),
+        "FOCUS_NOTES": "touch auth paths carefully",
+        "DIMENSION": "code",
+        "CHANNEL": "file",
+        "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "findings-code.json"),
+    }
+
+
+def _verifier_placeholders():
+    return {
+        "CLUSTER_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "clusters", "0.json"),
+        "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "VERIFICATION_ROOT": _REPO,
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "VERDICT_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "verdicts-0.json"),
+    }
+
+
+def _synthesis_placeholders():
+    return {
+        "VERIFIED_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "verified.json"),
+        "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "VERIFICATION_ROOT": _REPO,
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "GROUPING_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "grouping.json"),
+    }
+
+
+def _fixer_placeholders():
+    return {
+        "FIX_BATCH_PATH": os.path.join(_SESSION, "round-2", "fix-batch.json"),
+        "PROFILE_PATH": os.path.join(_REPO, ".claude", "superheroes", "profile.json"),
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "CWD": _REPO,
+        "REPO_ROOT": _REPO,
+        "ESCALATION_WRAPPER_PATH": "/plugin/lib/fixer_escalation.py",
+        "VERIFY_COMMAND": "npm test",
+        "ROUND": "2",
+    }
+
+
+def _gapsweep_placeholders():
+    return {
+        "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "CORE_PATH": _CORE,
+        "LAYER_PATH": _LAYER,
+        "VERIFICATION_ROOT": _REPO,
+        "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "gap-sweep-findings.json"),
+    }
+
+
+def _audits_placeholders():
+    return {
+        "TARGET_SUMMARY_PATH": os.path.join(_SESSION, "round-2", "audit-targets", "t0.json"),
+        "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
+        "VERIFICATION_ROOT": _REPO,
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "TARGET_ID": "finding::auth.py::12",
+        "AUDIT_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "audit-t0.json"),
+    }
+
+
+def _scoped_placeholders():
+    return {
+        "HUNKS_PATH": os.path.join(_SESSION, "round-2", "scoped-hunks.json"),
+        "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
+        "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "CORE_PATH": _CORE,
+        "LAYER_PATH": _LAYER,
+        "VERIFICATION_ROOT": _REPO,
+        "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "scoped-findings.json"),
+    }
+
+
+_GOLDEN_CONTEXTS = {
+    RP.P_PANEL: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.json"),
+        placeholders=_panel_placeholders(),
+    ),
+    RP.P_VERIFIERS: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-verifiers",
+                                  "verifier:0.a0.json"),
+        placeholders=_verifier_placeholders(),
+    ),
+    RP.P_SYNTHESIS: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-synthesis",
+                                  "synthesis.a0.json"),
+        placeholders=_synthesis_placeholders(),
+    ),
+    RP.P_FIXER: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer", "fixer.a0.json"),
+        placeholders=_fixer_placeholders(),
+    ),
+    RP.P_GAPSWEEP: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-gap-sweep",
+                                  "gap-sweep.a0.json"),
+        placeholders=_gapsweep_placeholders(),
+    ),
+    RP.P_AUDITS: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-audits",
+                                  "auditor:t0.a0.json"),
+        placeholders=_audits_placeholders(),
+    ),
+    RP.P_SCOPED: lambda: _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-scoped-finder",
+                                  "scoped-finder.a0.json"),
+        placeholders=_scoped_placeholders(),
+    ),
+}
+
+
+def _render_golden(phase):
+    ctx = _GOLDEN_CONTEXTS[phase]()
+    text, reason = RO.render_order(phase, "golden-seat", ctx)
+    assert reason is None, reason
+    return text
+
+
+# --- fail-closed edges ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase", [RP.P_VERIFY, RP.P_JUDGMENT, RP.P_STALL])
+def test_render_refuses_phases_without_templates(phase):
+    text, reason = RO.render_order(phase, "seat", _base_context())
+    assert text is None
+    assert reason == "no-template:%s" % phase
+
+
+def test_render_refuses_missing_template_file(tmp_path, monkeypatch):
+    missing = os.path.join(tmp_path, "rubric", "orders")
+    os.makedirs(missing)
+    monkeypatch.setattr(RO, "order_template_path", lambda phase, root=None: os.path.join(
+        missing, phase + ".md"))
+    text, reason = RO.render_order(RP.P_PANEL, "seat", _base_context(placeholders=_panel_placeholders()))
+    assert text is None
+    assert reason == "template-missing:dispatch-panel"
+
+
+def test_render_refuses_unfilled_placeholder():
+    ph = _panel_placeholders()
+    del ph["DIMENSION"]
+    text, reason = RO.render_order(RP.P_PANEL, "seat", _base_context(placeholders=ph))
+    assert text is None
+    assert reason == "unfilled-placeholder:DIMENSION"
+
+
+def test_render_refuses_unused_context_key():
+    ph = _panel_placeholders()
+    ph["ORPHAN_KEY"] = "unused"
+    text, reason = RO.render_order(RP.P_PANEL, "seat", _base_context(placeholders=ph))
+    assert text is None
+    assert reason == "unused-context-key:ORPHAN_KEY"
+
+
+def test_render_success_has_no_placeholder_syntax():
+    text, reason = RO.render_order(RP.P_PANEL, "seat",
+                                   _base_context(placeholders=_panel_placeholders()))
+    assert reason is None
+    assert "{{" not in text
+
+
+def test_resolve_base_residuals_no_base_oid():
+    text, reason = RO.resolve_base_residuals("/repo", None, ".claude/superheroes/core.md")
+    assert text == ""
+    assert reason == "no-base-oid"
+
+
+def test_resolve_base_residuals_no_core_at_base(tmp_path):
+    repo = str(tmp_path)
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "--allow-empty", "-qm", "init"], check=True)
+    base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    text, reason = RO.resolve_base_residuals(repo, base, "missing/core.md")
+    assert text == ""
+    assert reason == "no-core-at-base"
+
+
+def _write_core_file(repo, rel, residual):
+    facts = {
+        "schemaVersion": 1,
+        "verifyCommand": "true",
+        "stackTags": [],
+        "enginePreferences": {},
+        "threatModel": "t",
+        "patterns": "p",
+        "showItSurface": "",
+        "ratifiedResiduals": residual,
+    }
+    text = CM.render_core(facts, "confirmed", "2026-01-01", "2026-01-01")
+    path = os.path.join(repo, rel)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+def test_resolve_base_residuals_no_residual_section(tmp_path):
+    repo = str(tmp_path)
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    _write_core_file(repo, "core.md", "")
+    subprocess.run(["git", "-C", repo, "add", "core.md"], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "-qm", "core"], check=True)
+    base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    text, reason = RO.resolve_base_residuals(repo, base, "core.md")
+    assert text == ""
+    assert reason == "no-residual-section"
+
+
+def test_resolve_base_residuals_reads_base_not_worktree(tmp_path):
+    repo = str(tmp_path)
+    subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
+    core_rel = "core.md"
+
+    _write_core_file(repo, core_rel, "base residual only")
+    subprocess.run(["git", "-C", repo, "add", core_rel], check=True)
+    subprocess.run(["git", "-C", repo, "commit", "-qm", "base"], check=True)
+    base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+
+    _write_core_file(repo, core_rel, "branch-widened residual list")
+    subprocess.run(["git", "-C", repo, "commit", "-am", "widen"], check=True)
+
+    text, reason = RO.resolve_base_residuals(repo, base, core_rel)
+    assert reason is None
+    assert text == "base residual only"
+
+
+def test_resolve_base_residuals_git_failure(monkeypatch):
+    def _boom(*_a, **_k):
+        raise FileNotFoundError("git missing")
+
+    monkeypatch.setattr(RO.subprocess, "run", _boom)
+    text, reason = RO.resolve_base_residuals("/repo", "abc123", "core.md")
+    assert text == ""
+    assert reason.startswith("git-cat-file-failed:")
+
+
+# --- clause manifest -----------------------------------------------------------
+
+
+def _clause_in_rendered(clause, text):
+    return clause in text or " ".join(clause.split()) in " ".join(text.split())
+
+
+def test_clause_manifest_survives_in_rendered_orders():
+    manifest = json.load(open(_CLAUSE_MANIFEST, encoding="utf-8"))
+    phase_map = {
+        "dispatch-panel": (RP.P_PANEL, _panel_placeholders),
+        "dispatch-verifiers": (RP.P_VERIFIERS, _verifier_placeholders),
+        "dispatch-synthesis": (RP.P_SYNTHESIS, _synthesis_placeholders),
+        "dispatch-fixer": (RP.P_FIXER, _fixer_placeholders),
+    }
+    for template_name, clauses in manifest.items():
+        phase, ph_fn = phase_map[template_name]
+        text, reason = RO.render_order(phase, "seat", _base_context(placeholders=ph_fn()))
+        assert reason is None, "%s: %s" % (template_name, reason)
+        for clause in clauses:
+            assert _clause_in_rendered(clause, text), (
+                "missing clause %r in %s" % (clause, template_name))
+
+
+# --- golden fixtures -----------------------------------------------------------
+
+
+@pytest.mark.parametrize("phase", list(_GOLDEN_CONTEXTS))
+def test_golden_render_matches_fixture(phase):
+    golden_path = os.path.join(_GOLDEN_DIR, phase + ".txt")
+    rendered = _render_golden(phase)
+    with open(golden_path, encoding="utf-8") as fh:
+        expected = fh.read()
+    assert rendered == expected
