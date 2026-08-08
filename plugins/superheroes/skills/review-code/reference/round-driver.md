@@ -112,6 +112,15 @@ The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and
 `orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
 they disagree).
 
+**Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
+The driver writes these in the `orders-emit` commit when it emits dispatch orders:
+`round-<N>/diff.txt`, `round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`,
+`round-<N>/scoped-hunks.json`, and `round-<N>/verified.json` (phase-dependent — see
+`_order_sidecar_writes`). The orchestrator must write these **before** dispatching a fixer, audits,
+or scoped order: `round-<N>/head.diff` and `round-<N>/fix-batch.json` (the review-code loop's
+session-artifact table in `setup.md` is the home for those paths). The driver never creates
+`head.diff` or `fix-batch.json`; it only names them in rendered orders.
+
 ## Base guard
 
 Before any round work, every `next` invocation runs through `lib/review_base_guard.py` at the **CLI
@@ -199,9 +208,13 @@ all-or-nothing** — `resolve_judgment` must find a rule for **every** finding r
 parks (`gate-policy-unmatched-class:<class>`). Stall resolution is per stall class
 (`stall:accept-risk-eligible` vs `stall:accept-risk-ineligible`).
 
-When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). On the
-orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice; gate
-policy pre-authorization is what lets `advance` fold without stopping.
+When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). The refusal
+carries a `detail` cause distinct from the top-level reason so operators can tell *why* it parked:
+`gate-policy-calibration-unreadable`, `gate-policy-calibration-absent`, `gate-policy-no-valid-layer`,
+or `gate-policy-unmatched-class:<findingClass>` (plus the resolver's other `gate-policy-*` park
+tokens when applicable). On the orchestrator's `next`/`submit` path you still present the gate and
+submit the owner's choice; gate policy pre-authorization is what lets `advance` fold without
+stopping.
 
 **Ownership boundary (stated narrowly).** The overlay lives on the same ownership surface as
 `enginePreferences` — an honest-agent boundary, **not** a security boundary. No CLI flag can

@@ -4120,6 +4120,11 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
+        # Order-input ownership at emission (see also round-driver.md §Emitted orders):
+        #   driver commits in orders-emit: diff.txt (via _ensure_round_diff),
+        #   clusters/<i>.json, audit-targets/<skey>.json, scoped-hunks.json, verified.json
+        #   orchestrator must supply before dispatch: head.diff, fix-batch.json
+        #   (skills/review-code/reference/setup.md session-artifact table).
         # STUB(#723): order-input existence class not closed — placeholder set and sidecar set
         # must derive from one source before a fail-closed guard can land here.
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
@@ -4845,28 +4850,53 @@ def _commit_gate_policy_archive(session_dir, rnd, resolution):
     return None
 
 
-def _resolve_owner_gate_policy(phase, state, config):
-    """Resolve judgment/stall gate policy. Returns None when policy does not authorize advance."""
-    gate = _gate_policy_overlay_from_config(config)
+def _gate_policy_calibration_park_detail(gate):
+    """Distinct park cause when core.md gate classification refuses overlay read."""
     if core_md.review_gate_config_is_unreadable(gate):
-        return None
+        detail = "gate-policy-calibration-unreadable"
+        if gate.detail:
+            detail = "%s: %s" % (detail, gate.detail)
+        return detail
+    if core_md.review_gate_config_is_absent(gate):
+        return "gate-policy-calibration-absent"
+    if core_md.review_gate_config_is_refusal(gate):
+        reason = core_md._GATE_REFUSAL_REASONS.get(gate.status, "gate-policy-calibration-refused")
+        if gate.detail:
+            return "%s: %s" % (reason, gate.detail)
+        return reason
+    return "gate-policy-calibration-refused"
+
+
+def _resolve_owner_gate_policy(phase, state, config):
+    """Resolve judgment/stall gate policy.
+
+    Returns ``{"authorized": True, ...}`` when policy authorizes advance, else
+    ``{"authorized": False, "parkDetail": "<cause>"}`` so advance can park with a
+    distinguishable refusal detail while keeping the top-level park reason."""
+    gate = _gate_policy_overlay_from_config(config)
+    if (core_md.review_gate_config_is_unreadable(gate)
+            or core_md.review_gate_config_is_absent(gate)
+            or core_md.review_gate_config_is_refusal(gate)):
+        return {"authorized": False, "parkDetail": _gate_policy_calibration_park_detail(gate)}
     overlay = gate.overlay
     if phase == P_JUDGMENT:
         rows = _judgment_policy_rows(state)
         if not rows:
-            return None
+            return {"authorized": False, "parkDetail": "gate-policy-judgment-no-findings"}
         resolution = review_gate_policy.resolve_judgment(rows, overlay)
     elif phase == P_STALL:
         resolution = review_gate_policy.resolve_stall(_stall_policy_class(state), overlay)
     else:
-        return None
+        return {"authorized": False, "parkDetail": "gate-policy-unknown-phase"}
     if resolution.get("action") == review_gate_policy.PARK:
-        return None
+        return {"authorized": False,
+                "parkDetail": resolution.get("reason") or "gate-policy-park"}
     if phase == P_JUDGMENT:
         artifact = _judgment_artifact_from_resolution(state, resolution)
     else:
         artifact = dict(resolution.get("action") or {})
-    return {"artifact": artifact, "policyApplied": _policy_applied_record(phase, resolution),
+    return {"authorized": True, "artifact": artifact,
+            "policyApplied": _policy_applied_record(phase, resolution),
             "resolution": resolution}
 
 
@@ -4874,9 +4904,9 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     """Fold an owner gate through cmd_submit when calibration pre-authorizes it."""
     resolved = _resolve_owner_gate_policy(phase, state, config)
     park_reason = "advance-judgment-park" if phase == P_JUDGMENT else "advance-stall-park"
-    if resolved is None:
+    if not resolved.get("authorized"):
         return _refuse_cmd(session_dir, "advance", park_reason, phase=phase, rnd=rnd,
-                           attempt=attempt)
+                           attempt=attempt, detail=resolved.get("parkDetail"))
     archive_refused = _commit_gate_policy_archive(session_dir, rnd, resolved["resolution"])
     if archive_refused is not None:
         return _commit_refused_response(session_dir, "advance", archive_refused, phase=phase,

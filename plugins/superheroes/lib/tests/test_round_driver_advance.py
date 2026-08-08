@@ -1260,6 +1260,7 @@ def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, ph
     state = _state(d)
     state["step"] = phase
     state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
+    state["config"]["repoRoot"] = _repo_without_gate_policy(tmp_path)
     if phase == RD.P_JUDGMENT:
         state["_judgmentFindings"] = [
             {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
@@ -1271,6 +1272,10 @@ def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, ph
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == reason
+    if phase == RD.P_JUDGMENT:
+        assert out["detail"] == "gate-policy-unmatched-class:judgment:important"
+    else:
+        assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
     parks = [e for e in _journal(d) if e.get("reason") == reason]
     assert parks and parks[-1]["fault"] == RD.FAULT_CALLER
 
@@ -1391,6 +1396,7 @@ def test_advance_judgment_partial_match_parks(tmp_path, adapters):
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-unmatched-class:judgment:minor"
 
 
 def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters):
@@ -1406,6 +1412,7 @@ def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters):
     d = _judgment_session_with_repo(tmp_path, adapters, repo)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"].startswith("gate-policy-calibration-unreadable")
 
 
 def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
@@ -1420,6 +1427,7 @@ def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monke
     monkeypatch.setattr(rgp, "load_shipped_layer", missing_layer)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-no-valid-layer"
 
 
 def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
@@ -1461,6 +1469,7 @@ def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-stall-park"
+    assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
 
 
 def test_advance_has_no_caller_supplied_policy_route():
