@@ -14,6 +14,7 @@ REFUSAL_SLOT_REF_INVALID = "boundary-slot-ref-invalid"
 REFUSAL_REDIRECTS_INVALID = "boundary-redirects-invalid"
 REFUSAL_PROTECTED_TARGETS_INVALID = "boundary-protected-targets-invalid"
 REFUSAL_TARGET_OFF_ALLOWLIST = "boundary-target-off-allowlist"
+REFUSAL_TARGET_NOT_LOCAL = "boundary-target-not-local-development"
 REFUSAL_REDIRECT_OFF_ALLOWLIST = "boundary-redirect-off-allowlist"
 REFUSAL_PROTECTED_TARGET = "boundary-protected-target-refused"
 REFUSAL_DATASTORE_IDENTITY_MISMATCH = "boundary-datastore-identity-mismatch"
@@ -49,6 +50,25 @@ def parse_origin(value):
     return canonical
 
 
+def is_local_development_origin(origin):
+    """Return whether ``origin`` is a canonical local-development origin."""
+    # bite-axis: locality — only loopback IPv4 (127.0.0.0/8), IPv6 [::1], localhost, and
+    # *.localhost hosts qualify; malformed input returns False without raising.
+    host = _host_from_canonical_origin(origin)
+    if host is None:
+        return False
+    if _is_ipv4_loopback_host(host):
+        return True
+    if host == "[::1]":
+        return True
+    lowered = host.lower()
+    if lowered == "localhost":
+        return True
+    if lowered.endswith(".localhost"):
+        return True
+    return False
+
+
 def target_binding(slot_ref, *, origin, permitted_redirects, protected_targets):
     """Build a validated target binding dict."""
     # bite-axis: binding integrity — invalid slot ref, origin, redirects list, or protected
@@ -60,6 +80,8 @@ def target_binding(slot_ref, *, origin, permitted_redirects, protected_targets):
         raise PilotBoundaryError(REFUSAL_SLOT_REF_INVALID)
 
     canonical_origin = parse_origin(origin)
+    if not is_local_development_origin(canonical_origin):
+        raise PilotBoundaryError(REFUSAL_TARGET_NOT_LOCAL)
 
     if not isinstance(permitted_redirects, list):
         raise PilotBoundaryError(REFUSAL_REDIRECTS_INVALID)
@@ -70,6 +92,8 @@ def target_binding(slot_ref, *, origin, permitted_redirects, protected_targets):
             parsed = parse_origin(redirect)
         except PilotBoundaryError:
             raise PilotBoundaryError(REFUSAL_REDIRECTS_INVALID)
+        if not is_local_development_origin(parsed):
+            raise PilotBoundaryError(REFUSAL_TARGET_NOT_LOCAL)
         if parsed not in seen_redirects:
             seen_redirects.add(parsed)
             canonical_redirects.append(parsed)
@@ -321,6 +345,45 @@ def authorize_credentials(verdict, slot_ref, policy_digest):
         "policyDigest": policy_digest,
         "authorized": True,
     }
+
+
+def _host_from_canonical_origin(origin):
+    if not isinstance(origin, str):
+        return None
+    sep_index = origin.find("://")
+    if sep_index < 1:
+        return None
+    rest = origin[sep_index + 3:]
+    if rest.startswith("["):
+        close = rest.find("]")
+        if close < 2:
+            return None
+        colon = rest.find(":", close)
+        if colon < 0:
+            return None
+        return rest[:close + 1]
+    colon = rest.rfind(":")
+    if colon < 1:
+        return None
+    return rest[:colon]
+
+
+def _is_ipv4_loopback_host(host):
+    parts = host.split(".")
+    if len(parts) != 4:
+        return False
+    first_octet = None
+    for part in parts:
+        if not part.isdigit():
+            return False
+        if len(part) > 1 and part[0] == "0":
+            return False
+        octet = int(part)
+        if octet < 0 or octet > 255:
+            return False
+        if first_octet is None:
+            first_octet = octet
+    return first_octet == 127
 
 
 def _parse_origin_or_none(value):

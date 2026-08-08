@@ -310,6 +310,30 @@ redirect. There is **no `--allow-protected` equivalent** on this path — unlike
 `gate_violations`, which `--allow-protected` can bypass, protected-target refusal here is
 unconditional.
 
+### Local development locality
+
+`target_binding` refuses any **origin** or **permitted redirect** that is not a local
+development host. This is the mechanical §14 gate: non-local targets are refused **before**
+any credential exists, with no acceptance-record escape hatch, override flag, or environment
+variable bypass.
+
+**Accepted host forms** (closed set — nothing else qualifies):
+
+- IPv4 loopback `127.0.0.0/8` (for example `127.0.0.1`, `127.0.0.53`)
+- IPv6 loopback `[::1]`
+- The literal host `localhost` (case-insensitive)
+- Any host ending in `.localhost` (case-insensitive; RFC 6761 reserves the subtree)
+
+**Deliberately excluded:** private LAN ranges (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`), `0.0.0.0`, `[::]`, public hostnames, and hosts that merely contain
+`localhost` without being `localhost` or a `.localhost` subdomain.
+
+**Protected targets are exempt** from the locality check — they name forbidden destinations
+(for example a production URL in `protectedTargets` is correct and does not refuse binding).
+
+Malformed origins still refuse `boundary-origin-invalid` (origin) or
+`boundary-redirects-invalid` (redirect) before the locality check runs.
+
 Protected targets are a **two-class** list:
 
 1. **URL-shaped entries** (contain `://`) — parsed and canonicalized to exact origins
@@ -325,8 +349,9 @@ Protected targets are a **two-class** list:
 URL-shaped entries that do not parse refuse at binding time. Opaque tokens are never
 interpreted as hostnames for origin matching.
 
-Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_target`,
-`check_redirect`, `check_protected_identity`, `boundary_verdict`, `authorize_credentials`.
+Public API in `lib/pilot_boundary.py`: `parse_origin`, `is_local_development_origin`,
+`target_binding`, `check_target`, `check_redirect`, `check_protected_identity`,
+`boundary_verdict`, `authorize_credentials`.
 
 ### Target boundary refusal tokens
 
@@ -336,6 +361,7 @@ Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_
 | `boundary-slot-ref-invalid` | `target_binding` receives a slot reference that does not parse |
 | `boundary-redirects-invalid` | `permitted_redirects` is not a list, or any redirect does not parse as an exact origin |
 | `boundary-protected-targets-invalid` | `protected_targets` is missing, empty, not a list, contains a non-string or empty entry, or contains a URL-shaped entry that does not parse |
+| `boundary-target-not-local-development` | `target_binding`: origin or any permitted redirect is canonical but not a local-development host |
 | `boundary-target-off-allowlist` | `check_target`: parsed origin is not the binding origin and is not protected |
 | `boundary-redirect-off-allowlist` | `check_redirect`: parsed origin is neither the binding origin nor a permitted redirect and is not protected |
 | `boundary-protected-target-refused` | `check_target`, `check_redirect`, or `check_protected_identity`: parsed origin or identity names a protected target |
