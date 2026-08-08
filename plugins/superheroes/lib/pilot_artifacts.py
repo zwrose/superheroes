@@ -8,11 +8,12 @@ import io
 import json
 import os
 import stat
+import sys
 import tempfile
 import zipfile
+import zlib
 from datetime import datetime, timedelta
 
-import pilot_conformance
 import pr_comment
 import store
 import store_core
@@ -41,7 +42,9 @@ MAX_RETENTION_HOURS = 720
 PERMITTED_CAPTURE_SCOPE = "viewport"
 MAX_ARCHIVE_MEMBERS = 2000
 MAX_ARCHIVE_BYTES = 32 * 1024 * 1024
+MAX_PAYLOAD_BYTES = 64 * 1024 * 1024
 MAX_TEXT_BYTES = 4 * 1024 * 1024
+SIDECARLESS_GRACE_SECONDS = 300
 _DIR_MODE = 0o700
 _FILE_MODE = 0o600
 SIDECAR_SUFFIX = ".meta.json"
@@ -63,6 +66,8 @@ REASON_STORE_PATH_UNSAFE = "artifact-store-path-unsafe"
 REASON_STORE_PERMISSIONS_UNSAFE = "artifact-store-permissions-unsafe"
 REASON_WRITE_FAILED = "artifact-write-failed"
 REASON_SIDECAR_UNRECOVERABLE = "artifact-sidecar-unrecoverable"
+REASON_SIDECAR_SCHEMA_UNKNOWN = "artifact-sidecar-schema-unknown"
+REASON_SIDECAR_PENDING = "artifact-sidecar-pending"
 REASON_RETENTION_EXPIRED = "artifact-retention-expired"
 REASON_SWEEP_FAILED = "artifact-sweep-failed"
 
@@ -203,13 +208,6 @@ def _scrub_text(text, material):
     return scrubbed
 
 
-def _establish_scrubbed(text, material):
-    result = _scrub_text(text, material)
-    if isinstance(result, dict) and not result.get("ok", True):
-        return result
-    return result
-
-
 def _establish_capture(payload_bytes, capture):
     if not isinstance(capture, dict) or set(capture.keys()) != {"scope", "sha256"}:
         return _fail(REASON_CAPTURE_RECEIPT_INVALID)
@@ -245,9 +243,7 @@ def _zip_member_name_safe(name):
 def _establish_archive(payload_bytes, material):
     try:
         zf = zipfile.ZipFile(io.BytesIO(payload_bytes), "r")
-    except zipfile.BadZipFile:
-        return _fail(REASON_PAYLOAD_FORMAT_INVALID)
-    except Exception:
+    except (zipfile.BadZipFile, OSError):
         return _fail(REASON_PAYLOAD_FORMAT_INVALID)
 
     try:
@@ -261,11 +257,18 @@ def _establish_archive(payload_bytes, material):
                 return _fail(REASON_PAYLOAD_OVERSIZE)
             if not _zip_member_name_safe(info.filename):
                 return _fail(REASON_PAYLOAD_FORMAT_INVALID)
+            # bite-axis: member-name residue scan — material in filenames refuses.
+            refused = _residue_scan(info.filename, material)
+            if refused is not None:
+                return refused
 
         out_buf = io.BytesIO()
         out_zip = zipfile.ZipFile(out_buf, "w", zipfile.ZIP_DEFLATED)
         for info in infos:
-            raw = zf.read(info.filename)
+            try:
+                raw = zf.read(info)
+            except (zipfile.BadZipFile, RuntimeError, EOFError, OSError, zlib.error):
+                return _fail(REASON_PAYLOAD_FORMAT_INVALID)
             try:
                 text = raw.decode("utf-8")
             except UnicodeDecodeError:
@@ -302,36 +305,62 @@ def _write_binary_atomic(path, data):
 def _read_regular_file(path):
     if not isinstance(path, str) or not path:
         return _fail(REASON_PAYLOAD_UNREADABLE)
-    if os.path.islink(path):
-        return _fail(REASON_PAYLOAD_UNREADABLE)
     try:
-        st = os.lstat(path)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
     except OSError:
         return _fail(REASON_PAYLOAD_UNREADABLE)
-    if not stat.S_ISREG(st.st_mode):
-        return _fail(REASON_PAYLOAD_UNREADABLE)
     try:
-        with open(path, "rb") as fh:
-            return fh.read()
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return _fail(REASON_PAYLOAD_UNREADABLE)
+        # bite-axis: payload size bound — refuse before reading unbounded bytes.
+        if st.st_size > MAX_PAYLOAD_BYTES:
+            return _fail(REASON_PAYLOAD_OVERSIZE)
+        with os.fdopen(fd, "rb") as fh:
+            data = fh.read()
+        fd = None
+        return data
     except OSError:
         return _fail(REASON_PAYLOAD_UNREADABLE)
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
-def _load_sidecar(sidecar_path):
+def _parse_sidecar_file(sidecar_path):
+    """Return (sidecar_dict, status) where status is ok|unknown_schema|invalid."""
     try:
-        with open(sidecar_path, encoding="utf-8") as fh:
+        fd = os.open(sidecar_path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None, "invalid"
+    try:
+        with os.fdopen(fd, "r", encoding="utf-8") as fh:
             obj = json.load(fh)
+        fd = None
     except (OSError, json.JSONDecodeError, ValueError):
-        return None
+        return None, "invalid"
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
     if not isinstance(obj, dict):
-        return None
+        return None, "invalid"
     if set(obj.keys()) != _SIDECAR_REQUIRED_KEYS:
-        return None
-    if obj.get("schemaVersion") != SCHEMA:
-        return None
+        return None, "invalid"
+    schema_version = obj.get("schemaVersion")
+    if schema_version != SCHEMA:
+        if isinstance(schema_version, int):
+            # bite-axis: unknown schema retains — forward compatibility must not delete.
+            return obj, "unknown_schema"
+        return None, "invalid"
     if not _is_iso8601_utc(obj.get("expiresAt")):
-        return None
-    return obj
+        return None, "invalid"
+    return obj, "ok"
 
 
 def _list_entry(artifact_key, artifact_class, artifact_id, reason):
@@ -346,28 +375,107 @@ def _list_entry(artifact_key, artifact_class, artifact_id, reason):
 def _safe_unlink(path, artifacts_dir, warnings, artifact_key="", artifact_class="", artifact_id=""):
     if os.path.islink(path):
         warnings.append(_list_entry(artifact_key, artifact_class, artifact_id, REASON_SWEEP_FAILED))
-        return
+        return False
     if not _path_contained_in(path, artifacts_dir):
         warnings.append(_list_entry(artifact_key, artifact_class, artifact_id, REASON_SWEEP_FAILED))
-        return
+        return False
     try:
         os.unlink(path)
     except OSError:
         warnings.append(_list_entry(artifact_key, artifact_class, artifact_id, REASON_SWEEP_FAILED))
+        return False
+    return True
 
 
 def _remove_artifact(payload_path, sidecar_path, artifacts_dir, artifact_key,
-                     artifact_class, artifact_id, reason, removed, warnings):
+                     artifact_class, artifact_id, reason, removed, retained, warnings):
+    ok = True
     if payload_path and os.path.isfile(payload_path):
-        _safe_unlink(payload_path, artifacts_dir, warnings,
-                     artifact_key, artifact_class, artifact_id)
+        if not _safe_unlink(payload_path, artifacts_dir, warnings,
+                            artifact_key, artifact_class, artifact_id):
+            ok = False
     if sidecar_path and os.path.isfile(sidecar_path):
-        _safe_unlink(sidecar_path, artifacts_dir, warnings,
-                     artifact_key, artifact_class, artifact_id)
-    removed.append(_list_entry(artifact_key, artifact_class, artifact_id, reason))
+        if not _safe_unlink(sidecar_path, artifacts_dir, warnings,
+                            artifact_key, artifact_class, artifact_id):
+            ok = False
+    if ok:
+        # bite-axis: receipt truthfulness — removed only when unlink succeeded.
+        removed.append(_list_entry(artifact_key, artifact_class, artifact_id, reason))
+    else:
+        retained.append(_list_entry(artifact_key, artifact_class, artifact_id, None))
 
 
-def sweep(artifacts_dir, *, now):
+def _sweep_class_dir(class_dir, key_name, class_name, artifacts_dir, now,
+                     removed, retained, warnings):
+    try:
+        names = os.listdir(class_dir)
+    except OSError:
+        warnings.append(_list_entry(key_name, class_name, "", REASON_SWEEP_FAILED))
+        return
+
+    sidecars = {}
+    payloads = set()
+    for name in names:
+        full = os.path.join(class_dir, name)
+        if name.endswith(SIDECAR_SUFFIX) and os.path.isfile(full) and not os.path.islink(full):
+            artifact_id = name[:-len(SIDECAR_SUFFIX)]
+            sidecars[artifact_id] = full
+        elif os.path.isfile(full) and not os.path.islink(full) and not name.endswith(SIDECAR_SUFFIX):
+            payloads.add(name)
+
+    now_dt = _parse_iso8601_utc(now)
+
+    for artifact_id in sorted(payloads):
+        payload_path = os.path.join(class_dir, artifact_id)
+        sidecar_path = sidecars.get(artifact_id)
+        if sidecar_path is None:
+            try:
+                mtime = os.path.getmtime(payload_path)
+            except OSError:
+                mtime = 0
+            age_seconds = now_dt.timestamp() - mtime
+            if age_seconds < SIDECARLESS_GRACE_SECONDS:
+                # bite-axis: write grace — young sidecarless payloads await sidecar write.
+                retained.append(_list_entry(key_name, class_name, artifact_id, None))
+                warnings.append(_list_entry(
+                    key_name, class_name, artifact_id, REASON_SIDECAR_PENDING))
+                continue
+            _remove_artifact(
+                payload_path, None, artifacts_dir, key_name, class_name,
+                artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, retained, warnings,
+            )
+            continue
+        sidecar, status = _parse_sidecar_file(sidecar_path)
+        if status == "unknown_schema":
+            retained.append(_list_entry(key_name, class_name, artifact_id, None))
+            warnings.append(_list_entry(
+                key_name, class_name, artifact_id, REASON_SIDECAR_SCHEMA_UNKNOWN))
+            continue
+        if sidecar is None:
+            _remove_artifact(
+                payload_path, sidecar_path, artifacts_dir, key_name, class_name,
+                artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, retained, warnings,
+            )
+            continue
+        expires_at = sidecar["expiresAt"]
+        # bite-axis: retention removes on deadline — instant comparison, not string.
+        if _parse_iso8601_utc(expires_at) <= now_dt:
+            _remove_artifact(
+                payload_path, sidecar_path, artifacts_dir, key_name, class_name,
+                artifact_id, REASON_RETENTION_EXPIRED, removed, retained, warnings,
+            )
+        else:
+            retained.append(_list_entry(key_name, class_name, artifact_id, None))
+
+    for artifact_id, sidecar_path in sidecars.items():
+        if artifact_id not in payloads:
+            _remove_artifact(
+                None, sidecar_path, artifacts_dir, key_name, class_name,
+                artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, retained, warnings,
+            )
+
+
+def sweep(artifacts_dir, *, now, scope=None):
     """Remove expired or unrecoverable artifacts."""
     if not _is_iso8601_utc(now):
         return _fail(REASON_NOW_INVALID, removed=[], retained=[], warnings=[])
@@ -384,9 +492,20 @@ def sweep(artifacts_dir, *, now):
     retained = []
     warnings = []
 
+    if scope is not None:
+        artifact_key, artifact_class = scope
+        class_dir = os.path.join(artifacts_dir, artifact_key, artifact_class)
+        if os.path.isdir(class_dir) and not os.path.islink(class_dir):
+            _sweep_class_dir(
+                class_dir, artifact_key, artifact_class, artifacts_dir, now,
+                removed, retained, warnings,
+            )
+        return _ok(removed=removed, retained=retained, warnings=warnings)
+
     try:
         keys = os.listdir(artifacts_dir)
     except OSError:
+        warnings.append(_list_entry("", "", "", REASON_SWEEP_FAILED))
         return _ok(removed=removed, retained=retained, warnings=warnings)
 
     for key_name in keys:
@@ -396,58 +515,16 @@ def sweep(artifacts_dir, *, now):
         try:
             classes = os.listdir(key_dir)
         except OSError:
+            warnings.append(_list_entry(key_name, "", "", REASON_SWEEP_FAILED))
             continue
         for class_name in classes:
             class_dir = os.path.join(key_dir, class_name)
             if not os.path.isdir(class_dir) or os.path.islink(class_dir):
                 continue
-            try:
-                names = os.listdir(class_dir)
-            except OSError:
-                continue
-            sidecars = {}
-            payloads = set()
-            for name in names:
-                full = os.path.join(class_dir, name)
-                if name.endswith(SIDECAR_SUFFIX) and os.path.isfile(full) and not os.path.islink(full):
-                    artifact_id = name[:-len(SIDECAR_SUFFIX)]
-                    sidecars[artifact_id] = full
-                elif os.path.isfile(full) and not os.path.islink(full) and not name.endswith(SIDECAR_SUFFIX):
-                    payloads.add(name)
-
-            for artifact_id in sorted(payloads):
-                payload_path = os.path.join(class_dir, artifact_id)
-                sidecar_path = sidecars.get(artifact_id)
-                if sidecar_path is None:
-                    # bite-axis: unrecoverable sidecar removes payload — no indefinite retention.
-                    _remove_artifact(
-                        payload_path, None, artifacts_dir, key_name, class_name,
-                        artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, warnings,
-                    )
-                    continue
-                sidecar = _load_sidecar(sidecar_path)
-                if sidecar is None:
-                    _remove_artifact(
-                        payload_path, sidecar_path, artifacts_dir, key_name, class_name,
-                        artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, warnings,
-                    )
-                    continue
-                expires_at = sidecar["expiresAt"]
-                # bite-axis: retention removes on deadline — readership is irrelevant.
-                if expires_at <= now:
-                    _remove_artifact(
-                        payload_path, sidecar_path, artifacts_dir, key_name, class_name,
-                        artifact_id, REASON_RETENTION_EXPIRED, removed, warnings,
-                    )
-                else:
-                    retained.append(_list_entry(key_name, class_name, artifact_id, None))
-
-            for artifact_id, sidecar_path in sidecars.items():
-                if artifact_id not in payloads:
-                    _remove_artifact(
-                        None, sidecar_path, artifacts_dir, key_name, class_name,
-                        artifact_id, REASON_SIDECAR_UNRECOVERABLE, removed, warnings,
-                    )
+            _sweep_class_dir(
+                class_dir, key_name, class_name, artifacts_dir, now,
+                removed, retained, warnings,
+            )
 
     return _ok(removed=removed, retained=retained, warnings=warnings)
 
@@ -497,16 +574,17 @@ def retain(artifacts_dir, *, branch, slot, artifact_class, payload_text=None,
         if isinstance(payload_bytes, dict) and not payload_bytes.get("ok", True):
             return payload_bytes
 
-    sweep_result = sweep(artifacts_dir, now=now)
+    sweep_result = sweep(artifacts_dir, now=now, scope=(artifact_key, artifact_class))
     if not sweep_result["ok"]:
         return sweep_result
     swept = sweep_result.get("removed", [])
 
     basis = CLASS_BASIS[artifact_class]
     if basis == BASIS_SCRUBBED:
-        established = _establish_scrubbed(payload_text, material)
+        established = _scrub_text(payload_text, material)
         if isinstance(established, dict) and not established.get("ok", True):
             return established
+        # bite-axis: scrubbed bytes written — read-back must not carry secrets.
         payload_bytes = established.encode("utf-8")
     elif basis == BASIS_CAPTURE_SCOPE:
         established = _establish_capture(payload_bytes, capture)
@@ -579,176 +657,115 @@ def retain(artifacts_dir, *, branch, slot, artifact_class, payload_text=None,
     return out
 
 
-@pilot_conformance.register("artifact-store",
-                            surfaces=["pilot_artifacts.retain", "pilot_artifacts.sweep"])
-def conformance_exercise(*, inputs, now):
-    """Exercise retain + sweep on a real artifact store."""
-    if not isinstance(inputs, dict):
-        return pilot_conformance.exercise_record(
-            exercise="artifact-store",
-            surfaces=["pilot_artifacts.retain", "pilot_artifacts.sweep"],
-            result=pilot_conformance.RESULT_SKIPPED,
-            reason=REASON_MATERIAL_INVALID,
-            evidence="inputs missing or malformed",
-            exercised_at=now,
-        )
+def _parse_kv(args, flag, default=None):
+    if flag in args:
+        i = args.index(flag)
+        if i + 1 < len(args) and not args[i + 1].startswith("--"):
+            return args[i + 1]
+    return default
 
-    artifacts = inputs.get("artifacts")
-    if not isinstance(artifacts, dict):
-        return pilot_conformance.exercise_record(
-            exercise="artifact-store",
-            surfaces=["pilot_artifacts.retain", "pilot_artifacts.sweep"],
-            result=pilot_conformance.RESULT_SKIPPED,
-            reason=REASON_MATERIAL_INVALID,
-            evidence="artifacts input missing or malformed",
-            exercised_at=now,
-        )
 
-    artifacts_dir = artifacts.get("artifacts_dir")
-    branch = artifacts.get("branch")
-    slot = artifacts.get("slot")
-    material = artifacts.get("material")
-    if (
-        not isinstance(artifacts_dir, str)
-        or not isinstance(branch, str)
-        or not isinstance(slot, str)
-        or not isinstance(material, (list, tuple))
-        or not material
-    ):
-        return pilot_conformance.exercise_record(
-            exercise="artifact-store",
-            surfaces=["pilot_artifacts.retain", "pilot_artifacts.sweep"],
-            result=pilot_conformance.RESULT_SKIPPED,
-            reason=REASON_MATERIAL_INVALID,
-            evidence="artifacts fields missing or malformed",
-            exercised_at=now,
-        )
-
-    held = 0
-    first_fail = None
-
-    clean = retain(
-        artifacts_dir,
-        branch=branch,
-        slot=slot,
-        artifact_class=CLASS_STEP_LOG,
-        payload_text="step ok",
-        material=material,
-        now=now,
-    )
-    if clean.get("ok"):
-        payload_path = clean["path"]
-        sidecar_path = clean["sidecar"]
-        if (
-            os.path.isfile(payload_path)
-            and os.path.isfile(sidecar_path)
-            and stat.S_IMODE(os.stat(payload_path).st_mode) == _FILE_MODE
-            and stat.S_IMODE(os.stat(sidecar_path).st_mode) == _FILE_MODE
-        ):
-            held += 1
-        else:
-            first_fail = first_fail or REASON_WRITE_FAILED
-    else:
-        first_fail = first_fail or clean.get("reason")
-
-    dirty_before = 0
-    class_dir = os.path.join(artifacts_dir, store.artifact_key(branch, slot), CLASS_STEP_LOG)
-    if os.path.isdir(class_dir):
-        dirty_before = sum(
-            1 for name in os.listdir(class_dir)
-            if not name.endswith(SIDECAR_SUFFIX) and os.path.isfile(os.path.join(class_dir, name))
-        )
-    dirty = retain(
-        artifacts_dir,
-        branch=branch,
-        slot=slot,
-        artifact_class=CLASS_STEP_LOG,
-        payload_text="failed connecting to %s" % material[0],
-        material=material,
-        now=now,
-    )
-    dirty_after = 0
-    if os.path.isdir(class_dir):
-        dirty_after = sum(
-            1 for name in os.listdir(class_dir)
-            if not name.endswith(SIDECAR_SUFFIX) and os.path.isfile(os.path.join(class_dir, name))
-        )
-    if (
-        not dirty.get("ok")
-        and dirty.get("reason") == REASON_REDACTION_UNESTABLISHED
-        and dirty_after == dirty_before
-    ):
-        held += 1
-    else:
-        first_fail = first_fail or dirty.get("reason") or REASON_REDACTION_UNESTABLISHED
-
-    trace_fd, trace_zip = tempfile.mkstemp(suffix=".zip")
-    os.close(trace_fd)
+def _read_text_file(path):
     try:
-        with zipfile.ZipFile(trace_zip, "w") as zf:
-            zf.writestr("log.txt", "trace line")
-        trace_refused = retain(
-            artifacts_dir,
-            branch=branch,
-            slot=slot,
-            artifact_class=CLASS_TRACE,
-            payload_path=trace_zip,
-            material=material,
-            now=now,
-            opted_in=False,
-        )
-    finally:
+        with open(path, encoding="utf-8") as fh:
+            return fh.read()
+    except OSError as exc:
+        sys.stderr.write("read error %s: %s\n" % (path, exc))
+        return None
+
+
+def main(argv):
+    args = argv[1:]
+    if not args:
+        sys.stderr.write(
+            "Usage: pilot_artifacts.py retain|sweep ...\n")
+        return 2
+    cmd = args[0]
+    if cmd == "retain":
+        artifacts_dir = _parse_kv(args, "--artifacts-dir")
+        branch = _parse_kv(args, "--branch")
+        slot = _parse_kv(args, "--slot")
+        artifact_class = _parse_kv(args, "--class")
+        material_file = _parse_kv(args, "--material-file")
+        now = _parse_kv(args, "--now")
+        payload_text_file = _parse_kv(args, "--payload-text-file")
+        payload_path = _parse_kv(args, "--payload-path")
+        capture_json = _parse_kv(args, "--capture-json")
+        retention_hours = _parse_kv(args, "--retention-hours")
+        opted_in = "--opted-in" in args
+
+        if not all((artifacts_dir, branch, slot, artifact_class, material_file, now)):
+            sys.stderr.write(
+                "usage: retain --artifacts-dir P --branch B --slot S --class C "
+                "--material-file M --now T "
+                "(--payload-text-file F | --payload-path F) [--capture-json J] "
+                "[--retention-hours N] [--opted-in]\n")
+            return 2
+        if bool(payload_text_file) == bool(payload_path):
+            sys.stderr.write("retain: exactly one of --payload-text-file or --payload-path\n")
+            return 2
+
+        material_text = _read_text_file(material_file)
+        if material_text is None:
+            return 2
         try:
-            os.unlink(trace_zip)
-        except OSError:
-            pass
-    if not trace_refused.get("ok") and trace_refused.get("reason") == REASON_CLASS_NOT_OPTED_IN:
-        held += 1
-    else:
-        first_fail = first_fail or trace_refused.get("reason") or REASON_CLASS_NOT_OPTED_IN
+            material = json.loads(material_text)
+        except json.JSONDecodeError:
+            sys.stderr.write("material-file: invalid JSON\n")
+            return 2
 
-    short_now = now
-    short = retain(
-        artifacts_dir,
-        branch=branch,
-        slot=slot,
-        artifact_class=CLASS_STEP_LOG,
-        payload_text="expires soon",
-        material=material,
-        now=short_now,
-        retention_hours=1,
-    )
-    if short.get("ok"):
-        later = _add_hours_iso8601(short_now, 2)
-        sweep_out = sweep(artifacts_dir, now=later)
-        removed = sweep_out.get("removed", [])
-        expired = [
-            entry for entry in removed
-            if entry.get("reason") == REASON_RETENTION_EXPIRED
-            and entry.get("artifactId") == short.get("artifactId")
-        ]
-        if expired:
-            held += 1
+        capture = None
+        if capture_json is not None:
+            try:
+                capture = json.loads(capture_json)
+            except json.JSONDecodeError:
+                sys.stderr.write("capture-json: invalid JSON\n")
+                return 2
+
+        payload_text = None
+        if payload_text_file is not None:
+            payload_text = _read_text_file(payload_text_file)
+            if payload_text is None:
+                return 2
+
+        kwargs = {
+            "branch": branch,
+            "slot": slot,
+            "artifact_class": artifact_class,
+            "material": material,
+            "now": now,
+            "opted_in": opted_in,
+        }
+        if payload_text is not None:
+            kwargs["payload_text"] = payload_text
         else:
-            first_fail = first_fail or REASON_RETENTION_EXPIRED
-    else:
-        first_fail = first_fail or short.get("reason")
+            kwargs["payload_path"] = payload_path
+        if capture is not None:
+            kwargs["capture"] = capture
+        if retention_hours is not None:
+            try:
+                kwargs["retention_hours"] = int(retention_hours)
+            except ValueError:
+                sys.stderr.write("retention-hours: invalid integer\n")
+                return 2
 
-    if held == 4:
-        return pilot_conformance.exercise_record(
-            exercise="artifact-store",
-            surfaces=["pilot_artifacts.retain", "pilot_artifacts.sweep"],
-            result=pilot_conformance.RESULT_PASS,
-            reason=None,
-            evidence="4/4 expectations held",
-            exercised_at=now,
-        )
+        result = retain(artifacts_dir, **kwargs)
+        sys.stdout.write(json.dumps(result, separators=(",", ":")) + "\n")
+        return 0 if result.get("ok") else 1
 
-    return pilot_conformance.exercise_record(
-        exercise="artifact-store",
-        surfaces=["pilot_artifacts.retain", "pilot_artifacts.sweep"],
-        result=pilot_conformance.RESULT_FAIL,
-        reason=first_fail or REASON_WRITE_FAILED,
-        evidence="%d/4 expectations held" % held,
-        exercised_at=now,
-    )
+    if cmd == "sweep":
+        artifacts_dir = _parse_kv(args, "--artifacts-dir")
+        now = _parse_kv(args, "--now")
+        if not artifacts_dir or not now:
+            sys.stderr.write("usage: sweep --artifacts-dir P --now T\n")
+            return 2
+        result = sweep(artifacts_dir, now=now)
+        sys.stdout.write(json.dumps(result, separators=(",", ":")) + "\n")
+        return 0 if result.get("ok") else 1
+
+    sys.stderr.write("unknown command: %s\n" % cmd)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

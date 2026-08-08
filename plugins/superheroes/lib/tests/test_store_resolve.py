@@ -176,6 +176,9 @@ def test_create_global_then_resolve(tmp_path):
     root = str(tmp_path / "store")
     c = store.create(repo, "global", root)
     assert c["artifacts_dir"].startswith(root)
+    assert not os.path.exists(c["artifacts_dir"])
+    assert os.path.isdir(c["plans_dir"])
+    assert os.path.isdir(c["state_dir"])
     open(c["profile"], "w").write("# p\n")
     r = store.resolve(repo, root)
     assert r["location"] == "global"
