@@ -624,7 +624,7 @@ def test_submit_audits_repeated_id_accepted_the_fold_governs(tmp_path):
     the case (`ambiguous`: honor NEITHER ruling), and that handling must be what governs — so a
     doubled CLEARING ruling is accepted here and still folds to not-discharged."""
     d, n = _at(tmp_path, RD.P_AUDITS)
-    good, _targets = _audit_artifact(n)                  # a `discharged` ruling
+    good, targets = _audit_artifact(n)                  # a `discharged` ruling
     rid = good["results"][0]["id"]
     repeated = {"results": list(good["results"]) + list(good["results"]),
                 "collectionManifest": good["collectionManifest"]}
@@ -633,7 +633,8 @@ def test_submit_audits_repeated_id_accepted_the_fold_governs(tmp_path):
     ok, state = RD.load_state(d)
     assert ok
     outcomes = state["auditRounds"][-1]["outcomes"]
-    assert [(o["identity"], o["ruling"]) for o in outcomes] == [(rid, "not-discharged")], outcomes
+    line_less = targets[0].get("identity") or rid.split("@L")[0]
+    assert [(o["identity"], o["ruling"]) for o in outcomes] == [(line_less, "not-discharged")], outcomes
     assert any(dec.get("kind") == "not-discharged" for dec in state["decisions"]), state["decisions"]
 
 

@@ -11,6 +11,8 @@ unaudited fix (the expensive failure direction: a real defect ships believed fix
 uncertain / malformed / missing ruling collapses to `not-discharged` and is disclosed.
 """
 
+from finding_identity import finding_identity
+
 AUDIT_RULINGS = ("discharged", "not-discharged", "discharged-but-new-issue")
 
 # The rulings whose fix counts as discharged for stall/continuation accounting. A
@@ -119,6 +121,21 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
     if not isinstance(audited, list):
         audited = []
 
+    # Duplicate TARGET ids (e.g. a session persisted before per-location ids) — honor none of the
+    # group so one ruling cannot discharge an unaudited sibling.
+    duplicate_target_ids = set()
+    target_id_counts = {}
+    for f in audited:
+        if not isinstance(f, dict):
+            continue
+        fid = f.get("id")
+        if isinstance(fid, str):
+            target_id_counts[fid] = target_id_counts.get(fid, 0) + 1
+    for fid, count in target_id_counts.items():
+        if count > 1:
+            duplicate_target_ids.add(fid)
+    ambiguous_ids |= duplicate_target_ids
+
     audits = []
     discharged, not_discharged = [], []
     new_issues = []
@@ -152,15 +169,20 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
         # the recurrence class keys so the audit-stall breaker's alias-tolerant match sees a
         # retitled-but-same-class stall (#507 v0).
         expected_auditor, provenance_enforced = _resolve_expected_auditor(fid, f, expected_auditors)
-        base = {"id": fid, "file": f.get("file"), "title": f.get("title"),
+        ident = f.get("identity")
+        if not isinstance(ident, str) or not ident:
+            ident = finding_identity(f) if isinstance(f, dict) else None
+        base = {"id": fid, "identity": ident, "file": f.get("file"), "title": f.get("title"),
                 "classKey": f.get("classKey"), "dimension": f.get("dimension"),
                 "taxonomy": f.get("taxonomy")}
 
         # No matching result (silence) → fail-closed not-discharged, disclosed as unaudited.
-        # An ambiguous id is IN seen_ids, so it never counts as silent — it is disclosed via
-        # `ambiguous` instead.
+        # An ambiguous id is IN seen_ids OR is a duplicate target id — disclosed via `ambiguous`.
         if r is None:
-            if fid is not None and fid in ambiguous_ids:
+            if fid is not None and fid in duplicate_target_ids:
+                base.update(ruling="not-discharged",
+                            reason="duplicate audit target id — honoring none")
+            elif fid is not None and fid in ambiguous_ids:
                 base.update(ruling="not-discharged",
                             reason="more than one audit result claimed this finding — honoring none")
             else:
@@ -171,6 +193,13 @@ def apply_audit_results(audited, results, expected_auditors=None, collection_man
             audits.append(base)
             if fid is not None:
                 not_discharged.append(fid)
+            continue
+
+        if fid is not None and fid in duplicate_target_ids:
+            base.update(ruling="not-discharged",
+                        reason="duplicate audit target id — honoring none")
+            audits.append(base)
+            not_discharged.append(fid)
             continue
 
         ruling = r.get("ruling")
