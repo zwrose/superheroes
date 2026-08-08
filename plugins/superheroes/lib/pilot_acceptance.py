@@ -6,8 +6,12 @@ report and declaration receipts, framework-authored rows, matrix aggregation, an
 import argparse
 import json
 import re
+import subprocess
 import sys
 from datetime import datetime, timezone
+
+import pilot_conformance as pc
+import pilot_conformance_declarations as pcd
 
 SCHEMA = 1
 
@@ -47,13 +51,8 @@ REASON_ROW_RULING_REQUIRED = "acceptance-row-ruling-required"
 REASON_ROW_RULING_INVALID = "acceptance-row-ruling-invalid"
 REASON_ROW_RULING_FORBIDDEN = "acceptance-row-ruling-forbidden"
 
-REASON_RESOLUTION_EXERCISE_MISSING = "acceptance-resolution-exercise-missing"
-REASON_RESOLUTION_EXERCISE_FAILED = "acceptance-resolution-exercise-failed"
-REASON_RESOLUTION_SURFACE_MISSING = "acceptance-resolution-surface-missing"
-REASON_RESOLUTION_DECLARATION_MISSING = "acceptance-resolution-declaration-missing"
-REASON_RESOLUTION_DECLARATION_NOT_ATTESTED = "acceptance-resolution-declaration-not-attested"
-
 REASON_EVIDENCE_EXERCISE_ABSENT = "acceptance-evidence-exercise-absent"
+REASON_EVIDENCE_EXERCISE_SKIPPED = "acceptance-evidence-exercise-skipped"
 REASON_EVIDENCE_EXERCISE_FAILED = "acceptance-evidence-exercise-failed"
 REASON_EVIDENCE_SURFACE_UNBOUND = "acceptance-evidence-surface-unbound"
 REASON_EVIDENCE_DECLARATION_ABSENT = "acceptance-evidence-declaration-absent"
@@ -61,7 +60,9 @@ REASON_EVIDENCE_DECLARATION_NOT_ATTESTED = "acceptance-evidence-declaration-not-
 
 REASON_CLI_REPORT_PATH_INVALID = "acceptance-cli-report-path-invalid"
 REASON_CLI_REPORT_INVALID = "acceptance-cli-report-invalid"
-REASON_CLI_DECLARATIONS_MISSING = "acceptance-cli-declarations-missing"
+REASON_CLI_DECLARATIONS_INVALID = "acceptance-cli-declarations-invalid"
+REASON_CLI_DIRTY_CONFLICTING = "acceptance-cli-dirty-conflicting"
+REASON_CLI_DIRTY_UNRESOLVED = "acceptance-cli-dirty-unresolved"
 REASON_CLI_GENERATED_AT_INVALID = "acceptance-cli-generated-at-invalid"
 REASON_CLI_FORMAT_INVALID = "acceptance-cli-format-invalid"
 
@@ -264,7 +265,10 @@ def _resolve_exercised(row_data, report_data):
     record = _find_exercise_record(report_data, evidence["exercise"])
     if record is None:
         return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_ABSENT)
-    if record.get("result") != "pass":
+    result = record.get("result")
+    if result == pc.RESULT_SKIPPED:
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_SKIPPED)
+    if result != pc.RESULT_PASS:
         return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_FAILED)
     surfaces = record.get("surfaces")
     if not isinstance(surfaces, list):
@@ -285,7 +289,7 @@ def _resolve_attested(row_data, declarations_block):
     )
     if decl_row is None:
         return _rewrite_unexercised(row_data, REASON_EVIDENCE_DECLARATION_ABSENT)
-    if decl_row.get("status") != "attested":
+    if decl_row.get("status") != pcd.STATUS_ATTESTED:
         return _rewrite_unexercised(row_data, REASON_EVIDENCE_DECLARATION_NOT_ATTESTED)
     return dict(row_data)
 
@@ -297,7 +301,7 @@ def resolve(rows, report_data, declarations_block):
     if not isinstance(report_data, dict):
         raise PilotAcceptanceError(REASON_CLI_REPORT_INVALID)
     if not isinstance(declarations_block, dict):
-        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MISSING)
+        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_INVALID)
 
     resolved = []
     for row_data in rows:
@@ -314,16 +318,11 @@ def resolve(rows, report_data, declarations_block):
     return resolved
 
 
-def matrix(reference_record, rows, report_data, declarations_block, *, generated_at):
-    """Aggregate resolved rows into a matrix dict with an ok verdict."""
-    resolved_rows = resolve(rows, report_data, declarations_block)
-    # bite-axis: non-empty rows — vacuous matrix is never ok.
+def _ok_clauses(reference_record, resolved_rows, report_data, declarations_block):
     rows_ok = bool(resolved_rows)
-    # bite-axis: no unexercised rows — every applicable claim must resolve or be declared.
     no_unexercised = all(
         row_data["status"] != STATUS_UNEXERCISED for row_data in resolved_rows
     )
-    # bite-axis: dirty reference — pin mismatch forces ok false even when rows resolve.
     reference_clean = not reference_record.get("dirty")
     report_unexercised_empty = (
         isinstance(report_data.get("unexercised"), list)
@@ -331,14 +330,23 @@ def matrix(reference_record, rows, report_data, declarations_block, *, generated
     )
     report_ok = report_data.get("ok") is True
     declarations_ok = declarations_block.get("ok") is True
-    ok = (
-        rows_ok
-        and no_unexercised
-        and reference_clean
-        and report_unexercised_empty
-        and report_ok
-        and declarations_ok
+    return {
+        "rows_non_empty": rows_ok,
+        "no_unexercised_rows": no_unexercised,
+        "reference_clean": reference_clean,
+        "report_unexercised_empty": report_unexercised_empty,
+        "report_ok": report_ok,
+        "declarations_ok": declarations_ok,
+    }
+
+
+def matrix(reference_record, rows, report_data, declarations_block, *, generated_at):
+    """Aggregate resolved rows into a matrix dict with an ok verdict."""
+    resolved_rows = resolve(rows, report_data, declarations_block)
+    clauses = _ok_clauses(
+        reference_record, resolved_rows, report_data, declarations_block
     )
+    ok = all(clauses.values())
     return {
         "schemaVersion": SCHEMA,
         "reference": dict(reference_record),
@@ -537,6 +545,8 @@ def _declaration_evidence_for_kind(declarations_block, kind):
             continue
         if decl_row.get("kind") != kind:
             continue
+        if decl_row.get("status") != pcd.STATUS_ATTESTED:
+            continue
         digest = decl_row.get("declarationDigest")
         slot_ref = decl_row.get("slotRef")
         if not isinstance(digest, str) or not digest:
@@ -620,13 +630,32 @@ def _escape_markdown_cell(value):
     return str(value).replace("|", "\\|")
 
 
-def render_markdown(matrix_data):
+_OK_CLAUSE_LABELS = {
+    "rows_non_empty": "at least one matrix row",
+    "no_unexercised_rows": "no unexercised rows",
+    "reference_clean": "reference worktree clean",
+    "report_unexercised_empty": "conformance run left no unexercised surfaces",
+    "report_ok": "conformance report ok",
+    "declarations_ok": "declarations envelope ok",
+}
+
+
+def render_markdown(matrix_data, report_data=None, declarations_block=None):
     """Render a matrix dict as an owner-readable markdown table."""
     lines = []
     ok = matrix_data.get("ok")
     lines.append("## Acceptance matrix")
     lines.append("")
     lines.append("**ok:** %s" % ok)
+    if report_data is not None and declarations_block is not None:
+        reference = matrix_data.get("reference") or {}
+        resolved_rows = matrix_data.get("rows") or []
+        clauses = _ok_clauses(reference, resolved_rows, report_data, declarations_block)
+        lines.append("")
+        lines.append("**ok clauses:**")
+        for key in sorted(clauses):
+            verdict = "pass" if clauses[key] else "fail"
+            lines.append("- %s: %s" % (_OK_CLAUSE_LABELS[key], verdict))
     reference = matrix_data.get("reference") or {}
     project = reference.get("project", "")
     commit = reference.get("commit", "")
@@ -657,7 +686,14 @@ def render_markdown(matrix_data):
             claim = _escape_markdown_cell(row_data.get("claim", ""))
             detail = ""
             if row_data.get("status") == STATUS_DECLARED_LIMIT:
-                detail = _escape_markdown_cell(row_data.get("closure_path"))
+                ruling = row_data.get("ruling")
+                closure = row_data.get("closure_path")
+                parts = []
+                if ruling:
+                    parts.append("ruling: %s" % ruling)
+                if closure:
+                    parts.append("closure: %s" % closure)
+                detail = _escape_markdown_cell("; ".join(parts))
             elif row_data.get("status") == STATUS_UNEXERCISED:
                 reason = (row_data.get("evidence") or {}).get("reason")
                 if reason:
@@ -684,6 +720,57 @@ def _validate_generated_at(value):
     return value
 
 
+def _validate_report_schema(report_data):
+    if report_data.get("schemaVersion") != pc.SCHEMA:
+        raise PilotAcceptanceError(REASON_CLI_REPORT_INVALID)
+
+
+def _empty_declarations_block():
+    return {
+        "schemaVersion": pcd.SCHEMA,
+        "rows": [],
+        "attested": 0,
+        "absent": 0,
+        "notApplicable": 0,
+        "ok": False,
+    }
+
+
+def _coerce_declarations_block(declarations):
+    if declarations is None:
+        return _empty_declarations_block()
+    if not isinstance(declarations, dict):
+        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_INVALID)
+    if declarations.get("schemaVersion") != pcd.SCHEMA:
+        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_INVALID)
+    return declarations
+
+
+def _derive_dirty_from_git():
+    try:
+        proc = subprocess.run(
+            ["git", "status", "--porcelain"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        raise PilotAcceptanceError(REASON_CLI_DIRTY_UNRESOLVED)
+    if proc.returncode != 0:
+        raise PilotAcceptanceError(REASON_CLI_DIRTY_UNRESOLVED)
+    return bool(proc.stdout.strip())
+
+
+def _resolve_dirty_flag(parsed):
+    if parsed.dirty and parsed.clean:
+        raise PilotAcceptanceError(REASON_CLI_DIRTY_CONFLICTING)
+    if parsed.dirty:
+        return True
+    if parsed.clean:
+        return False
+    return _derive_dirty_from_git()
+
+
 def _load_report(path):
     if not isinstance(path, str) or not path:
         raise PilotAcceptanceError(REASON_CLI_REPORT_PATH_INVALID)
@@ -697,15 +784,6 @@ def _load_report(path):
     return data
 
 
-def _matrix_from_report(report_data, *, project, commit, dirty, generated_at):
-    declarations = report_data.get("declarations")
-    if not isinstance(declarations, dict):
-        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MISSING)
-    ref = reference(project, commit, dirty=dirty)
-    rows = framework_rows(report_data, declarations)
-    return matrix(ref, rows, report_data, declarations, generated_at=generated_at)
-
-
 def main(argv):
     """CLI entry point for acceptance-matrix generation."""
     parser = argparse.ArgumentParser(prog="pilot_acceptance.py")
@@ -715,31 +793,29 @@ def main(argv):
     matrix_parser.add_argument("--report-path", required=True)
     matrix_parser.add_argument("--project", required=True)
     matrix_parser.add_argument("--commit", required=True)
-    matrix_parser.add_argument("--dirty", action="store_true", default=False)
+    matrix_parser.add_argument("--dirty", action="store_const", const=True, default=None)
+    matrix_parser.add_argument("--clean", action="store_const", const=True, default=None)
     matrix_parser.add_argument("--generated-at", default=None)
     matrix_parser.add_argument("--format", choices=("json", "markdown"), default="json")
 
     parsed = parser.parse_args(argv[1:])
-    if parsed.command != "matrix":
-        sys.stderr.write("%s\n" % REASON_CLI_FORMAT_INVALID)
-        return 2
 
     try:
         if parsed.generated_at is None:
             generated_at_value = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         else:
             generated_at_value = _validate_generated_at(parsed.generated_at)
-        ref = reference(parsed.project, parsed.commit, dirty=parsed.dirty)
+        dirty_value = _resolve_dirty_flag(parsed)
+        ref = reference(parsed.project, parsed.commit, dirty=dirty_value)
         report_data = _load_report(parsed.report_path)
-        declarations = report_data.get("declarations")
-        if not isinstance(declarations, dict):
-            raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MISSING)
-        rows = framework_rows(report_data, declarations)
+        _validate_report_schema(report_data)
+        declarations_block = _coerce_declarations_block(report_data.get("declarations"))
+        rows = framework_rows(report_data, declarations_block)
         matrix_data = matrix(
             ref,
             rows,
             report_data,
-            declarations,
+            declarations_block,
             generated_at=generated_at_value,
         )
     except PilotAcceptanceError as exc:
@@ -747,7 +823,11 @@ def main(argv):
         return 2
 
     if parsed.format == "markdown":
-        output = render_markdown(matrix_data)
+        output = render_markdown(
+            matrix_data,
+            report_data=report_data,
+            declarations_block=declarations_block,
+        )
     else:
         output = json.dumps(matrix_data, indent=2) + "\n"
     # bite-axis: stdout/stderr split — matrix payload on stdout; diagnostics on stderr.

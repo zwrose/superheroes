@@ -3404,12 +3404,18 @@ returns.
 
 ```text
 python3 -B pilot_acceptance.py matrix --report-path <json> --project <name> --commit <oid>
-       [--dirty] [--generated-at <iso>] [--format json|markdown]
+       [--dirty | --clean] [--generated-at <iso>] [--format json|markdown]
 ```
 
 The report JSON is the output of `pilot_conformance.py run`; `declarations` is read from the
-top-level key. Default format `json`. Matrix JSON on stdout, diagnostics on stderr. **Exit 0** when
-`ok` is true, **exit 1** when it is false (output still prints), **exit 2** on refusal.
+top-level key. When `declarations` is `null` (no registry was supplied to the conformance run),
+the matrix CLI treats it as an empty envelope (`ok: false`, no rows) and still renders —
+declaration-backed rows read `unexercised`. A non-null value that is not a well-formed
+declarations envelope refuses `acceptance-cli-declarations-invalid`. Default format `json`.
+Matrix JSON on stdout, diagnostics on stderr. **Exit 0** when `ok` is true, **exit 1** when it is
+false (output still prints), **exit 2** on refusal. When neither `--dirty` nor `--clean` is
+passed, dirty is derived from `git status --porcelain` in the current working directory;
+pass `--dirty` or `--clean` to override explicitly.
 
 ### Acceptance-matrix refusal tokens
 
@@ -3431,18 +3437,16 @@ top-level key. Default format `json`. Matrix JSON on stdout, diagnostics on stde
 | `acceptance-row-ruling-required` | `declared-limit` row missing `ruling` |
 | `acceptance-row-ruling-invalid` | `ruling` is not `owner-ruled` or `pending-owner-ruling` |
 | `acceptance-row-ruling-forbidden` | `ruling` present on a non-limit row |
-| `acceptance-resolution-exercise-missing` | exercised row cites a nonexistent exercise |
-| `acceptance-resolution-exercise-failed` | exercised row cites a non-passing exercise record |
-| `acceptance-resolution-surface-missing` | exercised row cites a surface not on the passing record |
-| `acceptance-resolution-declaration-missing` | attested row cites no matching declaration row |
-| `acceptance-resolution-declaration-not-attested` | declaration row exists but is not `attested` |
 | `acceptance-evidence-exercise-absent` | downgrade: cited exercise is not in the report |
+| `acceptance-evidence-exercise-skipped` | downgrade: cited exercise was skipped, not failed |
 | `acceptance-evidence-exercise-failed` | downgrade: cited exercise is present but did not pass |
 | `acceptance-evidence-surface-unbound` | downgrade: passing record's `surfaces` does not contain the cited surface |
 | `acceptance-evidence-declaration-absent` | downgrade: no declaration row matches the cited pointer |
 | `acceptance-evidence-declaration-not-attested` | downgrade: declaration row exists but is not `attested` |
 | `acceptance-cli-report-path-invalid` | `--report-path` missing or empty |
-| `acceptance-cli-report-invalid` | report file unreadable or not a JSON object |
-| `acceptance-cli-declarations-missing` | report has no `declarations` envelope |
+| `acceptance-cli-report-invalid` | report file unreadable, not a JSON object, or wrong `schemaVersion` |
+| `acceptance-cli-declarations-invalid` | `declarations` is present but not a well-formed envelope |
+| `acceptance-cli-dirty-conflicting` | both `--dirty` and `--clean` were passed |
+| `acceptance-cli-dirty-unresolved` | dirty not overridden and `git status --porcelain` could not be read |
 | `acceptance-cli-generated-at-invalid` | `--generated-at` is not valid ISO-8601 UTC-Z |
 | `acceptance-cli-format-invalid` | unknown `--format` value |

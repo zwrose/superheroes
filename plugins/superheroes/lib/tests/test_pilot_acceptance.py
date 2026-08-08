@@ -13,6 +13,8 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_acceptance as pa  # noqa: E402
+import pilot_conformance as pc  # noqa: E402
+import pilot_conformance_declarations as pcd  # noqa: E402
 
 _VALID_SHA1 = "a" * 40
 _VALID_SHA256 = "b" * 64
@@ -27,6 +29,7 @@ def _reference(**overrides):
 
 def _report_data(**overrides):
     base = {
+        "schemaVersion": pc.SCHEMA,
         "ok": True,
         "unexercised": [],
         "exercises": [],
@@ -37,6 +40,7 @@ def _report_data(**overrides):
 
 def _declarations_block(**overrides):
     base = {
+        "schemaVersion": pcd.SCHEMA,
         "ok": True,
         "rows": [
             {
@@ -50,6 +54,36 @@ def _declarations_block(**overrides):
     }
     base.update(overrides)
     return base
+
+
+def _empty_report():
+    return {
+        "schemaVersion": pc.SCHEMA,
+        "ok": True,
+        "unexercised": [],
+        "warnings": [],
+        "surfaces": [],
+        "exercises": [],
+    }
+
+
+def _empty_declarations():
+    return {
+        "schemaVersion": pcd.SCHEMA,
+        "rows": [],
+        "attested": 0,
+        "absent": 0,
+        "notApplicable": 0,
+        "ok": True,
+    }
+
+
+def _expected_framework_row_count():
+    return (
+        len(pa.FRAMEWORK_DECLARED_LIMITS)
+        + len(pa.EXTRAPOLATION_POINTS)
+        + len(pa.TRIPWIRE_ROWS)
+    )
 
 
 def _exercise(name, surfaces, result="pass"):
@@ -530,36 +564,160 @@ def test_render_markdown_surfaces_unexercised_reason():
     assert "reason: %s" % pa.REASON_EVIDENCE_SURFACE_UNBOUND in md
 
 
-# --- framework_rows totality --------------------------------------------------
-
-def _empty_report():
-    return {
-        "ok": True,
-        "unexercised": [],
-        "warnings": [],
-        "surfaces": [],
-        "exercises": [],
-    }
-
-
-def _empty_declarations():
-    return {
-        "schemaVersion": 1,
-        "rows": [],
-        "attested": 0,
-        "absent": 0,
-        "notApplicable": 0,
-        "ok": True,
-    }
-
-
-def _expected_framework_row_count():
-    return (
-        len(pa.FRAMEWORK_DECLARED_LIMITS)
-        + len(pa.EXTRAPOLATION_POINTS)
-        + len(pa.TRIPWIRE_ROWS)
+def test_render_markdown_shows_ok_clauses():
+    report = _report_data(ok=False, unexercised=["pilot_wave.wave_phase"])
+    declarations = _declarations_block(ok=False)
+    matrix_data = pa.matrix(
+        _reference(),
+        [pa.row(area="test-area", claim="c", status=pa.STATUS_PROSE_RESIDUE)],
+        report,
+        declarations,
+        generated_at=_GENERATED_AT,
     )
+    md = pa.render_markdown(matrix_data, report_data=report, declarations_block=declarations)
+    assert "**ok clauses:**" in md
+    assert "conformance run left no unexercised surfaces: fail" in md
+    assert "declarations envelope ok: fail" in md
 
+
+def test_render_markdown_shows_declared_limit_ruling():
+    matrix_data = {
+        "ok": True,
+        "reference": {"project": "p", "commit": _VALID_SHA1, "dirty": False},
+        "generatedAt": _GENERATED_AT,
+        "rows": [
+            pa.row(
+                area="declared-limit",
+                claim="limit claim",
+                status=pa.STATUS_DECLARED_LIMIT,
+                limit_id="lid",
+                closure_path="closure path",
+                ruling=pa.RULING_PENDING_OWNER_RULING,
+            ),
+        ],
+    }
+    md = pa.render_markdown(matrix_data)
+    assert "ruling: pending-owner-ruling" in md
+    assert "closure: closure path" in md
+
+
+def test_matrix_accepts_null_declarations():
+    report = _empty_report()
+    report["declarations"] = None
+    rows = pa.framework_rows(report, pa._coerce_declarations_block(None))
+    assert len(rows) == _expected_framework_row_count()
+    matrix_data = pa.matrix(
+        _reference(),
+        rows,
+        report,
+        pa._coerce_declarations_block(None),
+        generated_at=_GENERATED_AT,
+    )
+    assert "## Acceptance matrix" not in str(matrix_data)
+    assert matrix_data["ok"] is False
+
+
+def test_cli_matrix_with_null_declarations_report():
+    report = {
+        "schemaVersion": pc.SCHEMA,
+        "ok": False,
+        "unexercised": list(pc.REQUIRED_SURFACES),
+        "exercises": [],
+        "declarations": None,
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = _write_report(tmpdir, report)
+        proc = subprocess.run(
+            _cli_argv(path, format="markdown"),
+            capture_output=True,
+            text=True,
+            cwd=_LIB,
+        )
+    assert proc.returncode == 1
+    assert proc.stderr == ""
+    assert proc.stdout.startswith("## Acceptance matrix")
+
+
+def test_e2e_conformance_run_then_matrix_cli(tmp_path):
+    from test_pilot_conformance import _write_calibration_layer  # noqa: E402
+
+    reach_root = tmp_path / "reach"
+    reach_root.mkdir()
+    _write_calibration_layer(reach_root, include_mint=True)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    policy = {
+        "declaration": "example-project-pilot-policy",
+        "slots": {
+            "slot-a": {
+                "origin": "http://127.0.0.1:5173",
+                "permittedRedirects": ["http://127.0.0.1:5173"],
+                "expectedIdentities": {"owner": "pilot-owner@example.test"},
+                "mintableAccounts": ["pilot-owner"],
+                "accountClasses": {"owner": "dev"},
+            }
+        },
+    }
+    with open(
+        policy_root / "example-project-pilot-policy.json",
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(policy, handle)
+    report_path = tmp_path / "report.json"
+    conformance_argv = [
+        sys.executable,
+        "-B",
+        os.path.join(_LIB, "pilot_conformance.py"),
+        "run",
+        "--cwd",
+        str(reach_root),
+        "--policy-root",
+        str(policy_root),
+        "--reach-root",
+        str(reach_root),
+        "--now",
+        _GENERATED_AT,
+    ]
+    conformance_proc = subprocess.run(
+        conformance_argv,
+        capture_output=True,
+        text=True,
+        cwd=_LIB,
+    )
+    assert conformance_proc.stderr == ""
+    # conformance may exit 1 when surfaces unexercised
+    with open(report_path, "w", encoding="utf-8") as handle:
+        handle.write(conformance_proc.stdout)
+    matrix_argv = [
+        sys.executable,
+        "-B",
+        os.path.join(_LIB, "pilot_acceptance.py"),
+        "matrix",
+        "--report-path",
+        str(report_path),
+        "--project",
+        "demo",
+        "--commit",
+        _VALID_SHA1,
+        "--generated-at",
+        _GENERATED_AT,
+        "--clean",
+        "--format",
+        "markdown",
+    ]
+    matrix_proc = subprocess.run(
+        matrix_argv,
+        capture_output=True,
+        text=True,
+        cwd=_LIB,
+    )
+    assert matrix_proc.returncode in (0, 1)
+    assert matrix_proc.stderr == ""
+    assert matrix_proc.stdout.startswith("## Acceptance matrix")
+
+
+# --- framework_rows totality --------------------------------------------------
 
 def test_framework_rows_degrades_never_raises_on_empty_inputs():
     """framework_rows is total: empty report and declarations yield every row, never raise."""
@@ -598,9 +756,12 @@ def _cli_argv(report_path, **extra):
         _VALID_SHA1,
         "--generated-at",
         _GENERATED_AT,
+        "--clean",
     ]
     for key, value in extra.items():
         if key == "dirty" and value:
+            if "--clean" in argv:
+                argv.remove("--clean")
             argv.append("--dirty")
         elif key == "format":
             argv.extend(["--format", value])
@@ -609,6 +770,7 @@ def _cli_argv(report_path, **extra):
 
 def _minimal_passing_report():
     return {
+        "schemaVersion": pc.SCHEMA,
         "ok": True,
         "unexercised": [],
         "exercises": [
@@ -626,6 +788,39 @@ def _minimal_passing_report():
         ],
         "declarations": _declarations_block(),
     }
+
+
+def test_cli_derives_dirty_from_git_status(tmp_path):
+    subprocess.run(["git", "init"], cwd=tmp_path, check=True, capture_output=True)
+    (tmp_path / "dirty-marker.txt").write_text("dirty", encoding="utf-8")
+    report = {
+        "schemaVersion": pc.SCHEMA,
+        "ok": False,
+        "unexercised": list(pc.REQUIRED_SURFACES),
+        "exercises": [],
+        "declarations": None,
+    }
+    path = _write_report(tmpdir=str(tmp_path), report=report)
+    argv = [
+        sys.executable,
+        "-B",
+        os.path.join(_LIB, "pilot_acceptance.py"),
+        "matrix",
+        "--report-path",
+        path,
+        "--project",
+        "demo",
+        "--commit",
+        _VALID_SHA1,
+        "--generated-at",
+        _GENERATED_AT,
+        "--format",
+        "json",
+    ]
+    proc = subprocess.run(argv, capture_output=True, text=True, cwd=tmp_path)
+    assert proc.returncode == 1
+    data = json.loads(proc.stdout)
+    assert data["reference"]["dirty"] is True
 
 
 def test_cli_exit_0_on_ok_matrix():
@@ -661,7 +856,10 @@ def test_cli_exit_1_on_not_ok_matrix():
 
 def test_cli_exit_2_on_refusal():
     with tempfile.TemporaryDirectory() as tmpdir:
-        path = _write_report(tmpdir, {"ok": True, "unexercised": []})
+        path = _write_report(
+            tmpdir,
+            {"schemaVersion": pc.SCHEMA, "ok": True, "unexercised": [], "declarations": None},
+        )
         argv = _cli_argv(path)
         argv[argv.index(_VALID_SHA1)] = "short"
         proc = subprocess.run(

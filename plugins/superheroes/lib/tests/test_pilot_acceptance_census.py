@@ -31,6 +31,9 @@ _SECTION_DECLARE_EXERCISE = "## Declare and exercise"
 _SECTION_PROVISIONING_GATE = "## The provisioning gate"
 _SECTION_CONFORMANCE = "## The conformance run"
 _SECTION_ACCEPTANCE = "## The acceptance matrix"
+_SECTION_FRAMEWORK_DECLARED_LIMITS = "### Framework declared limits"
+_SECTION_EXTRAPOLATION_ROWS = "### Extrapolation rows"
+_SECTION_TRIPWIRE_ROWS = "### Tripwire rows and the two-row ownership rule"
 
 _RUNTIME_NEW_EXERCISE_TOKENS = frozenset({
     pcr.REASON_BOUNDARY_EXPECTATION_UNMET,
@@ -223,6 +226,124 @@ def _exercise_evidence_pointers():
 
 def _registered_exercise_names():
     return {fn.conformance_exercise for fn in pc.default_exercises()}
+
+
+def _declared_limits_code_inventory():
+    return {
+        row["limit_id"]: row["ruling"]
+        for row in pa.FRAMEWORK_DECLARED_LIMITS
+    }
+
+
+def _extrapolation_code_inventory():
+    return {spec["id"]: spec["status"] for spec in pa.EXTRAPOLATION_POINTS}
+
+
+def _tripwire_code_inventory():
+    return {spec["id"]: spec["status"] for spec in pa.TRIPWIRE_ROWS}
+
+
+def _doc_declared_limit_rulings(doc):
+    section = _extract_section(doc, _SECTION_FRAMEWORK_DECLARED_LIMITS)
+    assert section is not None
+    rulings = {}
+    for line in section.splitlines():
+        if not line.startswith("| `"):
+            continue
+        parts = [part.strip() for part in line.split("|")]
+        if len(parts) < 3:
+            continue
+        limit_id = parts[1].strip("`")
+        ruling = parts[2].strip("`")
+        if limit_id in ("limit_id", "") or ruling in ("ruling", ""):
+            continue
+        if limit_id and ruling:
+            rulings[limit_id] = ruling
+    return rulings
+
+
+def _assert_inventory_literals_in_section(section, inventory, label):
+    for item_id, value in inventory.items():
+        assert "`%s`" % item_id in section, (
+            "%s id `%s` missing from pilot-contract.md (file: %s)"
+            % (label, item_id, _PILOT_CONTRACT)
+        )
+        assert "`%s`" % value in section, (
+            "%s value `%s` for id `%s` missing from pilot-contract.md (file: %s)"
+            % (label, value, item_id, _PILOT_CONTRACT)
+        )
+
+
+def _assert_doc_inventory_ids_in_code(section, inventory, label):
+    doc_ids = {token for token in _literal_tokens_in_text(section) if token in inventory}
+    assert doc_ids == set(inventory), (
+        "pilot-contract.md %s id mismatch — missing from code: %s; "
+        "in doc but not in code: %s (file: %s)"
+        % (
+            label,
+            ", ".join(sorted(set(inventory) - doc_ids)) or "(none)",
+            ", ".join(sorted(doc_ids - set(inventory))) or "(none)",
+            _PILOT_CONTRACT,
+        )
+    )
+
+
+def test_doc_declared_limits_inventory_code_to_doc():
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_FRAMEWORK_DECLARED_LIMITS)
+    assert section is not None
+    code_inventory = _declared_limits_code_inventory()
+    doc_rulings = _doc_declared_limit_rulings(doc)
+    assert set(code_inventory) == set(doc_rulings)
+    for limit_id, ruling in code_inventory.items():
+        assert doc_rulings[limit_id] == ruling
+    _assert_inventory_literals_in_section(
+        section, code_inventory, "FRAMEWORK_DECLARED_LIMITS"
+    )
+
+
+def test_doc_declared_limits_inventory_doc_to_code():
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_FRAMEWORK_DECLARED_LIMITS)
+    assert section is not None
+    code_inventory = _declared_limits_code_inventory()
+    doc_rulings = _doc_declared_limit_rulings(doc)
+    assert set(doc_rulings) == set(code_inventory)
+    _assert_doc_inventory_ids_in_code(
+        section, code_inventory, "FRAMEWORK_DECLARED_LIMITS"
+    )
+
+
+def test_doc_extrapolation_inventory_code_to_doc():
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_EXTRAPOLATION_ROWS)
+    assert section is not None
+    inventory = _extrapolation_code_inventory()
+    _assert_inventory_literals_in_section(section, inventory, "EXTRAPOLATION_POINTS")
+
+
+def test_doc_extrapolation_inventory_doc_to_code():
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_EXTRAPOLATION_ROWS)
+    assert section is not None
+    inventory = _extrapolation_code_inventory()
+    _assert_doc_inventory_ids_in_code(section, inventory, "EXTRAPOLATION_POINTS")
+
+
+def test_doc_tripwire_inventory_code_to_doc():
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_TRIPWIRE_ROWS)
+    assert section is not None
+    inventory = _tripwire_code_inventory()
+    _assert_inventory_literals_in_section(section, inventory, "TRIPWIRE_ROWS")
+
+
+def test_doc_tripwire_inventory_doc_to_code():
+    doc = _load_contract()
+    section = _extract_section(doc, _SECTION_TRIPWIRE_ROWS)
+    assert section is not None
+    inventory = _tripwire_code_inventory()
+    _assert_doc_inventory_ids_in_code(section, inventory, "TRIPWIRE_ROWS")
 
 
 def test_framework_declared_limits_census_bidirectional():
