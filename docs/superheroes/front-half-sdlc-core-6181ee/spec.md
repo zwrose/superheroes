@@ -7,6 +7,7 @@ issue: null
 parent: null
 size: large
 status: approved
+approved: "2026-08-07"
 gates: {review: passed}
 producedBy: "the-architect@0.24.0"
 created: "2026-08-07"
@@ -633,7 +634,7 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
 
 ## Amendments
 
-None yet — initial draft, ahead of first owner approval.
+- **2026-08-08 (owner-stamped, wording):** recorded the approval date — the owner confirmed in the advisor channel that approval was given 2026-08-07 in the discovery sitting; added the `approved:` frontmatter field. Sections touched: frontmatter, Amendments. Decides nothing a builder could build differently against.
 
 ## Coverage
 
