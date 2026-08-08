@@ -163,7 +163,11 @@ Critical never GATEs and never parks**:
 2. **Confirming probe** — re-dispatch the verifier (`--role verifier`) for that single
    finding to seek the triggering input in the diff and the repo; a CONFIRMED upgrade then
    becomes GATE-eligible. Where the triggering input can only be established by a **mutation**,
-   that run is the orchestrator's — the verifier never mutates.
+   that run is the orchestrator's — the verifier never mutates. A review seat is **obliged**
+   never to change the repository and never to claim a run it did not make — the base rubric's
+   verification rule **"A review seat never changes the repository, and never claims a run it did
+   not make."** (`rubric/review-base.md`) is the authoritative statement; this is the pointer, not
+   a second copy.
 3. **Grounded advisory** — record `action: "skip"`, `advisory: true`, with the PLAUSIBLE
    verdict as the verification trace (citable ground truth). It rides the handback disclosed
    through the skipped-blocker channel and never interrupts mid-run.

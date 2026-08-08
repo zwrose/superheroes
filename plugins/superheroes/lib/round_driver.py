@@ -4731,7 +4731,7 @@ def _commit_gate_policy_archive(session_dir, rnd, resolution):
 def _resolve_owner_gate_policy(phase, state, config):
     """Resolve judgment/stall gate policy. Returns None when policy does not authorize advance."""
     gate = _gate_policy_overlay_from_config(config)
-    if gate.status == core_md.CONFIG_UNREADABLE:
+    if core_md.review_gate_config_is_unreadable(gate):
         return None
     overlay = gate.overlay
     if phase == P_JUDGMENT:

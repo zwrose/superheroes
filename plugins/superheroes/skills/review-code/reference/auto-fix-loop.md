@@ -49,7 +49,9 @@ never drop a finding or a lens.
 > **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its findings on **stdout** rather than writing the
-> findings file. The contract shape lives in the base rubric's "Findings output format" section; the
+> findings file. The required stdout shape is `{"findings": [...], "investigated": [...]}` — a seat
+> that omits `investigated` forfeits vacuously. The contract shape also lives in the base rubric's
+> "Findings output format" section; the
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
 > top-level JSON value**, so incidental trailing prose after a valid object is tolerated. An **empty**

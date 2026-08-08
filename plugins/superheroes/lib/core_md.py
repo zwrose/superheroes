@@ -489,6 +489,11 @@ def review_gate_config_is_absent(gate):
     return gate.status == CONFIG_ABSENT
 
 
+def review_gate_config_is_unreadable(gate):
+    """True when core.md exists but cannot be read for review-gate-policy overlay purposes."""
+    return gate.status == CONFIG_UNREADABLE
+
+
 def review_gate_config_is_refusal(gate):
     """True when ``review_gate_policy_for_gate`` status refuses usable overlay read."""
     return gate.status not in _GATE_USABLE_STATUSES
