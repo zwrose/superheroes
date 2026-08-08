@@ -2918,7 +2918,9 @@ rather than tightened (`artifact-store-permissions-unsafe`). Each artifact carri
 (`.meta.json`) holding its `expiresAt` deadline; there is **no index file** — a corrupt shared
 index would strand every deadline. Removal happens on the deadline **whether or not anyone read
 the artifact**; a sweep runs **on every write**; a payload whose sidecar cannot be recovered is
-removed rather than retained forever (`artifact-sidecar-unrecoverable`).
+removed rather than retained forever (`artifact-sidecar-unrecoverable`). A payload still awaiting
+its sidecar or bearing an unrecognized sidecar schema is **retained** with a warning instead, so
+concurrent writes and forward-compatible readers do not destroy valid artifacts.
 
 ### Artifact store refusal tokens
 
@@ -2941,6 +2943,8 @@ removed rather than retained forever (`artifact-sidecar-unrecoverable`).
 | `artifact-store-permissions-unsafe` | store directory grants group or other permission bits |
 | `artifact-write-failed` | atomic payload or sidecar write failed |
 | `artifact-sidecar-unrecoverable` | sidecar is missing or corrupt during sweep — payload removed |
+| `artifact-sidecar-pending` | payload has no sidecar yet and is inside the write-grace window — payload retained with warning |
+| `artifact-sidecar-schema-unknown` | sidecar `schemaVersion` is unrecognized — payload retained with warning |
 | `artifact-retention-expired` | `expiresAt` is at or before `now` during sweep |
 | `artifact-sweep-failed` | sweep could not unlink a path safely |
 
