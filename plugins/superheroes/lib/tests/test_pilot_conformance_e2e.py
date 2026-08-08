@@ -1,6 +1,7 @@
-"""End-to-end conformance run — whole-run green receipt across all five exercises (C10)."""
+"""End-to-end conformance run — whole-run green receipt across all eight exercises (C10)."""
 import datetime
 import os
+import stat
 import sys
 
 import pytest
@@ -16,6 +17,7 @@ import pilot_policy # noqa: E402
 from test_pilot_conformance_cleanup import ( # noqa: E402
     _build_cleanup_inputs,
     _cleanup_correct_script,
+    _passing_verdict,
     _SLOT_REF,
 )
 
@@ -25,16 +27,22 @@ _GRACE_HOURS = 72
 
 _EXPECTED_EXERCISE_NAMES = frozenset({
     "artifact-store",
+    "boundary-refusals",
     "cleanup-end-to-end",
+    "horizon-validity",
     "mint-gate-off",
+    "ownership-probe",
     "reclaim-sweep",
     "wave-headless",
 })
 
 _INPUT_KEY_TO_EXERCISE = {
     "artifacts": "artifact-store",
+    "boundary": "boundary-refusals",
     "cleanup": "cleanup-end-to-end",
+    "horizon": "horizon-validity",
     "mint": "mint-gate-off",
+    "ownership_probe": "ownership-probe",
     "reclaim": "reclaim-sweep",
     "wave": "wave-headless",
 }
@@ -126,6 +134,32 @@ def _build_conformance_inputs(tmp_root, now):
     env_var = mint_envelope["enablingFlagEnvVar"]
     run_cwd = cleanup["run_cwd"]
 
+    policy = dict(policy)
+    protected = list(policy.get("protectedTargets") or [])
+    if not any(isinstance(target, str) and "://" in target for target in protected):
+        protected.append("https://app.example.com:443")
+    policy["protectedTargets"] = protected
+    cleanup["policy"] = policy
+
+    probe_script = os.path.join(tmp_root, "bin", "ownership_probe.py")
+    os.makedirs(os.path.dirname(probe_script), exist_ok=True)
+    with open(probe_script, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "_acct = sys.argv[1]\n"
+            "sys.stdout.write(json.dumps(dict(ownsNothing=True, account=_acct)))\n"
+        )
+    os.chmod(probe_script, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    policy["ownershipProbe"] = {
+        "command": [probe_script, pilot_policy.ACCOUNT_PLACEHOLDER],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+    cleanup["policy"] = policy
+    cleanup["verdict"] = _passing_verdict(policy)
+
+    reach = cleanup["reach_roots"]
+    work_cwd = os.path.join(tmp_root, "cwd")
     inputs = {
         "artifacts": {
             "artifacts_dir": artifacts_dir,
@@ -133,11 +167,26 @@ def _build_conformance_inputs(tmp_root, now):
             "slot": "slot-a",
             "material": material,
         },
+        "boundary": {
+            "policy": policy,
+            "slot_ref": _SLOT_REF,
+        },
         "cleanup": cleanup,
+        "horizon": {
+            "pilot_block": pilot_block,
+        },
         "mint": {
             "envelope": mint_envelope,
             "run_cwd": run_cwd,
             "environment": {env_var: "1"},
+        },
+        "ownership_probe": {
+            "policy": policy,
+            "pilot_block": pilot_block,
+            "reach_roots": reach,
+            "run_cwd": pilot_conformance._neutral_cleanup_run_cwd(work_cwd, reach),
+            "run_cwd_disposable": True,
+            "connection_detail": policy["datastore"]["connectionDetail"],
         },
         "reclaim": {"slots_dir": slots_dir},
         "wave": {

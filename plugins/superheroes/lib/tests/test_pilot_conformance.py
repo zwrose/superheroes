@@ -32,8 +32,8 @@ def _pass_record(**overrides):
 # --- REQUIRED_SURFACES inventory ----------------------------------------------
 
 def test_required_surfaces_sorted_unique_and_count():
-    """Inventory is normative: sorted, no duplicates, exactly 17 members."""
-    assert len(pc.REQUIRED_SURFACES) == 17
+    """Inventory is normative: sorted, no duplicates, exactly 24 members."""
+    assert len(pc.REQUIRED_SURFACES) == 24
     assert len(pc.REQUIRED_SURFACES) == len(set(pc.REQUIRED_SURFACES))
     assert list(pc.REQUIRED_SURFACES) == sorted(pc.REQUIRED_SURFACES)
 
@@ -254,11 +254,11 @@ def test_report_happy_path_all_surfaces_covered():
     assert result["ok"] is True
     assert result["unexercised"] == []
     assert result["surfaces"] == sorted(pc.REQUIRED_SURFACES)
-    assert len(result["exercises"]) == 17
+    assert len(result["exercises"]) == 24
 
 
 def test_edge_report_empty_ok_false_unexercised_all():
-    """Edge 9: report([]) — ok is False and unexercised lists all 17 surfaces."""
+    """Edge 9: report([]) — ok is False and unexercised lists all 24 surfaces."""
     result = pc.report([])
     assert result["ok"] is False
     assert result["unexercised"] == sorted(pc.REQUIRED_SURFACES)
@@ -359,7 +359,7 @@ def test_run_happy_path():
     result = pc.run([ok_fn], inputs={}, now=EXERCISED_AT)
     assert result["ok"] is False
     assert SAMPLE_SURFACE in result["surfaces"]
-    assert len(result["unexercised"]) == 16
+    assert len(result["unexercised"]) == 23
 
 
 def test_edge_run_unregistered_callable_refuses_before_any_runs():
@@ -593,8 +593,11 @@ def test_default_exercises_stable_order():
     names = [fn.conformance_exercise for fn in pc.default_exercises()]
     assert names == [
         "artifact-store",
+        "boundary-refusals",
         "cleanup-end-to-end",
+        "horizon-validity",
         "mint-gate-off",
+        "ownership-probe",
         "reclaim-sweep",
         "wave-headless",
     ]
@@ -638,7 +641,7 @@ def _write_calibration_layer(tmp_path, *, include_mint=False):
 def test_resolve_inputs_no_calibration_all_absent(tmp_path):
     inputs, resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
     assert inputs == {}
-    assert len(resolution) == 5
+    assert len(resolution) == 9
     assert all(entry["state"] == "absent" for entry in resolution)
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
@@ -715,6 +718,7 @@ _LIVE_EFFECT_SURFACES = frozenset({
     "pilot_cleanup.resurrection_plan",
     "pilot_mint.gate_off_receipt",
     "pilot_mint.run_gate_off_test",
+    "pilot_policy.ownership_probe_request",
 })
 
 
@@ -740,7 +744,7 @@ def test_resolve_inputs_default_live_effects_cleanup_mint_absent(tmp_path):
 
 
 def test_default_run_report_live_effect_surfaces_unexercised(tmp_path):
-    """bite-axis: live-effect containment — default run reports all seven surfaces unexercised."""
+    """bite-axis: live-effect containment — default run reports all eight surfaces unexercised."""
     report = pc.run(pc.default_exercises(), inputs={}, now=EXERCISED_AT)
     assert report["ok"] is False
     assert _LIVE_EFFECT_SURFACES <= set(report["unexercised"])
@@ -795,6 +799,57 @@ def test_resolve_inputs_cleanup_run_cwd_outside_reach(tmp_path, monkeypatch):
     assert inputs["cleanup"].get("run_cwd_disposable") is True
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["cleanup"]["state"] == "resolved"
+
+
+def test_resolve_inputs_ownership_probe_includes_reach_roots(tmp_path, monkeypatch):
+    import json
+
+    from test_pilot_conformance_cleanup import (
+        _cleanup_correct_script,
+        _harness_layout,
+        _three_slot_policy,
+        _write_cleanup_script,
+        _write_scripts,
+    )
+
+    import pilot_boundary
+
+    monkeypatch.setattr("store_core.run_git", lambda *_args, **_kwargs: "main")
+    _write_calibration_layer(tmp_path, include_mint=True)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    slots_dir = tmp_path / "slots"
+    slots_dir.mkdir()
+    reach_root, _run_cwd, bin_dir, store_dir, cleanup_repo, _journal = _harness_layout(
+        str(tmp_path)
+    )
+    plant, probe = _write_scripts(bin_dir)
+    _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    with open(
+        policy_root / "example-project-pilot-policy.json",
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(policy, handle)
+
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        policy_root=str(policy_root),
+        reach_roots=[reach_root],
+        slots_dir=str(slots_dir),
+        slot_ref="slot-a@1",
+        branch="main",
+        slot="slot-a",
+        now=EXERCISED_AT,
+        allow_live_effects=True,
+    )
+    assert "ownership_probe" in inputs
+    assert inputs["ownership_probe"]["reach_roots"] == [reach_root]
+    probe_run_cwd = inputs["ownership_probe"]["run_cwd"]
+    assert pilot_boundary.is_outside_all_reach_roots(probe_run_cwd, [reach_root])
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["ownership-probe"]["state"] == "resolved"
 
 
 # --- CLI ----------------------------------------------------------------------

@@ -1,4 +1,5 @@
 """Doc↔code census: artifact store and conformance contract matches pilot-contract.md."""
+import glob
 import os
 import re
 import sys
@@ -11,7 +12,10 @@ if _LIB not in sys.path:
 import pilot_artifacts as pa # noqa: E402
 import pilot_conformance as pc # noqa: E402
 import pilot_conformance_cleanup as pcc # noqa: E402
+import pilot_conformance_declarations as pcd # noqa: E402
 import pilot_conformance_runtime as pcr # noqa: E402
+
+_CONFORMANCE_CENSUS_MODULES = (pc, pcc, pcr, pcd)
 
 _PILOT_CONTRACT = os.path.join(
     os.path.dirname(_LIB), "reference", "pilot-contract.md"
@@ -19,6 +23,7 @@ _PILOT_CONTRACT = os.path.join(
 
 _SECTION_ARTIFACT = "## The per-slot artifact store"
 _SECTION_CONFORMANCE = "## The conformance run"
+_SECTION_DECLARE_EXERCISE = "## Declare and exercise"
 _ARTIFACT_TOKEN_HEADER = "| Token | When returned |"
 _CONFORMANCE_TOKEN_HEADER = "| Token | When returned |"
 _CLASS_HEADER = "| Class | Default / opt-in | Redaction basis | Default retention (hours) |"
@@ -105,9 +110,18 @@ def _assert_bidirectional_tokens(code_tokens, doc_tokens, label):
     )
 
 
+def _discovered_pilot_conformance_modules():
+    paths = sorted(glob.glob(os.path.join(_LIB, "pilot_conformance*.py")))
+    return {os.path.splitext(os.path.basename(path))[0] for path in paths}
+
+
+def _conformance_census_module_names():
+    return {module.__name__ for module in _CONFORMANCE_CENSUS_MODULES}
+
+
 def _conformance_reason_constants():
     tokens = set()
-    for module in (pc, pcr, pcc):
+    for module in _CONFORMANCE_CENSUS_MODULES:
         tokens |= _reason_constants(module)
     return tokens
 
@@ -127,7 +141,35 @@ def test_conformance_reason_tokens_bidirectional():
     assert section is not None
     doc_tokens = _parse_token_table(section, _CONFORMANCE_TOKEN_HEADER)
     code_tokens = _conformance_reason_constants()
+    # pilot_conformance_declarations reuses a refusal token documented under
+    # Declare and exercise, not the conformance token table.
+    declarations_only = code_tokens & _reason_constants(pcd)
+    cross_section = declarations_only - doc_tokens
+    if cross_section:
+        declare_section = _extract_section(doc, _SECTION_DECLARE_EXERCISE)
+        assert declare_section is not None
+        declare_doc_tokens = _parse_token_table(
+            declare_section, _CONFORMANCE_TOKEN_HEADER
+        )
+        doc_tokens |= declare_doc_tokens & cross_section
     _assert_bidirectional_tokens(code_tokens, doc_tokens, "conformance REASON_*")
+
+
+def test_conformance_census_modules_cover_all_siblings():
+    """Every pilot_conformance*.py sibling must appear in the census module set."""
+    discovered = _discovered_pilot_conformance_modules()
+    declared = _conformance_census_module_names()
+    missing_from_census = discovered - declared
+    extra_in_census = declared - discovered
+    assert missing_from_census == set() and extra_in_census == set(), (
+        "conformance census module set mismatch — "
+        "modules on disk not in census: %s; "
+        "modules in census not on disk: %s"
+        % (
+            ", ".join(sorted(missing_from_census)) or "(none)",
+            ", ".join(sorted(extra_in_census)) or "(none)",
+        )
+    )
 
 
 def test_required_surfaces_match_inventory_table():

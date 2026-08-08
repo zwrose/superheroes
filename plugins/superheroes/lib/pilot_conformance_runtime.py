@@ -3,19 +3,25 @@
 Drives in-repo pilot surfaces without live apps, browsers, or network so a
 conformance report can cite exercise receipts instead of intentions.
 """
+import calendar
+import json
 import os
 import shutil
 import stat
-import sys
 import tempfile
+import time
 import zipfile
 
 import pilot_appctl
 import pilot_artifacts
+import pilot_bounded_run
+import pilot_boundary
 import pilot_conformance
 import pilot_contract
+import pilot_horizon
 import pilot_journal
 import pilot_mint
+import pilot_policy
 import pilot_reclaim
 import pilot_wave
 import store
@@ -26,6 +32,17 @@ REASON_SLOTS_DIR_INVALID = "conformance-runtime-slots-dir-invalid"
 REASON_EXPECTATION_UNMET = "conformance-runtime-expectation-unmet"
 REASON_SWEEP_WARNINGS_EMPTY = "conformance-runtime-sweep-warnings-empty"
 REASON_GATE_OFF_UNVERIFIED = "conformance-runtime-gate-off-unverified"
+REASON_HORIZON_EXPECTATION_UNMET = "conformance-runtime-horizon-expectation-unmet"
+REASON_BOUNDARY_EXPECTATION_UNMET = "conformance-runtime-boundary-expectation-unmet"
+
+REASON_OWNERSHIP_PROBE_UNDECLARED = "ownership-probe-undeclared"
+REASON_OWNERSHIP_PROBE_REFUSED = "ownership-probe-refused"
+REASON_OWNERSHIP_PROBE_ANSWER_INVALID = "ownership-probe-answer-invalid"
+
+_OWNERSHIP_PROBE_LIMIT_VERBATIM = (
+    "an account quietly accumulating data over time is not something the framework "
+    "detects. This one relies on the owner noticing."
+)
 
 _WAVE_SURFACES = [
     "pilot_appctl.assert_unique_endpoints",
@@ -45,6 +62,25 @@ _MINT_SURFACES = [
 _RECLAIM_SURFACES = ["pilot_reclaim.sweep"]
 
 _ARTIFACT_SURFACES = ["pilot_artifacts.retain", "pilot_artifacts.sweep"]
+
+_BOUNDARY_SURFACES = [
+    "pilot_boundary.check_target",
+    "pilot_boundary.check_redirect",
+    "pilot_boundary.check_protected_identity",
+    "pilot_boundary.is_local_development_origin",
+]
+
+_HORIZON_SURFACES = [
+    "pilot_horizon.account_margin",
+    "pilot_horizon.validate_observation",
+]
+
+_OWNERSHIP_PROBE_SURFACES = ["pilot_policy.ownership_probe_request"]
+
+_OFF_ALLOWLIST_ORIGIN = "http://127.0.0.1:59999"
+_NON_LOCAL_ORIGIN = "https://production.invalid:443"
+_OWNERSHIP_PROBE_TIMEOUT_SECONDS = 20
+_OWNERSHIP_PROBE_MAX_OUTPUT_BYTES = 4096
 
 _WAVE_LAUNCHED_AT = "2026-08-02T12:00:00Z"
 _WAVE_DEADLINE_SECONDS = 10
@@ -327,6 +363,85 @@ def _receipt_well_formed(record, envelope, exercised_at):
         return False
     evidence = receipt.get("evidence")
     return isinstance(evidence, str) and bool(evidence)
+
+
+def _parse_exercised_at_epoch(exercised_at):
+    for fmt in ("%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%dT%H:%M:%S.%fZ"):
+        try:
+            parsed = time.strptime(exercised_at, fmt)
+            return calendar.timegm(parsed)
+        except ValueError:
+            continue
+    return None
+
+
+def _first_policy_slot(policy):
+    slots = policy.get("slots")
+    if not isinstance(slots, dict) or not slots:
+        return None, None
+    slot_name = sorted(slots.keys())[0]
+    slot = slots.get(slot_name)
+    if not isinstance(slot, dict):
+        return None, None
+    return slot_name, slot
+
+
+def _protected_target_url(protected_targets):
+    if not isinstance(protected_targets, list):
+        return None
+    for target in protected_targets:
+        if isinstance(target, str) and "://" in target:
+            return target
+    return None
+
+
+def _protected_identity_token(protected_targets):
+    if not isinstance(protected_targets, list):
+        return None
+    for target in protected_targets:
+        if isinstance(target, str) and target and "://" not in target:
+            return target
+    return None
+
+
+def _occupied_boundary_origins(policy, slot):
+    occupied = set()
+    if isinstance(slot, dict):
+        origin = slot.get("origin")
+        if isinstance(origin, str) and origin:
+            occupied.add(origin)
+        redirects = slot.get("permittedRedirects")
+        if isinstance(redirects, list):
+            for redirect in redirects:
+                if isinstance(redirect, str) and redirect:
+                    occupied.add(redirect)
+    protected_targets = policy.get("protectedTargets") if isinstance(policy, dict) else None
+    if isinstance(protected_targets, list):
+        for target in protected_targets:
+            if isinstance(target, str) and "://" in target:
+                occupied.add(target)
+    return occupied
+
+
+def _off_allowlist_origin(policy, slot):
+    occupied = _occupied_boundary_origins(policy, slot)
+    for port in range(59990, 60010):
+        candidate = "http://127.0.0.1:%d" % port
+        if candidate not in occupied:
+            return candidate
+    raise RuntimeError("no unoccupied off-allowlist origin in scan range")
+
+
+def _ownership_probe_answer_valid(stdout_bytes, expected_account):
+    try:
+        text = stdout_bytes.decode("utf-8")
+    except UnicodeDecodeError:
+        return False
+    try:
+        payload = json.loads(text)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return False
+    return isinstance(payload, dict) and payload.get("ownsNothing") is True and payload.get("account") == expected_account
 
 
 @pilot_conformance.register("wave-headless", surfaces=_WAVE_SURFACES)
@@ -777,3 +892,556 @@ def mint_gate_off_exercise(*, inputs, now):
         "mint gate-off command exercised and receipt well-formed",
         now,
     )
+
+
+@pilot_conformance.register("boundary-refusals", surfaces=_BOUNDARY_SURFACES)
+def boundary_refusals_exercise(*, inputs, now):
+    boundary_inputs, skip_reason = _exercise_key(inputs, "boundary")
+    if skip_reason is not None:
+        return _skipped(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            skip_reason,
+            "boundary inputs absent or malformed",
+            now,
+        )
+
+    policy = boundary_inputs.get("policy")
+    slot_ref = boundary_inputs.get("slot_ref")
+    if not isinstance(policy, dict):
+        return _skipped(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "boundary policy missing or wrong type",
+            now,
+        )
+    if not isinstance(slot_ref, str) or not slot_ref:
+        return _skipped(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "boundary slot_ref missing or wrong type",
+            now,
+        )
+
+    _slot_name, slot = _first_policy_slot(policy)
+    if slot is None:
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "policy has no usable slots",
+            now,
+        )
+
+    origin = slot.get("origin")
+    redirects = slot.get("permittedRedirects")
+    protected_targets = policy.get("protectedTargets")
+    if (
+        not isinstance(origin, str)
+        or not origin
+        or not isinstance(redirects, list)
+        or not isinstance(protected_targets, list)
+        or not protected_targets
+    ):
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "policy slot or protectedTargets malformed",
+            now,
+        )
+
+    try:
+        binding = pilot_boundary.target_binding(
+            slot_ref,
+            origin=origin,
+            permitted_redirects=redirects,
+            protected_targets=protected_targets,
+        )
+    except pilot_boundary.PilotBoundaryError as exc:
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            exc.reason,
+            "project policy origin or redirects could not bind",
+            now,
+        )
+
+    try:
+        off_allowlist_origin = _off_allowlist_origin(policy, slot)
+    except RuntimeError:
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "no free off-allowlist origin port available for refusal exercise",
+            now,
+        )
+    off_target = pilot_boundary.check_target(binding, off_allowlist_origin)
+    if (
+        off_target.get("ok")
+        or off_target.get("reason") != pilot_boundary.REFUSAL_TARGET_OFF_ALLOWLIST
+    ):
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "off-allowlist target refusal token mismatch",
+            now,
+        )
+
+    off_redirect = pilot_boundary.check_redirect(binding, off_allowlist_origin)
+    if (
+        off_redirect.get("ok")
+        or off_redirect.get("reason") != pilot_boundary.REFUSAL_REDIRECT_OFF_ALLOWLIST
+    ):
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "off-allowlist redirect refusal token mismatch",
+            now,
+        )
+
+    evidence_legs = [
+        "off-allowlist target refused",
+        "off-allowlist redirect refused",
+    ]
+
+    protected_url = _protected_target_url(protected_targets)
+    if protected_url is None:
+        evidence_legs.append("protected URL leg skipped (no URL-shaped protectedTargets entry)")
+    else:
+        protected_target = pilot_boundary.check_target(binding, protected_url)
+        if (
+            protected_target.get("ok")
+            or protected_target.get("reason") != pilot_boundary.REFUSAL_PROTECTED_TARGET
+        ):
+            return _failed(
+                "boundary-refusals",
+                _BOUNDARY_SURFACES,
+                REASON_BOUNDARY_EXPECTATION_UNMET,
+                "protected target refusal token mismatch",
+                now,
+            )
+        evidence_legs.append("protected URL refused")
+
+    if pilot_boundary.is_local_development_origin(_NON_LOCAL_ORIGIN):
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "non-local origin was accepted as local development",
+            now,
+        )
+    try:
+        pilot_boundary.target_binding(
+            slot_ref,
+            origin=_NON_LOCAL_ORIGIN,
+            permitted_redirects=redirects,
+            protected_targets=protected_targets,
+        )
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "non-local origin binding was accepted",
+            now,
+        )
+    except pilot_boundary.PilotBoundaryError as exc:
+        if exc.reason != pilot_boundary.REFUSAL_TARGET_NOT_LOCAL:
+            return _failed(
+                "boundary-refusals",
+                _BOUNDARY_SURFACES,
+                exc.reason,
+                "non-local origin refusal token mismatch",
+                now,
+            )
+
+    evidence_legs.append("non-local origin refused")
+
+    protected_identity = _protected_identity_token(protected_targets)
+    if protected_identity is None:
+        evidence_legs.append(
+            "protected identity leg skipped (no opaque protectedTargets entry)"
+        )
+    else:
+        identity_refusal = pilot_boundary.check_protected_identity(
+            binding,
+            protected_identity,
+        )
+        if (
+            identity_refusal.get("ok")
+            or identity_refusal.get("reason") != pilot_boundary.REFUSAL_PROTECTED_TARGET
+        ):
+            return _failed(
+                "boundary-refusals",
+                _BOUNDARY_SURFACES,
+                REASON_BOUNDARY_EXPECTATION_UNMET,
+                "protected identity refusal token mismatch",
+                now,
+            )
+        evidence_legs.append("protected identity refused")
+
+    protected_legs = [
+        leg
+        for leg in evidence_legs
+        if leg.startswith("protected ")
+    ]
+    if not protected_legs:
+        return _failed(
+            "boundary-refusals",
+            _BOUNDARY_SURFACES,
+            REASON_BOUNDARY_EXPECTATION_UNMET,
+            "no protectedTargets legs could be exercised",
+            now,
+        )
+
+    return _passed(
+        "boundary-refusals",
+        _BOUNDARY_SURFACES,
+        "; ".join(evidence_legs),
+        now,
+    )
+
+
+@pilot_conformance.register("horizon-validity", surfaces=_HORIZON_SURFACES)
+def horizon_validity_exercise(*, inputs, now):
+    horizon_inputs, skip_reason = _exercise_key(inputs, "horizon")
+    if skip_reason is not None:
+        return _skipped(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            skip_reason,
+            "horizon inputs absent or malformed",
+            now,
+        )
+
+    pilot_block = horizon_inputs.get("pilot_block")
+    if not isinstance(pilot_block, dict):
+        return _skipped(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "horizon pilot_block missing or wrong type",
+            now,
+        )
+
+    now_epoch = _parse_exercised_at_epoch(now)
+    if now_epoch is None:
+        return _failed(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            REASON_HORIZON_EXPECTATION_UNMET,
+            "exercise now could not be parsed to epoch seconds",
+            now,
+        )
+
+    sign_in_path = pilot_block.get("signInPath")
+    if not isinstance(sign_in_path, str) or sign_in_path not in pilot_contract.SIGN_IN_PATHS:
+        return _failed(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            REASON_HORIZON_EXPECTATION_UNMET,
+            "pilot block signInPath missing or invalid",
+            now,
+        )
+
+    validity_provenance = pilot_block.get("validityProvenance")
+    deadline_at = now_epoch + 3600
+    margin_seconds = 300
+    server_probe_max_age = 86400
+
+    comfortable = pilot_horizon.server_probe_observation(
+        expires_at=deadline_at + margin_seconds + 3600,
+        observed_at=now_epoch,
+    )
+    covered = pilot_horizon.account_margin(
+        comfortable,
+        deadline_at=deadline_at,
+        margin_seconds=margin_seconds,
+        sign_in_path=sign_in_path,
+        attended=False,
+        now=now_epoch,
+        server_probe_max_age=server_probe_max_age,
+    )
+    if not covered.get("ok"):
+        return _failed(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            covered.get("reason") or REASON_HORIZON_EXPECTATION_UNMET,
+            "comfortable horizon margin was not accepted",
+            now,
+        )
+    evidence_legs = []
+
+    shortfall_observation = pilot_horizon.server_probe_observation(
+        expires_at=deadline_at + margin_seconds - 100,
+        observed_at=now_epoch,
+    )
+    shortfall = pilot_horizon.account_margin(
+        shortfall_observation,
+        deadline_at=deadline_at,
+        margin_seconds=margin_seconds,
+        sign_in_path=sign_in_path,
+        attended=False,
+        now=now_epoch,
+        server_probe_max_age=server_probe_max_age,
+    )
+    if (
+        shortfall.get("ok")
+        or shortfall.get("reason") != pilot_horizon.REFUSAL_MARGIN_EXCEEDED
+    ):
+        return _failed(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            REASON_HORIZON_EXPECTATION_UNMET,
+            "shortfall horizon margin refusal token mismatch",
+            now,
+        )
+    evidence_legs.append("margin covered")
+    evidence_legs.append("margin exceeded")
+
+    try:
+        pilot_horizon.validate_observation({"provenance": "bogus"})
+        return _failed(
+            "horizon-validity",
+            _HORIZON_SURFACES,
+            REASON_HORIZON_EXPECTATION_UNMET,
+            "malformed observation was accepted",
+            now,
+        )
+    except pilot_horizon.PilotHorizonError:
+        evidence_legs.append("malformed observation refused")
+
+    if validity_provenance == "unknown":
+        unknown = pilot_horizon.unknown_observation()
+        unattended = pilot_horizon.account_margin(
+            unknown,
+            deadline_at=deadline_at,
+            margin_seconds=margin_seconds,
+            sign_in_path=sign_in_path,
+            attended=False,
+            now=now_epoch,
+        )
+        if (
+            unattended.get("ok")
+            or unattended.get("reason")
+            != pilot_horizon.REFUSAL_UNKNOWN_PROVENANCE_UNATTENDED
+        ):
+            return _failed(
+                "horizon-validity",
+                _HORIZON_SURFACES,
+                REASON_HORIZON_EXPECTATION_UNMET,
+                "unknown provenance unattended refusal token mismatch",
+                now,
+            )
+        evidence_legs.append("unknown-provenance-unattended exercised")
+    else:
+        evidence_legs.append(
+            "unknown-provenance leg not applicable (validityProvenance=%s)"
+            % validity_provenance
+        )
+
+    return _passed(
+        "horizon-validity",
+        _HORIZON_SURFACES,
+        "; ".join(evidence_legs),
+        now,
+    )
+
+
+@pilot_conformance.register("ownership-probe", surfaces=_OWNERSHIP_PROBE_SURFACES)
+def ownership_probe_exercise(*, inputs, now):
+    probe_inputs, skip_reason = _exercise_key(inputs, "ownership_probe")
+    if skip_reason is not None:
+        return _skipped(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            skip_reason,
+            "ownership probe inputs absent or malformed",
+            now,
+        )
+
+    policy = probe_inputs.get("policy")
+    pilot_block = probe_inputs.get("pilot_block")
+    run_cwd = probe_inputs.get("run_cwd")
+    connection_detail = probe_inputs.get("connection_detail")
+    if not isinstance(policy, dict):
+        return _skipped(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "ownership probe policy missing or wrong type",
+            now,
+        )
+    if not isinstance(pilot_block, dict):
+        return _skipped(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "ownership probe pilot_block missing or wrong type",
+            now,
+        )
+    if not isinstance(run_cwd, str) or not run_cwd or not os.path.isdir(run_cwd):
+        return _skipped(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "ownership probe run_cwd missing or not a directory",
+            now,
+        )
+    if not isinstance(connection_detail, str) or not connection_detail:
+        return _skipped(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_INPUTS_MALFORMED,
+            "ownership probe connection_detail missing or wrong type",
+            now,
+        )
+
+    if policy.get("ownershipProbe") is None:
+        return _skipped(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_OWNERSHIP_PROBE_UNDECLARED,
+            "policy declares no ownershipProbe",
+            now,
+        )
+
+    credential_set = pilot_block.get("credentialSet") or []
+    accounts = []
+    for entry in credential_set:
+        if not isinstance(entry, dict):
+            continue
+        account = entry.get("account")
+        if isinstance(account, str) and account:
+            accounts.append(account)
+    if not accounts:
+        return _failed(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_OWNERSHIP_PROBE_REFUSED,
+            "pilot block credentialSet has no accounts to probe",
+            now,
+        )
+
+    reach_roots = probe_inputs.get("reach_roots")
+    if not isinstance(reach_roots, list) or not reach_roots:
+        reach_roots = [os.path.realpath(run_cwd)]
+    else:
+        reach_roots = [
+            os.path.realpath(root)
+            for root in reach_roots
+            if isinstance(root, str) and root
+        ]
+        if not reach_roots:
+            return _skipped(
+                "ownership-probe",
+                _OWNERSHIP_PROBE_SURFACES,
+                REASON_INPUTS_MALFORMED,
+                "ownership probe reach_roots missing or wrong type",
+                now,
+            )
+    try:
+        confined_run_cwd = pilot_conformance._neutral_cleanup_run_cwd(run_cwd, reach_roots)
+    except RuntimeError:
+        return _failed(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            REASON_OWNERSHIP_PROBE_REFUSED,
+            "ownership probe could not allocate confined run_cwd outside reach roots",
+            now,
+        )
+
+    try:
+        ownership_probe = policy.get("ownershipProbe")
+        try:
+            pilot_boundary._validate_observer(
+                ownership_probe,
+                connection_detail,
+                reach_roots,
+                confined_run_cwd,
+            )
+        except pilot_boundary.PilotBoundaryError as exc:
+            return _failed(
+                "ownership-probe",
+                _OWNERSHIP_PROBE_SURFACES,
+                exc.reason,
+                "ownership probe command failed confinement checks",
+                now,
+            )
+
+        path_value = os.environ.get("PATH", os.defpath)
+        probed_accounts = []
+        for account in accounts:
+            try:
+                request = pilot_policy.ownership_probe_request(policy, account)
+            except pilot_policy.PilotPolicyError as exc:
+                return _failed(
+                    "ownership-probe",
+                    _OWNERSHIP_PROBE_SURFACES,
+                    exc.reason,
+                    "ownership probe request could not be resolved",
+                    now,
+                )
+
+            env = {
+                request["connectionEnvVar"]: connection_detail,
+                "PATH": path_value,
+            }
+            run = pilot_bounded_run.run_bounded(
+                request["argv"],
+                run_cwd=confined_run_cwd,
+                env=env,
+                timeout_seconds=_OWNERSHIP_PROBE_TIMEOUT_SECONDS,
+                max_output_bytes=_OWNERSHIP_PROBE_MAX_OUTPUT_BYTES,
+            )
+            if (
+                run["outcome"] != pilot_bounded_run.OUTCOME_COMPLETED
+                or run["exitCode"] != 0
+            ):
+                return _failed(
+                    "ownership-probe",
+                    _OWNERSHIP_PROBE_SURFACES,
+                    REASON_OWNERSHIP_PROBE_REFUSED,
+                    "ownership probe for account %s exited non-zero" % account,
+                    now,
+                )
+            if not _ownership_probe_answer_valid(run["stdout"], account):
+                return _failed(
+                    "ownership-probe",
+                    _OWNERSHIP_PROBE_SURFACES,
+                    REASON_OWNERSHIP_PROBE_ANSWER_INVALID,
+                    (
+                        "ownership probe for account %s exited 0 but stdout did not "
+                        "parse as JSON with ownsNothing true and matching account; a process that merely "
+                        "started is not evidence the account owns nothing"
+                    )
+                    % account,
+                    now,
+                )
+            probed_accounts.append(account)
+
+        if set(probed_accounts) != set(accounts):
+            return _failed(
+                "ownership-probe",
+                _OWNERSHIP_PROBE_SURFACES,
+                REASON_OWNERSHIP_PROBE_REFUSED,
+                "ownership probe did not exercise every credential-set account",
+                now,
+            )
+
+        return _passed(
+            "ownership-probe",
+            _OWNERSHIP_PROBE_SURFACES,
+            (
+                "ownership probe exercised for accounts %s; %s"
+                % (", ".join(sorted(probed_accounts)), _OWNERSHIP_PROBE_LIMIT_VERBATIM)
+            ),
+            now,
+        )
+    finally:
+        shutil.rmtree(confined_run_cwd, ignore_errors=True)

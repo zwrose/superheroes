@@ -124,19 +124,48 @@ block, run the headless conformance pass (normative CLI in
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/pilot_conformance.py" run --cwd .
+REPORT_JSON="$(mktemp)"
+trap 'rm -f "$REPORT_JSON"' EXIT
+CONFORMANCE_ARGS=(run --cwd .)
+if [ -n "${PILOT_REGISTRY:-}" ]; then
+  CONFORMANCE_ARGS+=(--registry-path "$PILOT_REGISTRY")
+fi
+python3 -B "$ROOT_DIR/lib/pilot_conformance.py" "${CONFORMANCE_ARGS[@]}" > "$REPORT_JSON"
+python3 -B "$ROOT_DIR/lib/pilot_acceptance.py" matrix \
+  --report-path "$REPORT_JSON" \
+  --project "$(basename "$(pwd)")" \
+  --commit "$(git rev-parse HEAD)" \
+  --format markdown
 ```
 
-Stdout is the report JSON; stderr carries diagnostics. **Exit 1 is a real
-outcome to report, not an error to swallow** — show the operator which
-surfaces came back `unexercised` and why, from the report's `resolution`
-list. The run **never** writes into the repository when `--allow-live-effects`
-is not passed. The `cleanup-end-to-end` and `mint-gate-off` exercises are
+When the project maintains a declare-and-exercise registry (see
+`reference/pilot-contract.md` §Declare and exercise), set `PILOT_REGISTRY` to
+that JSON path before running the conformance step so `--registry-path` is passed
+and the report carries a `declarations` envelope. **Without a registry path** the
+conformance report's `declarations` key is `null` — the matrix CLI still
+renders, but declaration-backed rows read `unexercised` with a stated reason;
+that is the ordinary adopter case, not a refusal.
+
+Stdout is the report JSON from the conformance run; the matrix step prints
+markdown on stdout. Stderr carries diagnostics. **Exit 1 is a real outcome to
+report, not an error to swallow** — show the operator which surfaces came back
+`unexercised` and why, from the report's `resolution` list. The matrix's `ok`
+is **false** when any row is `unexercised`, when the reference worktree is
+dirty, or when the run itself left surfaces `unexercised` — that is the honest
+outcome for a project that has not exercised everything, **not a failure to
+work around**. `--commit` must be a **full object id** (run `git rev-parse
+HEAD` in the reference project — not a branch name). **Dirty** is derived from
+`git status --porcelain` in the **CLI process's current working directory** when
+neither `--dirty` nor `--clean` is passed; pass `--dirty` or `--clean` to
+override. The run **never** writes into the repository when `--allow-live-effects` is not passed. The
+`cleanup-end-to-end`, `mint-gate-off`, and `ownership-probe` exercises are
 reported as **unexercised** unless the operator explicitly passes
-`--allow-live-effects`; opting in runs the project's own destructive cleanup
-and gate-off commands against live datastore and checkout resources. A
-`mint-gate-off` exercise that does not produce a usable receipt is reported as
-**unexercised**, never recorded as exercised — configure refuses to claim it.
+`--allow-live-effects`; opting in runs the project's own destructive cleanup,
+gate-off, and ownership-probe commands against live datastore and checkout
+resources. A `mint-gate-off` exercise that does not produce a usable receipt is
+reported as **unexercised**, never recorded as exercised — configure refuses to
+claim it. The matrix is **generated, not stored** by the plugin — where a
+project keeps it is the project's own decision.
 
 ### Pilot block (optional)
 

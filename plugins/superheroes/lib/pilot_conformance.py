@@ -32,13 +32,20 @@ REQUIRED_SURFACES = (
     "pilot_appctl.resolve_invocation",
     "pilot_artifacts.retain",
     "pilot_artifacts.sweep",
+    "pilot_boundary.check_protected_identity",
+    "pilot_boundary.check_redirect",
+    "pilot_boundary.check_target",
+    "pilot_boundary.is_local_development_origin",
     "pilot_cleanup.cleanup_effect_receipt",
     "pilot_cleanup.receipt_valid_for",
     "pilot_cleanup.registry_record",
     "pilot_cleanup.resolve_containment",
     "pilot_cleanup.resurrection_plan",
+    "pilot_horizon.account_margin",
+    "pilot_horizon.validate_observation",
     "pilot_mint.gate_off_receipt",
     "pilot_mint.run_gate_off_test",
+    "pilot_policy.ownership_probe_request",
     "pilot_reclaim.sweep",
     "pilot_wave.admit_work",
     "pilot_wave.assert_destructive_allowed",
@@ -76,8 +83,17 @@ REASON_INPUT_POLICY_UNRESOLVED = "conformance-input-policy-unresolved"
 REASON_INPUT_NO_MINT = "conformance-input-no-mint"
 REASON_INPUT_CLEANUP_INCOMPLETE = "conformance-input-cleanup-incomplete"
 REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED = "conformance-input-live-effects-not-permitted"
+REASON_INPUT_NO_REGISTRY_PATH = "conformance-input-no-registry-path"
+REASON_INPUT_REGISTRY_MISSING = "conformance-input-registry-missing"
+REASON_INPUT_REGISTRY_UNREADABLE = "conformance-input-registry-unreadable"
+REASON_INPUT_REGISTRY_INVALID_JSON = "conformance-input-registry-invalid-json"
+REASON_INPUT_REGISTRY_INVALID_SHAPE = "conformance-input-registry-invalid-shape"
 
-EFFECT_BEARING_EXERCISES = frozenset({"cleanup-end-to-end", "mint-gate-off"})
+EFFECT_BEARING_EXERCISES = frozenset({
+    "cleanup-end-to-end",
+    "mint-gate-off",
+    "ownership-probe",
+})
 
 REASON_CLI_CWD_INVALID = "conformance-cli-cwd-invalid"
 REASON_CLI_NOW_INVALID = "conformance-cli-now-invalid"
@@ -402,8 +418,11 @@ def default_exercises():
 
     return [
         runtime.artifact_store_exercise,
+        runtime.boundary_refusals_exercise,
         pilot_conformance_cleanup.cleanup_end_to_end_exercise,
+        runtime.horizon_validity_exercise,
         runtime.mint_gate_off_exercise,
+        runtime.ownership_probe_exercise,
         runtime.reclaim_sweep_exercise,
         runtime.wave_headless_exercise,
     ]
@@ -520,6 +539,33 @@ def _build_cleanup_verdict(policy, slot_ref, now):
     )
 
 
+def _load_registry(registry_path):
+    """Load a declaration registry document; return (registry, reason)."""
+    if registry_path is None:
+        return None, REASON_INPUT_NO_REGISTRY_PATH
+    if not os.path.isfile(registry_path):
+        return None, REASON_INPUT_REGISTRY_MISSING
+    try:
+        with open(registry_path, "r", encoding="utf-8") as handle:
+            raw = handle.read()
+    except OSError:
+        return None, REASON_INPUT_REGISTRY_UNREADABLE
+    try:
+        doc = json.loads(raw)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None, REASON_INPUT_REGISTRY_INVALID_JSON
+    if not isinstance(doc, dict):
+        return None, REASON_INPUT_REGISTRY_INVALID_SHAPE
+    import pilot_contract
+
+    if doc.get("schemaVersion") != pilot_contract.REGISTRY_SCHEMA_VERSION:
+        return None, REASON_INPUT_REGISTRY_INVALID_SHAPE
+    records = doc.get("records")
+    if not isinstance(records, list):
+        return None, REASON_INPUT_REGISTRY_INVALID_SHAPE
+    return doc, None
+
+
 def _neutral_cleanup_run_cwd(cwd, reach_roots):
     """Allocate a disposable working directory outside every reach root."""
     import pilot_boundary
@@ -534,7 +580,8 @@ def _neutral_cleanup_run_cwd(cwd, reach_roots):
 
 def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                    slot_ref=None, branch=None, slot=None, artifacts_dir=None,
-                   store_root=None, now=None, allow_live_effects=False):
+                   registry_path=None, store_root=None, now=None,
+                   allow_live_effects=False):
     """Assemble exercise inputs and a per-key resolution audit trail."""
     import pilot_contract
     import pilot_policy
@@ -684,8 +731,7 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                             "policy": policy,
                             "pilot_block": pilot_block,
                             "slot_ref": slot_ref,
-                            "reach_roots": reach,
-                            "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
+                                    "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
                             "run_cwd_disposable": True,
                             "cleanup_root": cleanup_root,
                             "journal_path": journal_path,
@@ -755,6 +801,108 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
         _resolution_entry(resolution, "wave", resolved=False, reason=REASON_INPUT_NO_SLOTS_DIR)
         _resolution_entry(resolution, "reclaim", resolved=False, reason=REASON_INPUT_NO_SLOTS_DIR)
 
+    registry = None
+    registry_reason = REASON_INPUT_NO_REGISTRY_PATH
+    if registry_path is not None:
+        registry, registry_reason = _load_registry(registry_path)
+
+    declarations_reason = None
+    if pilot_block is None:
+        declarations_reason = pilot_reason
+    elif policy is None:
+        declarations_reason = policy_reason or REASON_INPUT_POLICY_UNRESOLVED
+    elif registry is None:
+        declarations_reason = registry_reason
+    else:
+        import pilot_conformance_declarations
+
+        inputs["declarations"] = pilot_conformance_declarations.declarations_block(
+            pilot_block,
+            policy,
+            registry,
+            now=now,
+        )
+        _resolution_entry(resolution, "declarations", resolved=True)
+
+    if "declarations" not in inputs:
+        _resolution_entry(
+            resolution,
+            "declarations",
+            resolved=False,
+            reason=declarations_reason or REASON_INPUT_NO_REGISTRY_PATH,
+        )
+
+    boundary = None
+    boundary_reason = pilot_reason if pilot_block is None else None
+    if policy is None:
+        if boundary_reason is None:
+            boundary_reason = policy_reason or REASON_INPUT_POLICY_UNRESOLVED
+    elif not isinstance(slot_ref, str) or not slot_ref:
+        boundary_reason = REASON_INPUT_NO_SLOT_REF
+    else:
+        boundary = {"policy": policy, "slot_ref": slot_ref}
+
+    if boundary is not None:
+        inputs["boundary"] = boundary
+        _resolution_entry(resolution, "boundary", resolved=True)
+    else:
+        _resolution_entry(
+            resolution,
+            "boundary",
+            resolved=False,
+            reason=boundary_reason or REASON_INPUT_POLICY_UNRESOLVED,
+        )
+
+    horizon = None
+    horizon_reason = pilot_reason if pilot_block is None else None
+    if pilot_block is not None:
+        horizon = {"pilot_block": pilot_block}
+
+    if horizon is not None:
+        inputs["horizon"] = horizon
+        _resolution_entry(resolution, "horizon", resolved=True)
+    else:
+        _resolution_entry(
+            resolution,
+            "horizon",
+            resolved=False,
+            reason=horizon_reason or REASON_INPUT_NO_PILOT_BLOCK,
+        )
+
+    ownership_probe = None
+    ownership_probe_reason = pilot_reason if pilot_block is None else None
+    if not allow_live_effects:
+        ownership_probe_reason = REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    elif pilot_block is not None and ownership_probe_reason is None:
+        if policy is None:
+            ownership_probe_reason = policy_reason or REASON_INPUT_POLICY_UNRESOLVED
+        elif not os.path.isdir(cwd):
+            ownership_probe_reason = REASON_INPUT_CLEANUP_INCOMPLETE
+        else:
+            reach = list(reach_roots) if reach_roots is not None else [os.path.realpath(cwd)]
+            if not reach:
+                ownership_probe_reason = REASON_INPUT_CLEANUP_INCOMPLETE
+            else:
+                ownership_probe = {
+                    "policy": policy,
+                    "pilot_block": pilot_block,
+                    "reach_roots": reach,
+                    "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
+                    "run_cwd_disposable": True,
+                    "connection_detail": policy["datastore"]["connectionDetail"],
+                }
+
+    if ownership_probe is not None:
+        inputs["ownership_probe"] = ownership_probe
+        _resolution_entry(resolution, "ownership-probe", resolved=True)
+    else:
+        _resolution_entry(
+            resolution,
+            "ownership-probe",
+            resolved=False,
+            reason=ownership_probe_reason or REASON_INPUT_POLICY_UNRESOLVED,
+        )
+
     return inputs, resolution
 
 
@@ -780,13 +928,14 @@ def _parse_run_args(args):
     run_parser.add_argument("--branch")
     run_parser.add_argument("--slot")
     run_parser.add_argument("--artifacts-dir")
+    run_parser.add_argument("--registry-path")
     run_parser.add_argument("--now")
     run_parser.add_argument(
         "--allow-live-effects",
         action="store_true",
         help=(
-            "Run cleanup-end-to-end and mint-gate-off against the project's real "
-            "datastore and checkout (the project's own destructive commands)."
+            "Run cleanup-end-to-end, mint-gate-off, and ownership-probe against the "
+            "project's real datastore and checkout (the project's own commands)."
         ),
     )
     parsed = parser.parse_args(args)
@@ -832,6 +981,7 @@ def main(argv):
             branch=parsed.branch,
             slot=parsed.slot,
             artifacts_dir=parsed.artifacts_dir,
+            registry_path=parsed.registry_path,
             now=now,
             allow_live_effects=parsed.allow_live_effects,
         )
@@ -842,6 +992,7 @@ def main(argv):
 
     output = dict(report_data)
     output["resolution"] = resolution
+    output["declarations"] = inputs.get("declarations")
     # bite-axis: stdout/stderr split — report JSON only on stdout; diagnostics belong on stderr.
     sys.stdout.write(json.dumps(output, indent=2) + "\n")
     # bite-axis: all-skipped honesty — ok false must exit 1, never 0.
