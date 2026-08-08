@@ -102,6 +102,7 @@ def _ingest(sd, seat=SEAT, attempt=1, current=1, rnd=1, phase=PHASE, **kw):
 
 
 # --- roster_slots -----------------------------------------------------------------------------
+# axis (first three tests): repeated roster keys expand to distinct occurrence slots without loss/overwrite; order preserved
 
 def test_roster_slots_no_repeats_every_occurrence_is_zero_order_preserved():
     roster = ["a.py:1", "b.py:2", "c.py:3"]
@@ -121,6 +122,7 @@ def test_roster_slots_repeated_key_three_times_interleaved():
 
 @pytest.mark.parametrize("bad", [None, "seat", 3, {}])
 def test_roster_slots_non_sequence_returns_empty_no_exception(bad):
+    # axis: non-sequence roster input must fail-closed to empty expansion (no exception)
     assert RR.roster_slots(bad) == []
 
 

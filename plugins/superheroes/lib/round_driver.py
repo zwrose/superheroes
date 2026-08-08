@@ -2275,6 +2275,9 @@ def _audit_targets(state, config, audit_targets_map):
         loc = _location_id(f)
         n = seen_location.get(loc, 0)
         seen_location[loc] = n + 1
+        # Same ``%s#%d`` format as ``_slot_label`` roster occurrence suffixes; the two namespaces
+        # stay disjoint because audit roster keys are per-location unique (no occurrence suffix)
+        # and pre-change persisted ids carry no ``#``.
         tid = loc if n == 0 else "%s#%d" % (loc, n)
         targets.append({
             "id": tid,
@@ -2521,12 +2524,27 @@ def _park_capped_open(state, detail):
     state["step"] = P_TERMINAL
 
 
+def _open_audit_target_ids(state):
+    """Per-location ids still open this round, or None when the open set cannot be determined
+    (legacy persisted session without ``_auditOutcome``)."""
+    outcome = state.get("_auditOutcome")
+    if not isinstance(outcome, dict):
+        return None
+    nd = outcome.get("notDischarged")
+    if not isinstance(nd, list):
+        return None
+    return set(nd)
+
+
 def _stalled_critical(state, config, breaker):
     """A stalled identity whose fix batch carried a Critical still counts as an open Critical at the
     cap (fail toward park)."""
     stalled = set(breaker.get("stalledIdentities") or [])
+    open_ids = _open_audit_target_ids(state)
     for t in state.get("_auditTargets") or []:
         if not isinstance(t, dict):
+            continue
+        if open_ids is not None and t.get("id") not in open_ids:
             continue
         if circuit_breaker.is_critical(t.get("severity")) \
                 and circuit_breaker.audit_target_aliases(t) & stalled:
@@ -2560,8 +2578,15 @@ def _handle_stall(state, config, breaker):
                      else "no escalation rung available — fixer unchanged, escalated:false"))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
         stalled = set(breaker.get("stalledIdentities") or [])
-        batch = [dict(t) for t in (state.get("_auditTargets") or [])
-                 if isinstance(t, dict) and circuit_breaker.audit_target_aliases(t) & stalled]
+        open_ids = _open_audit_target_ids(state)
+        batch = []
+        for t in (state.get("_auditTargets") or []):
+            if not isinstance(t, dict):
+                continue
+            if open_ids is not None and t.get("id") not in open_ids:
+                continue
+            if circuit_breaker.audit_target_aliases(t) & stalled:
+                batch.append(dict(t))
         state["_fixBatch"] = batch or [dict(f) for f in (state.get("fixBatch") or [])]
         state["step"] = P_FIXER
         return
