@@ -433,6 +433,77 @@ _PAYLOAD_CHECKERS = {
     P_AUDITS: _audits_payload_fault,
 }
 
+# Declared payload contracts — read off the checkers above, never hand-copied field names.
+_PAYLOAD_CONTRACTS = {
+    P_PANEL: {
+        "required": [],
+        "optional": ["findings", "confidence", "tier", "receiptMissing", "receiptStale",
+                     VACUOUS_FIELD, "reason"],
+        "conditional": {
+            "findings": ("required unless the seat declared it did not run "
+                         "(vacuous is True or reason is a not-run outcome token)"),
+        },
+        "enums": {},
+    },
+    P_VERIFIERS: {
+        "required": ["verdicts"],
+        "optional": [],
+        "conditional": {},
+        "enums": {},
+    },
+    P_SYNTHESIS: {
+        "required": ["grouping"],
+        "optional": [],
+        "conditional": {},
+        "enums": {},
+    },
+    P_GAPSWEEP: {
+        "required": ["findings"],
+        "optional": [],
+        "conditional": {},
+        "enums": {},
+    },
+    P_SCOPED: {
+        "required": ["findings"],
+        "optional": [],
+        "conditional": {},
+        "enums": {},
+    },
+    P_FIXER: {
+        "required": ["fixes"],
+        "optional": ["escalated", "headDiff", "headDiffPath", "coverageDecisions"],
+        "conditional": {},
+        "enums": {},
+    },
+    P_VERIFY: {
+        "required": ["result"],
+        "optional": ["command", "exit", "outputSha256"],
+        "conditional": {},
+        "enums": {"result": list(round_phases._VERIFY_RESULTS)},
+    },
+    P_AUDITS: {
+        "required": ["id", "ruling", "reason"],
+        "optional": ["newIssues", "evidence", "auditorVendor"],
+        "conditional": {
+            "newIssues": "required when ruling is %s" % RULING_NEW_ISSUE,
+        },
+        "enums": {"ruling": list(audits.AUDIT_RULINGS)},
+    },
+}
+
+
+def payload_contract(phase):
+    """({required, optional, enums, conditional?}, reason_or_None).
+
+    The declared per-seat payload shape for `phase`, as data. An unknown phase or a phase with no
+    checker returns an empty contract plus a distinct reason — never a silent empty contract.
+    """
+    if phase not in ADAPTER_PHASES:
+        return {}, "unknown-phase:%s" % _label(phase)
+    if phase not in _PAYLOAD_CHECKERS:
+        return {}, "no-payload-checker:%s" % _label(phase)
+    return dict(_PAYLOAD_CONTRACTS[phase]), None
+
 
 def payload_fault(phase, payload, seat_key, record_boundary=False):
     """A reason string naming the offending field, or None. Never raises."""

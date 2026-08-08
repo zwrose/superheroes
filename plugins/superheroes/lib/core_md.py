@@ -87,16 +87,21 @@ def render_core(facts, status, created, updated):
     show_it_block = ""
     if show_it:
         show_it_block = "## Show-it surface\n\n%s\n\n" % show_it
+    ratified = (facts.get("ratifiedResiduals") or "").strip()
+    ratified_block = ""
+    if ratified:
+        ratified_block = "## Ratified residuals\n\n%s\n\n" % ratified
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
         "## Threat model\n\n%s\n\n"
         "## Canonical patterns\n\n%s\n\n"
-        "%s"
+        "%s%s"
         "```json superheroes-core\n%s\n```\n"
         % (SCHEMA_VERSION, status, created, updated,
            (facts.get("threatModel") or "").strip(),
            (facts.get("patterns") or "").strip(),
            show_it_block,
+           ratified_block,
            json.dumps(block, indent=2))
     )
 
@@ -154,6 +159,7 @@ def parse_core(text):
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
         "showItSurface": _section(text, "Show-it surface"),
+        "ratifiedResiduals": _section(text, "Ratified residuals"),
         "created": created,
         "updated": updated,
     }
@@ -331,6 +337,7 @@ def read(cwd, root=None):
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
         "showItSurface": facts["showItSurface"],
+        "ratifiedResiduals": facts["ratifiedResiduals"],
         "behind": behind,
         "created": facts["created"],
         "updated": facts["updated"],
@@ -1274,7 +1281,8 @@ def confirm(cwd, *, root=None, now=None):
             if existing.get("status") == "confirmed":
                 return {"action": "noop", "record": existing}
             facts = {k: existing[k] for k in (
-                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
+                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
+                "ratifiedResiduals")}
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),
