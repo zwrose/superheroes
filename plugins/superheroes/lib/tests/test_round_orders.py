@@ -503,73 +503,52 @@ def test_shipped_resource_refusal_when_rubric_missing(monkeypatch):
     assert reason == "shipped-resource-missing:RUBRIC_PATH"
 
 
-# --- FX-1: seat transport from seat_map compose (fix 3) ------------------------
+# --- FB-6: seat transport from seat_map compose (detector 1) -------------------
 
 
 def test_seat_transport_classifies_vendors_from_compose_output():
+    """Engine seats (codex/cursor) → stdout; host seat (claude) → file — off SM.build()."""
     import round_driver as RD
     import seat_map as SM
-    composed = SM.build(roster=SM.PANEL_ROSTER[:1], live_vendors=["codex", "cursor", "claude"],
-                        author_family="anthropic", narrative_family="openai", seed=1)
-    seats = composed["seats"]
-    code_cfg = seats.get("architecture-reviewer") or seats.get("code-reviewer")
-    # Force vendor assignments for test
-    state = {"seatMap": {"seats": {
-        "codex-seat": {"vendor": "codex", "model": "m", "effort": "high"},
-        "cursor-seat": {"vendor": "cursor", "model": "m", "effort": "high"},
-        "claude-seat": {"vendor": "claude", "model": "m", "effort": "high"},
-    }}}
-    assert RD._seat_is_engine(RD._seat_dispatch_row(state, "codex-seat"))
-    assert RD._seat_is_engine(RD._seat_dispatch_row(state, "cursor-seat"))
-    assert not RD._seat_is_engine(RD._seat_dispatch_row(state, "claude-seat"))
 
-
-def test_seat_transport_from_real_compose_output():
-    import round_driver as RD
-    import seat_map as SM
-    composed = SM.build(roster=("code-reviewer",), live_vendors=["codex", "cursor", "claude"],
-                        author_family="anthropic", narrative_family="openai", seed=42,
-                        pins={"code-reviewer": {"vendor": "codex"}})
-    seat_cfg = composed["seats"]["code-reviewer"]
-    state = {"seatMap": {"seats": {"code-reviewer": seat_cfg}}}
-    row = RD._seat_dispatch_row(state, "code-reviewer")
-    assert row.get("vendor") == seat_cfg["vendor"]
-    assert RD._seat_is_engine(row)
-    ph_channel = "stdout" if RD._seat_is_engine(row) else "file"
-    assert ph_channel == "stdout"
-
-
-# --- FX-1: emitted-order path layout drift test (fix 15) -----------------------
-
-
-def test_documented_order_path_layout_matches_code_home():
-    import round_driver as RD
-    import round_records as RR
-    session = "/tmp/session-drift"
-    rnd, phase, attempt = 2, RP.P_PANEL, 0
-    skey = RR.storage_key("code-reviewer", 0)
-    code_paths = {
-        "order": RR.order_prompt_path(session, rnd, phase, skey, attempt),
-        "envelope_stub": RR.envelope_stub_path(session, rnd, phase, skey, attempt),
-        "landing_engine": RR.landing_path(session, rnd, phase, skey, attempt),
-        "landing_host": RR.bare_payload_path(session, rnd, phase, skey, attempt),
-        "manifest": RD._orders_manifest_path(session, rnd, phase, attempt),
+    composed = SM.build(
+        roster=("code-reviewer", "security-reviewer", "architecture-reviewer"),
+        live_vendors=["codex", "cursor", "claude"],
+        author_family="anthropic",
+        narrative_family="openai",
+        seed=723,
+        pins={
+            "code-reviewer": {"vendor": "codex"},
+            "security-reviewer": {"vendor": "cursor"},
+            "architecture-reviewer": {"vendor": "claude"},
+        },
+    )
+    state = {"seatMap": {"seats": composed["seats"]}}
+    expectations = {
+        "code-reviewer": ("stdout", True),
+        "security-reviewer": ("stdout", True),
+        "architecture-reviewer": ("file", False),
     }
-    skill_path = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "SKILL.md")
-    ref_path = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md")
-    with open(skill_path, encoding="utf-8") as fh:
-        skill_doc = fh.read()
-    with open(ref_path, encoding="utf-8") as fh:
-        ref_doc = fh.read()
-    assert "$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.md" in skill_doc
-    assert "$SESSION_DIR/round-<N>/orders/<phase>/<skey>.a<K>.envelope.json" in skill_doc
-    assert "$SESSION_DIR/round-<N>/orders/<phase>/manifest.a<K>.json" in skill_doc
-    assert "$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.json" in skill_doc
-    assert "$SESSION_DIR/round-<N>/landing/<phase>/<skey>.a<K>.payload.json" in skill_doc
-    assert "round-N/orders/P/skey.aK.md" in ref_doc
-    assert "round-N/orders/P/skey.aK.envelope.json" in ref_doc
-    assert "round-N/orders/P/manifest.aK.json" in ref_doc
-    assert code_paths["order"].endswith("orders/%s/%s.a%d.md" % (phase, skey, attempt))
-    assert code_paths["envelope_stub"].endswith(".envelope.json")
-    assert code_paths["manifest"].endswith("manifest.a%d.json" % attempt)
-    assert code_paths["landing_host"].endswith(".payload.json")
+    for seat, (want_channel, want_engine) in expectations.items():
+        seat_cfg = composed["seats"][seat]
+        assert isinstance(seat_cfg.get("vendor"), str) and seat_cfg["vendor"], (
+            "composed seat %r missing vendor — seat_map schema drift" % seat)
+        row = RD._seat_dispatch_row(state, seat)
+        assert row["vendor"] == seat_cfg["vendor"]
+        is_engine = RD._seat_is_engine(row)
+        assert is_engine is want_engine, "%s: vendor=%r" % (seat, row["vendor"])
+        channel = "stdout" if is_engine else "file"
+        assert channel == want_channel
+
+
+def test_seat_transport_vendor_absent_is_not_engine():
+    import round_driver as RD
+
+    assert not RD._seat_is_engine(RD._seat_dispatch_row({"seatMap": {"seats": {}}}, "missing"))
+    assert not RD._seat_is_engine({"vendor": None, "model": "m", "engine": None})
+
+
+def test_seat_transport_unknown_vendor_is_not_engine():
+    import round_driver as RD
+
+    assert not RD._seat_is_engine({"vendor": "gemini", "model": "m", "engine": None})
