@@ -1,6 +1,6 @@
 # C7 — feat(superheroes): spec closure — the closure receipt and the owner's delivery decision
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec closure (FR-37, FR-38) + UFR-5, UFR-8, UFR-10 (second acceptance bullet — abandoned child) — owner-approved 2026-08-07.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec closure (FR-37, FR-38) + UFR-5, UFR-8, UFR-10 (second acceptance bullet — abandoned child) — owner-approved 2026-08-07, as-of amendment #3.
 
 **What:** Closure is never a separate process: the final child PR's vet assembles and
 carries the closure receipt (R8's elements; the present-tense test; the advisor sequences
@@ -22,8 +22,9 @@ never silence (UFR-10b).
 - FR-38: no silent close; partial delivery = explicit owner acceptance with
   delivered/deferred/declined named (UFR-5's bullet).
 - UFR-8: BOTH outcomes graded — the default (open + repair issues carrying receipt anchors
-  to the failing run, loop ending only at an owner decision) and the alternative (explicit
-  owner acceptance with the failing run disclosed).
+  to the failing run AND naming the unmet acceptance criterion each restores, loop ending
+  only at an owner decision) and the alternative (explicit owner acceptance with the
+  failing run disclosed).
 - One recorded closure rehearsal IN THIS CHILD'S HANDBACK: a final-child (or no-PR-close)
   walkthrough showing exactly one receipt assembled, its validation result stated, and the
   delivery-decision outcome riding the same handback.
@@ -31,7 +32,7 @@ never silence (UFR-10b).
 
 **Register text consumed (verbatim):**
 
-> **R4 — Amendment classes.** Every post-approval spec amendment is classified `wording` (changes phrasing; decides nothing a builder could build differently against) or `substantive` (anything else — the default when ambiguous, failing closed), and every Amendments-log entry carries: date, owner stamp, class, and the section names it touched; a wording amendment's total ceremony is the body edit, the log entry, and mechanical propagation; a substantive amendment additionally triggers the touched-parts re-read (UFR-4) before injection.
+> **R4 — Amendment classes.** Every post-approval spec amendment is classified `wording` (changes phrasing; decides nothing a builder could build differently against) or `substantive` (anything else — the default when ambiguous, failing closed), and every Amendments-log entry carries: date, owner stamp, class, and the section names it touched; entries are ordered in the log and numbered by order of addition (oldest = 1) — the number is positional, not a new field — and R1's anchor cursor reads that order; a wording amendment's total ceremony is the body edit, the log entry, and mechanical propagation; a substantive amendment additionally triggers the touched-parts re-read (UFR-4) before injection.
 
 > **R7 — The park surface.** A park lands the full park note — what was elicited or found so far, explicitly marked unapproved — on the owner's reading surface at park time: in the advisor's delivery message when the owner is present, else as the opening item of the advisor's next delivery message; a durable copy lands as a comment on the parked item's issue or PR, and the durable copy is for the record — it is never required owner reading.
 

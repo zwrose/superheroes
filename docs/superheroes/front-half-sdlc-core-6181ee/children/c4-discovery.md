@@ -1,6 +1,6 @@
 # C4 — feat(superheroes): discovery — consent-gated investigation, adaptive elicitation, three exits, the weight call
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Discovery (FR-11..FR-17) + UFR-10 (first acceptance bullet — abandoned discovery) — owner-approved 2026-08-07.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Discovery (FR-11..FR-17) + UFR-10 (first acceptance bullet — abandoned discovery) — owner-approved 2026-08-07, as-of amendment #3.
 
 **What:** Discovery becomes the one front door for requirements: no separate spike surface
 (FR-11, including the recorded-ruling bypass — rulings already made need no discovery);
@@ -12,13 +12,18 @@ override (FR-16, R5); a light spec is the same artifact class (FR-17). Abandoned
 discoveries get park notes per R7 (UFR-10a).
 
 **DoD:**
-- Discovery/architect charter text: the one front door + recorded-ruling bypass; the
+- Discovery/architect charter text: the one front door (no separate spike surface; the
+  recorded-ruling bypass's ROUTING outcome is C3's, not this child's); the
   consent gate names its spend, starts nothing on silence — while the owner is unavailable
   the item WAITS or PARKS (per R7) — stops at the named bound and re-asks, and is stated
   as the SOLE mid-flight consent point.
 - The three exits each with their distinct artifact: the approved spec; the findings
   record WITH owner ratification recorded and an explicit no-spec-fabricated outcome; the
   park note per R7 — and every exit reports to the advisor.
+- Adaptive elicitation per FR-14's own terms: per-dimension care probing (each
+  opinion-bearing dimension probed, the owner asked whether they care) and the
+  Dispositions-driven stopping rule (a small surface closes having asked only what its
+  table needed) — both as charter text.
 - Prose elicitation: FR-15's behavior demonstrated by a recorded rehearsal or completed
   live-discovery transcript INCLUDED IN THIS CHILD'S HANDBACK, showing a clarifying or
   mixed free-form answer accepted and the dialogue proceeding without re-forcing a single

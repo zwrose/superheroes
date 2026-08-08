@@ -1,12 +1,14 @@
 # C6 — feat(superheroes): decomposition + the epic contract — coverage map, register, package read, verbatim injection
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract (FR-26..FR-36) + UFR-3, UFR-4, UFR-6, UFR-7 — owner-approved 2026-08-07.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract (FR-26..FR-36) + UFR-3, UFR-4, UFR-6, UFR-7 — owner-approved 2026-08-07, as-of amendment #3.
 
 **What:** The advisor's decomposition machinery as charter + tooling: the spec-handoff vet
 and fixed sequence with dated approval (FR-26); the acceptance-level coverage map (FR-27,
 UFR-3); the contract register with decide-bys and the no-product-opinion rule (FR-28,
-FR-29); seam-first sequencing (FR-30); verbatim register injection (FR-31's charter rule; the checker itself is C9's — this
-child owns the FILING and VERIFICATION-PASS invocations per R3's ownership split); the
+FR-29); seam-first sequencing (FR-30); verbatim register injection behavior around C9's landed invocations (R3: C9 owns the
+whole FR-31 criterion; this child is a dependent); the WHOLE amendment machinery — FR-22
+classification, the R4 log contract, and UFR-4 propagation, one behavior one owner
+(round-2 consolidation); the
 adversarial package read with scoped rounds, convergence rule, verification pass, audit
 trail, and ceiling park (FR-32, UFR-7, using R5's weight vocabulary); post-approval-only
 decomposition + substantive-amendment re-entry (FR-33, UFR-4 — reading R4's classes);
@@ -16,11 +18,11 @@ single-issue fast path (FR-36).
 **DoD:**
 - Showrunner charter: FR-26's vet shape + fixed sequence; FR-27/28/29/30 duties; FR-33's
   post-approval rule and re-entry; FR-34 reciprocity; FR-35's vet row; FR-36 fast path.
-- R3's filing and verification-pass invocations integrated (C9 ships the checker; C2 owns
-  intake) — each exercised once through this child's surfaces.
-- The standing NFR vet row (round-1 finding C13): every child PR's vet grades the three
-  package-wide NFRs (owner reading load, plain language, guidelines never hardened into
-  gates) — shipped as charter text with the row's grading stated.
+- Filing and verification behavior built around C9's landed invocations (dependent — owns
+  no FR-31 criterion).
+- FR-22 whole: classification (wording vs substantive, fail-closed default), the R4 log
+  contract (entry fields + positional numbering), and the wording path's bounded ceremony
+  — with the RECORDED classification of one exercised amendment in the handback.
 - FR-32's read protocol in the charter: five lenses, seat composition per the
   review-discipline independence rules (maker-family exclusion; advisor-as-author counts as
   the maker — spec amendment 2026-08-08), scoped rounds, the convergence rule
@@ -44,9 +46,9 @@ single-issue fast path (FR-36).
 
 **Register text consumed (verbatim):**
 
-> **R3 — The exact-text check.** Register-to-child text agreement is checked by byte-exact comparison of each consumer artifact's quoted register block against the register file it names — an epic child's body against its epic's register, and a single-issue child's body standing in for a register (FR-36's shared-seam rule) against the epic register its quote header names; the check is machine work (a script with a stable invocation and a pass/fail result naming the first differing line), never model judgment; it runs at three points — child filing, child build intake, and the package read's verification pass.
+> **R3 — The exact-text check.** Register-to-child text agreement is checked by byte-exact comparison of each consumer artifact's quoted register block against the register file it names — an epic child's body against its epic's register, and a single-issue child's body standing in for a register (FR-36's shared-seam rule) against the epic register its quote header names; the check is machine work (a script with a stable invocation and a pass/fail result naming the first differing line), never model judgment; it runs at three points — child filing, child build intake, and the package read's verification pass. **C9 owns FR-31's acceptance criterion whole**: the script AND all three invocation points (the workhorse-intake line and the showrunner filing and verification lines are C9's charter edits); C2 and C6 are dependents that build behavior around the already-landed invocations, owning none of them. **Bootstrap (one-time, disclosed):** until C9 ships, the advisor performs the same byte-exact comparison with a recorded ad-hoc invocation — this package's own filings run under that bootstrap, with the invocation and results preserved in the package-read audit trail.
 
-> **R4 — Amendment classes.** Every post-approval spec amendment is classified `wording` (changes phrasing; decides nothing a builder could build differently against) or `substantive` (anything else — the default when ambiguous, failing closed), and every Amendments-log entry carries: date, owner stamp, class, and the section names it touched; a wording amendment's total ceremony is the body edit, the log entry, and mechanical propagation; a substantive amendment additionally triggers the touched-parts re-read (UFR-4) before injection.
+> **R4 — Amendment classes.** Every post-approval spec amendment is classified `wording` (changes phrasing; decides nothing a builder could build differently against) or `substantive` (anything else — the default when ambiguous, failing closed), and every Amendments-log entry carries: date, owner stamp, class, and the section names it touched; entries are ordered in the log and numbered by order of addition (oldest = 1) — the number is positional, not a new field — and R1's anchor cursor reads that order; a wording amendment's total ceremony is the body edit, the log entry, and mechanical propagation; a substantive amendment additionally triggers the touched-parts re-read (UFR-4) before injection.
 
 > **R5 — The weight vocabulary.** A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.
 

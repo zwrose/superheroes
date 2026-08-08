@@ -51,9 +51,35 @@ substantive amendments' FR-33 re-entry; ceiling: this is round 2 of the original
 - **Scope given:** revised parts are the unreviewed text — verify each fix against its
   named finding, hunt new defects in changed text; unchanged-text findings logged without
   extension per the convergence rule.
-- **Result:** _pending — filled when the seats return._
+- **Result: 22 findings** (A1r2–A5r2, B1r2–B5r2, C1r2–C12r2; 12 blocking) — all against
+  round-1's revised text (new authorship), none against unchanged text, so no
+  declined-extension log this round. Seats engaged: A 104,831 tok / 619s; B 73,446 / 426s;
+  C 63,681 / 538s.
+- **The one finding that parks to the owner (A1r2 + A2r2 + B1r2, one family):** round 1's
+  R6 first-match precedence was register-authored PRODUCT OPINION — FR-5 defines
+  overlapping route cases and authorizes no precedence, and the exactly-one
+  disambiguation (including the detective pre-ship transition) is an owner FR-5
+  amendment. Disposition per FR-33: neither a package fix nor a refutation — an
+  owner-stamped spec amendment is required. **R6 is now an OPEN register entry parked to
+  the owner (R7's park duty discharged: full note in the advisor's next delivery message
+  + durable copy on PR #922); C3 cannot file until ruled. Round 3 is HELD until that
+  ruling** — its invocation cause will be the ruling + the round-2 fixes.
+- **Fold (advisor, this commit):** R1 cursor → ordered amendment number; R3/FR-31
+  consolidated whole into C9 with the disclosed advisor bootstrap; R4 + FR-22 + UFR-4
+  consolidated into C6; FR-11 bypass-routing wholly C3; NFR vet row moved to C1; all nine
+  anchors carry the as-of cursor (`as-of amendment #3`); five DoDs upgraded to
+  recorded-artifact evidence (C7r2/C8r2/C9r2/C10r2 classes); C4 gained FR-14's
+  per-dimension probing + stopping rule (C12r2) and C5 the unhappy-path seed areas
+  (C11r2). Post-fold mechanical checks: quotes byte-exact 9/9; coverage clean (two
+  remaining declared splits: FR-1, FR-11, plus UFR-10's spec-defined split).
+
+## Round 3 (HELD — awaiting the owner's FR-5 precedence ruling)
+
+Cause at invocation: the owner ruling + round-2 fixes (new authorship). Scope: the
+round-2-revised parts + R6/C3 once ruled. Ceiling: round 3 of the original 3 — if it
+returns more than mechanical items, the package parks under UFR-7.
 
 ## Verification pass
 
-_Pending — runs after the converging round: each fix checked against its finding plus the
-mechanical sync battery (quote exactness, coverage exactly-once)._
+_Runs with round 3: each fix checked against its finding plus the mechanical sync battery
+(quote exactness, coverage exactly-once — both already passing at this commit)._
