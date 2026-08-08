@@ -692,14 +692,99 @@ def test_advance_records_adapter_provenance_on_the_round_entry_and_receipt(tmp_p
     adapters.assemble = assemble_with_provenance
     assert _advance(d, tmp_path)["ok"] is True
     prov = _state(d)["rounds"]["1"]["adapterProvenance"]
-    assert prov["vendorEchoMismatch"] == mismatch
-    assert prov["dispatchManifestUnavailable"] is True
+    by_phase = prov["byPhase"]
+    assert by_phase[RD.P_PANEL]["vendorEchoMismatch"] == mismatch
+    assert by_phase[RD.P_PANEL]["dispatchManifestUnavailable"] is True
     receipt = RD.build_receipt(_state(d), d)
     rd = next(r for r in receipt["rounds"] if r["round"] == 1)
     assert rd["adapterProvenance"] == prov
     degraded = "\n".join(receipt["degraded"])
-    assert "adapter-provenance (round 1): vendor echo mismatch" in degraded
-    assert "adapter-provenance (round 1): dispatch manifest unavailable" in degraded
+    assert "adapter-provenance (round 1, %s): vendor echo mismatch" % RD.P_PANEL in degraded
+    assert "adapter-provenance (round 1, %s): dispatch manifest unavailable" % RD.P_PANEL in degraded
+
+
+def test_adapter_provenance_accumulates_per_phase_in_one_round(tmp_path, adapters):
+    """Panel and verifiers disclosures in the same round must both survive under byPhase."""
+    d = _session(tmp_path)
+    panel_mismatch = [{"seat": "code-reviewer", "occurrence": 0, "echo": "cursor",
+                       "manifest": "codex"}]
+    verifier_omitted = [{"seat": "src/f.py:3", "occurrence": 0, "reason": "timeout"}]
+
+    def assemble_with_provenance(phase, envelopes, state, config, dispatch_manifest=None,
+                                 canary=None, session_dir=None):
+        if phase == RD.P_PANEL:
+            seats = {}
+            for env in (envelopes or []):
+                seat = env.get("seat")
+                if env.get("schema") == RR.SEAT_MISSING_SCHEMA:
+                    seats[seat] = {"findings": [], "missing": True}
+                else:
+                    seats[seat] = env.get("payload") or {"findings": []}
+            return {"seats": seats,
+                    "provenance": {"vendorEchoMismatch": panel_mismatch,
+                                   "dispatchManifestUnavailable": True}}, None
+        if phase == RD.P_VERIFIERS:
+            return {"verdicts": [],
+                    "provenance": {"unverifiedClusters": verifier_omitted}}, None
+        return {}, None
+
+    adapters.assemble = assemble_with_provenance
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    # verifiers: empty roster folds immediately
+    assert _advance(d, tmp_path)["ok"] is True
+    prov = _state(d)["rounds"]["1"]["adapterProvenance"]
+    by_phase = prov["byPhase"]
+    assert by_phase[RD.P_PANEL]["vendorEchoMismatch"] == panel_mismatch
+    assert by_phase[RD.P_PANEL]["dispatchManifestUnavailable"] is True
+    assert by_phase[RD.P_VERIFIERS]["unverifiedClusters"] == verifier_omitted
+
+
+def test_build_receipt_emits_mixed_old_flat_and_new_by_phase_adapter_provenance(tmp_path):
+    """Round 1 legacy flat and round 2 per-phase shapes both ride the receipt and disclosures."""
+    state = copy.deepcopy(V2_STATE)
+    state["rounds"] = {
+        "1": {"adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer",
+                                                            "echo": "cursor",
+                                                            "manifest": "codex"}]}},
+        "2": {"adapterProvenance": {"byPhase": {RD.P_VERIFIERS: {
+            "dispatchManifestUnavailable": True}}}},
+    }
+    receipt = RD.build_receipt(state, str(tmp_path))
+    rd1 = next(r for r in receipt["rounds"] if r["round"] == 1)
+    rd2 = next(r for r in receipt["rounds"] if r["round"] == 2)
+    assert rd1["adapterProvenance"] == state["rounds"]["1"]["adapterProvenance"]
+    assert rd2["adapterProvenance"] == state["rounds"]["2"]["adapterProvenance"]
+    degraded = "\n".join(receipt["degraded"])
+    assert "adapter-provenance (round 1, unknown-phase): vendor echo mismatch" in degraded
+    assert ("adapter-provenance (round 2, %s): dispatch manifest unavailable"
+            % RD.P_VERIFIERS) in degraded
+
+
+def test_adapter_provenance_migrates_legacy_flat_on_write(tmp_path):
+    """A legacy flat value moves under unknown-phase when a new phase is folded."""
+    state = copy.deepcopy(V2_STATE)
+    state["round"] = 1
+    state["rounds"] = {"1": {"adapterProvenance": {"dispatchManifestUnavailable": True}}}
+    new_prov = {"unverifiedClusters": [{"seat": "cluster-a", "occurrence": 0, "reason": "killed"}]}
+    RD._fold(state, state["config"], RD.P_VERIFIERS, {"provenance": new_prov})
+    prov = state["rounds"]["1"]["adapterProvenance"]
+    assert prov["byPhase"]["unknown-phase"]["dispatchManifestUnavailable"] is True
+    assert prov["byPhase"][RD.P_VERIFIERS]["unverifiedClusters"] == new_prov["unverifiedClusters"]
+
+
+def test_normalize_adapter_provenance_fail_closed_edges():
+    """Corrupt stored values normalize to empty; empty phase disclosures are not recorded."""
+    assert RD._normalize_adapter_provenance(None) == {}
+    assert RD._normalize_adapter_provenance("bad") == {}
+    assert RD._normalize_adapter_provenance({"byPhase": "not-a-dict"}) == {}
+    assert RD._normalize_adapter_provenance({"vendorEchoMismatch": []}) == {"unknown-phase": {
+        "vendorEchoMismatch": []}}
+    state = copy.deepcopy(V2_STATE)
+    state["round"] = 1
+    state["rounds"] = {}
+    RD._fold(state, state["config"], RD.P_PANEL, {"provenance": {}})
+    assert "adapterProvenance" not in state["rounds"].get("1", {})
 
 
 def test_record_result_refuses_a_payload_fault(tmp_path, adapters):
