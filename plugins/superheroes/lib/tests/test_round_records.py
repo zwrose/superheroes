@@ -101,6 +101,31 @@ def _ingest(sd, seat=SEAT, attempt=1, current=1, rnd=1, phase=PHASE, **kw):
                              current_attempt=current, roster=ROSTER, **kw)
 
 
+# --- roster_slots -----------------------------------------------------------------------------
+# axis (first three tests): repeated roster keys expand to distinct occurrence slots without loss/overwrite; order preserved
+
+def test_roster_slots_no_repeats_every_occurrence_is_zero_order_preserved():
+    roster = ["a.py:1", "b.py:2", "c.py:3"]
+    assert RR.roster_slots(roster) == [("a.py:1", 0), ("b.py:2", 0), ("c.py:3", 0)]
+
+
+def test_roster_slots_repeated_key_twice_expands_occurrence_order_preserved():
+    roster = ["a.py:1", "b.py:2", "a.py:1"]
+    assert RR.roster_slots(roster) == [("a.py:1", 0), ("b.py:2", 0), ("a.py:1", 1)]
+
+
+def test_roster_slots_repeated_key_three_times_interleaved():
+    roster = ["a.py:1", "b.py:2", "a.py:1", "c.py:3", "a.py:1"]
+    assert RR.roster_slots(roster) == [
+        ("a.py:1", 0), ("b.py:2", 0), ("a.py:1", 1), ("c.py:3", 0), ("a.py:1", 2)]
+
+
+@pytest.mark.parametrize("bad", [None, "seat", 3, {}])
+def test_roster_slots_non_sequence_returns_empty_no_exception(bad):
+    # axis: non-sequence roster input must fail-closed to empty expansion (no exception)
+    assert RR.roster_slots(bad) == []
+
+
 # --- storage keys -----------------------------------------------------------------------------
 
 def test_storage_key_is_filename_safe_and_slug_plus_hash():

@@ -184,14 +184,25 @@ def _audit_outcome_aliases(outcome):
     that keeps its class can't dodge the stall signal, exactly like the recurring-finding check).
     A dimension-less outcome contributes only its identity string — never the empty "::" key a
     bare recurrence_aliases would synthesize."""
-    if not isinstance(outcome, dict):
+    return _target_aliases(outcome)
+
+
+def audit_target_aliases(target):
+    """Alias set for an audit target — same construction path as `_audit_outcome_aliases` so stall
+    consumers cannot disagree on which targets match `stalledIdentities`."""
+    return _target_aliases(target)
+
+
+def _target_aliases(record):
+    """Shared alias construction for audit outcomes and audit targets."""
+    if not isinstance(record, dict):
         return set()
     aliases = set()
-    ident = outcome.get("identity")
+    ident = record.get("identity") or record.get("id")
     if isinstance(ident, str) and ident:
         aliases.add(ident)
-    if outcome.get("dimension") or outcome.get("taxonomy") or outcome.get("classKey"):
-        aliases |= recurrence_aliases(outcome)
+    if record.get("dimension") or record.get("taxonomy") or record.get("classKey"):
+        aliases |= recurrence_aliases(record)
     return aliases
 
 

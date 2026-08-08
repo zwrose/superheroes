@@ -192,9 +192,9 @@ def roster_for(phase, state, config):
 def _roster_slots(keys):
     """[(key, occurrence)] — the roster expanded so a REPEATED key stays addressable.
 
-    Two DISTINCT audit targets can legitimately share one id (`finding_identity` is line-less), so
-    the roster is occurrence-indexed exactly the way `round_records.storage_key` is: identity is
-    (seat_key, occurrence), never the seat key alone. The expansion itself is DELEGATED to
+    Two DISTINCT audit targets can legitimately share one roster seat key (same per-location id
+    before occurrence suffixing), so the roster is occurrence-indexed exactly the way
+    `round_records.storage_key` is: identity is (seat_key, occurrence), never the seat key alone. The expansion itself is DELEGATED to
     `round_records.roster_slots` — the driver's advance path enumerates the same slots to read the
     store, and two independent expansions could disagree about which record is which seat.
     """
