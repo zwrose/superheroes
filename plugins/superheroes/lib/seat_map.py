@@ -806,55 +806,40 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
     }
 
 
-def build_parser():
+def main(argv):
     import argparse
-
-    import cli_contract as cc
+    import json
+    import sys
 
     ap = argparse.ArgumentParser(prog="seat_map")
     sub = ap.add_subparsers(dest="cmd", required=True)
     c = sub.add_parser("compose", help="compute the panel seat map for a run")
-    cc.add_argument(c, "--author-family", contract="free-text", default=None)
-    cc.add_argument(c, "--narrative-family", contract="free-text", default=None)
-    cc.add_argument(c, "--pr-number", contract="free-text", default=None)
-    cc.add_argument(c, "--head-sha", contract="free-text", default=None)
-    cc.add_argument(
-        c,
+    c.add_argument("--author-family", default=None)
+    c.add_argument("--narrative-family", default=None)
+    c.add_argument("--pr-number", default=None)
+    c.add_argument("--head-sha", default=None)
+    c.add_argument(
         "--live-vendors",
-        contract="free-text",
         default=None,
         help="comma list; overrides preflight (test/precomputed seam)",
     )
-    cc.add_argument(
-        c,
+    c.add_argument(
         "--configured-engines",
-        contract="free-text",
         default="",
         help="comma list of non-claude engines; used to run preflight when --live-vendors omitted",
     )
-    cc.add_argument(
-        c,
+    c.add_argument(
         "--pins",
-        contract="free-text",
         default=None,
         help="JSON dict of seat pins passed to build()",
     )
-    cc.add_argument(
-        c,
+    c.add_argument(
         "--probe-mode",
-        contract="choices:probe,cache-only",
         default="probe",
         choices=("probe", "cache-only"),
         help="probe live vendors or reuse cache only",
     )
-    return ap
-
-
-def main(argv):
-    import json
-    import sys
-
-    args = build_parser().parse_args(argv[1:])
+    args = ap.parse_args(argv[1:])
     if args.cmd == "compose":
         import time
 

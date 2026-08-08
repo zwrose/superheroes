@@ -904,16 +904,21 @@ def test_dispatch_relative_repo_root_absolutized_for_cwd_and_codex_c(tmp_path, m
     assert argv[i + 1] == view_cwd
 
 
-def test_main_dispatch_review_without_repo_root_argparse_refusal(tmp_path):
+def test_main_dispatch_review_without_repo_root_json_refusal(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(ED, "_run_engine", _never_call)
     prompt = _valid_prompt(tmp_path)
-    with pytest.raises(SystemExit) as excinfo:
-        ED.main([
-            "dispatch-review",
-            "--engine", "codex",
-            "--effort", "high",
-            "--prompt-path", prompt,
-        ])
-    assert excinfo.value.code == 2
+    rc = ED.main([
+        "dispatch-review",
+        "--engine", "codex",
+        "--effort", "high",
+        "--prompt-path", prompt,
+    ])
+    assert rc == 0
+    res = json.loads(capsys.readouterr().out.strip())
+    assert res == {
+        "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
+        "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+    }
 
 
 def test_dispatch_vacuous_then_valid_investigated_succeeds_on_retry(tmp_path):
@@ -3414,13 +3419,11 @@ def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys
 
     monkeypatch.setattr(ED, "dispatch_review", _capture_dispatch)
     prompt = _valid_prompt(tmp_path)
-    repo_root = _repo(tmp_path)
     rc = ED.main([
         "dispatch-review",
         "--engine", "codex",
         "--effort", "high",
         "--prompt-path", prompt,
-        "--repo-root", repo_root,
         "--diff-base", "REF",
     ])
     assert rc == 0

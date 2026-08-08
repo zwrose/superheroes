@@ -23,7 +23,6 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
-import cli_contract as cc  # noqa: E402
 import model_registry  # noqa: E402
 
 _PARK_TAIL = (
@@ -156,21 +155,17 @@ def _cli_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def build_parser() -> argparse.ArgumentParser:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Dispatch model allowlist guard")
     sub = parser.add_subparsers(dest="command", required=True)
     check = sub.add_parser("check", help="Validate a dispatch against the allowlist")
-    cc.add_argument(check, "--role", contract="role", required=True)
-    cc.add_argument(check, "--vendor", contract="vendor", required=True)
-    cc.add_argument(check, "--model", contract="model-not-a-role", default=None,
-                    type=cc.optional_model_not_a_role)
-    cc.add_argument(check, "--effort", contract="effort", default=None)
+    check.add_argument("--role", required=True)
+    check.add_argument("--vendor", required=True)
+    check.add_argument("--model", default=None)
+    check.add_argument("--effort", default=None)
     check.set_defaults(func=_cli_check)
-    return parser
 
-
-def main(argv: list[str] | None = None) -> int:
-    args = build_parser().parse_args(argv)
+    args = parser.parse_args(argv)
     return args.func(args)
 
 
