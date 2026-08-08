@@ -199,15 +199,10 @@ def _target_aliases(record):
         return set()
     aliases = set()
     ident = record.get("identity") or record.get("id")
-    has_explicit = isinstance(ident, str) and ident
-    if has_explicit:
+    if isinstance(ident, str) and ident:
         aliases.add(ident)
     if record.get("dimension") or record.get("taxonomy") or record.get("classKey"):
         aliases |= recurrence_aliases(record)
-    elif not has_explicit:
-        derived = finding_identity(record)
-        if derived != "::":
-            aliases.add(derived)
     return aliases
 
 

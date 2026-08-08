@@ -2553,11 +2553,11 @@ def _stalled_open_targets(state, breaker):
             if circuit_breaker.audit_target_aliases(t) & stalled:
                 matched.append(t)
         return matched
-    # Legacy: persisted session without per-location ids — alias-only over fixBatch.
-    # Relies on audit_target_aliases deriving line-less identity from raw findings (no
-    # identity/id/class fields) so stalledIdentities still match — see circuit_breaker._target_aliases.
+    # Legacy: persisted session without per-location ids. Keys on the line-less identity DIRECTLY —
+    # NOT circuit_breaker aliases, whose fail-closed direction is the opposite one (an empty alias
+    # set must stay empty there so a malformed audit outcome is marked, not matched).
     for f in state.get("fixBatch") or []:
-        if isinstance(f, dict) and circuit_breaker.audit_target_aliases(f) & stalled:
+        if isinstance(f, dict) and finding_identity(f) in stalled:
             matched.append(f)
     return matched
 
