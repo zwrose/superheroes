@@ -3847,16 +3847,23 @@ def _session_meta(session_dir):
 
 
 def _ensure_round_diff(session_dir, rnd, state):
-    """Write `round-<N>/diff.txt` when absent so order templates have a real path to cite."""
+    """Write `round-<N>/diff.txt` when absent or untrusted so order templates have a real path to cite."""
     rdir = round_records.round_dir(session_dir, rnd)
     diff_path = os.path.join(rdir, "diff.txt")
-    if not os.path.exists(diff_path):
-        os.makedirs(rdir, exist_ok=True)
-        diff_text = state.get("reviewedDiff")
-        if not isinstance(diff_text, str):
-            diff_text = ""
-        with open(diff_path, "w", encoding="utf-8") as fh:
-            fh.write(diff_text)
+    diff_text = state.get("reviewedDiff")
+    if not isinstance(diff_text, str):
+        raise ValueError("reviewed-diff-unavailable")
+    expected = diff_text.encode("utf-8")
+    needs_write = True
+    if os.path.isfile(diff_path):
+        try:
+            with open(diff_path, "rb") as fh:
+                on_disk = fh.read()
+            needs_write = on_disk != expected
+        except OSError:
+            needs_write = True
+    if needs_write:
+        round_commit.atomic_write_bytes(diff_path, expected)
     return diff_path
 
 
@@ -4123,7 +4130,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # Order-input ownership at emission (see also round-driver.md §Emitted orders):
         #   driver commits in orders-emit: clusters/<i>.json, audit-targets/<skey>.json,
         #   scoped-hunks.json, verified.json
-        #   driver writes outside orders-emit commit: diff.txt (via _ensure_round_diff when absent)
+        #   driver writes outside orders-emit commit: diff.txt (via _ensure_round_diff when absent
+        #   or untrusted — atomic tmp+rename, content-checked against state)
         #   orchestrator must supply before dispatch: diff.txt (real git diff), head.diff,
         #   fix-batch.json (skills/review-code/reference/setup.md session-artifact table).
         # STUB(#723): order-input existence class not closed — placeholder set and sidecar set

@@ -2020,3 +2020,69 @@ def test_death_between_sidecar_begin_and_sidecar_complete(tmp_path, adapters):
     assert out["ok"] is True
     assert os.path.exists(sidecar_path)
     assert len(_outcomes(d, "sidecar-repaired")) == completes + 1
+
+
+# --- FB-12: _ensure_round_diff atomic write + content guard -------------------------------
+
+
+def _fb12_round_dir(session_dir, rnd=1):
+    rdir = RR.round_dir(session_dir, rnd)
+    os.makedirs(rdir, exist_ok=True)
+    return rdir
+
+
+def test_ensure_round_diff_writes_when_absent(tmp_path):
+    d = str(tmp_path / "fb12-absent")
+    state = {"reviewedDiff": DIFF}
+    path = RD._ensure_round_diff(d, 1, state)
+    assert path == os.path.join(_fb12_round_dir(d), "diff.txt")
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == DIFF
+
+
+def test_ensure_round_diff_returns_existing_when_correct(tmp_path):
+    d = str(tmp_path / "fb12-correct")
+    rdir = _fb12_round_dir(d)
+    diff_path = os.path.join(rdir, "diff.txt")
+    with open(diff_path, "w", encoding="utf-8") as fh:
+        fh.write(DIFF)
+    mtime_before = os.path.getmtime(diff_path)
+    path = RD._ensure_round_diff(d, 1, {"reviewedDiff": DIFF})
+    assert path == diff_path
+    assert os.path.getmtime(diff_path) == mtime_before
+
+
+def test_ensure_round_diff_repairs_zero_byte(tmp_path):
+    d = str(tmp_path / "fb12-zero")
+    diff_path = os.path.join(_fb12_round_dir(d), "diff.txt")
+    with open(diff_path, "wb"):
+        pass
+    path = RD._ensure_round_diff(d, 1, {"reviewedDiff": DIFF})
+    assert path == diff_path
+    with open(diff_path, encoding="utf-8") as fh:
+        assert fh.read() == DIFF
+
+
+def test_ensure_round_diff_repairs_mismatch(tmp_path):
+    d = str(tmp_path / "fb12-mismatch")
+    diff_path = os.path.join(_fb12_round_dir(d), "diff.txt")
+    with open(diff_path, "w", encoding="utf-8") as fh:
+        fh.write("stale diff\n")
+    path = RD._ensure_round_diff(d, 1, {"reviewedDiff": DIFF})
+    assert path == diff_path
+    with open(diff_path, encoding="utf-8") as fh:
+        assert fh.read() == DIFF
+
+
+@pytest.mark.parametrize("reviewed_diff", [pytest.param(None, id="none"),
+                                           pytest.param({"x": 1}, id="dict")])
+def test_ensure_round_diff_refuses_non_string_reviewed_diff(tmp_path, reviewed_diff):
+    d = str(tmp_path / "fb12-non-string")
+    with pytest.raises(ValueError, match="reviewed-diff-unavailable"):
+        RD._ensure_round_diff(d, 1, {"reviewedDiff": reviewed_diff})
+
+
+def test_ensure_round_diff_refuses_missing_reviewed_diff(tmp_path):
+    d = str(tmp_path / "fb12-missing")
+    with pytest.raises(ValueError, match="reviewed-diff-unavailable"):
+        RD._ensure_round_diff(d, 1, {})
