@@ -1,6 +1,6 @@
 # C7 — feat(superheroes): spec closure — the closure receipt and the owner's delivery decision
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec closure (FR-37, FR-38) + UFR-5, UFR-8, UFR-10 (second acceptance bullet — abandoned child) — owner-approved 2026-08-07, as-of amendment #3.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec closure (FR-37, FR-38) + UFR-5, UFR-8, UFR-10 (second acceptance bullet — abandoned child) — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** Closure is never a separate process: the final child PR's vet assembles and
 carries the closure receipt (R8's elements; the present-tense test; the advisor sequences

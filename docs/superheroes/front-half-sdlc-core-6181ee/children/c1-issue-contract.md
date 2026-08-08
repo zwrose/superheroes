@@ -1,6 +1,6 @@
 # C1 — feat(superheroes): the issue contract — three-slot skeleton, anchor block, DoD bar (seam child)
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §The issue contract (FR-7, FR-8, FR-9, FR-10) + FR-1's acceptance rule — owner-approved 2026-08-07, as-of amendment #3.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §The issue contract (FR-7, FR-8, FR-9, FR-10) + FR-1's acceptance rule — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** Ship the issue contract every later child builds on: the three-slot skeleton in the
 plugin's issue templates and charter text (showrunner duty 2/3 filing rules), the

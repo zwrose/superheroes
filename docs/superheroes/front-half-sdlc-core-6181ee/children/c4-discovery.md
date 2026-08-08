@@ -1,6 +1,6 @@
 # C4 — feat(superheroes): discovery — consent-gated investigation, adaptive elicitation, three exits, the weight call
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Discovery (FR-11..FR-17) + UFR-10 (first acceptance bullet — abandoned discovery) — owner-approved 2026-08-07, as-of amendment #3.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Discovery (FR-11..FR-17) + UFR-10 (first acceptance bullet — abandoned discovery) — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** Discovery becomes the one front door for requirements: no separate spike surface
 (FR-11, including the recorded-ruling bypass — rulings already made need no discovery);

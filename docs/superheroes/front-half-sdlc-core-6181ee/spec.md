@@ -83,6 +83,10 @@ contains yet?*
     (FR-11) — to build-ready; given a tiny owner-present item, to micro.
   - *Acceptance (rule):* micro work that turns out to need probing re-routes — anything
     worth probing belongs to discovery.
+  - *Acceptance (rule — overlap resolution):* the four cases are tests the advisor
+    applies; where more than one matches, the route is the advisor's judgment call,
+    recorded with the route and anchor at routing time (FR-6's record); "exactly one
+    route" means exactly one is chosen, never that the cases partition.
 
 **FR-6.** The advisor shall not assign a discovery size, lane, or review weight at routing;
 micro is the only route knowable as small up front.
@@ -646,6 +650,13 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
 
 ## Amendments
 
+- **2026-08-08 (owner-stamped, substantive):** FR-5 overlap resolution — the route cases
+  are tests, overlaps resolve by recorded advisor judgment, and "exactly one route" means
+  one is chosen, not that the cases partition. Cause: the package read (rounds 1–2) showed
+  a register-authored precedence was product opinion; the owner walked the overlap cases
+  and stamped the judgment rule in-channel. The detective pre-ship transition needs no new
+  text — it lives in the detective spec's Assumptions (rulings live where made, FR-25).
+  Sections touched: Routing at intake (FR-5), Amendments.
 - **2026-08-08 (owner-stamped, substantive):** FR-36 shared seams — a single-issue spec
   sharing a seam with an epic records the seam in the epic's register, quoted verbatim in
   the single child's issue body, which stands in for the missing register on that side.

@@ -73,11 +73,18 @@ substantive amendments' FR-33 re-entry; ceiling: this is round 2 of the original
   (C11r2). Post-fold mechanical checks: quotes byte-exact 9/9; coverage clean (two
   remaining declared splits: FR-1, FR-11, plus UFR-10's spec-defined split).
 
-## Round 3 (HELD — awaiting the owner's FR-5 precedence ruling)
+## Round 3 (invoked 2026-08-08 ~16:1x; cause: FR-5 amendment #4 — owner walked the overlap
+cases in-channel and stamped the judgment rule — plus the round-2 fixes as new authorship)
 
-Cause at invocation: the owner ruling + round-2 fixes (new authorship). Scope: the
-round-2-revised parts + R6/C3 once ruled. Ceiling: round 3 of the original 3 — if it
-returns more than mechanical items, the package parks under UFR-7.
+The routing question resolved SMALLER than round 2 framed it: the owner's case-walk showed
+overlap resolution is advisor judgment (recorded), the register decides no precedence, and
+the pre-ship detective transition already lives in the detective spec's Assumptions — no
+new rule. Folded: FR-5 amendment #4 (both copies); R6 de-escalated to judgment inputs
+(OPEN cleared — C3 fileable); R9 transition pointer → the detective spec; anchors bumped
+to `as-of amendment #4` (fresh citation post-amendment); quotes re-injected byte-exact;
+coverage clean. Scope given to seats: verify the round-2 fixes + the amendment fold;
+convergence = mechanical-only findings. Ceiling: round 3 of the original 3 — more than
+mechanical parks the package under UFR-7.
 
 ## Verification pass
 

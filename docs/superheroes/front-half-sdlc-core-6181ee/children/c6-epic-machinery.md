@@ -1,6 +1,6 @@
 # C6 — feat(superheroes): decomposition + the epic contract — coverage map, register, package read, verbatim injection
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract (FR-26..FR-36) + UFR-3, UFR-4, UFR-6, UFR-7 — owner-approved 2026-08-07, as-of amendment #3.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract (FR-26..FR-36) + UFR-3, UFR-4, UFR-6, UFR-7 — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** The advisor's decomposition machinery as charter + tooling: the spec-handoff vet
 and fixed sequence with dated approval (FR-26); the acceptance-level coverage map (FR-27,

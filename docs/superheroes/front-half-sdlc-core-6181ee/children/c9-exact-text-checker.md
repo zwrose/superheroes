@@ -1,6 +1,6 @@
 # C9 — feat(superheroes): the exact-text checker — one script, three invocation points (seam child 2)
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract, FR-31's machine-check rule — owner-approved 2026-08-07, as-of amendment #3.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec handoff, decomposition, and the epic contract, FR-31's machine-check rule — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** The standalone machine check R3 defines, extracted to its own small child (round-1
 package-read finding B2: the checker was double-owned by C2 and C6). This child ships the

@@ -1,6 +1,6 @@
 # C5 — feat(superheroes): spec content rules + the amendment machinery
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec content (FR-18..FR-25) — owner-approved 2026-08-07, as-of amendment #3.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Spec content (FR-18..FR-25) — owner-approved 2026-08-07, as-of amendment #4.
 
 **What:** What a spec may contain and how it changes: the merged Dispositions table with the
 six seed dimensions grown by the learning loop (FR-18, FR-21); the elicitation test as the
