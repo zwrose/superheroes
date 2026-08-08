@@ -3755,24 +3755,28 @@ def _normalize_focus_notes(value):
     return str(value)
 
 
-def _calibration_path_placeholder(path, label):
+def _calibration_path_placeholder(path, label, root_refusal=None):
+    if root_refusal:
+        return "(%s calibration refused — %s)" % (label, root_refusal)
     if isinstance(path, str) and path and os.path.isfile(path):
         return path
     return "(%s calibration not resolved for this project)" % label
 
 
 def _resolved_calibration_paths(repo_root):
-    """(core_path_or_None, layer_path_or_None) from calibration_resolve — storage-mode aware."""
+    """(core_path_or_None, layer_path_or_None, root_refusal_or_None) from calibration_resolve."""
     cwd = repo_root if isinstance(repo_root, str) and repo_root else os.getcwd()
     try:
         info = calibration_resolve.resolve(cwd)
-    except calibration_resolve.UnresolvableRootError:
-        return None, None
+    except calibration_resolve.UnresolvableRootError as exc:
+        refusal = core_md.gate_refusal_line(
+            core_md.gate_refusal(exc.reason, str(exc.root)))
+        return None, None, refusal
     core = info.get("dispatch_core")
     layer = info.get("dispatch_layer")
     core_path = core if isinstance(core, str) and os.path.isfile(core) else None
     layer_path = layer if isinstance(layer, str) and os.path.isfile(layer) else None
-    return core_path, layer_path
+    return core_path, layer_path, None
 
 
 def _seat_is_engine(row):
@@ -3875,9 +3879,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     rdir = round_records.round_dir(session_dir, rnd)
     diff_path = _ensure_round_diff(session_dir, rnd, state)
     rubric_path = _shipped_rubric_path()
-    core_resolved, layer_resolved = _resolved_calibration_paths(repo_root)
-    core_path = _calibration_path_placeholder(core_resolved, "Core")
-    layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer")
+    core_resolved, layer_resolved, root_refusal = _resolved_calibration_paths(repo_root)
+    core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
+    layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
+                                              root_refusal)
     payload = pending_payload if isinstance(pending_payload, dict) else {}
     ph = {}
 
@@ -3977,7 +3982,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
     if not isinstance(residuals, str):
         residuals = ""
-    core_resolved, layer_resolved = _resolved_calibration_paths(repo_root)
+    core_resolved, layer_resolved, _root_refusal = _resolved_calibration_paths(repo_root)
     return {
         "session_dir": session_dir,
         "round": rnd,

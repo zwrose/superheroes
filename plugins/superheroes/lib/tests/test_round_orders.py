@@ -552,3 +552,75 @@ def test_seat_transport_unknown_vendor_is_not_engine():
     import round_driver as RD
 
     assert not RD._seat_is_engine({"vendor": "gemini", "model": "m", "engine": None})
+
+
+# --- FB-7: unresolvable calibration root vs resolved-empty order text ----------------
+
+
+def _fb7_panel_order_placeholders(repo_root, monkeypatch, resolve_impl):
+    import calibration_resolve as cr
+    import round_driver as RD
+    import round_phases as RP
+
+    monkeypatch.setattr(cr, "resolve", resolve_impl)
+    session_dir = os.path.join(repo_root, ".session")
+    os.makedirs(session_dir, exist_ok=True)
+    state = {"config": {"repoRoot": repo_root}, "reviewedDiff": ""}
+    paths = {
+        "storage_key": "code-reviewer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env-landing.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    return RD._order_placeholders(
+        RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
+        session_dir, 1, paths,
+    )
+
+
+def test_order_calibration_unresolvable_root_differs_from_resolved_empty(tmp_path, monkeypatch):
+    import calibration_resolve as cr
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+
+    def resolve_empty(_cwd, **kwargs):
+        return {"dispatch_core": None, "dispatch_layer": None}
+
+    empty_ph = _fb7_panel_order_placeholders(repo, monkeypatch, resolve_empty)
+    assert empty_ph["CORE_PATH"] == _CORE_UNRESOLVED
+    assert empty_ph["LAYER_PATH"] == _LAYER_UNRESOLVED
+
+    def resolve_unresolvable(_cwd, **kwargs):
+        raise cr.UnresolvableRootError(
+            str(tmp_path / "bad-store"), repo, "review-crew", "global", "/layer.md")
+
+    unres_ph = _fb7_panel_order_placeholders(repo, monkeypatch, resolve_unresolvable)
+    assert cr.REASON_UNRESOLVABLE_ROOT in unres_ph["CORE_PATH"]
+    assert cr.REASON_UNRESOLVABLE_ROOT in unres_ph["LAYER_PATH"]
+    assert "calibration refused" in unres_ph["CORE_PATH"]
+    assert "not resolved for this project" not in unres_ph["CORE_PATH"]
+    assert unres_ph["CORE_PATH"] != empty_ph["CORE_PATH"]
+    assert unres_ph["LAYER_PATH"] != empty_ph["LAYER_PATH"]
+
+
+def test_order_calibration_unresolvable_root_renders_distinct_panel_text(tmp_path, monkeypatch):
+    import calibration_resolve as cr
+    import round_driver as RD
+    import round_phases as RP
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+
+    def resolve_unresolvable(_cwd, **kwargs):
+        raise cr.UnresolvableRootError(
+            str(tmp_path / "bad-store"), repo, "review-crew", "global", "/layer.md")
+
+    ph = _fb7_panel_order_placeholders(repo, monkeypatch, resolve_unresolvable)
+    text, reason = RO.render_order(
+        RP.P_PANEL, "code-reviewer", _base_context(placeholders=ph))
+    assert reason is None
+    assert cr.REASON_UNRESOLVABLE_ROOT in text
+    assert _CORE_UNRESOLVED not in text

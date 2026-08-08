@@ -48,6 +48,9 @@ ADJUDICATED = {
     "review_store.py::resolve::resolve": (
         "propagate (no handler — UnresolvableRootError surfaces to caller)"
     ),
+    "round_driver.py::_resolved_calibration_paths::resolve": (
+        "convert to explicit gate_refusal placeholder (never 'not resolved for this project')"
+    ),
 }
 
 _CALIBRATION_MODULE = "calibration_resolve"
