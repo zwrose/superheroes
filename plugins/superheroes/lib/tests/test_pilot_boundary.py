@@ -354,10 +354,10 @@ def test_check_target_refuses_protected_bound_origin_first():
 
 
 def test_check_redirect_refuses_protected_permitted_redirect_first():
-    redirect = "http://app.example.com:443"
+    redirect = "http://127.0.0.1:8080"
     binding = _binding(
         origin="http://127.0.0.1:5173",
-        permitted_redirects=[],
+        permitted_redirects=[redirect],
         protected_targets=[redirect],
     )
     result = pb.check_redirect(binding, redirect)

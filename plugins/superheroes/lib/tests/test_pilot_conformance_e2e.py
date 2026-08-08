@@ -1,6 +1,7 @@
 """End-to-end conformance run — whole-run green receipt across all eight exercises (C10)."""
 import datetime
 import os
+import stat
 import sys
 
 import pytest
@@ -140,12 +141,18 @@ def _build_conformance_inputs(tmp_root, now):
     policy["protectedTargets"] = protected
     cleanup["policy"] = policy
 
-    probe_script = (
-        "import json, sys; _acct='%s'; sys.stdout.write(json.dumps(dict(ownsNothing=True)))"
-        % pilot_policy.ACCOUNT_PLACEHOLDER
-    )
+    probe_script = os.path.join(tmp_root, "bin", "ownership_probe.py")
+    os.makedirs(os.path.dirname(probe_script), exist_ok=True)
+    with open(probe_script, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "_acct = sys.argv[1]\n"
+            "sys.stdout.write(json.dumps(dict(ownsNothing=True, account=_acct)))\n"
+        )
+    os.chmod(probe_script, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
     policy["ownershipProbe"] = {
-        "command": [sys.executable, "-c", probe_script],
+        "command": [probe_script, pilot_policy.ACCOUNT_PLACEHOLDER],
         "connectionEnvVar": "PILOT_DATASTORE_URL",
     }
     cleanup["policy"] = policy
@@ -175,6 +182,7 @@ def _build_conformance_inputs(tmp_root, now):
             "policy": policy,
             "pilot_block": pilot_block,
             "run_cwd": run_cwd,
+            "reach_roots": cleanup["reach_roots"],
             "connection_detail": policy["datastore"]["connectionDetail"],
         },
         "reclaim": {"slots_dir": slots_dir},

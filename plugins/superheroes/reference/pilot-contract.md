@@ -532,8 +532,12 @@ Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy
 `ownership_probe_request(policy, account)` is a pure resolution function: it substitutes
 `{account}` in `ownershipProbe.command[1:]` (never in `argv[0]`), returns the resolved argv and
 `connectionEnvVar` name, and refuses `policy-document-invalid` when the policy declares no
-`ownershipProbe`. The conformance `ownership-probe` exercise executes the resolved command; the
-resolver never runs it.
+`ownershipProbe`. The account must match the policy account-name grammar
+(`^[A-Za-z_][A-Za-z0-9_-]*$`) and appear among a slot's `expectedIdentities` keys; otherwise the
+resolver refuses `policy-ownership-probe-account-invalid` or
+`policy-ownership-probe-account-undeclared`. The conformance `ownership-probe` exercise executes
+the resolved command under the same observer confinement checks as `datastore.observer`, with
+`run_cwd` allocated outside every reach root; the resolver never runs it.
 
 §14 treats whether the pilot account is gaining real data, rights, or billing as prose, only partly
 checkable. When declared, the ownership probe exercises the mechanical half at launch: every
@@ -555,6 +559,8 @@ framework detects. This one relies on the owner noticing.
 | `policy-document-mode-insecure` | Document mode grants group- or world-write |
 | `policy-document-unreadable` | Document or an ancestor cannot be opened or read |
 | `policy-document-invalid` | JSON parse failure, wrong top-level shape, declaration mismatch, or any structural validation failure in `validate_policy` |
+| `policy-ownership-probe-account-invalid` | `ownership_probe_request`: account missing, empty, or fails account-name grammar |
+| `policy-ownership-probe-account-undeclared` | `ownership_probe_request`: account is not declared in any slot's `expectedIdentities` |
 | `policy-schema-version-unsupported` | `schemaVersion` is not integer `1` |
 
 ## Results travel, never policy
@@ -3140,9 +3146,11 @@ Expected outcome: **pass** when all four expectations hold.
 the project's resolved policy and fires pure boundary predicates against the project's own first
 slot (sorted by slot name): the declared origin and redirects must bind; off-allowlist targets and
 redirects, protected targets, non-local-development origins, and protected identity tokens must
-refuse with the exact boundary tokens. When the project's declared origin is not local development,
-the exercise **fails** with the binding refusal token rather than skipping. Expected outcome:
-**pass** when every leg holds.
+refuse with the exact boundary tokens. `protectedTargets` is a two-class list (URL-shaped origins
+and opaque identity tokens); when only one class is present the missing class's leg is skipped and
+recorded in the evidence string rather than failing the exercise. When the project's declared origin
+is not local development, the exercise **fails** with the binding refusal token rather than skipping.
+Expected outcome: **pass** when every applicable leg holds.
 
 **`cleanup-end-to-end`** — drives the cleanup receipt, registry record, receipt binding,
 containment resolution, and resurrection planner on synthetic inputs. The resurrection plan is
@@ -3164,13 +3172,15 @@ evidence string. Expected outcome: **pass** when every applicable leg holds.
 
 **`ownership-probe`** — effect-bearing §14 account-owns-nothing tripwire when the policy declares
 `ownershipProbe`. Resolves and runs the probe for **every** account in the pilot block's
-`credentialSet` under `pilot_bounded_run`. Exit 0 with stdout JSON `{"ownsNothing": true}` passes
-for that account; exit 0 with any other body fails with `ownership-probe-answer-invalid` (a process
-that merely started is not evidence the account owns nothing); non-zero exit fails with
-`ownership-probe-refused`; undeclared probe skips with `ownership-probe-undeclared`. A passing
-probe proves a narrow point-in-time subclaim only — an account quietly accumulating data over time
-is not something the framework detects. This one relies on the owner noticing. Expected outcome:
-**pass** when every declared account answers `ownsNothing: true` on a pass.
+`credentialSet` under `pilot_bounded_run`, with observer confinement on the declared command and a
+`run_cwd` outside reach roots. Exit 0 with stdout JSON `{"ownsNothing": true, "account": "<name>"}`
+matching the probed account passes for that account; exit 0 with any other body fails with
+`ownership-probe-answer-invalid` (a process that merely started is not evidence the account owns
+nothing); non-zero exit fails with `ownership-probe-refused`; undeclared probe skips with
+`ownership-probe-undeclared`. A passing probe proves a narrow point-in-time subclaim only — an
+account quietly accumulating data over time is not something the framework detects. This one relies
+on the owner noticing. Expected outcome: **pass** when every declared account answers
+`ownsNothing: true` on a pass.
 
 **`reclaim-sweep`** — seeds a past-grace quarantine entry and exercises `pilot_reclaim.sweep`,
 requiring warnings on the seeded entry. Expected outcome: **pass** when sweep warns and retains

@@ -1112,6 +1112,14 @@ def test_validate_policy_account_classes_refuses_malformed(account_classes):
     assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
 
 
+def test_validate_policy_account_classes_refuses_trailing_newline_class_token():
+    doc = _sample_policy()
+    doc["slots"]["slot-a"]["accountClasses"] = {"owner": "dev\n"}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
 # --- ownershipProbe -----------------------------------------------------------
 
 def _valid_ownership_probe():
