@@ -3898,7 +3898,10 @@ def _orders_anchor(state, session_dir, rnd, phase, attempt):
 
 
 def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
-    """Rebuild the dispatch anchor from the journalled emission hash when state lost the mirror."""
+    """Rebuild the dispatch anchor from the journalled emission hash when state lost the mirror.
+
+    The rebuild re-verifies the manifest file against the journalled ``manifestSha256`` before
+    trusting any per-seat order hashes read from disk."""
     for event in reversed(read_journal(session_dir)):
         if event.get("outcome") != "orders-emitted":
             continue
@@ -3909,18 +3912,22 @@ def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
             return None
         path = _orders_manifest_path(session_dir, rnd, phase, attempt)
         manifest, err = round_records.read_json(path)
+        if err is not None or not isinstance(manifest, dict):
+            return None
+        computed_sha = round_records.sha256_text(round_records.canonical(manifest))
+        if computed_sha != manifest_sha:
+            return None
         orders = {}
-        if err is None and isinstance(manifest, dict):
-            seats = manifest.get("seats")
-            if isinstance(seats, dict):
-                for skey, entry in seats.items():
-                    if not isinstance(entry, dict):
-                        continue
-                    order_sha = entry.get("orderSha256")
-                    if isinstance(order_sha, str) and order_sha:
-                        orders[skey] = order_sha
+        seats = manifest.get("seats")
+        if isinstance(seats, dict):
+            for skey, entry in seats.items():
+                if not isinstance(entry, dict):
+                    continue
+                order_sha = entry.get("orderSha256")
+                if isinstance(order_sha, str) and order_sha:
+                    orders[skey] = order_sha
         if not orders:
-            raw = manifest.get("seats") if (err is None and isinstance(manifest, dict)) else {}
+            raw = manifest.get("seats")
             if isinstance(raw, dict):
                 orders = {seat: round_records.NOT_EMITTED for seat in raw}
         return {"manifestSha256": manifest_sha, "orders": orders, "path": path}

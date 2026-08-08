@@ -1025,6 +1025,49 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     assert RD.cmd_record_result(d, "src/f.py:3")["ok"] is True
 
 
+def _drop_orders_anchor_mirror(session_dir):
+    state = _state(session_dir)
+    state.pop("_ordersAnchors", None)
+    RD.save_state(session_dir, state)
+
+
+def test_tampered_manifest_rebuild_refuses_ingest(tmp_path, adapters):
+    """A/B — journal rebuild re-verifies manifest bytes; tampering refuses ingestion."""
+    seat = "src/f.py:3"
+
+    def _emit_verifiers_orders(name):
+        d = _session(tmp_path, name=name)
+        adapters.rosters[RD.P_VERIFIERS] = [seat]
+        _record_all_panel_seats(d)
+        assert _advance(d, tmp_path)["ok"] is True
+        return d
+
+    # A: untampered manifest — mirror dropped, rebuild succeeds, ingest accepts
+    ok_session = _emit_verifiers_orders("untampered")
+    _drop_orders_anchor_mirror(ok_session)
+    assert RD._orders_anchor(_state(ok_session), ok_session, 1, RD.P_VERIFIERS, 0) is not None
+    pend = _pending(ok_session)
+    _land(ok_session, seat, pend=pend)
+    assert RD.cmd_record_result(ok_session, seat)["ok"] is True
+
+    # B: one orderSha256 edited — rebuild fails closed, ingest refuses
+    bad_session = _emit_verifiers_orders("tampered")
+    manifest_path = RD._orders_manifest_path(bad_session, 1, RD.P_VERIFIERS, 0)
+    anchor_before = RD._orders_anchor(_state(bad_session), bad_session, 1, RD.P_VERIFIERS, 0)
+    manifest_sha = anchor_before["manifestSha256"]
+    order_sha = anchor_before["orders"][RR.storage_key(seat)]
+    _drop_orders_anchor_mirror(bad_session)
+    manifest, err = RR.read_json(manifest_path)
+    assert err is None
+    skey = RR.storage_key(seat)
+    manifest["seats"][skey]["orderSha256"] = "f" * 64
+    RR.atomic_write_json(manifest_path, manifest)
+    assert RD._orders_anchor(_state(bad_session), bad_session, 1, RD.P_VERIFIERS, 0) is None
+    pend = _pending(bad_session)
+    _land(bad_session, seat, pend=pend, manifestSha256=manifest_sha, orderSha256=order_sha)
+    assert RD.cmd_record_result(bad_session, seat)["reason"] == "manifest-anchor-unanchored"
+
+
 def test_advance_refuses_an_incomplete_roster_naming_every_missing_seat(tmp_path, adapters):
     """A/B — the SAME phase with every seat recorded folds (below); one seat short refuses and the
     refusal enumerates every absent seat BY NAME."""

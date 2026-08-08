@@ -473,7 +473,9 @@ def _anchor_check(envelope, seat_key, anchor, occurrence=0):
     want_order = orders.get(skey) if isinstance(orders, dict) else None
     if want_order is None and isinstance(orders, dict):
         # Legacy anchors keyed by bare seat key before per-slot hashing landed.
-        want_order = orders.get(seat_key)
+        bare = orders.get(seat_key)
+        if bare == NOT_EMITTED:
+            want_order = bare
     if env_manifest != anchor.get("manifestSha256"):
         return "manifest-anchor-mismatch"
     if env_order == NOT_EMITTED:

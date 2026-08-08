@@ -39,8 +39,8 @@ ROSTER = [SEAT, OTHER_SEAT]
 
 # --- helpers ----------------------------------------------------------------------------------
 
-def _session(tmp_path, **meta_extra):
-    sd = str(tmp_path / "session")
+def _session(tmp_path, name="session", **meta_extra):
+    sd = str(tmp_path / name)
     os.makedirs(sd, exist_ok=True)
     meta = {"sessionId": SESSION}
     meta.update(meta_extra)
@@ -1051,6 +1051,38 @@ def test_refusal_not_emitted_against_real_anchor(tmp_path):
     sd = _session(tmp_path)
     _land(sd, _env(orderSha256=RR.NOT_EMITTED, manifestSha256="m" * 64))
     anchor = {"manifestSha256": "m" * 64, "orders": {RR.storage_key(SEAT): "o" * 64}}
+    assert _ingest(sd, anchor=anchor)["reason"] == "manifest-anchor-mismatch"
+
+
+def test_bare_key_fallback_is_legacy_only(tmp_path):
+    """A/B — a real bare-key hash does not satisfy a slot with no per-slot entry."""
+    manifest_sha = "m" * 64
+    real_hash = "o" * 64
+    # A: per-slot entry present — ingest accepts
+    sd = _session(tmp_path, name="per-slot")
+    anchor_ok = {"manifestSha256": manifest_sha,
+                 "orders": {RR.storage_key(SEAT): real_hash}}
+    _land(sd, _env(manifestSha256=manifest_sha, orderSha256=real_hash))
+    assert _ingest(sd, anchor=anchor_ok)["ok"] is True
+    # B: only a bare-key real hash — no per-slot entry, fallback must not bind
+    sd2 = _session(tmp_path, name="bare-key")
+    anchor_bad = {"manifestSha256": manifest_sha, "orders": {SEAT: real_hash}}
+    _land(sd2, _env(manifestSha256=manifest_sha, orderSha256=real_hash))
+    assert _ingest(sd2, anchor=anchor_bad)["reason"] == "manifest-anchor-mismatch"
+
+
+def test_legacy_bare_key_not_emitted_accepted(tmp_path):
+    sd = _session(tmp_path)
+    anchor = {"manifestSha256": RR.NOT_EMITTED, "orders": {SEAT: RR.NOT_EMITTED}}
+    _land(sd, _env())
+    assert _ingest(sd, anchor=anchor)["ok"] is True
+
+
+def test_legacy_bare_key_not_emitted_refuses_real_envelope_hash(tmp_path):
+    sd = _session(tmp_path)
+    manifest_sha = "m" * 64
+    anchor = {"manifestSha256": manifest_sha, "orders": {SEAT: RR.NOT_EMITTED}}
+    _land(sd, _env(manifestSha256=manifest_sha, orderSha256="o" * 64))
     assert _ingest(sd, anchor=anchor)["reason"] == "manifest-anchor-mismatch"
 
 
