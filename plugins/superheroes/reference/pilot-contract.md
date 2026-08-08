@@ -433,16 +433,25 @@ as a relative path.
       "origin": "http://127.0.0.1:5173",
       "permittedRedirects": ["http://127.0.0.1:9000"],
       "expectedIdentities": {"owner": "pilot-owner@example.test"},
-      "mintableAccounts": ["pilot-owner"]
+      "mintableAccounts": ["pilot-owner"],
+      "accountClasses": {"owner": "dev", "guest": "dev"}
     }
+  },
+  "ownershipProbe": {
+    "command": ["/opt/pilot/ownership-probe", "--account", "{account}"],
+    "connectionEnvVar": "PILOT_DB_URL"
   }
 }
 ```
 
 Top-level keys are exactly `schemaVersion`, `declaration`, `protectedTargets`, `datastore`,
-and `slots`. Each slot requires `origin`, `permittedRedirects`, and `expectedIdentities`
-(non-empty dict mapping account names to identity strings). `mintableAccounts` is optional.
-`datastore.observer` may be `null` (app-reported path) or an object with `command` (non-empty
+`slots`, and `ownershipProbe`. Each slot requires `origin`, `permittedRedirects`, and
+`expectedIdentities` (non-empty dict mapping account names to identity strings).
+`mintableAccounts` and `accountClasses` are optional. When present, `accountClasses` is a
+non-empty dict mapping each account name (non-empty string) to a class token matching
+`^[a-z][a-z0-9-]{0,31}$`. `ownershipProbe` may be `null` or an object with exactly
+`command` and `connectionEnvVar`; `command` is validated like sentinel commands but requires
+`{account}` in `command[1:]` and permits only that placeholder. `datastore.observer` may be `null` (app-reported path) or an object with `command` (non-empty
 argv list) and `connectionEnvVar` (valid env-var name). `datastore.containment` is **optional**;
 when present its keys are exactly `permissions` and `sentinel`, and each may be `null`.
 `permissions` requires a real-boolean `cannotReachForeignNamespaces` and non-empty `evidence`.
@@ -612,6 +621,8 @@ verification, or with a stale verdict), not a hostile process in another address
 | `provision-account-unknown` | `authorized_seed_request`: account is not in the slot's `expectedIdentities` |
 | `provision-mint-unsupported` | `authorized_mint_request`: slot has no `mintableAccounts` or the list is empty |
 | `provision-launch-invalid` | `authorized_app_launch`: `launch` is not a mapping, or `baseUrl` / `readinessUrl` is absent, non-string, or empty |
+| `provision-account-class-undeclared` | `gate_account_classes` or `gate_provisioning`: slot has no `accountClasses`, or a credential-set account lacks a class entry |
+| `provision-account-class-span` | `gate_account_classes` or `gate_provisioning`: credential-set accounts map to more than one distinct class token within the slot |
 
 ## Seed and mint call shapes
 
@@ -2579,7 +2590,28 @@ share a UID by design (#660 §14). It prevents ordering mistakes, not a hostile 
 another address space.
 
 Public API in `lib/pilot_provision.py`: `declaration_for`, `require_declarations_exercised`,
-`gate_datastore_identity`, `gate_provisioning`.
+`gate_datastore_identity`, `gate_account_classes`, `gate_provisioning`.
+
+### The account-class gate
+
+§14 accepts an unsandboxed pilot session authority on conditions; the first is mechanical:
+**credentials spanning more than one account class** refuses at provisioning. Each slot may
+declare `accountClasses` — a map from account name to class token. At provisioning,
+`gate_account_classes` collects every account named in the block's `credentialSet` and requires
+each to have a class entry in that slot's `accountClasses`. The set of distinct class tokens
+across those accounts must have exactly one member; two or more refuses
+(`provision-account-class-span`). Scope is **per slot**, not project-wide: two slots may each be
+internally single-class without matching each other.
+
+Extra entries in `accountClasses` naming accounts **not** in the credential set are **ignored,
+not refused** — a policy may describe more accounts than a given block uses. There is no
+override: the gate cannot be bypassed by omitting the field from the schema — `accountClasses`
+is optional in the policy document but **required at the gate**, so an existing policy that never
+declared classes now refuses at provisioning (`provision-account-class-undeclared`). That adoption
+consequence is deliberate: a mechanical tripwire satisfied by omission is decorative.
+
+This is an **in-process chokepoint, not a sandbox** (same §14 UID-sharing model as the other
+provisioning gates).
 
 ### Provisioning gate refusal tokens
 
@@ -2593,6 +2625,8 @@ Public API in `lib/pilot_provision.py`: `declaration_for`, `require_declarations
 | `provision-weaker-acceptance-invalid` | `gate_datastore_identity`: `weaker_acceptance` is not a dict with exactly `acceptedBy`, `acceptedAt`, and `reason` as non-empty strings, with `acceptedAt` in ISO-8601 UTC `Z` form |
 | `provision-datastore-identity-strength-unknown` | `gate_datastore_identity`: strength is neither `strong` nor `weaker` |
 | `provision-mint-declaration-missing` | `declaration_for` for a mint kind: slot policy grants `mintableAccounts` but `pilot.mint` is absent from the block |
+| `provision-account-class-undeclared` | `gate_account_classes` or `gate_provisioning`: slot has no `accountClasses`, or a credential-set account lacks a class entry |
+| `provision-account-class-span` | `gate_account_classes` or `gate_provisioning`: credential-set accounts map to more than one distinct class token within the slot |
 
 ## Per-slot app lifecycle
 

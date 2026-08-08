@@ -46,7 +46,14 @@ _FIELD_NAME_SHAPED_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\Z")
 _KEY_CARVE_OUT_CLASS = "mintable-account"
 
 _TOP_LEVEL_KEYS = frozenset(
-    {"schemaVersion", "declaration", "protectedTargets", "datastore", "slots"}
+    {
+        "schemaVersion",
+        "declaration",
+        "protectedTargets",
+        "datastore",
+        "slots",
+        "ownershipProbe",
+    }
 )
 _DATASTORE_REQUIRED_KEYS = frozenset(
     {"expectedIdentity", "connectionDetail", "observer"}
@@ -65,13 +72,22 @@ CONTAINMENT_SENTINEL_KEYS = frozenset(
 # `test_pilot_placeholder_census` is the census that keeps it that way (#866).
 NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
 SENTINEL_PLACEHOLDER = "{sentinel}"
+ACCOUNT_PLACEHOLDER = "{account}"
+ACCOUNT_CLASS_TOKEN_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _PLACEHOLDER_RE = pilot_contract.PLACEHOLDER_RE
 _ALLOWED_PLACEHOLDERS = frozenset(
     {NAMESPACE_PLACEHOLDER, SENTINEL_PLACEHOLDER}
 )
+_OWNERSHIP_PROBE_KEYS = frozenset({"command", "connectionEnvVar"})
 OBSERVER_KEYS = frozenset({"command", "connectionEnvVar"})
 _SLOT_KEYS = frozenset(
-    {"origin", "permittedRedirects", "expectedIdentities", "mintableAccounts"}
+    {
+        "origin",
+        "permittedRedirects",
+        "expectedIdentities",
+        "mintableAccounts",
+        "accountClasses",
+    }
 )
 _SLOT_REQUIRED_KEYS = frozenset(
     {"origin", "permittedRedirects", "expectedIdentities"}
@@ -218,6 +234,18 @@ def validate_policy(doc):
         except pilot_slot.PilotSlotError:
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
         _validate_slot(slot)
+
+    ownership_probe = doc["ownershipProbe"]
+    if ownership_probe is not None:
+        if (
+            not isinstance(ownership_probe, dict)
+            or set(ownership_probe.keys()) != _OWNERSHIP_PROBE_KEYS
+        ):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        _validate_ownership_probe_command(ownership_probe["command"])
+        env_var = ownership_probe["connectionEnvVar"]
+        if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
     return doc
 
@@ -564,7 +592,9 @@ def _validate_containment(containment):
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
 
-def _validate_sentinel_command(command):
+def _validate_placeholder_command(
+    command, *, required_placeholders, allowed_placeholders
+):
     if not isinstance(command, list) or not command:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     for item in command:
@@ -573,20 +603,35 @@ def _validate_sentinel_command(command):
     executable = command[0]
     if not os.path.isabs(executable):
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
-    if (
-        NAMESPACE_PLACEHOLDER in executable
-        or SENTINEL_PLACEHOLDER in executable
-    ):
+    if _PLACEHOLDER_RE.findall(executable):
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     args = command[1:]
-    has_namespace = any(NAMESPACE_PLACEHOLDER in part for part in args)
-    has_sentinel = any(SENTINEL_PLACEHOLDER in part for part in args)
-    if not has_namespace or not has_sentinel:
-        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    for placeholder in required_placeholders:
+        if not any(placeholder in part for part in args):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     for part in command:
         for match in _PLACEHOLDER_RE.findall(part):
-            if match not in _ALLOWED_PLACEHOLDERS:
+            if match not in allowed_placeholders:
                 raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+
+def _validate_sentinel_command(command):
+    _validate_placeholder_command(
+        command,
+        required_placeholders=(
+            NAMESPACE_PLACEHOLDER,
+            SENTINEL_PLACEHOLDER,
+        ),
+        allowed_placeholders=_ALLOWED_PLACEHOLDERS,
+    )
+
+
+def _validate_ownership_probe_command(command):
+    _validate_placeholder_command(
+        command,
+        required_placeholders=(ACCOUNT_PLACEHOLDER,),
+        allowed_placeholders=frozenset({ACCOUNT_PLACEHOLDER}),
+    )
 
 
 def _validate_observer(observer):
@@ -644,6 +689,19 @@ def _validate_slot(slot):
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
         for account in mintable:
             if not isinstance(account, str) or not account:
+                raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+    if "accountClasses" in slot:
+        account_classes = slot["accountClasses"]
+        if not isinstance(account_classes, dict) or not account_classes:
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        for account, class_token in account_classes.items():
+            if not isinstance(account, str) or not account:
+                raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+            if (
+                not isinstance(class_token, str)
+                or not ACCOUNT_CLASS_TOKEN_RE.match(class_token)
+            ):
                 raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
 
