@@ -28,12 +28,14 @@ def _load(name: str, filename: str):
 ED = _load("engine_dispatch", "engine_dispatch.py")
 DG = _load("dispatch_guard", "dispatch_guard.py")
 SM = _load("seat_map", "seat_map.py")
+RD = _load("round_driver", "round_driver.py")
 MR = _load("model_registry", "model_registry.py")
 
 _CENSUS_MODULES = (
     ("engine_dispatch", ED.build_parser()),
     ("dispatch_guard", DG.build_parser()),
     ("seat_map", SM.build_parser()),
+    ("round_driver", RD.build_parser()),
 )
 
 
