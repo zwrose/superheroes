@@ -29,8 +29,10 @@ def _sample_policy(**overrides):
                 "permittedRedirects": ["http://127.0.0.1:5173"],
                 "expectedIdentities": {"owner": "pilot-owner@example.test"},
                 "mintableAccounts": ["pilot-owner"],
+                "accountClasses": {"owner": "dev"},
             }
         },
+        "ownershipProbe": None,
     }
     doc.update(overrides)
     return doc
@@ -1082,3 +1084,110 @@ def test_policy_material_unchanged_by_containment():
     without = pp.policy_material(_sample_policy())
     with_containment = pp.policy_material(_policy_with_containment_datastore())
     assert with_containment == without
+
+
+# --- accountClasses -----------------------------------------------------------
+
+def test_validate_policy_account_classes_happy_path():
+    pp.validate_policy(_sample_policy())
+
+
+@pytest.mark.parametrize(
+    "account_classes",
+    [
+        {},
+        [],
+        "not-a-dict",
+        {"": "dev"},
+        {"owner": ""},
+        {"owner": "Dev"},
+        {"owner": "dev-extra-token-that-is-way-too-long"},
+    ],
+)
+def test_validate_policy_account_classes_refuses_malformed(account_classes):
+    doc = _sample_policy()
+    doc["slots"]["slot-a"]["accountClasses"] = account_classes
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_account_classes_refuses_trailing_newline_class_token():
+    doc = _sample_policy()
+    doc["slots"]["slot-a"]["accountClasses"] = {"owner": "dev\n"}
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+# --- ownershipProbe -----------------------------------------------------------
+
+def _valid_ownership_probe():
+    return {
+        "command": ["/opt/pilot/ownership-probe", "--account", pp.ACCOUNT_PLACEHOLDER],
+        "connectionEnvVar": "PILOT_DB_URL",
+    }
+
+
+def test_validate_policy_ownership_probe_null_validates():
+    doc = _sample_policy(ownershipProbe=None)
+    pp.validate_policy(doc)
+
+
+def test_validate_policy_ownership_probe_happy_path():
+    doc = _sample_policy(ownershipProbe=_valid_ownership_probe())
+    pp.validate_policy(doc)
+
+
+@pytest.mark.parametrize(
+    "ownership_probe",
+    [
+        {},
+        {"command": ["/opt/pilot/probe", pp.ACCOUNT_PLACEHOLDER]},
+        {"connectionEnvVar": "PILOT_DB_URL"},
+        {"command": ["/opt/pilot/probe", pp.ACCOUNT_PLACEHOLDER], "connectionEnvVar": "PILOT_DB_URL", "extra": True},
+        {
+            "command": ["/opt/pilot/probe"],
+            "connectionEnvVar": "PILOT_DB_URL",
+        },
+        {
+            "command": [pp.ACCOUNT_PLACEHOLDER, "probe"],
+            "connectionEnvVar": "PILOT_DB_URL",
+        },
+        {
+            "command": ["/opt/pilot/probe", "{unknown}"],
+            "connectionEnvVar": "PILOT_DB_URL",
+        },
+        {
+            "command": ["/opt/pilot/probe", pp.ACCOUNT_PLACEHOLDER],
+            "connectionEnvVar": "bad env",
+        },
+    ],
+)
+def test_validate_policy_ownership_probe_refuses_malformed(ownership_probe):
+    doc = _sample_policy(ownershipProbe=ownership_probe)
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_without_ownership_probe_validates():
+    doc = _sample_policy()
+    del doc["ownershipProbe"]
+    pp.validate_policy(doc)
+
+
+def test_validate_policy_unknown_top_level_key_refuses():
+    doc = _sample_policy()
+    doc["unknownKey"] = True
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID
+
+
+def test_validate_policy_missing_required_top_level_key_refuses():
+    doc = _sample_policy()
+    del doc["slots"]
+    with pytest.raises(pp.PilotPolicyError) as exc:
+        pp.validate_policy(doc)
+    assert exc.value.reason == pp.REFUSAL_DOCUMENT_INVALID

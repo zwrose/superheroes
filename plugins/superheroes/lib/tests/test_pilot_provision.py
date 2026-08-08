@@ -41,9 +41,17 @@ SAMPLE_POLICY = {
             "permittedRedirects": ["http://127.0.0.1:5173"],
             "expectedIdentities": {"owner": "pilot-owner@example.test"},
             "mintableAccounts": ["pilot-owner"],
+            "accountClasses": {"owner": "dev", "guest": "dev"},
         },
     },
+    "ownershipProbe": None,
 }
+
+
+def _slot_account_classes(policy, **account_classes):
+    policy = copy.deepcopy(policy)
+    policy["slots"]["slot-a"]["accountClasses"] = account_classes
+    return policy
 
 
 def _digest(policy):
@@ -1675,3 +1683,139 @@ def test_app_launch_edge_assert_results_only_refuses(monkeypatch):
     with pytest.raises(pilot_policy.PilotPolicyError) as exc:
         pp.authorized_app_launch(verdict, policy, "slot-a@1", _valid_launch())
     assert exc.value.reason == pilot_policy.REFUSAL_MATERIAL_IN_RESULT
+
+
+# --- gate_account_classes -----------------------------------------------------
+
+def test_gate_account_classes_single_class_passes():
+    policy = SAMPLE_POLICY
+    block = _valid_pilot_block()
+    pp.gate_account_classes(policy, "slot-a@1", block)
+
+
+def test_gate_account_classes_two_classes_refuses_span():
+    policy = _slot_account_classes(SAMPLE_POLICY, owner="dev", guest="prod")
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_SPAN
+
+
+def test_gate_account_classes_missing_map_refuses_undeclared():
+    policy = copy.deepcopy(SAMPLE_POLICY)
+    del policy["slots"]["slot-a"]["accountClasses"]
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_one_account_missing_class_refuses_undeclared():
+    policy = _slot_account_classes(SAMPLE_POLICY, owner="dev")
+    block = _valid_pilot_block()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_extra_unrelated_entries_ignored():
+    policy = _slot_account_classes(
+        SAMPLE_POLICY,
+        owner="dev",
+        guest="dev",
+        unused="prod",
+    )
+    block = _valid_pilot_block()
+    pp.gate_account_classes(policy, "slot-a@1", block)
+
+
+def test_gate_provisioning_refuses_account_class_span():
+    policy = _slot_account_classes(_captured_policy(), owner="dev", guest="prod")
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _verdict_with_identity(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_provisioning(verdict, policy, slot_ref, block, registry)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_SPAN
+
+
+def test_gate_provisioning_refuses_missing_account_classes():
+    policy = copy.deepcopy(_captured_policy())
+    del policy["slots"]["slot-a"]["accountClasses"]
+    block = _valid_pilot_block()
+    slot_ref = "slot-a@1"
+    registry = _full_registry(block, policy, slot_ref)
+    verdict = _verdict_with_identity(policy)
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_provisioning(verdict, policy, slot_ref, block, registry)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def _account_class_policy():
+    return {
+        "slots": {
+            "slot-a": {
+                "accountClasses": {"owner": "pilot"},
+            },
+        },
+    }
+
+
+def test_gate_account_classes_empty_credential_set_refuses():
+    policy = _account_class_policy()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", {"credentialSet": []})
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_missing_credential_set_refuses():
+    policy = _account_class_policy()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", {})
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_non_dict_block_refuses():
+    policy = _account_class_policy()
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", "not-a-dict")
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_non_dict_entry_refuses():
+    policy = _account_class_policy()
+    block = {"credentialSet": ["not-a-dict"]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_missing_account_refuses_not_key_error():
+    policy = _account_class_policy()
+    block = {"credentialSet": [{"role": "x"}]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_empty_account_refuses():
+    policy = _account_class_policy()
+    block = {"credentialSet": [{"account": ""}]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED
+
+
+def test_gate_account_classes_non_dict_account_classes_refuses():
+    policy = {
+        "slots": {
+            "slot-a": {
+                "accountClasses": ["not-a-dict"],
+            },
+        },
+    }
+    block = {"credentialSet": [{"account": "owner", "role": "x"}]}
+    with pytest.raises(pp.PilotProvisionError) as exc:
+        pp.gate_account_classes(policy, "slot-a@1", block)
+    assert exc.value.reason == pp.REFUSAL_ACCOUNT_CLASS_UNDECLARED

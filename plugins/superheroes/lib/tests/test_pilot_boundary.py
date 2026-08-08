@@ -110,6 +110,139 @@ def test_parse_origin_refuses_path_query_fragment(url):
     assert exc.value.reason == pb.REFUSAL_ORIGIN_INVALID
 
 
+# --- is_local_development_origin ----------------------------------------------
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://127.0.0.1:5173",
+        "http://127.0.0.53:8080",
+        "http://127.255.255.255:1",
+        "https://127.0.0.1:443",
+        "http://localhost:3000",
+        "http://LOCALHOST:3000",
+        "http://api.localhost:4000",
+        "http://deep.sub.localhost:9000",
+        "http://[::1]:443",
+        "https://[::1]:8443",
+    ],
+)
+def test_is_local_development_origin_accepts_closed_host_set(origin):
+    canonical = pb.parse_origin(origin)
+    assert pb.is_local_development_origin(canonical) is True
+
+
+def test_is_local_development_origin_ipv6_round_trip():
+    canonical = pb.parse_origin("http://[::1]:5173")
+    assert canonical == "http://[::1]:5173"
+    assert pb.is_local_development_origin(canonical) is True
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "https://production.example.com:443",
+        "http://10.0.0.1:80",
+        "http://172.16.0.1:80",
+        "http://192.168.1.1:80",
+        "http://0.0.0.0:80",
+        "http://[::]:80",
+        "http://notlocalhost:80",
+        "http://localhost.evil.example:80",
+        "http://127.1:80",
+        "http://127.0.0.256:80",
+        "http://0127.0.0.1:80",
+        "http://127.0.0.1.example.com:80",
+        "http://[::ffff:127.0.0.1]:80",
+    ],
+)
+def test_is_local_development_origin_rejects_non_local_hosts(origin):
+    canonical = pb.parse_origin(origin)
+    assert pb.is_local_development_origin(canonical) is False
+
+
+@pytest.mark.parametrize("value", [None, "", 123, "not-an-origin"])
+def test_is_local_development_origin_returns_false_without_raising(value):
+    assert pb.is_local_development_origin(value) is False
+
+
+def test_is_local_development_origin_rejects_arabic_indic_digit_octet():
+    origin = pb.parse_origin("http://127.0.0.١:5173")
+    assert pb.is_local_development_origin(origin) is False
+
+
+def test_is_local_development_origin_rejects_superscript_digit_without_raising():
+    origin = pb.parse_origin("http://127.0.0.²:5173")
+    assert pb.is_local_development_origin(origin) is False
+
+
+def test_is_local_development_origin_rejects_superscript_digit_in_redirect_host():
+    origin = pb.parse_origin("http://127.0.0.¹:8080")
+    assert pb.is_local_development_origin(origin) is False
+
+
+def test_is_local_development_origin_ascii_loopback_still_passes():
+    origin = pb.parse_origin("http://127.0.0.1:5173")
+    assert pb.is_local_development_origin(origin) is True
+
+
+# --- target_binding locality --------------------------------------------------
+
+def test_target_binding_refuses_non_local_origin():
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.target_binding(
+            "slot@1",
+            origin="https://production.example.com:443",
+            permitted_redirects=[],
+            protected_targets=["example_prod"],
+        )
+    assert exc.value.reason == pb.REFUSAL_TARGET_NOT_LOCAL
+
+
+def test_target_binding_refuses_non_local_permitted_redirect():
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.target_binding(
+            "slot@1",
+            origin="http://127.0.0.1:5173",
+            permitted_redirects=["https://login.example.com:443"],
+            protected_targets=["example_prod"],
+        )
+    assert exc.value.reason == pb.REFUSAL_TARGET_NOT_LOCAL
+
+
+def test_target_binding_malformed_origin_precedes_non_local():
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.target_binding(
+            "slot@1",
+            origin="https://production.example.com",
+            permitted_redirects=[],
+            protected_targets=["example_prod"],
+        )
+    assert exc.value.reason == pb.REFUSAL_ORIGIN_INVALID
+
+
+def test_target_binding_malformed_redirect_precedes_non_local():
+    with pytest.raises(pb.PilotBoundaryError) as exc:
+        pb.target_binding(
+            "slot@1",
+            origin="http://127.0.0.1:5173",
+            permitted_redirects=["https://login.example.com"],
+            protected_targets=["example_prod"],
+        )
+    assert exc.value.reason == pb.REFUSAL_REDIRECTS_INVALID
+
+
+def test_target_binding_allows_production_protected_target_with_loopback_origin():
+    binding = pb.target_binding(
+        "slot@1",
+        origin="http://127.0.0.1:5173",
+        permitted_redirects=[],
+        protected_targets=["https://app.example.com:443", "example_prod"],
+    )
+    assert binding["origin"] == "http://127.0.0.1:5173"
+    assert binding["protectedTargets"] == ["https://app.example.com:443", "example_prod"]
+
+
 # --- target_binding -----------------------------------------------------------
 
 def test_target_binding_canonicalizes_slot_ref_and_redirects():
@@ -146,7 +279,7 @@ def test_target_binding_refuses_portless_url_protected_target():
         pb.target_binding(
             "slot@1",
             origin="http://127.0.0.1:5173",
-            permitted_redirects=["https://login.example.com:443"],
+            permitted_redirects=[],
             protected_targets=["https://login.example.com"],
         )
     assert exc.value.reason == pb.REFUSAL_PROTECTED_TARGETS_INVALID
@@ -163,13 +296,13 @@ def test_target_binding_opaque_protected_target_still_works():
 
 
 def test_check_redirect_refuses_protected_target_with_explicit_port():
-    binding = pb.target_binding(
-        "slot@1",
+    redirect = "http://127.0.0.1:8443"
+    binding = _binding(
         origin="http://127.0.0.1:5173",
-        permitted_redirects=["https://login.example.com:443"],
-        protected_targets=["https://login.example.com:443"],
+        permitted_redirects=[redirect],
+        protected_targets=[redirect],
     )
-    result = pb.check_redirect(binding, "https://login.example.com:443")
+    result = pb.check_redirect(binding, redirect)
     assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
 
 
@@ -180,12 +313,13 @@ def test_parse_origin_lowercases_ipv6_host():
 
 
 def test_check_redirect_refuses_protected_ipv6_case_variant():
-    binding = pb.target_binding(
-        "slot@1",
-        origin="http://127.0.0.1:5173",
-        permitted_redirects=["https://[::FFFF:1]:443"],
-        protected_targets=["https://[::ffff:1]:443"],
-    )
+    redirect = "https://[::ffff:1]:443"
+    binding = {
+        "slotRef": "slot-a@1",
+        "origin": "http://127.0.0.1:5173",
+        "permittedRedirects": [redirect],
+        "protectedTargets": [redirect],
+    }
     result = pb.check_redirect(binding, "https://[::FFFF:1]:443")
     assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
 
@@ -221,7 +355,7 @@ def test_check_target_refuses_protected_bound_origin_first():
 
 
 def test_check_redirect_refuses_protected_permitted_redirect_first():
-    redirect = "http://app.example.com:443"
+    redirect = "http://127.0.0.1:8080"
     binding = _binding(
         origin="http://127.0.0.1:5173",
         permitted_redirects=[redirect],
@@ -653,7 +787,7 @@ def test_path_containment_not_string_prefix(private_tmp):
 # --- boundary_verdict ---------------------------------------------------------
 
 def test_boundary_verdict_carries_no_policy_values():
-    distinctive_origin = "http://distinctive-host.example:5999"
+    distinctive_origin = "http://127.0.0.99:5999"
     distinctive_identity = "distinctive_datastore_identity_token"
     binding = pb.target_binding(
         "slot@1",
@@ -691,7 +825,7 @@ def test_boundary_verdict_carries_no_policy_values():
     serialized = json.dumps(verdict)
     for leaked in (
         distinctive_origin,
-        "distinctive-host.example",
+        "127.0.0.99",
         distinctive_identity,
     ):
         assert leaked not in serialized
