@@ -638,6 +638,25 @@ def _validate_ownership_probe_command(command):
     )
 
 
+def ownership_probe_request(policy, account):
+    """Return the resolved argv and environment for the policy's ownership probe."""
+    validate_policy(policy)
+    ownership_probe = policy.get("ownershipProbe")
+    if ownership_probe is None:
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    if not isinstance(account, str) or not account:
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+    command = ownership_probe["command"]
+    resolved_argv = [command[0]]
+    for part in command[1:]:
+        resolved_argv.append(part.replace(ACCOUNT_PLACEHOLDER, account))
+    return {
+        "argv": resolved_argv,
+        "connectionEnvVar": ownership_probe["connectionEnvVar"],
+    }
+
+
 def _validate_observer(observer):
     # bite-axis: observer shape — when present, observer must be a dict with only command and
     # connectionEnvVar keys and each field must be a valid non-empty string or command list.

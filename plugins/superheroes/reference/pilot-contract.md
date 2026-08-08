@@ -526,7 +526,19 @@ non-empty argv of non-empty strings with an **absolute** `argv[0]` that carries 
 `declaration` field must match the identifier used to open it.
 
 Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy`,
-`policy_material`.
+`policy_material`, `ownership_probe_request`.
+
+`ownership_probe_request(policy, account)` is a pure resolution function: it substitutes
+`{account}` in `ownershipProbe.command[1:]` (never in `argv[0]`), returns the resolved argv and
+`connectionEnvVar` name, and refuses `policy-document-invalid` when the policy declares no
+`ownershipProbe`. The conformance `ownership-probe` exercise executes the resolved command; the
+resolver never runs it.
+
+§14 treats whether the pilot account is gaining real data, rights, or billing as prose, only partly
+checkable. When declared, the ownership probe exercises the mechanical half at launch: every
+credential-set account must answer `ownsNothing: true` at that instant. A passing probe does not
+close the §14 limit — an account quietly accumulating data over time is not something the
+framework detects. This one relies on the owner noticing.
 
 ### Policy document refusal tokens
 
@@ -3093,13 +3105,20 @@ and every exercise passed — so a surface with no exercise at all still shows u
 | `pilot_appctl.resolve_invocation` | `wave-headless` |
 | `pilot_artifacts.retain` | `artifact-store` |
 | `pilot_artifacts.sweep` | `artifact-store` |
+| `pilot_boundary.check_protected_identity` | `boundary-refusals` |
+| `pilot_boundary.check_redirect` | `boundary-refusals` |
+| `pilot_boundary.check_target` | `boundary-refusals` |
+| `pilot_boundary.is_local_development_origin` | `boundary-refusals` |
 | `pilot_cleanup.cleanup_effect_receipt` | `cleanup-end-to-end` |
 | `pilot_cleanup.receipt_valid_for` | `cleanup-end-to-end` |
 | `pilot_cleanup.registry_record` | `cleanup-end-to-end` |
 | `pilot_cleanup.resolve_containment` | `cleanup-end-to-end` |
 | `pilot_cleanup.resurrection_plan` | `cleanup-end-to-end` |
+| `pilot_horizon.account_margin` | `horizon-validity` |
+| `pilot_horizon.validate_observation` | `horizon-validity` |
 | `pilot_mint.gate_off_receipt` | `mint-gate-off` |
 | `pilot_mint.run_gate_off_test` | `mint-gate-off` |
+| `pilot_policy.ownership_probe_request` | `ownership-probe` |
 | `pilot_reclaim.sweep` | `reclaim-sweep` |
 | `pilot_wave.admit_work` | `wave-headless` |
 | `pilot_wave.assert_destructive_allowed` | `wave-headless` |
@@ -3116,6 +3135,14 @@ refused, and a short-retention artifact is swept on deadline. The exercise prove
 *behaviour* against that disposable instance, not the configured store's current *state*.
 Expected outcome: **pass** when all four expectations hold.
 
+**`boundary-refusals`** — effect-free §14 local-development tripwire. Constructs bindings from
+the project's resolved policy and fires pure boundary predicates against the project's own first
+slot (sorted by slot name): the declared origin and redirects must bind; off-allowlist targets and
+redirects, protected targets, non-local-development origins, and protected identity tokens must
+refuse with the exact boundary tokens. When the project's declared origin is not local development,
+the exercise **fails** with the binding refusal token rather than skipping. Expected outcome:
+**pass** when every leg holds.
+
 **`cleanup-end-to-end`** — drives the cleanup receipt, registry record, receipt binding,
 containment resolution, and resurrection planner on synthetic inputs. The resurrection plan is
 **produced, never executed**. Expected outcome: **pass** when every step holds and the plan
@@ -3125,6 +3152,24 @@ action is `resurrect`.
 from the result. A gate-off run that does not produce a usable receipt is reported as
 **unexercised**, never recorded as exercised. Expected outcome: **pass** when the runner succeeds
 and the receipt is well-formed.
+
+**`horizon-validity`** — effect-free §13 validity-provenance extrapolation point. Uses the
+project's declared `validityProvenance` from its pilot block and the exercise's `now` argument
+(timezone-aware UTC epoch arithmetic only — never wall clock). Exercises `account_margin` in both
+directions (comfortably covered and `horizon-margin-exceeded`), refuses malformed observations via
+`validate_observation`, and when `validityProvenance` is `unknown` fires
+`horizon-unknown-provenance-unattended`; otherwise records that leg as not applicable inside the
+evidence string. Expected outcome: **pass** when every applicable leg holds.
+
+**`ownership-probe`** — effect-bearing §14 account-owns-nothing tripwire when the policy declares
+`ownershipProbe`. Resolves and runs the probe for **every** account in the pilot block's
+`credentialSet` under `pilot_bounded_run`. Exit 0 with stdout JSON `{"ownsNothing": true}` passes
+for that account; exit 0 with any other body fails with `ownership-probe-answer-invalid` (a process
+that merely started is not evidence the account owns nothing); non-zero exit fails with
+`ownership-probe-refused`; undeclared probe skips with `ownership-probe-undeclared`. A passing
+probe proves a narrow point-in-time subclaim only — an account quietly accumulating data over time
+is not something the framework detects. This one relies on the owner noticing. Expected outcome:
+**pass** when every declared account answers `ownsNothing: true` on a pass.
 
 **`reclaim-sweep`** — seeds a past-grace quarantine entry and exercises `pilot_reclaim.sweep`,
 requiring warnings on the seeded entry. Expected outcome: **pass** when sweep warns and retains
@@ -3136,24 +3181,27 @@ when every headless check holds.
 
 ### Effect-bearing exercises
 
-Two exercises execute the **project's own commands against the project's real resources**:
+Three exercises execute the **project's own commands against the project's real resources**:
 
 | Exercise | Live effects |
 |---|---|
 | `cleanup-end-to-end` | Plants sentinels, writes the operational slot journal, runs the declared cleanup command against the live datastore |
 | `mint-gate-off` | Runs the declared gate-off command in the live checkout |
+| `ownership-probe` | Runs the declared ownership probe command for every credential-set account |
 
-Headless exercises (`wave-headless`, `reclaim-sweep`, `artifact-store`) touch only disposable
-subtrees they create themselves.
+Headless exercises (`wave-headless`, `reclaim-sweep`, `artifact-store`, `boundary-refusals`,
+`horizon-validity`) touch only disposable subtrees they create themselves or pure in-memory
+predicates.
 
-By default, `resolve_inputs` leaves `cleanup` and `mint` inputs **absent** with
+By default, `resolve_inputs` leaves `cleanup`, `mint`, and `ownership_probe` inputs **absent** with
 `conformance-input-live-effects-not-permitted`; those exercises return `skipped`, `ok` is
 `false`, and their surfaces appear in `unexercised` rather than being silently omitted from the
-report. Pass `--allow-live-effects` to resolve and run the effect-bearing pair; the run will
-execute the project's own cleanup and gate-off commands against the project's real datastore and
-checkout. Operators who pass that flag also accept the declared limit that `pilot_bounded_run`
-does not signal the process group when a command exits cleanly after detaching a helper (see
-`pilot_conformance_cleanup.py` module docstring; issue #833 acceptance matrix).
+report. Pass `--allow-live-effects` to resolve and run the effect-bearing trio; the run will
+execute the project's own cleanup, gate-off, and ownership-probe commands against the project's
+real datastore and checkout. Operators who pass that flag also accept the declared limit that
+`pilot_bounded_run` does not signal the process group when a command exits cleanly after
+detaching a helper (see `pilot_conformance_cleanup.py` module docstring; issue #833 acceptance
+matrix).
 
 ### CLI
 
@@ -3199,7 +3247,7 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
 | `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
 | `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
-| `conformance-input-live-effects-not-permitted` | cleanup or mint input: `--allow-live-effects` was not passed |
+| `conformance-input-live-effects-not-permitted` | cleanup, mint, or ownership-probe input: `--allow-live-effects` was not passed |
 | `conformance-input-no-artifacts-dir` | artifacts input: artifacts directory could not be resolved |
 | `conformance-input-no-calibration` | pilot block input: calibration config could not be loaded for cwd |
 | `conformance-input-no-material` | artifacts input: policy material list is empty after resolution |
@@ -3223,6 +3271,11 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-runtime-expectation-unmet` | headless wave/reclaim expectation did not hold |
 | `conformance-runtime-sweep-warnings-empty` | reclaim sweep produced no warnings for seeded entry |
 | `conformance-runtime-gate-off-unverified` | mint gate-off run or receipt could not be verified |
+| `conformance-runtime-boundary-expectation-unmet` | boundary-refusals leg did not hold or refusal token mismatch |
+| `conformance-runtime-horizon-expectation-unmet` | horizon-validity leg did not hold or refusal token mismatch |
+| `ownership-probe-undeclared` | ownership-probe: policy declares no `ownershipProbe` (normal skip) |
+| `ownership-probe-refused` | ownership-probe: probe command exited non-zero |
+| `ownership-probe-answer-invalid` | ownership-probe: exit 0 but stdout is not JSON with `ownsNothing: true` |
 | `conformance-cleanup-inputs-missing` | cleanup exercise inputs absent |
 | `conformance-cleanup-inputs-malformed` | cleanup exercise inputs present but incomplete |
 | `conformance-cleanup-receipt-not-pass` | cleanup effect receipt did not pass |

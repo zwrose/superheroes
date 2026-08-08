@@ -32,13 +32,20 @@ REQUIRED_SURFACES = (
     "pilot_appctl.resolve_invocation",
     "pilot_artifacts.retain",
     "pilot_artifacts.sweep",
+    "pilot_boundary.check_protected_identity",
+    "pilot_boundary.check_redirect",
+    "pilot_boundary.check_target",
+    "pilot_boundary.is_local_development_origin",
     "pilot_cleanup.cleanup_effect_receipt",
     "pilot_cleanup.receipt_valid_for",
     "pilot_cleanup.registry_record",
     "pilot_cleanup.resolve_containment",
     "pilot_cleanup.resurrection_plan",
+    "pilot_horizon.account_margin",
+    "pilot_horizon.validate_observation",
     "pilot_mint.gate_off_receipt",
     "pilot_mint.run_gate_off_test",
+    "pilot_policy.ownership_probe_request",
     "pilot_reclaim.sweep",
     "pilot_wave.admit_work",
     "pilot_wave.assert_destructive_allowed",
@@ -82,7 +89,11 @@ REASON_INPUT_REGISTRY_UNREADABLE = "conformance-input-registry-unreadable"
 REASON_INPUT_REGISTRY_INVALID_JSON = "conformance-input-registry-invalid-json"
 REASON_INPUT_REGISTRY_INVALID_SHAPE = "conformance-input-registry-invalid-shape"
 
-EFFECT_BEARING_EXERCISES = frozenset({"cleanup-end-to-end", "mint-gate-off"})
+EFFECT_BEARING_EXERCISES = frozenset({
+    "cleanup-end-to-end",
+    "mint-gate-off",
+    "ownership-probe",
+})
 
 REASON_CLI_CWD_INVALID = "conformance-cli-cwd-invalid"
 REASON_CLI_NOW_INVALID = "conformance-cli-now-invalid"
@@ -407,8 +418,11 @@ def default_exercises():
 
     return [
         runtime.artifact_store_exercise,
+        runtime.boundary_refusals_exercise,
         pilot_conformance_cleanup.cleanup_end_to_end_exercise,
+        runtime.horizon_validity_exercise,
         runtime.mint_gate_off_exercise,
+        runtime.ownership_probe_exercise,
         runtime.reclaim_sweep_exercise,
         runtime.wave_headless_exercise,
     ]
@@ -819,6 +833,71 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
             reason=declarations_reason or REASON_INPUT_NO_REGISTRY_PATH,
         )
 
+    boundary = None
+    boundary_reason = pilot_reason if pilot_block is None else None
+    if policy is None:
+        if boundary_reason is None:
+            boundary_reason = policy_reason or REASON_INPUT_POLICY_UNRESOLVED
+    elif not isinstance(slot_ref, str) or not slot_ref:
+        boundary_reason = REASON_INPUT_NO_SLOT_REF
+    else:
+        boundary = {"policy": policy, "slot_ref": slot_ref}
+
+    if boundary is not None:
+        inputs["boundary"] = boundary
+        _resolution_entry(resolution, "boundary", resolved=True)
+    else:
+        _resolution_entry(
+            resolution,
+            "boundary",
+            resolved=False,
+            reason=boundary_reason or REASON_INPUT_POLICY_UNRESOLVED,
+        )
+
+    horizon = None
+    horizon_reason = pilot_reason if pilot_block is None else None
+    if pilot_block is not None:
+        horizon = {"pilot_block": pilot_block}
+
+    if horizon is not None:
+        inputs["horizon"] = horizon
+        _resolution_entry(resolution, "horizon", resolved=True)
+    else:
+        _resolution_entry(
+            resolution,
+            "horizon",
+            resolved=False,
+            reason=horizon_reason or REASON_INPUT_NO_PILOT_BLOCK,
+        )
+
+    ownership_probe = None
+    ownership_probe_reason = pilot_reason if pilot_block is None else None
+    if not allow_live_effects:
+        ownership_probe_reason = REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
+    elif pilot_block is not None and ownership_probe_reason is None:
+        if policy is None:
+            ownership_probe_reason = policy_reason or REASON_INPUT_POLICY_UNRESOLVED
+        elif not os.path.isdir(cwd):
+            ownership_probe_reason = REASON_INPUT_CLEANUP_INCOMPLETE
+        else:
+            ownership_probe = {
+                "policy": policy,
+                "pilot_block": pilot_block,
+                "run_cwd": cwd,
+                "connection_detail": policy["datastore"]["connectionDetail"],
+            }
+
+    if ownership_probe is not None:
+        inputs["ownership_probe"] = ownership_probe
+        _resolution_entry(resolution, "ownership-probe", resolved=True)
+    else:
+        _resolution_entry(
+            resolution,
+            "ownership-probe",
+            resolved=False,
+            reason=ownership_probe_reason or REASON_INPUT_POLICY_UNRESOLVED,
+        )
+
     return inputs, resolution
 
 
@@ -850,8 +929,8 @@ def _parse_run_args(args):
         "--allow-live-effects",
         action="store_true",
         help=(
-            "Run cleanup-end-to-end and mint-gate-off against the project's real "
-            "datastore and checkout (the project's own destructive commands)."
+            "Run cleanup-end-to-end, mint-gate-off, and ownership-probe against the "
+            "project's real datastore and checkout (the project's own commands)."
         ),
     )
     parsed = parser.parse_args(args)

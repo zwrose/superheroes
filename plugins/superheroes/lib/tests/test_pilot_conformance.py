@@ -32,8 +32,8 @@ def _pass_record(**overrides):
 # --- REQUIRED_SURFACES inventory ----------------------------------------------
 
 def test_required_surfaces_sorted_unique_and_count():
-    """Inventory is normative: sorted, no duplicates, exactly 17 members."""
-    assert len(pc.REQUIRED_SURFACES) == 17
+    """Inventory is normative: sorted, no duplicates, exactly 24 members."""
+    assert len(pc.REQUIRED_SURFACES) == 24
     assert len(pc.REQUIRED_SURFACES) == len(set(pc.REQUIRED_SURFACES))
     assert list(pc.REQUIRED_SURFACES) == sorted(pc.REQUIRED_SURFACES)
 
@@ -254,11 +254,11 @@ def test_report_happy_path_all_surfaces_covered():
     assert result["ok"] is True
     assert result["unexercised"] == []
     assert result["surfaces"] == sorted(pc.REQUIRED_SURFACES)
-    assert len(result["exercises"]) == 17
+    assert len(result["exercises"]) == 24
 
 
 def test_edge_report_empty_ok_false_unexercised_all():
-    """Edge 9: report([]) — ok is False and unexercised lists all 17 surfaces."""
+    """Edge 9: report([]) — ok is False and unexercised lists all 24 surfaces."""
     result = pc.report([])
     assert result["ok"] is False
     assert result["unexercised"] == sorted(pc.REQUIRED_SURFACES)
@@ -359,7 +359,7 @@ def test_run_happy_path():
     result = pc.run([ok_fn], inputs={}, now=EXERCISED_AT)
     assert result["ok"] is False
     assert SAMPLE_SURFACE in result["surfaces"]
-    assert len(result["unexercised"]) == 16
+    assert len(result["unexercised"]) == 23
 
 
 def test_edge_run_unregistered_callable_refuses_before_any_runs():
@@ -593,8 +593,11 @@ def test_default_exercises_stable_order():
     names = [fn.conformance_exercise for fn in pc.default_exercises()]
     assert names == [
         "artifact-store",
+        "boundary-refusals",
         "cleanup-end-to-end",
+        "horizon-validity",
         "mint-gate-off",
+        "ownership-probe",
         "reclaim-sweep",
         "wave-headless",
     ]
@@ -638,7 +641,7 @@ def _write_calibration_layer(tmp_path, *, include_mint=False):
 def test_resolve_inputs_no_calibration_all_absent(tmp_path):
     inputs, resolution = pc.resolve_inputs(str(tmp_path), now=EXERCISED_AT)
     assert inputs == {}
-    assert len(resolution) == 6
+    assert len(resolution) == 9
     assert all(entry["state"] == "absent" for entry in resolution)
     by_input = {entry["input"]: entry for entry in resolution}
     assert by_input["cleanup"]["reason"] == pc.REASON_INPUT_LIVE_EFFECTS_NOT_PERMITTED
@@ -715,6 +718,7 @@ _LIVE_EFFECT_SURFACES = frozenset({
     "pilot_cleanup.resurrection_plan",
     "pilot_mint.gate_off_receipt",
     "pilot_mint.run_gate_off_test",
+    "pilot_policy.ownership_probe_request",
 })
 
 
@@ -740,7 +744,7 @@ def test_resolve_inputs_default_live_effects_cleanup_mint_absent(tmp_path):
 
 
 def test_default_run_report_live_effect_surfaces_unexercised(tmp_path):
-    """bite-axis: live-effect containment — default run reports all seven surfaces unexercised."""
+    """bite-axis: live-effect containment — default run reports all eight surfaces unexercised."""
     report = pc.run(pc.default_exercises(), inputs={}, now=EXERCISED_AT)
     assert report["ok"] is False
     assert _LIVE_EFFECT_SURFACES <= set(report["unexercised"])

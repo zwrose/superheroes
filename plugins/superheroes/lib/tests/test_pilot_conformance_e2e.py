@@ -1,4 +1,4 @@
-"""End-to-end conformance run — whole-run green receipt across all five exercises (C10)."""
+"""End-to-end conformance run — whole-run green receipt across all eight exercises (C10)."""
 import datetime
 import os
 import sys
@@ -25,16 +25,22 @@ _GRACE_HOURS = 72
 
 _EXPECTED_EXERCISE_NAMES = frozenset({
     "artifact-store",
+    "boundary-refusals",
     "cleanup-end-to-end",
+    "horizon-validity",
     "mint-gate-off",
+    "ownership-probe",
     "reclaim-sweep",
     "wave-headless",
 })
 
 _INPUT_KEY_TO_EXERCISE = {
     "artifacts": "artifact-store",
+    "boundary": "boundary-refusals",
     "cleanup": "cleanup-end-to-end",
+    "horizon": "horizon-validity",
     "mint": "mint-gate-off",
+    "ownership_probe": "ownership-probe",
     "reclaim": "reclaim-sweep",
     "wave": "wave-headless",
 }
@@ -126,6 +132,22 @@ def _build_conformance_inputs(tmp_root, now):
     env_var = mint_envelope["enablingFlagEnvVar"]
     run_cwd = cleanup["run_cwd"]
 
+    policy = dict(policy)
+    protected = list(policy.get("protectedTargets") or [])
+    if not any(isinstance(target, str) and "://" in target for target in protected):
+        protected.append("https://app.example.com:443")
+    policy["protectedTargets"] = protected
+    cleanup["policy"] = policy
+
+    probe_script = (
+        "import json, sys; _acct='%s'; sys.stdout.write(json.dumps(dict(ownsNothing=True)))"
+        % pilot_policy.ACCOUNT_PLACEHOLDER
+    )
+    policy["ownershipProbe"] = {
+        "command": [sys.executable, "-c", probe_script],
+        "connectionEnvVar": "PILOT_DATASTORE_URL",
+    }
+
     inputs = {
         "artifacts": {
             "artifacts_dir": artifacts_dir,
@@ -133,11 +155,24 @@ def _build_conformance_inputs(tmp_root, now):
             "slot": "slot-a",
             "material": material,
         },
+        "boundary": {
+            "policy": policy,
+            "slot_ref": _SLOT_REF,
+        },
         "cleanup": cleanup,
+        "horizon": {
+            "pilot_block": pilot_block,
+        },
         "mint": {
             "envelope": mint_envelope,
             "run_cwd": run_cwd,
             "environment": {env_var: "1"},
+        },
+        "ownership_probe": {
+            "policy": policy,
+            "pilot_block": pilot_block,
+            "run_cwd": run_cwd,
+            "connection_detail": policy["datastore"]["connectionDetail"],
         },
         "reclaim": {"slots_dir": slots_dir},
         "wave": {
