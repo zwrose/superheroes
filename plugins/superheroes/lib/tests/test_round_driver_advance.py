@@ -1415,6 +1415,42 @@ def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters):
     assert out["detail"].startswith("gate-policy-calibration-unreadable")
 
 
+def test_advance_judgment_calibration_absent_parks(tmp_path, adapters):
+    """Calibration absent (no core.md) → park with gate-policy-calibration-absent."""
+    repo = str(tmp_path / "repo-no-core")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="judgment-absent")
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-calibration-absent"
+
+
+def test_advance_judgment_calibration_refused_parks(tmp_path, adapters, monkeypatch):
+    """Unregistered calibration refusal status → park with gate-policy-calibration-refused."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="judgment-refused")
+    cm = _load_core_md()
+    unknown_status = "unregistered-calibration-refusal"
+    with pytest.raises(KeyError):
+        cm.gate_refusal_reason_for_status(unknown_status)
+
+    def fake_overlay(_config):
+        return cm.ReviewGatePolicyGate(unknown_status, None, None)
+
+    monkeypatch.setattr(RD, "_gate_policy_overlay_from_config", fake_overlay)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-calibration-refused"
+
+
 def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
     """Fail-closed edge 4: shipped policy file missing with no overlay → park."""
     repo = _repo_without_gate_policy(tmp_path)

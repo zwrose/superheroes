@@ -114,12 +114,17 @@ they disagree).
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
 The driver writes these in the `orders-emit` commit when it emits dispatch orders:
-`round-<N>/diff.txt`, `round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`,
-`round-<N>/scoped-hunks.json`, and `round-<N>/verified.json` (phase-dependent — see
-`_order_sidecar_writes`). The orchestrator must write these **before** dispatching a fixer, audits,
-or scoped order: `round-<N>/head.diff` and `round-<N>/fix-batch.json` (the review-code loop's
-session-artifact table in `setup.md` is the home for those paths). The driver never creates
-`head.diff` or `fix-batch.json`; it only names them in rendered orders.
+`round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`, `round-<N>/scoped-hunks.json`,
+and `round-<N>/verified.json` (phase-dependent — see `_order_sidecar_writes`). When
+`round-<N>/diff.txt` is absent, `_ensure_round_diff` writes it from loop state (`reviewedDiff`) via
+a plain `open()` **before** the `orders-emit` commit — not inside the commit protocol. The
+orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
+`setup.md`'s session-artifact table). The orchestrator must write these **before** dispatching a
+fixer, audits, or scoped order: `round-<N>/fix-batch.json` (the review-code loop's session-artifact
+table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders and audits — it is
+**not** produced by the driver; the orchestrator must write it before dispatching those phases (the
+driver only names the path in rendered orders). The driver never creates `head.diff` or
+`fix-batch.json`.
 
 ## Base guard
 
@@ -209,12 +214,36 @@ parks (`gate-policy-unmatched-class:<class>`). Stall resolution is per stall cla
 (`stall:accept-risk-eligible` vs `stall:accept-risk-ineligible`).
 
 When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). The refusal
-carries a `detail` cause distinct from the top-level reason so operators can tell *why* it parked:
-`gate-policy-calibration-unreadable`, `gate-policy-calibration-absent`, `gate-policy-no-valid-layer`,
-or `gate-policy-unmatched-class:<findingClass>` (plus the resolver's other `gate-policy-*` park
-tokens when applicable). On the orchestrator's `next`/`submit` path you still present the gate and
-submit the owner's choice; gate policy pre-authorization is what lets `advance` fold without
-stopping.
+carries a `detail` cause distinct from the top-level reason so operators can tell *why* it parked.
+On the orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice;
+gate policy pre-authorization is what lets `advance` fold without stopping.
+
+**Advance gate-policy park detail causes** (authoritative list — drift-tested against
+`round_driver.owner_gate_policy_park_detail_causes()`):
+
+```text
+gate-policy-calibration-unreadable
+gate-policy-calibration-absent
+gate-policy-calibration-refused
+repo-root-unavailable
+gate-policy-judgment-no-findings
+gate-policy-unknown-phase
+gate-policy-park
+gate-policy-no-valid-layer
+gate-policy-judgment-input-not-list
+gate-policy-judgment-row-not-object
+gate-policy-judgment-row-missing-class
+gate-policy-unknown-stall-class
+```
+
+Parameterized (suffix after `:` is diagnostic detail):
+
+```text
+gate-policy-unmatched-class:<findingClass>
+```
+
+`gate-policy-calibration-unreadable` and `repo-root-unavailable` may also carry a `: <detail>`
+suffix when the underlying read failure has a message.
 
 **Ownership boundary (stated narrowly).** The overlay lives on the same ownership surface as
 `enginePreferences` — an honest-agent boundary, **not** a security boundary. No CLI flag can
@@ -222,11 +251,6 @@ substitute a policy: exactly two fixed sources are read (shipped file + optional
 Resolution returns a `layers` audit (each layer's `identity` carries `source`, `schema`, `sha256`)
 so a substitution is visible after the fact. A builder **can** change `core.md`; claiming they
 cannot is an overclaim.
-
-Gate-policy refusal reasons (in addition to the advance park tokens above):
-`gate-policy-no-valid-layer`, `gate-policy-judgment-input-not-list`,
-`gate-policy-judgment-row-not-object`, `gate-policy-judgment-row-missing-class`,
-`gate-policy-unknown-stall-class`, `gate-policy-unmatched-class:<findingClass>`.
 
 | `action` / `phase` | Orchestrator fulfills |
 | --- | --- |

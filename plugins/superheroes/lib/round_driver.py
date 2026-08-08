@@ -4121,10 +4121,11 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
         # Order-input ownership at emission (see also round-driver.md §Emitted orders):
-        #   driver commits in orders-emit: diff.txt (via _ensure_round_diff),
-        #   clusters/<i>.json, audit-targets/<skey>.json, scoped-hunks.json, verified.json
-        #   orchestrator must supply before dispatch: head.diff, fix-batch.json
-        #   (skills/review-code/reference/setup.md session-artifact table).
+        #   driver commits in orders-emit: clusters/<i>.json, audit-targets/<skey>.json,
+        #   scoped-hunks.json, verified.json
+        #   driver writes outside orders-emit commit: diff.txt (via _ensure_round_diff when absent)
+        #   orchestrator must supply before dispatch: diff.txt (real git diff), head.diff,
+        #   fix-batch.json (skills/review-code/reference/setup.md session-artifact table).
         # STUB(#723): order-input existence class not closed — placeholder set and sidecar set
         # must derive from one source before a fail-closed guard can land here.
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
@@ -4850,21 +4851,52 @@ def _commit_gate_policy_archive(session_dir, rnd, resolution):
     return None
 
 
+GATE_POLICY_CALIBRATION_PARK_CAUSE_UNREADABLE = "gate-policy-calibration-unreadable"
+GATE_POLICY_CALIBRATION_PARK_CAUSE_ABSENT = "gate-policy-calibration-absent"
+GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED = "gate-policy-calibration-refused"
+
+GATE_POLICY_RESOLVER_PARK_CAUSES = frozenset({
+    "gate-policy-judgment-no-findings",
+    "gate-policy-unknown-phase",
+    "gate-policy-park",
+    "gate-policy-no-valid-layer",
+    "gate-policy-judgment-input-not-list",
+    "gate-policy-judgment-row-not-object",
+    "gate-policy-judgment-row-missing-class",
+    "gate-policy-unknown-stall-class",
+})
+
+GATE_POLICY_UNMATCHED_CLASS_PREFIX = "gate-policy-unmatched-class:"
+
+
+def owner_gate_policy_park_detail_causes():
+    """Exact park-detail cause tokens ``advance`` may emit on owner gates (no parameterized suffixes)."""
+    causes = set(GATE_POLICY_RESOLVER_PARK_CAUSES)
+    causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_UNREADABLE)
+    causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_ABSENT)
+    causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED)
+    causes.add(core_md.GATE_REASON_ROOT_UNAVAILABLE)
+    return frozenset(causes)
+
+
 def _gate_policy_calibration_park_detail(gate):
     """Distinct park cause when core.md gate classification refuses overlay read."""
     if core_md.review_gate_config_is_unreadable(gate):
-        detail = "gate-policy-calibration-unreadable"
+        detail = GATE_POLICY_CALIBRATION_PARK_CAUSE_UNREADABLE
         if gate.detail:
             detail = "%s: %s" % (detail, gate.detail)
         return detail
     if core_md.review_gate_config_is_absent(gate):
-        return "gate-policy-calibration-absent"
+        return GATE_POLICY_CALIBRATION_PARK_CAUSE_ABSENT
     if core_md.review_gate_config_is_refusal(gate):
-        reason = core_md._GATE_REFUSAL_REASONS.get(gate.status, "gate-policy-calibration-refused")
+        try:
+            reason = core_md.gate_refusal_reason_for_status(gate.status)
+        except KeyError:
+            reason = GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED
         if gate.detail:
             return "%s: %s" % (reason, gate.detail)
         return reason
-    return "gate-policy-calibration-refused"
+    return GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED
 
 
 def _resolve_owner_gate_policy(phase, state, config):

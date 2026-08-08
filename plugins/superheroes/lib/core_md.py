@@ -514,13 +514,20 @@ def review_gate_config_refusal_detail(gate):
     return gate.detail
 
 
+def gate_refusal_reason_for_status(status):
+    """Return the canonical refusal reason string for a registered config-gate status.
+
+    Raises ``KeyError`` when *status* is not registered — fail-closed, never silently defaulted."""
+    return _GATE_REFUSAL_REASONS[status]
+
+
 def gate_config_refusal(cfg):
     """Return the ``gate_refusal`` payload for a refusal status, or ``None`` when usable/absent.
 
     An unregistered status raises ``KeyError`` — fail-closed, never silently treated as usable."""
     if not gate_config_is_refusal(cfg):
         return None
-    return gate_refusal(_GATE_REFUSAL_REASONS[cfg.status], cfg.detail)
+    return gate_refusal(gate_refusal_reason_for_status(cfg.status), cfg.detail)
 
 
 def gate_refusal(reason, detail):
