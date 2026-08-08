@@ -16,6 +16,7 @@ import pilot_policy # noqa: E402
 from test_pilot_conformance_cleanup import ( # noqa: E402
     _build_cleanup_inputs,
     _cleanup_correct_script,
+    _passing_verdict,
     _SLOT_REF,
 )
 
@@ -147,6 +148,8 @@ def _build_conformance_inputs(tmp_root, now):
         "command": [sys.executable, "-c", probe_script],
         "connectionEnvVar": "PILOT_DATASTORE_URL",
     }
+    cleanup["policy"] = policy
+    cleanup["verdict"] = _passing_verdict(policy)
 
     inputs = {
         "artifacts": {

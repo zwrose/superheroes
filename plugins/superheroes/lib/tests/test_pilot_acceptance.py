@@ -268,7 +268,7 @@ def test_resolve_exercised_wrong_surface_becomes_unexercised():
     )
     resolved = pa.resolve([row_data], report, _declarations_block())
     assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
-    assert resolved[0]["evidence"]["reason"] == pa.REASON_RESOLUTION_SURFACE_MISSING
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_SURFACE_UNBOUND
 
 
 def test_resolve_exercised_failed_record_becomes_unexercised():
@@ -283,7 +283,7 @@ def test_resolve_exercised_failed_record_becomes_unexercised():
     )
     resolved = pa.resolve([row_data], report, _declarations_block())
     assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
-    assert resolved[0]["evidence"]["reason"] == pa.REASON_RESOLUTION_EXERCISE_FAILED
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_EXERCISE_FAILED
 
 
 def test_resolve_exercised_missing_exercise_becomes_unexercised():
@@ -295,7 +295,7 @@ def test_resolve_exercised_missing_exercise_becomes_unexercised():
     )
     resolved = pa.resolve([row_data], _report_data(), _declarations_block())
     assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
-    assert resolved[0]["evidence"]["reason"] == pa.REASON_RESOLUTION_EXERCISE_MISSING
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_EXERCISE_ABSENT
 
 
 def test_resolve_attested_digest_mismatch_becomes_unexercised():
@@ -307,7 +307,30 @@ def test_resolve_attested_digest_mismatch_becomes_unexercised():
     )
     resolved = pa.resolve([row_data], _report_data(), _declarations_block())
     assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
-    assert resolved[0]["evidence"]["reason"] == pa.REASON_RESOLUTION_DECLARATION_MISSING
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_DECLARATION_ABSENT
+
+
+def test_resolve_attested_not_attested_becomes_unexercised():
+    row_data = pa.row(
+        area="a",
+        claim="c",
+        status=pa.STATUS_ATTESTED,
+        evidence={"kind": "session-surface", "slotRef": "slot-a@1", "digest": "abc123"},
+    )
+    declarations = _declarations_block(
+        rows=[
+            {
+                "kind": "session-surface",
+                "slotRef": "slot-a@1",
+                "status": "absent",
+                "declarationDigest": "abc123",
+                "reason": None,
+            }
+        ]
+    )
+    resolved = pa.resolve([row_data], _report_data(), declarations)
+    assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_DECLARATION_NOT_ATTESTED
 
 
 def test_resolve_never_produces_not_applicable():
@@ -487,6 +510,69 @@ def test_render_markdown_shows_dirty_warning():
     }
     md = pa.render_markdown(matrix_data)
     assert "dirty" in md.lower()
+
+
+def test_render_markdown_surfaces_unexercised_reason():
+    matrix_data = {
+        "ok": False,
+        "reference": {"project": "p", "commit": _VALID_SHA1, "dirty": False},
+        "generatedAt": _GENERATED_AT,
+        "rows": [
+            pa.row(
+                area="test-area",
+                claim="c",
+                status=pa.STATUS_UNEXERCISED,
+                evidence={"reason": pa.REASON_EVIDENCE_SURFACE_UNBOUND},
+            ),
+        ],
+    }
+    md = pa.render_markdown(matrix_data)
+    assert "reason: %s" % pa.REASON_EVIDENCE_SURFACE_UNBOUND in md
+
+
+# --- framework_rows totality --------------------------------------------------
+
+def _empty_report():
+    return {
+        "ok": True,
+        "unexercised": [],
+        "warnings": [],
+        "surfaces": [],
+        "exercises": [],
+    }
+
+
+def _empty_declarations():
+    return {
+        "schemaVersion": 1,
+        "rows": [],
+        "attested": 0,
+        "absent": 0,
+        "notApplicable": 0,
+        "ok": True,
+    }
+
+
+def _expected_framework_row_count():
+    return (
+        len(pa.FRAMEWORK_DECLARED_LIMITS)
+        + len(pa.EXTRAPOLATION_POINTS)
+        + len(pa.TRIPWIRE_ROWS)
+    )
+
+
+def test_framework_rows_degrades_never_raises_on_empty_inputs():
+    """framework_rows is total: empty report and declarations yield every row, never raise."""
+    rows = pa.framework_rows(_empty_report(), _empty_declarations())
+    assert len(rows) == _expected_framework_row_count()
+    for row_data in rows:
+        assert row_data["status"] in (
+            pa.STATUS_UNEXERCISED,
+            pa.STATUS_DECLARED_LIMIT,
+            pa.STATUS_PROSE_RESIDUE,
+        )
+        if row_data["status"] == pa.STATUS_UNEXERCISED:
+            assert row_data["evidence"]["reason"]
 
 
 # --- CLI ----------------------------------------------------------------------

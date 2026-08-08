@@ -3341,6 +3341,11 @@ Declaration-backed:
 `surfaces` list contains the cited surface. Citing a real but unrelated passing record must fail
 resolution.
 
+**Totality:** `framework_rows` always returns the full framework row set for any well-formed report
+and declarations block, including empty ones. Rows whose evidence does not resolve become
+`unexercised` with a stated reason — the builder never raises and never goes silent. An adopter whose
+run lacks the evidence a row wanted sees readable `unexercised` rows, not a traceback.
+
 ### Matrix `ok`
 
 `ok` is true only when **all** of these hold:
@@ -3431,6 +3436,11 @@ top-level key. Default format `json`. Matrix JSON on stdout, diagnostics on stde
 | `acceptance-resolution-surface-missing` | exercised row cites a surface not on the passing record |
 | `acceptance-resolution-declaration-missing` | attested row cites no matching declaration row |
 | `acceptance-resolution-declaration-not-attested` | declaration row exists but is not `attested` |
+| `acceptance-evidence-exercise-absent` | downgrade: cited exercise is not in the report |
+| `acceptance-evidence-exercise-failed` | downgrade: cited exercise is present but did not pass |
+| `acceptance-evidence-surface-unbound` | downgrade: passing record's `surfaces` does not contain the cited surface |
+| `acceptance-evidence-declaration-absent` | downgrade: no declaration row matches the cited pointer |
+| `acceptance-evidence-declaration-not-attested` | downgrade: declaration row exists but is not `attested` |
 | `acceptance-cli-report-path-invalid` | `--report-path` missing or empty |
 | `acceptance-cli-report-invalid` | report file unreadable or not a JSON object |
 | `acceptance-cli-declarations-missing` | report has no `declarations` envelope |

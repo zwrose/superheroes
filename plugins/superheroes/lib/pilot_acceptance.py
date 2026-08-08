@@ -53,6 +53,12 @@ REASON_RESOLUTION_SURFACE_MISSING = "acceptance-resolution-surface-missing"
 REASON_RESOLUTION_DECLARATION_MISSING = "acceptance-resolution-declaration-missing"
 REASON_RESOLUTION_DECLARATION_NOT_ATTESTED = "acceptance-resolution-declaration-not-attested"
 
+REASON_EVIDENCE_EXERCISE_ABSENT = "acceptance-evidence-exercise-absent"
+REASON_EVIDENCE_EXERCISE_FAILED = "acceptance-evidence-exercise-failed"
+REASON_EVIDENCE_SURFACE_UNBOUND = "acceptance-evidence-surface-unbound"
+REASON_EVIDENCE_DECLARATION_ABSENT = "acceptance-evidence-declaration-absent"
+REASON_EVIDENCE_DECLARATION_NOT_ATTESTED = "acceptance-evidence-declaration-not-attested"
+
 REASON_CLI_REPORT_PATH_INVALID = "acceptance-cli-report-path-invalid"
 REASON_CLI_REPORT_INVALID = "acceptance-cli-report-invalid"
 REASON_CLI_DECLARATIONS_MISSING = "acceptance-cli-declarations-missing"
@@ -220,6 +226,13 @@ def _rewrite_unexercised(row_data, reason):
     }
 
 
+def _framework_unexercised_row(*, area, claim, reason):
+    return _rewrite_unexercised(
+        {"area": area, "claim": claim},
+        reason,
+    )
+
+
 def _find_exercise_record(report_data, exercise_name):
     exercises = report_data.get("exercises")
     if not isinstance(exercises, list):
@@ -250,15 +263,15 @@ def _resolve_exercised(row_data, report_data):
     evidence = row_data["evidence"]
     record = _find_exercise_record(report_data, evidence["exercise"])
     if record is None:
-        return _rewrite_unexercised(row_data, REASON_RESOLUTION_EXERCISE_MISSING)
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_ABSENT)
     if record.get("result") != "pass":
-        return _rewrite_unexercised(row_data, REASON_RESOLUTION_EXERCISE_FAILED)
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_FAILED)
     surfaces = record.get("surfaces")
     if not isinstance(surfaces, list):
-        return _rewrite_unexercised(row_data, REASON_RESOLUTION_SURFACE_MISSING)
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_SURFACE_UNBOUND)
     # bite-axis: surface binding — cited surface must appear on the passing exercise record.
     if evidence["surface"] not in surfaces:
-        return _rewrite_unexercised(row_data, REASON_RESOLUTION_SURFACE_MISSING)
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_SURFACE_UNBOUND)
     return dict(row_data)
 
 
@@ -271,9 +284,9 @@ def _resolve_attested(row_data, declarations_block):
         evidence["digest"],
     )
     if decl_row is None:
-        return _rewrite_unexercised(row_data, REASON_RESOLUTION_DECLARATION_MISSING)
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_DECLARATION_ABSENT)
     if decl_row.get("status") != "attested":
-        return _rewrite_unexercised(row_data, REASON_RESOLUTION_DECLARATION_NOT_ATTESTED)
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_DECLARATION_NOT_ATTESTED)
     return dict(row_data)
 
 
@@ -542,12 +555,23 @@ def _build_framework_row(spec, *, area, declarations_block):
     status = spec["status"]
     claim = spec["claim"]
     evidence = spec.get("evidence")
-    if status == STATUS_ATTESTED and evidence is None:
-        declaration_kind = spec.get("declaration_kind")
-        if declaration_kind:
-            evidence = _declaration_evidence_for_kind(declarations_block, declaration_kind)
+    if status in (STATUS_EXERCISED, STATUS_ATTESTED):
+        if status == STATUS_ATTESTED and evidence is None:
+            declaration_kind = spec.get("declaration_kind")
+            if declaration_kind:
+                evidence = _declaration_evidence_for_kind(declarations_block, declaration_kind)
+            if evidence is None:
+                return _framework_unexercised_row(
+                    area=area,
+                    claim=claim,
+                    reason=REASON_EVIDENCE_DECLARATION_ABSENT,
+                )
         if evidence is None:
-            raise PilotAcceptanceError(REASON_ROW_EVIDENCE_REQUIRED)
+            return _framework_unexercised_row(
+                area=area,
+                claim=claim,
+                reason=REASON_EVIDENCE_EXERCISE_ABSENT,
+            )
     kwargs = {
         "area": area,
         "claim": claim,
@@ -634,6 +658,14 @@ def render_markdown(matrix_data):
             detail = ""
             if row_data.get("status") == STATUS_DECLARED_LIMIT:
                 detail = _escape_markdown_cell(row_data.get("closure_path"))
+            elif row_data.get("status") == STATUS_UNEXERCISED:
+                reason = (row_data.get("evidence") or {}).get("reason")
+                if reason:
+                    detail = _escape_markdown_cell("reason: %s" % reason)
+                else:
+                    detail = _escape_markdown_cell(
+                        json.dumps(row_data["evidence"], sort_keys=True)
+                    )
             elif row_data.get("evidence") is not None:
                 detail = _escape_markdown_cell(json.dumps(row_data["evidence"], sort_keys=True))
             lines.append("| %s | %s | %s |" % (status, claim, detail))
