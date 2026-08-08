@@ -150,10 +150,11 @@ def _strict_fsync_staging(directory):
 
 
 def _ensure_parent_dirs_strict(path):
-    """Create missing ancestor directories, fsyncing each newly created one strictly.
+    """Create missing ancestor directories, then fsync each parent after its child exists.
 
-    Also fsyncs the deepest pre-existing ancestor so the link naming the topmost
-    newly created directory is durable — same contract as ``_strict_fsync_staging``.
+    Fsync order: the deepest pre-existing ancestor (so the topmost new link is durable),
+    then the parent of each newly created directory (deepest last), then the deepest
+    created directory itself — same contract as ``_strict_fsync_staging``.
     """
     parent = os.path.dirname(os.path.abspath(path))
     if not parent:
@@ -165,11 +166,16 @@ def _ensure_parent_dirs_strict(path):
         current = os.path.dirname(current)
     if not created:
         return
-    for directory in reversed(created):
+    top_down = list(reversed(created))
+    for directory in top_down:
         os.makedirs(directory, exist_ok=True)
-        fsync_dir_strict(directory)
     if os.path.isdir(current):
         fsync_dir_strict(current)
+    for directory in top_down:
+        parent_dir = os.path.dirname(directory)
+        if parent_dir:
+            fsync_dir_strict(parent_dir)
+    fsync_dir_strict(top_down[-1])
 
 
 def _read_intent(path):
@@ -491,6 +497,12 @@ class Commit(object):
         return part["n"]
 
     def _stage(self):
+        try:
+            return self._stage_inner()
+        except OSError as exc:
+            raise CommitRefused("commit-staging-failed", str(exc))
+
+    def _stage_inner(self):
         root = commits_root(self.session_dir)
         commit_dir = os.path.join(root, self.commit_id)
         cleanup = os.path.join(root, _cleanup_name(self.commit_id))
@@ -522,6 +534,8 @@ class Commit(object):
                     "appendId": part["appendId"],
                     "entry": part["entry"],
                 })
+
+        _strict_fsync_staging(parts_dir)
 
         intent = {
             "schema": SCHEMA,
