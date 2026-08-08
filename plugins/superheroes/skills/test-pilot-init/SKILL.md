@@ -155,7 +155,7 @@ dirty, or when the run itself left surfaces `unexercised` — that is the honest
 outcome for a project that has not exercised everything, **not a failure to
 work around**. `--commit` must be a **full object id** (run `git rev-parse
 HEAD` in the reference project — not a branch name). **Dirty** is derived from
-`git status --porcelain` in the reference project's working directory when
+`git status --porcelain` in the **CLI process's current working directory** when
 neither `--dirty` nor `--clean` is passed; pass `--dirty` or `--clean` to
 override. The run **never** writes into the repository when `--allow-live-effects` is not passed. The
 `cleanup-end-to-end`, `mint-gate-off`, and `ownership-probe` exercises are

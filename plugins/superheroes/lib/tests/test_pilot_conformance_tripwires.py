@@ -110,18 +110,22 @@ def _confined_ownership_probe_command(workspace, body_code, exit_code=0):
     return [probe_py, pp.ACCOUNT_PLACEHOLDER]
 
 
-def _run_ownership_probe(tmp_dir, policy, pilot_block, command):
+def _run_ownership_probe(tmp_dir, policy, pilot_block, command, *, reach_roots=None):
     policy = dict(policy)
     policy["ownershipProbe"] = {
         "command": command,
         "connectionEnvVar": "PILOT_DB_URL",
     }
+    if reach_roots is None:
+        reach_roots = [os.path.join(tmp_dir, "reach")]
+        os.makedirs(reach_roots[0], exist_ok=True)
     return pcr.ownership_probe_exercise(
         inputs={
             "ownership_probe": {
                 "policy": policy,
                 "pilot_block": pilot_block,
                 "run_cwd": tmp_dir,
+                "reach_roots": reach_roots,
                 "connection_detail": policy["datastore"]["connectionDetail"],
             }
         },
@@ -323,6 +327,23 @@ def test_horizon_validity_margin_covered_and_exceeded():
     assert "not applicable" in record["evidence"]
 
 
+def test_horizon_validity_margin_covered_guard_required(monkeypatch):
+    real_account_margin = ph.account_margin
+
+    def fake_account_margin(observation, **kwargs):
+        if observation.get("expiresAt", 0) >= kwargs["deadline_at"] + kwargs["margin_seconds"]:
+            return {"ok": False, "reason": ph.REFUSAL_MARGIN_EXCEEDED}
+        return real_account_margin(observation, **kwargs)
+
+    monkeypatch.setattr(pcr.pilot_horizon, "account_margin", fake_account_margin)
+    record = pcr.horizon_validity_exercise(
+        inputs=_horizon_inputs(_pilot_block(validityProvenance="server-probe")),
+        now=EXERCISED_AT,
+    )
+    assert record["result"] == pc.RESULT_FAIL
+    assert "margin covered" not in record["evidence"]
+
+
 def test_horizon_validity_margin_exceeded_token(monkeypatch):
     block = _pilot_block(validityProvenance="server-probe")
     real_account_margin = ph.account_margin
@@ -411,8 +432,32 @@ def test_ownership_probe_multi_account_pass(tmp_dir):
     record = _run_ownership_probe(tmp_dir, policy, pilot_block, command)
     assert record["result"] == pc.RESULT_PASS
     assert "guest" in record["evidence"]
-    assert "owner" in record["evidence"]
+    assert "owner" in record["evidence"].split("ownership probe exercised for accounts ", 1)[1].split(";")[0]
     assert pcr._OWNERSHIP_PROBE_LIMIT_VERBATIM in record["evidence"]
+
+
+def test_ownership_probe_refuses_executable_inside_configured_reach_root(tmp_dir):
+    reach_root = os.path.join(tmp_dir, "reach")
+    os.makedirs(reach_root, exist_ok=True)
+    probe_py = os.path.join(reach_root, "ownership_probe.py")
+    with open(probe_py, "w", encoding="utf-8") as handle:
+        handle.write(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "_acct = sys.argv[1]\n"
+            "sys.stdout.write(json.dumps(dict(ownsNothing=True, account=_acct)))\n"
+        )
+    os.chmod(probe_py, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+    command = [probe_py, pp.ACCOUNT_PLACEHOLDER]
+    record = _run_ownership_probe(
+        tmp_dir,
+        _sample_policy(),
+        _pilot_block(),
+        command,
+        reach_roots=[reach_root],
+    )
+    assert record["result"] == pc.RESULT_FAIL
+    assert record["reason"] == pb.REFUSAL_DATASTORE_OBSERVER_INVALID
 
 
 def test_ownership_probe_nonzero_exit(tmp_dir):

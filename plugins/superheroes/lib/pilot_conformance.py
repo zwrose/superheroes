@@ -731,8 +731,7 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
                             "policy": policy,
                             "pilot_block": pilot_block,
                             "slot_ref": slot_ref,
-                            "reach_roots": reach,
-                            "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
+                                    "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
                             "run_cwd_disposable": True,
                             "cleanup_root": cleanup_root,
                             "journal_path": journal_path,
@@ -880,12 +879,18 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
         elif not os.path.isdir(cwd):
             ownership_probe_reason = REASON_INPUT_CLEANUP_INCOMPLETE
         else:
-            ownership_probe = {
-                "policy": policy,
-                "pilot_block": pilot_block,
-                "run_cwd": cwd,
-                "connection_detail": policy["datastore"]["connectionDetail"],
-            }
+            reach = list(reach_roots) if reach_roots is not None else [os.path.realpath(cwd)]
+            if not reach:
+                ownership_probe_reason = REASON_INPUT_CLEANUP_INCOMPLETE
+            else:
+                ownership_probe = {
+                    "policy": policy,
+                    "pilot_block": pilot_block,
+                    "reach_roots": reach,
+                    "run_cwd": _neutral_cleanup_run_cwd(cwd, reach),
+                    "run_cwd_disposable": True,
+                    "connection_detail": policy["datastore"]["connectionDetail"],
+                }
 
     if ownership_probe is not None:
         inputs["ownership_probe"] = ownership_probe

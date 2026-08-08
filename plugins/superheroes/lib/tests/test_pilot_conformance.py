@@ -801,6 +801,57 @@ def test_resolve_inputs_cleanup_run_cwd_outside_reach(tmp_path, monkeypatch):
     assert by_input["cleanup"]["state"] == "resolved"
 
 
+def test_resolve_inputs_ownership_probe_includes_reach_roots(tmp_path, monkeypatch):
+    import json
+
+    from test_pilot_conformance_cleanup import (
+        _cleanup_correct_script,
+        _harness_layout,
+        _three_slot_policy,
+        _write_cleanup_script,
+        _write_scripts,
+    )
+
+    import pilot_boundary
+
+    monkeypatch.setattr("store_core.run_git", lambda *_args, **_kwargs: "main")
+    _write_calibration_layer(tmp_path, include_mint=True)
+    policy_root = tmp_path / "policy"
+    policy_root.mkdir()
+    slots_dir = tmp_path / "slots"
+    slots_dir.mkdir()
+    reach_root, _run_cwd, bin_dir, store_dir, cleanup_repo, _journal = _harness_layout(
+        str(tmp_path)
+    )
+    plant, probe = _write_scripts(bin_dir)
+    _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    policy = _three_slot_policy(store_dir, plant, probe)
+    with open(
+        policy_root / "example-project-pilot-policy.json",
+        "w",
+        encoding="utf-8",
+    ) as handle:
+        json.dump(policy, handle)
+
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        policy_root=str(policy_root),
+        reach_roots=[reach_root],
+        slots_dir=str(slots_dir),
+        slot_ref="slot-a@1",
+        branch="main",
+        slot="slot-a",
+        now=EXERCISED_AT,
+        allow_live_effects=True,
+    )
+    assert "ownership_probe" in inputs
+    assert inputs["ownership_probe"]["reach_roots"] == [reach_root]
+    probe_run_cwd = inputs["ownership_probe"]["run_cwd"]
+    assert pilot_boundary.is_outside_all_reach_roots(probe_run_cwd, [reach_root])
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["ownership-probe"]["state"] == "resolved"
+
+
 # --- CLI ----------------------------------------------------------------------
 
 def _repo_root():

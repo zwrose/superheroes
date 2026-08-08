@@ -296,13 +296,13 @@ def test_target_binding_opaque_protected_target_still_works():
 
 
 def test_check_redirect_refuses_protected_target_with_explicit_port():
-    binding = pb.target_binding(
-        "slot@1",
+    redirect = "http://127.0.0.1:8443"
+    binding = _binding(
         origin="http://127.0.0.1:5173",
-        permitted_redirects=[],
-        protected_targets=["https://login.example.com:443"],
+        permitted_redirects=[redirect],
+        protected_targets=[redirect],
     )
-    result = pb.check_redirect(binding, "https://login.example.com:443")
+    result = pb.check_redirect(binding, redirect)
     assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
 
 
@@ -313,12 +313,13 @@ def test_parse_origin_lowercases_ipv6_host():
 
 
 def test_check_redirect_refuses_protected_ipv6_case_variant():
-    binding = pb.target_binding(
-        "slot@1",
-        origin="http://127.0.0.1:5173",
-        permitted_redirects=[],
-        protected_targets=["https://[::ffff:1]:443"],
-    )
+    redirect = "https://[::ffff:1]:443"
+    binding = {
+        "slotRef": "slot-a@1",
+        "origin": "http://127.0.0.1:5173",
+        "permittedRedirects": [redirect],
+        "protectedTargets": [redirect],
+    }
     result = pb.check_redirect(binding, "https://[::FFFF:1]:443")
     assert result == {"ok": False, "reason": pb.REFUSAL_PROTECTED_TARGET}
 

@@ -158,6 +158,8 @@ def _build_conformance_inputs(tmp_root, now):
     cleanup["policy"] = policy
     cleanup["verdict"] = _passing_verdict(policy)
 
+    reach = cleanup["reach_roots"]
+    work_cwd = os.path.join(tmp_root, "cwd")
     inputs = {
         "artifacts": {
             "artifacts_dir": artifacts_dir,
@@ -181,8 +183,9 @@ def _build_conformance_inputs(tmp_root, now):
         "ownership_probe": {
             "policy": policy,
             "pilot_block": pilot_block,
-            "run_cwd": run_cwd,
-            "reach_roots": cleanup["reach_roots"],
+            "reach_roots": reach,
+            "run_cwd": pilot_conformance._neutral_cleanup_run_cwd(work_cwd, reach),
+            "run_cwd_disposable": True,
             "connection_detail": policy["datastore"]["connectionDetail"],
         },
         "reclaim": {"slots_dir": slots_dir},

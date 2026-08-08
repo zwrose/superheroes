@@ -54,6 +54,7 @@ REASON_ROW_RULING_FORBIDDEN = "acceptance-row-ruling-forbidden"
 REASON_EVIDENCE_EXERCISE_ABSENT = "acceptance-evidence-exercise-absent"
 REASON_EVIDENCE_EXERCISE_SKIPPED = "acceptance-evidence-exercise-skipped"
 REASON_EVIDENCE_EXERCISE_FAILED = "acceptance-evidence-exercise-failed"
+REASON_EVIDENCE_EXERCISE_REFUSED = "acceptance-evidence-exercise-refused"
 REASON_EVIDENCE_SURFACE_UNBOUND = "acceptance-evidence-surface-unbound"
 REASON_EVIDENCE_DECLARATION_ABSENT = "acceptance-evidence-declaration-absent"
 REASON_EVIDENCE_DECLARATION_NOT_ATTESTED = "acceptance-evidence-declaration-not-attested"
@@ -61,10 +62,12 @@ REASON_EVIDENCE_DECLARATION_NOT_ATTESTED = "acceptance-evidence-declaration-not-
 REASON_CLI_REPORT_PATH_INVALID = "acceptance-cli-report-path-invalid"
 REASON_CLI_REPORT_INVALID = "acceptance-cli-report-invalid"
 REASON_CLI_DECLARATIONS_INVALID = "acceptance-cli-declarations-invalid"
+REASON_CLI_DECLARATIONS_MALFORMED = "acceptance-cli-declarations-malformed"
+REASON_CLI_DECLARATIONS_NULL = "acceptance-cli-declarations-null"
+REASON_CLI_DECLARATIONS_ABSENT = "acceptance-cli-declarations-absent"
 REASON_CLI_DIRTY_CONFLICTING = "acceptance-cli-dirty-conflicting"
 REASON_CLI_DIRTY_UNRESOLVED = "acceptance-cli-dirty-unresolved"
 REASON_CLI_GENERATED_AT_INVALID = "acceptance-cli-generated-at-invalid"
-REASON_CLI_FORMAT_INVALID = "acceptance-cli-format-invalid"
 
 _COMMIT_OID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
 _EXERCISE_EVIDENCE_KEYS = frozenset({"exercise", "surface"})
@@ -268,6 +271,8 @@ def _resolve_exercised(row_data, report_data):
     result = record.get("result")
     if result == pc.RESULT_SKIPPED:
         return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_SKIPPED)
+    if result == pc.RESULT_REFUSED:
+        return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_REFUSED)
     if result != pc.RESULT_PASS:
         return _rewrite_unexercised(row_data, REASON_EVIDENCE_EXERCISE_FAILED)
     surfaces = record.get("surfaces")
@@ -353,6 +358,7 @@ def matrix(reference_record, rows, report_data, declarations_block, *, generated
         "generatedAt": generated_at,
         "rows": resolved_rows,
         "ok": ok,
+        "okClauses": clauses,
     }
 
 
@@ -650,7 +656,11 @@ def render_markdown(matrix_data, report_data=None, declarations_block=None):
     if report_data is not None and declarations_block is not None:
         reference = matrix_data.get("reference") or {}
         resolved_rows = matrix_data.get("rows") or []
-        clauses = _ok_clauses(reference, resolved_rows, report_data, declarations_block)
+        clauses = matrix_data.get("okClauses")
+        if clauses is None:
+            clauses = _ok_clauses(
+                reference, resolved_rows, report_data, declarations_block
+            )
         lines.append("")
         lines.append("**ok clauses:**")
         for key in sorted(clauses):
@@ -725,8 +735,8 @@ def _validate_report_schema(report_data):
         raise PilotAcceptanceError(REASON_CLI_REPORT_INVALID)
 
 
-def _empty_declarations_block():
-    return {
+def _empty_declarations_block(*, source=None):
+    block = {
         "schemaVersion": pcd.SCHEMA,
         "rows": [],
         "attested": 0,
@@ -734,15 +744,32 @@ def _empty_declarations_block():
         "notApplicable": 0,
         "ok": False,
     }
+    if source is not None:
+        block["source"] = source
+    return block
 
 
-def _coerce_declarations_block(declarations):
+def _validate_declarations_envelope(declarations):
+    if not isinstance(declarations.get("rows"), list):
+        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MALFORMED)
+    for count_key in ("attested", "absent", "notApplicable"):
+        if not isinstance(declarations.get(count_key), int):
+            raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MALFORMED)
+    if declarations.get("ok") not in (True, False):
+        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MALFORMED)
+
+
+def _coerce_declarations_block(report_data):
+    if "declarations" not in report_data:
+        return _empty_declarations_block(source=REASON_CLI_DECLARATIONS_ABSENT)
+    declarations = report_data["declarations"]
     if declarations is None:
-        return _empty_declarations_block()
+        return _empty_declarations_block(source=REASON_CLI_DECLARATIONS_NULL)
     if not isinstance(declarations, dict):
         raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_INVALID)
     if declarations.get("schemaVersion") != pcd.SCHEMA:
-        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_INVALID)
+        raise PilotAcceptanceError(REASON_CLI_DECLARATIONS_MALFORMED)
+    _validate_declarations_envelope(declarations)
     return declarations
 
 
@@ -809,7 +836,7 @@ def main(argv):
         ref = reference(parsed.project, parsed.commit, dirty=dirty_value)
         report_data = _load_report(parsed.report_path)
         _validate_report_schema(report_data)
-        declarations_block = _coerce_declarations_block(report_data.get("declarations"))
+        declarations_block = _coerce_declarations_block(report_data)
         rows = framework_rows(report_data, declarations_block)
         matrix_data = matrix(
             ref,

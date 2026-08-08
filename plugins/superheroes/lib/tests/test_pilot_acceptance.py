@@ -51,6 +51,9 @@ def _declarations_block(**overrides):
                 "reason": None,
             }
         ],
+        "attested": 1,
+        "absent": 0,
+        "notApplicable": 0,
     }
     base.update(overrides)
     return base
@@ -320,6 +323,36 @@ def test_resolve_exercised_failed_record_becomes_unexercised():
     assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_EXERCISE_FAILED
 
 
+def test_resolve_exercised_refused_record_becomes_unexercised():
+    row_data = pa.row(
+        area="a",
+        claim="c",
+        status=pa.STATUS_EXERCISED,
+        evidence={"exercise": "wave-headless", "surface": "pilot_wave.wave_phase"},
+    )
+    report = _report_data(
+        exercises=[_exercise("wave-headless", ["pilot_wave.wave_phase"], result=pc.RESULT_REFUSED)]
+    )
+    resolved = pa.resolve([row_data], report, _declarations_block())
+    assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_EXERCISE_REFUSED
+
+
+def test_resolve_exercised_skipped_record_becomes_unexercised():
+    row_data = pa.row(
+        area="a",
+        claim="c",
+        status=pa.STATUS_EXERCISED,
+        evidence={"exercise": "wave-headless", "surface": "pilot_wave.wave_phase"},
+    )
+    report = _report_data(
+        exercises=[_exercise("wave-headless", ["pilot_wave.wave_phase"], result=pc.RESULT_SKIPPED)]
+    )
+    resolved = pa.resolve([row_data], report, _declarations_block())
+    assert resolved[0]["status"] == pa.STATUS_UNEXERCISED
+    assert resolved[0]["evidence"]["reason"] == pa.REASON_EVIDENCE_EXERCISE_SKIPPED
+
+
 def test_resolve_exercised_missing_exercise_becomes_unexercised():
     row_data = pa.row(
         area="a",
@@ -477,6 +510,8 @@ def test_matrix_ok_true_when_all_clauses_hold():
         generated_at=_GENERATED_AT,
     )
     assert data["ok"] is True
+    assert data["okClauses"]["rows_non_empty"] is True
+    assert data["okClauses"]["declarations_ok"] is True
 
 
 # --- ownership two-row rule ---------------------------------------------------
@@ -604,17 +639,56 @@ def test_render_markdown_shows_declared_limit_ruling():
 def test_matrix_accepts_null_declarations():
     report = _empty_report()
     report["declarations"] = None
-    rows = pa.framework_rows(report, pa._coerce_declarations_block(None))
+    rows = pa.framework_rows(report, pa._coerce_declarations_block(report))
     assert len(rows) == _expected_framework_row_count()
     matrix_data = pa.matrix(
         _reference(),
         rows,
         report,
-        pa._coerce_declarations_block(None),
+        pa._coerce_declarations_block(report),
         generated_at=_GENERATED_AT,
     )
     assert "## Acceptance matrix" not in str(matrix_data)
     assert matrix_data["ok"] is False
+    assert matrix_data["okClauses"]["declarations_ok"] is False
+
+
+def test_coerce_declarations_absent_key_degrades():
+    block = pa._coerce_declarations_block({})
+    assert block["source"] == pa.REASON_CLI_DECLARATIONS_ABSENT
+    assert block["ok"] is False
+
+
+def test_coerce_declarations_explicit_null_degrades():
+    block = pa._coerce_declarations_block({"declarations": None})
+    assert block["source"] == pa.REASON_CLI_DECLARATIONS_NULL
+    assert block["ok"] is False
+
+
+def test_coerce_declarations_malformed_envelope_refuses():
+    with pytest.raises(pa.PilotAcceptanceError) as exc:
+        pa._coerce_declarations_block({"declarations": {"schemaVersion": pcd.SCHEMA}})
+    assert exc.value.reason == pa.REASON_CLI_DECLARATIONS_MALFORMED
+
+
+def test_cli_matrix_with_malformed_declarations_report():
+    report = {
+        "schemaVersion": pc.SCHEMA,
+        "ok": False,
+        "unexercised": list(pc.REQUIRED_SURFACES),
+        "exercises": [],
+        "declarations": {"schemaVersion": pcd.SCHEMA},
+    }
+    with tempfile.TemporaryDirectory() as tmpdir:
+        path = _write_report(tmpdir, report)
+        proc = subprocess.run(
+            _cli_argv(path, format="markdown"),
+            capture_output=True,
+            text=True,
+            cwd=_LIB,
+        )
+    assert proc.returncode == 2
+    assert proc.stderr.strip() == pa.REASON_CLI_DECLARATIONS_MALFORMED
 
 
 def test_cli_matrix_with_null_declarations_report():

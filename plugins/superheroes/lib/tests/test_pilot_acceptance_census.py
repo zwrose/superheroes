@@ -274,8 +274,71 @@ def _assert_inventory_literals_in_section(section, inventory, label):
         )
 
 
-def _assert_doc_inventory_ids_in_code(section, inventory, label):
-    doc_ids = {token for token in _literal_tokens_in_text(section) if token in inventory}
+def _assert_extrapolation_id_status_pairs_in_section(section, inventory, label):
+    for item_id, value in inventory.items():
+        assert "`%s`" % item_id in section, (
+            "%s id `%s` missing from pilot-contract.md (file: %s)"
+            % (label, item_id, _PILOT_CONTRACT)
+        )
+        paired = "`%s` (`%s`" % (item_id, value)
+        alt_paired = "`%s`\n(`%s`" % (item_id, value)
+        assert paired in section or alt_paired in section, (
+            "%s id `%s` not paired with status `%s` in pilot-contract.md (file: %s)"
+            % (label, item_id, value, _PILOT_CONTRACT)
+        )
+
+
+def _assert_tripwire_id_status_pairs_in_section(section, inventory, label):
+    for item_id, value in inventory.items():
+        assert "`%s`" % item_id in section, (
+            "%s id `%s` missing from pilot-contract.md (file: %s)"
+            % (label, item_id, _PILOT_CONTRACT)
+        )
+        paired = "**`%s`** — `%s`" % (item_id, value)
+        assert paired in section, (
+            "%s id `%s` not paired with status `%s` in pilot-contract.md (file: %s)"
+            % (label, item_id, value, _PILOT_CONTRACT)
+        )
+
+
+_ACCEPTANCE_STATUSES = frozenset({
+    pa.STATUS_EXERCISED,
+    pa.STATUS_ATTESTED,
+    pa.STATUS_UNEXERCISED,
+    pa.STATUS_DECLARED_LIMIT,
+    pa.STATUS_PROSE_RESIDUE,
+    pa.STATUS_NOT_APPLICABLE,
+})
+
+
+def _assert_status_vocabulary_pinned(doc):
+    acceptance_section = _extract_section(doc, _SECTION_ACCEPTANCE)
+    assert acceptance_section is not None
+    for status in sorted(_ACCEPTANCE_STATUSES):
+        assert "`%s`" % status in acceptance_section, (
+            "acceptance status vocabulary missing `%s` in pilot-contract.md (file: %s)"
+            % (status, _PILOT_CONTRACT)
+        )
+
+
+def _doc_extrapolation_ids(section):
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r"`([a-z][a-z0-9-]+)`[\s\n]*\(`([a-z][a-z0-9-]+)`",
+            section,
+        )
+    }
+
+
+def _doc_tripwire_ids(section):
+    return {
+        match.group(1)
+        for match in re.finditer(r"\*\*`([a-z][a-z0-9-]+)`\*\* — `", section)
+    }
+
+
+def _assert_doc_inventory_ids_in_code(doc_ids, inventory, label):
     assert doc_ids == set(inventory), (
         "pilot-contract.md %s id mismatch — missing from code: %s; "
         "in doc but not in code: %s (file: %s)"
@@ -310,7 +373,7 @@ def test_doc_declared_limits_inventory_doc_to_code():
     doc_rulings = _doc_declared_limit_rulings(doc)
     assert set(doc_rulings) == set(code_inventory)
     _assert_doc_inventory_ids_in_code(
-        section, code_inventory, "FRAMEWORK_DECLARED_LIMITS"
+        set(doc_rulings), code_inventory, "FRAMEWORK_DECLARED_LIMITS"
     )
 
 
@@ -319,7 +382,7 @@ def test_doc_extrapolation_inventory_code_to_doc():
     section = _extract_section(doc, _SECTION_EXTRAPOLATION_ROWS)
     assert section is not None
     inventory = _extrapolation_code_inventory()
-    _assert_inventory_literals_in_section(section, inventory, "EXTRAPOLATION_POINTS")
+    _assert_extrapolation_id_status_pairs_in_section(section, inventory, "EXTRAPOLATION_POINTS")
 
 
 def test_doc_extrapolation_inventory_doc_to_code():
@@ -327,7 +390,9 @@ def test_doc_extrapolation_inventory_doc_to_code():
     section = _extract_section(doc, _SECTION_EXTRAPOLATION_ROWS)
     assert section is not None
     inventory = _extrapolation_code_inventory()
-    _assert_doc_inventory_ids_in_code(section, inventory, "EXTRAPOLATION_POINTS")
+    _assert_doc_inventory_ids_in_code(
+        _doc_extrapolation_ids(section), inventory, "EXTRAPOLATION_POINTS"
+    )
 
 
 def test_doc_tripwire_inventory_code_to_doc():
@@ -335,7 +400,7 @@ def test_doc_tripwire_inventory_code_to_doc():
     section = _extract_section(doc, _SECTION_TRIPWIRE_ROWS)
     assert section is not None
     inventory = _tripwire_code_inventory()
-    _assert_inventory_literals_in_section(section, inventory, "TRIPWIRE_ROWS")
+    _assert_tripwire_id_status_pairs_in_section(section, inventory, "TRIPWIRE_ROWS")
 
 
 def test_doc_tripwire_inventory_doc_to_code():
@@ -343,7 +408,9 @@ def test_doc_tripwire_inventory_doc_to_code():
     section = _extract_section(doc, _SECTION_TRIPWIRE_ROWS)
     assert section is not None
     inventory = _tripwire_code_inventory()
-    _assert_doc_inventory_ids_in_code(section, inventory, "TRIPWIRE_ROWS")
+    _assert_doc_inventory_ids_in_code(
+        _doc_tripwire_ids(section), inventory, "TRIPWIRE_ROWS"
+    )
 
 
 def test_framework_declared_limits_census_bidirectional():
@@ -482,6 +549,11 @@ def test_census_red_code_to_doc_missing_boundary_token(monkeypatch):
         _assert_bidirectional_tokens(
             code_tokens, doc_tokens, "pilot_boundary.REFUSAL_TARGET_NOT_LOCAL"
         )
+
+
+def test_acceptance_status_vocabulary_pinned_in_contract():
+    doc = _load_contract()
+    _assert_status_vocabulary_pinned(doc)
 
 
 def test_census_red_doc_to_code_fictitious_acceptance_token(monkeypatch):
