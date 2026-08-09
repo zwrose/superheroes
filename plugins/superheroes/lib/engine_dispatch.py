@@ -588,7 +588,7 @@ def _path_content_identity(cwd_real, rel_path):
 def _baseline_dirty_map(cwd_real, timeout=None):
     try:
         status = _git_scrubbed(
-            cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=matching",
+            cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=traditional",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -603,7 +603,12 @@ def _baseline_dirty_map(cwd_real, timeout=None):
 
 
 def _delivered_paths(cwd_real, base_sha, timeout=None):
-    """Union of committed and working-tree paths changed since ``base_sha``.
+    """Paths changed since ``base_sha`` in the working tree, plus on-disk status-only paths.
+
+    The diff against ``base_sha`` is authoritative for whether a path counts as delivered.
+    Status supplies only paths git cannot express there (untracked/ignored files on disk).
+    Status-derived paths absent from disk are excluded so a committed-then-reverted deletion
+    cannot be credited when the final worktree matches base.
 
     Returns a ``set`` of paths on success, or an evidence-cause token string on failure.
     """
@@ -620,7 +625,7 @@ def _delivered_paths(cwd_real, base_sha, timeout=None):
     paths = _parse_name_status_z_paths(diff.stdout or "")
     try:
         status = _git_scrubbed(
-            cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=matching",
+            cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=traditional",
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
@@ -628,7 +633,7 @@ def _delivered_paths(cwd_real, base_sha, timeout=None):
     if status.returncode != 0:
         return ITEM_EVIDENCE_CAUSE_STATUS_FAILED
     for path in _parse_porcelain_z_paths(status.stdout or ""):
-        if path:
+        if path and os.path.lexists(os.path.join(cwd_real, path)):
             paths.add(path)
     return paths
 
@@ -654,12 +659,13 @@ def _item_delivery_check(cwd_real, opened, timeout=None):
             current = _path_content_identity(cwd_real, path)
             if current == baseline_dirty[path]:
                 missing.append(path)
-    return {
+    field_values = {
         "declared": True,
         "expected": len(expected_items),
         "delivered": len(expected_items) - len(missing),
         "missing": sorted(missing),
     }
+    return {field: field_values[field] for field in ITEM_CHECK_FIELDS}
 
 
 def _worktree_lease_path(cwd_real):

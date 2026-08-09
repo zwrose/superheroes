@@ -2,6 +2,7 @@ import importlib.util
 import hashlib
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -1532,17 +1533,40 @@ def test_dispatch_mechanics_names_item_check_constants():
     """axis: itemCheck detail tokens and field names are named in dispatch-mechanics.md."""
     with open(_DISPATCH_MECHANICS, encoding="utf-8") as fh:
         doc = fh.read()
-    missing = []
-    for token in (ED.ITEM_DETAIL_UNDELIVERED, ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE):
-        if token not in doc:
-            missing.append(token)
-    for field in sorted(ED.ITEM_CHECK_FIELDS):
-        if field not in doc:
-            missing.append(field)
-    assert missing == [], (
-        "dispatch-mechanics.md missing item-check constant(s): %s (file: %s)"
-        % (", ".join(missing), _DISPATCH_MECHANICS)
+
+    item_check_match = re.search(r"`itemCheck`\s*\(([^)]+)\)", doc)
+    assert item_check_match, "itemCheck field list not found in dispatch-mechanics.md"
+    doc_fields = frozenset(re.findall(r"`([^`]+)`", item_check_match.group(1)))
+    assert doc_fields == ED.ITEM_CHECK_FIELDS, (
+        "itemCheck field list mismatch: doc=%s code=%s"
+        % (sorted(doc_fields), sorted(ED.ITEM_CHECK_FIELDS))
     )
+
+    tokens_start = doc.find("Terminal detail tokens:")
+    assert tokens_start != -1, "Terminal detail tokens section not found"
+    tokens_end = doc.find("\n\n", tokens_start)
+    tokens_span = doc[tokens_start:tokens_end]
+    assert "`%s`" % ED.ITEM_DETAIL_UNDELIVERED in tokens_span
+    assert "`%s:<cause>`" % ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE in tokens_span
+
+    causes_start = doc.find("causes include", tokens_start)
+    assert causes_start != -1, "item-evidence-unavailable causes list not found"
+    causes_end = doc.find(").", causes_start)
+    causes_span = doc[causes_start:causes_end]
+    doc_causes = frozenset(re.findall(r"`([^`]+)`", causes_span))
+    expected_causes = frozenset({
+        ED.ITEM_EVIDENCE_CAUSE_FALSY_BASE,
+        ED.ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT,
+        ED.ITEM_EVIDENCE_CAUSE_DIFF_FAILED,
+        ED.ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT,
+        ED.ITEM_EVIDENCE_CAUSE_STATUS_FAILED,
+    })
+    assert doc_causes == expected_causes, (
+        "item-evidence causes mismatch: doc=%s code=%s"
+        % (sorted(doc_causes), sorted(expected_causes))
+    )
+
+    assert "`%s`" % ED.BASE_SHA_UNRESOLVABLE in doc
 
 
 def test_read_expected_items_non_utf8_file(tmp_path):
@@ -1587,6 +1611,11 @@ def test_write_untracked_dir_file_delivered(tmp_path):
 
 def test_write_gitignored_declared_path_delivered(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
+    gitignore = os.path.join(wt, ".gitignore")
+    with open(gitignore, "w", encoding="utf-8") as fh:
+        fh.write("docs/\n")
+    _git(wt, "add", ".gitignore")
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "ignore docs")
 
     class DeliverRunner:
         def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
@@ -1624,15 +1653,19 @@ def test_delivered_paths_committed_rename(tmp_path):
 def test_write_committed_then_reverted_not_credited(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     base = _git(wt, "rev-parse", "HEAD").stdout.strip()
-    reverted = os.path.join(wt, "reverted.txt")
-    with open(reverted, "w", encoding="utf-8") as fh:
-        fh.write("temp\n")
-    _git(wt, "add", "reverted.txt")
-    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add temp")
-    os.remove(reverted)
-    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+
+    class CommitThenRevertRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            reverted = os.path.join(cwd, "reverted.txt")
+            with open(reverted, "w", encoding="utf-8") as fh:
+                fh.write("temp\n")
+            _git(cwd, "add", "reverted.txt")
+            _git(cwd, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add temp")
+            os.remove(reverted)
+            return _build_ok_stdout(), False, 0, ""
+
     res = _dispatch_write(
-        tmp_path, fake, cwd=wt,
+        tmp_path, CommitThenRevertRunner(), cwd=wt,
         base_sha=base,
         expected_items=["reverted.txt"],
     )

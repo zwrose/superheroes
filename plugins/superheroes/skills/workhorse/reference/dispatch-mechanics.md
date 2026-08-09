@@ -221,17 +221,19 @@ no `baselineDirty` capture, no `itemCheck` key. When declared, a passing result 
 `itemCheck` (`declared`, `expected`, `delivered`, `missing`). Terminal detail tokens:
 `items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`) and
 `item-evidence-unavailable:<cause>` (git evidence could not be collected — causes include
-`falsy-base-sha`, `diff-timeout`, `diff-failed`, `status-timeout`, `status-failed`). Other forfeits,
-`unrunnable`, and `worktree-dirtied-by-attempt` never carry `itemCheck`.
+`falsy-base-sha`, `diff-timeout`, `diff-failed`, `status-timeout`, `status-failed`). Open-time
+`unrunnable` detail `base-sha-unresolvable` refuses when a declared run's `--base-sha` does not
+resolve. Other forfeits, `unrunnable`, and `worktree-dirtied-by-attempt` never carry `itemCheck`.
 
 Evidence is the union of `git diff --name-status -z -M <baseSha>` against the **working tree**
-(not `HEAD`, so a path committed and then reverted is not credited) plus
-`git status --porcelain=v1 -z -uall --ignored=matching` paths. Rename/copy records contribute both
-the old and new paths.
+(not `HEAD`, so a path committed and then reverted is not credited) plus on-disk paths from
+`git status --porcelain=v1 -z -uall --ignored=traditional` that git cannot express in that diff.
+Rename/copy records contribute both the old and new paths.
 
 This is **final-diff membership, not proof of engine authorship**: it cannot distinguish created from
-modified; a concurrent writer could supply a path. A file that was already dirty before the run and
-unchanged afterward is not credited as delivered.
+modified; a create-then-delete leaves no evidence and reads as missing; a concurrent writer could
+supply a path. A file that was already dirty before the run and unchanged afterward is not credited
+as delivered.
 
 When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
 ended attempt's stdout. The outcome remains a forfeit; its contents are the implementer's claims and
