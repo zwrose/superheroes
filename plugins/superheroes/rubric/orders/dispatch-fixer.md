@@ -17,7 +17,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    original suggestion. BEFORE editing any file, gate it with the fixer
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
    values from ## Input:
-   `python3 -B "{{ESCALATION_WRAPPER_PATH}}" guard --root "{{REPO_ROOT}}" --path "<file>"`
+   `python3 -B {{ESCALATION_WRAPPER_PATH}} guard --root {{REPO_ROOT}} --path "<file>"`
    — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
    safety machinery); report it for owner escalation (see Payload contract) instead. Never
    push/merge/deploy (those stay user-gated).
