@@ -1180,8 +1180,8 @@ def test_baseline_dirty_map_rename_consumes_both_paths(tmp_path):
     with open(old, "w", encoding="utf-8") as fh:
         fh.write("rename-me\n")
     _git(wt, "add", "old-name.txt")
-    new = os.path.join(wt, "new-name.txt")
-    os.rename(old, new)
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add old")
+    _git(wt, "mv", "old-name.txt", "new-name.txt")
     dirty = ED._baseline_dirty_map(wt_real)
     assert "new-name.txt" in dirty
     assert "old-name.txt" in dirty
@@ -1299,7 +1299,9 @@ def test_write_resume_omitted_expected_items_inherit(tmp_path):
         tmp_path, FakeRunner([(_build_ok_stdout(), False, 0, "")]),
         cwd=wt, run_dir=run_dir, max_wait=120,
     )
-    assert res.get("detail") != "expected-items-mismatch"
+    assert res["ok"] is False
+    assert res["detail"] == ED.ITEM_DETAIL_UNDELIVERED
+    assert res["itemCheck"]["missing"] == ["keep.txt"]
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
     assert opened["expectedItems"] == ["keep.txt"]
@@ -1311,12 +1313,14 @@ def test_write_terminal_folded_returns_stored_before_expectation_check(tmp_path,
     fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
     first = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, expected_items=["a.txt"])
     assert first["terminal"] is True
+    assert "itemCheck" not in first
     res = _dispatch_write(
         tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir,
         expected_items=["different.txt"],
     )
     assert res["reason"] == "plan_wrong"
     assert res.get("detail") != "expected-items-mismatch"
+    assert "itemCheck" not in res
 
 
 def test_write_cli_expect_item_and_file(tmp_path, capsys):
@@ -1421,15 +1425,17 @@ def test_write_rename_contributes_both_paths(tmp_path):
     with open(old, "w", encoding="utf-8") as fh:
         fh.write("rename-me\n")
     _git(wt, "add", "old-name.txt")
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add old")
+    base_sha = _git(wt, "rev-parse", "HEAD").stdout.strip()
 
     class RenameRunner:
         def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
-            new = os.path.join(cwd, "new-name.txt")
-            os.rename(os.path.join(cwd, "old-name.txt"), new)
+            _git(cwd, "mv", "old-name.txt", "new-name.txt")
             return _build_ok_stdout(), False, 0, ""
 
     res = _dispatch_write(
         tmp_path, RenameRunner(), cwd=wt,
+        base_sha=base_sha,
         expected_items=["old-name.txt", "new-name.txt"],
     )
     assert res["ok"] is True
@@ -1441,7 +1447,7 @@ def test_write_item_evidence_unavailable_forfeits(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
 
     def fail_delivered(*_a, **_k):
-        return None
+        return ED.ITEM_EVIDENCE_CAUSE_DIFF_FAILED
 
     monkeypatch.setattr(ED, "_delivered_paths", fail_delivered)
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
@@ -1451,8 +1457,11 @@ def test_write_item_evidence_unavailable_forfeits(tmp_path, monkeypatch):
     )
     assert res["ok"] is False
     assert res["forfeited"] is True
-    assert res["detail"] == "item-evidence-unavailable"
+    assert res["detail"] == "%s:%s" % (
+        ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE, ED.ITEM_EVIDENCE_CAUSE_DIFF_FAILED,
+    )
     assert "itemCheck" not in res
+    assert "not an engine forfeit" in res["disclosure"]
 
 
 def test_write_item_evidence_timeout_forfeits(tmp_path, monkeypatch):
@@ -1460,7 +1469,7 @@ def test_write_item_evidence_timeout_forfeits(tmp_path, monkeypatch):
     real_git = ED._git_scrubbed
 
     def timeout_on_evidence_git(cwd, *args, timeout=None):
-        if args[:3] == ("diff", "--name-only", "-z"):
+        if args[:3] == ("diff", "--name-status", "-z"):
             raise subprocess.TimeoutExpired(cmd="git", timeout=timeout or 0)
         return real_git(cwd, *args, timeout=timeout)
 
@@ -1472,7 +1481,9 @@ def test_write_item_evidence_timeout_forfeits(tmp_path, monkeypatch):
     )
     assert res["ok"] is False
     assert res["forfeited"] is True
-    assert res["detail"] == "item-evidence-unavailable"
+    assert res["detail"] == "%s:%s" % (
+        ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE, ED.ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT,
+    )
     assert "itemCheck" not in res
 
 
@@ -1507,5 +1518,185 @@ def test_delivered_paths_union_committed_and_working_tree(tmp_path):
     with open(unstaged, "w", encoding="utf-8") as fh:
         fh.write("unstaged\n")
     paths = ED._delivered_paths(wt_real, head)
+    assert isinstance(paths, set)
     assert "staged.txt" in paths
     assert "unstaged.txt" in paths
+
+
+_DISPATCH_MECHANICS = os.path.join(
+    _HERE, "..", "..", "skills", "workhorse", "reference", "dispatch-mechanics.md",
+)
+
+
+def test_dispatch_mechanics_names_item_check_constants():
+    """axis: itemCheck detail tokens and field names are named in dispatch-mechanics.md."""
+    with open(_DISPATCH_MECHANICS, encoding="utf-8") as fh:
+        doc = fh.read()
+    missing = []
+    for token in (ED.ITEM_DETAIL_UNDELIVERED, ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE):
+        if token not in doc:
+            missing.append(token)
+    for field in sorted(ED.ITEM_CHECK_FIELDS):
+        if field not in doc:
+            missing.append(field)
+    assert missing == [], (
+        "dispatch-mechanics.md missing item-check constant(s): %s (file: %s)"
+        % (", ".join(missing), _DISPATCH_MECHANICS)
+    )
+
+
+def test_read_expected_items_non_utf8_file(tmp_path):
+    bad = tmp_path / "bad-items.txt"
+    bad.write_bytes(b"\xff\xfe")
+    ok, detail = ED._read_expected_items(None, str(bad))
+    assert not ok
+    assert detail == "expected-items-file-unreadable"
+
+
+def test_write_base_sha_unresolvable_refuses_before_spawn(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        base_sha="a" * 40,
+        expected_items=["missing.txt"],
+    )
+    assert res["detail"] == ED.BASE_SHA_UNRESOLVABLE
+    assert res["attempts"] == 0
+    assert fake.calls == []
+
+
+def test_write_untracked_dir_file_delivered(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+
+    class DeliverRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            target_dir = os.path.join(cwd, "newdir")
+            os.makedirs(target_dir)
+            with open(os.path.join(target_dir, "file.txt"), "w", encoding="utf-8") as fh:
+                fh.write("new\n")
+            return _build_ok_stdout(), False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DeliverRunner(), cwd=wt,
+        expected_items=["newdir/file.txt"],
+    )
+    assert res["ok"] is True
+    assert res["itemCheck"]["missing"] == []
+
+
+def test_write_gitignored_declared_path_delivered(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+
+    class DeliverRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            docs = os.path.join(cwd, "docs")
+            os.makedirs(docs, exist_ok=True)
+            with open(os.path.join(docs, "spec.md"), "w", encoding="utf-8") as fh:
+                fh.write("spec\n")
+            return _build_ok_stdout(), False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DeliverRunner(), cwd=wt,
+        expected_items=["docs/spec.md"],
+    )
+    assert res["ok"] is True
+    assert res["itemCheck"]["missing"] == []
+
+
+def test_delivered_paths_committed_rename(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    old = os.path.join(wt, "old-name.txt")
+    with open(old, "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    _git(wt, "add", "old-name.txt")
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add old")
+    base = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    _git(wt, "mv", "old-name.txt", "new-name.txt")
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "rename")
+    paths = ED._delivered_paths(wt_real, base)
+    assert isinstance(paths, set)
+    assert "old-name.txt" in paths
+    assert "new-name.txt" in paths
+
+
+def test_write_committed_then_reverted_not_credited(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    base = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    reverted = os.path.join(wt, "reverted.txt")
+    with open(reverted, "w", encoding="utf-8") as fh:
+        fh.write("temp\n")
+    _git(wt, "add", "reverted.txt")
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add temp")
+    os.remove(reverted)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        base_sha=base,
+        expected_items=["reverted.txt"],
+    )
+    assert res["detail"] == ED.ITEM_DETAIL_UNDELIVERED
+    assert "reverted.txt" in res["itemCheck"]["missing"]
+
+
+def test_write_folded_malformed_expectation_returns_stored_terminal(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
+    first = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, expected_items=["a.txt"])
+    assert first["terminal"] is True
+    res = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir,
+        expected_items=["/abs/path"],
+    )
+    assert res["reason"] == "plan_wrong"
+    assert res.get("detail") != "expected-item-absolute"
+
+
+def test_baseline_dirty_map_fifo_and_symlink(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    fifo = os.path.join(wt, "pipe.fifo")
+    os.mkfifo(fifo)
+    symlink = os.path.join(wt, "link.txt")
+    os.symlink("README.md", symlink)
+    assert ED._path_content_identity(wt_real, "pipe.fifo") == "<absent>"
+    dirty = ED._baseline_dirty_map(wt_real)
+    assert dirty["link.txt"] == "<absent>"
+
+
+@pytest.mark.parametrize("cause,neutralize", [
+    (ED.ITEM_EVIDENCE_CAUSE_FALSY_BASE, lambda *_a, **_k: ED.ITEM_EVIDENCE_CAUSE_FALSY_BASE),
+    (ED.ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT, "diff-timeout"),
+    (ED.ITEM_EVIDENCE_CAUSE_DIFF_FAILED, "diff-failed"),
+    (ED.ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT, "status-timeout"),
+    (ED.ITEM_EVIDENCE_CAUSE_STATUS_FAILED, "status-failed"),
+])
+def test_write_item_evidence_cause_forfeits(tmp_path, monkeypatch, cause, neutralize):
+    wt, _main = _linked_worktree(tmp_path)
+    if callable(neutralize):
+        monkeypatch.setattr(ED, "_delivered_paths", neutralize)
+    else:
+        real_git = ED._git_scrubbed
+        status_calls = {"n": 0}
+
+        def fail_git(cwd, *args, timeout=None):
+            if neutralize == "diff-timeout" and args[:3] == ("diff", "--name-status", "-z"):
+                raise subprocess.TimeoutExpired(cmd="git", timeout=timeout or 0)
+            if neutralize == "diff-failed" and args[:3] == ("diff", "--name-status", "-z"):
+                return subprocess.CompletedProcess(args, 1, "", "err")
+            if args and args[0] == "status":
+                status_calls["n"] += 1
+                if neutralize == "status-timeout" and status_calls["n"] > 1:
+                    raise subprocess.TimeoutExpired(cmd="git", timeout=timeout or 0)
+                if neutralize == "status-failed" and status_calls["n"] > 1:
+                    return subprocess.CompletedProcess(args, 1, "", "err")
+            return real_git(cwd, *args, timeout=timeout)
+
+        monkeypatch.setattr(ED, "_git_scrubbed", fail_git)
+
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, expected_items=["a.txt"])
+    assert res["detail"] == "%s:%s" % (ED.ITEM_DETAIL_EVIDENCE_UNAVAILABLE, cause)
+    assert "itemCheck" not in res
