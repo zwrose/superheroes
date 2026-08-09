@@ -12,7 +12,7 @@ review. Your job is **not** keep/drop — you group issues that share the same r
 
 ## Your task
 Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids}`
-echoing the staged ids verbatim. Write your groups to {{GROUPING_OUTPUT_PATH}}.
+echoing the staged ids verbatim. {{OUTPUT_CHANNEL_BLOCK}}
 
 `verification.merge_and_rank` applies your groups under a **coverage guarantee**: every
 survivor's staged id appears exactly once in the output; invalid or missing groups fail
@@ -29,4 +29,4 @@ merge is PLAUSIBLE. Issues are ranked Critical → Important → Minor → Nit, 
   group proposal, or decide the run's outcome.
 - Echo staged ids verbatim — do not recompute or rename.
 - **Never change the repository, and never claim a run you did not make.**
-- Write a JSON array — every survivor id appears exactly once across all groups.
+- {{OUTPUT_CHANNEL_BLOCK}}

@@ -809,6 +809,40 @@ def test_record_result_refuses_a_payload_fault(tmp_path, adapters):
     assert RD.cmd_record_result(d, "test-reviewer")["ok"] is True
 
 
+def test_record_result_refuses_bare_payload_fault(tmp_path, adapters):
+    """Bare host landings get the same record-time payload validation as full envelopes."""
+    d = _session(tmp_path)
+    pend = _pending(d)
+    skey = RR.storage_key("code-reviewer")
+    stub_path = RR.envelope_stub_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
+    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+    manifest_sha, order_sha = _anchor_hashes(d, pend["round"], pend["phase"], pend["attempt"],
+                                             "code-reviewer")
+    RR.atomic_write_json(stub_path, {
+        "schema": RR.SEAT_RESULT_SCHEMA,
+        "session": _session_id(d),
+        "round": pend["round"],
+        "phase": pend["phase"],
+        "seat": "code-reviewer",
+        "attempt": pend["attempt"],
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+    })
+    RR.atomic_write_json(
+        RR.bare_payload_path(d, pend["round"], pend["phase"], skey, pend["attempt"]),
+        {"findings": "not-a-list"},
+    )
+    adapters.faults["code-reviewer"] = "findings must be a list"
+    out = RD.cmd_record_result(d, "code-reviewer")
+    assert out["ok"] is False and out["reason"] == "payload-fault"
+    assert out["detail"] == "findings must be a list"
+    spath = RR.store_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
+    assert not os.path.exists(spath)
+
+
 def _fixer_session(tmp_path, adapters, name="fx"):
     """A session parked at the dispatch-fixer phase with a one-seat roster."""
     d = _session(tmp_path, name=name)
@@ -1042,7 +1076,7 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
 def test_advance_emits_synthesis_verified_json_sidecar(tmp_path, adapters):
     """Synthesis dispatch writes verified.json from the pending findings payload."""
     d = _session(tmp_path)
-    _record_all_panel_seats(d)
+    _record_panel_with_verifier_cluster(d)
     assert _advance(d, tmp_path)["ok"] is True
     out = _advance(d, tmp_path)              # verifiers: empty roster → synthesis dispatch
     assert out["ok"] is True
@@ -1051,7 +1085,9 @@ def test_advance_emits_synthesis_verified_json_sidecar(tmp_path, adapters):
     assert os.path.isfile(verified_path)
     verified, err = RR.read_json(verified_path)
     assert err is None
-    assert verified == {"findings": []}
+    assert len(verified["findings"]) == 1
+    assert verified["findings"][0]["file"] == "f.py"
+    assert verified["findings"][0]["line"] == 1
 
 
 def _drop_orders_anchor_mirror(session_dir):

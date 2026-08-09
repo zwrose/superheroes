@@ -378,6 +378,36 @@ def test_refusal_schema_unknown(tmp_path):
     assert out["schema"] == "seat-result/2"
 
 
+def test_refusal_schema_unknown_when_schema_key_absent(tmp_path):
+    sd = _session(tmp_path)
+    env = _env()
+    del env["schema"]
+    _land(sd, env)
+    out = _ingest(sd)
+    assert out["reason"] == "schema-unknown"
+    assert out["schema"] is None
+
+
+def test_refusal_landing_torn_when_envelope_is_not_a_dict(tmp_path):
+    sd = _session(tmp_path)
+    path = _land(sd, _env())
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("[]")
+    out = _ingest(sd)
+    assert out["reason"] == "landing-torn"
+
+
+def test_refusal_landing_torn_when_bare_payload_is_findings_array(tmp_path):
+    sd = _session(tmp_path)
+    skey = RR.storage_key(SEAT)
+    stub_path = RR.envelope_stub_path(sd, 1, PHASE, skey, 1)
+    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+    RR.atomic_write_json(stub_path, _stub_header(sd))
+    RR.atomic_write_json(RR.bare_payload_path(sd, 1, PHASE, skey, 1), [{"id": "f1"}])
+    out = _ingest(sd)
+    assert out["reason"] == "landing-torn"
+
+
 def test_refusal_missing_reason_enumerates_the_allowed_set(tmp_path):
     sd = _session(tmp_path)
     _land(sd, _missing_env(reason="vibes"))

@@ -29,6 +29,4 @@ files are pre-existing — SKIP them, even if they violate conventions.
 ## Hard rules
 - Do NOT decide the run's outcome or re-run panel seats.
 - **Never change the repository, and never claim a run you did not make.**
-- Deliver per the base rubric's panel output-format section. Write candidate records to
-  {{FINDINGS_OUTPUT_PATH}} as a JSON array — write `[]` rather than skipping the file when you
-  have nothing to flag.
+- {{OUTPUT_CHANNEL_BLOCK}}

@@ -39,5 +39,31 @@
     "autofix-probe-",
     "Commit ALL changes in ONE commit",
     "do NOT guess. Report it for owner escalation (see Payload contract)"
+  ],
+  "dispatch-gap-sweep": [
+    "You are the gap-sweep finder for a big-diff review round",
+    "only flag code in `+` or `-` lines",
+    "You are reviewing CHANGES MADE BY THIS PR/BRANCH",
+    "`file:line` citation required",
+    "Never change the repository, and never claim a run you did not make",
+    "Do NOT decide the run's outcome or re-run panel seats",
+    "Never one whole-file read"
+  ],
+  "dispatch-audits": [
+    "You are the fix auditor for one cleared-or-stalled finding target",
+    "You are **never** the fixer's vendor",
+    "Return exactly one audit result for this target",
+    "Judge only this one target",
+    "Never change the repository, and never claim a run you did not make",
+    "Transport keys use the per-location target identifier"
+  ],
+  "dispatch-scoped-finder": [
+    "You are the scoped finder for a delta review round",
+    "only flag code in `+` or `-` lines within those\nhunks",
+    "You are reviewing CHANGES MADE BY THIS FIX",
+    "`file:line` citation required",
+    "Do NOT scan outside the scoped hunks file",
+    "Never change the repository, and never claim a run you did not make",
+    "Review only the hunks named in"
   ]
 }

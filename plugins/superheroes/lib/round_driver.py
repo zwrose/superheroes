@@ -3839,6 +3839,17 @@ def _label(value):
     return value if isinstance(value, str) else repr(value)
 
 
+def _paths_match(emitted, expected):
+    """True when ``emitted`` names ``expected``, whether shell-quoted or raw."""
+    if not isinstance(expected, str) or not expected:
+        return False
+    if emitted == expected:
+        return True
+    if isinstance(emitted, str) and shlex.split(emitted) == [expected]:
+        return True
+    return False
+
+
 def _shipped_resource_refusal(placeholders):
     """Refuse when a shipped plugin resource path in placeholders does not exist."""
     if not isinstance(placeholders, dict):
@@ -3849,7 +3860,7 @@ def _shipped_resource_refusal(placeholders):
     )
     for name, expected in checks:
         emitted = placeholders.get(name)
-        if emitted == expected and not os.path.isfile(expected):
+        if _paths_match(emitted, expected) and not os.path.isfile(expected):
             return "shipped-resource-missing:%s" % name
     return None
 
@@ -3987,21 +3998,26 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                 break
         if cluster_index is None:
             raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "CLUSTER_FINDINGS_PATH": os.path.join(rdir, "clusters", "%d.json" % cluster_index),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
         }
     elif phase == P_SYNTHESIS:
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "VERIFIED_FINDINGS_PATH": os.path.join(rdir, "verified.json"),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "GROUPING_OUTPUT_PATH": os.path.join(rdir, "grouping.json"),
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
         }
     elif phase == P_GAPSWEEP:
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
@@ -4009,6 +4025,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
         }
     elif phase == P_AUDITS:
         targets = payload.get("targets")
@@ -4016,6 +4033,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             targets = []
         if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "TARGET_SUMMARY_PATH": os.path.join(rdir, "audit-targets",
                                                 "%s.json" % round_records.storage_key(
@@ -4024,8 +4042,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "TARGET_ID": seat_key,
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
         }
     elif phase == P_SCOPED:
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "HUNKS_PATH": os.path.join(rdir, "scoped-hunks.json"),
             "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
@@ -4034,6 +4054,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
         }
     elif phase == P_FIXER:
         ph = {
@@ -4341,13 +4362,16 @@ def _seat_for_record_identity(session_dir, ident):
 
 
 def _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
-    """(envelope, err) for a landed seat file, or (None, reason). Never raises."""
+    """(envelope, err) for a landed seat file — full envelope or bare host payload. Never raises."""
     try:
-        lpath = round_records.landing_path(
-            session_dir, rnd, phase, round_records.storage_key(seat_key, occurrence), attempt)
+        skey = round_records.storage_key(seat_key, occurrence)
     except ValueError as exc:
         return None, str(exc)
-    return round_records.read_json(lpath)
+    envelope, refusal = round_records._read_landing_envelope(
+        session_dir, rnd, phase, skey, attempt, occurrence)
+    if refusal is not None:
+        return None, refusal.get("reason")
+    return envelope, None
 
 
 def _preflight_payload_fault(phase, envelope, seat_key):
@@ -4622,9 +4646,16 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
             spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
         except ValueError:
             continue
-        if not os.path.exists(lpath) or os.path.exists(spath):
+        try:
+            bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError:
+            bare_path = None
+        has_landing = os.path.exists(lpath) or (
+            bare_path is not None and os.path.exists(bare_path))
+        if not has_landing or os.path.exists(spath):
             continue
-        envelope, _lerr = round_records.read_json(lpath)
+        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
+                                                 occurrence)
         fault = _preflight_payload_fault(phase, envelope, seat_key)
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,

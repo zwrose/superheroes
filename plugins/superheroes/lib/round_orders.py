@@ -67,6 +67,7 @@ _AUX_PLACEHOLDER_INPUTS = frozenset({
     "CHANNEL",
     "FOCUS_NOTES",
     "FINDINGS_OUTPUT_PATH",
+    "GROUPING_OUTPUT_PATH",
     "PR_CHECKOUT_PATH",
 })
 
@@ -286,10 +287,66 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     return ph
 
 
+def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
+    ph = dict(context.get("placeholders") or {})
+    channel = ph.get("CHANNEL", "file")
+    stdout_example, reason = _stdout_payload_example(phase)
+    if channel == "stdout":
+        if reason:
+            ph["OUTPUT_CHANNEL_BLOCK"] = ""
+            return ph
+        if phase == round_phases.P_VERIFIERS:
+            ph["OUTPUT_CHANNEL_BLOCK"] = (
+                "Emit `%s` as your final stdout with nothing after it; do not write a verdict "
+                "file (read-only sandbox — nothing reads one)." % stdout_example
+            )
+        elif phase == round_phases.P_SYNTHESIS:
+            ph["OUTPUT_CHANNEL_BLOCK"] = (
+                "Emit `%s` as your final stdout with nothing after it; do not write a grouping "
+                "file (read-only sandbox — nothing reads one). Every survivor id appears exactly "
+                "once across all groups." % stdout_example
+            )
+        elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+            ph["OUTPUT_CHANNEL_BLOCK"] = (
+                'Emit findings as your final stdout with nothing after it; do not write a findings '
+                "file (read-only sandbox — nothing reads one). Write `[]` when you have nothing "
+                "to flag."
+            )
+        else:
+            ph["OUTPUT_CHANNEL_BLOCK"] = (
+                "Emit `%s` as your final stdout with nothing after it. Do not write a landing file "
+                "(read-only sandbox)." % stdout_example
+            )
+    elif phase == round_phases.P_VERIFIERS:
+        ph["OUTPUT_CHANNEL_BLOCK"] = (
+            "Write a JSON array to this cluster's own verdict file — never a shared verdict file: "
+            "exactly one entry per cluster issue."
+        )
+    elif phase == round_phases.P_SYNTHESIS:
+        ph["OUTPUT_CHANNEL_BLOCK"] = (
+            "Write your groups to %s.\n"
+            "Write a JSON array — every survivor id appears exactly once across all groups."
+            % ph.get("GROUPING_OUTPUT_PATH", "{{GROUPING_OUTPUT_PATH}}")
+        )
+    elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+        ph["OUTPUT_CHANNEL_BLOCK"] = (
+            "Deliver per the base rubric's panel output-format section. Write candidate records to "
+            "%s as a JSON array — write `[]` rather than skipping the file when you have "
+            "nothing to flag."
+            % ph.get("FINDINGS_OUTPUT_PATH", "{{FINDINGS_OUTPUT_PATH}}")
+        )
+    else:
+        ph["OUTPUT_CHANNEL_BLOCK"] = ""
+    return ph
+
+
 def _derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     if phase == round_phases.P_PANEL:
         ph = _panel_derived_placeholders(context)
+    elif phase in (round_phases.P_VERIFIERS, round_phases.P_SYNTHESIS,
+                   round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
+        ph = _channel_derived_placeholders(phase, context)
     return ph
 
 
