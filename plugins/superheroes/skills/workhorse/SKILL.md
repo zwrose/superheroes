@@ -216,6 +216,14 @@ or docs build)?** There is nothing to bring up — say so and skip the app-bring
 just your worktree + branch. **You own integration** — you merge the work orders' branches back
 together, no one else does.
 
+**Full lane only — declare the build lane.** Once the worktree and branch exist, before any
+autonomous work, run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/build_lane.py" declare
+--repo-root <abs> --lane full --issue <n>` with the routed issue number. Light and micro lanes
+declare nothing — the handback receipt gate does not apply to them. A **refusal to declare is a
+park**, not something to work around: the declaration is what arms the receipt gate. The marker is
+**bound to the branch** — when the worktree moves to other work the marker goes stale and the gate
+stays silent.
+
 ## 3. Preflight — the checkout before going autonomous
 
 With the app running and **before any autonomous work** (in the full lane the brief itself is

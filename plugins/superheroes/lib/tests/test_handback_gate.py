@@ -65,6 +65,7 @@ def _write_build_lane(repo, **over):
         "issue": "#624",
         "declaredAt": "2026-08-09T00:00:00Z",
         "repoRoot": os.path.realpath(repo),
+        "branch": sc.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "main",
     }
     obj.update(over)
     with open(os.path.join(d, hg.BUILD_LANE_FILE), "w", encoding="utf-8") as fh:
@@ -78,6 +79,7 @@ def _write_review_session(repo, **over):
         "sessionDir": str(repo / "session") if hasattr(repo, "__truediv__") else "/tmp/session",
         "startedAt": "2026-08-09T00:00:00Z",
         "repoRoot": os.path.realpath(repo),
+        "branch": sc.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "main",
     }
     obj.update(over)
     with open(os.path.join(d, hg.REVIEW_SESSION_FILE), "w", encoding="utf-8") as fh:
@@ -86,8 +88,7 @@ def _write_review_session(repo, **over):
 
 def _diff_sha256(repo, base_sha):
     r = subprocess.run(
-        ["git", "-C", repo, "-c", "core.quotepath=false",
-         "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],
+        ["git", "-C", repo, "diff", "%s...HEAD" % base_sha],
         capture_output=True,
         timeout=10,
     )
@@ -530,6 +531,12 @@ def test_parse_inherited_repo_flag_before_subcommand():
     assert invs[0]["pr"]["repo"] == "org/repo"
 
 
+def test_parse_inherited_repo_between_pr_and_subcommand():
+    invs = hg.parse_gh_invocations("gh pr -R org/repo ready")
+    assert invs[0]["action"] == "pr-ready"
+    assert invs[0]["pr"]["repo"] == "org/repo"
+
+
 def test_parse_host_qualified_repo_flag():
     invs = hg.parse_gh_invocations("gh --repo ghe.example.com/org/repo pr create --base main")
     subj = hg.command_subject(invs[0])
@@ -624,8 +631,7 @@ def test_branch_mismatch_at_equal_head_refuses(tmp_path):
 
 def _git_diff_text(repo, base_sha):
     r = subprocess.run(
-        ["git", "-C", repo, "-c", "core.quotepath=false",
-         "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],
+        ["git", "-C", repo, "diff", "%s...HEAD" % base_sha],
         capture_output=True,
         timeout=10,
     )
@@ -665,6 +671,118 @@ def test_base_ref_round_trip_from_prepare_sidecar(tmp_path):
         fh.write(prepared["sidecar_bytes"])
     result = hg.validate_handback("gh pr create --base main", repo)
     assert result["decision"] == "allow"
+
+
+# --- WO-8 exact-shape recognizer --------------------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "gh pr create --unknown-flag --base main",
+    "gh pr create --foo=bar --base main",
+])
+def test_unknown_option_refuses_in_family(tmp_path, command):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback(command, repo)
+    assert result["reason"] == "handback-inspection-failed"
+    assert "unrecognized gh option" in result["detail"]
+
+
+def test_attached_short_repo_flag_parsed(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback("gh pr ready -Rother/repo", repo)
+    assert result["reason"] == "handback-repo-mismatch"
+
+
+def test_attached_short_title_not_draft(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback("gh pr create -tupdate --base main", repo)
+    assert result["decision"] == "allow"
+
+
+def test_body_pr_url_does_not_hijack_repo(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    url = "https://github.com/other/repo/pull/1"
+    result = hg.validate_handback("gh pr create --body %s --base main" % url, repo)
+    assert result["decision"] == "allow"
+
+
+def test_head_owner_branch_same_owner_allows(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    branch = sc.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    result = hg.validate_handback("gh pr create --head org:%s --base main" % branch, repo)
+    assert result["decision"] == "allow"
+
+
+def test_head_owner_branch_cross_repo_refuses(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback("gh pr create --head alice:feature --base main", repo)
+    assert result["reason"] == "handback-subject-unresolvable"
+
+
+def test_head_branch_only_allows(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    branch = sc.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    result = hg.validate_handback("gh pr create --head %s --base main" % branch, repo)
+    assert result["decision"] == "allow"
+
+
+def test_unexpanded_repo_var_refuses(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback('gh pr ready --repo="$TARGET"', repo)
+    assert result["reason"] == "handback-inspection-failed"
+
+
+def test_quoted_gh_repo_env_parsed(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback("GH_REPO='other/repo' gh pr ready", repo)
+    assert result["reason"] == "handback-repo-mismatch"
+
+
+def test_help_leaves_family(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    assert hg.validate_handback("gh pr ready --help", repo)["decision"] == "allow"
+    assert hg.validate_handback("gh pr create --dry-run --base main", repo)["decision"] == "allow"
+
+
+def test_marker_branch_mismatch_stale_silence(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_build_lane(repo, branch="other-branch")
+    result = hg.validate_handback("gh pr ready", repo)
+    assert result["decision"] == "allow"
+    assert result["reason"] is None
+
+
+def test_marker_missing_branch_stale(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    d = _superheroes_dir(repo)
+    obj = {
+        "schema": hg.BUILD_LANE_SCHEMA,
+        "lane": "full",
+        "issue": "#624",
+        "declaredAt": "2026-08-09T00:00:00Z",
+        "repoRoot": os.path.realpath(repo),
+    }
+    with open(os.path.join(d, hg.BUILD_LANE_FILE), "w", encoding="utf-8") as fh:
+        json.dump(obj, fh)
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is False
+    assert len(state["stale"]) == 1
+
+
+def test_review_session_gone_stale(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_review_session(repo, sessionDir="/nonexistent/session")
+    state = hg.marker_state(_gitdir(repo), repo)
+    assert state["inScope"] is False
+    assert len(state["stale"]) == 1
+
+
+def test_pr_inherited_repo_between_pr_and_ready(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    result = hg.validate_handback("gh pr -R other/repo ready", repo)
+    assert result["reason"] == "handback-repo-mismatch"
 
 
 # --- bite-proof -------------------------------------------------------------------------------
@@ -822,8 +940,8 @@ def test_bite_draft_undo_passthrough(tmp_path):
     assert hg.validate_handback("gh pr ready --undo", repo)["decision"] == "allow"
     path = hg.__file__
     src = _neutralize(path,
-                      'and not (inv["action"] == "pr-create" and inv.get("draft"))]',
-                      ']')
+                      '        if inv["action"] == "pr-create" and inv.get("draft"):\n            continue',
+                      '        if False and inv["action"] == "pr-create" and inv.get("draft"):\n            continue')
     try:
         import importlib
         mod = importlib.reload(hg)
@@ -833,18 +951,19 @@ def test_bite_draft_undo_passthrough(tmp_path):
         _restore(path, src)
 
 
-def test_bite_unknown_flag_does_not_shift_tokens():
-    red = hg.parse_gh_invocations("gh pr create --fill --draft")
-    assert red[0]["draft"] is True
+def test_bite_unknown_option_refuses(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    red = hg.validate_handback("gh pr create --totally-unknown --base main", repo)
+    assert red["reason"] == "handback-inspection-failed"
     path = hg.__file__
     src = _neutralize(path,
-                      '            # unknown flag: invariant (a) — no state change, width already set\n\n        i += width',
-                      '            # unknown flag: invariant (a) — no state change, width already set\n\n        i += width + (1 if tok == "--fill" else 0)')
+                      '        if inv.get("unrecognized") or inv["action"] == "unrecognized":',
+                      '        if False and (inv.get("unrecognized") or inv["action"] == "unrecognized"):')
     try:
         import importlib
         mod = importlib.reload(hg)
-        green = mod.parse_gh_invocations("gh pr create --fill --draft")
-        assert green[0]["draft"] is False
+        green = mod.validate_handback("gh pr create --totally-unknown --base main", repo)
+        assert green["decision"] == "allow"
     finally:
         _restore(path, src)
 
@@ -875,8 +994,8 @@ def test_bite_inherited_repo_flag(tmp_path):
     assert red["reason"] == "handback-repo-mismatch"
     path = hg.__file__
     src = _neutralize(path,
-                      'def _parse_gh_globals(tokens):',
-                      'def _parse_gh_globals(tokens):\n    return None, None, tokens[1:], False\n\ndef _parse_gh_globals_DISABLED(tokens):')
+                      '    if global_repo and parsed.get("repo") is None:\n        parsed["repo"] = global_repo',
+                      '    if False and global_repo and parsed.get("repo") is None:\n        parsed["repo"] = global_repo')
     try:
         import importlib
         mod = importlib.reload(hg)
@@ -973,6 +1092,104 @@ def test_bite_branch_binding(tmp_path):
         mod = importlib.reload(hg)
         green = mod.validate_handback("gh pr ready", repo)
         assert green["decision"] == "allow"
+    finally:
+        _restore(path, src)
+
+
+def test_bite_attached_short_repo(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    red = hg.validate_handback("gh pr create -tupdate --base main", repo)
+    assert red["decision"] == "allow"
+    path = hg.__file__
+    src = _neutralize(path,
+                      '            rest = letters[i + 1:]\n'
+                      '            parts.append((flag, rest if rest else None))',
+                      '            rest = letters[i + 1:]\n'
+                      '            parts.append((flag, None))')
+    try:
+        import importlib
+        mod = importlib.reload(hg)
+        green = mod.validate_handback("gh pr create -tupdate --base main", repo)
+        assert green["decision"] == "refuse"
+    finally:
+        _restore(path, src)
+
+
+def test_bite_url_only_from_operands(tmp_path):
+    repo, _, _ = _scoped_repo(tmp_path)
+    url = "https://github.com/other/repo/pull/1"
+    red = hg.validate_handback("gh pr create --body %s --base main" % url, repo)
+    assert red["decision"] == "allow"
+    path = hg.__file__
+    src = _neutralize(path,
+                      '    for operand in pr.get("operands") or []:',
+                      '    for operand in ([pr.get("body")] if pr.get("body") else []) + (pr.get("operands") or []):')
+    try:
+        import importlib
+        mod = importlib.reload(hg)
+        green = mod.validate_handback("gh pr create --body %s --base main" % url, repo)
+        assert green["reason"] == "handback-repo-mismatch"
+    finally:
+        _restore(path, src)
+
+
+def test_bite_non_mutating_leaves_family(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_build_lane(repo)
+    red = hg.validate_handback("gh pr ready --help", repo)
+    assert red["decision"] == "allow"
+    path = hg.__file__
+    src = _neutralize(path,
+                      '        if inv.get("non_mutating"):\n            continue',
+                      '        if False and inv.get("non_mutating"):\n            continue')
+    try:
+        import importlib
+        mod = importlib.reload(hg)
+        green = mod.validate_handback("gh pr ready --help", repo)
+        assert green["reason"] == "handback-no-receipt"
+    finally:
+        _restore(path, src)
+
+
+def test_bite_branch_bound_marker_staleness(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "f.txt", "x\n")
+    _write_build_lane(repo, branch="other-branch")
+    red = hg.validate_handback("gh pr ready", repo)
+    assert red["decision"] == "allow"
+    path = hg.__file__
+    src = _neutralize(path,
+                      '    ok, why = _marker_branch_matches(obj["branch"], repo_root)',
+                      '    ok, why = True, None  # bite: skip branch staleness')
+    try:
+        import importlib
+        mod = importlib.reload(hg)
+        green = mod.validate_handback("gh pr ready", repo)
+        assert green["decision"] == "refuse"
+    finally:
+        _restore(path, src)
+
+
+def test_bite_diff_invocation_matches_production(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    _commit_file(repo, "base.txt", "base\n", msg="base")
+    base_sha = sc.run_git(repo, "rev-parse", "HEAD")
+    _commit_file(repo, "café.txt", "feature\n", msg="feature")
+    session = str(tmp_path / "session")
+    _write_build_lane(repo)
+    _write_sidecar(repo, session, _certified_receipt(), base_ref="main", base_sha=base_sha)
+    red = hg.validate_handback("gh pr ready", repo)
+    assert red["decision"] == "allow"
+    path = hg.__file__
+    src = _neutralize(path,
+                      '            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],',
+                      '            ["git", "-C", repo_root, "-c", "core.quotepath=false", "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],')
+    try:
+        import importlib
+        mod = importlib.reload(hg)
+        green = mod.validate_handback("gh pr ready", repo)
+        assert green["reason"] == "handback-diff-mismatch"
     finally:
         _restore(path, src)
 

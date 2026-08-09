@@ -399,6 +399,14 @@ _REVIEW_SESSION_MARKER = "review-session.json"
 _REVIEW_SESSION_SCHEMA = "review-session/1"
 
 
+def _journal_bootstrap_marker_failure(session_dir, reason):
+    try:
+        _journal_append(session_dir, {"cmd": "bootstrap-review-session-marker",
+                                      "outcome": "failed", "reason": reason})
+    except Exception:
+        pass
+
+
 def _bootstrap_review_session_marker(session_dir):
     """Write review-session.json scope marker; failures are swallowed (#624 §4)."""
     try:
@@ -407,8 +415,13 @@ def _bootstrap_review_session_marker(session_dir):
         if not isinstance(repo_root, str) or not repo_root:
             repo_root = store_core.repo_root(os.getcwd())
         if not repo_root:
+            _journal_bootstrap_marker_failure(session_dir, "repo-root-unresolvable")
             return
         repo_root = os.path.realpath(repo_root)
+        branch = store_core.run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+        if not branch or branch == "HEAD":
+            _journal_bootstrap_marker_failure(session_dir, "detached-head")
+            return
         gitdir = store_core.get_worktree_gitdir(repo_root)
         super_dir = os.path.join(gitdir, SIDECAR_DIRNAME)
         os.makedirs(super_dir, exist_ok=True)
@@ -417,11 +430,12 @@ def _bootstrap_review_session_marker(session_dir):
             "sessionDir": os.path.realpath(session_dir),
             "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
             "repoRoot": repo_root,
+            "branch": branch,
         }
         with open(os.path.join(super_dir, _REVIEW_SESSION_MARKER), "w", encoding="utf-8") as fh:
             json.dump(marker, fh)
-    except Exception:
-        pass
+    except Exception as exc:
+        _journal_bootstrap_marker_failure(session_dir, str(exc))
 
 
 def _state_version(state):

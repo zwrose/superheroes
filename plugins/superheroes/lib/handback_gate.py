@@ -6,7 +6,7 @@ that lacks an allowlisted review receipt. This class is a **Claude-host, Bash-to
 tripwire**. It does not cover aliases, wrapper scripts, non-Bash tools, or other hosts. **It is
 not a security boundary and is not claimed as one.**
 
-Parser invariants (re-grounded #624 WO-7):
+Parser invariants (re-grounded #624 WO-8):
 
 **(a) An unknown flag must never shift the interpretation of any other token.** Cursor advancement
 is decided in exactly one place per token; an unrecognized flag advances by exactly one.
@@ -15,6 +15,10 @@ is decided in exactly one place per token; an unrecognized flag advances by exac
 nothing a genuinely-valid production case produces.** Where the honest resolution is *cannot verify
 deterministically*, that is a stated residual covered by the advisor vet — exactly as ratified §4.3
 already does for ``gh pr ready``'s remote base. State the residual; never invent verification.
+
+**(c) The gate recognizes only invocation shapes it understands completely. A token-matching
+invocation it cannot parse in full refuses in-family — it is never partially understood and never
+allowed on the strength of a partial parse.**
 
 **``gh pr ready`` residual:** for a bare ``gh pr ready`` with no selector, binding is branch +
 HEAD — the PR's remote base cannot be resolved without a network call inside a deterministic hook.
@@ -56,6 +60,8 @@ _REFUSAL_DETAIL = (
     "if genuinely stuck, park to the advisor."
 )
 
+_INSPECTION_DOC = "plugins/superheroes/skills/review-code/SKILL.md"
+
 _PR_URL = re.compile(
     r"^(?P<base>[a-zA-Z][a-zA-Z0-9+.\-]*://[^/]+/[^/]+/[^/]+)/pull/(?P<num>\d+)(?:[/?#].*)?$"
 )
@@ -66,12 +72,26 @@ _HEREDOC_OPENER = re.compile(r"<<-?\s*(['\"]?)(\w+)\1\s*$")
 
 _ENV_ASSIGN_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-# gh pr subcommand flags — invariant (a): width is decided once per original argv token.
-_GH_PR_VALUE_OPTS = frozenset({"-R", "--repo", "-H", "--head", "-B", "--base"})
-_GH_PR_BOOL_OPTS = frozenset({"-d", "--draft", "--undo"})
+# Recognized gh option → arity (0 = boolean, 1 = value-taking).  Any token not in this table
+# makes the invocation unrecognized (invariant c).
+_GH_OPTION_ARITY = {
+    "-R": 1, "--repo": 1, "--hostname": 1,
+    "-H": 1, "--head": 1,
+    "-B": 1, "--base": 1,
+    "-t": 1, "--title": 1,
+    "-b": 1, "--body": 1,
+    "--body-file": 1,
+    "--reviewer": 1,
+    "--label": 1,
+    "--assignee": 1,
+    "-d": 0, "--draft": 0,
+    "--fill": 0,
+    "--undo": 0,
+    "--help": 0, "-h": 0,
+    "--dry-run": 0,
+}
 
-# gh global flags before the subcommand (``gh -R org/repo pr …``).
-_GH_GLOBAL_VALUE_OPTS = frozenset({"-R", "--repo", "--hostname"})
+_NON_MUTATING_OPTS = frozenset({"--help", "-h", "--dry-run"})
 
 _HAND_BACK_SHELL_PREFIXES = frozenset({
     "!", "then", "do", "else", "elif", "(", ";;", "if",
@@ -117,14 +137,13 @@ def _parse_bool_value(raw):
     return None
 
 
-def _option_token_width(tokens, idx, value_taking):
-    """How many argv slots one option token consumes — invariant (a)."""
-    tok = tokens[idx]
-    if "=" in tok:
-        return 1
-    if value_taking:
-        return 2 if idx + 1 < len(tokens) else 1
-    return 1
+def _value_unresolvable(val):
+    """True when a flag value is a literal shell expansion the hook cannot resolve."""
+    return bool(val) and "$" in val
+
+
+def _option_base(tok):
+    return tok.split("=", 1)[0] if "=" in tok else tok
 
 
 def _inline_option_value(tok):
@@ -133,42 +152,40 @@ def _inline_option_value(tok):
     return None
 
 
-def _expand_clustered_flags(token, value_opts):
-    """Minimal clustered-short-flag expander for gh pr flags."""
-    if not token.startswith("-") or token.startswith("--"):
-        if token.startswith("--"):
-            base = token.split("=", 1)[0]
-            expects = base in value_opts and "=" not in token
-            return ([token], None, expects)
-        return ([token], None, False)
-    letters = token[1:]
-    if not letters or not letters.isalpha():
-        return ([token], None, False)
-    flags = []
+def _expand_short_token(tok):
+    """Expand one short-option argv token into (flag, inline_value) pairs.
+
+    Attached values: ``-Rother/repo`` → (``-R``, ``other/repo``); ``-tupdate`` → (``-t``, ``update``).
+    Clustered booleans: ``-d`` alone or ``-df`` when every letter is a known arity-0 flag.
+    Returns (parts, unrecognized_flag) where unrecognized_flag names the first unknown letter."""
+    if not tok.startswith("-") or tok.startswith("--"):
+        return None, tok
+    letters = tok[1:]
+    if not letters:
+        return None, tok
+    parts = []
     i = 0
     while i < len(letters):
-        c = letters[i]
-        opt = "-%s" % c
-        flags.append(opt)
-        if opt in value_opts:
+        flag = "-%s" % letters[i]
+        if flag not in _GH_OPTION_ARITY:
+            return None, flag
+        arity = _GH_OPTION_ARITY[flag]
+        if arity == 1:
             rest = letters[i + 1:]
-            if rest:
-                return (flags, rest, False)
-            return (flags, None, True)
+            parts.append((flag, rest if rest else None))
+            return parts, None
+        parts.append((flag, None))
         i += 1
-    return (flags, None, False)
+    return parts, None
 
 
-def _parse_pr_args(args):
-    """Parse flags and operands for ``gh pr ready`` / ``gh pr create``.
-
-    Invariant (a): each original argv token advances the cursor exactly once via
-    ``_option_token_width``; unknown flags touch no state."""
-    repo = head = base = None
+def _scan_options(args, *, inherited_only=False):
+    """Single-pass option scan.  Returns state dict or unrecognized token name."""
+    repo = head = base = title = body = body_file = None
     selector = None
-    draft = undo = False
-    parse_error = False
+    draft = undo = non_mutating = False
     operands = []
+    unrecognized = None
     i = 0
     while i < len(args):
         tok = args[i]
@@ -180,40 +197,86 @@ def _parse_pr_args(args):
             i += 1
             continue
 
-        flags, inline, expects_value = _expand_clustered_flags(tok, _GH_PR_VALUE_OPTS)
-        width = _option_token_width(args, i, expects_value)
-        if expects_value and width == 1 and "=" not in tok:
-            parse_error = True
-
-        for part in flags:
-            base_flag = part.split("=", 1)[0]
-            inline_val = _inline_option_value(part)
-            if inline_val is None:
-                inline_val = inline
-
-            if base_flag in _GH_PR_BOOL_OPTS:
-                parsed = _parse_bool_value(inline_val)
+        if tok.startswith("--"):
+            flag = _option_base(tok)
+            if flag not in _GH_OPTION_ARITY:
+                return {"unrecognized": flag}
+            arity = _GH_OPTION_ARITY[flag]
+            inline = _inline_option_value(tok)
+            if arity == 0:
+                parsed = _parse_bool_value(inline)
                 if parsed is None:
-                    parse_error = True
-                elif base_flag in ("-d", "--draft"):
+                    return {"unrecognized": flag, "reason": "unparseable boolean"}
+                if flag in ("-d", "--draft"):
                     draft = parsed
-                elif base_flag == "--undo":
+                elif flag == "--undo":
                     undo = parsed
-            elif base_flag in _GH_PR_VALUE_OPTS:
-                val = inline_val
-                if val is None and width > 1:
-                    val = args[i + 1]
-                if val is None:
-                    parse_error = True
-                elif base_flag in ("-R", "--repo"):
-                    repo = val
-                elif base_flag in ("-H", "--head"):
-                    head = val
-                elif base_flag in ("-B", "--base"):
-                    base = val
-            # unknown flag: invariant (a) — no state change, width already set
+                elif flag in _NON_MUTATING_OPTS:
+                    non_mutating = True
+                i += 1
+                continue
+            val = inline
+            if val is None:
+                if i + 1 >= len(args):
+                    return {"unrecognized": flag, "reason": "missing value"}
+                val = args[i + 1]
+                i += 2
+            else:
+                i += 1
+            if _value_unresolvable(val):
+                return {"unrecognized": flag, "reason": "unresolvable value %r" % val}
+            if flag in ("-R", "--repo"):
+                repo = val
+            elif flag in ("-H", "--head"):
+                head = val
+            elif flag in ("-B", "--base"):
+                base = val
+            elif flag in ("-t", "--title"):
+                title = val
+            elif flag in ("-b", "--body"):
+                body = val
+            elif flag == "--body-file":
+                body_file = val
+            continue
 
-        i += width
+        parts, bad = _expand_short_token(tok)
+        if bad is not None:
+            return {"unrecognized": bad}
+        advance = 1
+        for flag, inline in parts:
+            if flag not in _GH_OPTION_ARITY:
+                return {"unrecognized": flag}
+            arity = _GH_OPTION_ARITY[flag]
+            if arity == 0:
+                parsed = _parse_bool_value(inline)
+                if parsed is None:
+                    return {"unrecognized": flag}
+                if flag in ("-d", "--draft"):
+                    draft = parsed
+                elif flag == "--undo":
+                    undo = parsed
+                elif flag in _NON_MUTATING_OPTS:
+                    non_mutating = True
+            else:
+                val = inline
+                if val is None:
+                    if i + advance >= len(args):
+                        return {"unrecognized": flag, "reason": "missing value"}
+                    val = args[i + advance]
+                    advance += 1
+                if _value_unresolvable(val):
+                    return {"unrecognized": flag, "reason": "unresolvable value %r" % val}
+                if flag in ("-R", "--repo"):
+                    repo = val
+                elif flag in ("-H", "--head"):
+                    head = val
+                elif flag in ("-B", "--base"):
+                    base = val
+                elif flag in ("-t", "--title"):
+                    title = val
+                elif flag in ("-b", "--body"):
+                    body = val
+        i += advance
 
     if operands and selector is None:
         selector = operands[0]
@@ -221,17 +284,22 @@ def _parse_pr_args(args):
         "repo": repo,
         "head": head,
         "base": base,
+        "title": title,
+        "body": body,
+        "body_file": body_file,
         "selector": selector,
+        "operands": operands,
         "draft": draft,
         "undo": undo,
-        "parse_error": parse_error,
+        "non_mutating": non_mutating,
+        "unrecognized": None,
     }
 
 
 def _parse_gh_globals(tokens):
     """Parse inherited ``-R``/``--repo``/``--hostname`` before the ``pr`` subcommand."""
     repo = host = None
-    parse_error = False
+    unrecognized = None
     i = 0
     while i < len(tokens):
         tok = tokens[i]
@@ -240,58 +308,168 @@ def _parse_gh_globals(tokens):
         if not tok.startswith("-"):
             i += 1
             continue
-        base = tok.split("=", 1)[0]
-        if base in _GH_GLOBAL_VALUE_OPTS:
+        if tok.startswith("--"):
+            flag = _option_base(tok)
+            if flag not in _GH_OPTION_ARITY:
+                return repo, host, tokens[i:], flag
+            if _GH_OPTION_ARITY[flag] == 0:
+                if flag in _NON_MUTATING_OPTS:
+                    return repo, host, tokens[i:], flag
+                i += 1
+                continue
             val = _inline_option_value(tok)
-            width = _option_token_width(tokens, i, val is None)
-            if val is None and width > 1:
-                val = tokens[i + 1]
             if val is None:
-                parse_error = True
-            elif base in ("-R", "--repo"):
+                if i + 1 >= len(tokens):
+                    return repo, host, tokens[i:], flag
+                val = tokens[i + 1]
+                i += 2
+            else:
+                i += 1
+            if _value_unresolvable(val):
+                return repo, host, tokens[i:], flag
+            if flag in ("-R", "--repo"):
                 repo = val
-            elif base == "--hostname":
+            elif flag == "--hostname":
                 host = val
-            i += width
-        else:
-            i += 1  # invariant (a): unknown global flag, advance one
-    return repo, host, tokens[i:], parse_error
+            continue
+        parts, bad = _expand_short_token(tok)
+        if bad is not None:
+            return repo, host, tokens[i:], bad
+        advance = 1
+        for flag, inline in parts:
+            if _GH_OPTION_ARITY.get(flag) != 1:
+                return repo, host, tokens[i:], flag
+            val = inline
+            if val is None:
+                if i + advance >= len(tokens):
+                    return repo, host, tokens[i:], flag
+                val = tokens[i + advance]
+                advance += 1
+            if _value_unresolvable(val):
+                return repo, host, tokens[i:], flag
+            if flag in ("-R", "--repo"):
+                repo = val
+        i += advance
+    return repo, host, tokens[i:], None
+
+
+def _scan_inherited_before_subcommand(tokens):
+    """Parse ``-R``/``--repo``/``--hostname`` between ``pr`` and ``ready``/``create``."""
+    repo = host = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok in ("ready", "create"):
+            return repo, host, i, tok, None
+        if not tok.startswith("-"):
+            return repo, host, None, None, None
+        if tok.startswith("--"):
+            flag = _option_base(tok)
+            if flag not in _GH_OPTION_ARITY:
+                return repo, host, None, None, flag
+            if _GH_OPTION_ARITY[flag] == 0:
+                if flag in _NON_MUTATING_OPTS:
+                    return repo, host, None, None, flag
+                i += 1
+                continue
+            val = _inline_option_value(tok)
+            if val is None:
+                if i + 1 >= len(tokens):
+                    return repo, host, None, None, flag
+                val = tokens[i + 1]
+                i += 2
+            else:
+                i += 1
+            if _value_unresolvable(val):
+                return repo, host, None, None, flag
+            if flag in ("-R", "--repo"):
+                repo = val
+            elif flag == "--hostname":
+                host = val
+            continue
+        parts, bad = _expand_short_token(tok)
+        if bad is not None:
+            return repo, host, None, None, bad
+        advance = 1
+        for flag, inline in parts:
+            if _GH_OPTION_ARITY.get(flag) != 1:
+                return repo, host, None, None, flag
+            val = inline
+            if val is None:
+                if i + advance >= len(tokens):
+                    return repo, host, None, None, flag
+                val = tokens[i + advance]
+                advance += 1
+            if _value_unresolvable(val):
+                return repo, host, None, None, flag
+            if flag in ("-R", "--repo"):
+                repo = val
+        i += advance
+    return repo, host, None, None, None
+
+
+def _find_pr_subcommand(tokens):
+    """Locate ``ready`` or ``create`` among tokens after ``pr``, skipping inherited flags.
+
+    Returns (sub_index, subcommand, unrecognized_flag)."""
+    repo, host, sub_idx, sub, unrec = _scan_inherited_before_subcommand(tokens)
+    if unrec is not None:
+        return None, None, unrec
+    if sub is not None:
+        return sub_idx, sub, None
+    return None, None, None
 
 
 def _classify_gh(tokens, segment_text):
     """Classify one tokenized gh invocation."""
     if not tokens or not _is_gh_token(tokens[0]):
         return None
-    global_repo, global_host, rest, global_parse_error = _parse_gh_globals(tokens[1:])
+    global_repo, global_host, rest, global_unrec = _parse_gh_globals(tokens[1:])
+    if global_unrec is not None:
+        return {"action": "unrecognized", "unrecognized": global_unrec, "argv": tokens}
+
     if len(rest) >= 2 and rest[0] == "api" and rest[1] == "graphql":
         if "markPullRequestReadyForReview" in segment_text:
             return {"action": "graphql-ready", "argv": tokens, "draft": False, "undo": False,
-                    "parse_error": global_parse_error, "pr": {},
-                    "global_repo": global_repo, "global_host": global_host}
+                    "pr": {}, "global_repo": global_repo, "global_host": global_host}
         return None
-    if len(rest) >= 2 and rest[0] == "pr":
-        sub = rest[1]
-        pr_args = rest[2:]
-        parsed = _parse_pr_args(pr_args)
-        parsed["parse_error"] = parsed["parse_error"] or global_parse_error
-        if global_repo and parsed.get("repo") is None:
-            parsed["repo"] = global_repo
-        if sub == "ready":
-            if parsed["undo"]:
-                return {"action": "pr-ready", "argv": tokens, "draft": False, "undo": True,
-                        "parse_error": parsed["parse_error"], "pr": parsed,
-                        "global_repo": global_repo, "global_host": global_host}
-            return {"action": "pr-ready", "argv": tokens, "draft": False, "undo": False,
-                    "parse_error": parsed["parse_error"], "pr": parsed,
-                    "global_repo": global_repo, "global_host": global_host}
-        if sub == "create":
-            if parsed["draft"]:
-                return {"action": "pr-create", "argv": tokens, "draft": True, "undo": False,
-                        "parse_error": parsed["parse_error"], "pr": parsed,
-                        "global_repo": global_repo, "global_host": global_host}
-            return {"action": "pr-create", "argv": tokens, "draft": False, "undo": False,
-                    "parse_error": parsed["parse_error"], "pr": parsed,
-                    "global_repo": global_repo, "global_host": global_host}
+
+    if len(rest) < 2 or rest[0] != "pr":
+        return None
+
+    sub_idx, sub, pr_unrec = _find_pr_subcommand(rest[1:])
+    if pr_unrec is not None:
+        return {"action": "unrecognized", "unrecognized": pr_unrec, "argv": tokens}
+    if sub is None:
+        return None
+
+    inherited_repo, inherited_host, _, _, _ = _scan_inherited_before_subcommand(rest[1:])
+    pr_args = rest[1 + sub_idx + 1:]
+    parsed = _scan_options(pr_args)
+    if parsed.get("unrecognized"):
+        return {"action": "unrecognized", "unrecognized": parsed["unrecognized"],
+                "argv": tokens, "detail": parsed.get("reason")}
+
+    if global_repo and parsed.get("repo") is None:
+        parsed["repo"] = global_repo
+    if inherited_repo and parsed.get("repo") is None:
+        parsed["repo"] = inherited_repo
+    effective_host = global_host or inherited_host
+
+    if parsed.get("non_mutating"):
+        action = "pr-ready" if sub == "ready" else "pr-create"
+        return {"action": action, "argv": tokens, "non_mutating": True,
+                "draft": parsed.get("draft", False), "undo": parsed.get("undo", False),
+                "pr": parsed, "global_repo": global_repo, "global_host": effective_host}
+
+    if sub == "ready":
+        return {"action": "pr-ready", "argv": tokens, "draft": False,
+                "undo": parsed.get("undo", False), "pr": parsed,
+                "global_repo": global_repo, "global_host": effective_host}
+    if sub == "create":
+        return {"action": "pr-create", "argv": tokens,
+                "draft": parsed.get("draft", False), "undo": False,
+                "pr": parsed, "global_repo": global_repo, "global_host": effective_host}
     return None
 
 
@@ -331,6 +509,12 @@ def _segment_marks_cwd_unestablishable(segment):
     return False
 
 
+def _strip_quotes(val):
+    if isinstance(val, str) and len(val) >= 2 and val[0] == val[-1] and val[0] in "'\"":
+        return val[1:-1]
+    return val
+
+
 def _capture_env_prefix(tokens):
     """Capture leading VAR=value assignments (gh-specific — do not discard)."""
     env = {}
@@ -339,7 +523,7 @@ def _capture_env_prefix(tokens):
         key = tokens[start].split("=", 1)[0]
         if _ENV_ASSIGN_RE.match(key):
             k, v = tokens[start].split("=", 1)
-            env[k] = v
+            env[k] = _strip_quotes(v)
             start += 1
             continue
         break
@@ -384,12 +568,17 @@ def parse_gh_invocations(command):
             "action": classified["action"],
             "argv": classified["argv"],
             "env": {},
-            "undo": classified["undo"],
-            "draft": classified["draft"],
-            "parse_error": classified.get("parse_error", False),
+            "undo": classified.get("undo", False),
+            "draft": classified.get("draft", False),
             "pr": classified.get("pr", {}),
             "cwd_establishable": cwd_establishable,
         }
+        if classified.get("non_mutating"):
+            inv["non_mutating"] = True
+        if classified.get("unrecognized"):
+            inv["unrecognized"] = classified["unrecognized"]
+            if classified.get("detail"):
+                inv["unrecognized_detail"] = classified["detail"]
         if classified.get("global_host"):
             inv["env"]["GH_HOST"] = classified["global_host"]
         for key in ("GH_REPO", "GH_HOST"):
@@ -428,13 +617,14 @@ def command_subject(invocation, environ=None):
     selector = pr.get("selector")
     head = pr.get("head")
     base = pr.get("base")
-    for operand in _pr_url_operands(invocation):
-        if selector is None:
-            selector = operand
-        parsed = _normalize_repo_arg(operand, host=host)
-        if parsed and repo is None:
-            repo = parsed
-            repo_source = "url"
+    for operand in pr.get("operands") or []:
+        if _PR_URL.match(operand):
+            if selector is None:
+                selector = operand
+            parsed = _normalize_repo_arg(operand, host=host)
+            if parsed and repo is None:
+                repo = parsed
+                repo_source = "url"
     if repo is None and inline.get("GH_REPO"):
         repo = _normalize_repo_arg(inline["GH_REPO"], host=host)
         repo_source = "env-inline"
@@ -448,14 +638,6 @@ def command_subject(invocation, environ=None):
         "base": base,
         "repoSource": repo_source,
     }
-
-
-def _pr_url_operands(invocation):
-    """Yield operand tokens that look like PR URLs."""
-    argv = invocation.get("argv") or []
-    for tok in argv[1:]:
-        if _PR_URL.match(tok):
-            yield tok
 
 
 def _worktree_toplevel(repo_root):
@@ -479,6 +661,15 @@ def _marker_repo_matches(marker_root, repo_root):
     return True, None
 
 
+def _marker_branch_matches(marker_branch, repo_root):
+    if not isinstance(marker_branch, str) or not marker_branch.strip():
+        return False, "branch is missing or empty"
+    current = store_core.run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+    if current and current != marker_branch:
+        return False, "branch %r differs from worktree branch %r" % (marker_branch, current)
+    return True, None
+
+
 def _read_json(path):
     try:
         with open(path, encoding="utf-8") as fh:
@@ -495,10 +686,13 @@ def _validate_build_lane(obj, repo_root):
         return False, "schema must be build-lane/1"
     if obj.get("lane") != "full":
         return None, "non-full-lane"
-    for key in ("issue", "declaredAt", "repoRoot"):
+    for key in ("issue", "declaredAt", "repoRoot", "branch"):
         if not isinstance(obj.get(key), str) or not obj.get(key):
             return False, "missing or empty field: %s" % key
     ok, why = _marker_repo_matches(obj["repoRoot"], repo_root)
+    if not ok:
+        return False, why
+    ok, why = _marker_branch_matches(obj["branch"], repo_root)
     if not ok:
         return False, why
     return True, None
@@ -507,12 +701,17 @@ def _validate_build_lane(obj, repo_root):
 def _validate_review_session(obj, repo_root):
     if obj.get("schema") != REVIEW_SESSION_SCHEMA:
         return False, "schema must be review-session/1"
-    for key in ("sessionDir", "startedAt", "repoRoot"):
+    for key in ("sessionDir", "startedAt", "repoRoot", "branch"):
         if not isinstance(obj.get(key), str) or not obj.get(key):
             return False, "missing or empty field: %s" % key
     ok, why = _marker_repo_matches(obj["repoRoot"], repo_root)
     if not ok:
         return False, why
+    ok, why = _marker_branch_matches(obj["branch"], repo_root)
+    if not ok:
+        return False, why
+    if not os.path.isdir(obj["sessionDir"]):
+        return False, "sessionDir no longer exists"
     return True, None
 
 
@@ -575,11 +774,10 @@ def _refuse(reason, detail, *, subject=None, sidecar_path=None, head_sha=None):
 
 
 def _recompute_diff_sha256(base_sha, repo_root):
-    """Pinned diff recompute — subprocess for git -c flags."""
+    """Pinned diff recompute — plain ``git diff`` matching production review-code."""
     try:
         r = subprocess.run(
-            ["git", "-C", repo_root, "-c", "core.quotepath=false",
-             "diff", "--no-color", "--no-ext-diff", "%s...HEAD" % base_sha],
+            ["git", "-C", repo_root, "diff", "%s...HEAD" % base_sha],
             capture_output=True,
             timeout=10,
         )
@@ -603,6 +801,17 @@ def _resolve_implicit_pr_base(cwd, run_git):
         prefix = "refs/remotes/origin/"
         if ref.startswith(prefix):
             return ref[len(prefix):]
+    return None
+
+
+def _origin_owner(cwd, run_git):
+    """Return the owner segment of ``origin`` (e.g. ``org`` from ``github.com/org/repo``)."""
+    origin = store_core.normalize_remote(run_git(cwd, "remote", "get-url", "origin"))
+    if not origin:
+        return None
+    parts = origin.split("/")
+    if len(parts) >= 2:
+        return parts[1]
     return None
 
 
@@ -651,11 +860,6 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
         return _refuse("handback-inspection-failed",
                         "working directory for this gh invocation cannot be established "
                         "(preceding cd/pushd or subshell)",
-                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
-
-    if invocation.get("parse_error"):
-        return _refuse("handback-inspection-failed",
-                        "could not parse gh pr flags",
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if not os.path.isfile(sidecar_path):
@@ -737,10 +941,22 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if pr.get("head"):
-        if branch and pr["head"] != branch:
+        head_val = pr["head"]
+        owner = None
+        branch_part = head_val
+        if ":" in head_val:
+            owner, branch_part = head_val.split(":", 1)
+        if owner:
+            origin_owner = _origin_owner(cwd, run_git)
+            if origin_owner is None or owner != origin_owner:
+                return _refuse("handback-subject-unresolvable",
+                                "cross-repo --head %r cannot be verified locally"
+                                % head_val,
+                                subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
+        if branch and branch_part != branch:
             return _refuse("handback-subject-unresolvable",
                             "--head %r does not match worktree branch %r"
-                            % (pr["head"], branch),
+                            % (head_val, branch),
                             subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if action == "pr-create":
@@ -776,10 +992,10 @@ def _validate_binding(invocation, cwd, environ, run_git, gitdir):
                         "git rev-parse for sidecar baseSha %r failed" % pinned_base,
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
-    recomputed_diff = _recompute_diff_sha256(verified_base, cwd)
+    recomputed_diff = _recompute_diff_sha256(pinned_base, cwd)
     if recomputed_diff is None:
         return _refuse("handback-inspection-failed",
-                        "diff recompute for %s...HEAD failed" % verified_base,
+                        "diff recompute for %s...HEAD failed" % pinned_base,
                         subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)
 
     if recomputed_diff != sidecar.get("diffSha256"):
@@ -795,10 +1011,16 @@ def validate_handback(command, cwd, *, environ=None, run_git=None):
     environ = environ if environ is not None else os.environ
     run_git = run_git or store_core.run_git
     invocations = parse_gh_invocations(command)
-    guarded = [inv for inv in invocations
-               if inv["action"] in ("pr-ready", "pr-create", "graphql-ready")
-               and not (inv["action"] == "pr-ready" and inv.get("undo"))
-               and not (inv["action"] == "pr-create" and inv.get("draft"))]
+    guarded = []
+    for inv in invocations:
+        if inv.get("non_mutating"):
+            continue
+        if inv["action"] == "pr-ready" and inv.get("undo"):
+            continue
+        if inv["action"] == "pr-create" and inv.get("draft"):
+            continue
+        if inv["action"] in ("pr-ready", "pr-create", "graphql-ready", "unrecognized"):
+            guarded.append(inv)
 
     if not guarded:
         return _allow()
@@ -815,6 +1037,17 @@ def validate_handback(command, cwd, *, environ=None, run_git=None):
         return _allow()
 
     for inv in guarded:
+        if inv.get("unrecognized") or inv["action"] == "unrecognized":
+            token = inv.get("unrecognized", "?")
+            detail = ("unrecognized gh option %r — see %s"
+                      % (token, _INSPECTION_DOC))
+            if inv.get("unrecognized_detail"):
+                detail = "%s (%s)" % (detail, inv["unrecognized_detail"])
+            subject = command_subject(inv, environ)
+            head_sha = run_git(cwd, "rev-parse", "HEAD")
+            return _refuse("handback-inspection-failed", detail,
+                            subject=subject, sidecar_path=_sidecar_path(gitdir),
+                            head_sha=head_sha)
         if inv["action"] == "graphql-ready":
             subject = command_subject(inv, environ)
             head_sha = run_git(cwd, "rev-parse", "HEAD")

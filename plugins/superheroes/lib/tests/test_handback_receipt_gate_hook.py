@@ -56,6 +56,7 @@ def _superheroes_dir(repo):
 
 
 def _write_build_lane(repo):
+    import store_core as sc
     d = _superheroes_dir(repo)
     obj = {
         "schema": hg.BUILD_LANE_SCHEMA,
@@ -63,6 +64,7 @@ def _write_build_lane(repo):
         "issue": "#624",
         "declaredAt": "2026-08-09T00:00:00Z",
         "repoRoot": os.path.realpath(repo),
+        "branch": sc.run_git(repo, "rev-parse", "--abbrev-ref", "HEAD") or "main",
     }
     with open(os.path.join(d, hg.BUILD_LANE_FILE), "w", encoding="utf-8") as fh:
         json.dump(obj, fh)
