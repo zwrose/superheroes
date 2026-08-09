@@ -62,7 +62,8 @@ _WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
 
 # bite-proof axis: refuses shell-expandable text, so an allow entry can never match
 # a name the shell will substitute. Replaces an enumerated blacklist of expansion forms.
-_LITERAL_SAFE_COMMAND = re.compile(r"^[A-Za-z0-9 _\-./:=,'\"@+]+$")
+# Uses fullmatch (not $-anchored match) because $ exempts a trailing newline in Python.
+_LITERAL_SAFE_COMMAND = re.compile(r"[A-Za-z0-9 _\-./:=,'\"@+]+")
 
 _VALUE_FLAG_LONG = frozenset(("--field", "--raw-field", "--ref", "--repo"))
 _VALUE_FLAGS = frozenset(("-F", "--field", "-f", "--raw-field", "-r", "--ref", "-R", "--repo"))
@@ -154,7 +155,7 @@ def workflow_run_target(command):
     if not isinstance(command, str) or not command or len(command) > 4096:
         return None
 
-    if not _LITERAL_SAFE_COMMAND.match(command):
+    if not _LITERAL_SAFE_COMMAND.fullmatch(command):
         return None
 
     try:
@@ -203,6 +204,8 @@ def allowlisted(command, action, entries):
     # cannot reach silence via file content.
     if action not in ALLOWLISTABLE_ACTIONS:
         return False
+    # Fail closed: this function resolves targets only via workflow_run_target. A future
+    # ALLOWLISTABLE_ACTIONS entry must ship its own extractor — do not fall through here.
     if action != "run-workflow":
         return False
     target = workflow_run_target(command)

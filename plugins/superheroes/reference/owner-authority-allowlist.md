@@ -6,8 +6,8 @@ If you arrived here from an approval prompt, you are in the right place. The gat
 ## What this is
 
 The owner-authority gate asks before merge, release, force-push, push-to-default, and workflow
-commands on calibrated projects — the never-merge floor. It can only narrow asking, never widen
-silence by accident. If an unattended session keeps stalling on the **same** workflow dispatch you
+commands on calibrated projects — the never-merge floor. The allow file can only narrow asking,
+never widen silence by accident. If an unattended session keeps stalling on the **same** workflow dispatch you
 have already decided is safe, pre-authorize that one workflow by exact name in a hand-edited allow
 file. Everything else still asks.
 

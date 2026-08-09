@@ -289,6 +289,9 @@ def _write_allow_at(store, content):
     return path
 
 
+_VALID_ENTRY = {"action": "run-workflow", "workflow": "deploy.yml"}
+
+
 # --- workflow_run_target: accepts ------------------------------------------------
 
 @pytest.mark.parametrize("command,expected", [
@@ -348,6 +351,10 @@ def test_workflow_run_target_accepts(command, expected):
     "gh workflow run",
     "gh workflow run a b",
     "gh workflow run ''",
+    "gh workflow run deploy.yml\n",
+    "gh workflow run deploy.yml \n",
+    "gh workflow run deploy.yml\r",
+    "gh workflow run deploy.yml\r\n",
     None,
     "x" * 4097,
     "gh workflow run --ref main",
@@ -381,29 +388,34 @@ def test_workflow_run_target_refuses(command):
     "exception_on_path",
 ])
 def test_read_allow_file_fail_direction_yields_no_entries(setup, tmp_path, monkeypatch):
+    # Each case carries a valid allow entry so a weakened schema guard would yield entries != [].
     store = _pin_allow_store(tmp_path, monkeypatch)
     path = os.path.join(store, oa.ALLOW_FILENAME)
 
     if setup == "absent":
+        # No file — cannot carry a valid entry by construction.
         os.makedirs(store, exist_ok=True)
     elif setup == "unreadable":
         os.makedirs(store, exist_ok=True)
         path_obj = tmp_path / "allow-store" / oa.ALLOW_FILENAME
-        path_obj.write_text('{"schemaVersion": 1, "allow": []}')
+        path_obj.write_text(json.dumps({"schemaVersion": 1, "allow": [_VALID_ENTRY]}))
         path_obj.chmod(0)
         if os.access(path, os.R_OK):
             pytest.skip("chmod 000 did not make file unreadable for this user")
     elif setup == "is_dir":
+        # Path is a directory — cannot carry a valid entry by construction.
         os.makedirs(path, exist_ok=True)
     elif setup == "dangling_symlink":
+        # Unreadable path — cannot carry a valid entry by construction.
         os.makedirs(store, exist_ok=True)
         os.symlink(tmp_path / "no-target", path)
     elif setup == "bad_json":
+        # Invalid JSON — cannot carry a valid entry by construction.
         os.makedirs(store, exist_ok=True)
         with open(path, "w") as fh:
             fh.write("{ not json")
     elif setup == "top_array":
-        _write_allow_at(store, [])
+        _write_allow_at(store, [_VALID_ENTRY])
     elif setup == "top_string":
         _write_allow_at(store, "hello")
     elif setup == "top_number":
@@ -413,26 +425,29 @@ def test_read_allow_file_fail_direction_yields_no_entries(setup, tmp_path, monke
         with open(path, "w") as fh:
             fh.write("null")
     elif setup == "schema_missing":
-        _write_allow_at(store, {"allow": []})
+        _write_allow_at(store, {"allow": [_VALID_ENTRY]})
     elif setup == "schema_true":
-        _write_allow_at(store, {"schemaVersion": True, "allow": []})
+        _write_allow_at(store, {"schemaVersion": True, "allow": [_VALID_ENTRY]})
     elif setup == "schema_false":
-        _write_allow_at(store, {"schemaVersion": False, "allow": []})
+        _write_allow_at(store, {"schemaVersion": False, "allow": [_VALID_ENTRY]})
     elif setup == "schema_1_0":
-        _write_allow_at(store, {"schemaVersion": 1.0, "allow": []})
+        _write_allow_at(store, {"schemaVersion": 1.0, "allow": [_VALID_ENTRY]})
     elif setup == "schema_str_1":
-        _write_allow_at(store, {"schemaVersion": "1", "allow": []})
+        _write_allow_at(store, {"schemaVersion": "1", "allow": [_VALID_ENTRY]})
     elif setup == "schema_null":
-        _write_allow_at(store, {"schemaVersion": None, "allow": []})
+        _write_allow_at(store, {"schemaVersion": None, "allow": [_VALID_ENTRY]})
     elif setup == "schema_0":
-        _write_allow_at(store, {"schemaVersion": 0, "allow": []})
+        _write_allow_at(store, {"schemaVersion": 0, "allow": [_VALID_ENTRY]})
     elif setup == "schema_2":
-        _write_allow_at(store, {"schemaVersion": 2, "allow": []})
+        _write_allow_at(store, {"schemaVersion": 2, "allow": [_VALID_ENTRY]})
     elif setup == "allow_missing":
+        # No allow key — cannot carry a valid entry by construction.
         _write_allow_at(store, {"schemaVersion": 1})
     elif setup == "allow_dict":
+        # allow is a dict, not a list — cannot carry a valid entry by construction.
         _write_allow_at(store, {"schemaVersion": 1, "allow": {}})
     elif setup == "exception_on_path":
+        # Path resolution fails — cannot carry a valid entry by construction.
         def _boom(cwd, root=None):
             raise OSError("simulated path failure")
         monkeypatch.setattr(oa, "allow_file_path", _boom)
