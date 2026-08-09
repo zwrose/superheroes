@@ -33,6 +33,9 @@
   "dispatch-fixer": [
     "You are the fixer for one round of an auto-fix code-review loop",
     "gate it with the fixer file-scope guard",
+    "No branch-controlled path may be interpolated into\nshell text",
+    "printf '%s\\n' \"$path\"",
+    "--stdin-path",
     "if `allow` is false (or `degraded` is true), DO NOT edit that file",
     "Fix ONLY what the findings call for. No unrelated refactors (YAGNI)",
     "retry ONCE. If it still fails, STOP and report CHECK_FAILED",

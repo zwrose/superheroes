@@ -470,3 +470,78 @@ def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, 
         return text, provenance, None
     except Exception as exc:  # noqa: BLE001
         return "", None, "residual-read-failed:%s" % exc
+
+
+# --- shell-interpreted template census (FX-4A) ---------------------------------
+
+_SHELL_FENCE_RE = re.compile(r"```(?:shell|bash|sh)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_INLINE_CMD_TICK_RE = re.compile(r"`([^`\n]+)`")
+_ANGLE_SUB_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9_]*)>")
+
+# Driver-rendered placeholders — not branch-controlled (quoted or numeric at render time).
+_SHELL_SAFE_PLACEHOLDERS = frozenset({"ESCALATION_WRAPPER_PATH", "REPO_ROOT", "ROUND"})
+
+# Model-authored commit-message slots — not branch-controlled diff paths.
+_SAFE_ANGLE_SUBSTITUTIONS = frozenset({"count", "dimensions"})
+
+_SHELL_CMD_PREFIXES = (
+    "python3", "python ", "git ", "printf ", "npm ", "pytest", "cargo ", "make ",
+    "yarn ", "pnpm ", "go test", "bundle ", "rake ",
+)
+
+
+def _inline_backtick_is_shell_command(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped:
+        return False
+    lowered = stripped.lower()
+    if any(lowered.startswith(prefix) for prefix in _SHELL_CMD_PREFIXES):
+        return True
+    if " | " in stripped:
+        return True
+    return False
+
+
+def iter_shell_interpreted_regions(body: str):
+    """Yield shell-interpreted spans: fenced shell blocks and inline command backticks."""
+    for match in _SHELL_FENCE_RE.finditer(body):
+        yield match.group(1)
+    for match in _INLINE_CMD_TICK_RE.finditer(body):
+        if _inline_backtick_is_shell_command(match.group(1)):
+            yield match.group(1)
+
+
+def scan_template_shell_violations(template_body: str, template_id: str) -> list[str]:
+    """Flag placeholders or substitution markers inside shell-interpreted template regions."""
+    violations = []
+    for region in iter_shell_interpreted_regions(template_body):
+        for match in _PLACEHOLDER_RE.finditer(region):
+            name = match.group(1)
+            if name not in _SHELL_SAFE_PLACEHOLDERS:
+                violations.append(
+                    "%s: shell region contains unfenced placeholder {{%s}}" % (template_id, name))
+        for match in _ANGLE_SUB_RE.finditer(region):
+            name = match.group(1)
+            if name not in _SAFE_ANGLE_SUBSTITUTIONS:
+                violations.append(
+                    "%s: shell region contains substitution marker <%s>" % (template_id, name))
+    return violations
+
+
+def scan_all_order_templates_shell_violations(root: str | None = None) -> list[str]:
+    """Census over every shipped order template."""
+    violations = []
+    orders_dir = os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), "..", "rubric", "orders")
+    if root is not None:
+        orders_dir = os.path.join(root, "rubric", "orders")
+    orders_dir = os.path.normpath(orders_dir)
+    for name in sorted(os.listdir(orders_dir)):
+        if not name.endswith(".md"):
+            continue
+        path = os.path.join(orders_dir, name)
+        with open(path, encoding="utf-8") as fh:
+            body = fh.read()
+        template_id = name[:-3]
+        violations.extend(scan_template_shell_violations(body, template_id))
+    return violations
