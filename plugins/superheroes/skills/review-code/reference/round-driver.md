@@ -225,6 +225,7 @@ gate policy pre-authorization is what lets `advance` fold without stopping.
 gate-policy-calibration-unreadable
 gate-policy-calibration-absent
 gate-policy-calibration-refused
+gate-policy-calibration-structurally-ambiguous
 repo-root-unavailable
 gate-policy-judgment-no-findings
 gate-policy-unknown-phase
@@ -242,8 +243,14 @@ Parameterized (suffix after `:` is diagnostic detail):
 gate-policy-unmatched-class:<findingClass>
 ```
 
-`gate-policy-calibration-unreadable` and `repo-root-unavailable` may also carry a `: <detail>`
-suffix when the underlying read failure has a message.
+`gate-policy-calibration-unreadable`, `gate-policy-calibration-structurally-ambiguous`, and
+`repo-root-unavailable` may also carry a `: <detail>` suffix when the underlying read failure or
+structural ambiguity has a message.
+
+When the review-gate-policy overlay has ambiguous duplicate keys, `advance` parks with
+`gate.detail` returned verbatim — `duplicate-policy-key:<key>` where `<key>` is the conflicting
+policy key name. The sync test's parameterized fenced block drift-checks only
+`gate-policy-unmatched-class:<findingClass>`; this form is documented here in prose instead.
 
 **Ownership boundary (stated narrowly).** The overlay lives on the same ownership surface as
 `enginePreferences` — an honest-agent boundary, **not** a security boundary. No CLI flag can
