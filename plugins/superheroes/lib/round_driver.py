@@ -178,6 +178,9 @@ BASE_GUARD_CHECKED = "checked-stat-bound"
 # Citable reason recorded when gate policy pre-authorizes a judgment `skip` disposition.
 _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 
+# Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
+JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
+
 
 # --- the per-round disclosure channels (#720) -------------------------------------------------
 # Shape predicates for a channel value coming off a DURABLE record. A record is external input: a
@@ -1142,11 +1145,13 @@ def _advance(state, config):
         if state.get("_escalatedRung"):
             payload["escalatedRung"] = state["_escalatedRung"]
     elif step == P_JUDGMENT:
+        judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+        row_ids = _judgment_row_ids(judgment)
         payload = {"findings": [
-            {"id": _judgment_finding_id(f), "file": f.get("file"), "line": f.get("line"),
+            {"id": row_ids[i], "file": f.get("file"), "line": f.get("line"),
              "title": f.get("title"), "severity": f.get("severity"),
              "classification": "judgment", "dispositions": list(JUDGMENT_DISPOSITIONS)}
-            for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]}
+            for i, f in enumerate(judgment)]}
     elif step == P_STALL:
         # The stall menu is the audit-stall TERMINAL only (a tradeoff/judgment blocker routes to
         # present-judgment, never here — #507 R2a). No judgment findings ride this payload.
@@ -1757,8 +1762,26 @@ def _judgment_finding_id(finding):
     """The per-LOCATION disposition key for a judgment finding — the line-less `finding_identity`
     PLUS the line. Two same-title tradeoff blockers at DIFFERENT lines get DISTINCT ids, so the
     owner's disposition for one never collides onto the other (the line-less identity did — #507 R2
-    v5). The present-judgment payload emits this id and the fold keys the dispositions on it."""
+    v5). For the FIRST row at a location this equals ``_location_id``; repeats at the same location
+    use ``_judgment_row_ids`` (occurrence suffix)."""
     return _location_id(finding)
+
+
+def _judgment_row_ids(findings):
+    """Per-row disposition keys for judgment findings. Reuses the audit-target occurrence pattern:
+    the first row at a location gets the bare per-location id; repeats get ``#1``, ``#2``, … so two
+    surviving tradeoff findings at the same location (e.g. different severities) never share one id."""
+    ids = []
+    seen_location = {}
+    for f in findings:
+        if not isinstance(f, dict):
+            ids.append(None)
+            continue
+        loc = _location_id(f)
+        n = seen_location.get(loc, 0)
+        seen_location[loc] = n + 1
+        ids.append(loc if n == 0 else "%s#%d" % (loc, n))
+    return ids
 
 
 def _route_judgment_blockers(state, blocking):
@@ -1779,10 +1802,11 @@ def _route_judgment_blockers(state, blocking):
     mechanical = [f for f in blocking if isinstance(f, dict) and not f.get("tradeoff")]
     state["_judgmentFindings"] = [dict(f) for f in judgment]
     state["_judgmentMechanical"] = [dict(f) for f in mechanical]
+    row_ids = _judgment_row_ids(judgment)
     _record_round(state, "judgmentBlockers", [
-        {"id": _judgment_finding_id(f), "file": f.get("file"), "line": f.get("line"),
+        {"id": row_ids[i], "file": f.get("file"), "line": f.get("line"),
          "title": f.get("title"), "severity": f.get("severity"), "classification": "judgment"}
-        for f in judgment])
+        for i, f in enumerate(judgment)])
     _decision(state, "judgment-gate",
               "%d tradeoff/product-choice blocker(s) routed to owner judgment — never auto-fixed; "
               "each offered fix-as-suggested / fix-with-guidance / skip: %s"
@@ -1821,14 +1845,23 @@ def _fold_judgment(state, config, artifact):
     raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
     by_id = {}
     for d in raw:
-        if isinstance(d, dict) and d.get("id") is not None:
-            by_id[d.get("id")] = d
+        if not isinstance(d, dict) or d.get("id") is None:
+            continue
+        fid = d.get("id")
+        prior = by_id.get(fid)
+        if prior is not None and prior.get("disposition") != d.get("disposition"):
+            _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+            state.pop("_judgmentFindings", None)
+            state.pop("_judgmentMechanical", None)
+            return
+        by_id[fid] = d
     judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+    row_ids = _judgment_row_ids(judgment)
     fix_batch = [dict(f) for f in (state.get("_judgmentMechanical") or []) if isinstance(f, dict)]
     skipped = []
     disposition_log = []
-    for f in judgment:
-        fid = _judgment_finding_id(f)
+    for i, f in enumerate(judgment):
+        fid = row_ids[i]
         d = by_id.get(fid) if isinstance(by_id.get(fid), dict) else {}
         disposition = d.get("disposition")
         reason = d.get("reason")
@@ -4937,14 +4970,14 @@ def _gate_policy_overlay_from_config(config):
 
 
 def _judgment_policy_rows(state):
+    judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+    row_ids = _judgment_row_ids(judgment)
     rows = []
-    for finding in (state.get("_judgmentFindings") or []):
-        if not isinstance(finding, dict):
-            continue
+    for i, finding in enumerate(judgment):
         severity = finding.get("severity")
         finding_class = "judgment:%s" % (severity.lower() if isinstance(severity, str) else "")
         rows.append({
-            "id": _judgment_finding_id(finding),
+            "id": row_ids[i],
             "findingClass": finding_class,
             "severity": severity,
             "title": finding.get("title"),
@@ -4972,7 +5005,8 @@ def _judgment_artifact_from_resolution(state, resolution):
         finding = judgment[row_index]
         rule = match.get("rule") if isinstance(match.get("rule"), dict) else {}
         disposition = rule.get("disposition")
-        entry = {"id": _judgment_finding_id(finding), "disposition": disposition}
+        row_ids = _judgment_row_ids(judgment)
+        entry = {"id": row_ids[row_index], "disposition": disposition}
         if disposition == review_gate_policy.JUDGMENT_SKIP_DISPOSITION:
             entry["reason"] = _GATE_POLICY_SKIP_REASON
         dispositions.append(entry)
