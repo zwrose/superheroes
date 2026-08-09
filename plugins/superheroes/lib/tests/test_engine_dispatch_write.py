@@ -1203,15 +1203,21 @@ def test_write_open_persists_expected_items_and_baseline(tmp_path):
     dirty_path = os.path.join(wt, "track.txt")
     with open(dirty_path, "w", encoding="utf-8") as fh:
         fh.write("x\n")
-    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+
+    class DeliverExpectedRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "track.txt"), "w", encoding="utf-8") as fh:
+                fh.write("y\n")
+            return _build_ok_stdout(), False, 0, ""
+
     res = _dispatch_write(
-        tmp_path, fake, cwd=wt,
-        expected_items=["alpha/beta", "alpha/beta"],
+        tmp_path, DeliverExpectedRunner(), cwd=wt,
+        expected_items=["track.txt"],
     )
     assert res["ok"] is True
     records, _ = ED._journal_read(str(tmp_path / "run"))
     opened = next(r for r in records if r.get("kind") == "run-opened")
-    assert opened["expectedItems"] == ["alpha/beta"]
+    assert opened["expectedItems"] == ["track.txt"]
     assert isinstance(opened["baselineDirty"], dict)
     assert opened["baselineDirty"]["track.txt"] == hashlib.sha256(b"x\n").hexdigest()
 
@@ -1221,9 +1227,11 @@ def test_write_undeclared_expected_items_none_in_journal(tmp_path):
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res = _dispatch_write(tmp_path, fake, cwd=wt)
     assert res["ok"] is True
+    assert "itemCheck" not in res
     records, _ = ED._journal_read(str(tmp_path / "run"))
     opened = next(r for r in records if r.get("kind") == "run-opened")
     assert opened["expectedItems"] is None
+    assert opened["baselineDirty"] is None
 
 
 def test_write_invalid_base_sha_refuses_before_open(tmp_path):
@@ -1259,7 +1267,7 @@ def test_write_baseline_capture_failed_refuses(tmp_path, monkeypatch):
     wt, _main = _linked_worktree(tmp_path)
     monkeypatch.setattr(ED, "_baseline_dirty_map", lambda *_a, **_k: None)
     fake = FakeRunner([])
-    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    res = _dispatch_write(tmp_path, fake, cwd=wt, expected_items=["a.txt"])
     assert res["detail"] == "baseline-capture-failed"
     assert res["attempts"] == 0
     assert fake.calls == []
@@ -1282,9 +1290,19 @@ def test_write_resume_omitted_expected_items_inherit(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir = str(tmp_path / "run")
     fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
-    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, expected_items=["keep.txt"])
-    res = _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    first = _dispatch_write(
+        tmp_path, fake, cwd=wt, run_dir=run_dir,
+        expected_items=["keep.txt"], max_wait=0,
+    )
+    assert first.get("terminal") is False
+    res = _dispatch_write(
+        tmp_path, FakeRunner([(_build_ok_stdout(), False, 0, "")]),
+        cwd=wt, run_dir=run_dir, max_wait=120,
+    )
     assert res.get("detail") != "expected-items-mismatch"
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["expectedItems"] == ["keep.txt"]
 
 
 def test_write_terminal_folded_returns_stored_before_expectation_check(tmp_path, monkeypatch):
@@ -1321,3 +1339,152 @@ def test_write_cli_expect_item_and_file(tmp_path, capsys):
     records, _ = ED._journal_read(run_dir)
     opened = next(r for r in records if r.get("kind") == "run-opened")
     assert opened["expectedItems"] == ["cli-item.txt", "from-file.txt"]
+
+
+# --- WO-2 (#907): collection-time declared-item delivery check -----------------
+
+
+def test_write_undeclared_skips_baseline_capture(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    calls = []
+
+    def track(cwd_real, timeout=None):
+        calls.append(cwd_real)
+        return {}
+
+    monkeypatch.setattr(ED, "_baseline_dirty_map", track)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["ok"] is True
+    assert "itemCheck" not in res
+    assert calls == []
+
+
+def test_write_all_delivered_ok_with_item_check(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    target = os.path.join(wt, "delivered.txt")
+
+    class DeliverRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(target, "w", encoding="utf-8") as fh:
+                fh.write("done\n")
+            return _build_ok_stdout(), False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DeliverRunner(), cwd=wt,
+        expected_items=["delivered.txt"],
+    )
+    assert res["ok"] is True
+    assert res["itemCheck"] == {
+        "declared": True,
+        "expected": 1,
+        "delivered": 1,
+        "missing": [],
+    }
+
+
+def test_write_missing_item_forfeits(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=["missing.txt", "also-missing.txt"],
+    )
+    assert res["ok"] is False
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["reason"] == ED.dispatch_outcome.REASON_FORFEITED
+    assert res["detail"] == "items-undelivered"
+    assert res["itemCheck"]["missing"] == ["also-missing.txt", "missing.txt"]
+    assert res["itemCheck"]["delivered"] == 0
+    assert res["itemCheck"]["expected"] == 2
+
+
+def test_write_pre_dirty_unchanged_not_credited(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    dirty_path = os.path.join(wt, "pre-dirty.txt")
+    with open(dirty_path, "w", encoding="utf-8") as fh:
+        fh.write("unchanged\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=["pre-dirty.txt"],
+    )
+    assert res["ok"] is False
+    assert res["detail"] == "items-undelivered"
+    assert res["itemCheck"]["missing"] == ["pre-dirty.txt"]
+
+
+def test_write_rename_contributes_both_paths(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    old = os.path.join(wt, "old-name.txt")
+    with open(old, "w", encoding="utf-8") as fh:
+        fh.write("rename-me\n")
+    _git(wt, "add", "old-name.txt")
+
+    class RenameRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            new = os.path.join(cwd, "new-name.txt")
+            os.rename(os.path.join(cwd, "old-name.txt"), new)
+            return _build_ok_stdout(), False, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, RenameRunner(), cwd=wt,
+        expected_items=["old-name.txt", "new-name.txt"],
+    )
+    assert res["ok"] is True
+    assert res["itemCheck"]["delivered"] == 2
+    assert res["itemCheck"]["missing"] == []
+
+
+def test_write_item_evidence_unavailable_forfeits(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+
+    def fail_delivered(*_a, **_k):
+        return None
+
+    monkeypatch.setattr(ED, "_delivered_paths", fail_delivered)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=["a.txt"],
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "item-evidence-unavailable"
+    assert "itemCheck" not in res
+
+
+def test_write_forfeit_paths_carry_no_item_check(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+
+    class DirtyTimeoutRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            return "", True, 0, ""
+
+    res = _dispatch_write(
+        tmp_path, DirtyTimeoutRunner(), cwd=wt,
+        expected_items=["should-not-appear.txt"], max_wait=120,
+    )
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert res["forfeited"] is True
+    assert "itemCheck" not in res
+
+
+def test_delivered_paths_union_committed_and_working_tree(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    head = _git(wt, "rev-parse", "HEAD").stdout.strip()
+    staged = os.path.join(wt, "staged.txt")
+    with open(staged, "w", encoding="utf-8") as fh:
+        fh.write("staged\n")
+    _git(wt, "add", "staged.txt")
+    _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add staged")
+    unstaged = os.path.join(wt, "unstaged.txt")
+    with open(unstaged, "w", encoding="utf-8") as fh:
+        fh.write("unstaged\n")
+    paths = ED._delivered_paths(wt_real, head)
+    assert "staged.txt" in paths
+    assert "unstaged.txt" in paths

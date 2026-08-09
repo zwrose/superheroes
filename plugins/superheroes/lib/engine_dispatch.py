@@ -535,6 +535,60 @@ def _baseline_dirty_map(cwd_real, timeout=None):
     return result
 
 
+def _delivered_paths(cwd_real, base_sha, timeout=None):
+    """Union of committed and working-tree paths changed since ``base_sha``."""
+    if not base_sha:
+        return None
+    try:
+        diff = _git_scrubbed(
+            cwd_real, "diff", "--name-only", "-z", base_sha, "HEAD", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if diff.returncode != 0:
+        return None
+    paths = set()
+    for part in (diff.stdout or "").split("\0"):
+        if part:
+            paths.add(part)
+    try:
+        status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", "-z", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if status.returncode != 0:
+        return None
+    for path in _parse_porcelain_z_paths(status.stdout or ""):
+        if path:
+            paths.add(path)
+    return paths
+
+
+def _item_delivery_check(cwd_real, opened, timeout=None):
+    """Collection-time declared-item check. ``None`` when nothing was declared."""
+    expected_items = opened.get("expectedItems")
+    if expected_items is None:
+        return None
+    baseline_dirty = opened.get("baselineDirty") or {}
+    delivered_paths = _delivered_paths(cwd_real, opened.get("baseSha"), timeout=timeout)
+    if delivered_paths is None:
+        return {"evidenceUnavailable": True}
+    missing = []
+    for path in expected_items:
+        if path not in delivered_paths:
+            missing.append(path)
+            continue
+        if path in baseline_dirty:
+            current = _path_content_identity(cwd_real, path)
+            if current == baseline_dirty[path]:
+                missing.append(path)
+    return {
+        "declared": True,
+        "expected": len(expected_items),
+        "delivered": len(expected_items) - len(missing),
+        "missing": sorted(missing),
+    }
+
+
 def _worktree_lease_path(cwd_real):
     digest = hashlib.sha256(cwd_real.encode("utf-8")).hexdigest()
     return os.path.join(tempfile.gettempdir(), WORKTREE_LEASE_PREFIX + digest)
@@ -2021,11 +2075,46 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 engine = opened["engine"]
                 if grade.get("ok"):
                     if run_kind == RUN_KIND_WRITE:
-                        result = _with_run_fields(
-                            {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
-                             "evidence": grade.get("evidence", {}), "attempts": latest},
-                            run_dir=run_dir_real, argv=argv,
+                        item_check = _item_delivery_check(
+                            os.path.realpath(opened["cwd"]), opened,
                         )
+                        if item_check is None:
+                            result = _with_run_fields(
+                                {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
+                                 "evidence": grade.get("evidence", {}), "attempts": latest},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                        elif item_check.get("evidenceUnavailable"):
+                            result = _with_run_fields(
+                                {"ok": False, "terminal": True,
+                                 "reason": dispatch_outcome.REASON_FORFEITED,
+                                 "detail": "item-evidence-unavailable",
+                                 "attempts": latest, "forfeited": True},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                        elif item_check.get("missing"):
+                            expected = item_check["expected"]
+                            delivered = item_check["delivered"]
+                            result = _with_run_fields(
+                                {"ok": False, "terminal": True,
+                                 "reason": dispatch_outcome.REASON_FORFEITED,
+                                 "detail": "items-undelivered",
+                                 "attempts": latest, "forfeited": True,
+                                 "itemCheck": item_check,
+                                 "disclosure": (
+                                     "Declared-item check: %d of %d expected paths were not "
+                                     "delivered; the worktree is left exactly as the engine "
+                                     "left it." % (expected - delivered, expected)
+                                 )},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                        else:
+                            result = _with_run_fields(
+                                {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
+                                 "evidence": grade.get("evidence", {}), "attempts": latest},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                            result["itemCheck"] = item_check
                     else:
                         result = _with_run_fields(
                             {"ok": True, "terminal": True, "findings": grade.get("findings", []),
@@ -2737,14 +2826,17 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
-            baseline_dirty = _baseline_dirty_map(cwd_real, timeout=preflight_timeout)
-            if baseline_dirty is None:
-                return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "baseline-capture-failed",
-                     "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir_real, argv=argv,
-                )
+            if declared_expected_items is not None:
+                baseline_dirty = _baseline_dirty_map(cwd_real, timeout=preflight_timeout)
+                if baseline_dirty is None:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "baseline-capture-failed",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    )
+            else:
+                baseline_dirty = None
             baseline = _worktree_baseline(cwd_real, timeout=preflight_timeout)
             if baseline is None and preflight_timeout is not None:
                 return _write_preflight_terminal(
