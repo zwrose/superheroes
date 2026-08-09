@@ -3287,7 +3287,8 @@ def _next_response(pending, expected_hash):
     }
 
 
-def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
+def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
+               _pending_policy_applied=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
     advance. Stale/mismatched → rejected {ok: false} (exit 0). An exact duplicate of an
     already-accepted submit → idempotent {ok: true, duplicate: true}.
@@ -3319,6 +3320,11 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             round_no = prep["round_no"]
             art_hash = prep["art_hash"]
             _fold(state, state["config"], phase, artifact)
+            if _via_advance and _pending_policy_applied is not None:
+                applied = state.get("_policyApplied")
+                if not isinstance(applied, list):
+                    applied = []
+                state["_policyApplied"] = list(applied) + [_pending_policy_applied]
             state["lastAccepted"] = {"phase": phase, "attempt": attempt, "round": round_no,
                                      "artifactHash": art_hash}
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
@@ -4978,6 +4984,7 @@ def _commit_gate_policy_archive(session_dir, rnd, resolution):
 GATE_POLICY_CALIBRATION_PARK_CAUSE_UNREADABLE = "gate-policy-calibration-unreadable"
 GATE_POLICY_CALIBRATION_PARK_CAUSE_ABSENT = "gate-policy-calibration-absent"
 GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED = "gate-policy-calibration-refused"
+GATE_POLICY_CALIBRATION_PARK_CAUSE_STRUCTURAL = "gate-policy-calibration-structurally-ambiguous"
 
 GATE_POLICY_RESOLVER_PARK_CAUSES = frozenset({
     "gate-policy-judgment-no-findings",
@@ -4994,12 +5001,18 @@ def owner_gate_policy_park_detail_causes():
     causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_UNREADABLE)
     causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_ABSENT)
     causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED)
+    causes.add(GATE_POLICY_CALIBRATION_PARK_CAUSE_STRUCTURAL)
     causes.add(core_md.GATE_REASON_ROOT_UNAVAILABLE)
     return frozenset(causes)
 
 
 def _gate_policy_calibration_park_detail(gate):
     """Distinct park cause when core.md gate classification refuses overlay read."""
+    if core_md.review_gate_config_is_structurally_ambiguous(gate):
+        detail = GATE_POLICY_CALIBRATION_PARK_CAUSE_STRUCTURAL
+        if gate.detail:
+            detail = "%s: %s" % (detail, gate.detail)
+        return detail
     if core_md.review_gate_config_is_unreadable(gate):
         detail = GATE_POLICY_CALIBRATION_PARK_CAUSE_UNREADABLE
         if gate.detail:
@@ -5025,7 +5038,8 @@ def _resolve_owner_gate_policy(phase, state, config):
     ``{"authorized": False, "parkDetail": "<cause>"}`` so advance can park with a
     distinguishable refusal detail while keeping the top-level park reason."""
     gate = _gate_policy_overlay_from_config(config)
-    if (core_md.review_gate_config_is_unreadable(gate)
+    if (core_md.review_gate_config_is_structurally_ambiguous(gate)
+            or core_md.review_gate_config_is_unreadable(gate)
             or core_md.review_gate_config_is_absent(gate)
             or core_md.review_gate_config_is_refusal(gate)):
         return {"authorized": False, "parkDetail": _gate_policy_calibration_park_detail(gate)}
@@ -5063,7 +5077,8 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
         return _commit_refused_response(session_dir, "advance", archive_refused, phase=phase,
                                         rnd=rnd, attempt=attempt)
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), resolved["artifact"],
-                        _via_advance=True)
+                        _via_advance=True,
+                        _pending_policy_applied=resolved["policyApplied"])
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
@@ -5071,12 +5086,6 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     if not ok_folded or state is None:
         reason, fault, detail = _state_load_fault(session_dir)
         return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
-    applied = state.get("_policyApplied")
-    if not isinstance(applied, list):
-        applied = []
-    applied = list(applied)
-    applied.append(resolved["policyApplied"])
-    state["_policyApplied"] = applied
     state["_advanceUsed"] = True
     journal_entry = _journal_entry_for_commit(session_dir, "advance", "advanced",
                                               phase=phase, round=rnd, attempt=attempt,

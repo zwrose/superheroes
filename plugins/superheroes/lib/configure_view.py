@@ -212,6 +212,10 @@ def _review_gate_policy_lines(data):
         return ["core.md: repo root unavailable"]
     if gate_status == core_md.CONFIG_UNREADABLE:
         return ["core.md: unreadable"]
+    if gate_status == core_md.CONFIG_STRUCTURAL_AMBIGUITY:
+        detail = data.get("gateDetail") or "structurally ambiguous"
+        classifier = detail.split(":", 1)[0] if detail else "structurally ambiguous"
+        return ["core.md: structurally ambiguous (%s)" % classifier]
 
     lines = []
     shipped = data.get("shipped") or {}

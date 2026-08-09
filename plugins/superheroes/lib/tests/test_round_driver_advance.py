@@ -309,6 +309,18 @@ def _outcomes(session_dir, outcome):
     return [e for e in _journal(session_dir) if e.get("outcome") == outcome]
 
 
+def _journal_events_claiming_policy_applied(session_dir):
+    return [e for e in _journal(session_dir) if e.get("policyApplied")]
+
+
+def _receipt_on_disk_policy_applied(session_dir):
+    receipt_path = os.path.join(session_dir, RD.RECEIPT_FILE)
+    if not os.path.isfile(receipt_path):
+        return None
+    with open(receipt_path, encoding="utf-8") as fh:
+        return json.load(fh).get("policyApplied")
+
+
 # =============================================================================================
 # §1 bootstrap: session id + seat map
 # =============================================================================================
@@ -1497,6 +1509,11 @@ def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
     assert out.get("policyApplied") is not None
     assert out["policyApplied"]["action"] == {"choice": "accept-the-disclosed-risk"}
     assert _state(d)["terminal"] == "converged"
+    receipt_path = os.path.join(d, RD.RECEIPT_FILE)
+    with open(receipt_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    assert on_disk.get("policyApplied")
+    assert on_disk["policyApplied"][-1]["action"] == {"choice": "accept-the-disclosed-risk"}
 
 
 def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):
@@ -1595,11 +1612,13 @@ def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adap
     d = _judgment_session_with_repo(tmp_path, adapters, repo, name="fold-refused")
     real_submit = RD.cmd_submit
 
-    def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
+    def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
+                    _pending_policy_applied=None):
         if _via_advance:
             return {"ok": False, "reason": "test-fold-refused"}
         return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
-                           _via_advance=_via_advance)
+                           _via_advance=_via_advance,
+                           _pending_policy_applied=_pending_policy_applied)
 
     monkeypatch.setattr(RD, "cmd_submit", refuse_once)
     out = _advance(d, tmp_path)
@@ -1617,6 +1636,63 @@ def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adap
                               "disposition": "fix-as-suggested"},
                          ]})
     assert hand["ok"] is True, hand
+
+
+def test_stall_accept_risk_terminal_receipt_on_disk_carries_policy_applied(tmp_path, adapters):
+    """FX-4B-4 detector 1: stall accept-the-disclosed-risk converges inside the fold and the
+    write-once terminal receipt must carry policyApplied — assert against the on-disk file, not
+    in-memory state."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-stall-menu",
+        "findingClass": "stall:accept-risk-eligible",
+        "disposition": "accept-the-disclosed-risk",
+    }])
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="stall-receipt-provenance")
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    state["_acceptRiskEligible"] = True
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert _state(d)["terminal"] == "converged"
+    receipt_path = os.path.join(d, RD.RECEIPT_FILE)
+    assert os.path.isfile(receipt_path), "terminal receipt must be on disk"
+    with open(receipt_path, encoding="utf-8") as fh:
+        on_disk = json.load(fh)
+    policy = on_disk.get("policyApplied")
+    assert policy, "on-disk round-receipt.json must carry policyApplied"
+    assert policy[-1]["phase"] == RD.P_STALL
+    assert policy[-1]["action"] == {"choice": "accept-the-disclosed-risk"}
+
+
+def test_owner_gate_fold_refused_leaves_no_policy_applied_durable_record(tmp_path, adapters,
+                                                                         monkeypatch):
+    """FX-4B-4 detector 2: a fold-refused owner-gate advance must leave no durable record claiming
+    policy was applied — not in state, not in any receipt, not in the journal."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "fix-as-suggested",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="fold-refused-no-claim")
+    real_submit = RD.cmd_submit
+
+    def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
+                    _pending_policy_applied=None):
+        if _via_advance:
+            return {"ok": False, "reason": "test-fold-refused"}
+        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
+                           _via_advance=_via_advance,
+                           _pending_policy_applied=_pending_policy_applied)
+
+    monkeypatch.setattr(RD, "cmd_submit", refuse_once)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    state = _state(d)
+    assert not state.get("_policyApplied")
+    assert not RD.build_receipt(state, d).get("policyApplied")
+    assert not _receipt_on_disk_policy_applied(d)
+    assert not _journal_events_claiming_policy_applied(d)
 
 
 def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):

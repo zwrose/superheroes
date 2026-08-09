@@ -596,6 +596,19 @@ def test_render_shows_review_gate_policy_overlay(tmp_path):
     assert "shipped default: gate-policy/1 (0 rules; pre-authorizes nothing)" in screen
 
 
+def test_render_shows_review_gate_policy_structurally_ambiguous_core(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    repo = str(tmp_path)
+    path = core_md.core_path(repo, root)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    screen = cv.render(repo, root=root)
+    assert "## Review gate policy" in screen
+    assert "core.md: structurally ambiguous" in screen
+    assert "project overlay: none configured" not in screen
+
+
 def test_render_shows_review_gate_policy_unreadable_core(tmp_path):
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)

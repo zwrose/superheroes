@@ -26,8 +26,10 @@ CONFIG_ABSENT = "absent"
 CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 CONFIG_ROOT_UNAVAILABLE = "root-unavailable"
+CONFIG_STRUCTURAL_AMBIGUITY = "structurally-ambiguous"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
 GATE_REASON_ROOT_UNAVAILABLE = "repo-root-unavailable"
+GATE_REASON_STRUCTURAL_AMBIGUITY = "core-md-structurally-ambiguous"
 
 
 # Lives in store_core (lowest layer); alias kept so existing ``except RepoRootUnavailable``
@@ -39,6 +41,7 @@ _GATE_USABLE_STATUSES = frozenset({CONFIG_OK, CONFIG_ABSENT})
 _GATE_REFUSAL_REASONS = {
     CONFIG_UNREADABLE: GATE_REASON_UNREADABLE,
     CONFIG_ROOT_UNAVAILABLE: GATE_REASON_ROOT_UNAVAILABLE,
+    CONFIG_STRUCTURAL_AMBIGUITY: GATE_REASON_STRUCTURAL_AMBIGUITY,
 }
 
 GATE_REASON_EVALUATION_FAILED = "dispatch-gate-evaluation-failed"
@@ -331,9 +334,13 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     Uses the same existence/readability classification as ``engine_preferences_for_gate`` so
     *no overlay configured* (``CONFIG_OK`` with no ``reviewGatePolicy`` key) is distinct from
     *core.md unreadable* (``CONFIG_UNREADABLE``) and from *core.md absent* (``CONFIG_ABSENT``).
-    Never raises."""
+    Routes through ``profile_structural_refusal`` so a structurally ambiguous core.md is a
+    distinguishable refusal, not a silently parsed overlay. Never raises."""
     gate_cfg = engine_preferences_for_gate(
         cwd=cwd, root=root, profile_path=profile_path)
+    structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
+    if structural is not None:
+        return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
     if gate_cfg.status == CONFIG_ABSENT:
         return ReviewGatePolicyGate(CONFIG_ABSENT, None, None)
     if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
@@ -502,6 +509,11 @@ def review_gate_config_is_unreadable(gate):
     return gate.status == CONFIG_UNREADABLE
 
 
+def review_gate_config_is_structurally_ambiguous(gate):
+    """True when core.md is present but structurally ambiguous for overlay read purposes."""
+    return gate.status == CONFIG_STRUCTURAL_AMBIGUITY
+
+
 def review_gate_config_is_refusal(gate):
     """True when ``review_gate_policy_for_gate`` status refuses usable overlay read."""
     return gate.status not in _GATE_USABLE_STATUSES
@@ -541,6 +553,59 @@ def gate_refusal(reason, detail):
     return {"reason": reason, "detail": detail}
 
 
+def _structural_refusal_at_path(path):
+    """Structural soundness of one core.md path, or None when unambiguous or absent."""
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except (OSError, UnicodeDecodeError):
+        return "core-md-unreadable:%s" % path
+    blocks = _JSON_BLOCK.findall(text)
+    if len(blocks) > 1:
+        return "multiple-core-blocks:%s" % path
+    if not blocks:
+        return None
+    dup_key = [None]
+
+    def _reject_dupes(pairs):
+        seen = {}
+        for key, value in pairs:
+            if key in seen:
+                dup_key[0] = key
+                raise ValueError(DUPLICATE_CORE_KEY_REASON)
+            seen[key] = value
+        return seen
+
+    try:
+        json.loads(blocks[0], object_pairs_hook=_reject_dupes)
+    except ValueError:
+        if dup_key[0] is not None:
+            return "%s:%s" % (DUPLICATE_CORE_KEY_REASON, dup_key[0])
+        # corrupt block — upstream's job, not this guard's
+    except TypeError:
+        pass
+    return None
+
+
+def _gate_structural_refusal(*, cwd=None, root=None, profile_path=None):
+    """Structural refusal for the gate path(s) ``review_gate_policy_for_gate`` would read."""
+    try:
+        if profile_path:
+            layer = os.path.realpath(profile_path)
+            return _structural_refusal_at_path(os.path.join(os.path.dirname(layer), "core.md"))
+        cwd = cwd or os.getcwd()
+        in_repo, global_path = _core_candidates(cwd, root)
+        for path in (in_repo, global_path):
+            reason = _structural_refusal_at_path(path)
+            if reason is not None:
+                return reason
+        return None
+    except Exception as exc:
+        return "core-md-structural-check-failed: %s" % gate_refusal_detail(exc)
+
+
 def profile_structural_refusal(cwd=None, root=None):
     """Structural soundness of the project's core.md candidates — the fail-closed guard for a
     configuration value whose WRONG value is costly rather than merely inconvenient (#755).
@@ -553,41 +618,7 @@ def profile_structural_refusal(cwd=None, root=None):
     launch tier, where an ambiguous profile must fail closed rather than pick a value out of a
     file we cannot fully trust."""
     try:
-        cwd = cwd or os.getcwd()
-        in_repo, global_path = _core_candidates(cwd, root)
-        for path in (in_repo, global_path):
-            if not os.path.exists(path):
-                continue
-            try:
-                with open(path, encoding="utf-8") as fh:
-                    text = fh.read()
-            except (OSError, UnicodeDecodeError):
-                return "core-md-unreadable:%s" % path
-            blocks = _JSON_BLOCK.findall(text)
-            if len(blocks) > 1:
-                return "multiple-core-blocks:%s" % path
-            if not blocks:
-                continue
-            dup_key = [None]
-
-            def _reject_dupes(pairs):
-                seen = {}
-                for key, value in pairs:
-                    if key in seen:
-                        dup_key[0] = key
-                        raise ValueError(DUPLICATE_CORE_KEY_REASON)
-                    seen[key] = value
-                return seen
-
-            try:
-                json.loads(blocks[0], object_pairs_hook=_reject_dupes)
-            except ValueError as exc:
-                if dup_key[0] is not None:
-                    return "%s:%s" % (DUPLICATE_CORE_KEY_REASON, dup_key[0])
-                # corrupt block — upstream's job, not this guard's
-            except TypeError:
-                pass
-        return None
+        return _gate_structural_refusal(cwd=cwd, root=root)
     except Exception as exc:
         return "core-md-structural-check-failed: %s" % gate_refusal_detail(exc)
 

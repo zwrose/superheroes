@@ -3028,6 +3028,29 @@ def test_write_review_gate_policy_deferred_when_lock_contended(tmp_path, monkeyp
     assert res["reason"] == CM.BUILDER_DISPATCH_DEFER_LOCK_CONTENDED
 
 
+def test_review_gate_policy_for_gate_structurally_ambiguous_distinct_from_absent_and_unreadable(
+        tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    CM.write(
+        repo,
+        dict(_CORE_FACTS),
+        "confirmed",
+        root=store,
+        now="2026-06-26",
+    )
+    path = CM.core_path(repo, root=store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.status == CM.CONFIG_STRUCTURAL_AMBIGUITY
+    assert gate.overlay is None
+    assert gate.detail is not None
+    assert gate.detail.startswith("multiple-core-blocks:")
+
+
 def test_review_gate_policy_for_gate_unreadable_distinct_from_absent_and_no_overlay(tmp_path):
     repo = str(tmp_path)
     store = str(tmp_path / "store")
