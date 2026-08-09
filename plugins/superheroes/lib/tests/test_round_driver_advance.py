@@ -1250,7 +1250,8 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     (RD.P_STALL, "advance-stall-park"),
 ], ids=["judgment", "stall"])
 def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, phase, reason):
-    """A/B — the same `advance` on a dispatch phase folds; the two OWNER gates park unconditionally."""
+    """A/B — the same `advance` on a dispatch phase folds; without a calibration overlay the two
+    OWNER gates park because the shipped default pre-authorizes nothing."""
     ok_session = _session(tmp_path, name="folds-" + reason)
     _record_all_panel_seats(ok_session)
     assert _advance(ok_session, tmp_path)["ok"] is True
@@ -1259,6 +1260,7 @@ def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, ph
     state = _state(d)
     state["step"] = phase
     state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
+    state["config"]["repoRoot"] = _repo_without_gate_policy(tmp_path)
     if phase == RD.P_JUDGMENT:
         state["_judgmentFindings"] = [
             {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
@@ -1270,6 +1272,10 @@ def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, ph
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == reason
+    if phase == RD.P_JUDGMENT:
+        assert out["detail"] == "gate-policy-unmatched-class:judgment:important"
+    else:
+        assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
     parks = [e for e in _journal(d) if e.get("reason") == reason]
     assert parks and parks[-1]["fault"] == RD.FAULT_CALLER
 
@@ -1281,6 +1287,254 @@ def test_run_loop_judgment_default_is_unchanged(tmp_path):
     assert RD._run_seam({"io": {}}, RD.P_JUDGMENT, payload, RD.new_state(_cfg()), _cfg()) == {
         "dispositions": [{"id": "f1", "disposition": "fix-as-suggested"},
                          {"id": "f2", "disposition": "fix-as-suggested"}]}
+
+
+# =============================================================================================
+# §4b gate-policy auto-advance (#723 WO-7)
+# =============================================================================================
+
+def _load_core_md():
+    path = os.path.join(_LIB, "core_md.py")
+    spec = importlib.util.spec_from_file_location("core_md_advance", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _repo_with_gate_policy(tmp_path, rules):
+    cm = _load_core_md()
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
+    in_repo = os.path.join(repo, ".claude", "superheroes", "core.md")
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    with open(in_repo, "w", encoding="utf-8") as fh:
+        fh.write(cm.render_core(facts, "confirmed", "2026-01-01", "2026-01-01"))
+    policy = {"schema": "gate-policy/1", "default": "park", "rules": rules}
+    assert cm.write_review_gate_policy(repo, policy, root=None)["action"] == "written"
+    return repo
+
+
+def _repo_without_gate_policy(tmp_path):
+    cm = _load_core_md()
+    repo = str(tmp_path / "repo-no-policy")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
+    in_repo = os.path.join(repo, ".claude", "superheroes", "core.md")
+    os.makedirs(os.path.dirname(in_repo), exist_ok=True)
+    with open(in_repo, "w", encoding="utf-8") as fh:
+        fh.write(cm.render_core(facts, "confirmed", "2026-01-01", "2026-01-01"))
+    return repo
+
+
+def _parked_at_owner_gate(tmp_path, adapters, phase, name=None):
+    label = name or ("park-" + phase)
+    d = _session(tmp_path, name=label)
+    state = _state(d)
+    state["step"] = phase
+    state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
+    if phase == RD.P_JUDGMENT:
+        state["_judgmentFindings"] = [
+            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
+             "tradeoff": True}]
+        state["_judgmentMechanical"] = []
+    if phase == RD.P_STALL:
+        state["_stallChoices"] = list(RD.STALL_CHOICES)
+        state["_acceptRiskEligible"] = False
+    RD.save_state(d, state)
+    return d
+
+
+def _judgment_session_with_repo(tmp_path, adapters, repo, severity="Important", name="judgment"):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_JUDGMENT, name=name)
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    state["_judgmentFindings"] = [
+        {"title": "widen the API", "severity": severity, "file": "f.py", "line": 1, "tradeoff": True}]
+    RD.save_state(d, state)
+    return d
+
+
+def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["action"] == {"dispositions": [
+        {"findingClass": "judgment:important", "disposition": "skip"}]}
+    assert _state(d)["terminal"] == "converged"
+    found = [p for p in os.listdir(os.path.join(d, "round-1")) if p.startswith("gate-policy.")]
+    assert found, "expected gate-policy archive under round-1"
+    receipt = RD.build_receipt(_state(d), d)
+    assert receipt.get("policyApplied")
+
+
+def test_advance_judgment_partial_match_parks(tmp_path, adapters):
+    """Fail-closed edge 1: some rows match and some do not → park with advance-judgment-park."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    state = _state(d)
+    state["_judgmentFindings"].append(
+        {"title": "other", "severity": "Minor", "file": "g.py", "line": 2, "tradeoff": True})
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-unmatched-class:judgment:minor"
+
+
+def test_advance_judgment_unreadable_overlay_parks(tmp_path, adapters):
+    """Fail-closed edge 3: unreadable calibration overlay → park."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    core_path = os.path.join(repo, ".claude", "superheroes", "core.md")
+    with open(core_path, "w", encoding="utf-8") as fh:
+        fh.write("{{{corrupt core\n")
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"].startswith("gate-policy-calibration-unreadable")
+
+
+def test_advance_judgment_calibration_absent_parks(tmp_path, adapters):
+    """Calibration absent (no core.md) → park with gate-policy-calibration-absent."""
+    repo = str(tmp_path / "repo-no-core")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="judgment-absent")
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-calibration-absent"
+
+
+def test_advance_judgment_calibration_refused_parks(tmp_path, adapters, monkeypatch):
+    """Unregistered calibration refusal status → park with gate-policy-calibration-refused."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="judgment-refused")
+    cm = _load_core_md()
+    unknown_status = "unregistered-calibration-refusal"
+    with pytest.raises(KeyError):
+        cm.gate_refusal_reason_for_status(unknown_status)
+
+    def fake_overlay(_config):
+        return cm.ReviewGatePolicyGate(unknown_status, None, None)
+
+    monkeypatch.setattr(RD, "_gate_policy_overlay_from_config", fake_overlay)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-calibration-refused"
+
+
+def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monkeypatch):
+    """Fail-closed edge 4: shipped policy file missing with no overlay → park."""
+    repo = _repo_without_gate_policy(tmp_path)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    import review_gate_policy as rgp
+
+    def missing_layer(path=None):
+        return {"ok": False, "reason": "gate-policy-shipped-missing", "layer": None}
+
+    monkeypatch.setattr(rgp, "load_shipped_layer", missing_layer)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    assert out["detail"] == "gate-policy-no-valid-layer"
+
+
+def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
+    """Stall gate authorized advance via accept-the-disclosed-risk when eligible."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-stall-menu",
+        "findingClass": "stall:accept-risk-eligible",
+        "disposition": "accept-the-disclosed-risk",
+    }])
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL)
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    state["_acceptRiskEligible"] = True
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["action"] == {"choice": "accept-the-disclosed-risk"}
+    assert _state(d)["terminal"] == "converged"
+
+
+def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):
+    """Fail-closed edge 2: accept-the-disclosed-risk is not offerable for ineligible stall class."""
+    cm = _load_core_md()
+    repo = _repo_with_gate_policy(tmp_path, [])
+    invalid = {
+        "schema": "gate-policy/1",
+        "default": "park",
+        "rules": [{
+            "gate": "present-stall-menu",
+            "findingClass": "stall:accept-risk-ineligible",
+            "disposition": "accept-the-disclosed-risk",
+        }],
+    }
+    assert cm.write_review_gate_policy(repo, invalid, root=None)["action"] == "refused"
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL)
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-stall-park"
+    assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
+
+
+def test_advance_has_no_caller_supplied_policy_route():
+    """Gate policy is calibration-only — no advance flag may inject rules."""
+    parser = RD.build_parser()
+    for _path, action in __import__("cli_contract").iter_caller_supplied_actions(parser):
+        assert "policy" not in action.dest
+        for opt in action.option_strings:
+            assert "policy" not in opt.lower()
+    source = open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
+    assert "GATE_POLICY_ENV" not in source
+    assert 'os.environ.get("GATE_POLICY' not in source
+    assert "config.get(\"gatePolicy" not in source
+
+
+def test_policy_applied_records_match_and_action_not_identities_only(tmp_path, adapters):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "fix-as-suggested",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True
+    applied = out["policyApplied"]
+    assert applied["matches"]
+    assert applied["matches"][0].get("rule")
+    assert applied["action"]
+    assert _state(d)["step"] == RD.P_FIXER
 
 
 def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):

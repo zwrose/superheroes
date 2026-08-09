@@ -26,6 +26,7 @@ import guardian_vitals  # noqa: E402
 import mode_reconcile  # noqa: E402
 import mode_registry   # noqa: E402
 import model_tier_overrides  # noqa: E402
+import review_gate_policy  # noqa: E402
 import store_sweep     # noqa: E402
 
 _NON_LAYER = ("core.md", "patterns.md")
@@ -187,6 +188,64 @@ def _guardian_lines(guardian):
     return lines
 
 
+def _collect_review_gate_policy(cwd, root):
+    """Resolved review-gate-policy layers for the configure view. Never raises."""
+    gate = core_md.review_gate_policy_for_gate(cwd=cwd, root=root)
+    shipped = review_gate_policy.load_shipped_layer()
+    overlay_raw = gate.overlay
+    overlay_parse = None
+    if core_md.review_gate_config_is_ok(gate) and overlay_raw is not None:
+        overlay_parse = review_gate_policy.parse_overlay(overlay_raw)
+    return {
+        "gateStatus": gate.status,
+        "gateDetail": gate.detail,
+        "overlayRaw": overlay_raw,
+        "overlayParse": overlay_parse,
+        "shipped": shipped,
+    }
+
+
+def _review_gate_policy_lines(data):
+    """Plain-text review-gate-policy rows for the one-screen view."""
+    gate_status = data.get("gateStatus")
+    if gate_status == core_md.CONFIG_ABSENT:
+        return ["core.md: absent (no calibration overlay possible)"]
+    if gate_status == core_md.CONFIG_ROOT_UNAVAILABLE:
+        return ["core.md: repo root unavailable"]
+    if gate_status == core_md.CONFIG_UNREADABLE:
+        return ["core.md: unreadable"]
+
+    lines = []
+    shipped = data.get("shipped") or {}
+    if shipped.get("ok"):
+        rules = shipped.get("layer", {}).get("rules") or []
+        lines.append(
+            "shipped default: %s (%d rules; pre-authorizes nothing)"
+            % (review_gate_policy.GATE_POLICY_SCHEMA, len(rules))
+        )
+    else:
+        reason = shipped.get("reason") or "unknown"
+        lines.append("shipped default: unreadable (%s)" % reason)
+
+    overlay_raw = data.get("overlayRaw")
+    overlay_parse = data.get("overlayParse")
+    if overlay_raw is None:
+        lines.append("project overlay: none configured (driver parks unmatched gates)")
+    elif overlay_parse and overlay_parse.get("ok"):
+        rules = overlay_parse.get("layer", {}).get("rules") or []
+        ident = overlay_parse.get("layer", {}).get("identity") or {}
+        sha = ident.get("sha256") or ""
+        short_sha = sha[:12] + "…" if len(sha) == 64 else sha
+        lines.append(
+            "project overlay: %s (%d rules; sha256=%s)"
+            % (review_gate_policy.GATE_POLICY_SCHEMA, len(rules), short_sha)
+        )
+    else:
+        reason = (overlay_parse or {}).get("reason") or "overlay-malformed"
+        lines.append("project overlay: refused (%s)" % reason)
+    return lines
+
+
 def collect(cwd, root=None):
     """Gather everything the view renders (read-only): the core facts, each hero layer's text,
     the pinned patterns, the resolved storage mode, the coalesced drift notice, the effective
@@ -243,10 +302,21 @@ def collect(cwd, root=None):
         guardian = _collect_guardian(cwd, root)
     except Exception:
         guardian = None
+    try:
+        review_gate = _collect_review_gate_policy(cwd, root)
+    except Exception:
+        review_gate = {
+            "gateStatus": core_md.CONFIG_UNREADABLE,
+            "gateDetail": "review-gate-policy-view-failed",
+            "overlayRaw": None,
+            "overlayParse": None,
+            "shipped": review_gate_policy.load_shipped_layer(),
+        }
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
-            "enginePrefs": engine_prefs, "guardian": guardian}
+            "enginePrefs": engine_prefs, "guardian": guardian,
+            "reviewGatePolicy": review_gate}
 
 
 def _health_line(counts):
@@ -302,6 +372,10 @@ def render(cwd, *, root=None):
     if core is None:
         out.append("(no core calibration yet)")
         _append_builder_dispatch_row(out, cwd, root)
+        out.append("")
+        out.append("## Review gate policy")
+        for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
+            out.append(line)
     else:
         out.append(f"status: {core.get('status')}")
         out.append(f"verify command: {core.get('verifyCommand') or '(none)'}")
@@ -381,6 +455,10 @@ def render(cwd, *, root=None):
             out.append("Rejected seat pins (not applied — seat falls back to rotation):")
             for seat, reason in sorted(rejected_seats.items()):
                 out.append(f"  {seat}: {reason} ⚠")
+        out.append("")
+        out.append("## Review gate policy")
+        for line in _review_gate_policy_lines(data.get("reviewGatePolicy") or {}):
+            out.append(line)
     for hero, text in data["layers"]:
         out.append("")
         out.append(f"## Layer: {hero}")
