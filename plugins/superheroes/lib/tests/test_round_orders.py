@@ -459,22 +459,43 @@ def test_golden_stdout_channel_panel_order():
     (["auth", "payments"], '["auth","payments"]'),
     (None, ""),
 ])
-def test_render_normalizes_focus_notes(focus, expected_substr):
-    ph = _panel_placeholders()
-    ph["FOCUS_NOTES"] = focus if focus is not None else ""
-    if focus is None:
-        ph.pop("FOCUS_NOTES", None)
-    ctx = _base_context(placeholders=ph)
-    if focus is not None:
-        ctx["placeholders"]["FOCUS_NOTES"] = focus
-    # Driver normalizes before render; simulate via derived placeholders path
+def test_render_normalizes_focus_notes(focus, expected_substr, tmp_path):
     import round_driver as RD
-    normalized = RD._normalize_focus_notes(focus)
-    ph["FOCUS_NOTES"] = normalized
-    text, reason = RO.render_order(RP.P_PANEL, "seat", _base_context(placeholders=ph))
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    meta_path = os.path.join(session_dir, RR.META_FILE)
+    meta = {"repoRoot": repo, "focusNotes": focus}
+    with open(meta_path, "w", encoding="utf-8") as fh:
+        json.dump(meta, fh)
+    state = {"config": {"repoRoot": repo}, "reviewedDiff": "diff --git a/f b/f\n"}
+    paths = {
+        "storage_key": "code-reviewer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
+        session_dir, 2, paths,
+    )
+    if focus is None:
+        assert ph["FOCUS_NOTES"] == ""
+    else:
+        assert ph["FOCUS_NOTES"] == RD._normalize_focus_notes(focus)
+    text, reason = RO.render_order(
+        RP.P_PANEL, "code-reviewer",
+        _base_context(host_seat=True, placeholders=ph, landing_path=paths["bare_payload_path"]),
+    )
     assert reason is None
     if expected_substr:
-        assert expected_substr.replace('"', '"') in text or expected_substr in text
+        assert expected_substr in text
+    elif focus is None:
+        assert "- Focus:" not in text
 
 
 def test_render_focus_dict_via_driver_normalization():
@@ -991,21 +1012,199 @@ def test_order_templates_shell_census_clean():
     assert violations == [], "shell census violations:\n" + "\n".join(violations)
 
 
-def test_order_templates_shell_census_flags_injected_placeholder(tmp_path):
-    orders_dir = os.path.join(_PLUGIN_ROOT, "rubric", "orders")
+def test_order_templates_shell_census_flags_untagged_fence_placeholder(tmp_path):
+    orders_dir = os.path.join(str(tmp_path), "rubric", "orders")
+    os.makedirs(orders_dir)
     probe = os.path.join(orders_dir, "dispatch-panel.md")
-    original = open(probe, encoding="utf-8").read()
-    injected = original + "\n`python3 -B {{PROBE_PLACEHOLDER}}`\n"
-    try:
-        with open(probe, "w", encoding="utf-8") as fh:
-            fh.write(injected)
-        violations = RO.scan_all_order_templates_shell_violations()
-        assert any("dispatch-panel" in v and "PROBE_PLACEHOLDER" in v for v in violations)
-    finally:
-        with open(probe, "w", encoding="utf-8") as fh:
-            fh.write(original)
-    violations = RO.scan_all_order_templates_shell_violations()
-    assert violations == []
+    with open(probe, "w", encoding="utf-8") as fh:
+        fh.write("```\nbash {{PROBE_PLACEHOLDER}}\n```\n")
+    violations = RO.scan_all_order_templates_shell_violations(root=str(tmp_path))
+    assert any("dispatch-panel" in v and "PROBE_PLACEHOLDER" in v for v in violations)
+
+
+def test_fixer_escalation_wrapper_path_quoted_through_renderer(tmp_path, monkeypatch):
+    import round_driver as RD
+
+    plugin_with_space = os.path.join(str(tmp_path), "plugin root")
+    escalation = os.path.join(plugin_with_space, "lib", "escalation_resolve.py")
+    os.makedirs(os.path.dirname(escalation), exist_ok=True)
+    with open(escalation, "w", encoding="utf-8") as fh:
+        fh.write("# probe\n")
+    monkeypatch.setattr(RD, "_shipped_escalation_wrapper_path", lambda: escalation)
+    repo = str(tmp_path / "proj")
+    os.makedirs(repo)
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": repo, "fixerVendor": "claude"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+    }
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths,
+    )
+    quoted_escalation = shlex.quote(escalation)
+    assert ph["ESCALATION_WRAPPER_PATH"] == quoted_escalation
+    assert quoted_escalation != escalation
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=paths["bare_payload_path"],
+        repo_root=repo,
+        placeholders=ph,
+    )
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None
+    assert quoted_escalation in text
+    assert "python3 -B %s guard" % quoted_escalation in text
+    assert "python3 -B %s guard" % escalation not in text
+
+
+def test_fixer_profile_unresolvable_root_differs_from_resolved_absent(tmp_path, monkeypatch):
+    import calibration_resolve as cr
+    import model_tier_overrides as mto
+    import round_driver as RD
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+
+    def resolve_absent(_cwd, **kwargs):
+        return None
+
+    monkeypatch.setattr(mto, "resolve_profile_path", resolve_absent)
+    absent = RD._profile_path_for_orders(repo)
+    assert absent == "(Project profile not resolved for this project)"
+    assert "refused" not in absent
+
+    def resolve_unresolvable(_cwd, **kwargs):
+        raise cr.UnresolvableRootError(str(tmp_path / "bad"), repo, "review-crew", "global", "/p")
+
+    monkeypatch.setattr(mto, "resolve_profile_path", resolve_unresolvable)
+    refused = RD._profile_path_for_orders(repo)
+    assert cr.REASON_UNRESOLVABLE_ROOT in refused
+    assert refused != absent
+
+
+def test_host_order_delivery_names_landing_not_phase_result_file():
+    landing = os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                           "code-reviewer.a0.payload.json")
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=landing,
+        placeholders=_panel_placeholders(channel="file"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    delivery = text.split("## Ratified residuals")[0]
+    assert landing in delivery
+    assert _panel_placeholders()["FINDINGS_OUTPUT_PATH"] not in delivery
+
+
+def test_engine_verifiers_order_uses_verdict_stdout_contract():
+    ctx = _base_context(host_seat=False, placeholders=_verifier_placeholders(channel="stdout"))
+    text, reason = RO.render_order(RP.P_VERIFIERS, "verifier:x", ctx)
+    assert reason is None
+    assert '{"verdicts":' in text
+    assert "Emit findings" not in text
+
+
+def test_engine_fixer_order_landing_block_uses_fixes_stdout_contract(tmp_path, monkeypatch):
+    import engine_pref as EP
+    import round_driver as RD
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    monkeypatch.setattr(EP, "load_engine_prefs", lambda _root: {"fixer": "codex"})
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": repo, "fixerVendor": "codex"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+    }
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ctx, _paths = RD._build_order_render_context(
+        session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {"fixes": []},
+    )
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None
+    assert '{"fixes":' in text.split("## Return your result")[-1]
+    assert "Payload landing path:" not in text.split("## Return your result")[-1]
+
+
+def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
+    import round_driver as RD
+
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    rdir = os.path.join(session_dir, "round-2")
+    os.makedirs(rdir)
+    payload = {
+        "clusters": [{"key": "f.py:0", "findings": []}],
+        "targets": [{"id": "finding::auth.py::12"}],
+        "hunks": {"files": []},
+        "findings": [{"id": "v0"}],
+    }
+    roster = ["verifier:f.py:0", "finding::auth.py::12"]
+    writes = RD._order_sidecar_writes(session_dir, 2, RP.P_VERIFIERS, roster,
+                                      {"clusters": payload["clusters"]})
+    cluster_path = RD._order_cluster_sidecar_path(rdir, 0)
+    assert cluster_path in [path for path, _ in writes]
+    paths = {
+        "storage_key": "verifier:f.py:0.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n"}
+    ph = RD._order_placeholders(
+        RP.P_VERIFIERS, "verifier:f.py:0", 0, state, state["config"],
+        {"clusters": payload["clusters"]}, session_dir, 2, paths,
+    )
+    assert ph["CLUSTER_FINDINGS_PATH"] == cluster_path
+    audit_write = RD._order_sidecar_writes(session_dir, 2, RP.P_AUDITS, roster,
+                                          {"targets": payload["targets"]})
+    audit_path = RD._order_audit_target_sidecar_path(rdir, RR.storage_key("finding::auth.py::12", 0))
+    assert audit_path in [path for path, _ in audit_write]
+    ph_audit = RD._order_placeholders(
+        RP.P_AUDITS, "finding::auth.py::12", 0, state, state["config"],
+        {"targets": payload["targets"]}, session_dir, 2, paths,
+    )
+    assert ph_audit["TARGET_SUMMARY_PATH"] == audit_path
+    scoped_write = RD._order_sidecar_writes(session_dir, 2, RP.P_SCOPED, roster,
+                                             {"hunks": payload["hunks"]})
+    scoped_path = RD._order_scoped_hunks_sidecar_path(rdir)
+    assert scoped_path in [path for path, _ in scoped_write]
+    ph_scoped = RD._order_placeholders(
+        RP.P_SCOPED, "scoped-finder", 0, state, state["config"],
+        {"hunks": payload["hunks"]}, session_dir, 2, paths,
+    )
+    assert ph_scoped["HUNKS_PATH"] == scoped_path
+
+
+def test_order_templates_shell_census_flags_injected_placeholder(tmp_path):
+    orders_dir = os.path.join(str(tmp_path), "rubric", "orders")
+    os.makedirs(orders_dir)
+    probe = os.path.join(orders_dir, "dispatch-panel.md")
+    with open(probe, "w", encoding="utf-8") as fh:
+        fh.write("# probe\n`python3 -B {{PROBE_PLACEHOLDER}}`\n")
+    violations = RO.scan_all_order_templates_shell_violations(root=str(tmp_path))
+    assert any("dispatch-panel" in v and "PROBE_PLACEHOLDER" in v for v in violations)
 
 
 def test_fixer_guard_command_uses_stdin_not_shell_path_interpolation(tmp_path):

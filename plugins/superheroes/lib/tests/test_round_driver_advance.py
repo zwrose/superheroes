@@ -1445,6 +1445,31 @@ def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
     assert receipt.get("policyApplied")
 
 
+def test_advance_judgment_colliding_identity_severity_policy_dispositions_not_collapse(
+        tmp_path, adapters):
+    """Policy advance must not collapse dispositions when two same-location findings differ in severity."""
+    repo = _repo_with_gate_policy(tmp_path, [
+        {"gate": "present-judgment", "findingClass": "judgment:critical",
+         "disposition": "fix-as-suggested"},
+        {"gate": "present-judgment", "findingClass": "judgment:important",
+         "disposition": "skip"},
+    ])
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_JUDGMENT, name="judgment-collide")
+    state = _state(d)
+    state["config"]["repoRoot"] = repo
+    state["_judgmentFindings"] = [
+        {"title": "widen the API", "severity": "Critical", "file": "f.py", "line": 1, "tradeoff": True},
+        {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1, "tradeoff": True},
+    ]
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    after = _state(d)
+    assert after["step"] == RD.P_FIXER
+    assert [f["severity"] for f in after["_fixBatch"]] == ["Critical"]
+    assert [s["severity"] for s in after.get("_skippedBlockers") or []] == ["Important"]
+
+
 def test_advance_judgment_partial_match_parks(tmp_path, adapters):
     """Fail-closed edge 1: some rows match and some do not → park with advance-judgment-park."""
     repo = _repo_with_gate_policy(tmp_path, [{

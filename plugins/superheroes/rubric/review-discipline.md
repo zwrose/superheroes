@@ -161,10 +161,11 @@ order, not an instruction the orchestrator hand-inlines at dispatch time.
 **Where a project records them.** Optional `## Ratified residuals` prose in the project's
 `core.md` (`.claude/superheroes/core.md` in-repo), owner-editable through `configure`.
 
-**How seats receive them.** On each `next` for a `dispatch-*` phase, `round_orders.resolve_base_residuals`
-reads that section from `core.md` at the review's **pinned base commit** (`git cat-file` on
-`meta.baseRef` — never the worktree or branch under review). `round_orders.render_order` appends
-the residual block to every review seat's order. An empty or missing section renders an explicit
+**How seats receive them.** On each `next` for a `dispatch-*` phase, `round_orders.resolve_order_residuals`
+reads that section from `core.md` at the review's **pinned base commit** when the project is
+in-repo (`resolve_base_residuals` / `git cat-file` on `meta.baseRef` — never the worktree or
+branch under review); out-of-repo sessions read the calibration store instead.
+`round_orders.render_order` appends the residual block to every review seat's order. An empty or missing section renders an explicit
 **"No ratified residuals are recorded for this project at the review base."** line — a missing list
 and an empty one are different facts, so the block is never omitted.
 

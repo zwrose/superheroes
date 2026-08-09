@@ -29,7 +29,7 @@ hunks. Only flag code in `+` or `-` lines of the scoped surface.
 - Do NOT scan outside the scoped hunks file.
 - Do NOT decide the run's outcome.
 - **Never change the repository, and never claim a run you did not make.**
-- Deliver per the base rubric's panel output-format section. Write candidate records to /tmp/superheroes-session-wo4-golden/round-2/scoped-findings.json as a JSON array — write `[]` rather than skipping the file when you have nothing to flag.
+- Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-scoped-finder/scoped-finder.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
 
 ## Ratified residuals (owner-ratified, quoted data)
 

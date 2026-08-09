@@ -178,6 +178,9 @@ BASE_GUARD_CHECKED = "checked-stat-bound"
 # Citable reason recorded when gate policy pre-authorizes a judgment `skip` disposition.
 _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 
+# Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
+JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
+
 
 # --- the per-round disclosure channels (#720) -------------------------------------------------
 # Shape predicates for a channel value coming off a DURABLE record. A record is external input: a
@@ -1171,11 +1174,13 @@ def _advance(state, config):
         if state.get("_escalatedRung"):
             payload["escalatedRung"] = state["_escalatedRung"]
     elif step == P_JUDGMENT:
+        judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+        row_ids = _judgment_row_ids(judgment)
         payload = {"findings": [
-            {"id": _judgment_finding_id(f), "file": f.get("file"), "line": f.get("line"),
+            {"id": row_ids[i], "file": f.get("file"), "line": f.get("line"),
              "title": f.get("title"), "severity": f.get("severity"),
              "classification": "judgment", "dispositions": list(JUDGMENT_DISPOSITIONS)}
-            for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]}
+            for i, f in enumerate(judgment)]}
     elif step == P_STALL:
         # The stall menu is the audit-stall TERMINAL only (a tradeoff/judgment blocker routes to
         # present-judgment, never here — #507 R2a). No judgment findings ride this payload.
@@ -1786,8 +1791,26 @@ def _judgment_finding_id(finding):
     """The per-LOCATION disposition key for a judgment finding — the line-less `finding_identity`
     PLUS the line. Two same-title tradeoff blockers at DIFFERENT lines get DISTINCT ids, so the
     owner's disposition for one never collides onto the other (the line-less identity did — #507 R2
-    v5). The present-judgment payload emits this id and the fold keys the dispositions on it."""
+    v5). For the FIRST row at a location this equals ``_location_id``; repeats at the same location
+    use ``_judgment_row_ids`` (occurrence suffix)."""
     return _location_id(finding)
+
+
+def _judgment_row_ids(findings):
+    """Per-row disposition keys for judgment findings. Reuses the audit-target occurrence pattern:
+    the first row at a location gets the bare per-location id; repeats get ``#1``, ``#2``, … so two
+    surviving tradeoff findings at the same location (e.g. different severities) never share one id."""
+    ids = []
+    seen_location = {}
+    for f in findings:
+        if not isinstance(f, dict):
+            ids.append(None)
+            continue
+        loc = _location_id(f)
+        n = seen_location.get(loc, 0)
+        seen_location[loc] = n + 1
+        ids.append(loc if n == 0 else "%s#%d" % (loc, n))
+    return ids
 
 
 def _route_judgment_blockers(state, blocking):
@@ -1808,10 +1831,11 @@ def _route_judgment_blockers(state, blocking):
     mechanical = [f for f in blocking if isinstance(f, dict) and not f.get("tradeoff")]
     state["_judgmentFindings"] = [dict(f) for f in judgment]
     state["_judgmentMechanical"] = [dict(f) for f in mechanical]
+    row_ids = _judgment_row_ids(judgment)
     _record_round(state, "judgmentBlockers", [
-        {"id": _judgment_finding_id(f), "file": f.get("file"), "line": f.get("line"),
+        {"id": row_ids[i], "file": f.get("file"), "line": f.get("line"),
          "title": f.get("title"), "severity": f.get("severity"), "classification": "judgment"}
-        for f in judgment])
+        for i, f in enumerate(judgment)])
     _decision(state, "judgment-gate",
               "%d tradeoff/product-choice blocker(s) routed to owner judgment — never auto-fixed; "
               "each offered fix-as-suggested / fix-with-guidance / skip: %s"
@@ -1850,14 +1874,23 @@ def _fold_judgment(state, config, artifact):
     raw = artifact.get("dispositions") if isinstance(artifact.get("dispositions"), list) else []
     by_id = {}
     for d in raw:
-        if isinstance(d, dict) and d.get("id") is not None:
-            by_id[d.get("id")] = d
+        if not isinstance(d, dict) or d.get("id") is None:
+            continue
+        fid = d.get("id")
+        prior = by_id.get(fid)
+        if prior is not None and prior.get("disposition") != d.get("disposition"):
+            _park_cannot_certify(state, "%s: %s" % (JUDGMENT_DISPOSITION_COLLISION_CAUSE, fid))
+            state.pop("_judgmentFindings", None)
+            state.pop("_judgmentMechanical", None)
+            return
+        by_id[fid] = d
     judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+    row_ids = _judgment_row_ids(judgment)
     fix_batch = [dict(f) for f in (state.get("_judgmentMechanical") or []) if isinstance(f, dict)]
     skipped = []
     disposition_log = []
-    for f in judgment:
-        fid = _judgment_finding_id(f)
+    for i, f in enumerate(judgment):
+        fid = row_ids[i]
         d = by_id.get(fid) if isinstance(by_id.get(fid), dict) else {}
         disposition = d.get("disposition")
         reason = d.get("reason")
@@ -3894,10 +3927,12 @@ def _profile_path_for_orders(repo_root):
     """Resolved project profile path for fixer orders — never a hand-typed layout guess."""
     try:
         path = model_tier_overrides.resolve_profile_path(repo_root)
-        if isinstance(path, str) and path.strip():
-            return path
-    except Exception:  # noqa: BLE001
-        pass
+    except calibration_resolve.UnresolvableRootError as exc:
+        refusal = core_md.gate_refusal_line(
+            core_md.gate_refusal(exc.reason, str(exc.root)))
+        return "(Project profile refused — %s)" % refusal
+    if isinstance(path, str) and path.strip():
+        return path
     return "(Project profile not resolved for this project)"
 
 
@@ -3950,6 +3985,29 @@ def _shipped_resource_refusal(placeholders):
     return None
 
 
+# Order-input sidecar layout — one home for commit writes and order placeholders.
+ORDER_SIDECAR_CLUSTERS_DIR = "clusters"
+ORDER_SIDECAR_AUDIT_TARGETS_DIR = "audit-targets"
+ORDER_SIDECAR_SCOPED_HUNKS_FILE = "scoped-hunks.json"
+ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
+
+
+def _order_cluster_sidecar_path(rdir, index):
+    return os.path.join(rdir, ORDER_SIDECAR_CLUSTERS_DIR, "%d.json" % index)
+
+
+def _order_audit_target_sidecar_path(rdir, skey):
+    return os.path.join(rdir, ORDER_SIDECAR_AUDIT_TARGETS_DIR, "%s.json" % skey)
+
+
+def _order_scoped_hunks_sidecar_path(rdir):
+    return os.path.join(rdir, ORDER_SIDECAR_SCOPED_HUNKS_FILE)
+
+
+def _order_verified_sidecar_path(rdir):
+    return os.path.join(rdir, ORDER_SIDECAR_VERIFIED_FILE)
+
+
 def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
     """[(path, bytes)] sidecars named in orders, derived from the phase payload."""
     writes = []
@@ -3959,35 +4017,33 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
         clusters = payload.get("clusters")
         if not isinstance(clusters, list):
             clusters = []
-        clusters_dir = os.path.join(rdir, "clusters")
         for index, cluster in enumerate(clusters):
             if not isinstance(cluster, dict):
                 cluster = {}
-            path = os.path.join(clusters_dir, "%d.json" % index)
+            path = _order_cluster_sidecar_path(rdir, index)
             writes.append((path, round_records.canonical(cluster).encode("utf-8")))
     elif phase == P_AUDITS:
         targets = payload.get("targets")
         if not isinstance(targets, list):
             targets = []
-        audit_dir = os.path.join(rdir, "audit-targets")
         for index, (seat_key, occurrence) in enumerate(round_records.roster_slots(roster)):
             target = targets[index] if index < len(targets) else {}
             if not isinstance(target, dict):
                 target = {}
             skey = round_records.storage_key(seat_key, occurrence)
-            path = os.path.join(audit_dir, "%s.json" % skey)
+            path = _order_audit_target_sidecar_path(rdir, skey)
             writes.append((path, round_records.canonical(target).encode("utf-8")))
     elif phase == P_SCOPED:
         hunks = payload.get("hunks")
         if not isinstance(hunks, dict):
             hunks = {}
-        path = os.path.join(rdir, "scoped-hunks.json")
+        path = _order_scoped_hunks_sidecar_path(rdir)
         writes.append((path, round_records.canonical(hunks).encode("utf-8")))
     elif phase == P_SYNTHESIS:
         findings = payload.get("findings")
         if not isinstance(findings, list):
             findings = []
-        path = os.path.join(rdir, "verified.json")
+        path = _order_verified_sidecar_path(rdir)
         writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
     return writes
 
@@ -4085,7 +4141,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
         row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
-            "CLUSTER_FINDINGS_PATH": os.path.join(rdir, "clusters", "%d.json" % cluster_index),
+            "CLUSTER_FINDINGS_PATH": _order_cluster_sidecar_path(rdir, cluster_index),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
@@ -4094,7 +4150,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     elif phase == P_SYNTHESIS:
         row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
-            "VERIFIED_FINDINGS_PATH": os.path.join(rdir, "verified.json"),
+            "VERIFIED_FINDINGS_PATH": _order_verified_sidecar_path(rdir),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
@@ -4120,9 +4176,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
         row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
-            "TARGET_SUMMARY_PATH": os.path.join(rdir, "audit-targets",
-                                                "%s.json" % round_records.storage_key(
-                                                    seat_key, occurrence)),
+            "TARGET_SUMMARY_PATH": _order_audit_target_sidecar_path(
+                rdir, round_records.storage_key(seat_key, occurrence)),
             "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
@@ -4132,7 +4187,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     elif phase == P_SCOPED:
         row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
-            "HUNKS_PATH": os.path.join(rdir, "scoped-hunks.json"),
+            "HUNKS_PATH": _order_scoped_hunks_sidecar_path(rdir),
             "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
             "RUBRIC_PATH": rubric_path,
             "CORE_PATH": core_path,
@@ -4967,14 +5022,14 @@ def _gate_policy_overlay_from_config(config):
 
 
 def _judgment_policy_rows(state):
+    judgment = [f for f in (state.get("_judgmentFindings") or []) if isinstance(f, dict)]
+    row_ids = _judgment_row_ids(judgment)
     rows = []
-    for finding in (state.get("_judgmentFindings") or []):
-        if not isinstance(finding, dict):
-            continue
+    for i, finding in enumerate(judgment):
         severity = finding.get("severity")
         finding_class = "judgment:%s" % (severity.lower() if isinstance(severity, str) else "")
         rows.append({
-            "id": _judgment_finding_id(finding),
+            "id": row_ids[i],
             "findingClass": finding_class,
             "severity": severity,
             "title": finding.get("title"),
@@ -5002,7 +5057,8 @@ def _judgment_artifact_from_resolution(state, resolution):
         finding = judgment[row_index]
         rule = match.get("rule") if isinstance(match.get("rule"), dict) else {}
         disposition = rule.get("disposition")
-        entry = {"id": _judgment_finding_id(finding), "disposition": disposition}
+        row_ids = _judgment_row_ids(judgment)
+        entry = {"id": row_ids[row_index], "disposition": disposition}
         if disposition == review_gate_policy.JUDGMENT_SKIP_DISPOSITION:
             entry["reason"] = _GATE_POLICY_SKIP_REASON
         dispositions.append(entry)
