@@ -5,6 +5,8 @@ import os
 import sys
 import io
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
 _PLUGIN_ROOT = os.path.abspath(os.path.join(_HERE, "..", ".."))
@@ -136,6 +138,32 @@ def test_guard_path_and_stdin_path_mutually_exclusive():
     rc = ER.main(["escalation_resolve.py", "guard", "--root", _REPO_ROOT,
                   "--path", "x", "--stdin-path"])
     assert rc == 2
+
+
+_GUARD_REFUSAL_CASES = [
+    ("empty-stdin", "", ("--root", _REPO_ROOT, "--stdin-path")),
+    ("embedded-newline", "/a/b.py\n/c/d.py", ("--root", _REPO_ROOT, "--stdin-path")),
+    ("surrounding-whitespace", " /a/b.py ", ("--root", _REPO_ROOT, "--stdin-path")),
+    ("embedded-nul", "/a/b.py\0", ("--root", _REPO_ROOT, "--stdin-path")),
+    ("both-modes", "/a/b.py", ("--root", _REPO_ROOT, "--path", "x", "--stdin-path")),
+]
+
+
+@pytest.mark.parametrize("case,payload,args",
+                         _GUARD_REFUSAL_CASES,
+                         ids=[c[0] for c in _GUARD_REFUSAL_CASES])
+def test_guard_refusal_still_emits_a_fail_closed_verdict(capsys, case, payload, args):
+    """Every guard refusal carries `allow`/`degraded`, not just a nonzero status.
+
+    The shipped fixer order states its rule as "if `allow` is false (or `degraded` is
+    true), DO NOT edit that file". A refusal that emits no verdict leaves that rule
+    unevaluable at exactly the moments it matters most.
+    """
+    rc, out = _stdin_guard(capsys, payload, *args)
+    assert rc == 2, case
+    assert out["allow"] is False, case
+    assert out["degraded"] is True, case
+    assert out["refusal"], case
 
 
 def test_guard_stdin_path_with_metacharacters(capsys, tmp_path):

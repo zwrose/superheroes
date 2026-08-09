@@ -251,10 +251,21 @@ def test_resolve_base_residuals_no_base_oid():
     assert reason == "no-base-oid"
 
 
+def _git_commit(repo, *args):
+    """Commit in a throwaway repo with an explicit identity.
+
+    A CI runner carries no git identity, so a bare `git commit` here is green on a dev
+    box and fatal in CI ("empty ident name"). Pinning it inline is the convention across
+    this suite (see `guardian_fixtures`, `test_core_md`, `test_engine_dispatch`).
+    """
+    subprocess.run(["git", "-C", repo, "-c", "user.email=t@t.local", "-c", "user.name=t",
+                    "commit", *args], check=True)
+
+
 def test_resolve_base_residuals_no_core_at_base(tmp_path):
     repo = str(tmp_path)
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "--allow-empty", "-qm", "init"], check=True)
+    _git_commit(repo, "--allow-empty", "-qm", "init")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     text, reason = RO.resolve_base_residuals(repo, base, "missing/core.md")
     assert text == ""
@@ -286,7 +297,7 @@ def test_resolve_base_residuals_no_residual_section(tmp_path):
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
     _write_core_file(repo, "core.md", "")
     subprocess.run(["git", "-C", repo, "add", "core.md"], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "-qm", "core"], check=True)
+    _git_commit(repo, "-qm", "core")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     text, reason = RO.resolve_base_residuals(repo, base, "core.md")
     assert text == ""
@@ -300,11 +311,11 @@ def test_resolve_base_residuals_reads_base_not_worktree(tmp_path):
 
     _write_core_file(repo, core_rel, "base residual only")
     subprocess.run(["git", "-C", repo, "add", core_rel], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "-qm", "base"], check=True)
+    _git_commit(repo, "-qm", "base")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
 
     _write_core_file(repo, core_rel, "branch-widened residual list")
-    subprocess.run(["git", "-C", repo, "commit", "-am", "widen"], check=True)
+    _git_commit(repo, "-am", "widen")
 
     text, reason = RO.resolve_base_residuals(repo, base, core_rel)
     assert reason is None
@@ -518,10 +529,10 @@ def test_resolve_order_residuals_in_repo_reads_base(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
     _write_core_file(repo, ".claude/superheroes/core.md", "base residual only")
     subprocess.run(["git", "-C", repo, "add", ".claude/superheroes/core.md"], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "-qm", "base"], check=True)
+    _git_commit(repo, "-qm", "base")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     _write_core_file(repo, ".claude/superheroes/core.md", "branch widened")
-    subprocess.run(["git", "-C", repo, "commit", "-am", "widen"], check=True)
+    _git_commit(repo, "-am", "widen")
     monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.IN_REPO})
     text, prov, failure = RO.resolve_order_residuals(repo, base)
     assert failure is None
@@ -883,28 +894,31 @@ def test_golden_render_with_pr_checkout_matches_fixture():
 # --- FX-4A: engine landing stdout channel --------------------------------------
 
 
-_FILE_CHANNEL_MARKERS = (
-    "Write candidate records to",
-    "Write your groups to",
-    "Write a JSON array to this cluster",
-    "Write the JSON array to",
-)
-
-
 @pytest.mark.parametrize("phase,ph_fn", [
-    (RP.P_PANEL, lambda: _panel_placeholders(channel="stdout")),
-    (RP.P_VERIFIERS, lambda: _verifier_placeholders(channel="stdout")),
-    (RP.P_SYNTHESIS, lambda: _synthesis_placeholders(channel="stdout")),
-    (RP.P_GAPSWEEP, lambda: _gapsweep_placeholders(channel="stdout")),
-    (RP.P_SCOPED, lambda: _scoped_placeholders(channel="stdout")),
+    (RP.P_PANEL, _panel_placeholders),
+    (RP.P_VERIFIERS, _verifier_placeholders),
+    (RP.P_SYNTHESIS, _synthesis_placeholders),
+    (RP.P_GAPSWEEP, _gapsweep_placeholders),
+    (RP.P_SCOPED, _scoped_placeholders),
 ])
 def test_engine_order_template_body_has_no_file_channel_delivery(phase, ph_fn):
-    ctx = _base_context(host_seat=False, placeholders=ph_fn())
+    """The stdout render must not carry the file render's own delivery text.
+
+    The marker is DERIVED from the renderer's file-channel branch, never hand-copied:
+    a hand-typed marker list silently stops matching the moment the wording moves, and
+    then asserts nothing. Drop the `channel == "stdout"` branch and both renders emit
+    the same block, so this goes red.
+    """
+    file_ctx = _base_context(host_seat=False, placeholders=ph_fn(channel="file"))
+    file_marker = RO._derived_placeholders(phase, file_ctx)["OUTPUT_CHANNEL_BLOCK"]
+    assert file_marker.strip(), "%s has no file-channel delivery text to test against" % phase
+
+    ctx = _base_context(host_seat=False, placeholders=ph_fn(channel="stdout"))
     text, reason = RO.render_order(phase, "seat", ctx)
     assert reason is None
     body = text.split("## Ratified residuals")[0]
-    for marker in _FILE_CHANNEL_MARKERS:
-        assert marker not in body, "%s still instructs file-channel delivery: %r" % (phase, marker)
+    assert file_marker not in body, (
+        "%s still instructs file-channel delivery: %r" % (phase, file_marker))
 
 
 def test_engine_order_landing_block_uses_stdout_not_file_write():
@@ -1020,6 +1034,46 @@ def test_order_templates_shell_census_flags_untagged_fence_placeholder(tmp_path)
         fh.write("```\nbash {{PROBE_PLACEHOLDER}}\n```\n")
     violations = RO.scan_all_order_templates_shell_violations(root=str(tmp_path))
     assert any("dispatch-panel" in v and "PROBE_PLACEHOLDER" in v for v in violations)
+
+
+def _write_probe_order(tmp_path, body):
+    orders_dir = os.path.join(str(tmp_path), "rubric", "orders")
+    os.makedirs(orders_dir, exist_ok=True)
+    with open(os.path.join(orders_dir, "dispatch-panel.md"), "w", encoding="utf-8") as fh:
+        fh.write(body)
+    return RO.scan_all_order_templates_shell_violations(root=str(tmp_path))
+
+
+def test_order_templates_shell_census_flags_angle_substitution_marker(tmp_path):
+    """`<file>` in a shell region is the ORIGINAL defect shape — the census must still bite.
+
+    Both placeholder probes use `{{...}}`, which exercises only the `_PLACEHOLDER_RE` arm;
+    without this, deleting the `_ANGLE_SUB_RE` loop leaves the whole suite green.
+    """
+    violations = _write_probe_order(
+        tmp_path, '# probe\n`python3 guard --path "<file>"`\n')
+    assert any("dispatch-panel" in v and "<file>" in v for v in violations), violations
+
+
+def test_order_templates_shell_census_flags_angle_substitution_in_fence(tmp_path):
+    violations = _write_probe_order(tmp_path, "```bash\ngit commit -m '<subject>'\n```\n")
+    assert any("dispatch-panel" in v and "<subject>" in v for v in violations), violations
+
+
+# Pinned literally, NOT derived from the constant under test: parametrizing over
+# `_SAFE_ANGLE_SUBSTITUTIONS` makes a shrink silently drop its own case instead of failing.
+_RATIFIED_ANGLE_SUBSTITUTIONS = ("count", "dimensions")
+
+
+def test_safe_angle_substitution_allowlist_is_the_ratified_set():
+    assert RO._SAFE_ANGLE_SUBSTITUTIONS == frozenset(_RATIFIED_ANGLE_SUBSTITUTIONS)
+
+
+@pytest.mark.parametrize("name", _RATIFIED_ANGLE_SUBSTITUTIONS)
+def test_order_templates_shell_census_allows_ratified_angle_substitutions(tmp_path, name):
+    """The other direction: the allowlisted commit-message slots must NOT be flagged."""
+    violations = _write_probe_order(tmp_path, "# probe\n`echo <%s>`\n" % name)
+    assert violations == [], violations
 
 
 def test_fixer_escalation_wrapper_path_quoted_through_renderer(tmp_path, monkeypatch):

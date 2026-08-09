@@ -4092,7 +4092,12 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
                         session_dir, rnd, paths):
-    """Phase-specific placeholder dict for `round_orders.render_order`. Never raises."""
+    """Phase-specific placeholder dict for `round_orders.render_order`.
+
+    Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
+    — that IS the refusal channel, and `_cmd_next_locked` catches it. Do not add a caller
+    that assumes this returns on every input.
+    """
     meta = _session_meta(session_dir)
     cfg = config if isinstance(config, dict) else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()

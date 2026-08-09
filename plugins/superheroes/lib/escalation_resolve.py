@@ -27,6 +27,19 @@ def _say(detail):
     sys.stderr.write(detail + "\n")
 
 
+def _guard_refusal(detail):
+    """Refuse a guard call the way this module refuses everything else — with a verdict.
+
+    The shipped fixer order keys its rule on `allow` / `degraded`; an exit carrying neither
+    leaves that rule unevaluable, so every guard refusal emits the conservative verdict on
+    stdout alongside the nonzero status. Same direction as `_safe`: refuse, never proceed.
+    """
+    _say(detail)
+    sys.stdout.write(json.dumps(
+        {"allow": False, "degraded": True, "refusal": detail}) + "\n")
+    return 2
+
+
 def _parse_stdin_path(raw):
     """Read one absolute path from stdin for guard --stdin-path.
 
@@ -141,14 +154,12 @@ def main(argv):
 
     if args.cmd == "guard":
         if bool(args.stdin_path) == bool(args.path):
-            _say("guard requires exactly one of --path or --stdin-path")
-            return 2
+            return _guard_refusal("guard requires exactly one of --path or --stdin-path")
         if args.stdin_path:
             raw = sys.stdin.read()
             path, err = _parse_stdin_path(raw)
             if err:
-                _say(err)
-                return 2
+                return _guard_refusal(err)
         else:
             path = args.path
         # conservative=True (treat as safety machinery -> refuse) on any core error.
