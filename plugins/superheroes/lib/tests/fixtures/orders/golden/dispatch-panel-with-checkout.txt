@@ -13,7 +13,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 
 ## Context files
 - Diff: /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, panel output format): /private/tmp/c4a/plugins/superheroes/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): /private/tmp/wh723-car5/plugins/superheroes/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - CLAUDE.md (project conventions): CLAUDE.md
@@ -86,7 +86,15 @@ Your result must carry a payload matching this shape:
 
 Required keys: (none)
 Optional keys: findings, confidence, tier, receiptMissing, receiptStale, vacuous, reason
+confidence type: non-empty-string
+findings type: list-of-objects
+reason type: string
+receiptMissing type: boolean
+receiptStale type: boolean
+tier type: non-empty-string
+vacuous type: boolean
 Conditional — findings: required unless the seat declared it did not run (vacuous is True or reason is a not-run outcome token)
+Also enforced — findings-unless-not-run: findings is required unless vacuous is True or reason is a not-run outcome token
 
 ## Return your result
 
