@@ -4867,12 +4867,7 @@ GATE_POLICY_RESOLVER_PARK_CAUSES = frozenset({
     "gate-policy-judgment-no-findings",
     "gate-policy-unknown-phase",
     "gate-policy-park",
-    "gate-policy-no-valid-layer",
-    "gate-policy-judgment-input-not-list",
-    "gate-policy-judgment-row-not-object",
-    "gate-policy-judgment-row-missing-class",
-    "gate-policy-unknown-stall-class",
-})
+}) | review_gate_policy.RESOLVER_PARK_CAUSES
 
 GATE_POLICY_UNMATCHED_CLASS_PREFIX = "gate-policy-unmatched-class:"
 
@@ -4951,6 +4946,15 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     if archive_refused is not None:
         return _commit_refused_response(session_dir, "advance", archive_refused, phase=phase,
                                         rnd=rnd, attempt=attempt)
+    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), resolved["artifact"],
+                        _via_advance=True)
+    if not folded.get("ok"):
+        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
+                           attempt=attempt, detail=folded.get("reason"))
+    ok_folded, state = load_state(session_dir)
+    if not ok_folded or state is None:
+        reason, fault, detail = _state_load_fault(session_dir)
+        return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
     applied = state.get("_policyApplied")
     if not isinstance(applied, list):
         applied = []
@@ -4959,11 +4963,6 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     state["_policyApplied"] = applied
     state["_advanceUsed"] = True
     save_state(session_dir, state)
-    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), resolved["artifact"],
-                        _via_advance=True)
-    if not folded.get("ok"):
-        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
-                           attempt=attempt, detail=folded.get("reason"))
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt,
                    policyApplied=resolved["policyApplied"])
     nxt = cmd_next(session_dir)

@@ -1537,6 +1537,40 @@ def test_policy_applied_records_match_and_action_not_identities_only(tmp_path, a
     assert _state(d)["step"] == RD.P_FIXER
 
 
+def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adapters, monkeypatch):
+    """Policy staging is durable only after a successful fold — refused folds keep submit open."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "fix-as-suggested",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="fold-refused")
+    real_submit = RD.cmd_submit
+
+    def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
+        if _via_advance:
+            return {"ok": False, "reason": "test-fold-refused"}
+        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
+                           _via_advance=_via_advance)
+
+    monkeypatch.setattr(RD, "cmd_submit", refuse_once)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "test-fold-refused"
+    state = _state(d)
+    assert state.get("_advanceUsed") is not True
+    assert not state.get("_policyApplied")
+    receipt = RD.build_receipt(state, d)
+    assert not receipt.get("policyApplied")
+    pend = RD.cmd_next(d)
+    hand = RD.cmd_submit(d, pend["phase"], pend["attempt"], pend["expectedStateHash"],
+                         {"dispositions": [
+                             {"id": RD._judgment_finding_id(state["_judgmentFindings"][0]),
+                              "disposition": "fix-as-suggested"},
+                         ]})
+    assert hand["ok"] is True, hand
+
+
 def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):
     """A/B — a pure-advance session advances, and a pure-submit session submits; MIXING the two
     within one session is refused loudly and journalled, in both directions."""

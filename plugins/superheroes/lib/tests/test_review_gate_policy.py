@@ -287,3 +287,37 @@ def test_whole_layer_drop_one_invalid_rule_discards_entire_layer():
     assert parsed["reason"] == "layer-rule-not-object"
     result = RGP.resolve_judgment([{"findingClass": cls, "id": "a"}], overlay)
     assert result["action"] == RGP.PARK
+
+
+def test_fail_closed_overlay_digest_mismatch():
+    cls = sorted(RGP.judgment_finding_classes())[0]
+    policy = {
+        "schema": RGP.GATE_POLICY_SCHEMA,
+        "default": "park",
+        "rules": [_judgment_rule(cls, "skip")],
+    }
+    overlay = {
+        "identity": {
+            "source": "calibration/test.json",
+            "schema": RGP.GATE_POLICY_SCHEMA,
+            "sha256": "deadbeef" + "0" * 56,
+        },
+        "policy": policy,
+    }
+    parsed = RGP.parse_overlay(overlay)
+    assert parsed["ok"] is False
+    assert parsed["reason"] == "overlay-digest-mismatch"
+
+
+def test_fail_closed_policy_rule_fix_with_guidance_refused():
+    cls = sorted(RGP.judgment_finding_classes())[0]
+    overlay = _overlay(
+        {
+            "schema": RGP.GATE_POLICY_SCHEMA,
+            "default": "park",
+            "rules": [_judgment_rule(cls, "fix-with-guidance")],
+        }
+    )
+    parsed = RGP.parse_overlay(overlay)
+    assert parsed["ok"] is False
+    assert parsed["reason"] == "layer-disposition-not-allowed"

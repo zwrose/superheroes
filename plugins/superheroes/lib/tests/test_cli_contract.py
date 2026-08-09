@@ -283,6 +283,16 @@ def test_effort_union_covers_registry_vendor_efforts():
         assert cc.effort(effort_value) == effort_value
 
 
+def test_vendor_rejects_unknown_value():
+    with pytest.raises(argparse.ArgumentTypeError, match="unknown vendor"):
+        cc.vendor("__not-a-registered-vendor__")
+
+
+def test_effort_rejects_unknown_value():
+    with pytest.raises(argparse.ArgumentTypeError, match="unknown effort"):
+        cc.effort("__not-a-registered-effort__")
+
+
 def test_census_reads_contract_from_parser_not_hand_list():
   # axis: a parser built through build_parser() carries declarations on its actions.
     parser = ED.build_parser()

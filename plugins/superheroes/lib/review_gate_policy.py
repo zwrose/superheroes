@@ -21,7 +21,18 @@ PARK = "park"
 
 GATES = (GATE_PRESENT_JUDGMENT, GATE_PRESENT_STALL_MENU)
 JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
+# Policy rules may authorize only dispositions the resolver can fulfil without owner input.
+POLICY_JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "skip")
 STALL_CHOICES = round_phases.STALL_CHOICES
+
+# Exact ``_park`` reason tokens (non-parameterized) — authoritative vocabulary for drift guards.
+RESOLVER_PARK_CAUSES = frozenset({
+    "gate-policy-judgment-input-not-list",
+    "gate-policy-no-valid-layer",
+    "gate-policy-judgment-row-not-object",
+    "gate-policy-judgment-row-missing-class",
+    "gate-policy-unknown-stall-class",
+})
 
 STALL_CLASS_ELIGIBLE = "stall:accept-risk-eligible"
 STALL_CLASS_INELIGIBLE = "stall:accept-risk-ineligible"
@@ -61,7 +72,7 @@ def _stall_allowed_dispositions(finding_class: str) -> tuple[str, ...]:
 
 
 def _judgment_allowed_dispositions(_finding_class: str) -> tuple[str, ...]:
-    return JUDGMENT_DISPOSITIONS
+    return POLICY_JUDGMENT_DISPOSITIONS
 
 
 def _allowed_dispositions(gate: str, finding_class: str) -> tuple[str, ...]:
@@ -200,6 +211,16 @@ def parse_overlay(overlay: dict | None) -> dict:
 
     if schema != GATE_POLICY_SCHEMA:
         return {"ok": False, "reason": "layer-invalid-schema", "layer": None}
+
+    try:
+        policy_bytes = json.dumps(
+            policy, sort_keys=True, separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError):
+        return {"ok": False, "reason": "overlay-malformed", "layer": None}
+    computed = hashlib.sha256(policy_bytes).hexdigest()
+    if computed != sha256:
+        return {"ok": False, "reason": "overlay-digest-mismatch", "layer": None}
 
     layer, reason = _validate_layer(policy, source=source, sha256=sha256)
     if layer is None:

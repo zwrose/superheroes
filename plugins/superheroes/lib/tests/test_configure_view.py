@@ -1,3 +1,4 @@
+import hashlib
 import json
 import os
 import subprocess
@@ -613,12 +614,37 @@ def test_render_shows_review_gate_policy_refused_overlay(tmp_path):
     path = core_md.core_path(repo, root)
     text = open(path, encoding="utf-8").read()
     block = json.loads(core_md._JSON_BLOCK.search(text).group(1))
+    policy = {"schema": "gate-policy/2", "default": "park", "rules": []}
+    policy_bytes = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
     block["reviewGatePolicy"] = {
-        "identity": {"source": path, "schema": "gate-policy/1", "sha256": "0" * 64},
-        "policy": {"schema": "gate-policy/2", "default": "park", "rules": []},
+        "identity": {
+            "source": path,
+            "schema": "gate-policy/1",
+            "sha256": hashlib.sha256(policy_bytes).hexdigest(),
+        },
+        "policy": policy,
     }
     new_body = json.dumps(block, indent=2)
     new_text = core_md._splice_single_json_block(text, new_body)
     open(path, "w", encoding="utf-8").write(new_text)
     screen = cv.render(repo, root=root)
+    assert "## Review gate policy" in screen
     assert "project overlay: refused (layer-invalid-schema)" in screen
+
+
+def test_render_shows_review_gate_policy_refused_overlay_digest_mismatch(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    repo = str(tmp_path)
+    path = core_md.core_path(repo, root)
+    text = open(path, encoding="utf-8").read()
+    block = json.loads(core_md._JSON_BLOCK.search(text).group(1))
+    block["reviewGatePolicy"] = {
+        "identity": {"source": path, "schema": "gate-policy/1", "sha256": "0" * 64},
+        "policy": {"schema": "gate-policy/1", "default": "park", "rules": []},
+    }
+    new_body = json.dumps(block, indent=2)
+    new_text = core_md._splice_single_json_block(text, new_body)
+    open(path, "w", encoding="utf-8").write(new_text)
+    screen = cv.render(repo, root=root)
+    assert "## Review gate policy" in screen
+    assert "project overlay: refused (overlay-digest-mismatch)" in screen
