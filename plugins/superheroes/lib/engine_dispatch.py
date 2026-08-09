@@ -585,19 +585,23 @@ def _path_content_identity(cwd_real, rel_path):
         return "<absent>"
 
 
-def _baseline_dirty_map(cwd_real, timeout=None):
+def _baseline_dirty_map(cwd_real, declared_paths, timeout=None):
+    if not declared_paths:
+        return {}
     try:
         status = _git_scrubbed(
             cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=traditional",
+            "--", *declared_paths,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return None
     if status.returncode != 0:
         return None
+    declared_set = set(declared_paths)
     result = {}
     for path in _parse_porcelain_z_paths(status.stdout or ""):
-        if path:
+        if path and path in declared_set:
             result[path] = _path_content_identity(cwd_real, path)
     return result
 
@@ -2918,8 +2922,12 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                     run_dir=run_dir_real, argv=argv,
                 )
 
-            if base_sha is not None and not _verify_base_sha_resolves(
-                cwd_real, base_sha, timeout=preflight_timeout,
+            if (
+                declared_expected_items is not None
+                and base_sha is not None
+                and not _verify_base_sha_resolves(
+                    cwd_real, base_sha, timeout=preflight_timeout,
+                )
             ):
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
@@ -2935,7 +2943,9 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                     run_dir=run_dir_real, argv=argv,
                 )
             if declared_expected_items is not None:
-                baseline_dirty = _baseline_dirty_map(cwd_real, timeout=preflight_timeout)
+                baseline_dirty = _baseline_dirty_map(
+                    cwd_real, declared_expected_items, timeout=preflight_timeout,
+                )
                 if baseline_dirty is None:
                     return _write_preflight_terminal(
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,

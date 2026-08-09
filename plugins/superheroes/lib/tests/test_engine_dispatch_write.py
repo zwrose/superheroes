@@ -1153,7 +1153,7 @@ def test_validate_base_sha(base_sha, ok):
 
 def test_baseline_dirty_map_clean_worktree(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
-    dirty = ED._baseline_dirty_map(os.path.realpath(wt))
+    dirty = ED._baseline_dirty_map(os.path.realpath(wt), ["any.txt"])
     assert dirty == {}
 
 
@@ -1168,7 +1168,8 @@ def test_baseline_dirty_map_tracks_dirty_and_absent(tmp_path):
         fh.write("bye\n")
     _git(wt, "add", "gone.txt")
     os.remove(deleted)
-    dirty = ED._baseline_dirty_map(wt_real)
+    declared = ["dirty.txt", "gone.txt"]
+    dirty = ED._baseline_dirty_map(wt_real, declared)
     assert "dirty.txt" in dirty
     assert dirty["dirty.txt"] == hashlib.sha256(b"changed\n").hexdigest()
     assert dirty["gone.txt"] == "<absent>"
@@ -1183,7 +1184,8 @@ def test_baseline_dirty_map_rename_consumes_both_paths(tmp_path):
     _git(wt, "add", "old-name.txt")
     _git(wt, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "add old")
     _git(wt, "mv", "old-name.txt", "new-name.txt")
-    dirty = ED._baseline_dirty_map(wt_real)
+    declared = ["new-name.txt", "old-name.txt"]
+    dirty = ED._baseline_dirty_map(wt_real, declared)
     assert "new-name.txt" in dirty
     assert "old-name.txt" in dirty
 
@@ -1195,7 +1197,7 @@ def test_baseline_dirty_map_git_failure_returns_none(tmp_path, monkeypatch):
         return subprocess.CompletedProcess(args, 1, "", "err")
 
     monkeypatch.setattr(ED, "_git_scrubbed", fail_git)
-    assert ED._baseline_dirty_map(os.path.realpath(wt)) is None
+    assert ED._baseline_dirty_map(os.path.realpath(wt), ["a.txt"]) is None
 
 
 def test_write_open_persists_expected_items_and_baseline(tmp_path):
@@ -1590,6 +1592,49 @@ def test_write_base_sha_unresolvable_refuses_before_spawn(tmp_path):
     assert fake.calls == []
 
 
+def test_write_baseline_dirty_scoped_to_declared_paths(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    declared_path = os.path.join(wt, "declared-dirty.txt")
+    with open(declared_path, "w", encoding="utf-8") as fh:
+        fh.write("declared\n")
+    undeclared_path = os.path.join(wt, "undeclared-dirty.txt")
+    with open(undeclared_path, "w", encoding="utf-8") as fh:
+        fh.write("undeclared\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=["declared-dirty.txt"],
+        max_wait=0,
+    )
+    assert res.get("terminal") is False
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    baseline = opened["baselineDirty"]
+    assert "declared-dirty.txt" in baseline
+    assert "undeclared-dirty.txt" not in baseline
+    assert set(baseline.keys()) == {"declared-dirty.txt"}
+
+
+def test_write_undeclared_unresolvable_base_sha_proceeds_declared_refuses(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    unresolvable = "a" * 40
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    undeclared = _dispatch_write(tmp_path, fake, cwd=wt, base_sha=unresolvable)
+    assert undeclared["ok"] is True
+    assert undeclared.get("detail") != ED.BASE_SHA_UNRESOLVABLE
+    assert undeclared["attempts"] == 1
+    declared_fake = FakeRunner([])
+    declared = _dispatch_write(
+        tmp_path, declared_fake, cwd=wt,
+        run_dir=str(tmp_path / "run-declared"),
+        base_sha=unresolvable,
+        expected_items=["missing.txt"],
+    )
+    assert declared["detail"] == ED.BASE_SHA_UNRESOLVABLE
+    assert declared["attempts"] == 0
+    assert declared_fake.calls == []
+
+
 def test_write_untracked_dir_file_delivered(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
 
@@ -1695,7 +1740,7 @@ def test_baseline_dirty_map_fifo_and_symlink(tmp_path):
     symlink = os.path.join(wt, "link.txt")
     os.symlink("README.md", symlink)
     assert ED._path_content_identity(wt_real, "pipe.fifo") == "<absent>"
-    dirty = ED._baseline_dirty_map(wt_real)
+    dirty = ED._baseline_dirty_map(wt_real, ["link.txt", "pipe.fifo"])
     assert dirty["link.txt"] == "<absent>"
 
 
