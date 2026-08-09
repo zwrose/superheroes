@@ -994,22 +994,36 @@ def test_advance_folds_a_complete_phase_and_emits_the_next_action(tmp_path, adap
     assert {e["occurrence"] for e in call["envelopes"]} == {0}
 
 
+def _record_panel_with_verifier_cluster(session_dir, file="f.py", line=1):
+    finding = {
+        "file": file,
+        "line": line,
+        "severity": "Important",
+        "title": "issue",
+        "dimension": "Code",
+    }
+    for seat in RD.DIMENSIONS:
+        payload = {"findings": [finding] if seat == "code-reviewer" else []}
+        _land_and_record(session_dir, seat, payload=payload)
+
+
 def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_path, adapters):
     d = _session(tmp_path)
-    adapters.rosters[RD.P_VERIFIERS] = ["src/f.py:3"]
-    _record_all_panel_seats(d)
+    verifier_seat = "verifier:f.py:0"
+    adapters.rosters[RD.P_VERIFIERS] = [verifier_seat]
+    _record_panel_with_verifier_cluster(d)
     out = _advance(d, tmp_path)
     assert out["ok"] is True
     manifest_path = RD._orders_manifest_path(d, 1, RD.P_VERIFIERS, 0)
     manifest, err = RR.read_json(manifest_path)
     assert err is None
-    skey = RR.storage_key("src/f.py:3")
+    skey = RR.storage_key(verifier_seat)
     emitted = [e for e in _outcomes(d, "orders-emitted") if e.get("phase") == RD.P_VERIFIERS]
     assert len(emitted) == 1
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_VERIFIERS, 0)
     assert anchor["manifestSha256"] == emitted[0]["manifestSha256"]
     seat_entry = manifest["seats"][skey]
-    assert seat_entry["storeKey"] == skey and seat_entry["seat"] == "src/f.py:3"
+    assert seat_entry["storeKey"] == skey and seat_entry["seat"] == verifier_seat
     assert seat_entry["orderSha256"] == anchor["orders"][skey]
     assert anchor["orders"][skey] != RR.NOT_EMITTED
     # the anchor rides the state-hash chain, and the emitted hash is the one ingestion checks
@@ -1018,11 +1032,11 @@ def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_p
     assert os.path.exists(seat_entry["envelopeStubPath"])
     # an envelope claiming a DIFFERENT manifest hash is refused against the emission-time anchor
     pend = _pending(d)
-    _land(d, "src/f.py:3", pend=pend, manifestSha256="deadbeef")
-    assert RD.cmd_record_result(d, "src/f.py:3")["reason"] == "manifest-anchor-mismatch"
+    _land(d, verifier_seat, pend=pend, manifestSha256="deadbeef")
+    assert RD.cmd_record_result(d, verifier_seat)["reason"] == "manifest-anchor-mismatch"
     # A/B: the envelope carrying the anchored hash records fine
-    _land(d, "src/f.py:3", pend=pend)
-    assert RD.cmd_record_result(d, "src/f.py:3")["ok"] is True
+    _land(d, verifier_seat, pend=pend)
+    assert RD.cmd_record_result(d, verifier_seat)["ok"] is True
 
 
 def test_advance_emits_synthesis_verified_json_sidecar(tmp_path, adapters):
@@ -1048,12 +1062,12 @@ def _drop_orders_anchor_mirror(session_dir):
 
 def test_tampered_manifest_rebuild_refuses_ingest(tmp_path, adapters):
     """A/B — journal rebuild re-verifies manifest bytes; tampering refuses ingestion."""
-    seat = "src/f.py:3"
+    seat = "verifier:f.py:0"
 
     def _emit_verifiers_orders(name):
         d = _session(tmp_path, name=name)
         adapters.rosters[RD.P_VERIFIERS] = [seat]
-        _record_all_panel_seats(d)
+        _record_panel_with_verifier_cluster(d)
         assert _advance(d, tmp_path)["ok"] is True
         return d
 

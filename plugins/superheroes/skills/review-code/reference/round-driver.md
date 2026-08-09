@@ -121,7 +121,7 @@ a plain `open()` **before** the `orders-emit` commit — not inside the commit p
 orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
 `setup.md`'s session-artifact table). The orchestrator must write these **before** dispatching a
 fixer, audits, or scoped order: `round-<N>/fix-batch.json` (the review-code loop's session-artifact
-table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders and audits — it is
+table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders — it is
 **not** produced by the driver; the orchestrator must write it before dispatching those phases (the
 driver only names the path in rendered orders). The driver never creates `head.diff` or
 `fix-batch.json`.

@@ -18,7 +18,7 @@ _GOLDEN_DIR = os.path.join(_FIXTURES, "golden")
 
 _SESSION = "/tmp/superheroes-session-wo4-golden"
 _REPO = "/home/user/proj"
-_PLUGIN_ROOT = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_PLUGIN_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 _PLUGIN_RUBRIC = os.path.join(_PLUGIN_ROOT, "rubric", "review-base.md")
 _CORE_UNRESOLVED = "(Core calibration not resolved for this project)"
 _LAYER_UNRESOLVED = "(Review-crew layer calibration not resolved for this project)"
@@ -48,8 +48,8 @@ def _base_context(**over):
     return ctx
 
 
-def _panel_placeholders(channel="file"):
-    return {
+def _panel_placeholders(channel="file", pr_checkout=False):
+    ph = {
         "MODE": "branch",
         "REPO": "acme/widget",
         "TARGET": "feature/wo4",
@@ -57,13 +57,14 @@ def _panel_placeholders(channel="file"):
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CORE_PATH": _CORE_UNRESOLVED,
         "LAYER_PATH": _LAYER_UNRESOLVED,
-        "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo"),
+        "PR_CHECKOUT_PATH": os.path.join(_SESSION, "repo") if pr_checkout else "",
         "PRIOR_COMMENTS_PATH": os.path.join(_SESSION, "prior-comments.json"),
         "FOCUS_NOTES": "touch auth paths carefully",
-        "DIMENSION": "code",
+        "DIMENSION": "Code",
         "CHANNEL": channel,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "findings-code.json"),
     }
+    return ph
 
 
 def _verifier_placeholders():
@@ -316,7 +317,7 @@ def _clause_in_rendered(clause, text):
 def test_clause_manifest_survives_in_rendered_orders():
     manifest = json.load(open(_CLAUSE_MANIFEST, encoding="utf-8"))
     phase_map = {
-        "dispatch-panel": (RP.P_PANEL, _panel_placeholders),
+        "dispatch-panel": (RP.P_PANEL, lambda: _panel_placeholders(pr_checkout=True)),
         "dispatch-verifiers": (RP.P_VERIFIERS, _verifier_placeholders),
         "dispatch-synthesis": (RP.P_SYNTHESIS, _synthesis_placeholders),
         "dispatch-fixer": (RP.P_FIXER, _fixer_placeholders),
@@ -607,10 +608,140 @@ def test_seat_transport_vendor_absent_is_not_engine():
     assert not RD._seat_is_engine({"vendor": None, "model": "m", "engine": None})
 
 
-def test_seat_transport_unknown_vendor_is_not_engine():
+def test_seat_transport_unknown_vendor_refuses_order_render():
     import round_driver as RD
 
-    assert not RD._seat_is_engine({"vendor": "gemini", "model": "m", "engine": None})
+    row = {"vendor": "gemini", "model": "m", "engine": None}
+    assert RD._seat_transport_fault(row, "code-reviewer") == "unknown-vendor:code-reviewer:gemini"
+
+
+# --- FX-4A: core path drift guard ------------------------------------------------
+
+
+def test_in_repo_core_path_matches_resolve_order_residuals_home():
+    """resolve_order_residuals must derive in-repo core layout from core_md — never hand-typed."""
+    assert CM.in_repo_core_rel_path() == os.path.join(".claude", "superheroes", "core.md")
+
+
+# --- FX-4A: order-render-refused wiring ----------------------------------------
+
+
+def test_next_surfaces_order_render_refused(tmp_path, monkeypatch):
+    import round_driver as RD
+
+    def refuse_placeholders(*_a, **_k):
+        raise ValueError("order-render-refused:probe-seat:probe-reason")
+
+    monkeypatch.setattr(RD, "_order_placeholders", refuse_placeholders)
+    d = str(tmp_path / "s")
+    os.makedirs(d)
+    cfg = {"leg": "code", "vendors": ["claude"], "diff": "diff --git a/f b/f\n", "fixerVendor": "claude"}
+    out = RD.cmd_next(d, cfg)
+    assert out["ok"] is False
+    assert out["reason"] == "order-render-refused"
+    assert "probe-reason" in out.get("detail", "")
+
+
+# --- FX-4A: unmatched verifier cluster -----------------------------------------
+
+
+def test_unmatched_verifier_cluster_refuses_render():
+    import round_driver as RD
+
+    session_dir = os.path.join(_SESSION, "probe")
+    state = {"config": {"repoRoot": _REPO}, "reviewedDiff": "", "seatMap": {"seats": {}}}
+    paths = {"storage_key": "verifier:missing.a0"}
+    try:
+        RD._order_placeholders(
+            RP.P_VERIFIERS, "verifier:missing", 0, state, state["config"],
+            {"clusters": [{"key": "other:0", "findings": []}]},
+            session_dir, 2, paths)
+    except ValueError as exc:
+        assert "unmatched-verifier-cluster:missing" in str(exc)
+    else:
+        raise AssertionError("expected ValueError for unmatched verifier cluster")
+
+
+# --- FX-4A: panel dimension rubric label ---------------------------------------
+
+
+def test_panel_order_dimension_uses_rubric_label(tmp_path):
+    import round_driver as RD
+
+    session_dir = os.path.join(str(tmp_path), "s")
+    os.makedirs(session_dir)
+    state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "", "seatMap": {"seats": {}}}
+    paths = {"storage_key": "code-reviewer.a0"}
+    ph = RD._order_placeholders(
+        RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
+        session_dir, 2, paths)
+    assert ph["DIMENSION"] == "Code"
+    ph_sec = RD._order_placeholders(
+        RP.P_PANEL, "premortem-reviewer", 0, state, state["config"], {},
+        session_dir, 2, paths)
+    assert ph_sec["DIMENSION"] == "Failure-Mode"
+
+
+# --- FX-4A: PR checkout two-arm clause coverage --------------------------------
+
+
+def test_panel_order_without_pr_checkout_omits_checkout_clause():
+    text, reason = RO.render_order(
+        RP.P_PANEL, "code-reviewer", _base_context(placeholders=_panel_placeholders()))
+    assert reason is None
+    assert "PR branch checkout" not in text
+    assert "ONLY source of truth for verifying code" not in text
+
+
+def test_panel_order_with_pr_checkout_includes_checkout_clause():
+    text, reason = RO.render_order(
+        RP.P_PANEL, "code-reviewer",
+        _base_context(placeholders=_panel_placeholders(pr_checkout=True)))
+    assert reason is None
+    assert "PR branch checkout:" in text
+    assert "ONLY source of truth for verifying code" in text
+
+
+def test_golden_render_with_pr_checkout_matches_fixture():
+    golden_path = os.path.join(_GOLDEN_DIR, "dispatch-panel-with-checkout.txt")
+    ctx = _base_context(
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.json"),
+        placeholders=_panel_placeholders(pr_checkout=True),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "golden-seat", ctx)
+    assert reason is None
+    with open(golden_path, encoding="utf-8") as fh:
+        expected = fh.read()
+    assert _normalize_golden_machine_paths(text) == _normalize_golden_machine_paths(expected)
+
+
+# --- FX-4A: engine landing stdout channel --------------------------------------
+
+
+def test_engine_order_landing_block_uses_stdout_not_file_write():
+    ctx = _base_context(
+        host_seat=False,
+        placeholders=_panel_placeholders(channel="stdout"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert "stdout channel" in text
+    assert "Landing path:" not in text
+    assert "Envelope stub:" not in text
+
+
+def test_host_order_landing_block_uses_payload_file():
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.payload.json"),
+        placeholders=_panel_placeholders(channel="file"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert "Payload landing path:" in text
+    assert "stdout channel" not in text.split("## Return your result")[1]
 
 
 # --- FB-7: unresolvable calibration root vs resolved-empty order text ----------------

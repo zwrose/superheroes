@@ -5,10 +5,10 @@ You are the fixer for one round of an auto-fix code-review loop.
   id, severity, dimension, file, line, body, suggestion, and optional
   userGuidance)
 - Conventions: CLAUDE.md and the project profile (/home/user/proj/.claude/superheroes/profile.json);
-  severity/format from the base rubric (/private/tmp/sh723-pr2/plugins/superheroes/rubric/review-base.md)
+  severity/format from the base rubric (/private/tmp/c4a/plugins/superheroes/rubric/review-base.md)
 - Work in the current branch's working tree at /home/user/proj
 - Repo root: /home/user/proj
-- Escalation guard: /private/tmp/sh723-pr2/plugins/superheroes/lib/escalation_resolve.py
+- Escalation guard: /private/tmp/c4a/plugins/superheroes/lib/escalation_resolve.py
 - Verify command: npm test
 
 ## Your job
@@ -17,7 +17,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    original suggestion. BEFORE editing any file, gate it with the fixer
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
    values from ## Input:
-   `python3 -B "/private/tmp/sh723-pr2/plugins/superheroes/lib/escalation_resolve.py" guard --root "/home/user/proj" --path "<file>"`
+   `python3 -B "/private/tmp/c4a/plugins/superheroes/lib/escalation_resolve.py" guard --root "/home/user/proj" --path "<file>"`
    — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
    safety machinery); report it for owner escalation (see Payload contract) instead. Never
    push/merge/deploy (those stay user-gated).
@@ -74,7 +74,4 @@ Optional keys: escalated, headDiff, headDiffPath, coverageDecisions
 
 ## Return your result
 
-Copy the envelope stub below verbatim, add the payload described in the Payload contract section above, and write the complete envelope to the landing path.
-
-- Envelope stub: /tmp/superheroes-session-wo4-golden/round-2/stubs/seat.json
-- Landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-fixer/fixer.a0.json
+Deliver on the stdout channel described in the Delivery section above — emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it. Do not write a landing file (read-only sandbox).

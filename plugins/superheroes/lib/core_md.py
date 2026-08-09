@@ -192,8 +192,13 @@ def relocate_file(src, dst):
     os.remove(src)
 
 
+def in_repo_core_rel_path():
+    """Relative path from repository root to in-repo ``core.md`` — layout home for drift guards."""
+    return os.path.join(".claude", "superheroes", "core.md")
+
+
 def _core_candidates(cwd, root=None):
-    in_repo = os.path.join(_repo_root(cwd), ".claude", "superheroes", "core.md")
+    in_repo = os.path.join(_repo_root(cwd), in_repo_core_rel_path())
     global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
     return in_repo, global_path
 
