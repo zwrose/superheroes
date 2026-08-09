@@ -65,10 +65,12 @@ _WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
 # Uses fullmatch (not $-anchored match) because $ exempts a trailing newline in Python.
 _LITERAL_SAFE_COMMAND = re.compile(r"[A-Za-z0-9 _\-./:=,'\"@+]+")
 
-# Repo/ref flags change *which* workflow code runs or *where* — not workflow inputs.
-# The allow file is project-scoped, so another repo is never pre-authorized; a ref selects
-# the workflow definition (and secrets) on that branch. Inputs (-F/--field, -f/--raw-field,
-# --json) stay accepted — they parameterize the dispatch, not the code location.
+# Repo/ref flags change *where* the dispatch lands and *which* ref's definition runs.
+# The allow file is project-scoped, but only the command text is classified — ambient gh
+# env overrides (e.g. GH_REPO) are invisible here (see reference doc). Input flags
+# (-F/--field, -f/--raw-field, --json) are accepted as a deliberate v1 scope decision; an
+# allow entry does not pin inputs — a pre-authorized workflow is pre-authorized with any
+# inputs, which matters when a workflow's inputs influence what it checks out or runs.
 _SCOPE_CHANGING_FLAGS = frozenset(("-R", "--repo", "-r", "--ref"))
 
 _VALUE_FLAG_LONG = frozenset(("--field", "--raw-field"))

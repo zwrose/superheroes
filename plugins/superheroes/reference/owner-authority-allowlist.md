@@ -64,13 +64,20 @@ and `gh workflow disable` (only `run` can be pre-authorized).
 
 Missing, unreadable, malformed, or wrong-schema file **changes nothing** — the gate asks as today.
 The allowlist is read only when calibration is positively known; an indeterminate probe (corrupt or
-unreadable registry) → gate asks, file not read. **Promise:** nothing in this file can make the
-gate quieter except by exactly naming one workflow dispatch you intend to allow.
+unreadable registry) → gate asks, file not read. **Promise:** nothing in this file can widen silence
+beyond a workflow you named by hand — see the limitations below for what that name pins and what it
+does not (inputs, environment overrides).
 
 ## Limitations in v1
 
 - Hand-edited only; exact names only; **Claude Code only** (Codex hook config has no PreToolUse
   entry).
+- An entry pre-authorizes the **workflow**, not its **inputs** — if the workflow's inputs can
+  change what it checks out or runs, pre-authorizing it pre-authorizes all of those.
+- The gate matches on the **text of the command** and cannot see the environment it will run in.
+  If `GH_REPO` (or another `gh` environment override) is set in the session, a pre-authorized
+  dispatch may target a **different repository** than the one whose allow file authorized it. Do
+  not pre-authorize a workflow in a session or project where `GH_REPO` is set.
 - **Supported workflow-name characters:** the whole command must use only `A-Z a-z 0-9`, space, and
   `_ - . / : = , ' " @ +`. Any other character anywhere — `$`, backtick, `*`, `?`, `[`, `]`, `{`,
   `}`, `~`, `\`, `;`, `&`, `|`, `<`, `>` — means the gate asks. A name the shell could expand or
@@ -78,5 +85,6 @@ gate quieter except by exactly naming one workflow dispatch you intend to allow.
   `Preview & seed` **cannot be pre-authorized in v1** and will keep asking — an extra prompt, never
   an unapproved run.
 - Also asks regardless of the file: compound commands, env-var prefixes, absolute `gh` path,
-  unrecognized flags, `--ref` / `--repo` (a dispatch naming another repository or another ref is
-  not the dispatch you pre-authorized), or anything that does not name exactly one workflow.
+  unrecognized flags, `-R` / `-r` / `--ref` / `--repo` (a dispatch naming another repository or
+  another ref is not the dispatch you pre-authorized), or anything that does not name exactly one
+  workflow.

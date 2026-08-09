@@ -1121,6 +1121,17 @@ def _owner_authority_allowlist_doc():
     return _read("reference/owner-authority-allowlist.md")
 
 
+def _expand_char_ranges(text):
+    """Expand doc range tokens (`A-Z`, `a-z`, `0-9`) into full character sets."""
+    chars = set()
+    for token in text.split():
+        if len(token) == 3 and token[1] == "-" and ord(token[0]) <= ord(token[2]):
+            chars.update(chr(c) for c in range(ord(token[0]), ord(token[2]) + 1))
+        else:
+            chars.update(token)
+    return chars
+
+
 def _charset_lists_from_doc(doc):
     """Parse the supported and refused character lists from the reference doc."""
     marker = "**Supported workflow-name characters:**"
@@ -1148,18 +1159,32 @@ def _charset_lists_from_doc(doc):
 
     accepted = set()
     for chunk in re.findall(r"`([^`]+)`", accepted_half):
-        accepted.update(chunk)
-    # Range notation (`A-Z a-z 0-9`) is literal: each character is accepted by the pattern.
+        accepted.update(_expand_char_ranges(chunk))
+    # Range notation in backticks (`A-Z a-z 0-9`) is expanded to full character ranges.
     if "space" in accepted_half:
         accepted.add(" ")
 
     refused = set()
     for chunk in re.findall(r"`([^`]+)`", refused_half):
         refused.update(chunk)
+    if "backtick" in refused_half:
+        refused.add("`")
 
     assert accepted, "owner-authority-allowlist.md: no accepted charset parsed"
     assert refused, "owner-authority-allowlist.md: no refused charset parsed"
     return accepted, refused
+
+
+def _owner_authority_also_asks_bullet(doc):
+    """The 'Also asks regardless of the file' bullet under charset limitations."""
+    m = re.search(
+        r"Also asks regardless of the file:(.*?)(?:\n- |\n## |\Z)",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "owner-authority-allowlist.md: 'Also asks regardless of the file' bullet not found")
+    return m.group(1)
 
 
 def test_owner_authority_allowlist_doc_matches_code():
@@ -1196,12 +1221,27 @@ def test_owner_authority_allowlist_doc_matches_code():
         assert action in doc, (
             "owner-authority-allowlist.md missing ALLOWLISTABLE_ACTIONS member %r" % action)
 
+    also_asks = _owner_authority_also_asks_bullet(doc)
+    for flag in oa._SCOPE_CHANGING_FLAGS:
+        assert flag in also_asks, (
+            "owner-authority-allowlist.md 'Also asks' bullet missing _SCOPE_CHANGING_FLAGS "
+            "member %r" % flag)
+
     accepted_doc, refused_doc = _charset_lists_from_doc(doc)
     pattern = oa._LITERAL_SAFE_COMMAND
 
-    for ch in accepted_doc:
-        assert pattern.fullmatch("X" + ch + "Y"), (
-            "doc lists %r as accepted but _LITERAL_SAFE_COMMAND refuses it" % ch)
+    # chr(32)..chr(126): printable ASCII — complete for this pattern (no tab/newline accepted).
+    printable_ascii = {chr(c) for c in range(32, 127)}
+    code_accepted = {
+        ch for ch in printable_ascii
+        if pattern.fullmatch("X" + ch + "Y")
+    }
+    in_code_not_doc = code_accepted - accepted_doc
+    in_doc_not_code = accepted_doc - code_accepted
+    assert code_accepted == accepted_doc, (
+        "_LITERAL_SAFE_COMMAND charset drift — in code but not documented: %r; "
+        "documented but not in code: %r"
+        % (sorted(in_code_not_doc), sorted(in_doc_not_code)))
 
     for ch in refused_doc:
         assert not pattern.fullmatch("X" + ch + "Y"), (
