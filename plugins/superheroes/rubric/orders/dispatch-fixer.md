@@ -16,9 +16,11 @@ You are the fixer for one round of an auto-fix code-review loop.
    canonical patterns. When a finding has userGuidance, follow it over the
    original suggestion. BEFORE editing any file, gate it with the fixer
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
-   values from ## Input:
-   `python3 -B {{ESCALATION_WRAPPER_PATH}} guard --root {{REPO_ROOT}} --path "<file>"`
-   — if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
+   values from ## Input. **No branch-controlled path may be interpolated into
+   shell text** — pass the absolute file path out-of-band on stdin:
+   `printf '%s\n' "$path" | python3 -B {{ESCALATION_WRAPPER_PATH}} guard --root {{REPO_ROOT}} --stdin-path`
+   (set `$path` to the absolute path first; never build the path into the command
+   word). if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
    safety machinery); report it for owner escalation (see Payload contract) instead. Never
    push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).

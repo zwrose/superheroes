@@ -3813,7 +3813,7 @@ def _seat_is_engine(row):
 
 
 def _reviewer_engine_vendor(repo_root):
-    """Reviewer-role engine for single-seat reviewer phases (verifiers, synthesis, gap-sweep, scoped)."""
+    """Reviewer-role engine for single-seat reviewer phases (verifiers, gap-sweep, scoped)."""
     try:
         prefs = engine_pref.load_engine_prefs(repo_root)
         return engine_pref.resolve_engine("review", prefs)
@@ -3837,7 +3837,10 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
             if isinstance(target, dict) and target.get("id") == seat_key:
                 return {"vendor": target.get("auditorVendor"), "model": None, "engine": None}
         return {"vendor": None, "model": None, "engine": None}
-    if phase in (P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_SCOPED):
+    if phase == P_SYNTHESIS:
+        # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
+        return {"vendor": "claude", "model": None, "engine": None}
+    if phase in (P_VERIFIERS, P_GAPSWEEP, P_SCOPED):
         return {"vendor": _reviewer_engine_vendor(repo_root), "model": None, "engine": None}
     return {"vendor": None, "model": None, "engine": None}
 

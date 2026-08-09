@@ -726,8 +726,9 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
     )
     text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
     assert reason is None
-    assert "$(echo pwned)" in text
+    assert "$(echo pwned)" in text  # repo root appears quoted in ## Input
     assert shlex.quote(repo) in text
+    assert "--stdin-path" in text
 
 
 def test_engine_panel_landing_block_uses_phase_stdout_contract():
@@ -980,3 +981,114 @@ def test_order_calibration_unresolvable_root_renders_distinct_panel_text(tmp_pat
     assert reason is None
     assert cr.REASON_UNRESOLVABLE_ROOT in text
     assert _CORE_UNRESOLVED not in text
+
+
+# --- FX-4A-R4: shell-injection census + synthesis transport --------------------
+
+
+def test_order_templates_shell_census_clean():
+    violations = RO.scan_all_order_templates_shell_violations()
+    assert violations == [], "shell census violations:\n" + "\n".join(violations)
+
+
+def test_order_templates_shell_census_flags_injected_placeholder(tmp_path):
+    orders_dir = os.path.join(_PLUGIN_ROOT, "rubric", "orders")
+    probe = os.path.join(orders_dir, "dispatch-panel.md")
+    original = open(probe, encoding="utf-8").read()
+    injected = original + "\n`python3 -B {{PROBE_PLACEHOLDER}}`\n"
+    try:
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write(injected)
+        violations = RO.scan_all_order_templates_shell_violations()
+        assert any("dispatch-panel" in v and "PROBE_PLACEHOLDER" in v for v in violations)
+    finally:
+        with open(probe, "w", encoding="utf-8") as fh:
+            fh.write(original)
+    violations = RO.scan_all_order_templates_shell_violations()
+    assert violations == []
+
+
+def test_fixer_guard_command_uses_stdin_not_shell_path_interpolation(tmp_path):
+    import round_driver as RD
+
+    repo = str(tmp_path / "proj" / "src" / "$(malicious).py")
+    os.makedirs(repo)
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": repo, "fixerVendor": "claude"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+    }
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths,
+    )
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=paths["bare_payload_path"],
+        repo_root=repo,
+        placeholders=ph,
+    )
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None
+    assert "--stdin-path" in text
+    assert 'guard --root' in text
+    assert '--path "' not in text
+    assert '<file>' not in text
+    # Prior shape would have interpolated branch-controlled paths into shell quotes:
+    assert '--path "<' not in text
+
+
+@pytest.mark.parametrize("reviewer_engine", ["codex", "cursor", "claude"])
+def test_synthesis_transport_derives_from_synth_not_reviewer_engine(reviewer_engine, monkeypatch):
+    import engine_pref as EP
+    import round_driver as RD
+
+    monkeypatch.setattr(EP, "load_engine_prefs", lambda _root: {"reviewer": reviewer_engine})
+    row = RD._seat_transport_row(
+        {"config": {"repoRoot": _REPO}}, RP.P_SYNTHESIS, "synthesis", 0,
+        {"repoRoot": _REPO}, {}, _REPO,
+    )
+    assert row["vendor"] == "claude"
+    assert not RD._seat_is_engine(row)
+
+
+def test_synthesis_order_channel_file_when_reviewer_engine_is_codex(tmp_path, monkeypatch):
+    import engine_pref as EP
+    import round_driver as RD
+
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    monkeypatch.setattr(EP, "load_engine_prefs", lambda _root: {"reviewer": "codex"})
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": repo},
+        "reviewedDiff": "diff --git a/f b/f\n",
+    }
+    paths = {
+        "storage_key": "synthesis.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_SYNTHESIS, "synthesis", 0, state, state["config"],
+        {"findings": []}, session_dir, 2, paths,
+    )
+    assert ph["CHANNEL"] == "file"
+    ctx = _base_context(host_seat=True, placeholders=ph)
+    text, reason = RO.render_order(RP.P_SYNTHESIS, "synthesis", ctx)
+    assert reason is None
+    assert "Payload landing path:" in text
+    assert "stdout channel" not in text.split("## Return your result")[-1]

@@ -96,6 +96,47 @@ def test_guard_core_error_fails_closed_to_refuse(capsys, monkeypatch):
     assert rc == 0 and out["allow"] is False and out["degraded"] is True
 
 
+def test_guard_stdin_path_reads_path(capsys):
+    path = os.path.join(_REPO_ROOT, "plugins/superheroes/lib/decisions.py")
+    old_stdin = __import__("sys").stdin
+    try:
+        __import__("sys").stdin = __import__("io").StringIO(path + "\n")
+        rc, out = _run(capsys, "guard", "--root", _REPO_ROOT, "--stdin-path")
+    finally:
+        __import__("sys").stdin = old_stdin
+    assert rc == 0 and out["allow"] is True and out["degraded"] is False
+
+
+def test_guard_stdin_path_empty_fails(capsys):
+    old_stdin = __import__("sys").stdin
+    try:
+        __import__("sys").stdin = __import__("io").StringIO("")
+        rc = ER.main(["escalation_resolve.py", "guard", "--root", _REPO_ROOT, "--stdin-path"])
+    finally:
+        __import__("sys").stdin = old_stdin
+    assert rc == 2
+
+
+def test_guard_path_and_stdin_path_mutually_exclusive():
+    rc = ER.main(["escalation_resolve.py", "guard", "--root", _REPO_ROOT,
+                  "--path", "x", "--stdin-path"])
+    assert rc == 2
+
+
+def test_guard_stdin_path_with_metacharacters(capsys, tmp_path):
+    nasty = str(tmp_path / "src" / "$(echo pwned).py")
+    os.makedirs(os.path.dirname(nasty), exist_ok=True)
+    with open(nasty, "w", encoding="utf-8") as fh:
+        fh.write("# probe\n")
+    old_stdin = __import__("sys").stdin
+    try:
+        __import__("sys").stdin = __import__("io").StringIO(nasty + "\n")
+        rc, out = _run(capsys, "guard", "--stdin-path")
+    finally:
+        __import__("sys").stdin = old_stdin
+    assert rc == 0 and out["allow"] is True
+
+
 def test_rubric_absent_fails_closed(capsys, tmp_path, monkeypatch):
     # If the rubric file cannot be located under any candidate root, the wrapper degrades to
     # the embedded fail-closed posture (path None, degraded True) — the skill applies the floor.

@@ -78,7 +78,11 @@ def _build_parser():
               "--reversible", "--confidence"):
         r.add_argument(f, required=True)
     c = sub.add_parser("classify"); add_root(c); c.add_argument("--action", required=True)
-    g = sub.add_parser("guard"); add_root(g); g.add_argument("--path", required=True)
+    g = sub.add_parser("guard"); add_root(g)
+    g.add_argument("--path", default=None,
+                   help="absolute file path (mutually exclusive with --stdin-path)")
+    g.add_argument("--stdin-path", action="store_true",
+                   help="read one absolute file path from stdin (one line, no shell interpolation)")
     rb = sub.add_parser("rubric"); add_root(rb)
     return ap
 
@@ -122,9 +126,20 @@ def main(argv):
         return 0
 
     if args.cmd == "guard":
+        if bool(args.stdin_path) == bool(args.path):
+            _say("guard requires exactly one of --path or --stdin-path")
+            return 2
+        if args.stdin_path:
+            raw = sys.stdin.read()
+            if not raw or not raw.strip():
+                _say("guard --stdin-path: empty stdin")
+                return 2
+            path = raw.splitlines()[0].strip()
+        else:
+            path = args.path
         # conservative=True (treat as safety machinery -> refuse) on any core error.
         safety, degraded = _safe(escalation.is_safety_machinery, True,
-                                 path=args.path, band_roots=_band_roots(args.root))
+                                 path=path, band_roots=_band_roots(args.root))
         allow = not safety   # fail closed: error -> safety True -> allow False (refuse)
         sys.stdout.write(json.dumps({"allow": allow, "degraded": degraded}) + "\n")
         return 0
