@@ -51,6 +51,9 @@ ADJUDICATED = {
     "round_driver.py::_resolved_calibration_paths::resolve": (
         "convert to explicit gate_refusal placeholder (never 'not resolved for this project')"
     ),
+    "round_driver.py::_profile_path_for_orders::resolve_profile_path": (
+        "convert to explicit gate_refusal placeholder (never 'not resolved for this project')"
+    ),
 }
 
 _CALIBRATION_MODULE = "calibration_resolve"

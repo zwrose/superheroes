@@ -434,8 +434,9 @@ _PAYLOAD_CHECKERS = {
     P_AUDITS: _audits_payload_fault,
 }
 
-# Declared payload contracts — read off the checkers above, never hand-copied field names.
-_PAYLOAD_CONTRACTS = {
+# Declared payload field bindings — one home for required/optional/conditional/enums; drift-tested
+# against the payload_fault checkers in test_round_adapters.py.
+_PAYLOAD_FIELD_BINDINGS = {
     P_PANEL: {
         "required": [],
         "optional": ["findings", "confidence", "tier", "receiptMissing", "receiptStale",
@@ -490,6 +491,10 @@ _PAYLOAD_CONTRACTS = {
         },
         "enums": {"ruling": list(audits.AUDIT_RULINGS)},
     },
+}
+
+_PAYLOAD_CONTRACTS = {
+    phase: copy.deepcopy(spec) for phase, spec in _PAYLOAD_FIELD_BINDINGS.items()
 }
 
 

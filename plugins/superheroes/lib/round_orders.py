@@ -5,8 +5,9 @@ Two public entry points, both returning ``(value, reason_or_None)`` and **never 
 
   * ``render_order(phase, seat_key, context)`` — pure over its inputs; returns the complete order
     text for one seat.
-  * ``resolve_base_residuals(repo_root, base_oid, core_rel_path)`` — reads ratified residuals from
-    the pinned base commit via ``git cat-file``; never reads the worktree.
+  * ``resolve_order_residuals(repo_root, base_oid)`` — reads ratified residuals from the
+    pinned base commit when in-repo, else from the calibration store; never reads the worktree
+    under review. ``resolve_base_residuals`` is the base-pinned git cat-file arm only.
 
 Placeholder syntax (documented): ``{{NAME}}`` where ``NAME`` is ``[A-Z][A-Z0-9_]*``. An unfilled
 placeholder is a refusal; an unknown placeholder left in a template after substitution is a
@@ -249,6 +250,7 @@ def _validate_common_context(context: object) -> str | None:
 def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
+    landing = context.get("landing_path", "")
     if channel == "stdout":
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             'Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing '
@@ -256,8 +258,9 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
         )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            "Write the JSON array to %s — write `[]` rather than skipping the file when you have "
-            "nothing to flag." % ph.get("FINDINGS_OUTPUT_PATH", "{{FINDINGS_OUTPUT_PATH}}")
+            "Deliver per the base rubric's panel output-format section. Write your payload "
+            "artifact to %s — write an empty findings list rather than skipping the file when "
+            "you have nothing to flag." % landing
         )
     pr_checkout = ph.get("PR_CHECKOUT_PATH", "").strip()
     ph["PR_CHECKOUT_CONTEXT_LINE"] = (
@@ -290,27 +293,17 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
 def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
     ph = dict(context.get("placeholders") or {})
     channel = ph.get("CHANNEL", "file")
+    landing = context.get("landing_path", "")
     stdout_example, reason = _stdout_payload_example(phase)
     if channel == "stdout":
         if reason:
             ph["OUTPUT_CHANNEL_BLOCK"] = ""
             return ph
-        if phase == round_phases.P_VERIFIERS:
-            ph["OUTPUT_CHANNEL_BLOCK"] = (
-                "Emit `%s` as your final stdout with nothing after it; do not write a verdict "
-                "file (read-only sandbox — nothing reads one)." % stdout_example
-            )
-        elif phase == round_phases.P_SYNTHESIS:
+        if phase == round_phases.P_SYNTHESIS:
             ph["OUTPUT_CHANNEL_BLOCK"] = (
                 "Emit `%s` as your final stdout with nothing after it; do not write a grouping "
                 "file (read-only sandbox — nothing reads one). Every survivor id appears exactly "
                 "once across all groups." % stdout_example
-            )
-        elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
-            ph["OUTPUT_CHANNEL_BLOCK"] = (
-                'Emit findings as your final stdout with nothing after it; do not write a findings '
-                "file (read-only sandbox — nothing reads one). Write `[]` when you have nothing "
-                "to flag."
             )
         else:
             ph["OUTPUT_CHANNEL_BLOCK"] = (
@@ -319,21 +312,19 @@ def _channel_derived_placeholders(phase: str, context: dict) -> dict[str, str]:
             )
     elif phase == round_phases.P_VERIFIERS:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            "Write a JSON array to this cluster's own verdict file — never a shared verdict file: "
-            "exactly one entry per cluster issue."
+            "Write your verdict payload to %s — the `verdicts` array carries exactly one entry "
+            "per cluster issue." % landing
         )
     elif phase == round_phases.P_SYNTHESIS:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            "Write your groups to %s.\n"
-            "Write a JSON array — every survivor id appears exactly once across all groups."
-            % ph.get("GROUPING_OUTPUT_PATH", "{{GROUPING_OUTPUT_PATH}}")
+            "Write your grouping payload to %s.\n"
+            "every survivor id appears exactly once across all groups." % landing
         )
     elif phase in (round_phases.P_GAPSWEEP, round_phases.P_SCOPED):
         ph["OUTPUT_CHANNEL_BLOCK"] = (
-            "Deliver per the base rubric's panel output-format section. Write candidate records to "
-            "%s as a JSON array — write `[]` rather than skipping the file when you have "
-            "nothing to flag."
-            % ph.get("FINDINGS_OUTPUT_PATH", "{{FINDINGS_OUTPUT_PATH}}")
+            "Deliver per the base rubric's panel output-format section. Write your findings "
+            "payload to %s — write an empty findings list rather than skipping the file when "
+            "you have nothing to flag." % landing
         )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = ""
@@ -474,8 +465,8 @@ def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, 
 
 # --- shell-interpreted template census (FX-4A) ---------------------------------
 
-_SHELL_FENCE_RE = re.compile(r"```(?:shell|bash|sh)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
-_INLINE_CMD_TICK_RE = re.compile(r"`([^`\n]+)`")
+_ANY_FENCE_RE = re.compile(r"```[^\n]*\n(.*?)```", re.DOTALL)
+_INLINE_TICK_RE = re.compile(r"`([^`\n]+)`")
 _ANGLE_SUB_RE = re.compile(r"<([a-zA-Z][a-zA-Z0-9_]*)>")
 
 # Driver-rendered placeholders — not branch-controlled (quoted or numeric at render time).
@@ -484,31 +475,13 @@ _SHELL_SAFE_PLACEHOLDERS = frozenset({"ESCALATION_WRAPPER_PATH", "REPO_ROOT", "R
 # Model-authored commit-message slots — not branch-controlled diff paths.
 _SAFE_ANGLE_SUBSTITUTIONS = frozenset({"count", "dimensions"})
 
-_SHELL_CMD_PREFIXES = (
-    "python3", "python ", "git ", "printf ", "npm ", "pytest", "cargo ", "make ",
-    "yarn ", "pnpm ", "go test", "bundle ", "rake ",
-)
-
-
-def _inline_backtick_is_shell_command(text: str) -> bool:
-    stripped = text.strip()
-    if not stripped:
-        return False
-    lowered = stripped.lower()
-    if any(lowered.startswith(prefix) for prefix in _SHELL_CMD_PREFIXES):
-        return True
-    if " | " in stripped:
-        return True
-    return False
-
 
 def iter_shell_interpreted_regions(body: str):
-    """Yield shell-interpreted spans: fenced shell blocks and inline command backticks."""
-    for match in _SHELL_FENCE_RE.finditer(body):
+    """Yield every fenced block and inline backtick span — fail-closed on placeholders inside."""
+    for match in _ANY_FENCE_RE.finditer(body):
         yield match.group(1)
-    for match in _INLINE_CMD_TICK_RE.finditer(body):
-        if _inline_backtick_is_shell_command(match.group(1)):
-            yield match.group(1)
+    for match in _INLINE_TICK_RE.finditer(body):
+        yield match.group(1)
 
 
 def scan_template_shell_violations(template_body: str, template_id: str) -> list[str]:
