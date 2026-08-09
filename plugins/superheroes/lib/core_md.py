@@ -27,9 +27,11 @@ CONFIG_OK = "ok"
 CONFIG_UNREADABLE = "unreadable"
 CONFIG_ROOT_UNAVAILABLE = "root-unavailable"
 CONFIG_STRUCTURAL_AMBIGUITY = "structurally-ambiguous"
+CONFIG_POLICY_AMBIGUITY = "policy-ambiguous"
 GATE_REASON_UNREADABLE = "core-md-unreadable"
 GATE_REASON_ROOT_UNAVAILABLE = "repo-root-unavailable"
 GATE_REASON_STRUCTURAL_AMBIGUITY = "core-md-structurally-ambiguous"
+GATE_REASON_POLICY_AMBIGUITY = "gate-policy-ambiguous"
 
 
 # Lives in store_core (lowest layer); alias kept so existing ``except RepoRootUnavailable``
@@ -42,6 +44,7 @@ _GATE_REFUSAL_REASONS = {
     CONFIG_UNREADABLE: GATE_REASON_UNREADABLE,
     CONFIG_ROOT_UNAVAILABLE: GATE_REASON_ROOT_UNAVAILABLE,
     CONFIG_STRUCTURAL_AMBIGUITY: GATE_REASON_STRUCTURAL_AMBIGUITY,
+    CONFIG_POLICY_AMBIGUITY: GATE_REASON_POLICY_AMBIGUITY,
 }
 
 GATE_REASON_EVALUATION_FAILED = "dispatch-gate-evaluation-failed"
@@ -64,6 +67,7 @@ BUILDER_DISPATCH_DEFER_WRITE_FAILED = "builder-tier-write-failed"
 BUILDER_DISPATCH_DEFER_CLI_FAILED = "builder-tier-cli-failed"
 ENGINE_PREF_PIN_KEYS = ("codexModels", "seatPins")
 DUPLICATE_CORE_KEY_REASON = "duplicate-core-key"
+DUPLICATE_POLICY_KEY_REASON = "duplicate-policy-key"
 ENGINE_PINS_REASON_UNKNOWN_KEY = "engine-pins-unknown-key"
 ENGINE_PINS_REASON_INPUT_UNPARSEABLE = "engine-pins-input-unparseable"
 ENGINE_PINS_REASON_NOT_A_MAPPING = "engine-pins-not-a-mapping"
@@ -338,9 +342,6 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
     distinguishable refusal, not a silently parsed overlay. Never raises."""
     gate_cfg = engine_preferences_for_gate(
         cwd=cwd, root=root, profile_path=profile_path)
-    structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
-    if structural is not None:
-        return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
     if gate_cfg.status == CONFIG_ABSENT:
         return ReviewGatePolicyGate(CONFIG_ABSENT, None, None)
     if gate_cfg.status == CONFIG_ROOT_UNAVAILABLE:
@@ -363,6 +364,14 @@ def review_gate_policy_for_gate(*, cwd=None, root=None, profile_path=None):
             None,
             gate_refusal_detail(exc, at=path),
         )
+    block_text = _json_block_inner_text(text)
+    if block_text is not None:
+        policy_dup = _overlay_policy_document_duplicate_refusal(block_text)
+        if policy_dup is not None:
+            return ReviewGatePolicyGate(CONFIG_POLICY_AMBIGUITY, None, policy_dup)
+    structural = _gate_structural_refusal(cwd=cwd, root=root, profile_path=profile_path)
+    if structural is not None:
+        return ReviewGatePolicyGate(CONFIG_STRUCTURAL_AMBIGUITY, None, structural)
     facts = parse_core(text)
     if facts is None:
         return ReviewGatePolicyGate(
@@ -512,6 +521,11 @@ def review_gate_config_is_unreadable(gate):
 def review_gate_config_is_structurally_ambiguous(gate):
     """True when core.md is present but structurally ambiguous for overlay read purposes."""
     return gate.status == CONFIG_STRUCTURAL_AMBIGUITY
+
+
+def review_gate_config_is_policy_ambiguous(gate):
+    """True when the review-gate-policy overlay document is structurally ambiguous."""
+    return gate.status == CONFIG_POLICY_AMBIGUITY
 
 
 def review_gate_config_is_refusal(gate):
@@ -888,6 +902,69 @@ def _loads_rejecting_duplicate_keys(text):
     except TypeError:
         return None, None
     return value, None
+
+
+def _extract_json_object_at_key(text, key):
+    """Return the raw ``{...}`` substring for a JSON object's string *key*, or None."""
+    pattern = r'"%s"\s*:\s*' % re.escape(key)
+    m = re.search(pattern, text)
+    if not m:
+        return None
+    start = m.end()
+    while start < len(text) and text[start] in " \t\n\r":
+        start += 1
+    if start >= len(text) or text[start] != "{":
+        return None
+    depth = 0
+    in_string = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_string:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_string = False
+            continue
+        if ch == '"':
+            in_string = True
+            continue
+        if ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start:i + 1]
+    return None
+
+
+def _overlay_policy_document_duplicate_refusal(block_text):
+    """Refuse duplicate keys in ``reviewGatePolicy.policy`` — distinct from core-block dupes.
+
+    Returns ``duplicate-policy-key:<name>`` when the policy document has ambiguous keys, else
+    ``None``. Never raises."""
+    if not isinstance(block_text, str) or not block_text.strip():
+        return None
+    overlay_text = _extract_json_object_at_key(block_text, REVIEW_GATE_POLICY_KEY)
+    if overlay_text is None:
+        return None
+    policy_text = _extract_json_object_at_key(overlay_text, "policy")
+    if policy_text is None:
+        return None
+    _, duplicate_key = _loads_rejecting_duplicate_keys(policy_text)
+    if duplicate_key is None:
+        return None
+    return "%s:%s" % (DUPLICATE_POLICY_KEY_REASON, duplicate_key)
+
+
+def _json_block_inner_text(text):
+    """Inner text of the sole ```json superheroes-core``` block, or None."""
+    mb = _JSON_BLOCK.search(text or "")
+    if not mb:
+        return None
+    return mb.group(1)
 
 
 def _engine_pref_round_trip_ok(orig, new_parsed, allowed_pref_key):
@@ -1735,8 +1812,15 @@ def main(argv):
                 policy = None
             else:
                 try:
-                    policy = json.loads(raw)
-                except ValueError:
+                    policy, duplicate_key = _loads_rejecting_duplicate_keys(raw.strip())
+                except TypeError:
+                    policy, duplicate_key = None, None
+                if duplicate_key is not None:
+                    out = {"action": "refused",
+                           "reason": "%s:%s" % (DUPLICATE_POLICY_KEY_REASON, duplicate_key)}
+                    sys.stdout.write(json.dumps(out, indent=2) + "\n")
+                    return 0
+                if policy is None and raw.strip():
                     out = {"action": "refused", "reason": GATE_POLICY_REASON_INPUT_UNPARSEABLE}
                     sys.stdout.write(json.dumps(out, indent=2) + "\n")
                     return 0

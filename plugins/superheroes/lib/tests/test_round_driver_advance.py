@@ -28,6 +28,7 @@ import json
 import os
 import subprocess
 import sys
+import ast
 
 import pytest
 
@@ -2244,3 +2245,102 @@ def test_ensure_round_diff_refuses_missing_reviewed_diff(tmp_path):
     d = str(tmp_path / "fb12-missing")
     with pytest.raises(ValueError, match="reviewed-diff-unavailable"):
         RD._ensure_round_diff(d, 1, {})
+
+
+# --- receipt write-order census (FX-4B-R3) ---------------------------------
+
+_ROUND_DRIVER_PATH = os.path.join(_LIB, "round_driver.py")
+_POST_FOLD_CALLERS = frozenset({"_advance_owner_gate", "_advance_locked"})
+_RECEIPT_CENSUS_BOOTSTRAP_KEYS = frozenset({"_scriptRan"})
+
+
+def _round_driver_ast():
+    with open(_ROUND_DRIVER_PATH, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    return tree, ast
+
+
+def _fn_node(tree, ast_mod, name):
+    node = next((n for n in ast_mod.walk(tree)
+                 if isinstance(n, ast_mod.FunctionDef) and n.name == name), None)
+    assert node is not None, "round_driver has no function %r — census parse is inert" % name
+    return node
+
+
+def _literal_state_keys_read_in_function(fn_node, ast_mod):
+    keys = set()
+    for node in ast_mod.walk(fn_node):
+        if isinstance(node, ast_mod.Call):
+            func = node.func
+            if (isinstance(func, ast_mod.Attribute) and func.attr == "get"
+                    and isinstance(func.value, ast_mod.Name) and func.value.id == "state"
+                    and node.args and isinstance(node.args[0], ast_mod.Constant)
+                    and isinstance(node.args[0].value, str)):
+                keys.add(node.args[0].value)
+        elif isinstance(node, ast_mod.Subscript):
+            if (isinstance(node.value, ast_mod.Name) and node.value.id == "state"
+                    and isinstance(node.slice, ast_mod.Constant)
+                    and isinstance(node.slice.value, str)):
+                keys.add(node.slice.value)
+    return keys
+
+
+def _functions_assigning_state_key(tree, ast_mod, key):
+    writers = set()
+    for node in tree.body:
+        if not isinstance(node, ast_mod.FunctionDef):
+            continue
+        for sub in ast_mod.walk(node):
+            targets = []
+            if isinstance(sub, ast_mod.Assign):
+                targets = sub.targets
+            elif isinstance(sub, ast_mod.AugAssign):
+                targets = [sub.target]
+            for target in targets:
+                if (isinstance(target, ast_mod.Subscript)
+                        and isinstance(target.value, ast_mod.Name)
+                        and target.value.id == "state"
+                        and isinstance(target.slice, ast_mod.Constant)
+                        and target.slice.value == key):
+                    writers.add(node.name)
+    return writers
+
+
+def test_receipt_state_writes_census_no_post_fold_receipt_relevant_writes():
+    """Census — receipt-relevant state must not be written by post-fold advance callers."""
+    tree, ast_mod = _round_driver_ast()
+    receipt_keys = _literal_state_keys_read_in_function(
+        _fn_node(tree, ast_mod, "build_receipt"), ast_mod)
+    assert len(receipt_keys) >= 9, (
+        "build_receipt reads %d state keys — census parse looks inert" % len(receipt_keys))
+
+    post_fold_violations = {}
+    for key in sorted(receipt_keys):
+        if key in _RECEIPT_CENSUS_BOOTSTRAP_KEYS:
+            continue
+        bad = _functions_assigning_state_key(tree, ast_mod, key) & _POST_FOLD_CALLERS
+        if bad:
+            post_fold_violations[key] = sorted(bad)
+    assert post_fold_violations == {}, (
+        "receipt-relevant state written by post-fold callers: %s" % post_fold_violations)
+
+
+def test_receipt_state_writes_census_red_on_post_fold_probe_write():
+    """Bite-axis: a receipt-relevant key written only post-fold must fail the census."""
+    tree, ast_mod = _round_driver_ast()
+    probe_key = "_censusReceiptProbe"
+    with open(_ROUND_DRIVER_PATH, encoding="utf-8") as fh:
+        source = fh.read()
+    marker = "    ok_folded, state = load_state(session_dir)\n"
+    assert marker in source
+    probe_line = '    state["%s"] = True\n' % probe_key
+    probed = source.replace(marker, probe_line + marker, 1)
+    probed_tree = ast.parse(probed)
+    build_receipt = next(n for n in ast_mod.walk(probed_tree)
+                         if isinstance(n, ast_mod.FunctionDef) and n.name == "build_receipt")
+    # Inject a read of the probe key so the census considers it receipt-relevant.
+    build_receipt.body.insert(0, ast.parse('state.get("%s")' % probe_key).body[0])
+    receipt_keys = _literal_state_keys_read_in_function(build_receipt, ast_mod)
+    assert probe_key in receipt_keys
+    bad = _functions_assigning_state_key(probed_tree, ast_mod, probe_key) & _POST_FOLD_CALLERS
+    assert bad == {"_advance_owner_gate"}, bad

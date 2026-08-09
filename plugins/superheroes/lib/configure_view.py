@@ -216,7 +216,6 @@ def _review_gate_policy_lines(data):
         detail = data.get("gateDetail") or "structurally ambiguous"
         classifier = detail.split(":", 1)[0] if detail else "structurally ambiguous"
         return ["core.md: structurally ambiguous (%s)" % classifier]
-
     lines = []
     shipped = data.get("shipped") or {}
     if shipped.get("ok"):
@@ -231,7 +230,10 @@ def _review_gate_policy_lines(data):
 
     overlay_raw = data.get("overlayRaw")
     overlay_parse = data.get("overlayParse")
-    if overlay_raw is None:
+    if gate_status == core_md.CONFIG_POLICY_AMBIGUITY:
+        detail = data.get("gateDetail") or "policy-ambiguous"
+        lines.append("project overlay: refused (%s)" % detail)
+    elif overlay_raw is None:
         lines.append("project overlay: none configured (driver parks unmatched gates)")
     elif overlay_parse and overlay_parse.get("ok"):
         rules = overlay_parse.get("layer", {}).get("rules") or []

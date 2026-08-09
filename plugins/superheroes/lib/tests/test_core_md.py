@@ -3152,3 +3152,36 @@ def test_cli_write_review_gate_policy_refused_not_a_mapping(tmp_path, capsys, mo
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out == {"action": "refused", "reason": CM.GATE_POLICY_REASON_NOT_A_MAPPING}
+
+
+def test_cli_write_review_gate_policy_refused_duplicate_policy_key(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    raw = (
+        '{"schema": "gate-policy/1", "default": "park", "rules": [], '
+        '"default": "skip"}'
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(raw))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": "duplicate-policy-key:default"}
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_review_gate_policy_for_gate_refuses_duplicate_policy_document_key(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    inner = CM._JSON_BLOCK.search(text).group(1)
+    dup_inner = inner.replace('"rules": [', '"rules": [], "rules": [', 1)
+    open(path, "w", encoding="utf-8").write(CM._splice_single_json_block(text, dup_inner))
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.status == CM.CONFIG_POLICY_AMBIGUITY
+    assert gate.overlay is None
+    assert gate.detail == "duplicate-policy-key:rules"

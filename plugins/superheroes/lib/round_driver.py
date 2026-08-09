@@ -2731,7 +2731,13 @@ def _terminal_converged(state, config, full_panel, note=None):
 def build_receipt(state, session_dir=None):
     """The terminal driver receipt. Per-round schedule (planned vs executed), every finding's
     outcome, the decision ledger, the seat map, the scriptRan summary from the journal, and the
-    degraded disclosures. Written to round-receipt.json at the terminal."""
+    degraded disclosures. Written to round-receipt.json at the terminal.
+
+    RECEIPT WRITE-ORDER INVARIANT — by construction, not by call-site care: every write the
+    terminal receipt must reflect is visible to this builder at build time. The receipt is
+    write-once, so receipt-relevant state must be committed inside the fold transition
+    (``cmd_submit``'s ``_fold`` and its immediate post-fold staging), never by a post-fold
+    caller."""
     rounds = []
     for key in sorted(state.get("rounds") or {}, key=lambda k: int(k) if str(k).isdigit() else 0):
         rec = state["rounds"][key]
@@ -3325,6 +3331,8 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 if not isinstance(applied, list):
                     applied = []
                 state["_policyApplied"] = list(applied) + [_pending_policy_applied]
+            if _via_advance:
+                state["_advanceUsed"] = True
             state["lastAccepted"] = {"phase": phase, "attempt": attempt, "round": round_no,
                                      "artifactHash": art_hash}
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
@@ -5008,6 +5016,8 @@ def owner_gate_policy_park_detail_causes():
 
 def _gate_policy_calibration_park_detail(gate):
     """Distinct park cause when core.md gate classification refuses overlay read."""
+    if core_md.review_gate_config_is_policy_ambiguous(gate):
+        return gate.detail or GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED
     if core_md.review_gate_config_is_structurally_ambiguous(gate):
         detail = GATE_POLICY_CALIBRATION_PARK_CAUSE_STRUCTURAL
         if gate.detail:
@@ -5038,7 +5048,8 @@ def _resolve_owner_gate_policy(phase, state, config):
     ``{"authorized": False, "parkDetail": "<cause>"}`` so advance can park with a
     distinguishable refusal detail while keeping the top-level park reason."""
     gate = _gate_policy_overlay_from_config(config)
-    if (core_md.review_gate_config_is_structurally_ambiguous(gate)
+    if (core_md.review_gate_config_is_policy_ambiguous(gate)
+            or core_md.review_gate_config_is_structurally_ambiguous(gate)
             or core_md.review_gate_config_is_unreadable(gate)
             or core_md.review_gate_config_is_absent(gate)
             or core_md.review_gate_config_is_refusal(gate)):
@@ -5086,7 +5097,6 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     if not ok_folded or state is None:
         reason, fault, detail = _state_load_fault(session_dir)
         return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
-    state["_advanceUsed"] = True
     journal_entry = _journal_entry_for_commit(session_dir, "advance", "advanced",
                                               phase=phase, round=rnd, attempt=attempt,
                                               policyApplied=resolved["policyApplied"])
@@ -5216,8 +5226,6 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     artifact_for_fold = dict(artifact)
 
     # 5. fold through the EXISTING submit chokepoint (see `cmd_submit`).
-    state["_advanceUsed"] = True
-    save_state(session_dir, state)
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), artifact_for_fold,
                         _via_advance=True)
     if not folded.get("ok"):

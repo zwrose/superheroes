@@ -661,3 +661,27 @@ def test_render_shows_review_gate_policy_refused_overlay_digest_mismatch(tmp_pat
     screen = cv.render(repo, root=root)
     assert "## Review gate policy" in screen
     assert "project overlay: refused (overlay-digest-mismatch)" in screen
+
+
+def test_render_shows_review_gate_policy_duplicate_policy_key(tmp_path):
+    root = _seed_core_and_layer(tmp_path)
+    repo = str(tmp_path)
+    path = core_md.core_path(repo, root)
+    policy = {
+        "schema": "gate-policy/1",
+        "default": "park",
+        "rules": [{
+            "gate": "present-judgment",
+            "findingClass": "judgment:important",
+            "disposition": "skip",
+        }],
+    }
+    assert core_md.write_review_gate_policy(repo, policy, root=root)["action"] == "written"
+    text = open(path, encoding="utf-8").read()
+    inner = core_md._JSON_BLOCK.search(text).group(1)
+    dup_inner = inner.replace('"rules": [', '"rules": [], "rules": [', 1)
+    open(path, "w", encoding="utf-8").write(core_md._splice_single_json_block(text, dup_inner))
+    screen = cv.render(repo, root=root)
+    assert "## Review gate policy" in screen
+    assert "project overlay: refused (duplicate-policy-key:rules)" in screen
+    assert "project overlay: none configured" not in screen
