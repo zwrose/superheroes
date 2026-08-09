@@ -20,9 +20,14 @@ GATE_PRESENT_STALL_MENU = "present-stall-menu"
 PARK = "park"
 
 GATES = (GATE_PRESENT_JUDGMENT, GATE_PRESENT_STALL_MENU)
-JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
 # Policy rules may authorize only dispositions the resolver can fulfil without owner input.
-POLICY_JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "skip")
+POLICY_JUDGMENT_DISPOSITIONS = tuple(
+    d for d in round_phases.JUDGMENT_DISPOSITIONS if not d.endswith("-guidance")
+)
+JUDGMENT_SKIP_DISPOSITION = next(
+    d for d in POLICY_JUDGMENT_DISPOSITIONS
+    if d != round_phases.JUDGMENT_DISPOSITIONS[0]
+)
 STALL_CHOICES = round_phases.STALL_CHOICES
 
 # Exact ``_park`` reason tokens (non-parameterized) — authoritative vocabulary for drift guards.

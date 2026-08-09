@@ -4970,7 +4970,7 @@ def _judgment_artifact_from_resolution(state, resolution):
         rule = match.get("rule") if isinstance(match.get("rule"), dict) else {}
         disposition = rule.get("disposition")
         entry = {"id": _judgment_finding_id(finding), "disposition": disposition}
-        if disposition == "skip":
+        if disposition == review_gate_policy.JUDGMENT_SKIP_DISPOSITION:
             entry["reason"] = _GATE_POLICY_SKIP_REASON
         dispositions.append(entry)
     return {"dispositions": dispositions}
@@ -5025,10 +5025,14 @@ GATE_POLICY_CALIBRATION_PARK_CAUSE_ABSENT = "gate-policy-calibration-absent"
 GATE_POLICY_CALIBRATION_PARK_CAUSE_REFUSED = "gate-policy-calibration-refused"
 GATE_POLICY_CALIBRATION_PARK_CAUSE_STRUCTURAL = "gate-policy-calibration-structurally-ambiguous"
 
+GATE_POLICY_JUDGMENT_NO_FINDINGS_PARK_CAUSE = "gate-policy-judgment-no-findings"
+GATE_POLICY_UNKNOWN_PHASE_PARK_CAUSE = "gate-policy-unknown-phase"
+GATE_POLICY_PARK_CAUSE = "gate-policy-park"
+
 GATE_POLICY_RESOLVER_PARK_CAUSES = frozenset({
-    "gate-policy-judgment-no-findings",
-    "gate-policy-unknown-phase",
-    "gate-policy-park",
+    GATE_POLICY_JUDGMENT_NO_FINDINGS_PARK_CAUSE,
+    GATE_POLICY_UNKNOWN_PHASE_PARK_CAUSE,
+    GATE_POLICY_PARK_CAUSE,
 }) | review_gate_policy.RESOLVER_PARK_CAUSES
 
 GATE_POLICY_UNMATCHED_CLASS_PREFIX = "gate-policy-unmatched-class:"
@@ -5089,15 +5093,16 @@ def _resolve_owner_gate_policy(phase, state, config):
     if phase == P_JUDGMENT:
         rows = _judgment_policy_rows(state)
         if not rows:
-            return {"authorized": False, "parkDetail": "gate-policy-judgment-no-findings"}
+            return {"authorized": False,
+                    "parkDetail": GATE_POLICY_JUDGMENT_NO_FINDINGS_PARK_CAUSE}
         resolution = review_gate_policy.resolve_judgment(rows, overlay)
     elif phase == P_STALL:
         resolution = review_gate_policy.resolve_stall(_stall_policy_class(state), overlay)
     else:
-        return {"authorized": False, "parkDetail": "gate-policy-unknown-phase"}
+        return {"authorized": False, "parkDetail": GATE_POLICY_UNKNOWN_PHASE_PARK_CAUSE}
     if resolution.get("action") == review_gate_policy.PARK:
         return {"authorized": False,
-                "parkDetail": resolution.get("reason") or "gate-policy-park"}
+                "parkDetail": resolution.get("reason") or GATE_POLICY_PARK_CAUSE}
     if phase == P_JUDGMENT:
         artifact = _judgment_artifact_from_resolution(state, resolution)
     else:
@@ -5761,11 +5766,9 @@ def build_parser():
     cli_contract.add_argument(pr, "--seat", contract="free-text", default=None,
                               help="the roster seat to ingest; not needed with --sweep")
     cli_contract.add_argument(pr, "--attempt", contract="integer", default=None, type=int)
-    _supersede = pr.add_argument("--supersede", action="store_true")
-    setattr(_supersede, cli_contract.ACTION_CONTRACT_ATTR, "boolean-flag")
+    cli_contract.add_argument(pr, "--supersede", contract="boolean-flag")
     cli_contract.add_argument(pr, "--expect-sha256", contract="free-text", default=None)
-    _sweep = pr.add_argument("--sweep", action="store_true")
-    setattr(_sweep, cli_contract.ACTION_CONTRACT_ATTR, "boolean-flag")
+    cli_contract.add_argument(pr, "--sweep", contract="boolean-flag")
     cli_contract.add_argument(pr, "--occurrence", contract="integer", default=0, type=int,
                               help="which roster SLOT of a repeated seat key this envelope is "
                                    "(default 0). Two distinct audit targets can legitimately "
@@ -5784,8 +5787,7 @@ def build_parser():
 
     pa = sub.add_parser("advance")
     cli_contract.add_argument(pa, "--session-dir", contract="existing-directory", required=True)
-    _break_lock = pa.add_argument("--break-lock", action="store_true")
-    setattr(_break_lock, cli_contract.ACTION_CONTRACT_ATTR, "boolean-flag")
+    cli_contract.add_argument(pa, "--break-lock", contract="boolean-flag")
 
     pt = sub.add_parser("attest")
     cli_contract.add_argument(pt, "--session-dir", contract="existing-directory", required=True)

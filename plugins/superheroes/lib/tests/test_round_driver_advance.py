@@ -2284,9 +2284,14 @@ def test_ensure_round_diff_refuses_missing_reviewed_diff(tmp_path):
 
 
 # --- receipt write-order census (FX-4B-R3) ---------------------------------
+#
+# Blind spots (honest narrower guard — see module docstring in test below):
+# - Nested config reads such as ``(state.get("config") or {}).get("baseDegraded")`` are not
+#   expanded; only one-hop helpers whose body reads ``state`` literally are followed.
+# - Dynamic or computed state keys are invisible.
+# - Writers inside nested functions or lambdas are not attributed.
 
 _ROUND_DRIVER_PATH = os.path.join(_LIB, "round_driver.py")
-_POST_FOLD_CALLERS = frozenset({"_advance_owner_gate", "_advance_locked"})
 _RECEIPT_CENSUS_BOOTSTRAP_KEYS = frozenset({"_scriptRan"})
 
 
@@ -2303,7 +2308,11 @@ def _fn_node(tree, ast_mod, name):
     return node
 
 
-def _literal_state_keys_read_in_function(fn_node, ast_mod):
+def _function_index(tree, ast_mod):
+    return {node.name: node for node in tree.body if isinstance(node, ast_mod.FunctionDef)}
+
+
+def _literal_state_keys_read_in_function(fn_node, ast_mod, func_index=None, _visiting=None):
     keys = set()
     for node in ast_mod.walk(fn_node):
         if isinstance(node, ast_mod.Call):
@@ -2313,12 +2322,43 @@ def _literal_state_keys_read_in_function(fn_node, ast_mod):
                     and node.args and isinstance(node.args[0], ast_mod.Constant)
                     and isinstance(node.args[0].value, str)):
                 keys.add(node.args[0].value)
+            elif (isinstance(func, ast_mod.Name) and func_index is not None
+                  and func.id in func_index and node.args
+                  and isinstance(node.args[0], ast_mod.Name) and node.args[0].id == "state"):
+                callee = func.id
+                if _visiting is None:
+                    _visiting = set()
+                if callee in _visiting:
+                    continue
+                _visiting.add(callee)
+                keys |= _literal_state_keys_read_in_function(
+                    func_index[callee], ast_mod, func_index, _visiting)
         elif isinstance(node, ast_mod.Subscript):
             if (isinstance(node.value, ast_mod.Name) and node.value.id == "state"
                     and isinstance(node.slice, ast_mod.Constant)
                     and isinstance(node.slice.value, str)):
                 keys.add(node.slice.value)
     return keys
+
+
+def _post_fold_advance_callers(tree, ast_mod):
+    """Functions that fold through ``cmd_submit`` with ``_via_advance=True``."""
+    callers = set()
+    for node in tree.body:
+        if not isinstance(node, ast_mod.FunctionDef):
+            continue
+        for sub in ast_mod.walk(node):
+            if not isinstance(sub, ast_mod.Call):
+                continue
+            func = sub.func
+            if not (isinstance(func, ast_mod.Name) and func.id == "cmd_submit"):
+                continue
+            for kw in sub.keywords:
+                if (kw.arg == "_via_advance"
+                        and isinstance(kw.value, ast_mod.Constant)
+                        and kw.value.value is True):
+                    callers.add(node.name)
+    return callers
 
 
 def _functions_assigning_state_key(tree, ast_mod, key):
@@ -2343,10 +2383,17 @@ def _functions_assigning_state_key(tree, ast_mod, key):
 
 
 def test_receipt_state_writes_census_no_post_fold_receipt_relevant_writes():
-    """Census — receipt-relevant state must not be written by post-fold advance callers."""
+    """Census — receipt-relevant state must not be written by post-fold advance callers.
+
+    Derives post-fold callers from ``cmd_submit(..., _via_advance=True)`` call sites and expands
+    receipt-relevant keys one hop into same-module ``state`` helpers (e.g. ``_degraded`` →
+    ``independenceDegraded``). See module comment above for blind spots."""
     tree, ast_mod = _round_driver_ast()
+    func_index = _function_index(tree, ast_mod)
+    post_fold_callers = _post_fold_advance_callers(tree, ast_mod)
+    assert post_fold_callers, "no post-fold advance callers found — census parse is inert"
     receipt_keys = _literal_state_keys_read_in_function(
-        _fn_node(tree, ast_mod, "build_receipt"), ast_mod)
+        _fn_node(tree, ast_mod, "build_receipt"), ast_mod, func_index)
     assert len(receipt_keys) >= 9, (
         "build_receipt reads %d state keys — census parse looks inert" % len(receipt_keys))
 
@@ -2354,7 +2401,7 @@ def test_receipt_state_writes_census_no_post_fold_receipt_relevant_writes():
     for key in sorted(receipt_keys):
         if key in _RECEIPT_CENSUS_BOOTSTRAP_KEYS:
             continue
-        bad = _functions_assigning_state_key(tree, ast_mod, key) & _POST_FOLD_CALLERS
+        bad = _functions_assigning_state_key(tree, ast_mod, key) & post_fold_callers
         if bad:
             post_fold_violations[key] = sorted(bad)
     assert post_fold_violations == {}, (
@@ -2364,6 +2411,8 @@ def test_receipt_state_writes_census_no_post_fold_receipt_relevant_writes():
 def test_receipt_state_writes_census_red_on_post_fold_probe_write():
     """Bite-axis: a receipt-relevant key written only post-fold must fail the census."""
     tree, ast_mod = _round_driver_ast()
+    func_index = _function_index(tree, ast_mod)
+    post_fold_callers = _post_fold_advance_callers(tree, ast_mod)
     probe_key = "_censusReceiptProbe"
     with open(_ROUND_DRIVER_PATH, encoding="utf-8") as fh:
         source = fh.read()
@@ -2376,7 +2425,7 @@ def test_receipt_state_writes_census_red_on_post_fold_probe_write():
                          if isinstance(n, ast_mod.FunctionDef) and n.name == "build_receipt")
     # Inject a read of the probe key so the census considers it receipt-relevant.
     build_receipt.body.insert(0, ast.parse('state.get("%s")' % probe_key).body[0])
-    receipt_keys = _literal_state_keys_read_in_function(build_receipt, ast_mod)
+    receipt_keys = _literal_state_keys_read_in_function(build_receipt, ast_mod, func_index)
     assert probe_key in receipt_keys
-    bad = _functions_assigning_state_key(probed_tree, ast_mod, probe_key) & _POST_FOLD_CALLERS
+    bad = _functions_assigning_state_key(probed_tree, ast_mod, probe_key) & post_fold_callers
     assert bad == {"_advance_owner_gate"}, bad

@@ -89,6 +89,10 @@ def test_dispatch_cli_argument_census():
         assert missing == [], (
             f"{module_name} has undeclared caller-supplied arguments: {missing}"
         )
+        unvalidated = cc.census_unvalidated(parser)
+        assert unvalidated == [], (
+            f"{module_name} has declared-but-unvalidated caller-supplied arguments: {unvalidated}"
+        )
 
 
 def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
@@ -319,3 +323,34 @@ def test_census_red_when_argument_lacks_contract():
     assert any(
         dest == "undeclared_bite_proof_arg" for _path, _opts, dest in missing
     )
+
+
+def test_census_red_when_argument_declared_but_unvalidated():
+    """Bite-axis: declared contract with no validator must fail census_unvalidated."""
+    parser = argparse.ArgumentParser()
+    sub = parser.add_subparsers(dest="cmd", required=True)
+    probe = sub.add_parser("probe")
+    action = probe.add_argument("--declared-only-arg", default=None)
+    setattr(action, cc.ACTION_CONTRACT_ATTR, "unmapped-contract-token")
+    unvalidated = cc.census_unvalidated(parser)
+    assert any(
+        dest == "declared_only_arg" for _path, _opts, dest, contract in unvalidated
+    )
+    assert any(
+        contract == "unmapped-contract-token"
+        for _path, _opts, _dest, contract in unvalidated
+    )
+
+
+def test_boolean_flag_contract_validated_on_round_driver_parser():
+    contracts = {
+        (path, action.dest): cc.contract_for_action(action)
+        for path, action in cc.iter_caller_supplied_actions(RD.build_parser())
+    }
+    assert contracts[("record-result",), "supersede"] == "boolean-flag"
+    assert contracts[("advance",), "break_lock"] == "boolean-flag"
+    action = next(
+        action for path, action in cc.iter_caller_supplied_actions(RD.build_parser())
+        if path == ("advance",) and action.dest == "break_lock"
+    )
+    assert cc.contract_is_validated(action) is True

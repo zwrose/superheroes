@@ -18,6 +18,8 @@ import model_registry  # noqa: E402
 
 CLI_CONTRACT_ATTR = "__cli_contract__"
 ACTION_CONTRACT_ATTR = "cli_contract"
+VALIDATED_CONTRACT_ATTR = "cli_contract_validated"
+ACTION_ONLY_CONTRACTS = frozenset({"boolean-flag"})
 
 
 def _contract_type(contract: str, converter):
@@ -185,6 +187,24 @@ def contract_for_action(action: argparse.Action) -> str | None:
     return None
 
 
+def contract_is_validated(action: argparse.Action) -> bool:
+    """Return whether the action's declared contract has an attached validator."""
+    contract = contract_for_action(action)
+    if contract is None:
+        return False
+    if contract in ACTION_ONLY_CONTRACTS:
+        return action.nargs == 0 or action.const in (True, False, None)
+    if contract and contract.startswith("choices:"):
+        return action.choices is not None
+    type_fn = action.type
+    if type_fn is not None:
+        if getattr(type_fn, CLI_CONTRACT_ATTR, None) == contract:
+            return True
+        if contract == "integer" and type_fn is int:
+            return True
+    return False
+
+
 def add_argument(parser, *args, contract: str, **kwargs):
     """Add an argparse argument and attach its caller-contract declaration."""
     type_map = {
@@ -198,10 +218,13 @@ def add_argument(parser, *args, contract: str, **kwargs):
         "free-text": free_text,
         "integer": integer,
     }
-    if "type" not in kwargs and contract in type_map:
+    if contract == "boolean-flag":
+        kwargs.setdefault("action", "store_true")
+    elif "type" not in kwargs and contract in type_map:
         kwargs["type"] = type_map[contract]
     action = parser.add_argument(*args, **kwargs)
     setattr(action, ACTION_CONTRACT_ATTR, contract)
+    setattr(action, VALIDATED_CONTRACT_ATTR, contract_is_validated(action))
     return action
 
 
@@ -235,3 +258,16 @@ def census_undeclared(parser: argparse.ArgumentParser) -> list[tuple[tuple[str, 
             opts = ",".join(action.option_strings) or action.dest
             missing.append((path, opts, action.dest))
     return missing
+
+
+def census_unvalidated(parser: argparse.ArgumentParser) -> list[tuple[tuple[str, ...], str, str, str]]:
+    """Return declared-but-unvalidated arguments as (path, option_strings, dest, contract)."""
+    unvalidated = []
+    for path, action in iter_caller_supplied_actions(parser):
+        contract = contract_for_action(action)
+        if contract is None:
+            continue
+        if not getattr(action, VALIDATED_CONTRACT_ATTR, contract_is_validated(action)):
+            opts = ",".join(action.option_strings) or action.dest
+            unvalidated.append((path, opts, action.dest, contract))
+    return unvalidated

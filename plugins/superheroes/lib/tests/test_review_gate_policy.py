@@ -323,3 +323,29 @@ def test_fail_closed_policy_rule_fix_with_guidance_refused():
     parsed = RGP.parse_overlay(overlay)
     assert parsed["ok"] is False
     assert parsed["reason"] == "layer-disposition-not-allowed"
+
+
+def test_policy_judgment_dispositions_derived_from_home():
+    """Policy-eligible judgment dispositions are home minus owner-input-only members."""
+    home = set(round_phases.JUDGMENT_DISPOSITIONS)
+    policy = set(RGP.POLICY_JUDGMENT_DISPOSITIONS)
+    assert policy <= home
+    assert home - policy == {"fix-with-guidance"}
+    assert RGP.JUDGMENT_SKIP_DISPOSITION == "skip"
+    assert RGP.JUDGMENT_SKIP_DISPOSITION in policy
+
+
+def test_policy_judgment_dispositions_red_on_home_member_rename():
+    """Bite-axis: renaming a home disposition must fail the derived-policy binding."""
+    home_path = os.path.join(_HERE, "..", "round_phases.py")
+    with open(home_path, encoding="utf-8") as fh:
+        source = fh.read()
+    probed = source.replace('"skip"', '"skip-renamed-for-census"', 1)
+    spec = importlib.util.spec_from_file_location("round_phases_probe", home_path)
+    probe_phases = importlib.util.module_from_spec(spec)
+    exec(compile(probed, home_path, "exec"), probe_phases.__dict__)  # noqa: S102
+    derived = tuple(
+        d for d in probe_phases.JUDGMENT_DISPOSITIONS if not d.endswith("-guidance")
+    )
+    assert "skip" not in derived
+    assert "skip-renamed-for-census" in derived
