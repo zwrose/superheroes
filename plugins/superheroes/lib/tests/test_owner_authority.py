@@ -293,21 +293,16 @@ _VALID_ENTRY = {"action": "run-workflow", "workflow": "deploy.yml"}
 
 
 # --- workflow_run_target: accepts ------------------------------------------------
+# Bites on: workflow_run_target returns the exact workflow name when flags are limited to
+# inputs (-f/-F/--field) or valueless --json — never repo/ref scope-changing flags.
 
 @pytest.mark.parametrize("command,expected", [
     ("gh workflow run deploy.yml", "deploy.yml"),
     ("gh workflow run 'Preview seed'", "Preview seed"),
     ('gh workflow run "Preview seed"', "Preview seed"),
     ("gh workflow run ci.yml", "ci.yml"),
-    ("gh workflow run --ref main deploy.yml", "deploy.yml"),
-    ("gh workflow run deploy.yml --ref main", "deploy.yml"),
-    ("gh workflow run -r main deploy.yml", "deploy.yml"),
-    ("gh workflow run --ref main deploy.yml", "deploy.yml"),
-    ("gh workflow run -R o/r deploy.yml", "deploy.yml"),
     ("gh workflow run -f k=v deploy.yml", "deploy.yml"),
     ("gh workflow run -F k=v deploy.yml", "deploy.yml"),
-    ("gh workflow run --ref=main deploy.yml", "deploy.yml"),
-    ("gh workflow run --repo=o/r deploy.yml", "deploy.yml"),
     ("gh workflow run --field=k=v deploy.yml", "deploy.yml"),
     ("gh workflow run --json deploy.yml", "deploy.yml"),
     ("gh workflow run -- deploy.yml", "deploy.yml"),
@@ -317,6 +312,8 @@ def test_workflow_run_target_accepts(command, expected):
 
 
 # --- workflow_run_target: refuses ------------------------------------------------
+# Bites on: workflow_run_target returns None for shell-expandable text, scope-changing
+# repo/ref flags, malformed commands, and any dispatch that does not name exactly one workflow.
 
 @pytest.mark.parametrize("command", [
     "gh workflow run $VAR",
@@ -358,12 +355,28 @@ def test_workflow_run_target_accepts(command, expected):
     None,
     "x" * 4097,
     "gh workflow run --ref main",
+    # scope-changing repo/ref flags — never pre-authorized regardless of allow file
+    "gh workflow run -R o/r deploy.yml",
+    "gh workflow run --repo o/r deploy.yml",
+    "gh workflow run --repo=o/r deploy.yml",
+    "gh workflow run -r main deploy.yml",
+    "gh workflow run --ref main deploy.yml",
+    "gh workflow run --ref=main deploy.yml",
+    "gh workflow run deploy.yml -R o/r",
+    "gh workflow run deploy.yml --repo o/r",
+    "gh workflow run deploy.yml --repo=o/r",
+    "gh workflow run deploy.yml -r main",
+    "gh workflow run deploy.yml --ref main",
+    "gh workflow run deploy.yml --ref=main",
+    "gh workflow run --ref main deploy.yml",
 ])
 def test_workflow_run_target_refuses(command):
     assert oa.workflow_run_target(command) is None
 
 
 # --- read_allow_file: fail direction (§A) --------------------------------------
+# Bites on: read_allow_file yields no entries for absent, unreadable, malformed, or
+# wrong-schema files — a weakened guard must not honour hostile content.
 
 @pytest.mark.parametrize("setup", [
     "absent",
@@ -458,6 +471,81 @@ def test_read_allow_file_fail_direction_yields_no_entries(setup, tmp_path, monke
         path_obj.chmod(stat.S_IWUSR | stat.S_IRUSR)
 
 
+# --- read_allow_file: notes ------------------------------------------------------
+# Bites on: rejected-file notes name the defect; structural/malformed entries are
+# dropped with the correct note kind; absent files produce no rejection note.
+
+@pytest.mark.parametrize("setup,defect_fragment", [
+    ("unreadable", "unreadable"),
+    ("bad_json", "invalid JSON"),
+    ("top_array", "top level is not an object"),
+    ("schema_2", "bad schemaVersion"),
+    ("allow_dict", "allow is not a list"),
+    ("exception_on_path", "path resolution failed"),
+])
+def test_read_allow_file_rejected_file_note(setup, defect_fragment, tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    path = os.path.join(store, oa.ALLOW_FILENAME)
+
+    if setup == "unreadable":
+        os.makedirs(store, exist_ok=True)
+        path_obj = tmp_path / "allow-store" / oa.ALLOW_FILENAME
+        path_obj.write_text(json.dumps({"schemaVersion": 1, "allow": [_VALID_ENTRY]}))
+        path_obj.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip("chmod 000 did not make file unreadable for this user")
+    elif setup == "bad_json":
+        os.makedirs(store, exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write("{ not json")
+    elif setup == "top_array":
+        _write_allow_at(store, [_VALID_ENTRY])
+    elif setup == "schema_2":
+        _write_allow_at(store, {"schemaVersion": 2, "allow": [_VALID_ENTRY]})
+    elif setup == "allow_dict":
+        _write_allow_at(store, {"schemaVersion": 1, "allow": {}})
+    elif setup == "exception_on_path":
+        def _boom(cwd, root=None):
+            raise OSError("simulated path failure")
+        monkeypatch.setattr(oa, "allow_file_path", _boom)
+
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    rejected = [n for n in notes if n[0] == "rejected-file"]
+    assert len(rejected) == 1
+    assert defect_fragment in rejected[0][2]
+
+    if setup == "unreadable":
+        path_obj.chmod(stat.S_IWUSR | stat.S_IRUSR)
+
+
+def test_read_allow_file_absent_produces_no_rejection_note(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    os.makedirs(store, exist_ok=True)
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert not any(kind == "rejected-file" for kind, _, _ in notes)
+
+
+def test_read_allow_file_empty_allow_list_valid_no_rejection_note(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1, "allow": []})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert not any(kind == "rejected-file" for kind, _, _ in notes)
+
+
+def test_read_allow_file_empty_file_rejected(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    os.makedirs(store, exist_ok=True)
+    path = os.path.join(store, oa.ALLOW_FILENAME)
+    with open(path, "w") as fh:
+        fh.write("")
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert any(kind == "rejected-file" for kind, _, _ in notes)
+
+
 def test_read_allow_file_notes_structural_exclusions(tmp_path, monkeypatch):
     store = _pin_allow_store(tmp_path, monkeypatch)
     allow = [{"action": a, "workflow": "x"} for a in oa.NEVER_ALLOWLISTABLE]
@@ -508,7 +596,7 @@ def test_read_allow_file_mixed_valid_invalid(tmp_path, monkeypatch):
     assert len(notes) == 2
 
 
-def test_read_allow_file_is_read_only(tmp_path, monkeypatch):
+def test_read_allow_file_does_not_create_missing_store(tmp_path, monkeypatch):
     missing = str(tmp_path / "no-such-store")
     assert not os.path.exists(missing)
     monkeypatch.setattr(mode_registry, "project_store_dir",
@@ -519,7 +607,29 @@ def test_read_allow_file_is_read_only(tmp_path, monkeypatch):
     assert not os.path.exists(missing)
 
 
+def test_read_allow_file_does_not_modify_existing_store(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    content = {"schemaVersion": 1,
+               "allow": [{"action": "run-workflow", "workflow": "deploy.yml"}]}
+    path = _write_allow_at(store, content)
+    before_bytes = open(path, "rb").read()
+    before_mtime = os.stat(path).st_mtime_ns
+    before_mode = os.stat(path).st_mode
+    before_listing = sorted(os.listdir(store))
+
+    entries, notes = oa.read_allow_file(str(tmp_path))
+
+    assert entries == [{"action": "run-workflow", "workflow": "deploy.yml"}]
+    assert notes == []
+    assert open(path, "rb").read() == before_bytes
+    assert os.stat(path).st_mtime_ns == before_mtime
+    assert os.stat(path).st_mode == before_mode
+    assert sorted(os.listdir(store)) == before_listing
+
+
 # --- allowlisted -----------------------------------------------------------------
+# Bites on: allowlisted honours exact action+workflow pairs only — near-misses and
+# structural exclusions must not reach silence.
 
 def test_allowlisted_exact_match():
     entries = [{"action": "run-workflow", "workflow": "Preview seed"}]
@@ -527,16 +637,17 @@ def test_allowlisted_exact_match():
     assert oa.allowlisted(cmd, "run-workflow", entries) is True
 
 
-@pytest.mark.parametrize("workflow", [
-    "preview seed",
-    "Preview seed ",
-    "Preview seed.yml",
-    "Preview",
-    "Preview seed extra",
+@pytest.mark.parametrize("workflow,quoted", [
+    ("preview seed", "'preview seed'"),
+    ("Preview seed ", "'Preview seed '"),
+    ("Preview seed.yml", "'Preview seed.yml'"),
+    ("Preview", "Preview"),
+    ("Preview seed extra", "'Preview seed extra'"),
 ])
-def test_allowlisted_near_miss(workflow):
+def test_allowlisted_near_miss(workflow, quoted):
     entries = [{"action": "run-workflow", "workflow": "Preview seed"}]
-    cmd = "gh workflow run %s" % workflow
+    cmd = "gh workflow run %s" % quoted
+    assert oa.workflow_run_target(cmd) == workflow
     assert oa.allowlisted(cmd, "run-workflow", entries) is False
 
 
@@ -551,6 +662,8 @@ def test_allowlisted_glob_entry_does_not_match():
 
 
 # --- classify: allowlist end-to-end --------------------------------------------
+# Bites on: classify consults the allow file only when calibrated; indeterminate
+# never reads it; rejected-file notes surface in stderr and the ask reason.
 
 def test_classify_calibrated_allowlisted_dispatch_allows(tmp_path, monkeypatch):
     store = _pin_allow_store(tmp_path, monkeypatch)
@@ -576,6 +689,20 @@ def test_classify_calibrated_allowlisted_but_enable_asks(tmp_path, monkeypatch):
                             "allow": [{"action": "run-workflow", "workflow": "ci.yml"}]})
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
     decision, _ = oa.classify("gh workflow enable ci.yml", str(tmp_path))
+    assert decision == "ask"
+
+
+def test_classify_indeterminate_does_not_read_allow_file(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "deploy.yml"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "indeterminate")
+
+    def _tripwire(*a, **k):
+        raise AssertionError("read_allow_file must not be called when indeterminate")
+
+    monkeypatch.setattr(oa, "read_allow_file", _tripwire)
+    decision, _ = oa.classify("gh workflow run deploy.yml", str(tmp_path))
     assert decision == "ask"
 
 
@@ -624,6 +751,20 @@ def test_classify_gated_still_asks_without_allow_file(command, monkeypatch):
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
     decision, _ = oa.classify(command, "/somewhere")
     assert decision == "ask"
+
+
+def test_classify_rejected_file_note_in_reason(tmp_path, monkeypatch, capsys):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    os.makedirs(store, exist_ok=True)
+    path = os.path.join(store, oa.ALLOW_FILENAME)
+    with open(path, "w") as fh:
+        fh.write("{ not json")
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, reason = oa.classify("gh workflow run deploy.yml", str(tmp_path))
+    assert decision == "ask"
+    assert "rejected (invalid JSON)" in reason
+    captured = capsys.readouterr()
+    assert "invalid JSON" in captured.err
 
 
 def test_classify_writes_structural_note_to_stderr(tmp_path, monkeypatch, capsys):

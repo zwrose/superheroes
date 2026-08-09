@@ -1112,3 +1112,97 @@ def test_showrunner_charter_carries_builder_dispatch_tier_doctrine():
                 "%s missing the never-a-launch-default clause for %s"
                 % (label, refused)
             )
+
+
+# --- Cluster: owner-authority allowlist (owner_authority → owner-authority-allowlist.md) ---
+
+
+def _owner_authority_allowlist_doc():
+    return _read("reference/owner-authority-allowlist.md")
+
+
+def _charset_lists_from_doc(doc):
+    """Parse the supported and refused character lists from the reference doc."""
+    marker = "**Supported workflow-name characters:**"
+    start = doc.find(marker)
+    assert start != -1, (
+        "owner-authority-allowlist.md: %s marker not found" % marker)
+
+    consequence = doc.find("**Consequence:**", start)
+    section = doc[start:consequence] if consequence != -1 else doc[start:]
+
+    split_phrase = "Any other character anywhere"
+    split_at = section.find(split_phrase)
+    assert split_at != -1, (
+        "owner-authority-allowlist.md: %r phrase not found in charset paragraph"
+        % split_phrase)
+
+    accepted_half = section[:split_at]
+    refused_rest = section[split_at + len(split_phrase):].lstrip()
+    if refused_rest.startswith("—"):
+        refused_rest = refused_rest[1:].lstrip()
+    terminator = refused_rest.find("—")
+    assert terminator != -1, (
+        "owner-authority-allowlist.md: refused charset list terminator not found")
+    refused_half = refused_rest[:terminator]
+
+    accepted = set()
+    for chunk in re.findall(r"`([^`]+)`", accepted_half):
+        accepted.update(chunk)
+    # Range notation (`A-Z a-z 0-9`) is literal: each character is accepted by the pattern.
+    if "space" in accepted_half:
+        accepted.add(" ")
+
+    refused = set()
+    for chunk in re.findall(r"`([^`]+)`", refused_half):
+        refused.update(chunk)
+
+    assert accepted, "owner-authority-allowlist.md: no accepted charset parsed"
+    assert refused, "owner-authority-allowlist.md: no refused charset parsed"
+    return accepted, refused
+
+
+def test_owner_authority_allowlist_doc_matches_code():
+    """§11: owner-authority-allowlist.md restates owner_authority.py constants and charset."""
+    import owner_authority as oa
+
+    doc = _owner_authority_allowlist_doc()
+
+    assert oa.ALLOW_FILENAME in doc, (
+        "owner-authority-allowlist.md missing ALLOW_FILENAME %r" % oa.ALLOW_FILENAME)
+
+    schema_block = re.search(
+        r"```json\n(\{.*?\})\n```",
+        doc,
+        re.DOTALL,
+    )
+    assert schema_block, "owner-authority-allowlist.md: schema JSON block not found"
+    assert '"schemaVersion": %d' % oa.ALLOW_SCHEMA_VERSION in schema_block.group(1), (
+        "owner-authority-allowlist.md schema block missing schemaVersion %d"
+        % oa.ALLOW_SCHEMA_VERSION)
+
+    never_section = re.search(
+        r"## What can never be allowlisted\n(.*?)(?=\n## )",
+        doc,
+        re.DOTALL,
+    )
+    assert never_section, "owner-authority-allowlist.md: never-allowlistable section not found"
+    never_text = never_section.group(1)
+    for action in oa.NEVER_ALLOWLISTABLE:
+        assert action in never_text, (
+            "owner-authority-allowlist.md missing NEVER_ALLOWLISTABLE member %r" % action)
+
+    for action in oa.ALLOWLISTABLE_ACTIONS:
+        assert action in doc, (
+            "owner-authority-allowlist.md missing ALLOWLISTABLE_ACTIONS member %r" % action)
+
+    accepted_doc, refused_doc = _charset_lists_from_doc(doc)
+    pattern = oa._LITERAL_SAFE_COMMAND
+
+    for ch in accepted_doc:
+        assert pattern.fullmatch("X" + ch + "Y"), (
+            "doc lists %r as accepted but _LITERAL_SAFE_COMMAND refuses it" % ch)
+
+    for ch in refused_doc:
+        assert not pattern.fullmatch("X" + ch + "Y"), (
+            "doc lists %r as refused but _LITERAL_SAFE_COMMAND accepts it" % ch)

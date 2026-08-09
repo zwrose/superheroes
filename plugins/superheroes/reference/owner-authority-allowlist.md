@@ -78,4 +78,5 @@ gate quieter except by exactly naming one workflow dispatch you intend to allow.
   `Preview & seed` **cannot be pre-authorized in v1** and will keep asking — an extra prompt, never
   an unapproved run.
 - Also asks regardless of the file: compound commands, env-var prefixes, absolute `gh` path,
-  unrecognized flags, or anything that does not name exactly one workflow.
+  unrecognized flags, `--ref` / `--repo` (a dispatch naming another repository or another ref is
+  not the dispatch you pre-authorized), or anything that does not name exactly one workflow.

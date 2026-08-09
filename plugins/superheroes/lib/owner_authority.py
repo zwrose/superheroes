@@ -65,8 +65,14 @@ _WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
 # Uses fullmatch (not $-anchored match) because $ exempts a trailing newline in Python.
 _LITERAL_SAFE_COMMAND = re.compile(r"[A-Za-z0-9 _\-./:=,'\"@+]+")
 
-_VALUE_FLAG_LONG = frozenset(("--field", "--raw-field", "--ref", "--repo"))
-_VALUE_FLAGS = frozenset(("-F", "--field", "-f", "--raw-field", "-r", "--ref", "-R", "--repo"))
+# Repo/ref flags change *which* workflow code runs or *where* — not workflow inputs.
+# The allow file is project-scoped, so another repo is never pre-authorized; a ref selects
+# the workflow definition (and secrets) on that branch. Inputs (-F/--field, -f/--raw-field,
+# --json) stay accepted — they parameterize the dispatch, not the code location.
+_SCOPE_CHANGING_FLAGS = frozenset(("-R", "--repo", "-r", "--ref"))
+
+_VALUE_FLAG_LONG = frozenset(("--field", "--raw-field"))
+_VALUE_FLAGS = frozenset(("-F", "--field", "-f", "--raw-field"))
 
 
 def owner_authority_action(command):
@@ -87,6 +93,12 @@ def allow_file_path(cwd, root=None):
     return os.path.join(mode_registry.project_store_dir(cwd, root), ALLOW_FILENAME)
 
 
+def _rejected_file_note(defect):
+    return ("rejected-file", None,
+            "owner-authority-allow.json was rejected (%s) — the gate is asking as if it were absent"
+            % defect)
+
+
 def read_allow_file(cwd, root=None):
     """(entries, notes) from the allow file. PURE — never writes, never raises.
 
@@ -97,21 +109,35 @@ def read_allow_file(cwd, root=None):
     # bite-proof axis: probe is read-only — never creates the store directory or file.
     try:
         path = allow_file_path(cwd, root)
+    except Exception:
+        notes.append(_rejected_file_note("path resolution failed"))
+        return entries, notes
+
+    try:
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
+    except FileNotFoundError:
+        return entries, notes
+    except json.JSONDecodeError:
+        notes.append(_rejected_file_note("invalid JSON"))
+        return entries, notes
     except Exception:
+        notes.append(_rejected_file_note("unreadable"))
         return entries, notes
 
     if not isinstance(raw, dict):
+        notes.append(_rejected_file_note("top level is not an object"))
         return entries, notes
 
     ver = raw.get("schemaVersion")
     # bite-proof axis: a wrong-schema file must not yield entries (bool-int trap included).
     if not isinstance(ver, int) or isinstance(ver, bool) or ver != ALLOW_SCHEMA_VERSION:
+        notes.append(_rejected_file_note("bad schemaVersion"))
         return entries, notes
 
     allow = raw.get("allow")
     if not isinstance(allow, list):
+        notes.append(_rejected_file_note("allow is not a list"))
         return entries, notes
 
     for item in allow:
@@ -176,11 +202,16 @@ def workflow_run_target(command):
         if tok.startswith("-"):
             if "=" in tok:
                 flag = tok.split("=", 1)[0]
+                # bite-proof axis: repo/ref flags must never be skipped — they change scope.
+                if flag in _SCOPE_CHANGING_FLAGS:
+                    return None
                 # bite-proof axis: flag values must not be misread as the workflow name.
                 if flag not in _VALUE_FLAG_LONG:
                     return None
                 i += 1
                 continue
+            if tok in _SCOPE_CHANGING_FLAGS:
+                return None
             if tok in _VALUE_FLAGS:
                 if i + 1 >= len(tokens):
                     return None
@@ -278,6 +309,9 @@ def _ask_reason(action, command, notes):
     if structural:
         reason += (" [owner-authority-allow.json names %s, which can never be allowlisted; "
                    "ignored]" % ", ".join(structural))
+    rejected = [text for kind, _, text in notes if kind == "rejected-file"]
+    if rejected:
+        reason += " [%s]" % rejected[0]
     return reason
 
 
@@ -290,7 +324,10 @@ def classify(command, cwd, root=None):
     - 'uncalibrated' → ('allow', ''): a plain non-superheroes project gets no gate.
     - 'indeterminate' → ('ask', ...): fail CLOSED. The allow file is NOT consulted — narrowing
       applies only where calibration is positively known.
-    - 'calibrated' → read the allow file; allow iff allowlisted, else ask."""
+    - 'calibrated' → read the allow file; allow iff allowlisted, else ask.
+
+    `root` is a test seam for the allow-file read only; the calibration probe always uses the
+    ambient store. Production callers (the hook) never pass it."""
     action = owner_authority_action(command)
     if not action:
         return ("allow", "")
