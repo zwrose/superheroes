@@ -11,6 +11,7 @@ import os
 import subprocess
 
 import mode_registry
+import owner_authority as oa
 
 _PLUGIN = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 _HOOK = os.path.join(_PLUGIN, "hooks", "owner_authority_gate.py")
@@ -121,3 +122,60 @@ def test_session_start_entry_untouched():
                for h in entry["hooks"]]
     assert any("session_start.py" in c for c in ss_cmds), \
         "SessionStart must still reference session_start.py"
+
+
+# --- allowlist end-to-end ------------------------------------------------------
+
+def _write_allow_file(cwd, content):
+    store = mode_registry.project_store_dir(cwd)
+    os.makedirs(store, exist_ok=True)
+    path = os.path.join(store, oa.ALLOW_FILENAME)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(content, fh)
+
+
+def test_hook_allowlisted_workflow_dispatch_is_silent(tmp_path):
+    cwd = _calibrate(str(tmp_path))
+    _write_allow_file(cwd, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "deploy.yml"}]})
+    r = _run_hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                              "tool_input": {"command": "gh workflow run deploy.yml"}}))
+    assert r.returncode == 0
+    assert r.stdout.strip() == ""
+
+
+def test_hook_non_matching_workflow_still_asks(tmp_path):
+    cwd = _calibrate(str(tmp_path))
+    _write_allow_file(cwd, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "other.yml"}]})
+    r = _run_hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                              "tool_input": {"command": "gh workflow run deploy.yml"}}))
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+
+
+def test_hook_hostile_merge_pr_file_does_not_silence_pr_merge(tmp_path):
+    cwd = _calibrate(str(tmp_path))
+    _write_allow_file(cwd, {"schemaVersion": 1,
+                            "allow": [{"action": "merge-pr", "workflow": "x"}]})
+    r = _run_hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                              "tool_input": {"command": "gh pr merge 42 --squash"}}))
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert "can never be allowlisted" in reason
+
+
+def test_hook_malformed_allow_file_still_asks(tmp_path):
+    cwd = _calibrate(str(tmp_path))
+    store = mode_registry.project_store_dir(cwd)
+    os.makedirs(store, exist_ok=True)
+    with open(os.path.join(store, oa.ALLOW_FILENAME), "w") as fh:
+        fh.write("{ not valid json")
+    r = _run_hook(json.dumps({"tool_name": "Bash", "cwd": cwd,
+                              "tool_input": {"command": "gh workflow run deploy.yml"}}))
+    assert r.returncode == 0
+    out = json.loads(r.stdout)
+    assert out["hookSpecificOutput"]["permissionDecision"] == "ask"
