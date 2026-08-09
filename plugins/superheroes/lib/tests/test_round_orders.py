@@ -251,10 +251,21 @@ def test_resolve_base_residuals_no_base_oid():
     assert reason == "no-base-oid"
 
 
+def _git_commit(repo, *args):
+    """Commit in a throwaway repo with an explicit identity.
+
+    A CI runner carries no git identity, so a bare `git commit` here is green on a dev
+    box and fatal in CI ("empty ident name"). Pinning it inline is the convention across
+    this suite (see `guardian_fixtures`, `test_core_md`, `test_engine_dispatch`).
+    """
+    subprocess.run(["git", "-C", repo, "-c", "user.email=t@t.local", "-c", "user.name=t",
+                    "commit", *args], check=True)
+
+
 def test_resolve_base_residuals_no_core_at_base(tmp_path):
     repo = str(tmp_path)
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "--allow-empty", "-qm", "init"], check=True)
+    _git_commit(repo, "--allow-empty", "-qm", "init")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     text, reason = RO.resolve_base_residuals(repo, base, "missing/core.md")
     assert text == ""
@@ -286,7 +297,7 @@ def test_resolve_base_residuals_no_residual_section(tmp_path):
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
     _write_core_file(repo, "core.md", "")
     subprocess.run(["git", "-C", repo, "add", "core.md"], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "-qm", "core"], check=True)
+    _git_commit(repo, "-qm", "core")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     text, reason = RO.resolve_base_residuals(repo, base, "core.md")
     assert text == ""
@@ -300,11 +311,11 @@ def test_resolve_base_residuals_reads_base_not_worktree(tmp_path):
 
     _write_core_file(repo, core_rel, "base residual only")
     subprocess.run(["git", "-C", repo, "add", core_rel], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "-qm", "base"], check=True)
+    _git_commit(repo, "-qm", "base")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
 
     _write_core_file(repo, core_rel, "branch-widened residual list")
-    subprocess.run(["git", "-C", repo, "commit", "-am", "widen"], check=True)
+    _git_commit(repo, "-am", "widen")
 
     text, reason = RO.resolve_base_residuals(repo, base, core_rel)
     assert reason is None
@@ -518,10 +529,10 @@ def test_resolve_order_residuals_in_repo_reads_base(tmp_path, monkeypatch):
     subprocess.run(["git", "init", "-q", "-b", "main", repo], check=True)
     _write_core_file(repo, ".claude/superheroes/core.md", "base residual only")
     subprocess.run(["git", "-C", repo, "add", ".claude/superheroes/core.md"], check=True)
-    subprocess.run(["git", "-C", repo, "commit", "-qm", "base"], check=True)
+    _git_commit(repo, "-qm", "base")
     base = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
     _write_core_file(repo, ".claude/superheroes/core.md", "branch widened")
-    subprocess.run(["git", "-C", repo, "commit", "-am", "widen"], check=True)
+    _git_commit(repo, "-am", "widen")
     monkeypatch.setattr(mr, "resolve", lambda cwd, root=None: {"mode": mr.IN_REPO})
     text, prov, failure = RO.resolve_order_residuals(repo, base)
     assert failure is None
