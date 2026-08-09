@@ -329,6 +329,20 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 `validate_receipt(receipt)` returns `(ok, reason)` — a missing `scriptRan.byPhase` or non-list
 `rounds`/`findings`/`skippedBlockers` rejects the receipt.
 
+### Handback receipt gate (Claude host, Bash tool)
+
+The PreToolUse `handback_receipt_gate` hook refuses `gh pr ready` and non-draft `gh pr create` when
+the worktree is mechanically in scope but lacks a valid full-lane review receipt. Scope is marked by
+`build-lane.json` (workhorse intake) or `review-session.json` (written on the driver's first fresh
+`next`); **neither marker present → the gate stays silent** (not in scope). Terminal verdicts that
+permit handback are `converged` (with certification) and `uncertified-manual` (with attestation). A
+bare `gh pr ready` with no PR selector binds by branch + HEAD — the PR's remote base is not resolved
+inside the hook; that residual is covered by the advisor vet's remote-head duty.
+
+This class is a **Claude-host, Bash-tool, honest-agent tripwire**; it does not cover aliases,
+wrapper scripts, non-Bash tools, or other hosts. **It is not a security boundary and is not claimed
+as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry is intentional.
+
 ## Certification shapes
 
 | Shape | Meaning |

@@ -392,6 +392,35 @@ def _meta_session_id(session_dir):
     return sid if isinstance(sid, str) and sid else None
 
 
+_REVIEW_SESSION_MARKER = "review-session.json"
+_REVIEW_SESSION_SCHEMA = "review-session/1"
+
+
+def _bootstrap_review_session_marker(session_dir):
+    """Write review-session.json scope marker; failures are swallowed (#624 §4)."""
+    try:
+        meta = _session_meta(session_dir)
+        repo_root = meta.get("repoRoot")
+        if not isinstance(repo_root, str) or not repo_root:
+            repo_root = store_core.run_git(os.getcwd(), "rev-parse", "--show-toplevel")
+        if not repo_root:
+            return
+        repo_root = os.path.realpath(repo_root)
+        gitdir = store_core.get_worktree_gitdir(repo_root)
+        super_dir = os.path.join(gitdir, SIDECAR_DIRNAME)
+        os.makedirs(super_dir, exist_ok=True)
+        marker = {
+            "schema": _REVIEW_SESSION_SCHEMA,
+            "sessionDir": os.path.realpath(session_dir),
+            "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "repoRoot": repo_root,
+        }
+        with open(os.path.join(super_dir, _REVIEW_SESSION_MARKER), "w", encoding="utf-8") as fh:
+            json.dump(marker, fh)
+    except Exception:
+        pass
+
+
 def _state_version(state):
     """The state's `schemaVersion` when it is one this driver knows, else None. Read-only — a
     loaded state is NEVER stamped with a version it did not carry (the hash-preservation rule)."""
@@ -3203,6 +3232,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "attempt": None, "outcome": "refused-session-id",
                                           "reason": mint_reason})
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
+        _bootstrap_review_session_marker(session_dir)
         state = new_state(config_overrides)
     else:
         state = loaded

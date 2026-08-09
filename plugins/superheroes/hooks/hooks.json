@@ -6,6 +6,7 @@
         "hooks": [
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/owner_authority_gate.py\" || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"superheroes owner-authority gate unavailable (fail-closed)\"}}'" },
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree_guard_gate.py\" || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"superheroes worktree guard unavailable (fail-closed)\"}}'" },
+          { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/handback_receipt_gate.py\" || printf '{\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"permissionDecision\":\"deny\",\"permissionDecisionReason\":\"superheroes review-receipt gate unavailable (fail-closed)\"}}'" },
           { "type": "command", "command": "python3 -B \"${CLAUDE_PLUGIN_ROOT}/hooks/bash_timeout.py\" || true" }
         ]
       }
