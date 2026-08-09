@@ -402,7 +402,7 @@ def _bootstrap_review_session_marker(session_dir):
         meta = _session_meta(session_dir)
         repo_root = meta.get("repoRoot")
         if not isinstance(repo_root, str) or not repo_root:
-            repo_root = store_core.run_git(os.getcwd(), "rev-parse", "--show-toplevel")
+            repo_root = store_core.repo_root(os.getcwd())
         if not repo_root:
             return
         repo_root = os.path.realpath(repo_root)

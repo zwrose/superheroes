@@ -306,7 +306,18 @@ def _pr_url_operands(invocation):
 
 
 def _worktree_toplevel(repo_root, run_git):
-    return run_git(repo_root, "rev-parse", "--show-toplevel")
+    """Repo root via store_core, the one sanctioned resolver (`test_repo_root_census`).
+
+    `run_git` stays in the signature as the injected-seam marker for callers, but resolution
+    itself must not hand-roll `rev-parse --show-toplevel` — the census forbids it outside
+    store_core, and a second resolver is exactly the drift that check exists to stop. An
+    unresolvable root returns None, which `_marker_repo_matches` already reads as "not this
+    worktree" — the fail-closed direction for a scope marker.
+    """
+    try:
+        return store_core.repo_root(repo_root)
+    except store_core.RepoRootUnavailable:
+        return None
 
 
 def _marker_repo_matches(marker_root, repo_root, run_git):
