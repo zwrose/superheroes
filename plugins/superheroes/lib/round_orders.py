@@ -180,7 +180,23 @@ def _format_residual_block(context: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _format_landing_block(context: dict) -> tuple[str | None, str | None]:
+def _stdout_payload_example(phase: str) -> tuple[str | None, str | None]:
+    """Minimal stdout JSON example derived from the phase payload contract — one home with the block above."""
+    contract, reason = round_adapters.payload_contract(phase)
+    if reason:
+        return None, "payload-contract:%s" % reason
+    required = contract.get("required") or []
+    if phase == round_phases.P_PANEL:
+        return '{"findings": [...], "investigated": [...]}', None
+    if phase == round_phases.P_AUDITS:
+        return '{"id": "...", "ruling": "...", "reason": "..."}', None
+    if not required:
+        return '{...}', None
+    inner = ", ".join('"%s": [...]' % key for key in required)
+    return '{%s}' % inner, None
+
+
+def _format_landing_block(context: dict, phase: str) -> tuple[str | None, str | None]:
     landing = context.get("landing_path")
     stub = context.get("envelope_stub_path")
     if not isinstance(landing, str) or not landing:
@@ -197,11 +213,22 @@ def _format_landing_block(context: dict) -> tuple[str | None, str | None]:
             "- Payload landing path: %s" % landing,
         ])
     else:
-        lines.extend([
-            "Deliver on the stdout channel described in the Delivery section above — emit "
-            "`{\"findings\": [...], \"investigated\": [...]}` as your final stdout with nothing "
-            "after it. Do not write a landing file (read-only sandbox).",
-        ])
+        stdout_example, reason = _stdout_payload_example(phase)
+        if reason:
+            return None, reason
+        if phase == round_phases.P_PANEL:
+            lines.extend([
+                "Deliver on the stdout channel described in the Delivery section above — emit "
+                "`%s` as your final stdout with nothing after it. Do not write a landing file "
+                "(read-only sandbox)."
+                % stdout_example,
+            ])
+        else:
+            lines.extend([
+                "Deliver on stdout — emit `%s` as your final stdout with nothing after it. "
+                "Do not write a landing file (read-only sandbox)."
+                % stdout_example,
+            ])
     return "\n".join(lines), None
 
 
@@ -299,7 +326,7 @@ def render_order(phase: str, seat_key: str, context: dict) -> tuple[str | None, 
         contract_block, creason = _format_payload_contract(phase)
         if creason:
             return _refuse(creason)
-        landing_block, lreason = _format_landing_block(context)
+        landing_block, lreason = _format_landing_block(context, phase)
         if lreason:
             return _refuse(lreason)
         residual_block = _format_residual_block(context)

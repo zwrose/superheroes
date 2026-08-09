@@ -2,6 +2,7 @@
 import json
 import os
 import re
+import shlex
 import subprocess
 
 import pytest
@@ -89,11 +90,11 @@ def _synthesis_placeholders():
 def _fixer_placeholders():
     return {
         "FIX_BATCH_PATH": os.path.join(_SESSION, "round-2", "fix-batch.json"),
-        "PROFILE_PATH": os.path.join(_REPO, ".claude", "superheroes", "profile.json"),
+        "PROFILE_PATH": "(Project profile not resolved for this project)",
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "CWD": _REPO,
-        "REPO_ROOT": _REPO,
-        "ESCALATION_WRAPPER_PATH": _ESCALATION,
+        "REPO_ROOT": shlex.quote(_REPO),
+        "ESCALATION_WRAPPER_PATH": shlex.quote(_ESCALATION),
         "VERIFY_COMMAND": "npm test",
         "ROUND": "2",
     }
@@ -134,37 +135,45 @@ def _scoped_placeholders():
 
 _GOLDEN_CONTEXTS = {
     RP.P_PANEL: lambda: _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
-                                  "code-reviewer.a0.json"),
+                                  "code-reviewer.a0.payload.json"),
         placeholders=_panel_placeholders(),
     ),
     RP.P_VERIFIERS: lambda: _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-verifiers",
-                                  "verifier:0.a0.json"),
+                                  "verifier:0.a0.payload.json"),
         placeholders=_verifier_placeholders(),
     ),
     RP.P_SYNTHESIS: lambda: _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-synthesis",
-                                  "synthesis.a0.json"),
+                                  "synthesis.a0.payload.json"),
         placeholders=_synthesis_placeholders(),
     ),
     RP.P_FIXER: lambda: _base_context(
-        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer", "fixer.a0.json"),
+        host_seat=True,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-fixer",
+                                  "fixer.a0.payload.json"),
         placeholders=_fixer_placeholders(),
     ),
     RP.P_GAPSWEEP: lambda: _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-gap-sweep",
-                                  "gap-sweep.a0.json"),
+                                  "gap-sweep.a0.payload.json"),
         placeholders=_gapsweep_placeholders(),
     ),
     RP.P_AUDITS: lambda: _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-audits",
-                                  RR.storage_key("finding::auth.py::12", 0) + ".a0.json"),
+                                  RR.storage_key("finding::auth.py::12", 0) + ".a0.payload.json"),
         placeholders=_audits_placeholders(),
     ),
     RP.P_SCOPED: lambda: _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-scoped-finder",
-                                  "scoped-finder.a0.json"),
+                                  "scoped-finder.a0.payload.json"),
         placeholders=_scoped_placeholders(),
     ),
 }
@@ -382,6 +391,20 @@ def test_golden_render_matches_fixture(phase):
 # --- FX-1: host-seat and stdout-channel golden coverage (fix 14) ----------------
 
 
+def test_golden_host_seat_landing_block_asserts_payload_path():
+    landing = os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                           "code-reviewer.a0.payload.json")
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=landing,
+        placeholders=_panel_placeholders(channel="file"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert "Payload landing path: %s" % landing in text
+    assert "stdout channel" not in text.split("## Return your result")[1]
+
+
 def test_golden_host_seat_landing_block_no_stub_copy():
     ctx = _base_context(
         host_seat=True,
@@ -583,7 +606,7 @@ def test_seat_transport_classifies_vendors_from_compose_output():
             "architecture-reviewer": {"vendor": "claude"},
         },
     )
-    state = {"seatMap": {"seats": composed["seats"]}}
+    state = {"seatMap": {"seats": composed["seats"]}, "config": {"repoRoot": _REPO}}
     expectations = {
         "code-reviewer": ("stdout", True),
         "security-reviewer": ("stdout", True),
@@ -593,7 +616,7 @@ def test_seat_transport_classifies_vendors_from_compose_output():
         seat_cfg = composed["seats"][seat]
         assert isinstance(seat_cfg.get("vendor"), str) and seat_cfg["vendor"], (
             "composed seat %r missing vendor — seat_map schema drift" % seat)
-        row = RD._seat_dispatch_row(state, seat)
+        row = RD._seat_transport_row(state, RP.P_PANEL, seat, 0, state["config"], {}, _REPO)
         assert row["vendor"] == seat_cfg["vendor"]
         is_engine = RD._seat_is_engine(row)
         assert is_engine is want_engine, "%s: vendor=%r" % (seat, row["vendor"])
@@ -604,22 +627,96 @@ def test_seat_transport_classifies_vendors_from_compose_output():
 def test_seat_transport_vendor_absent_is_not_engine():
     import round_driver as RD
 
-    assert not RD._seat_is_engine(RD._seat_dispatch_row({"seatMap": {"seats": {}}}, "missing"))
+    row = RD._seat_transport_row({"seatMap": {"seats": {}}}, RP.P_PANEL, "missing", 0,
+                                 {}, {}, _REPO)
+    assert not RD._seat_is_engine(row)
     assert not RD._seat_is_engine({"vendor": None, "model": "m", "engine": None})
 
 
 def test_seat_transport_unknown_vendor_refuses_order_render():
     import round_driver as RD
 
-    row = {"vendor": "gemini", "model": "m", "engine": None}
-    assert RD._seat_transport_fault(row, "code-reviewer") == "unknown-vendor:code-reviewer:gemini"
+    session_dir = os.path.join(_SESSION, "probe-unknown-vendor")
+    state = {
+        "config": {"repoRoot": _REPO, "fixerVendor": "gemini"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "seatMap": {"seats": {}},
+    }
+    try:
+        RD._build_order_render_context(session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {})
+    except ValueError as exc:
+        assert "order-render-refused" in str(exc)
+        assert "unknown-vendor:fixer:gemini" in str(exc)
+    else:
+        raise AssertionError("expected order-render-refused for unknown fixer vendor")
+
+
+def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
+    import round_driver as RD
+
+    repo = str(tmp_path / "proj$(echo pwned)")
+    os.makedirs(repo)
+    session_dir = os.path.join(str(tmp_path), "session")
+    os.makedirs(session_dir)
+    state = {
+        "config": {"repoRoot": repo, "fixerVendor": "claude"},
+        "reviewedDiff": "diff --git a/f b/f\n",
+    }
+    paths = {
+        "storage_key": "fixer.a0",
+        "landing_path": os.path.join(session_dir, "landing.json"),
+        "envelope_landing_path": os.path.join(session_dir, "env.json"),
+        "bare_payload_path": os.path.join(session_dir, "bare.json"),
+        "envelope_stub_path": os.path.join(session_dir, "stub.json"),
+        "order_path": os.path.join(session_dir, "order.md"),
+    }
+    ph = RD._order_placeholders(
+        RP.P_FIXER, "fixer", 0, state, state["config"], {},
+        session_dir, 2, paths,
+    )
+    ctx = _base_context(
+        host_seat=True,
+        landing_path=paths["bare_payload_path"],
+        repo_root=repo,
+        placeholders=ph,
+    )
+    text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
+    assert reason is None
+    assert "$(echo pwned)" in text
+    assert shlex.quote(repo) in text
+
+
+def test_engine_panel_landing_block_uses_phase_stdout_contract():
+    ctx = _base_context(
+        host_seat=False,
+        landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
+                                  "code-reviewer.a0.json"),
+        placeholders=_panel_placeholders(channel="stdout"),
+    )
+    text, reason = RO.render_order(RP.P_PANEL, "code-reviewer", ctx)
+    assert reason is None
+    assert '{"findings": [...], "investigated": [...]}' in text
+    assert "Delivery section above" in text
 
 
 # --- FX-4A: core path drift guard ------------------------------------------------
 
 
-def test_in_repo_core_path_matches_resolve_order_residuals_home():
+def test_in_repo_core_path_matches_resolve_order_residuals_home(tmp_path, monkeypatch):
     """resolve_order_residuals must derive in-repo core layout from core_md — never hand-typed."""
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+
+    def fake_resolve_base(repo_root, base_oid, core_rel_path):
+        assert core_rel_path == CM.in_repo_core_rel_path()
+        return "probe residual", None
+
+    monkeypatch.setattr(RO, "resolve_base_residuals", fake_resolve_base)
+    import mode_registry as mr
+    monkeypatch.setattr(mr, "resolve", lambda _cwd: {"mode": mr.IN_REPO})
+    text, prov, failure = RO.resolve_order_residuals(repo, "abc123")
+    assert failure is None
+    assert text == "probe residual"
     assert CM.in_repo_core_rel_path() == os.path.join(".claude", "superheroes", "core.md")
 
 
@@ -705,8 +802,9 @@ def test_panel_order_with_pr_checkout_includes_checkout_clause():
 def test_golden_render_with_pr_checkout_matches_fixture():
     golden_path = os.path.join(_GOLDEN_DIR, "dispatch-panel-with-checkout.txt")
     ctx = _base_context(
+        host_seat=True,
         landing_path=os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
-                                  "code-reviewer.a0.json"),
+                                  "code-reviewer.a0.payload.json"),
         placeholders=_panel_placeholders(pr_checkout=True),
     )
     text, reason = RO.render_order(RP.P_PANEL, "golden-seat", ctx)

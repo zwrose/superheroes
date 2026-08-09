@@ -494,7 +494,11 @@ def _is_seat_result_envelope(obj):
 
 
 def _wrap_bare_payload(stub, payload, occurrence):
-    """Merge an emitted stub header with a host-seat payload file. Never raises."""
+    """Merge an emitted stub header with a host-seat payload file. Never raises.
+
+    ``payloadSha256`` is always driver-computed for this shape — the seat never declares a hash on
+    the bare payload file, so torn-write detection cannot fail here. Full envelopes the seat stamped
+  with ``payloadHashSource: seat-declared`` are the torn-write surface (`validate_landing`)."""
     if not isinstance(stub, dict):
         return None
     envelope = dict(stub)

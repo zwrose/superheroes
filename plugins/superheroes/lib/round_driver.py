@@ -41,6 +41,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import traceback
@@ -55,6 +56,8 @@ import mode_registry  # noqa: E402
 import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
+import engine_pref  # noqa: E402
+import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
@@ -140,7 +143,6 @@ LEGACY_SESSION_REFUSAL = "legacy-session-use-next-submit"
 ORDERS_DIRNAME = "orders"
 ORDERS_MANIFEST_SCHEMA = "orders-manifest/1"
 # External engines run in a shell and land a full envelope; host seats write payload-only.
-_ENGINE_VENDORS = frozenset(("codex", "cursor"))
 
 # The handback sidecar's path under the repo's git dir (§6). Nothing in this module READS it for
 # enforcement — the hook that does is a later PR.
@@ -3741,24 +3743,82 @@ def _resolved_calibration_paths(repo_root):
     return core_path, layer_path, None
 
 
+def _vendor_is_external_engine(vendor):
+    """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
+
+    Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
+    if not isinstance(vendor, str) or not vendor.strip():
+        return False
+    v = vendor.strip()
+    if v == "claude":
+        return False
+    return v in model_registry.vendors()
+
+
 def _seat_is_engine(row):
-    """True when the seat map's vendor is an external engine (codex/cursor)."""
-    return row.get("vendor") in _ENGINE_VENDORS
+    """True when the seat's vendor is an external engine (sandboxed stdout transport)."""
+    return _vendor_is_external_engine(row.get("vendor"))
+
+
+def _reviewer_engine_vendor(repo_root):
+    """Reviewer-role engine for single-seat reviewer phases (verifiers, synthesis, gap-sweep, scoped)."""
+    try:
+        prefs = engine_pref.load_engine_prefs(repo_root)
+        return engine_pref.resolve_engine("review", prefs)
+    except Exception:  # noqa: BLE001 — transport must degrade, never refuse render
+        return "claude"
+
+
+def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root):
+    """{vendor, model, engine} for transport — one home keyed to the source that actually knows."""
+    if phase == P_PANEL:
+        return _seat_dispatch_row(state, seat_key)
+    cfg = config if isinstance(config, dict) else {}
+    payload = pending_payload if isinstance(pending_payload, dict) else {}
+    if phase == P_FIXER:
+        return {"vendor": cfg.get("fixerVendor"), "model": None, "engine": None}
+    if phase == P_AUDITS:
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        for target in targets:
+            if isinstance(target, dict) and target.get("id") == seat_key:
+                return {"vendor": target.get("auditorVendor"), "model": None, "engine": None}
+        return {"vendor": None, "model": None, "engine": None}
+    if phase in (P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_SCOPED):
+        return {"vendor": _reviewer_engine_vendor(repo_root), "model": None, "engine": None}
+    return {"vendor": None, "model": None, "engine": None}
 
 
 def _seat_transport_fault(row, seat_key):
-    """Refuse when a seat map names a vendor the driver does not recognise.
+    """Refuse when a seat names a vendor the driver does not recognise.
 
-    Vendor absent is the normal no-seat-map case — not a refusal."""
+    Vendor absent is the normal unknowable-vendor case — not a refusal."""
     vendor = row.get("vendor")
     if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
         return None
     if not isinstance(vendor, str):
         return "unknown-vendor:%s:%s" % (seat_key, _label(vendor))
     vendor = vendor.strip()
-    if vendor in _ENGINE_VENDORS or vendor in model_registry.vendors():
+    if vendor in model_registry.vendors():
         return None
     return "unknown-vendor:%s:%s" % (seat_key, vendor)
+
+
+def _profile_path_for_orders(repo_root):
+    """Resolved project profile path for fixer orders — never a hand-typed layout guess."""
+    try:
+        path = model_tier_overrides.resolve_profile_path(repo_root)
+        if isinstance(path, str) and path.strip():
+            return path
+    except Exception:  # noqa: BLE001
+        pass
+    return "(Project profile not resolved for this project)"
+
+
+def _shell_quote_path(path):
+    """Shell-safe quoted path for commands the fixer order tells the seat to run."""
+    return shlex.quote(path if isinstance(path, str) and path else "")
 
 
 def _panel_dimension_label(seat_key):
@@ -3898,7 +3958,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         dim_label = _panel_dimension_label(seat_key)
         if not dim_label:
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
-        row = _seat_dispatch_row(state, seat_key)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         channel = "stdout" if _seat_is_engine(row) else "file"
         pr_checkout = _session_pr_checkout_path(session_dir)
         ph = {
@@ -3978,11 +4038,11 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     elif phase == P_FIXER:
         ph = {
             "FIX_BATCH_PATH": os.path.join(rdir, "fix-batch.json"),
-            "PROFILE_PATH": os.path.join(repo_root, ".claude", "superheroes", "profile.json"),
+            "PROFILE_PATH": _profile_path_for_orders(repo_root),
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
-            "REPO_ROOT": repo_root,
-            "ESCALATION_WRAPPER_PATH": _shipped_escalation_wrapper_path(),
+            "REPO_ROOT": _shell_quote_path(repo_root),
+            "ESCALATION_WRAPPER_PATH": _shell_quote_path(_shipped_escalation_wrapper_path()),
             "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
             "ROUND": str(rnd),
         }
@@ -3991,16 +4051,16 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
                                 pending_payload):
-    row = _seat_dispatch_row(state, seat_key)
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir)
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending_payload, repo_root)
     transport_fault = _seat_transport_fault(row, seat_key)
     if transport_fault is not None:
         skey = round_records.storage_key(seat_key, occurrence)
         raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))
     host_seat = not _seat_is_engine(row)
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
-    cfg = state.get("config") or {}
-    meta = _session_meta(session_dir)
-    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     base_ref = cfg.get("baseRef") or meta.get("baseRef")
     residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
     if not isinstance(residuals, str):
@@ -4130,7 +4190,11 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     order_hashes = {}
     rendered = []
     for seat_key, occurrence in round_records.roster_slots(roster):
-        row = _seat_dispatch_row(state, seat_key)
+        pending = pending_payload if isinstance(pending_payload, dict) else {}
+        cfg = state.get("config") or {}
+        repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
+                     or os.getcwd())
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
         skey = round_records.storage_key(seat_key, occurrence)
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload)
@@ -4683,7 +4747,11 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                            detail="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
                                   "that does not exist" % (seat, slots, occurrence))
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
-    row = _seat_dispatch_row(state, seat)
+    cfg = state.get("config") or {}
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    pending = ((state.get("pending") or {}).get("payload")
+               if isinstance(state.get("pending"), dict) else {})
+    row = _seat_transport_row(state, phase, seat, occurrence, cfg, pending, repo_root)
     envelope = {
         "schema": round_records.SEAT_MISSING_SCHEMA,
         "session": _meta_session_id(session_dir),

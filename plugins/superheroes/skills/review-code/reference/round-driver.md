@@ -116,9 +116,9 @@ they disagree).
 The driver writes these in the `orders-emit` commit when it emits dispatch orders:
 `round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`, `round-<N>/scoped-hunks.json`,
 and `round-<N>/verified.json` (phase-dependent — see `_order_sidecar_writes`). When
-`round-<N>/diff.txt` is absent, `_ensure_round_diff` writes it from loop state (`reviewedDiff`) via
-a plain `open()` **before** the `orders-emit` commit — not inside the commit protocol. The
-orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
+`round-<N>/diff.txt` is absent or its bytes do not match loop state (`reviewedDiff`),
+`_ensure_round_diff` writes it via `round_commit.atomic_write_bytes` (atomic tmp+rename) —
+outside the `orders-emit` commit, not inside it. The orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
 `setup.md`'s session-artifact table). The orchestrator must write these **before** dispatching a
 fixer, audits, or scoped order: `round-<N>/fix-batch.json` (the review-code loop's session-artifact
 table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders — it is

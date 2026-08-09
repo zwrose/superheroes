@@ -44,4 +44,6 @@ Conditional — newIssues: required when ruling is discharged-but-new-issue
 
 ## Return your result
 
-Deliver on the stdout channel described in the Delivery section above — emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it. Do not write a landing file (read-only sandbox).
+Write **only** your payload artifact to the landing path below — no envelope header, no stub copy.
+
+- Payload landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-audits/finding-auth-py-12-8a0e4bd0d35683e4.a0.payload.json

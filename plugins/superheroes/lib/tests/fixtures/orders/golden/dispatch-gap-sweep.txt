@@ -51,4 +51,6 @@ Required keys: findings
 
 ## Return your result
 
-Deliver on the stdout channel described in the Delivery section above — emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it. Do not write a landing file (read-only sandbox).
+Write **only** your payload artifact to the landing path below — no envelope header, no stub copy.
+
+- Payload landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.payload.json
