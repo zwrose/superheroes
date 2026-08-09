@@ -2,10 +2,13 @@
 
 Covers the enumerated command set (lifted verbatim from the retired enforcer), the tri-state
 calibration probe (calibrated / uncalibrated / indeterminate), the strictly-read-only guarantee,
-and the classify() decision (ask only for an owner-authority command on a calibrated OR
-indeterminate project; allow otherwise).
+the owner-calibrated allowlist (#947), and the classify() decision (ask only for an
+owner-authority command on a calibrated OR indeterminate project unless allowlisted; allow
+otherwise).
 """
+import json
 import os
+import stat
 
 import pytest
 
@@ -267,3 +270,361 @@ def test_calibration_state_reads_a_real_registry(tmp_path, monkeypatch):
     monkeypatch.setattr(mode_registry, "registry_path",
                         lambda c, r=None: orig_path(c, root=root))
     assert oa.calibration_state(cwd) == "calibrated"
+
+
+# --- allowlist helpers ---------------------------------------------------------
+
+def _pin_allow_store(tmp_path, monkeypatch, store_name="allow-store"):
+    store = str(tmp_path / store_name)
+    monkeypatch.setattr(mode_registry, "project_store_dir",
+                        lambda cwd, root=None: store)
+    return store
+
+
+def _write_allow_at(store, content):
+    os.makedirs(store, exist_ok=True)
+    path = os.path.join(store, oa.ALLOW_FILENAME)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(content, fh)
+    return path
+
+
+# --- workflow_run_target: accepts ------------------------------------------------
+
+@pytest.mark.parametrize("command,expected", [
+    ("gh workflow run deploy.yml", "deploy.yml"),
+    ("gh workflow run 'Preview seed'", "Preview seed"),
+    ('gh workflow run "Preview seed"', "Preview seed"),
+    ("gh workflow run ci.yml", "ci.yml"),
+    ("gh workflow run --ref main deploy.yml", "deploy.yml"),
+    ("gh workflow run deploy.yml --ref main", "deploy.yml"),
+    ("gh workflow run -r main deploy.yml", "deploy.yml"),
+    ("gh workflow run --ref main deploy.yml", "deploy.yml"),
+    ("gh workflow run -R o/r deploy.yml", "deploy.yml"),
+    ("gh workflow run -f k=v deploy.yml", "deploy.yml"),
+    ("gh workflow run -F k=v deploy.yml", "deploy.yml"),
+    ("gh workflow run --ref=main deploy.yml", "deploy.yml"),
+    ("gh workflow run --repo=o/r deploy.yml", "deploy.yml"),
+    ("gh workflow run --field=k=v deploy.yml", "deploy.yml"),
+    ("gh workflow run --json deploy.yml", "deploy.yml"),
+    ("gh workflow run -- deploy.yml", "deploy.yml"),
+])
+def test_workflow_run_target_accepts(command, expected):
+    assert oa.workflow_run_target(command) == expected
+
+
+# --- workflow_run_target: refuses ------------------------------------------------
+
+@pytest.mark.parametrize("command", [
+    "gh workflow run $VAR",
+    'gh workflow run "$VAR"',
+    "gh workflow run ${VAR}",
+    "gh workflow run $(cmd)",
+    "gh workflow run `cmd`",
+    "gh workflow run $'ansi'",
+    "gh workflow run *",
+    "gh workflow run ?",
+    "gh workflow run [abc]",
+    "gh workflow run {a,b}",
+    "gh workflow run ~",
+    "gh workflow run \\x",
+    "gh workflow run X; rm -rf /",
+    "gh workflow run X && echo hi",
+    "gh workflow run X || echo hi",
+    "gh workflow run X | cat",
+    "gh workflow run X > /tmp/out",
+    "gh workflow run X < /tmp/in",
+    "gh workflow run X\nY",
+    "gh workflow run unclosed'",
+    "FOO=bar gh workflow run X",
+    "/usr/bin/gh workflow run X",
+    "gh workflow enable ci.yml",
+    "gh workflow disable ci.yml",
+    "gh workflow run --zzz X deploy.yml",
+    "gh workflow run -rmain deploy.yml",
+    "gh workflow run - deploy.yml",
+    "gh workflow run deploy.yml --ref",
+    "gh workflow run --json=x deploy.yml",
+    "gh workflow run",
+    "gh workflow run a b",
+    "gh workflow run ''",
+    None,
+    "x" * 4097,
+    "gh workflow run --ref main",
+])
+def test_workflow_run_target_refuses(command):
+    assert oa.workflow_run_target(command) is None
+
+
+# --- read_allow_file: fail direction (§A) --------------------------------------
+
+@pytest.mark.parametrize("setup", [
+    "absent",
+    "unreadable",
+    "is_dir",
+    "dangling_symlink",
+    "bad_json",
+    "top_array",
+    "top_string",
+    "top_number",
+    "top_null",
+    "schema_missing",
+    "schema_true",
+    "schema_false",
+    "schema_1_0",
+    "schema_str_1",
+    "schema_null",
+    "schema_0",
+    "schema_2",
+    "allow_missing",
+    "allow_dict",
+    "exception_on_path",
+])
+def test_read_allow_file_fail_direction_yields_no_entries(setup, tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    path = os.path.join(store, oa.ALLOW_FILENAME)
+
+    if setup == "absent":
+        os.makedirs(store, exist_ok=True)
+    elif setup == "unreadable":
+        os.makedirs(store, exist_ok=True)
+        path_obj = tmp_path / "allow-store" / oa.ALLOW_FILENAME
+        path_obj.write_text('{"schemaVersion": 1, "allow": []}')
+        path_obj.chmod(0)
+        if os.access(path, os.R_OK):
+            pytest.skip("chmod 000 did not make file unreadable for this user")
+    elif setup == "is_dir":
+        os.makedirs(path, exist_ok=True)
+    elif setup == "dangling_symlink":
+        os.makedirs(store, exist_ok=True)
+        os.symlink(tmp_path / "no-target", path)
+    elif setup == "bad_json":
+        os.makedirs(store, exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write("{ not json")
+    elif setup == "top_array":
+        _write_allow_at(store, [])
+    elif setup == "top_string":
+        _write_allow_at(store, "hello")
+    elif setup == "top_number":
+        _write_allow_at(store, 1)
+    elif setup == "top_null":
+        os.makedirs(store, exist_ok=True)
+        with open(path, "w") as fh:
+            fh.write("null")
+    elif setup == "schema_missing":
+        _write_allow_at(store, {"allow": []})
+    elif setup == "schema_true":
+        _write_allow_at(store, {"schemaVersion": True, "allow": []})
+    elif setup == "schema_false":
+        _write_allow_at(store, {"schemaVersion": False, "allow": []})
+    elif setup == "schema_1_0":
+        _write_allow_at(store, {"schemaVersion": 1.0, "allow": []})
+    elif setup == "schema_str_1":
+        _write_allow_at(store, {"schemaVersion": "1", "allow": []})
+    elif setup == "schema_null":
+        _write_allow_at(store, {"schemaVersion": None, "allow": []})
+    elif setup == "schema_0":
+        _write_allow_at(store, {"schemaVersion": 0, "allow": []})
+    elif setup == "schema_2":
+        _write_allow_at(store, {"schemaVersion": 2, "allow": []})
+    elif setup == "allow_missing":
+        _write_allow_at(store, {"schemaVersion": 1})
+    elif setup == "allow_dict":
+        _write_allow_at(store, {"schemaVersion": 1, "allow": {}})
+    elif setup == "exception_on_path":
+        def _boom(cwd, root=None):
+            raise OSError("simulated path failure")
+        monkeypatch.setattr(oa, "allow_file_path", _boom)
+
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    if setup == "unreadable":
+        path_obj.chmod(stat.S_IWUSR | stat.S_IRUSR)
+
+
+def test_read_allow_file_notes_structural_exclusions(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    allow = [{"action": a, "workflow": "x"} for a in oa.NEVER_ALLOWLISTABLE]
+    _write_allow_at(store, {"schemaVersion": 1, "allow": allow})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert len(notes) == len(oa.NEVER_ALLOWLISTABLE)
+    assert all(kind == "structural" for kind, _, _ in notes)
+
+
+def test_read_allow_file_notes_not_allowlistable(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "push-to-default", "workflow": "main"}]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert notes == [("not-allowlistable", "push-to-default",
+                      "ignored not-allowlistable action 'push-to-default'")]
+
+
+def test_read_allow_file_notes_malformed(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1, "allow": ["garbage", None, 42]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert len(notes) == 3
+    assert all(kind == "malformed" for kind, _, _ in notes)
+
+
+def test_read_allow_file_valid_entry(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "Preview seed"}]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == [{"action": "run-workflow", "workflow": "Preview seed"}]
+    assert notes == []
+
+
+def test_read_allow_file_mixed_valid_invalid(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1, "allow": [
+        {"action": "merge-pr", "workflow": "x"},
+        {"action": "run-workflow", "workflow": "good"},
+        "bad",
+    ]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == [{"action": "run-workflow", "workflow": "good"}]
+    assert len(notes) == 2
+
+
+def test_read_allow_file_is_read_only(tmp_path, monkeypatch):
+    missing = str(tmp_path / "no-such-store")
+    assert not os.path.exists(missing)
+    monkeypatch.setattr(mode_registry, "project_store_dir",
+                        lambda cwd, root=None: missing)
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert notes == []
+    assert not os.path.exists(missing)
+
+
+# --- allowlisted -----------------------------------------------------------------
+
+def test_allowlisted_exact_match():
+    entries = [{"action": "run-workflow", "workflow": "Preview seed"}]
+    cmd = "gh workflow run 'Preview seed'"
+    assert oa.allowlisted(cmd, "run-workflow", entries) is True
+
+
+@pytest.mark.parametrize("workflow", [
+    "preview seed",
+    "Preview seed ",
+    "Preview seed.yml",
+    "Preview",
+    "Preview seed extra",
+])
+def test_allowlisted_near_miss(workflow):
+    entries = [{"action": "run-workflow", "workflow": "Preview seed"}]
+    cmd = "gh workflow run %s" % workflow
+    assert oa.allowlisted(cmd, "run-workflow", entries) is False
+
+
+def test_allowlisted_different_action():
+    entries = [{"action": "run-workflow", "workflow": "deploy.yml"}]
+    assert oa.allowlisted("gh pr merge 1", "merge-pr", entries) is False
+
+
+def test_allowlisted_glob_entry_does_not_match():
+    entries = [{"action": "run-workflow", "workflow": "*"}]
+    assert oa.allowlisted("gh workflow run deploy.yml", "run-workflow", entries) is False
+
+
+# --- classify: allowlist end-to-end --------------------------------------------
+
+def test_classify_calibrated_allowlisted_dispatch_allows(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "deploy.yml"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    assert oa.classify("gh workflow run deploy.yml", str(tmp_path)) == ("allow", "")
+
+
+def test_classify_calibrated_non_allowlisted_dispatch_asks(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "other.yml"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, reason = oa.classify("gh workflow run deploy.yml", str(tmp_path))
+    assert decision == "ask"
+    assert "owner-authority action 'run-workflow'" in reason
+
+
+def test_classify_calibrated_allowlisted_but_enable_asks(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "ci.yml"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, _ = oa.classify("gh workflow enable ci.yml", str(tmp_path))
+    assert decision == "ask"
+
+
+def test_classify_indeterminate_ignores_matching_allow_file(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "deploy.yml"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "indeterminate")
+    decision, _ = oa.classify("gh workflow run deploy.yml", str(tmp_path))
+    assert decision == "ask"
+
+
+def test_classify_uncalibrated_allows_even_with_matching_file(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "deploy.yml"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "uncalibrated")
+    assert oa.classify("gh workflow run deploy.yml", str(tmp_path)) == ("allow", "")
+
+
+def test_classify_hostile_merge_pr_file_does_not_silence_pr_merge(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "merge-pr", "workflow": "x"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, reason = oa.classify("gh pr merge 42 --squash", str(tmp_path))
+    assert decision == "ask"
+    assert "merge-pr" in reason
+    assert "can never be allowlisted" in reason
+
+
+def test_classify_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    _, reason = oa.classify("gh workflow run deploy.yml", str(tmp_path))
+    assert "reference/owner-authority-allowlist.md" in reason
+
+
+def test_classify_pr_merge_ask_reason_has_no_doc_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    _, reason = oa.classify("gh pr merge 42 --squash", str(tmp_path))
+    assert "reference/owner-authority-allowlist.md" not in reason
+
+
+@pytest.mark.parametrize("command", _GATED)
+def test_classify_gated_still_asks_without_allow_file(command, monkeypatch):
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, _ = oa.classify(command, "/somewhere")
+    assert decision == "ask"
+
+
+def test_classify_writes_structural_note_to_stderr(tmp_path, monkeypatch, capsys):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "merge-pr", "workflow": "x"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    oa.classify("gh pr merge 42 --squash", str(tmp_path))
+    captured = capsys.readouterr()
+    assert "structurally-excluded" in captured.err
+
+
+def test_classify_workflow_target_none_still_asks_despite_matching_entry(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "main"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, _ = oa.classify("gh workflow run --ref main", str(tmp_path))
+    assert decision == "ask"

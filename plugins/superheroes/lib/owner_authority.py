@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
 """The minimal owner-authority gate — the never-merge floor, restored at v2 size (issue #482).
 
-This is a MINIMAL, config-free classifier. It recognises an enumerated set of owner-authority
+This is a MINIMAL classifier. It recognises an enumerated set of owner-authority
 commands (merge a PR, cut a release, run a workflow, force-push, push to a default branch) and
 tells the PreToolUse(Bash) hook to emit `permissionDecision: "ask"` so the owner approves them
-live. There are NO roles, NO allowances, NO worktree-confinement, and NO config — all of the v1
+live. There are NO roles, NO allowances, and NO worktree-confinement — all of the v1
 enforcer machinery stays retired (#478).
+
+On a positively-calibrated project, an owner may narrow asking via a hand-edited allow file
+(`owner-authority-allow.json` in the project store). The allowlist can only ever *narrow*
+asking — it never widens silence. Invalid or hostile file content yields no entries (fail
+closed to ask exactly as today).
 
 The command enumeration below is LIFTED VERBATIM from the deleted `lib/enforcer.py`
 `GATED_COMMANDS` (git history, pre-#478); it is not re-derived or widened here.
@@ -19,11 +24,16 @@ Scope of the decision:
   probe but is TRI-STATE, because a safety floor must distinguish an absent calibration from a
   corrupt/errored one. It NEVER calls `mode_registry.resolve()` (which can backfill-WRITE the
   registry); a probe must not mutate project state.
+- The allow-file probe is strictly READ-ONLY. It never creates the store directory, the file,
+  or anything else.
 
 Stdlib-only.
 """
+import json
 import os
 import re
+import shlex
+import sys
 
 # LIFTED VERBATIM from the retired lib/enforcer.py GATED_COMMANDS (pre-#478). Do NOT re-derive
 # or widen these regexes. First .search hit wins (see owner_authority_action).
@@ -37,6 +47,26 @@ OWNER_AUTHORITY_COMMANDS = [
     ("push-to-default", re.compile(r"\bgit\s+push\b[^;&|\n]*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
 ]
 
+ALLOW_FILENAME = "owner-authority-allow.json"
+ALLOW_SCHEMA_VERSION = 1
+# Entries can only match actions in this tuple — structural exclusions (NEVER_ALLOWLISTABLE) are
+# enforced by omission from here, not by a separate filter. NEVER_ALLOWLISTABLE exists so
+# ignored entries are loud (stderr + ask reason), not to perform the exclusion itself.
+ALLOWLISTABLE_ACTIONS = ("run-workflow",)
+NEVER_ALLOWLISTABLE = ("merge-pr", "merge-api", "merge-graphql", "release", "force-push")
+
+_KNOWN_GATE_ACTIONS = frozenset(a for a, _ in OWNER_AUTHORITY_COMMANDS)
+
+# Informational only — has no authority over the allow decision (workflow_run_target does).
+_WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
+
+# bite-proof axis: refuses shell-expandable text, so an allow entry can never match
+# a name the shell will substitute. Replaces an enumerated blacklist of expansion forms.
+_LITERAL_SAFE_COMMAND = re.compile(r"^[A-Za-z0-9 _\-./:=,'\"@+]+$")
+
+_VALUE_FLAG_LONG = frozenset(("--field", "--raw-field", "--ref", "--repo"))
+_VALUE_FLAGS = frozenset(("-F", "--field", "-f", "--raw-field", "-r", "--ref", "-R", "--repo"))
+
 
 def owner_authority_action(command):
     """The action name (str) an owner-authority command performs, or None.
@@ -49,6 +79,139 @@ def owner_authority_action(command):
         if pattern.search(command):
             return action
     return None
+
+
+def allow_file_path(cwd, root=None):
+    import mode_registry
+    return os.path.join(mode_registry.project_store_dir(cwd, root), ALLOW_FILENAME)
+
+
+def read_allow_file(cwd, root=None):
+    """(entries, notes) from the allow file. PURE — never writes, never raises.
+
+    entries: list of {"action": str, "workflow": str}
+    notes:   list of (kind, action_or_None, text)"""
+    entries = []
+    notes = []
+    # bite-proof axis: probe is read-only — never creates the store directory or file.
+    try:
+        path = allow_file_path(cwd, root)
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+    except Exception:
+        return entries, notes
+
+    if not isinstance(raw, dict):
+        return entries, notes
+
+    ver = raw.get("schemaVersion")
+    # bite-proof axis: a wrong-schema file must not yield entries (bool-int trap included).
+    if not isinstance(ver, int) or isinstance(ver, bool) or ver != ALLOW_SCHEMA_VERSION:
+        return entries, notes
+
+    allow = raw.get("allow")
+    if not isinstance(allow, list):
+        return entries, notes
+
+    for item in allow:
+        if not isinstance(item, dict):
+            notes.append(("malformed", None, "ignored malformed allow entry (not a dict)"))
+            continue
+
+        action = item.get("action")
+        workflow = item.get("workflow")
+
+        if isinstance(action, str) and action in NEVER_ALLOWLISTABLE:
+            notes.append(("structural", action,
+                            "ignored structurally-excluded action %r" % action))
+            continue
+
+        if isinstance(action, str) and action in _KNOWN_GATE_ACTIONS \
+                and action not in ALLOWLISTABLE_ACTIONS:
+            notes.append(("not-allowlistable", action,
+                            "ignored not-allowlistable action %r" % action))
+            continue
+
+        # bite-proof axis: malformed entries must be dropped, never honoured wholesale.
+        if not isinstance(action, str) or not action:
+            notes.append(("malformed", None, "ignored malformed allow entry (bad action)"))
+            continue
+        if not isinstance(workflow, str) or not workflow:
+            notes.append(("malformed", action, "ignored malformed allow entry (bad workflow)"))
+            continue
+        if action not in ALLOWLISTABLE_ACTIONS:
+            notes.append(("malformed", action,
+                            "ignored malformed allow entry (unknown action %r)" % action))
+            continue
+
+        entries.append({"action": action, "workflow": workflow})
+
+    return entries, notes
+
+
+def workflow_run_target(command):
+    """The exact workflow id/name from a `gh workflow run` command, or None."""
+    if not isinstance(command, str) or not command or len(command) > 4096:
+        return None
+
+    if not _LITERAL_SAFE_COMMAND.match(command):
+        return None
+
+    try:
+        tokens = shlex.split(command, posix=True)
+    except ValueError:
+        return None
+
+    if len(tokens) < 3 or tokens[0] != "gh" or tokens[1] != "workflow" or tokens[2] != "run":
+        return None
+
+    positionals = []
+    i = 3
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--":
+            positionals.extend(tokens[i + 1:])
+            break
+        if tok.startswith("-"):
+            if "=" in tok:
+                flag = tok.split("=", 1)[0]
+                # bite-proof axis: flag values must not be misread as the workflow name.
+                if flag not in _VALUE_FLAG_LONG:
+                    return None
+                i += 1
+                continue
+            if tok in _VALUE_FLAGS:
+                if i + 1 >= len(tokens):
+                    return None
+                i += 2
+                continue
+            if tok == "--json":
+                i += 1
+                continue
+            return None
+        positionals.append(tok)
+        i += 1
+
+    if len(positionals) != 1 or not positionals[0]:
+        return None
+    return positionals[0]
+
+
+def allowlisted(command, action, entries):
+    """True when entries pre-authorize this exact command/action pair. Pure — no I/O."""
+    # bite-proof axis: only ALLOWLISTABLE_ACTIONS can ever match — structural exclusions
+    # cannot reach silence via file content.
+    if action not in ALLOWLISTABLE_ACTIONS:
+        return False
+    if action != "run-workflow":
+        return False
+    target = workflow_run_target(command)
+    if target is None:
+        return False
+    for entry in entries:
+        if entry["action"] == action and entry["workflow"] == target:
+            return True
+    return False
 
 
 def calibration_state(cwd):
@@ -102,20 +265,41 @@ def calibration_state(cwd):
     return "uncalibrated" if verdict == "none" else "calibrated"
 
 
-def classify(command, cwd):
+def _ask_reason(action, command, notes):
+    reason = "owner-authority action '%s' needs your live approval" % action
+    # Informational pointer only — driven by cheap regex, not workflow_run_target.
+    if _WORKFLOW_RUN_POINTER.search(command):
+        reason += (" — to pre-authorize this workflow, see the superheroes plugin's "
+                   "reference/owner-authority-allowlist.md")
+    structural = sorted({a for kind, a, _ in notes if kind == "structural" and a})
+    if structural:
+        reason += (" [owner-authority-allow.json names %s, which can never be allowlisted; "
+                   "ignored]" % ", ".join(structural))
+    return reason
+
+
+def classify(command, cwd, root=None):
     """('ask'|'allow', reason) for a candidate Bash command.
 
     Only an enumerated owner-authority command ever reaches the calibration probe: a non-matching
     command short-circuits to ('allow', ''). For a matching command the probe's tri-state decides:
 
-    - 'calibrated' OR 'indeterminate' → ('ask', ...): fail CLOSED. Because only an enumerated
-      owner-authority command reaches the probe, an 'indeterminate' fail-closed-to-ask costs at
-      most a rare extra prompt — never a silently-disabled floor.
-    - 'uncalibrated' → ('allow', ''): a plain non-superheroes project gets no gate."""
+    - 'uncalibrated' → ('allow', ''): a plain non-superheroes project gets no gate.
+    - 'indeterminate' → ('ask', ...): fail CLOSED. The allow file is NOT consulted — narrowing
+      applies only where calibration is positively known.
+    - 'calibrated' → read the allow file; allow iff allowlisted, else ask."""
     action = owner_authority_action(command)
     if not action:
         return ("allow", "")
     state = calibration_state(cwd)
-    if state in ("calibrated", "indeterminate"):
-        return ("ask", "owner-authority action '%s' needs your live approval" % action)
-    return ("allow", "")
+    if state == "uncalibrated":
+        return ("allow", "")
+    if state == "indeterminate":
+        # bite-proof axis: indeterminate must not consult the allow file.
+        return ("ask", _ask_reason(action, command, []))
+    entries, notes = read_allow_file(cwd, root)
+    for kind, _action, text in notes:
+        print(text, file=sys.stderr)
+    if allowlisted(command, action, entries):
+        return ("allow", "")
+    return ("ask", _ask_reason(action, command, notes))

@@ -4,7 +4,10 @@
 Reads the PreToolUse payload from stdin. When the tool is Bash and the command is one of the
 enumerated owner-authority actions (see lib/owner_authority.py) on a superheroes-calibrated
 project, it emits `permissionDecision: "ask"` so the owner approves the action live. For every
-other case it stays silent (implicit allow).
+other case it stays silent (implicit allow). On a calibrated project, an owner may pre-authorize
+an exactly-named workflow dispatch via owner-authority-allow.json in the project store; the
+hook's stdout contract is unchanged (classifier notes ride stderr, which this hook neither
+writes nor gates on).
 
 Contract (fail-closed, atomic single write):
 
