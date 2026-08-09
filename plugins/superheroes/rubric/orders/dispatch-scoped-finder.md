@@ -29,6 +29,4 @@ hunks. Only flag code in `+` or `-` lines of the scoped surface.
 - Do NOT scan outside the scoped hunks file.
 - Do NOT decide the run's outcome.
 - **Never change the repository, and never claim a run you did not make.**
-- Deliver per the base rubric's panel output-format section. Write candidate records to
-  {{FINDINGS_OUTPUT_PATH}} as a JSON array — write `[]` rather than skipping the file when you
-  have nothing to flag.
+- {{OUTPUT_CHANNEL_BLOCK}}

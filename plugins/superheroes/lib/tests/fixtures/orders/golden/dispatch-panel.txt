@@ -13,7 +13,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 
 ## Context files
 - Diff: /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, panel output format): /private/tmp/c4a/plugins/superheroes/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): ${PLUGIN_ROOT}/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - CLAUDE.md (project conventions): CLAUDE.md

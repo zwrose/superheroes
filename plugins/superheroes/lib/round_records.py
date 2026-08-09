@@ -541,7 +541,7 @@ def _read_landing_envelope(session_dir, rnd, phase, skey, attempt, occurrence):
             return dict(obj), None
         if isinstance(obj.get("schema"), str):
             return dict(obj), None
-        return None, _refuse("landing-torn", landingPath=env_path)
+        return None, _refuse("schema-unknown", schema=obj.get("schema"), landingPath=env_path)
 
     if bare_exists:
         payload, err = read_json(bare_path)

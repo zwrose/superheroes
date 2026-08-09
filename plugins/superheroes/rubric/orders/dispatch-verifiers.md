@@ -43,5 +43,4 @@ Verdict semantics:
   establish it stays **PLAUSIBLE**, with the needed check named in `reason` for the
   orchestrator. (Base rubric: "A review seat never changes the repository, and never
   claims a run it did not make.")
-- Write a JSON array to this cluster's own verdict file — never a shared verdict file:
-  exactly one entry per cluster issue.
+- {{OUTPUT_CHANNEL_BLOCK}}

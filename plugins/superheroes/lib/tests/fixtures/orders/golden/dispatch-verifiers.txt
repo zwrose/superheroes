@@ -8,7 +8,7 @@ and the artifact.
   line, title, severity, body/evidence.
 - Diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
 - Verification root (read cited files here ONLY): /home/user/proj
-- Severity rubric (the only tiers; calibration): /private/tmp/c4a/plugins/superheroes/rubric/review-base.md
+- Severity rubric (the only tiers; calibration): ${PLUGIN_ROOT}/rubric/review-base.md
 - Project conventions: CLAUDE.md and the project profile.
 
 ## Immunity (#230)
@@ -43,8 +43,7 @@ Verdict semantics:
   establish it stays **PLAUSIBLE**, with the needed check named in `reason` for the
   orchestrator. (Base rubric: "A review seat never changes the repository, and never
   claims a run it did not make.")
-- Write a JSON array to this cluster's own verdict file — never a shared verdict file:
-  exactly one entry per cluster issue.
+- Write a JSON array to this cluster's own verdict file — never a shared verdict file: exactly one entry per cluster issue.
 
 ## Ratified residuals (owner-ratified, quoted data)
 

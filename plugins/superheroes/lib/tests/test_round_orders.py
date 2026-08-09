@@ -68,22 +68,24 @@ def _panel_placeholders(channel="file", pr_checkout=False):
     return ph
 
 
-def _verifier_placeholders():
+def _verifier_placeholders(channel="file"):
     return {
         "CLUSTER_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "clusters", "0.json"),
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "VERIFICATION_ROOT": _REPO,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
+        "CHANNEL": channel,
     }
 
 
-def _synthesis_placeholders():
+def _synthesis_placeholders(channel="file"):
     return {
         "VERIFIED_FINDINGS_PATH": os.path.join(_SESSION, "round-2", "verified.json"),
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "VERIFICATION_ROOT": _REPO,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "GROUPING_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "grouping.json"),
+        "CHANNEL": channel,
     }
 
 
@@ -100,7 +102,7 @@ def _fixer_placeholders():
     }
 
 
-def _gapsweep_placeholders():
+def _gapsweep_placeholders(channel="file"):
     return {
         "DIFF_PATH": os.path.join(_SESSION, "round-2", "diff.txt"),
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
@@ -108,20 +110,22 @@ def _gapsweep_placeholders():
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "gap-sweep-findings.json"),
+        "CHANNEL": channel,
     }
 
 
-def _audits_placeholders():
+def _audits_placeholders(channel="file"):
     return {
         "TARGET_SUMMARY_PATH": os.path.join(_SESSION, "round-2", "audit-targets", "t0.json"),
         "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
         "VERIFICATION_ROOT": _REPO,
         "RUBRIC_PATH": _PLUGIN_RUBRIC,
         "TARGET_ID": "finding::auth.py::12",
+        "CHANNEL": channel,
     }
 
 
-def _scoped_placeholders():
+def _scoped_placeholders(channel="file"):
     return {
         "HUNKS_PATH": os.path.join(_SESSION, "round-2", "scoped-hunks.json"),
         "HEAD_DIFF_PATH": os.path.join(_SESSION, "round-2", "head.diff"),
@@ -130,6 +134,7 @@ def _scoped_placeholders():
         "LAYER_PATH": _LAYER_UNRESOLVED,
         "VERIFICATION_ROOT": _REPO,
         "FINDINGS_OUTPUT_PATH": os.path.join(_SESSION, "round-2", "scoped-findings.json"),
+        "CHANNEL": channel,
     }
 
 
@@ -323,6 +328,16 @@ def _clause_in_rendered(clause, text):
     return clause in text or " ".join(clause.split()) in " ".join(text.split())
 
 
+def test_clause_manifest_covers_every_order_template():
+    manifest = json.load(open(_CLAUSE_MANIFEST, encoding="utf-8"))
+    templates_dir = os.path.join(_PLUGIN_ROOT, "rubric", "orders")
+    for name in sorted(os.listdir(templates_dir)):
+        if not name.endswith(".md"):
+            continue
+        template_name = name[:-3]
+        assert template_name in manifest, "uncovered template: %s" % template_name
+
+
 def test_clause_manifest_survives_in_rendered_orders():
     manifest = json.load(open(_CLAUSE_MANIFEST, encoding="utf-8"))
     phase_map = {
@@ -330,7 +345,11 @@ def test_clause_manifest_survives_in_rendered_orders():
         "dispatch-verifiers": (RP.P_VERIFIERS, _verifier_placeholders),
         "dispatch-synthesis": (RP.P_SYNTHESIS, _synthesis_placeholders),
         "dispatch-fixer": (RP.P_FIXER, _fixer_placeholders),
+        "dispatch-gap-sweep": (RP.P_GAPSWEEP, _gapsweep_placeholders),
+        "dispatch-audits": (RP.P_AUDITS, _audits_placeholders),
+        "dispatch-scoped-finder": (RP.P_SCOPED, _scoped_placeholders),
     }
+    test_clause_manifest_covers_every_order_template()
     for template_name, clauses in manifest.items():
         phase, ph_fn = phase_map[template_name]
         text, reason = RO.render_order(phase, "seat", _base_context(placeholders=ph_fn()))
@@ -586,6 +605,31 @@ def test_shipped_resource_refusal_when_rubric_missing(monkeypatch):
     assert reason == "shipped-resource-missing:RUBRIC_PATH"
 
 
+def test_shipped_resource_refusal_when_quoted_escalation_path_missing(tmp_path, monkeypatch):
+    """Compare-path-forms probe — quoted emission must still refuse a missing shipped resource."""
+    import round_driver as RD
+    plugin_with_space = os.path.join(str(tmp_path), "plugin root")
+    missing = os.path.join(plugin_with_space, "lib", "escalation_resolve.py")
+    monkeypatch.setattr(RD, "_shipped_escalation_wrapper_path", lambda: missing)
+    ph = {"ESCALATION_WRAPPER_PATH": shlex.quote(missing), "RUBRIC_PATH": _PLUGIN_RUBRIC}
+    monkeypatch.setattr(RD, "_shipped_rubric_path", lambda: _PLUGIN_RUBRIC)
+    reason = RD._shipped_resource_refusal(ph)
+    assert reason == "shipped-resource-missing:ESCALATION_WRAPPER_PATH"
+
+
+def test_shipped_resource_refusal_when_quoted_escalation_path_present(tmp_path, monkeypatch):
+    import round_driver as RD
+    plugin_with_space = os.path.join(str(tmp_path), "plugin root")
+    present = os.path.join(plugin_with_space, "lib", "escalation_resolve.py")
+    os.makedirs(os.path.dirname(present), exist_ok=True)
+    with open(present, "w", encoding="utf-8") as fh:
+        fh.write("# probe\n")
+    monkeypatch.setattr(RD, "_shipped_escalation_wrapper_path", lambda: present)
+    ph = {"ESCALATION_WRAPPER_PATH": shlex.quote(present), "RUBRIC_PATH": _PLUGIN_RUBRIC}
+    monkeypatch.setattr(RD, "_shipped_rubric_path", lambda: _PLUGIN_RUBRIC)
+    assert RD._shipped_resource_refusal(ph) is None
+
+
 # --- FB-6: seat transport from seat_map compose (detector 1) -------------------
 
 
@@ -815,6 +859,30 @@ def test_golden_render_with_pr_checkout_matches_fixture():
 
 
 # --- FX-4A: engine landing stdout channel --------------------------------------
+
+
+_FILE_CHANNEL_MARKERS = (
+    "Write candidate records to",
+    "Write your groups to",
+    "Write a JSON array to this cluster",
+    "Write the JSON array to",
+)
+
+
+@pytest.mark.parametrize("phase,ph_fn", [
+    (RP.P_PANEL, lambda: _panel_placeholders(channel="stdout")),
+    (RP.P_VERIFIERS, lambda: _verifier_placeholders(channel="stdout")),
+    (RP.P_SYNTHESIS, lambda: _synthesis_placeholders(channel="stdout")),
+    (RP.P_GAPSWEEP, lambda: _gapsweep_placeholders(channel="stdout")),
+    (RP.P_SCOPED, lambda: _scoped_placeholders(channel="stdout")),
+])
+def test_engine_order_template_body_has_no_file_channel_delivery(phase, ph_fn):
+    ctx = _base_context(host_seat=False, placeholders=ph_fn())
+    text, reason = RO.render_order(phase, "seat", ctx)
+    assert reason is None
+    body = text.split("## Ratified residuals")[0]
+    for marker in _FILE_CHANNEL_MARKERS:
+        assert marker not in body, "%s still instructs file-channel delivery: %r" % (phase, marker)
 
 
 def test_engine_order_landing_block_uses_stdout_not_file_write():

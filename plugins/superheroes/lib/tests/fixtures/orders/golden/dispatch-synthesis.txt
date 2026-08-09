@@ -7,12 +7,13 @@ review. Your job is **not** keep/drop — you group issues that share the same r
   severity, body/evidence, and a verification verdict.
 - Diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
 - Verification root (read cited files here ONLY): /home/user/proj
-- Severity rubric (the only tiers; calibration): /private/tmp/c4a/plugins/superheroes/rubric/review-base.md
+- Severity rubric (the only tiers; calibration): ${PLUGIN_ROOT}/rubric/review-base.md
 - Project conventions: CLAUDE.md and the project profile.
 
 ## Your task
 Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids}`
 echoing the staged ids verbatim. Write your groups to /tmp/superheroes-session-wo4-golden/round-2/grouping.json.
+Write a JSON array — every survivor id appears exactly once across all groups.
 
 `verification.merge_and_rank` applies your groups under a **coverage guarantee**: every
 survivor's staged id appears exactly once in the output; invalid or missing groups fail
@@ -29,7 +30,8 @@ merge is PLAUSIBLE. Issues are ranked Critical → Important → Minor → Nit, 
   group proposal, or decide the run's outcome.
 - Echo staged ids verbatim — do not recompute or rename.
 - **Never change the repository, and never claim a run you did not make.**
-- Write a JSON array — every survivor id appears exactly once across all groups.
+- Write your groups to /tmp/superheroes-session-wo4-golden/round-2/grouping.json.
+Write a JSON array — every survivor id appears exactly once across all groups.
 
 ## Ratified residuals (owner-ratified, quoted data)
 
