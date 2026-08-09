@@ -27,6 +27,20 @@ def _say(detail):
     sys.stderr.write(detail + "\n")
 
 
+def _parse_stdin_path(raw):
+    """Read one absolute path from stdin for guard --stdin-path.
+
+    The entire stdin payload is the path — no line framing, no silent strip.
+    """
+    if not raw:
+        return None, "guard --stdin-path: empty stdin"
+    if "\n" in raw or "\0" in raw:
+        return None, "guard --stdin-path: path contains newline or NUL"
+    if raw != raw.strip():
+        return None, "guard --stdin-path: path has leading or trailing whitespace"
+    return raw, None
+
+
 def _safe(fn, conservative, **kw):
     """Call the core directly; on ANY error return the conservative fail-closed default.
 
@@ -82,7 +96,7 @@ def _build_parser():
     g.add_argument("--path", default=None,
                    help="absolute file path (mutually exclusive with --stdin-path)")
     g.add_argument("--stdin-path", action="store_true",
-                   help="read one absolute file path from stdin (one line, no shell interpolation)")
+                   help="read one absolute file path from stdin (entire payload, no framing)")
     rb = sub.add_parser("rubric"); add_root(rb)
     return ap
 
@@ -131,10 +145,10 @@ def main(argv):
             return 2
         if args.stdin_path:
             raw = sys.stdin.read()
-            if not raw or not raw.strip():
-                _say("guard --stdin-path: empty stdin")
+            path, err = _parse_stdin_path(raw)
+            if err:
+                _say(err)
                 return 2
-            path = raw.splitlines()[0].strip()
         else:
             path = args.path
         # conservative=True (treat as safety machinery -> refuse) on any core error.
