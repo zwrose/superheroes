@@ -1092,3 +1092,55 @@ def test_payload_contract_deep_copy_isolates_nested_mutation():
     for values in contract2["enums"].values():
         assert "__mutated__" not in values
     assert "__mutated__" not in contract2["conditional"]
+
+
+def test_payload_contract_bindings_match_declared_contracts():
+    for phase, binding in RA._PAYLOAD_FIELD_BINDINGS.items():
+        contract, reason = RA.payload_contract(phase)
+        assert reason is None, reason
+        assert contract.get("required") == binding.get("required")
+        assert contract.get("optional") == binding.get("optional")
+        assert contract.get("conditional") == binding.get("conditional")
+        assert contract.get("enums") == binding.get("enums")
+
+
+@pytest.mark.parametrize("phase", _CONTRACT_PHASES)
+def test_payload_contract_optional_keys_match_checker(phase):
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None, reason
+    seat_key = _SEAT_KEYS[phase]
+    base = _minimal_payload_for_contract(phase, contract, seat_key)
+    assert RA.payload_fault(phase, base, seat_key) is None
+    for field in contract.get("optional") or []:
+        payload = dict(base)
+        if field == "findings":
+            payload[field] = "not-a-list"
+        elif field in ("confidence", "tier", "reason", "command", "headDiff", "headDiffPath",
+                       "evidence", "auditorVendor"):
+            payload[field] = 1
+        elif field in ("receiptMissing", "receiptStale", RA.VACUOUS_FIELD, "escalated"):
+            payload[field] = "not-a-bool"
+        elif field == "newIssues":
+            payload[field] = "not-a-list"
+        elif field == "exit":
+            payload[field] = "not-an-int"
+        elif field == "outputSha256":
+            payload[field] = 1
+        elif field == "coverageDecisions":
+            payload[field] = "not-a-list"
+        else:
+            payload[field] = 1
+        fault = RA.payload_fault(phase, payload, seat_key)
+        assert fault is not None, "optional %r with wrong type must be refused for %s" % (field, phase)
+
+
+def test_payload_contract_audits_conditional_new_issues():
+    phase = RD.P_AUDITS
+    seat_key = _SEAT_KEYS[phase]
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None
+    payload = _minimal_payload_for_contract(phase, contract, seat_key)
+    payload["ruling"] = RA.RULING_NEW_ISSUE
+    payload["newIssues"] = []
+    del payload["newIssues"]
+    assert RA.payload_fault(phase, payload, seat_key) is not None
