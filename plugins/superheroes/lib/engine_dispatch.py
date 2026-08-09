@@ -81,6 +81,7 @@ _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_D
                      "GIT_CONFIG_SYSTEM", "GIT_COMMON_DIR")
 
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
+ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdout — the result JSON
@@ -2077,6 +2078,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     if run_kind == RUN_KIND_WRITE:
                         item_check = _item_delivery_check(
                             os.path.realpath(opened["cwd"]), opened,
+                            timeout=ITEM_EVIDENCE_TIMEOUT,
                         )
                         if item_check is None:
                             result = _with_run_fields(

@@ -1455,6 +1455,27 @@ def test_write_item_evidence_unavailable_forfeits(tmp_path, monkeypatch):
     assert "itemCheck" not in res
 
 
+def test_write_item_evidence_timeout_forfeits(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    real_git = ED._git_scrubbed
+
+    def timeout_on_evidence_git(cwd, *args, timeout=None):
+        if args[:3] == ("diff", "--name-only", "-z"):
+            raise subprocess.TimeoutExpired(cmd="git", timeout=timeout or 0)
+        return real_git(cwd, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", timeout_on_evidence_git)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=["a.txt"],
+    )
+    assert res["ok"] is False
+    assert res["forfeited"] is True
+    assert res["detail"] == "item-evidence-unavailable"
+    assert "itemCheck" not in res
+
+
 def test_write_forfeit_paths_carry_no_item_check(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
 
