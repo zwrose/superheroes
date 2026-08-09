@@ -1,4 +1,5 @@
 import importlib.util
+import hashlib
 import json
 import os
 import subprocess
@@ -1075,3 +1076,248 @@ def test_write_cli_out_of_range_max_wait_prints_named_refusal(tmp_path, capsys):
     assert res["detail"] == "max-wait-out-of-range:%d:allowed=0..%d" % (
         ED.MAX_SYNC_WAIT + 1, ED.MAX_SYNC_WAIT)
     assert not os.path.exists(run_dir)
+
+
+# --- WO-1 (#907): open-time declared-item contract -----------------------------
+
+
+@pytest.mark.parametrize("raw,token", [
+    (None, "expected-item-empty"),
+    ("", "expected-item-empty"),
+    ("   ", "expected-item-empty"),
+    (123, "expected-item-empty"),
+    ("foo\\bar", "expected-item-backslash"),
+    ("/abs/path", "expected-item-absolute"),
+    ("dir/", "expected-item-directory"),
+    (".", "expected-item-escapes-worktree"),
+    ("..", "expected-item-escapes-worktree"),
+    ("../escape", "expected-item-escapes-worktree"),
+    ("foo/..", "expected-item-escapes-worktree"),
+])
+def test_normalize_expected_item_refusals(raw, token):
+    ok, detail = ED._normalize_expected_item(raw)
+    assert not ok
+    assert detail == token
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("foo/bar", "foo/bar"),
+    ("./foo", "foo"),
+    ("foo//bar", "foo/bar"),
+    ("README.md", "README.md"),
+    ("CaseSensitive.MD", "CaseSensitive.MD"),
+])
+def test_normalize_expected_item_accepts(raw, expected):
+    ok, detail = ED._normalize_expected_item(raw)
+    assert ok
+    assert detail == expected
+
+
+def test_read_expected_items_undeclared():
+    ok, items = ED._read_expected_items(None, None)
+    assert ok
+    assert items is None
+
+
+def test_read_expected_items_union_dedup_sort(tmp_path):
+    items_file = tmp_path / "items.txt"
+    items_file.write_text("# comment\n\nfoo/bar\n  baz \n", encoding="utf-8")
+    ok, items = ED._read_expected_items(["foo/bar", "alpha"], str(items_file))
+    assert ok
+    assert items == ["alpha", "baz", "foo/bar"]
+
+
+def test_read_expected_items_file_unreadable(tmp_path):
+    ok, detail = ED._read_expected_items(None, str(tmp_path / "missing.txt"))
+    assert not ok
+    assert detail == "expected-items-file-unreadable"
+
+
+@pytest.mark.parametrize("base_sha,ok", [
+    (None, True),
+    ("a" * 40, True),
+    ("a" * 64, True),
+    ("not-a-sha", False),
+    ("A" * 40, False),
+    ("abc", False),
+])
+def test_validate_base_sha(base_sha, ok):
+    result_ok, detail = ED._validate_base_sha(base_sha)
+    assert result_ok is ok
+    if not ok:
+        assert detail == "base-sha-not-an-object-id"
+    elif base_sha is not None:
+        assert detail == base_sha
+
+
+def test_baseline_dirty_map_clean_worktree(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    dirty = ED._baseline_dirty_map(os.path.realpath(wt))
+    assert dirty == {}
+
+
+def test_baseline_dirty_map_tracks_dirty_and_absent(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    dirty_path = os.path.join(wt, "dirty.txt")
+    with open(dirty_path, "w", encoding="utf-8") as fh:
+        fh.write("changed\n")
+    deleted = os.path.join(wt, "gone.txt")
+    with open(deleted, "w", encoding="utf-8") as fh:
+        fh.write("bye\n")
+    _git(wt, "add", "gone.txt")
+    os.remove(deleted)
+    dirty = ED._baseline_dirty_map(wt_real)
+    assert "dirty.txt" in dirty
+    assert dirty["dirty.txt"] == hashlib.sha256(b"changed\n").hexdigest()
+    assert dirty["gone.txt"] == "<absent>"
+
+
+def test_baseline_dirty_map_rename_consumes_both_paths(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    old = os.path.join(wt, "old-name.txt")
+    with open(old, "w", encoding="utf-8") as fh:
+        fh.write("rename-me\n")
+    _git(wt, "add", "old-name.txt")
+    new = os.path.join(wt, "new-name.txt")
+    os.rename(old, new)
+    dirty = ED._baseline_dirty_map(wt_real)
+    assert "new-name.txt" in dirty
+    assert "old-name.txt" in dirty
+
+
+def test_baseline_dirty_map_git_failure_returns_none(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+
+    def fail_git(cwd, *args, timeout=None):
+        return subprocess.CompletedProcess(args, 1, "", "err")
+
+    monkeypatch.setattr(ED, "_git_scrubbed", fail_git)
+    assert ED._baseline_dirty_map(os.path.realpath(wt)) is None
+
+
+def test_write_open_persists_expected_items_and_baseline(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    dirty_path = os.path.join(wt, "track.txt")
+    with open(dirty_path, "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=["alpha/beta", "alpha/beta"],
+    )
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["expectedItems"] == ["alpha/beta"]
+    assert isinstance(opened["baselineDirty"], dict)
+    assert opened["baselineDirty"]["track.txt"] == hashlib.sha256(b"x\n").hexdigest()
+
+
+def test_write_undeclared_expected_items_none_in_journal(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["expectedItems"] is None
+
+
+def test_write_invalid_base_sha_refuses_before_open(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, base_sha="not-valid")
+    assert res["detail"] == "base-sha-not-an-object-id"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+
+
+def test_write_malformed_expected_item_refuses_before_open(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, expected_items=["/abs"])
+    assert res["detail"] == "expected-item-absolute"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+
+
+def test_write_unreadable_expect_items_file_refuses(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items_file=str(tmp_path / "missing-items.txt"),
+    )
+    assert res["detail"] == "expected-items-file-unreadable"
+    assert res["attempts"] == 0
+
+
+def test_write_baseline_capture_failed_refuses(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    monkeypatch.setattr(ED, "_baseline_dirty_map", lambda *_a, **_k: None)
+    fake = FakeRunner([])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["detail"] == "baseline-capture-failed"
+    assert res["attempts"] == 0
+    assert fake.calls == []
+
+
+def test_write_resume_expected_items_mismatch(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, expected_items=["a.txt"], max_wait=0)
+    res = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir,
+        expected_items=["b.txt"], max_wait=0,
+    )
+    assert res["detail"] == "expected-items-mismatch"
+    assert res["attempts"] == 0
+
+
+def test_write_resume_omitted_expected_items_inherit(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, expected_items=["keep.txt"])
+    res = _dispatch_write(tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir, max_wait=0)
+    assert res.get("detail") != "expected-items-mismatch"
+
+
+def test_write_terminal_folded_returns_stored_before_expectation_check(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
+    first = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir, expected_items=["a.txt"])
+    assert first["terminal"] is True
+    res = _dispatch_write(
+        tmp_path, FakeRunner([]), cwd=wt, run_dir=run_dir,
+        expected_items=["different.txt"],
+    )
+    assert res["reason"] == "plan_wrong"
+    assert res.get("detail") != "expected-items-mismatch"
+
+
+def test_write_cli_expect_item_and_file(tmp_path, capsys):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir = str(tmp_path / "run")
+    items_file = tmp_path / "items.txt"
+    items_file.write_text("from-file.txt\n", encoding="utf-8")
+    argv = [
+        "dispatch-write",
+        "--engine", "cursor",
+        "--engine-model", "composer-2.5",
+        "--prompt-path", _prompt(tmp_path),
+        "--cwd", wt,
+        "--run-dir", run_dir,
+        "--max-wait", "0",
+        "--expect-item", "cli-item.txt",
+        "--expect-items-file", str(items_file),
+    ]
+    assert ED.main(argv) == 0
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["expectedItems"] == ["cli-item.txt", "from-file.txt"]

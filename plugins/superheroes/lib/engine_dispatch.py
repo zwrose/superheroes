@@ -22,6 +22,8 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
+import re
 import secrets
 import signal
 import subprocess
@@ -425,6 +427,112 @@ def _worktree_baseline(cwd_real, timeout=None):
         "headSha": (head.stdout or "").strip(),
         "porcelainSha256": hashlib.sha256(porcelain.encode("utf-8")).hexdigest(),
     }
+
+
+_BASE_SHA_OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+
+
+def _normalize_expected_item(raw):
+    if not isinstance(raw, str):
+        return False, "expected-item-empty"
+    stripped = raw.strip()
+    if not stripped:
+        return False, "expected-item-empty"
+    if "\\" in stripped:
+        return False, "expected-item-backslash"
+    if stripped.startswith("/"):
+        return False, "expected-item-absolute"
+    if stripped.endswith("/"):
+        return False, "expected-item-directory"
+    normalized = posixpath.normpath(stripped)
+    if normalized in (".", ".."):
+        return False, "expected-item-escapes-worktree"
+    if any(seg == ".." for seg in normalized.split("/")):
+        return False, "expected-item-escapes-worktree"
+    return True, normalized
+
+
+def _read_expected_items(items, items_file):
+    if items is None and items_file is None:
+        return True, None
+    collected = []
+    if items:
+        collected.extend(items)
+    if items_file is not None:
+        try:
+            with open(items_file, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    collected.append(line)
+        except OSError:
+            return False, "expected-items-file-unreadable"
+    normalized = []
+    for raw in collected:
+        ok, detail = _normalize_expected_item(raw)
+        if not ok:
+            return False, detail
+        normalized.append(detail)
+    return True, sorted(set(normalized))
+
+
+def _validate_base_sha(base_sha):
+    if base_sha is None:
+        return True, None
+    if not isinstance(base_sha, str) or not _BASE_SHA_OBJECT_ID_RE.match(base_sha):
+        return False, "base-sha-not-an-object-id"
+    return True, base_sha
+
+
+def _parse_porcelain_z_paths(data):
+    """Extract every path from ``git status --porcelain=v1 -z`` output."""
+    text = data if isinstance(data, str) else (data or "").decode("utf-8", errors="surrogateescape")
+    paths = []
+    parts = text.split("\0")
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        if not entry:
+            index += 1
+            continue
+        status_xy = entry[:2]
+        path = entry[3:] if len(entry) > 2 and entry[2] == " " else entry[2:]
+        if status_xy[0] in ("R", "C") or status_xy[1] in ("R", "C"):
+            index += 1
+            old_path = parts[index] if index < len(parts) else ""
+            paths.append(path)
+            if old_path:
+                paths.append(old_path)
+        else:
+            paths.append(path)
+        index += 1
+    return paths
+
+
+def _path_content_identity(cwd_real, rel_path):
+    abs_path = os.path.join(cwd_real, rel_path)
+    if not os.path.exists(abs_path):
+        return "<absent>"
+    try:
+        with open(abs_path, "rb") as fh:
+            return hashlib.sha256(fh.read()).hexdigest()
+    except OSError:
+        return "<absent>"
+
+
+def _baseline_dirty_map(cwd_real, timeout=None):
+    try:
+        status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", "-z", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if status.returncode != 0:
+        return None
+    result = {}
+    for path in _parse_porcelain_z_paths(status.stdout or ""):
+        if path:
+            result[path] = _path_content_identity(cwd_real, path)
+    return result
 
 
 def _worktree_lease_path(cwd_real):
@@ -2391,7 +2499,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
-                    repo_root=None):
+                    repo_root=None, expected_items=None, baseline_dirty=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2427,6 +2535,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewPath": None,
         "baseSha": base_sha,
         "worktreeBaseline": worktree_baseline,
+        "expectedItems": expected_items,
+        "baselineDirty": baseline_dirty,
         "repoRoot": repo_root_real,
         "repoId": repo_id,
         "supervisorPid": os.getpid(),
@@ -2440,7 +2550,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
                    order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                    retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                   run_dir=None, max_wait=None):
+                   run_dir=None, max_wait=None, expected_items=None, expected_items_file=None):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -2451,6 +2561,7 @@ def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path
             prompt_path=prompt_path, cwd=cwd, order_id=order_id, base_sha=base_sha,
             timeout=timeout, retry_timeout=retry_timeout, progress_path=progress_path,
             run_engine=run_engine, run_dir=run_dir, max_wait=max_wait,
+            expected_items=expected_items, expected_items_file=expected_items_file,
         )
     except Exception as exc:
         return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
@@ -2460,7 +2571,8 @@ def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path
 def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                          retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                         run_dir=None, max_wait=None):
+                         run_dir=None, max_wait=None, expected_items=None,
+                         expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     role_kind = "build"
     argv = []
@@ -2554,6 +2666,24 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             run_dir=run_dir_real, argv=argv,
         )
 
+    ok_sha, sha_detail = _validate_base_sha(base_sha)
+    if not ok_sha:
+        return _write_preflight_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": sha_detail,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real, argv=argv,
+        )
+
+    caller_omitted_expected = expected_items is None and expected_items_file is None
+    ok_items, items_detail = _read_expected_items(expected_items, expected_items_file)
+    if not ok_items:
+        return _write_preflight_terminal(
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": items_detail,
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir_real, argv=argv,
+        )
+    declared_expected_items = items_detail
+
     if base_sha is None:
         try:
             head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
@@ -2584,10 +2714,34 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             argv = opened.get("argv") or argv
+            if state.get("folded") is not None:
+                return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
+            if state.get("abandoned") is not None:
+                return _with_run_fields(
+                    _stored_abandon_result(run_dir_real, state),
+                    run_dir=run_dir_real, argv=argv,
+                )
+            if not caller_omitted_expected:
+                stored_items = opened.get("expectedItems")
+                if declared_expected_items != stored_items:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "expected-items-mismatch",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    )
         else:
             if _run_dir_nonempty(run_dir_real):
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+            baseline_dirty = _baseline_dirty_map(cwd_real, timeout=preflight_timeout)
+            if baseline_dirty is None:
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": "baseline-capture-failed",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
@@ -2614,6 +2768,8 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 worktree_baseline=baseline,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
                 repo_root=repo_root,
+                expected_items=declared_expected_items,
+                baseline_dirty=baseline_dirty,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -2901,6 +3057,8 @@ def main(argv):
     w.add_argument("--retry-timeout", type=int, default=RETRY_MIN_TIMEOUT)
     w.add_argument("--max-wait", type=int, default=None)
     w.add_argument("--progress-file", default=None)
+    w.add_argument("--expect-item", action="append", default=None)
+    w.add_argument("--expect-items-file", default=None)
 
     p = sub.add_parser("dispatch-poll")
     p.add_argument("--run-dir", required=True)
@@ -2926,7 +3084,9 @@ def main(argv):
                              cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
                              run_dir=args.run_dir, timeout=args.timeout,
                              retry_timeout=args.retry_timeout, max_wait=args.max_wait,
-                             progress_path=args.progress_file)
+                             progress_path=args.progress_file,
+                             expected_items=args.expect_item,
+                             expected_items_file=args.expect_items_file)
     elif args.cmd == "dispatch-poll":
         res = dispatch_poll(args.run_dir)
     elif args.cmd == "dispatch-abandon":
