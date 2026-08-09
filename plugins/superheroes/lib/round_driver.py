@@ -5454,9 +5454,10 @@ def _prepare_sidecar(session_dir, state, git=None, journal_cmd="advance", receip
         if not stale:
             return {"ok": True, "path": path, "repaired": False, "needs_write": False}
     branch = run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD") or "detached"
-    base_ref = config.get("baseRef") or "unpinned"
+    base_ref = config.get("baseBranch") or "unpinned"
+    base_pin = config.get("baseRef")
     base_sha = run_git(repo_root, "rev-parse", "--verify", "--quiet",
-                       "%s^{commit}" % base_ref) if config.get("baseRef") else None
+                       "%s^{commit}" % base_pin) if base_pin else None
     certification = state.get("certification") or {}
     sidecar = round_records.build_sidecar(
         repoId=(store_core.normalize_remote(run_git(repo_root, "remote", "get-url", "origin"))
