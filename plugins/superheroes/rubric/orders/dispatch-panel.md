@@ -25,13 +25,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
 > strict fallback when a needed field is absent in all of them.
 
-## PR branch checkout (--post / --review-only PR paths only)
-On the read-only PR paths the PR branch is checked out at {{PR_CHECKOUT_PATH}}.
-This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob
-against this directory, NOT the main repo working directory — it may be on a
-different branch with stale or missing code. (On the auto-fix loop there is no
-detached checkout: the PR branch IS the current working tree, so verify against
-the working tree directly.)
+{{PR_CHECKOUT_INSTRUCTION_BLOCK}}
 
 ## Diff-scope rule — CRITICAL
 You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing

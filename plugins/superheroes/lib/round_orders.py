@@ -63,7 +63,12 @@ ORDER_PHASES = (
 )
 
 # Placeholder inputs consumed by derivation but not substituted into the template body.
-_AUX_PLACEHOLDER_INPUTS = frozenset({"CHANNEL", "FOCUS_NOTES", "FINDINGS_OUTPUT_PATH"})
+_AUX_PLACEHOLDER_INPUTS = frozenset({
+    "CHANNEL",
+    "FOCUS_NOTES",
+    "FINDINGS_OUTPUT_PATH",
+    "PR_CHECKOUT_PATH",
+})
 
 _COMMON_CONTEXT_KEYS = (
     "session_dir",
@@ -193,11 +198,9 @@ def _format_landing_block(context: dict) -> tuple[str | None, str | None]:
         ])
     else:
         lines.extend([
-            "Copy the envelope stub below verbatim, add the payload described in the Payload "
-            "contract section above, and write the complete envelope to the landing path.",
-            "",
-            "- Envelope stub: %s" % stub,
-            "- Landing path: %s" % landing,
+            "Deliver on the stdout channel described in the Delivery section above — emit "
+            "`{\"findings\": [...], \"investigated\": [...]}` as your final stdout with nothing "
+            "after it. Do not write a landing file (read-only sandbox).",
         ])
     return "\n".join(lines), None
 
@@ -232,6 +235,19 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     ph["PR_CHECKOUT_CONTEXT_LINE"] = (
         "- PR branch checkout: %s" % pr_checkout if pr_checkout else ""
     )
+    if pr_checkout:
+        ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = (
+            "## PR branch checkout (--post / --review-only PR paths only)\n"
+            "On the read-only PR paths the PR branch is checked out at %s.\n"
+            "This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob\n"
+            "against this directory, NOT the main repo working directory — it may be on a\n"
+            "different branch with stale or missing code. (On the auto-fix loop there is no\n"
+            "detached checkout: the PR branch IS the current working tree, so verify against\n"
+            "the working tree directly.)"
+            % pr_checkout
+        )
+    else:
+        ph["PR_CHECKOUT_INSTRUCTION_BLOCK"] = ""
     prior = ph.get("PRIOR_COMMENTS_PATH", "").strip()
     ph["PRIOR_COMMENTS_CONTEXT_LINE"] = (
         "- Prior comments + author justifications: %s" % prior if prior else ""
@@ -355,7 +371,7 @@ def resolve_order_residuals(repo_root: str, base_oid: str | None) -> tuple[str, 
             provenance = (
                 "Residuals below are read from the review base commit (base-pinned)."
             )
-            core_rel = ".claude/superheroes/core.md"
+            core_rel = core_md.in_repo_core_rel_path()
             text, reason = resolve_base_residuals(repo_root, base_oid, core_rel)
             if reason:
                 return "", provenance, reason

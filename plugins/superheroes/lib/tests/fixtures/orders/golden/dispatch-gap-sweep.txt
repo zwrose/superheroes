@@ -4,7 +4,7 @@ concerns.
 
 ## Input
 - Full diff (read in bounded chunks): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, panel output format): /private/tmp/sh723-pr2/plugins/superheroes/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): /private/tmp/c4a/plugins/superheroes/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - Verification root (read cited files here ONLY): /home/user/proj
@@ -51,7 +51,4 @@ Required keys: findings
 
 ## Return your result
 
-Copy the envelope stub below verbatim, add the payload described in the Payload contract section above, and write the complete envelope to the landing path.
-
-- Envelope stub: /tmp/superheroes-session-wo4-golden/round-2/stubs/seat.json
-- Landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-gap-sweep/gap-sweep.a0.json
+Deliver on the stdout channel described in the Delivery section above — emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it. Do not write a landing file (read-only sandbox).

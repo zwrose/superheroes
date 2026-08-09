@@ -3746,6 +3746,39 @@ def _seat_is_engine(row):
     return row.get("vendor") in _ENGINE_VENDORS
 
 
+def _seat_transport_fault(row, seat_key):
+    """Refuse when a seat map names a vendor the driver does not recognise.
+
+    Vendor absent is the normal no-seat-map case — not a refusal."""
+    vendor = row.get("vendor")
+    if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
+        return None
+    if not isinstance(vendor, str):
+        return "unknown-vendor:%s:%s" % (seat_key, _label(vendor))
+    vendor = vendor.strip()
+    if vendor in _ENGINE_VENDORS or vendor in model_registry.vendors():
+        return None
+    return "unknown-vendor:%s:%s" % (seat_key, vendor)
+
+
+def _panel_dimension_label(seat_key):
+    """Rubric dimension label for a panel seat — from SUBJECT_FALLBACK, not filename stem."""
+    stem = AGENT_SUFFIX.get(seat_key)
+    if not isinstance(stem, str) or not stem:
+        return None
+    return review_round_policy.SUBJECT_FALLBACK.get(stem.split("-")[0].lower())
+
+
+def _session_pr_checkout_path(session_dir):
+    """Detached PR checkout path when the read-only paths created one; else empty."""
+    path = os.path.join(session_dir, "repo")
+    return path if os.path.isdir(path) else ""
+
+
+def _label(value):
+    return value if isinstance(value, str) else repr(value)
+
+
 def _shipped_resource_refusal(placeholders):
     """Refuse when a shipped plugin resource path in placeholders does not exist."""
     if not isinstance(placeholders, dict):
@@ -3862,9 +3895,12 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     ph = {}
 
     if phase == P_PANEL:
-        dim = AGENT_SUFFIX.get(seat_key, seat_key)
+        dim_label = _panel_dimension_label(seat_key)
+        if not dim_label:
+            raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
         row = _seat_dispatch_row(state, seat_key)
         channel = "stdout" if _seat_is_engine(row) else "file"
+        pr_checkout = _session_pr_checkout_path(session_dir)
         ph = {
             "MODE": meta.get("mode") or cfg.get("mode") or "branch",
             "REPO": meta.get("repo") or cfg.get("repo") or "unknown",
@@ -3873,21 +3909,24 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "RUBRIC_PATH": rubric_path,
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
-            "PR_CHECKOUT_PATH": os.path.join(session_dir, "repo"),
+            "PR_CHECKOUT_PATH": pr_checkout,
             "PRIOR_COMMENTS_PATH": os.path.join(session_dir, "prior-comments.json"),
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
-            "DIMENSION": dim,
+            "DIMENSION": dim_label,
             "CHANNEL": channel,
-            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % dim),
+            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % AGENT_SUFFIX.get(
+                seat_key, seat_key)),
         }
     elif phase == P_VERIFIERS:
         prefix = "verifier:"
         cluster_key = seat_key[len(prefix):] if seat_key.startswith(prefix) else seat_key
-        cluster_index = 0
+        cluster_index = None
         for index, cluster in enumerate(payload.get("clusters") or []):
             if isinstance(cluster, dict) and cluster.get("key") == cluster_key:
                 cluster_index = index
                 break
+        if cluster_index is None:
+            raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
         ph = {
             "CLUSTER_FINDINGS_PATH": os.path.join(rdir, "clusters", "%d.json" % cluster_index),
             "DIFF_PATH": diff_path,
@@ -3912,6 +3951,11 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
         }
     elif phase == P_AUDITS:
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
+            raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
         ph = {
             "TARGET_SUMMARY_PATH": os.path.join(rdir, "audit-targets",
                                                 "%s.json" % round_records.storage_key(
@@ -3948,6 +3992,10 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
                                 pending_payload):
     row = _seat_dispatch_row(state, seat_key)
+    transport_fault = _seat_transport_fault(row, seat_key)
+    if transport_fault is not None:
+        skey = round_records.storage_key(seat_key, occurrence)
+        raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))
     host_seat = not _seat_is_engine(row)
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
     cfg = state.get("config") or {}

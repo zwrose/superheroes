@@ -7,7 +7,7 @@ review. Your job is **not** keep/drop — you group issues that share the same r
   severity, body/evidence, and a verification verdict.
 - Diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
 - Verification root (read cited files here ONLY): /home/user/proj
-- Severity rubric (the only tiers; calibration): /private/tmp/sh723-pr2/plugins/superheroes/rubric/review-base.md
+- Severity rubric (the only tiers; calibration): /private/tmp/c4a/plugins/superheroes/rubric/review-base.md
 - Project conventions: CLAUDE.md and the project profile.
 
 ## Your task
@@ -49,7 +49,4 @@ Required keys: grouping
 
 ## Return your result
 
-Copy the envelope stub below verbatim, add the payload described in the Payload contract section above, and write the complete envelope to the landing path.
-
-- Envelope stub: /tmp/superheroes-session-wo4-golden/round-2/stubs/seat.json
-- Landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-synthesis/synthesis.a0.json
+Deliver on the stdout channel described in the Delivery section above — emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it. Do not write a landing file (read-only sandbox).
