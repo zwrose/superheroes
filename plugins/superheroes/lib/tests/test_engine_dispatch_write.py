@@ -1744,6 +1744,46 @@ def test_baseline_dirty_map_fifo_and_symlink(tmp_path):
     assert dirty["link.txt"] == "<absent>"
 
 
+def test_baseline_dirty_map_pathspec_magic_literal_filename(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    wt_real = os.path.realpath(wt)
+    magic_name = ":(literal)foo"
+    magic_path = os.path.join(wt, magic_name)
+    with open(magic_path, "w", encoding="utf-8") as fh:
+        fh.write("magic\n")
+    dirty = ED._baseline_dirty_map(wt_real, [magic_name])
+    assert magic_name in dirty
+    assert dirty[magic_name] == hashlib.sha256(b"magic\n").hexdigest()
+
+
+def test_write_pathspec_magic_pre_dirty_unchanged_not_credited(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    magic_name = ":(weird)name.txt"
+    magic_path = os.path.join(wt, magic_name)
+    with open(magic_path, "w", encoding="utf-8") as fh:
+        fh.write("unchanged\n")
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(
+        tmp_path, fake, cwd=wt,
+        expected_items=[magic_name],
+    )
+    assert res["ok"] is False
+    assert res["detail"] == "items-undelivered"
+    assert res["itemCheck"]["missing"] == [magic_name]
+
+
+def test_write_expected_items_too_many_refuses_before_spawn(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([])
+    too_many = ["item-%04d.txt" % i for i in range(ED.MAX_EXPECTED_ITEMS + 1)]
+    res = _dispatch_write(tmp_path, fake, cwd=wt, expected_items=too_many)
+    assert res["reason"] == "unrunnable"
+    assert res["detail"] == "expected-items-too-many"
+    assert res["attempts"] == 0
+    assert res["forfeited"] is False
+    assert fake.calls == []
+
+
 @pytest.mark.parametrize("cause,neutralize", [
     (ED.ITEM_EVIDENCE_CAUSE_FALSY_BASE, lambda *_a, **_k: ED.ITEM_EVIDENCE_CAUSE_FALSY_BASE),
     (ED.ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT, "diff-timeout"),

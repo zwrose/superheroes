@@ -84,6 +84,7 @@ _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_D
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
 ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
 ITEM_IDENTITY_MAX_BYTES = 8 * 1024 * 1024
+MAX_EXPECTED_ITEMS = 1000
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
 ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
 ITEM_CHECK_FIELDS = frozenset(("declared", "expected", "delivered", "missing"))
@@ -486,7 +487,10 @@ def _read_expected_items(items, items_file):
         if not ok:
             return False, detail
         normalized.append(detail)
-    return True, sorted(set(normalized))
+    normalized = sorted(set(normalized))
+    if len(normalized) > MAX_EXPECTED_ITEMS:
+        return False, "expected-items-too-many"
+    return True, normalized
 
 
 def _validate_base_sha(base_sha):
@@ -588,10 +592,11 @@ def _path_content_identity(cwd_real, rel_path):
 def _baseline_dirty_map(cwd_real, declared_paths, timeout=None):
     if not declared_paths:
         return {}
+    literal_pathspecs = [":(literal)%s" % p for p in declared_paths]
     try:
         status = _git_scrubbed(
             cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=traditional",
-            "--", *declared_paths,
+            "--", *literal_pathspecs,
             timeout=timeout,
         )
     except subprocess.TimeoutExpired:
