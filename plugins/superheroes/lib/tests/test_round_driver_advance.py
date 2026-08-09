@@ -1522,17 +1522,51 @@ def test_advance_stall_ineligible_accept_risk_rule_parks(tmp_path, adapters):
     assert out["detail"] == "gate-policy-unmatched-class:stall:accept-risk-ineligible"
 
 
-def test_advance_has_no_caller_supplied_policy_route():
+def _allowed_gate_policy_layer_sources(repo):
+    cm = _load_core_md()
+    import review_gate_policy as rgp
+    return {cm.core_path(repo, root=None), rgp.gate_policy_path()}
+
+
+def test_advance_has_no_caller_supplied_policy_route(tmp_path, adapters):
     """Gate policy is calibration-only — no advance flag may inject rules."""
     parser = RD.build_parser()
     for _path, action in __import__("cli_contract").iter_caller_supplied_actions(parser):
         assert "policy" not in action.dest
         for opt in action.option_strings:
             assert "policy" not in opt.lower()
-    source = open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8").read()
-    assert "GATE_POLICY_ENV" not in source
-    assert 'os.environ.get("GATE_POLICY' not in source
-    assert "config.get(\"gatePolicy" not in source
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-sources")
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    allowed = _allowed_gate_policy_layer_sources(repo)
+    for layer in out["policyApplied"]["layers"]:
+        assert layer.get("source") in allowed, layer
+
+
+def test_advance_owner_gate_policy_applied_commits_state_and_journal(tmp_path, adapters, monkeypatch):
+    """Policy-applied durable record bundles state + journal in one commit."""
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-commit")
+    commit_kinds = []
+    real_begin = RD.round_commit.begin
+
+    def track_begin(session_dir, kind):
+        commit_kinds.append(kind)
+        return real_begin(session_dir, kind)
+
+    monkeypatch.setattr(RD.round_commit, "begin", track_begin)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert "advance-policy-applied" in commit_kinds
 
 
 def test_policy_applied_records_match_and_action_not_identities_only(tmp_path, adapters):

@@ -5010,9 +5010,18 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     applied.append(resolved["policyApplied"])
     state["_policyApplied"] = applied
     state["_advanceUsed"] = True
-    save_state(session_dir, state)
-    _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt,
-                   policyApplied=resolved["policyApplied"])
+    journal_entry = _journal_entry_for_commit(session_dir, "advance", "advanced",
+                                              phase=phase, round=rnd, attempt=attempt,
+                                              policyApplied=resolved["policyApplied"])
+    try:
+        c = round_commit.begin(session_dir, "advance-policy-applied")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, "advance", exc, phase=phase,
+                                        rnd=rnd, attempt=attempt)
     nxt = cmd_next(session_dir)
     if not nxt.get("ok"):
         return nxt

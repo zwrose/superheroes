@@ -6,6 +6,7 @@ import os
 
 import panel_tally
 import pytest
+import round_phases
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MOD = os.path.join(_HERE, "..", "review_gate_policy.py")
@@ -228,13 +229,14 @@ def test_fail_closed_stall_accept_risk_on_ineligible_class():
             "schema": RGP.GATE_POLICY_SCHEMA,
             "default": "park",
             "rules": [
-                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, RGP._ACCEPT_RISK),
+                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, round_phases.ACCEPT_RISK_CHOICE),
             ],
         }
     )
     loaded = RGP.parse_overlay(overlay)
     assert loaded["ok"] is False
     assert loaded["reason"] == "layer-disposition-not-allowed"
+    assert round_phases.ACCEPT_RISK_CHOICE in round_phases.STALL_CHOICES
 
 
 def test_stall_eligible_can_accept_disclosed_risk():
@@ -242,11 +244,11 @@ def test_stall_eligible_can_accept_disclosed_risk():
         {
             "schema": RGP.GATE_POLICY_SCHEMA,
             "default": "park",
-            "rules": [_stall_rule(RGP.STALL_CLASS_ELIGIBLE, RGP._ACCEPT_RISK)],
+            "rules": [_stall_rule(RGP.STALL_CLASS_ELIGIBLE, round_phases.ACCEPT_RISK_CHOICE)],
         }
     )
     result = RGP.resolve_stall(RGP.STALL_CLASS_ELIGIBLE, overlay)
-    assert result["action"] == {"choice": RGP._ACCEPT_RISK}
+    assert result["action"] == {"choice": round_phases.ACCEPT_RISK_CHOICE}
 
 
 def test_stall_ineligible_matching_accept_risk_rule_drops_layer():
@@ -261,7 +263,7 @@ def test_stall_ineligible_matching_accept_risk_rule_drops_layer():
                     "findingClass": RGP.STALL_CLASS_INELIGIBLE,
                     "disposition": "hold",
                 },
-                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, RGP._ACCEPT_RISK),
+                _stall_rule(RGP.STALL_CLASS_INELIGIBLE, round_phases.ACCEPT_RISK_CHOICE),
             ],
         }
     )

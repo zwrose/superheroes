@@ -29,7 +29,8 @@ DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
 
 # The four stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
 # ONLY for a CONFIRMED-with-receipt finding; the menu payload gates it per-run.
-STALL_CHOICES = ("ship-smaller", "spend-more", "accept-the-disclosed-risk", "hold")
+ACCEPT_RISK_CHOICE = "accept-the-disclosed-risk"
+STALL_CHOICES = ("ship-smaller", "spend-more", ACCEPT_RISK_CHOICE, "hold")
 
 # The three per-finding judgment dispositions the judgment gate offers (never "judge the dispute
 # yourself"): fix the finding as the reviewer suggested, fix it with owner free-text guidance, or

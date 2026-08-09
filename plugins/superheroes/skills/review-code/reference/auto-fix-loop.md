@@ -172,11 +172,19 @@ never drop a finding or a lens.
 > is **deliberately not built** pending a named consumer.
 >
 > **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
-> returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside the unchanged
-> `repo-root-*` refusals (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`,
-> `repo-root-not-a-repo`, also `attempts: 0`): `sanitized-view-tempbase-inside-repo`,
-> `sanitized-view-head-unresolved`, `sanitized-view-export-failed`, `sanitized-view-init-failed`.
-> There is **no fallback to the raw repo and no opt-out**.
+> returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside post-argparse
+> refusals such as `sanitized-view-tempbase-inside-repo`, `sanitized-view-head-unresolved`,
+> `sanitized-view-export-failed`, and `sanitized-view-init-failed` (also `attempts: 0`). There is
+> **no fallback to the raw repo and no opt-out**.
+>
+> **Argparse vs JSON refusals.** `--repo-root` is **required** and validated by argparse before
+> `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable
+> (`--repo-root ""`), a path that is not an existing directory, or a directory without `.git` exits
+> **2** with argparse's usage error — it never reaches the JSON envelope. `--run-dir` is optional;
+> when omitted the runner allocates a private temp directory. When supplied, a path that does not
+> exist or is not a directory is also refused at argparse (exit 2). **JSON refusals** (exit 0,
+> top-level `ok: false`) still apply for run-directory problems argparse cannot see: `run-dir-is-symlink`,
+> `run-dir-not-writable`, and the post-spawn `run-dir-*` family documented below.
 >
 > **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
 > `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`, plus `diffBase`,
@@ -193,8 +201,9 @@ never drop a finding or a lens.
 > **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
 > absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
 > prevent. An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
-> `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
-> (`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
+> `sanitizedView` **only when raised after the sanitized view was built** — early refusals
+> (`prompt-*`, `run-dir-is-symlink`, `run-dir-not-writable`, `schema-*`, and argparse failures for
+> `--repo-root` / `--run-dir`) precede the view and carry none. A terminal
 > forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
 > `result.findings` reads nothing.
 >
@@ -278,9 +287,8 @@ never drop a finding or a lens.
 > Read-only sandbox is **hard-coded inside the runner API** — it cannot emit a write dispatch. The
 > seat **may and should** read files and run read-only commands inside the sanitized view to ground
 > its findings (`--repo-root` on the CLI still names the **source** repository; the runner builds the
-> view itself). An unresolvable source repo root is a **named refusal** before any view is built
-> (`repo-root-absent`, `repo-root-missing`, `repo-root-not-a-directory`, `repo-root-not-a-repo`) with
-> `attempts: 0`. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
+> view itself). An unresolvable `--repo-root` is refused by **argparse before any JSON is emitted**
+> (exit 2) — missing, empty, not a directory, or not a git repository. `--diff-base` makes staging the diff **machinery** — the runner stages the change as
 > `SUPERHEROES_REVIEW_DIFF.patch` inside the view so the seat can read it without git history.
 > The value must be the **pinned base commit object id** the round diff was computed against — not a
 > symbolic ref like `origin/main`, which can drift mid-loop and stage a patch that disagrees with the

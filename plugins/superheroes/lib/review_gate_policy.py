@@ -38,7 +38,7 @@ STALL_CLASS_ELIGIBLE = "stall:accept-risk-eligible"
 STALL_CLASS_INELIGIBLE = "stall:accept-risk-ineligible"
 STALL_FINDING_CLASSES = frozenset((STALL_CLASS_ELIGIBLE, STALL_CLASS_INELIGIBLE))
 
-_ACCEPT_RISK = "accept-the-disclosed-risk"
+ACCEPT_RISK_CHOICE = round_phases.ACCEPT_RISK_CHOICE
 
 
 def gate_policy_path(root: str | None = None) -> str:
@@ -67,7 +67,7 @@ def _stall_allowed_dispositions(finding_class: str) -> tuple[str, ...]:
     if finding_class == STALL_CLASS_ELIGIBLE:
         return STALL_CHOICES
     if finding_class == STALL_CLASS_INELIGIBLE:
-        return tuple(c for c in STALL_CHOICES if c != _ACCEPT_RISK)
+        return tuple(c for c in STALL_CHOICES if c != ACCEPT_RISK_CHOICE)
     return ()
 
 
@@ -154,7 +154,7 @@ def _validate_layer(
         if (
             gate == GATE_PRESENT_STALL_MENU
             and finding_class == STALL_CLASS_INELIGIBLE
-            and disposition == _ACCEPT_RISK
+            and disposition == ACCEPT_RISK_CHOICE
         ):
             return None, "layer-disposition-not-allowed"
 
@@ -172,6 +172,56 @@ def _validate_layer(
         "rules": normalized_rules,
         "default": PARK,
     }, None
+
+
+def validate_policy_for_write(policy: object) -> str | None:
+    """Validate a gate-policy/1 document for calibration write.
+
+    Returns a human-readable refusal string, or ``None`` when valid. Never raises."""
+    if not isinstance(policy, dict):
+        return "policy must be a JSON object"
+    schema = policy.get("schema")
+    if schema != GATE_POLICY_SCHEMA:
+        return "schema must be %s (got %r)" % (GATE_POLICY_SCHEMA, schema)
+    default = policy.get("default")
+    if default != PARK:
+        return "default must be %r (got %r)" % (PARK, default)
+    rules_raw = policy.get("rules")
+    if not isinstance(rules_raw, list):
+        return "rules must be a list"
+    for index, rule in enumerate(rules_raw):
+        if not isinstance(rule, dict):
+            return "rules[%d] must be an object" % index
+        gate = rule.get("gate")
+        if gate not in GATES:
+            return "rules[%d].gate must be one of %s (got %r)" % (
+                index, ", ".join(GATES), gate)
+        finding_class = rule.get("findingClass")
+        known = _known_finding_classes(gate)
+        if not isinstance(finding_class, str) or finding_class not in known:
+            return "rules[%d].findingClass must be one of %s (got %r)" % (
+                index, ", ".join(sorted(known)), finding_class)
+        disposition = rule.get("disposition")
+        allowed = _allowed_dispositions(gate, finding_class)
+        if not isinstance(disposition, str) or disposition not in allowed:
+            return "rules[%d].disposition for gate %s class %s must be one of %s (got %r)" % (
+                index, gate, finding_class, ", ".join(allowed), disposition)
+    source = "calibration/write-check"
+    raw = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    digest = hashlib.sha256(raw).hexdigest()
+    _, reason = _validate_layer(policy, source=source, sha256=digest)
+    return reason
+
+
+def calibration_layer_resolution(overlay_raw: dict | None) -> dict:
+    """Shipped + overlay parse results for calibration consumers. Never raises."""
+    overlay_parse = None
+    if overlay_raw is not None:
+        overlay_parse = parse_overlay(overlay_raw)
+    return {
+        "shipped": load_shipped_layer(),
+        "overlayParse": overlay_parse,
+    }
 
 
 def load_shipped_layer(path: str | None = None) -> dict:

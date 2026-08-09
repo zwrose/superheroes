@@ -1140,44 +1140,9 @@ def _gate_policy_round_trip_ok(orig, new_parsed):
 
 def _gate_policy_write_refusal(policy):
     """Validate a gate-policy/1 policy dict for write-time storage. Returns a specific reason."""
-    import hashlib
     import review_gate_policy as rgp
 
-    if not isinstance(policy, dict):
-        return "policy must be a JSON object"
-    schema = policy.get("schema")
-    if schema != rgp.GATE_POLICY_SCHEMA:
-        return "schema must be %s (got %r)" % (rgp.GATE_POLICY_SCHEMA, schema)
-    default = policy.get("default")
-    if default != rgp.PARK:
-        return "default must be %r (got %r)" % (rgp.PARK, default)
-    rules_raw = policy.get("rules")
-    if not isinstance(rules_raw, list):
-        return "rules must be a list"
-    for index, rule in enumerate(rules_raw):
-        if not isinstance(rule, dict):
-            return "rules[%d] must be an object" % index
-        gate = rule.get("gate")
-        if gate not in rgp.GATES:
-            return "rules[%d].gate must be one of %s (got %r)" % (
-                index, ", ".join(rgp.GATES), gate)
-        finding_class = rule.get("findingClass")
-        known = rgp._known_finding_classes(gate)
-        if not isinstance(finding_class, str) or finding_class not in known:
-            return "rules[%d].findingClass must be one of %s (got %r)" % (
-                index, ", ".join(sorted(known)), finding_class)
-        disposition = rule.get("disposition")
-        allowed = rgp._allowed_dispositions(gate, finding_class)
-        if not isinstance(disposition, str) or disposition not in allowed:
-            return "rules[%d].disposition for gate %s class %s must be one of %s (got %r)" % (
-                index, gate, finding_class, ", ".join(allowed), disposition)
-    source = "calibration/write-check"
-    raw = json.dumps(policy, sort_keys=True, separators=(",", ":")).encode("utf-8")
-    digest = hashlib.sha256(raw).hexdigest()
-    layer, reason = rgp._validate_layer(policy, source=source, sha256=digest)
-    if layer is None:
-        return reason or GATE_POLICY_REASON_INVALID
-    return None
+    return rgp.validate_policy_for_write(policy)
 
 
 def _build_gate_policy_overlay(policy, source_path):

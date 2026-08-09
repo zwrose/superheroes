@@ -191,17 +191,15 @@ def _guardian_lines(guardian):
 def _collect_review_gate_policy(cwd, root):
     """Resolved review-gate-policy layers for the configure view. Never raises."""
     gate = core_md.review_gate_policy_for_gate(cwd=cwd, root=root)
-    shipped = review_gate_policy.load_shipped_layer()
     overlay_raw = gate.overlay
-    overlay_parse = None
-    if core_md.review_gate_config_is_ok(gate) and overlay_raw is not None:
-        overlay_parse = review_gate_policy.parse_overlay(overlay_raw)
+    layers = review_gate_policy.calibration_layer_resolution(
+        overlay_raw if core_md.review_gate_config_is_ok(gate) else None)
     return {
         "gateStatus": gate.status,
         "gateDetail": gate.detail,
         "overlayRaw": overlay_raw,
-        "overlayParse": overlay_parse,
-        "shipped": shipped,
+        "overlayParse": layers["overlayParse"],
+        "shipped": layers["shipped"],
     }
 
 

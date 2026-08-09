@@ -3103,3 +3103,29 @@ def test_cli_write_review_gate_policy_refused_malformed_json(tmp_path, capsys, m
     assert rc == 0
     out = json.loads(capsys.readouterr().out)
     assert out == {"action": "refused", "reason": CM.GATE_POLICY_REASON_INPUT_UNPARSEABLE}
+
+
+def test_cli_write_review_gate_policy_clear_null_stdin(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    monkeypatch.setattr("sys.stdin", io.StringIO("null\n"))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "written"}
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.overlay is None
+
+
+def test_cli_write_review_gate_policy_refused_not_a_mapping(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("[1, 2, 3]"))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": CM.GATE_POLICY_REASON_NOT_A_MAPPING}
