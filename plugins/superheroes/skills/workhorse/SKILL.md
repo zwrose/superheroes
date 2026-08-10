@@ -487,8 +487,8 @@ without a tool call.
   clamps** — an over-cap or negative value comes back `unrunnable` with detail
   `max-wait-out-of-range:<value>:allowed=0..540`, nothing opened and nothing spawned, so waiting
   longer than the cap means **omitting the flag and polling**, never passing a bigger number;
-  a zero slice is a legal **open-and-return-now** — it opens the run and returns `running`
-  **without starting an attempt at all**, so on its own it completes nothing; a `running` result whose
+  a zero slice on **`dispatch-review`** is a legal **open-and-return-now** — it opens the run and returns `running`
+  **without starting an attempt at all**; on **`dispatch-write`**, `--max-wait` **also** bounds git preflight (`preflight_timeout`, floored at **1 s** — `reference/dispatch-mechanics.md` § Launch slice vs continuation slice), so a zero slice is not a safe pre-open and can return terminal **`git-preflight-timeout`** with nothing opened — a continuation **cannot** recover an unlaunched run; on its own it completes nothing; a `running` result whose
   attempt count is **zero** means nothing has launched **yet** — re-invoke the same verb on the same
   `--run-dir` with a positive slice rather than continuing to poll) — **never** wrapped in
   `setsid`/`nohup`,
@@ -566,8 +566,7 @@ in-turn poll, never a final message.
 independent when its members have no result dependency, no shared writable worktree, and no shared
 output path; §6's independent work orders, a review panel's dimensions, a round's verifier clusters,
 and a round's audit targets are all such batches. Give every member its **own** `--run-dir`, **launch
-each one with a short positive slice** — a zero slice opens a run without starting an attempt, so
-opening run-dirs launches nothing — then **re-invoke the originating verb on every non-terminal run in
+each one with a short positive slice** — on **`dispatch-review`**, a zero slice opens a run without starting an attempt, so opening every run-dir at zero launches nothing; on **`dispatch-write`**, a zero slice is not a safe pre-open — `--max-wait` **also** bounds git preflight (`preflight_timeout`, floored at **1 s**), so it can return terminal **`git-preflight-timeout`** with nothing opened, and a continuation **cannot** recover an unlaunched run — then **re-invoke the originating verb on every non-terminal run in
 rotation** until each returns terminal, folding each result as it lands. **The concurrency comes from
 the engines working while you poll the others**, never from issuing the calls together in one message:
 measured on one host, run-action calls serialize and a launch call blocks for its whole slice, so a

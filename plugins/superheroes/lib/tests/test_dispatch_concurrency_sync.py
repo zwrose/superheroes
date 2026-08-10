@@ -240,8 +240,16 @@ def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
     grown = real_phrases + (
         "An extra plausible sentence that is not part of the canonical trio.",
     )
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="must have exactly"):
         _assert_exact_await_dispatches_phrases(grown)
+
+
+# Bite: duplicate-padded tuple — _assert_exact_await_dispatches_phrases must reject length mismatch
+def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
+    real_phrases = tuple(_PHRASE_BY_LABEL[label] for label in sorted(_PHRASE_BY_LABEL))
+    padded = real_phrases + (real_phrases[0],)
+    with pytest.raises(AssertionError, match="must have exactly"):
+        _assert_exact_await_dispatches_phrases(padded)
 
 
 # Bite: mutated phrase — _assert_exact_await_dispatches_phrases must reject a changed word
@@ -251,5 +259,5 @@ def test_assert_exact_await_dispatches_phrases_rejects_mutated_phrase():
         if "unwatched" in phrase:
             phrases[index] = phrase.replace("unwatched", "watched")
             break
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="found-not-expected"):
         _assert_exact_await_dispatches_phrases(tuple(phrases))
