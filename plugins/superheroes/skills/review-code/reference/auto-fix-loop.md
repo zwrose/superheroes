@@ -274,7 +274,7 @@ never drop a finding or a lens.
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 > # RUN_DIR — create once per seat before first dispatch-review (continuation reuses the same path)
-> if [ -z "$RUN_DIR" ]; then echo "RUN_DIR required (run-dir-missing)" >&2; exit 1; fi
+> if [ -z "$RUN_DIR" ]; then echo "RUN_DIR required (run-dir-absent)" >&2; exit 1; fi
 > mkdir -p "$(dirname "$RUN_DIR")" || { echo "cannot create RUN_DIR parent" >&2; exit 1; }
 > RUN_DIR="$(cd -P "$(dirname "$RUN_DIR")" && pwd -P)/$(basename "$RUN_DIR")"
 > if [ -L "$RUN_DIR" ]; then echo "RUN_DIR must be physical (run-dir-is-symlink)" >&2; exit 1; fi
