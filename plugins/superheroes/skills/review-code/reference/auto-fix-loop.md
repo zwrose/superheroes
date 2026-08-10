@@ -273,6 +273,10 @@ never drop a finding or a lens.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> # RUN_DIR — create once per seat before first dispatch-review (continuation reuses the same path)
+> RUN_DIR="$(cd "$(dirname "$RUN_DIR")" && pwd)/$(basename "$RUN_DIR")"
+> if [ ! -d "$RUN_DIR" ]; then mkdir "$RUN_DIR"; fi
+> # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \

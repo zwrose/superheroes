@@ -68,6 +68,30 @@ def _normalize_for_line_wrap(text):
     return re.sub(r"\s+", " ", text).strip()
 
 
+_EXCEPTION_MARKER_RE = re.compile(
+    r"\b(?:except|unless|notwithstanding|waived|overrides|"
+    r"does not apply|no longer applies|at your discretion|may be skipped)\b",
+    re.IGNORECASE,
+)
+
+
+_EXCEPTION_SCAN_LIMIT = 200
+
+
+def _remainder_introduces_exception(remainder):
+    """True when text immediately after the literal neutralizes it with an exception clause.
+
+    Scans only the first ``_EXCEPTION_SCAN_LIMIT`` characters — neutralizing suffixes are short,
+    and legitimate doctrine continuations (``; skill-owned seats ...``, ``. Dispatching ...``)
+    do not introduce exception vocabulary within that window.
+    """
+    norm = _normalize_for_line_wrap(remainder)
+    if not norm:
+        return False
+    scan = norm.lstrip()[:_EXCEPTION_SCAN_LIMIT]
+    return _EXCEPTION_MARKER_RE.search(scan) is not None
+
+
 def _literal_present(text, literal):
     norm_text = _normalize_for_line_wrap(text)
     norm_literal = _normalize_for_line_wrap(literal)
@@ -75,6 +99,8 @@ def _literal_present(text, literal):
     if pos < 0:
         return False
     after = norm_text[pos + len(norm_literal):]
+    if _remainder_introduces_exception(after):
+        return False
     if norm_literal.endswith("."):
         return True
     after_trimmed = after.lstrip()
@@ -260,6 +286,40 @@ def test_assert_literal_on_surface_rejects_appended_suffix_on_real_surface():
     mutated = real_surface[:pos + len(phrase)] + suffix + real_surface[pos + len(phrase):]
     with pytest.raises(AssertionError, match="invariant clause"):
         _assert_literal_on_surface(rel, mutated, phrase, "invariant clause")
+
+
+_NEUTRALIZING_SUFFIXES = (
+    " \u2014 except when the owner says otherwise",
+    " - except when the owner says otherwise",
+    "; except when the owner says otherwise",
+    ". Except when the owner says otherwise.",
+)
+
+
+@pytest.mark.parametrize("suffix", _NEUTRALIZING_SUFFIXES)
+def test_literal_present_rejects_neutralizing_suffix_forms(suffix):
+    mutated = _INVARIANT_CLAUSE + suffix
+    assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+
+
+@pytest.mark.parametrize("suffix", _NEUTRALIZING_SUFFIXES)
+def test_literal_present_rejects_neutralizing_suffix_on_real_surface(suffix):
+    rel = "rubric/launch-doctrine.md"
+    phrase = _phrase_for_label("invariant clause")
+    real_surface = _surface_text(rel)
+    pos = real_surface.find(phrase)
+    assert pos >= 0, "invariant clause missing from real launch-doctrine surface"
+    truncated = real_surface[:pos + len(phrase)] + suffix
+    assert not _literal_present(truncated, phrase)
+
+
+def test_real_surfaces_accept_genuine_invariant_continuation():
+    phrase = _phrase_for_label("invariant clause")
+    for rel in _SURFACES:
+        text = _surface_text(rel)
+        assert _literal_present(text, phrase), (
+            f"genuine invariant continuation in {rel} must still match"
+        )
 
 
 # Bite: grown tuple — _assert_exact_await_dispatches_phrases must reject an extra phrase
