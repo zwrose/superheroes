@@ -209,10 +209,11 @@ each of those batches are independent of one another** — the test is no result
 writable worktree, and no shared output path — so they **SHOULD be dispatched concurrently**, and a
 round that dispatches them one at a time is paying a cost this contract does not ask for.
 
-**How** to dispatch a batch concurrently — run-dirs, slice sizes, rotation, and the native-subagent
-channel — lives in
-`skills/workhorse/reference/dispatch-mechanics.md` § Launch slice
-vs continuation slice; this section does not restate it. **Per-arrival `submit` is wrong:** a
+**How** to dispatch a batch concurrently — run-dirs and slice sizes in
+`skills/workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice,
+rotation in `rubric/launch-doctrine.md`'s `await-dispatches` ruling, and the
+native-subagent channel in `skills/workhorse/reference/dispatch-mechanics.md` — this
+section does not restate them. **Per-arrival `submit` is wrong:** a
 `dispatch-panel` submit **accepts a partial seats map** (the `dispatch-panel` row below says so), so
 submitting on the first seat's arrival would advance an **incomplete** panel — the exact partial-round
 hazard § Lens coverage beside counts exists to prevent. Submit the phase **once**, with every member's

@@ -14,6 +14,8 @@ Overclaiming coverage in this docstring is the failure mode the enumeration exis
 import os
 import re
 
+import pytest
+
 import launch_doctrine as LD
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -99,16 +101,17 @@ def _assert_exact_await_dispatches_phrases(phrases):
             'RULING_INVARIANTS["await-dispatches"] must have exactly '
             f"{_EXPECTED_PHRASE_COUNT} phrases, found {len(phrases)}: {phrases!r}"
         )
-    normalized_found = tuple(_normalize_for_line_wrap(p) for p in phrases)
-    normalized_expected = tuple(
-        _normalize_for_line_wrap(_PHRASE_BY_LABEL[label])
-        for label in ("invariant clause", "independence test", "turn-end sentence")
-    )
+    normalized_found = {_normalize_for_line_wrap(p) for p in phrases}
+    normalized_expected = {
+        _normalize_for_line_wrap(literal) for literal in _PHRASE_BY_LABEL.values()
+    }
     if normalized_found != normalized_expected:
+        found_not_expected = normalized_found - normalized_expected
+        expected_not_found = normalized_expected - normalized_found
         raise AssertionError(
             'RULING_INVARIANTS["await-dispatches"] must match the three expected '
-            f"phrases exactly — found {normalized_found!r}, expected "
-            f"{normalized_expected!r}"
+            f"phrases exactly — found-not-expected: {sorted(found_not_expected)!r}, "
+            f"expected-not-found: {sorted(expected_not_found)!r}"
         )
 
 
@@ -161,19 +164,10 @@ def _assert_literal_on_every_surface(literal, label):
         _assert_literal_on_surface(rel, text, literal, label)
 
 
-def test_turn_end_sentence_on_every_amended_surface():
-    phrase = _phrase_for_label("turn-end sentence")
-    _assert_literal_on_every_surface(phrase, "turn-end sentence")
-
-
-def test_invariant_clause_on_every_amended_surface():
-    phrase = _phrase_for_label("invariant clause")
-    _assert_literal_on_every_surface(phrase, "invariant clause")
-
-
-def test_independence_test_on_every_amended_surface():
-    phrase = _phrase_for_label("independence test")
-    _assert_literal_on_every_surface(phrase, "independence test")
+@pytest.mark.parametrize("label", sorted(_PHRASE_BY_LABEL))
+def test_literal_on_every_amended_surface(label):
+    phrase = _phrase_for_label(label)
+    _assert_literal_on_every_surface(phrase, label)
 
 
 def test_ruling_invariants_pins_all_three_literals():
@@ -238,3 +232,24 @@ def test_normalize_rejects_truncated_literal():
 def test_phrase_equals_literal_rejects_appended_suffix():
     suffixed = _INVARIANT_CLAUSE + " except when the owner says otherwise"
     assert not _phrase_equals_literal(suffixed, _INVARIANT_CLAUSE)
+
+
+# Bite: grown tuple — _assert_exact_await_dispatches_phrases must reject an extra phrase
+def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
+    real_phrases = tuple(_PHRASE_BY_LABEL[label] for label in sorted(_PHRASE_BY_LABEL))
+    grown = real_phrases + (
+        "An extra plausible sentence that is not part of the canonical trio.",
+    )
+    with pytest.raises(AssertionError):
+        _assert_exact_await_dispatches_phrases(grown)
+
+
+# Bite: mutated phrase — _assert_exact_await_dispatches_phrases must reject a changed word
+def test_assert_exact_await_dispatches_phrases_rejects_mutated_phrase():
+    phrases = list(_PHRASE_BY_LABEL[label] for label in sorted(_PHRASE_BY_LABEL))
+    for index, phrase in enumerate(phrases):
+        if "unwatched" in phrase:
+            phrases[index] = phrase.replace("unwatched", "watched")
+            break
+    with pytest.raises(AssertionError):
+        _assert_exact_await_dispatches_phrases(tuple(phrases))
