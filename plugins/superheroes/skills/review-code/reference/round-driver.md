@@ -241,12 +241,12 @@ sequencing an independent batch is the defect this section exists to remove.
 ## Lens coverage beside counts
 
 **Every reported round count carries its lens coverage** — confirmation rounds at minimum, and any
-round whose counts anyone reads or acts on. A round is **complete** when **every configured dimension
-carries a terminal `seatStatus`**; it is **partial** when any configured dimension does not — a lens
-skipped because the round had already failed, a seat folded `missing` or `vacuous`, a seat whose
-findings are carried unverified. Completeness is defined by the **configured** dimensions, never by
-the seats that happened to return. Report it as `<complete>/<configured> dimensions` beside the
-count, naming the dimensions that did not land.
+round whose counts anyone reads or acts on. A round is **complete** when every configured dimension
+folded `seatStatus: "run"` and the round records no `vacuousSeats`, no `canaryUnverified`, and no
+`canaryFailed`. A round is **partial** when any configured dimension folded `missing`, or the round
+records any `vacuousSeats`, or `canaryUnverified`, or `canaryFailed`. Completeness is defined by
+the **configured** dimensions, never by the seats that happened to return. Report it as
+`<complete>/<configured> dimensions` beside the count, naming the dimensions that did not land.
 
 **A partial round's counts are floors, and are labeled as floors** — never totals.
 `2 blocking (floor — 3/5 dimensions; security and premortem did not land)` is honest; a bare

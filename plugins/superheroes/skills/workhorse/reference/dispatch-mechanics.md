@@ -89,6 +89,25 @@ pinned to the harness versions they were observed on.
   diversity of one panel. The prior charter phrasing missed this because it was framed as work in
   flight; two of the three deaths had none.
 
+## Launch slice vs continuation slice
+
+Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
+The slice you choose depends on whether the run is a **launch** or a **continuation**:
+
+- **LAUNCH** — the **first** call on a fresh `--run-dir`. Use a **short** positive slice. Run-action
+  calls serialize and a launch call blocks for its whole slice, so a launch phase over N run-dirs
+  costs about **N × the launch slice**. Measured on one host in the #930 build: three seats at a
+  **45 s** launch slice spent **150 s** launching and the batch cost **352 s** against a **373 s**
+  serial sum; the same three seats at a **12 s** launch slice cost **427 s** against a **987 s**
+  serial sum and a **419 s** slowest seat — i.e. the batch tracked its slowest member.
+- **CONTINUATION** — a re-invocation on an already-launched `--run-dir` while `.terminal` is false.
+  The engine is already working, so use the **full slice up to 540 s** — a longer slice simply means
+  fewer re-invocations.
+
+The `--max-wait 540` values in the recipes below are **continuation** slices and remain correct for
+every re-invocation after launch. On the first call for each `--run-dir`, substitute a short launch
+slice (12–45 s is the measured range above).
+
 ## Supervised review dispatch
 
 The sanctioned way to dispatch a long-running **external reviewer** seat is `dispatch-review`. The
@@ -188,6 +207,12 @@ The sanctioned way to dispatch a long-running **external implementer** is the su
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# LAUNCH — first call on a fresh --run-dir: short positive slice (see above)
+python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
+  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
+  --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
+  --run-dir "$RUN_DIR" --max-wait 12
+# CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
