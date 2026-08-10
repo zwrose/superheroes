@@ -382,9 +382,10 @@ never drop a finding or a lens.
 > **Settled dispatch contract (issue #865).** The reconciliation between this skill's dispatch
 > behaviour and the builder's native-shape rule is **closed** — not an open migration:
 >
-> 1. **External-engine seats (`codex`/`cursor`) satisfy the native-shape rule.** Each runs through
->    `dispatch-review` with `--run-dir` and `--max-wait 540`, re-invoked on the same run directory
->    until the structured result is terminal — the originating-verb continuation loop above.
+> 1. **External-engine seats (`codex`/`cursor`) satisfy the native-shape rule.** Each **launches**
+>    through `dispatch-review` on a fresh `--run-dir` with a **short positive launch slice**, then
+>    re-invokes the same `dispatch-review` on that `--run-dir` with `--max-wait 540` until the
+>    structured result is terminal — the originating-verb continuation loop above.
 >    **Claude seats** are native subagents (the `await-dispatches` ruling's native-subagent lifecycle
 >    exemption); the runner cannot dispatch them. A build whose review seats ran through the runner
 >    or as claude native subagents under this skill **owes no native-shape limitation disclosure**
