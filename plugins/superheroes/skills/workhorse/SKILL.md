@@ -361,6 +361,17 @@ work-order protocol:
 - **External engine** (codex / cursor CLI) → **inline
   `agents/implementer.md`, minus its frontmatter, verbatim** into the dispatch prompt.
 
+**Every implementer write-dispatch declares its deliverables.** Pass `--expect-item <path>`
+(repeatable) or `--expect-items-file <file>` on `dispatch-write`, naming every file the order must
+deliver. The runner then checks the declared set against the run's final diff at collection time and
+**downgrades a success to a forfeit** when a declared path was never delivered
+(`items-undelivered`) — catching the silent partial delivery that otherwise reads as a clean result
+and survives into review. It is **final-diff membership, not proof of authorship**: it cannot
+distinguish created from modified, a create-then-delete leaves no evidence and reads as missing, and
+a path already dirty before the run and unchanged after is not credited. Declaring nothing leaves
+behaviour unchanged — which is exactly why declaring is required rather than optional. Mechanics:
+`reference/dispatch-mechanics.md` § Declared items.
+
 Both paths carry identical instructions by construction. Choose each implementer's **model tier
 deliberately** — from the project's model/engine calibration where configured, **judged and disclosed
 in the work order** where not. Never let a subagent silently inherit your (high) session tier.
@@ -548,9 +559,28 @@ without a tool call.
 
 **Await every dispatch in-turn** — block on it, or **invoke through the authorized entrypoint with
 `--max-wait` slices and re-invoke the originating verb on the same `--run-dir` until terminal inside
-this turn** (see dispatch-mechanics). Independent dispatches may run **concurrently** (§6), but every
-one is **awaited in-turn** before the turn ends with a tool call (headless turn-end rule above), unless
-the in-turn poll genuinely cannot fit and you **park durably**.
+this turn** (see dispatch-mechanics). Ending the turn ends a headless session; "wait" must be an
+in-turn poll, never a final message.
+
+**An independent batch goes out concurrently — this is the shape, not a permission.** A batch is
+independent when its members have no result dependency, no shared writable worktree, and no shared
+output path; §6's independent work orders, a review panel's dimensions, a round's verifier clusters,
+and a round's audit targets are all such batches. Give every member its **own** `--run-dir`, **start
+them all with positive-slice calls issued together in one message** — opening a run-dir starts nothing
+and a zero slice starts no attempt, so a run-dir opened and then polled alone is still serial — then
+**re-invoke the originating verb on every non-terminal run** until each returns terminal, folding each
+result as it lands. A batch then costs its **slowest** member and not their **sum**: on the review leg
+that motivated this rule, a round of five seats cost ~30–50 minutes serially against ~10 minutes
+concurrently.
+
+**Concurrency changes a batch's shape, never its invariant:** in-turn awaiting only; never
+harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. Dispatching
+more runs at once is a way of awaiting *more* work inside one turn — never a licence to end the turn
+with a run unwatched, and never a reason to reach for a shape the runner does not own. The only
+exception to every run reaching terminal before the turn ends is a **durable park** (below). Anything
+failing the independence test stays **sequenced** — a dependent order, or two dispatches that would
+write the same worktree; sequencing a real dependency is correct, and sequencing an independent batch
+is the waste this rule removes.
 
 **This generalizes beyond dispatches — a headless session (`claude -p`) does not end a turn on any
 pending external outcome** — the same trap catches a background waiter (#600), a post-handback CI
@@ -864,6 +894,7 @@ curation stay with the advisor.
 | "This dispatch will finish quickly — the default timeout is fine." | A long external dispatch **you own** is **awaited in-turn** through `dispatch-review`/`dispatch-write --max-wait` (≤ 540 s) with originating-verb re-invocation on the same `--run-dir` until terminal — never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
 | "I'll kick off the implementer and wrap up my turn." | A headless session **exits when the turn ends** — until handback or park is posted, the turn's final act is a **tool call**. Launch long external dispatches through the **authorized entrypoint** (`dispatch-review`/`dispatch-write --max-wait`) and **poll in-turn** by re-invoking the originating verb until terminal (charter §7); survivability comes from the runner's own session leadership, not a standalone narrative turn-end. A **native subagent has no detach** — await it in-turn or park. Park only when the in-turn poll genuinely cannot fit. |
+| "I'll dispatch these seats one at a time so I can watch each one." | An independent batch — no result dependency, no shared writable worktree, and no shared output path — goes out **together** (own `--run-dir` each, positive-slice calls issued together in one message, then re-invoke the originating verb on every non-terminal run until each is terminal); watching one seat at a time is how a five-seat round costs the sum instead of the slowest; the invariant is unchanged — in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
