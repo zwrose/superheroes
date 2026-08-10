@@ -262,8 +262,10 @@ never drop a finding or a lens.
 > vacuous forfeit and on success.
 >
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
-> that loops to terminal). Re-invoke **`dispatch-review`** (never `dispatch-poll`) with the same
-> `--run-dir` and `--max-wait 540` while `.terminal` is false. A non-terminal
+> that loops to terminal). **Launch** each `--run-dir` with a **short positive slice** (12–45 s is the
+> measured range in `workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice);
+> then re-invoke **`dispatch-review`** (never `dispatch-poll`) on the same `--run-dir` with
+> `--max-wait 540` while `.terminal` is false. A non-terminal
 > `{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational
 > and never spawns; `dispatch-abandon` is how a run directory is abandoned. Omitting `--max-wait`
 > loops until terminal in 540 s slices — below the **600 s foreground-conversion boundary on harness
@@ -271,6 +273,14 @@ never drop a finding or a lens.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+> # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
+> python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
+>   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
+>   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
+>   --diff-base "$BASE_REF" \
+>   --run-dir "$RUN_DIR" --max-wait 12 \
+>   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
+> # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
@@ -384,8 +394,9 @@ never drop a finding or a lens.
 >    in-place fixer is not a `dispatch-write` consumer** above. Adopting the write verb there would
 >    require changing the auto-fix path's checkout model, which is not on the table.
 > 3. **Two owners, one boundary — bounds vs channel.** This skill owns the **bounds** of the
->    dispatches it launches — slice size (`--max-wait 540`, never zero), structural timeout, retry
->    ladder, and the standing rule that the caller composes **no** per-dispatch watchdog. The builder's
+>    dispatches it launches — slice sizes (a short launch slice and continuations up to `--max-wait
+>    540`, never zero), structural timeout, retry ladder, and the standing rule that the caller
+>    composes **no** per-dispatch watchdog. The builder's
 >    `await-dispatches` ruling governs the **channel** for dispatches **the builder itself launches**.
 >    Timeout contract stays the skill's; channel duty attaches to what the builder launches.
 > 4. **The native-shape limitation disclosure is retired for runner-dispatched and claude-native

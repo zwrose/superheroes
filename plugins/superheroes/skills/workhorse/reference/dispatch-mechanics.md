@@ -2,9 +2,10 @@
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
 2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
-3. [Supervised review dispatch](#supervised-review-dispatch)
-4. [Supervised write dispatch](#supervised-write-dispatch)
-5. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+3. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+4. [Supervised review dispatch](#supervised-review-dispatch)
+5. [Supervised write dispatch](#supervised-write-dispatch)
+6. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -211,13 +212,20 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
+  --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 12
 # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
+  --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 540
 ```
+
+Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
+The runner support for these flags ships in `main` via [#951](https://github.com/zwrose/superheroes/issues/951);
+they become accepted when this stack merges into `main` — on this branch the parser does not yet expose
+them.
 
 `$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
 **implementer** role. `--effort` is **optional** on `dispatch-write` because a registry model may

@@ -38,6 +38,14 @@ _INDEPENDENCE_TEST = (
     "no result dependency, no shared writable worktree, and no shared output path"
 )
 
+_PHRASE_BY_LABEL = {
+    "invariant clause": _INVARIANT_CLAUSE,
+    "independence test": _INDEPENDENCE_TEST,
+    "turn-end sentence": _TURN_END_SENTENCE,
+}
+
+_EXPECTED_PHRASE_COUNT = len(_PHRASE_BY_LABEL)
+
 
 def _read_plugin(rel):
     path = os.path.join(_PLUGIN_ROOT, rel)
@@ -85,6 +93,39 @@ def _await_dispatches_phrases():
     return phrases
 
 
+def _assert_exact_await_dispatches_phrases(phrases):
+    if len(phrases) != _EXPECTED_PHRASE_COUNT:
+        raise AssertionError(
+            'RULING_INVARIANTS["await-dispatches"] must have exactly '
+            f"{_EXPECTED_PHRASE_COUNT} phrases, found {len(phrases)}: {phrases!r}"
+        )
+    normalized_found = tuple(_normalize_for_line_wrap(p) for p in phrases)
+    normalized_expected = tuple(
+        _normalize_for_line_wrap(_PHRASE_BY_LABEL[label])
+        for label in ("invariant clause", "independence test", "turn-end sentence")
+    )
+    if normalized_found != normalized_expected:
+        raise AssertionError(
+            'RULING_INVARIANTS["await-dispatches"] must match the three expected '
+            f"phrases exactly — found {normalized_found!r}, expected "
+            f"{normalized_expected!r}"
+        )
+
+
+def _phrase_for_label(label):
+    if label not in _PHRASE_BY_LABEL:
+        raise AssertionError(f"unknown phrase label: {label!r}")
+    literal = _PHRASE_BY_LABEL[label]
+    for phrase in _await_dispatches_phrases():
+        if _phrase_equals_literal(phrase, literal):
+            return phrase
+    normalized = _normalize_for_line_wrap(literal)
+    raise AssertionError(
+        f'{label!r} missing from RULING_INVARIANTS["await-dispatches"] '
+        f"— expected exact phrase: {normalized!r}"
+    )
+
+
 def _workhorse_section7_concurrency_region():
     """§7 concurrency prose — not the whole file or the 'When you're tempted' table."""
     text = _read_plugin("skills/workhorse/SKILL.md")
@@ -121,28 +162,25 @@ def _assert_literal_on_every_surface(literal, label):
 
 
 def test_turn_end_sentence_on_every_amended_surface():
-    phrases = _await_dispatches_phrases()
-    _assert_literal_on_every_surface(phrases[2], "turn-end sentence")
+    phrase = _phrase_for_label("turn-end sentence")
+    _assert_literal_on_every_surface(phrase, "turn-end sentence")
 
 
 def test_invariant_clause_on_every_amended_surface():
-    phrases = _await_dispatches_phrases()
-    _assert_literal_on_every_surface(phrases[0], "invariant clause")
+    phrase = _phrase_for_label("invariant clause")
+    _assert_literal_on_every_surface(phrase, "invariant clause")
 
 
 def test_independence_test_on_every_amended_surface():
-    phrases = _await_dispatches_phrases()
-    _assert_literal_on_every_surface(phrases[1], "independence test")
+    phrase = _phrase_for_label("independence test")
+    _assert_literal_on_every_surface(phrase, "independence test")
 
 
 def test_ruling_invariants_pins_all_three_literals():
     # §11 pattern-2 drift guard: hand-typed literals must equal the machine home exactly.
     phrases = _await_dispatches_phrases()
-    for literal, label in (
-        (_TURN_END_SENTENCE, "turn-end sentence"),
-        (_INVARIANT_CLAUSE, "invariant clause"),
-        (_INDEPENDENCE_TEST, "independence test"),
-    ):
+    _assert_exact_await_dispatches_phrases(phrases)
+    for label, literal in _PHRASE_BY_LABEL.items():
         normalized = _normalize_for_line_wrap(literal)
         if not any(_phrase_equals_literal(phrase, literal) for phrase in phrases):
             raise AssertionError(
@@ -194,3 +232,9 @@ def test_normalize_rejects_unbackticked_ampersand():
 def test_normalize_rejects_truncated_literal():
     mutated = _INVARIANT_CLAUSE[: len(_INVARIANT_CLAUSE) // 2]
     assert not _literal_present(mutated, _INVARIANT_CLAUSE)
+
+
+# Bite: appended suffix — _phrase_equals_literal must reject containment
+def test_phrase_equals_literal_rejects_appended_suffix():
+    suffixed = _INVARIANT_CLAUSE + " except when the owner says otherwise"
+    assert not _phrase_equals_literal(suffixed, _INVARIANT_CLAUSE)
