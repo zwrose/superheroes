@@ -573,7 +573,8 @@ the engines working while you poll the others**, never from issuing the calls to
 measured on one host, run-action calls serialize and a launch call blocks for its whole slice, so a
 launch phase costs about N × the launch slice — keep it short. **A native-subagent batch is the other
 channel:** the harness runs several subagent dispatches issued in one message concurrently and owns
-their lifecycle, so there the batch genuinely does go out as parallel dispatches in one message. A batch then costs its **slowest** member and not their **sum**: on the review leg
+their lifecycle, so there the batch genuinely does go out as parallel dispatches in one message.
+A batch then costs its **slowest** member and not their **sum**: on the review leg
 that motivated this rule, a round of five seats cost ~30–50 minutes serially against ~10 minutes
 concurrently.
 
