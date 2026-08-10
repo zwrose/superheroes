@@ -209,13 +209,22 @@ each of those batches are independent of one another** — the test is no result
 writable worktree, and no shared output path — so they **SHOULD be dispatched concurrently**, and a
 round that dispatches them one at a time is paying a cost this contract does not ask for.
 
-**The shape, concretely.** Give every member of the batch its **own** `--run-dir`. **Start them all
-with positive-slice calls issued together in one message** — opening a run-dir starts nothing, and a
-zero slice starts no attempt, so a run-dir opened and then polled alone is still a serial round.
-Then **re-invoke the originating verb on every non-terminal run** until each one returns terminal.
-**Seat submits fold as they land** — a landed seat is recorded when it lands (`record-result` /
-`advance`); nothing waits for the slowest member before folding the fast ones. The round then costs
-its **slowest** member and not their **sum**.
+**The shape, concretely.** Give every member of the batch its **own** `--run-dir`. **Launch each one
+with a short positive slice** — a zero slice opens a run without starting an attempt, so opening
+run-dirs launches nothing. Then **re-invoke the originating verb on every non-terminal run in
+rotation** until each one returns terminal. **The concurrency comes from the engines working while
+you poll the others** — a slice that expires returns non-terminal `running` and its engine keeps
+working — and **not** from issuing the calls together in one message: measured on one host, run-action
+calls serialize and a launch call blocks for its whole slice, so a launch phase costs about N × the
+launch slice and that slice should be kept short. **Seat submits fold as they land** — a landed seat
+is recorded when it lands (`record-result` / `advance`); nothing waits for the slowest member before
+folding the fast ones. The round then costs its **slowest** member and not their **sum**.
+
+**A panel's `claude` seats are the other channel.** They are native subagents, not runner dispatches:
+the harness runs several subagent dispatches issued in **one message** concurrently, and it owns their
+lifecycle — no `--run-dir`, no slice, no rotation. A mixed-vendor panel therefore does both at once:
+the `claude` seats go out as parallel subagent dispatches in one message, and the engine seats are
+launched-and-rotated as above.
 
 **This changes a batch's shape, never its invariant:** in-turn awaiting only; never harness-external
 backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. Ending the turn ends a

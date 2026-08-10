@@ -565,11 +565,15 @@ in-turn poll, never a final message.
 **An independent batch goes out concurrently — this is the shape, not a permission.** A batch is
 independent when its members have no result dependency, no shared writable worktree, and no shared
 output path; §6's independent work orders, a review panel's dimensions, a round's verifier clusters,
-and a round's audit targets are all such batches. Give every member its **own** `--run-dir`, **start
-them all with positive-slice calls issued together in one message** — opening a run-dir starts nothing
-and a zero slice starts no attempt, so a run-dir opened and then polled alone is still serial — then
-**re-invoke the originating verb on every non-terminal run** until each returns terminal, folding each
-result as it lands. A batch then costs its **slowest** member and not their **sum**: on the review leg
+and a round's audit targets are all such batches. Give every member its **own** `--run-dir`, **launch
+each one with a short positive slice** — a zero slice opens a run without starting an attempt, so
+opening run-dirs launches nothing — then **re-invoke the originating verb on every non-terminal run in
+rotation** until each returns terminal, folding each result as it lands. **The concurrency comes from
+the engines working while you poll the others**, never from issuing the calls together in one message:
+measured on one host, run-action calls serialize and a launch call blocks for its whole slice, so a
+launch phase costs about N × the launch slice — keep it short. **A native-subagent batch is the other
+channel:** the harness runs several subagent dispatches issued in one message concurrently and owns
+their lifecycle, so there the batch genuinely does go out as parallel dispatches in one message. A batch then costs its **slowest** member and not their **sum**: on the review leg
 that motivated this rule, a round of five seats cost ~30–50 minutes serially against ~10 minutes
 concurrently.
 
@@ -894,7 +898,7 @@ curation stay with the advisor.
 | "This dispatch will finish quickly — the default timeout is fine." | A long external dispatch **you own** is **awaited in-turn** through `dispatch-review`/`dispatch-write --max-wait` (≤ 540 s) with originating-verb re-invocation on the same `--run-dir` until terminal — never squeezed under the foreground-conversion boundary (a larger foreground `timeout` converts to background; the turn ending kills converted runs — four 0.18.0 sessions died that way; mechanics in `dispatch-mechanics.md`) — and a stuck/runaway monitor. Never a borderline limit. |
 | "The implementer botched it — escalate to a stronger engine." | Attribution first. In the 0.18.0 wave, order quality outweighed execution ~5:1. A defect the order under-specified (a missing fail-closed edge, an unnamed target file) is an **order** defect — rewrite the order at the same rung, don't blame the engine. |
 | "I'll kick off the implementer and wrap up my turn." | A headless session **exits when the turn ends** — until handback or park is posted, the turn's final act is a **tool call**. Launch long external dispatches through the **authorized entrypoint** (`dispatch-review`/`dispatch-write --max-wait`) and **poll in-turn** by re-invoking the originating verb until terminal (charter §7); survivability comes from the runner's own session leadership, not a standalone narrative turn-end. A **native subagent has no detach** — await it in-turn or park. Park only when the in-turn poll genuinely cannot fit. |
-| "I'll dispatch these seats one at a time so I can watch each one." | An independent batch — no result dependency, no shared writable worktree, and no shared output path — goes out **together** (own `--run-dir` each, positive-slice calls issued together in one message, then re-invoke the originating verb on every non-terminal run until each is terminal); watching one seat at a time is how a five-seat round costs the sum instead of the slowest; the invariant is unchanged — in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. |
+| "I'll dispatch these seats one at a time so I can watch each one." | An independent batch — no result dependency, no shared writable worktree, and no shared output path — goes out **together** (own `--run-dir` each, launch each with a short positive slice, then rotate re-invocations over the non-terminal runs until each is terminal); watching one seat at a time is how a five-seat round costs the sum instead of the slowest; the invariant is unchanged — in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end. |
 | "It's committed locally — the PR is ready." | "Ready" requires the **remote** head containing every commit your receipts claim (`git rev-parse origin/<branch>` vs local HEAD). A local-only fix is a claim without a receipt. |
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
