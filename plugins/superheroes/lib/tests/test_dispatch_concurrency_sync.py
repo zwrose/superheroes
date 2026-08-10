@@ -11,6 +11,7 @@ files bless parallelism in their own words and are deliberately out of scope:
 Overclaiming coverage in this docstring is the failure mode the enumeration exists to prevent.
 """
 import os
+import re
 
 import launch_doctrine as LD
 
@@ -44,12 +45,28 @@ def _read_plugin(rel):
         return fh.read()
 
 
+def _normalize_for_line_wrap(text):
+    """Collapse whitespace runs so hard-wrapped markdown still matches oracle literals.
+
+    Line wrapping is a layout choice in hard-wrapped markdown and carries no meaning, so
+    tolerating it is correct; every other difference still fails — a changed or inserted word,
+    changed punctuation, curly quotes substituted for the straight quotes around "wait", an
+    un-backticked &, or a partial match.
+    """
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _literal_present(text, literal):
+    return _normalize_for_line_wrap(literal) in _normalize_for_line_wrap(text)
+
+
 def _assert_literal_on_every_surface(literal, label):
+    normalized_literal = _normalize_for_line_wrap(literal)
     for rel in _SURFACES:
         text = _read_plugin(rel)
-        if literal not in text:
+        if not _literal_present(text, literal):
             raise AssertionError(
-                f"{label!r} missing from {rel} — expected exact substring: {literal!r}"
+                f"{label!r} missing from {rel} — expected exact substring: {normalized_literal!r}"
             )
 
 
@@ -77,10 +94,10 @@ def test_ruling_invariants_pins_all_three_literals():
         (_INVARIANT_CLAUSE, "invariant clause"),
         (_INDEPENDENCE_TEST, "independence test"),
     ):
-        if not any(literal in phrase for phrase in phrases):
+        if not any(_literal_present(phrase, literal) for phrase in phrases):
             raise AssertionError(
                 f'{label!r} missing from RULING_INVARIANTS["await-dispatches"] '
-                f"— expected exact substring: {literal!r}"
+                f"— expected exact substring: {_normalize_for_line_wrap(literal)!r}"
             )
     result = LD.load()
     assert result["ok"] is True, (
