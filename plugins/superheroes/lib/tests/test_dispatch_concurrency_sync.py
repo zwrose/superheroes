@@ -69,7 +69,22 @@ def _normalize_for_line_wrap(text):
 
 
 def _literal_present(text, literal):
-    return _normalize_for_line_wrap(literal) in _normalize_for_line_wrap(text)
+    norm_text = _normalize_for_line_wrap(text)
+    norm_literal = _normalize_for_line_wrap(literal)
+    pos = norm_text.find(norm_literal)
+    if pos < 0:
+        return False
+    after = norm_text[pos + len(norm_literal):]
+    if norm_literal.endswith("."):
+        return True
+    after_trimmed = after.lstrip()
+    if not after_trimmed:
+        return True
+    if after_trimmed.startswith(";"):
+        return True
+    if after_trimmed[0] in ("—", "-", "."):
+        return True
+    return False
 
 
 def _phrase_equals_literal(phrase, literal):
@@ -232,6 +247,19 @@ def test_normalize_rejects_truncated_literal():
 def test_phrase_equals_literal_rejects_appended_suffix():
     suffixed = _INVARIANT_CLAUSE + " except when the owner says otherwise"
     assert not _phrase_equals_literal(suffixed, _INVARIANT_CLAUSE)
+
+
+# Bite: appended suffix on a real surface — _assert_literal_on_surface must reject neutralization
+def test_assert_literal_on_surface_rejects_appended_suffix_on_real_surface():
+    rel = "rubric/launch-doctrine.md"
+    phrase = _phrase_for_label("invariant clause")
+    real_surface = _surface_text(rel)
+    pos = real_surface.find(phrase)
+    assert pos >= 0, "invariant clause missing from real launch-doctrine surface"
+    suffix = " except when the owner says otherwise"
+    mutated = real_surface[:pos + len(phrase)] + suffix + real_surface[pos + len(phrase):]
+    with pytest.raises(AssertionError, match="invariant clause"):
+        _assert_literal_on_surface(rel, mutated, phrase, "invariant clause")
 
 
 # Bite: grown tuple — _assert_exact_await_dispatches_phrases must reject an extra phrase

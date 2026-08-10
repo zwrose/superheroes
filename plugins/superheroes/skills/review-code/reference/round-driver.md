@@ -207,7 +207,10 @@ Several `dispatch-` phases hand you a **batch**: `dispatch-panel`'s `payload.dim
 `dispatch-verifiers`' `payload.clusters`, and `dispatch-audits`' `payload.targets`. **The members of
 each of those batches are independent of one another** — the test is no result dependency, no shared
 writable worktree, and no shared output path — so they **SHOULD be dispatched concurrently**, and a
-round that dispatches them one at a time is paying a cost this contract does not ask for.
+round that dispatches them one at a time is paying a cost this contract does not ask for. A batch
+larger than the host or account can carry at once launches in waves — each wave launched, then
+rotated to terminal, before the next wave launches — and the SHOULD is about not serialising an
+independent batch, never a requirement to open every member simultaneously.
 
 **How** to dispatch a batch concurrently — run-dirs and slice sizes in
 `skills/workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice,
