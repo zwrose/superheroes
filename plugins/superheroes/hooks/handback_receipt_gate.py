@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
+# STUB(#954): handback refusal class is unwired from the PreToolUse chain — the hook never runs, so gh pr ready / non-draft gh pr create are not gated; arming is #954's decision.
 """PreToolUse(Bash) review-receipt gate — blocks handback without a valid receipt (#624 §4).
+
+**Shipped dark; nothing invokes this; the class does not arm; arming is owned by #954**
+(retrospective would-refuse audit → shadow mode → preconditions → owner decision). The
+parser-exactness question (the A-vs-B fork) is moot while dark and recorded on #954 — do not
+resolve it here.
 
 Reads the PreToolUse payload from stdin. When the tool is Bash and the command is a guarded
 ``gh pr ready`` / non-draft ``gh pr create`` in a mechanically-marked full-lane worktree that lacks

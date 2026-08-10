@@ -4476,6 +4476,68 @@ def test_run_config_retired_keys_census():
         "retired run-config keys read in round_driver.py: %s" % violations)
 
 
+def _review_session_marker_setup(tmp_path):
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    repo = os.path.join(d, "_gitrepo")
+    os.makedirs(repo, exist_ok=True)
+    subprocess.check_call(["git", "init", "-q", "-b", "review-branch"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    toplevel = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--show-toplevel"], text=True).strip()
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"repoRoot": toplevel}, fh)
+    sc = _load("store_core")
+    gitdir = sc.get_worktree_gitdir(repo)
+    marker_path = os.path.join(gitdir, RD.SIDECAR_DIRNAME, RD._REVIEW_SESSION_MARKER)
+    return d, marker_path
+
+
+def test_review_session_marker_writes_atomically(tmp_path, monkeypatch):
+    d, marker_path = _review_session_marker_setup(tmp_path)
+    calls = {"atomic": 0}
+    dest_truncates = []
+
+    orig_atomic = RD.round_commit.atomic_write_bytes
+
+    def track_atomic(path, data):
+        calls["atomic"] += 1
+        return orig_atomic(path, data)
+
+    orig_open = open
+
+    def tracking_open(path, mode="r", *args, **kwargs):
+        abspath = os.path.abspath(path)
+        if abspath == os.path.abspath(marker_path) and "w" in mode:
+            dest_truncates.append(abspath)
+        return orig_open(path, mode, *args, **kwargs)
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", track_atomic)
+    monkeypatch.setattr("builtins.open", tracking_open)
+    RD._bootstrap_review_session_marker(d)
+    assert calls["atomic"] == 1
+    assert not dest_truncates
+    assert os.path.isfile(marker_path)
+
+
+def test_review_session_marker_atomic_replace_preserves_prior_on_failure(tmp_path, monkeypatch):
+    d, marker_path = _review_session_marker_setup(tmp_path)
+    os.makedirs(os.path.dirname(marker_path), exist_ok=True)
+    sentinel = '{"schema":"review-session/1","prior":true}'
+    with open(marker_path, "w", encoding="utf-8") as fh:
+        fh.write(sentinel)
+
+    def boom(path, data):
+        raise OSError("simulated replace failure")
+
+    monkeypatch.setattr(RD.round_commit, "atomic_write_bytes", boom)
+    RD._bootstrap_review_session_marker(d)
+    with open(marker_path, encoding="utf-8") as fh:
+        assert fh.read() == sentinel
+
+
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():
     """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
     DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the

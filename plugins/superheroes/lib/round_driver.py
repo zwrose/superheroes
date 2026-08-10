@@ -432,8 +432,8 @@ def _bootstrap_review_session_marker(session_dir):
             "repoRoot": repo_root,
             "branch": branch,
         }
-        with open(os.path.join(super_dir, _REVIEW_SESSION_MARKER), "w", encoding="utf-8") as fh:
-            json.dump(marker, fh)
+        marker_path = os.path.join(super_dir, _REVIEW_SESSION_MARKER)
+        round_commit.atomic_write_bytes(marker_path, _canonical(marker).encode("utf-8"))
     except Exception as exc:
         _journal_bootstrap_marker_failure(session_dir, str(exc))
 

@@ -331,8 +331,15 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 
 ### Handback receipt gate (Claude host, Bash tool)
 
-The PreToolUse `handback_receipt_gate` hook refuses `gh pr ready` and non-draft `gh pr create` when
-the worktree is mechanically in scope but lacks a valid full-lane review receipt. Scope is marked by
+**Shipped dark in 0.25.0** — the review-receipt handback refusal class is built and in-tree but
+**unwired** from the PreToolUse chain; it enforces nothing today. **Arming is owned by #954**
+(retrospective would-refuse audit → shadow mode → preconditions → owner decision). The scope markers
+and sidecar below still ship and still produce data — that data is what #954's retrospective audit
+reads.
+
+When armed, the PreToolUse `handback_receipt_gate` hook would refuse `gh pr ready` and non-draft
+`gh pr create` when the worktree is mechanically in scope but lacks a valid full-lane review receipt.
+Scope is marked by
 `build-lane.json` (written by `lib/build_lane.py` `declare`, invoked from the workhorse charter's
 full-lane intake step) or `review-session.json` (written on the driver's first fresh `next`); both
 markers carry a `branch` field — a marker whose `branch` differs from the worktree's current branch

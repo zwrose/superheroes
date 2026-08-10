@@ -75,35 +75,34 @@ def test_worktree_guard_gate_wired_fail_closed_between_owner_and_timeout():
 
     owner_idx = next(i for i, c in enumerate(cmds) if "owner_authority_gate.py" in c)
     guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
-    handback_idx = next(i for i, c in enumerate(cmds) if "handback_receipt_gate.py" in c)
     to_idx = next(i for i, c in enumerate(cmds) if "bash_timeout.py" in c)
-    assert owner_idx < guard_idx < handback_idx < to_idx, \
-        "worktree guard must be listed after owner_authority_gate; handback_receipt_gate after worktree_guard and before bash_timeout"
+    assert owner_idx < guard_idx < to_idx, \
+        "worktree guard must be listed after owner_authority_gate and before bash_timeout"
 
 
-def test_handback_receipt_gate_wired_fail_closed_between_worktree_guard_and_timeout():
+def test_handback_receipt_gate_is_not_wired_shipped_dark():
+    """#954: the review-receipt handback refusal class ships dark — unwired from PreToolUse.
+
+    Re-arming requires deleting or inverting this test deliberately.
+    """
     cfg = json.load(open(_HOOKS))
     bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
     assert bash, "no Bash PreToolUse matcher"
     cmds = [h["command"] for entry in bash for h in entry["hooks"]]
 
-    gate = [c for c in cmds if "handback_receipt_gate.py" in c]
-    assert gate, "hooks.json must wire handback_receipt_gate.py on the Bash matcher"
-    gate_cmd = gate[0]
-    assert "|| printf" in gate_cmd, "gate must carry a process-failure fallback"
+    handback = [c for c in cmds if "handback_receipt_gate.py" in c]
+    assert not handback, "handback_receipt_gate.py must not be wired on the Bash matcher (shipped dark, #954)"
 
-    start = gate_cmd.index("printf ") + len("printf ")
-    assert gate_cmd[start] == "'", "printf argument must be single-quoted"
-    end = gate_cmd.index("'", start + 1)
-    fallback = json.loads(gate_cmd[start + 1:end])
-    assert fallback["hookSpecificOutput"]["permissionDecision"] == "deny"
-    assert "review-receipt gate unavailable" in fallback["hookSpecificOutput"]["permissionDecisionReason"]
-
-    guard_idx = next(i for i, c in enumerate(cmds) if "worktree_guard_gate.py" in c)
-    handback_idx = next(i for i, c in enumerate(cmds) if "handback_receipt_gate.py" in c)
-    to_idx = next(i for i, c in enumerate(cmds) if "bash_timeout.py" in c)
-    assert guard_idx < handback_idx < to_idx, \
-        "handback receipt gate must be listed after worktree_guard_gate and before bash_timeout"
+    expected = [
+        "owner_authority_gate.py",
+        "worktree_guard_gate.py",
+        "bash_timeout.py",
+    ]
+    assert len(cmds) == len(expected), (
+        f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
+    )
+    for i, name in enumerate(expected):
+        assert name in cmds[i], f"hook {i} must be {name}, got {cmds[i]!r}"
 
 
 def test_hooks_codex_still_wires_nothing():

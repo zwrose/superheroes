@@ -1,6 +1,11 @@
 #!/usr/bin/env python3
 """Handback gate — parser, subject resolver, semantic validator, scope markers (#624 §4).
 
+**Shipped dark; nothing invokes this; the class does not arm; arming is owned by #954**
+(retrospective would-refuse audit → shadow mode → preconditions → owner decision). The
+parser-exactness question (the A-vs-B fork) is moot while dark and recorded on #954 — do not
+resolve it here.
+
 Refuses ``gh pr ready`` / non-draft ``gh pr create`` in a mechanically-marked full-lane worktree
 that lacks an allowlisted review receipt. This class is a **Claude-host, Bash-tool, honest-agent
 tripwire**. It does not cover aliases, wrapper scripts, non-Bash tools, or other hosts. **It is
