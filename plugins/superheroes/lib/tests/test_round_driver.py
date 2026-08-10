@@ -15,6 +15,7 @@ independence, receipt-missing seats carried unverified, the author-justification
 the driver receipt + its validator.
 """
 import importlib.util
+import hashlib
 import json
 import os
 import re
@@ -4536,6 +4537,113 @@ def test_review_session_marker_atomic_replace_preserves_prior_on_failure(tmp_pat
     RD._bootstrap_review_session_marker(d)
     with open(marker_path, encoding="utf-8") as fh:
         assert fh.read() == sentinel
+
+
+def _next_marker_session_setup(tmp_path):
+    d = str(tmp_path / "session")
+    os.makedirs(d)
+    repo = os.path.join(d, "_gitrepo")
+    os.makedirs(repo, exist_ok=True)
+    subprocess.check_call(["git", "init", "-q", "-b", "review-branch"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    toplevel = subprocess.check_output(
+        ["git", "-C", repo, "rev-parse", "--show-toplevel"], text=True).strip()
+    with open(os.path.join(d, "meta.json"), "w", encoding="utf-8") as fh:
+        json.dump({"repoRoot": toplevel}, fh)
+    return d, repo
+
+
+def test_next_bootstraps_review_session_marker(tmp_path):
+    """Public cmd_next path must write the review-session scope marker (#624)."""
+    d, repo = _next_marker_session_setup(tmp_path)
+    n = RD.cmd_next(d, _cfg())
+    assert n["ok"]
+    sc = _load("store_core")
+    gitdir = sc.get_worktree_gitdir(repo)
+    marker_path = os.path.join(gitdir, RD.SIDECAR_DIRNAME, RD._REVIEW_SESSION_MARKER)
+    assert os.path.isfile(marker_path)
+    with open(marker_path, encoding="utf-8") as fh:
+        marker = json.load(fh)
+    assert marker["schema"] == RD._REVIEW_SESSION_SCHEMA
+    assert marker["branch"] == "review-branch"
+    assert marker["sessionDir"] == os.path.realpath(d)
+
+
+def _legacy_sidecar_setup(tmp_path):
+    RR = _load("round_records")
+    sc = _load("store_core")
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    base_sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "feature"], cwd=repo)
+    head_sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    session = str(tmp_path / "session")
+    os.makedirs(session)
+    receipt = {
+        "schema": RD.RECEIPT_CERTIFIED_SCHEMA % 3,
+        "schemaVersion": 3,
+        "verdict": "converged",
+        "certificationShape": "audited-chain",
+        "certification": {"shape": "audited-chain"},
+        "scriptRan": {"byPhase": {}},
+        "seatMap": {},
+        "rounds": [],
+        "findings": [],
+        "decisions": [],
+        "degraded": [],
+        "skippedBlockers": [],
+    }
+    receipt_path = os.path.join(session, RD.RECEIPT_FILE)
+    receipt_bytes = json.dumps(receipt).encode("utf-8")
+    with open(receipt_path, "wb") as fh:
+        fh.write(receipt_bytes)
+    diff = subprocess.check_output(["git", "-C", repo, "diff", "%s...HEAD" % base_sha])
+    sidecar = RR.build_sidecar(
+        repoId="github.com/o/r",
+        branch="main",
+        headSha=head_sha,
+        baseRef=base_sha,
+        baseSha=base_sha,
+        diffSha256=hashlib.sha256(diff).hexdigest(),
+        verdict="converged",
+        certificationShape="audited-chain",
+        receiptPath=receipt_path,
+        receiptSha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        policySha256="policy",
+        sessionDir=session,
+    )
+    gitdir = sc.get_worktree_gitdir(repo)
+    super_dir = os.path.join(gitdir, RD.SIDECAR_DIRNAME)
+    os.makedirs(super_dir, exist_ok=True)
+    sidecar_path = os.path.join(super_dir, RD.SIDECAR_FILE)
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    state = {
+        "terminal": "converged",
+        "config": {"repoRoot": repo, "baseRef": base_sha, "baseBranch": "main"},
+        "reviewedDiff": "",
+        "certification": {"shape": "audited-chain"},
+    }
+    return session, state, sidecar_path
+
+
+def test_legacy_sidecar_base_ref_is_republished(tmp_path):
+    """A car-4 sidecar with a commit id in baseRef must be rewritten to the branch-name contract."""
+    session, state, sidecar_path = _legacy_sidecar_setup(tmp_path)
+    with open(sidecar_path, encoding="utf-8") as fh:
+        before = json.load(fh)
+    assert len(before["baseRef"]) == 40
+    prepared = RD._prepare_sidecar(session, state)
+    assert prepared["ok"] is True and prepared["needs_write"] is True
+    republished = json.loads(prepared["sidecar_bytes"].decode("utf-8"))
+    assert republished["baseRef"] == "main"
+    assert republished["baseSha"] == before["baseSha"]
 
 
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():
