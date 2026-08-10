@@ -4646,6 +4646,152 @@ def test_legacy_sidecar_base_ref_is_republished(tmp_path):
     assert republished["baseSha"] == before["baseSha"]
 
 
+def test_hex_named_branch_sidecar_not_republished(tmp_path):
+    """A current-contract sidecar whose base branch is legitimately named as 40 lowercase hex must
+    stay fresh — shape must not infer legacy semantics from the name alone."""
+    RR = _load("round_records")
+    sc = _load("store_core")
+    hex_branch = "a" * 40
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    init_sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    subprocess.check_call(["git", "update-ref", "refs/heads/%s" % hex_branch, init_sha], cwd=repo)
+    subprocess.check_call(["git", "checkout", "-q", "refs/heads/%s" % hex_branch], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "on-hex"], cwd=repo)
+    head_sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    session = str(tmp_path / "session")
+    os.makedirs(session)
+    receipt = {
+        "schema": RD.RECEIPT_CERTIFIED_SCHEMA % 3,
+        "schemaVersion": 3,
+        "verdict": "converged",
+        "certificationShape": "audited-chain",
+        "certification": {"shape": "audited-chain"},
+        "scriptRan": {"byPhase": {}},
+        "seatMap": {},
+        "rounds": [],
+        "findings": [],
+        "decisions": [],
+        "degraded": [],
+        "skippedBlockers": [],
+    }
+    receipt_path = os.path.join(session, RD.RECEIPT_FILE)
+    receipt_bytes = json.dumps(receipt).encode("utf-8")
+    with open(receipt_path, "wb") as fh:
+        fh.write(receipt_bytes)
+    diff = subprocess.check_output(["git", "-C", repo, "diff", "%s...HEAD" % init_sha])
+    sidecar = RR.build_sidecar(
+        repoId="github.com/o/r",
+        branch=hex_branch,
+        headSha=head_sha,
+        baseRef=hex_branch,
+        baseSha=head_sha,
+        diffSha256=hashlib.sha256(diff).hexdigest(),
+        verdict="converged",
+        certificationShape="audited-chain",
+        receiptPath=receipt_path,
+        receiptSha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        policySha256="policy",
+        sessionDir=session,
+    )
+    gitdir = sc.get_worktree_gitdir(repo)
+    super_dir = os.path.join(gitdir, RD.SIDECAR_DIRNAME)
+    os.makedirs(super_dir, exist_ok=True)
+    sidecar_path = os.path.join(super_dir, RD.SIDECAR_FILE)
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    state = {
+        "terminal": "converged",
+        "config": {"repoRoot": repo, "baseBranch": hex_branch},
+        "reviewedDiff": "",
+        "certification": {"shape": "audited-chain"},
+    }
+    prepared = RD._prepare_sidecar(session, state)
+    assert prepared["ok"] is True and prepared["needs_write"] is False
+
+
+def test_legacy_sidecar_sha256_base_ref_is_republished(tmp_path):
+    """A legacy sidecar whose baseRef holds a 64-hex SHA-256 object id must be repaired."""
+    RR = _load("round_records")
+    sc = _load("store_core")
+    repo = str(tmp_path / "repo")
+    os.makedirs(repo)
+    subprocess.check_call(["git", "init", "-q", "-b", "main"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.email", "t@t"], cwd=repo)
+    subprocess.check_call(["git", "config", "user.name", "t"], cwd=repo)
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "init"], cwd=repo)
+    base_sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    base_sha256 = hashlib.sha256(base_sha.encode()).hexdigest()
+    subprocess.check_call(["git", "commit", "-q", "--allow-empty", "-m", "feature"], cwd=repo)
+    head_sha = subprocess.check_output(["git", "-C", repo, "rev-parse", "HEAD"], text=True).strip()
+    session = str(tmp_path / "session")
+    os.makedirs(session)
+    receipt = {
+        "schema": RD.RECEIPT_CERTIFIED_SCHEMA % 3,
+        "schemaVersion": 3,
+        "verdict": "converged",
+        "certificationShape": "audited-chain",
+        "certification": {"shape": "audited-chain"},
+        "scriptRan": {"byPhase": {}},
+        "seatMap": {},
+        "rounds": [],
+        "findings": [],
+        "decisions": [],
+        "degraded": [],
+        "skippedBlockers": [],
+    }
+    receipt_path = os.path.join(session, RD.RECEIPT_FILE)
+    receipt_bytes = json.dumps(receipt).encode("utf-8")
+    with open(receipt_path, "wb") as fh:
+        fh.write(receipt_bytes)
+    diff = subprocess.check_output(["git", "-C", repo, "diff", "%s...HEAD" % base_sha])
+    sidecar = RR.build_sidecar(
+        repoId="github.com/o/r",
+        branch="main",
+        headSha=head_sha,
+        baseRef=base_sha256,
+        baseSha=base_sha,
+        diffSha256=hashlib.sha256(diff).hexdigest(),
+        verdict="converged",
+        certificationShape="audited-chain",
+        receiptPath=receipt_path,
+        receiptSha256=hashlib.sha256(receipt_bytes).hexdigest(),
+        policySha256="policy",
+        sessionDir=session,
+    )
+    gitdir = sc.get_worktree_gitdir(repo)
+    super_dir = os.path.join(gitdir, RD.SIDECAR_DIRNAME)
+    os.makedirs(super_dir, exist_ok=True)
+    sidecar_path = os.path.join(super_dir, RD.SIDECAR_FILE)
+    with open(sidecar_path, "w", encoding="utf-8") as fh:
+        json.dump(sidecar, fh)
+    state = {
+        "terminal": "converged",
+        "config": {"repoRoot": repo, "baseRef": base_sha, "baseBranch": "main"},
+        "reviewedDiff": "",
+        "certification": {"shape": "audited-chain"},
+    }
+    prepared = RD._prepare_sidecar(session, state)
+    assert prepared["ok"] is True and prepared["needs_write"] is True
+    republished = json.loads(prepared["sidecar_bytes"].decode("utf-8"))
+    assert republished["baseRef"] == "main"
+
+
+def test_legacy_sidecar_repair_is_idempotent(tmp_path):
+    """A second terminal advance after legacy baseRef repair must find the sidecar fresh."""
+    session, state, sidecar_path = _legacy_sidecar_setup(tmp_path)
+    prepared = RD._prepare_sidecar(session, state)
+    assert prepared["ok"] is True and prepared["needs_write"] is True
+    with open(sidecar_path, "wb") as fh:
+        fh.write(prepared["sidecar_bytes"])
+    again = RD._prepare_sidecar(session, state)
+    assert again["ok"] is True and again["needs_write"] is False
+
+
 def test_cursor_fix_never_gets_an_independent_cursor_auditor():
     """#651: composer and grok are ONE family, so a cursor-only panel auditing a cursor fix is
     DEGRADED, never independent. Under the old registry (composer='cursor', grok='xai') the

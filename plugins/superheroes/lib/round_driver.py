@@ -5418,15 +5418,6 @@ def _canary_landings(session_dir, state, rnd, attempt):
 
 # --- the handback sidecar (§6) -------------------------------------------------------------------
 
-# Old writers stored the commit id in ``baseRef``; republish under the branch-name contract.
-# Mirrors ``handback_gate._LEGACY_BASE_SHA`` — kept here so live code does not import the dark gate.
-_LEGACY_BASE_REF_SHA = re.compile(r"^[0-9a-f]{40}$")
-
-
-def _sidecar_has_legacy_base_ref(sidecar):
-    return bool(_LEGACY_BASE_REF_SHA.match(sidecar.get("baseRef") or ""))
-
-
 def _sidecar_path(gitdir):
     return os.path.join(gitdir, SIDECAR_DIRNAME, SIDECAR_FILE)
 
@@ -5473,18 +5464,19 @@ def _prepare_sidecar(session_dir, state, git=None, journal_cmd="advance", receip
                 receipt_bytes = fh.read()
         except OSError as exc:
             return {"reason": "sidecar-receipt-unreadable", "detail": str(exc)}
+    expected_base_ref = config.get("baseBranch") or "unpinned"
     path = _sidecar_path(gitdir)
     existing, err = round_records.read_json(path)
     if err is None and isinstance(existing, dict):
         stale, _why = round_records.sidecar_stale(existing, head_sha=head_sha,
                                                   receipt_bytes=receipt_bytes,
                                                   session_dir=session_dir)
-        if not stale and _sidecar_has_legacy_base_ref(existing):
+        if not stale and existing.get("baseRef") != expected_base_ref:
             stale = True
         if not stale:
             return {"ok": True, "path": path, "repaired": False, "needs_write": False}
     branch = run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD") or "detached"
-    base_ref = config.get("baseBranch") or "unpinned"
+    base_ref = expected_base_ref
     base_pin = config.get("baseRef")
     base_sha = run_git(repo_root, "rev-parse", "--verify", "--quiet",
                        "%s^{commit}" % base_pin) if base_pin else None
