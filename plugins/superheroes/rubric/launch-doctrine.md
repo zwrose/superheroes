@@ -20,7 +20,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `base-moved` — if your base merges mid-build, rebase onto main, retarget, and disclose.
 - `no-force-push` — never force-push (it is gated); use a fresh branch if history must move.
 - `design-forks` — design forks inside ratified scope are your call with disclosure; park only genuinely consequential ones.
-- `await-dispatches` — until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — a zero slice opens the run and returns now without starting an attempt, so progress comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
+- `await-dispatches` — Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message. Until the handback or park comment is posted, every turn ends with a tool call; await every dispatch in-turn, and run each external engine dispatch you invoke directly through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — a zero slice opens the run and returns now without starting an attempt, so progress comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; independent dispatches go out CONCURRENTLY — give each its own `--run-dir`, start them all with positive-slice calls issued together in one message (opening a run-dir starts nothing), then re-invoke the originating verb on every non-terminal run until each is terminal, so a batch costs its slowest dispatch and not their sum; independent means no result dependency, no shared writable worktree, and no shared output path — dependent orders and dispatches sharing a writable worktree stay sequenced; the concurrency changes a batch's shape, never its invariant: in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end; skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll cannot fit the turn, park durably on the issue or PR.
 - `remote-head` — verify the REMOTE head against your receipts before declaring the PR ready.
 - `git-identity` — commits inherit the git identity the worktree resolves through git's normal cascade — repo-local `.git/config` when set, otherwise this environment's global config; never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or wrong identity — an empty *resolved* `git config user.email`/`user.name`, never an empty `--local` — is a park-and-report, not an improvisation.
 <!-- launch-doctrine:rulings:end -->
@@ -79,8 +79,8 @@ loads — the full mechanism, the detached-shape contract, and the field evidenc
 §7 (`skills/workhorse/SKILL.md`) — do not consolidate the mechanism back into the machine-parsed
 blocks above. The `await-dispatches` ruling in the machine-parsed block above carries the turn-end rule,
 the poll contract for external engine dispatches the builder invokes directly (skill-owned seats
-and native subagents keep their own lifecycle), and the park escape, so a launched builder receives
-them in its composed prompt.
+and native subagents keep their own lifecycle), the park escape, the concurrent-batch shape, and
+the invariant it preserves, so a launched builder receives them in its composed prompt.
 
 ## Recovery — taking over a build that stopped
 
