@@ -38,14 +38,28 @@ RULING_TEXT = {
         "park only genuinely consequential ones."
     ),
     "await-dispatches": (
-        "until the handback or park comment is posted, every turn ends with a tool call; "
+        'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message. '
+        "Until the handback or park comment is posted, every turn ends with a tool call; "
         "await every dispatch in-turn, and run each external engine dispatch you invoke directly "
-        "through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — a zero slice "
-        "opens the run and returns now without starting an attempt, so progress comes from a "
-        "re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured "
+        "through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — on "
+        "`dispatch-review` a zero slice opens the run and returns now without starting an attempt; on "
+        "`dispatch-write` a zero or too-short slice can return terminal `git-preflight-timeout` with "
+        "nothing opened, so size the launch slice to the repository's git-preflight cost; progress "
+        "comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured "
         "result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; "
-        "skill-owned seats and native subagents keep their own lifecycle; when the in-turn poll "
-        "cannot fit the turn, park durably on the issue or PR."
+        "independent dispatches go out CONCURRENTLY — give each member its own `--run-dir`, launch each one "
+        "with a short positive slice, then re-invoke the originating verb on every non-terminal run in rotation "
+        "until each returns terminal, so a batch costs its slowest member and not their sum; "
+        "the concurrency comes from the engines working while you poll the others, never from issuing the "
+        "calls together in one message — measured on one host: run-action calls serialize, and a launch call "
+        "blocks for its whole slice, so keep the launch slice short; a native-subagent batch is the other "
+        "channel and does go out as parallel dispatches in one message, harness-managed; "
+        "independent means no result dependency, no shared writable worktree, and no shared output path — "
+        "dependent orders and dispatches sharing a writable worktree stay sequenced; "
+        "the concurrency changes a batch's shape, never its invariant: "
+        "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an "
+        "unwatched run-dir at turn end; skill-owned seats and native subagents keep their own lifecycle; "
+        "when the in-turn poll cannot fit the turn, park durably on the issue or PR."
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
@@ -62,6 +76,11 @@ RULING_INVARIANTS = {
         "never pass `-c user.name` or `-c user.email`",
         "never synthesize one",
         "park-and-report",
+    ),
+    "await-dispatches": (
+        "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end",
+        "no result dependency, no shared writable worktree, and no shared output path",
+        'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.',
     ),
 }
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)

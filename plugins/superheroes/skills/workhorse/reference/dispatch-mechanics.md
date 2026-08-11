@@ -2,9 +2,11 @@
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
 2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
-3. [Supervised review dispatch](#supervised-review-dispatch)
-4. [Supervised write dispatch](#supervised-write-dispatch)
-5. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+3. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+4. [Supervised review dispatch](#supervised-review-dispatch)
+5. [Supervised write dispatch](#supervised-write-dispatch)
+6. [Declared items](#declared-items)
+7. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -88,6 +90,33 @@ pinned to the harness versions they were observed on.
   the exits killed two live codex review seats mid-run — roughly 50 minutes of review, and the vendor
   diversity of one panel. The prior charter phrasing missed this because it was framed as work in
   flight; two of the three deaths had none.
+
+## Launch slice vs continuation slice
+
+Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
+The slice you choose depends on whether the run is a **launch** or a **continuation**:
+
+- **LAUNCH** — the **first** call on a fresh `--run-dir`. Use a **short** positive slice for
+  **`dispatch-review`** and for **`dispatch-write`** on repositories whose git preflight is fast.
+  On **`dispatch-write`**, `--max-wait` is also the **git-preflight timeout** (`preflight_timeout`
+  in `engine_dispatch.py`), bounding worktree validation, repository discovery, `rev-parse HEAD`, and
+  the baseline `git status`. The launch slice **must therefore exceed the repository's git-preflight
+  cost** (which depends on repository size and disk speed and must be sized locally), or the call
+  returns terminal **`git-preflight-timeout`** with nothing launched — and a continuation **cannot**
+  recover a run that never opened. Run-action calls serialize and a launch call blocks for its whole
+  slice, so a launch phase over N run-dirs costs about **N × the launch slice** — that estimate
+  **omits** this serial preflight work on each `dispatch-write`, so a real launch phase costs
+  somewhat more than the multiplication suggests. Measured on one host in the #930 build: three seats at a
+  **45 s** launch slice spent **150 s** launching and the batch cost **352 s** against a **373 s**
+  serial sum; the same three seats at a **12 s** launch slice cost **427 s** against a **987 s**
+  serial sum and a **419 s** slowest seat — i.e. the batch tracked its slowest member.
+- **CONTINUATION** — a re-invocation on an already-launched `--run-dir` while `.terminal` is false.
+  The engine is already working, so use the **full slice up to 540 s** — a longer slice simply means
+  fewer re-invocations.
+
+The `--max-wait 540` values in the recipes below are **continuation** slices and remain correct for
+every re-invocation after launch. On the first call for each `--run-dir`, substitute a short launch
+slice (12–45 s is the measured range above).
 
 ## Supervised review dispatch
 
@@ -188,11 +217,27 @@ The sanctioned way to dispatch a long-running **external implementer** is the su
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# LAUNCH — first call on a fresh --run-dir; on dispatch-write --max-wait is also the git-preflight
+# timeout, so size this slice to the repository's preflight cost, not just rotation headroom
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
   --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
+  --expect-item "<path-from-order>" \
+  --run-dir "$RUN_DIR" --max-wait 45
+# CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
+python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
+  --engine "$IMPL_ENGINE" --engine-model "$IMPL_ENGINE_MODEL" \
+  --prompt-path "$ORDER_PROMPT" --cwd "$BUILD_WORKTREE" --order-id "$ORDER_ID" \
+  --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 540
 ```
+
+### Declared items
+
+Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
+The runner support for these flags ships in `main` via [#951](https://github.com/zwrose/superheroes/issues/951);
+they become accepted when this stack merges into `main` — on this branch the parser does not yet expose
+them.
 
 `$IMPL_ENGINE` and `$IMPL_ENGINE_MODEL` come from the project's dispatch calibration for the
 **implementer** role. `--effort` is **optional** on `dispatch-write` because a registry model may

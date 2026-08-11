@@ -402,8 +402,11 @@ def test_reworded_await_dispatches_ruling_refuses():
     text = _mutate_once(
         _read_doctrine(),
         (
-            "(a slice of 0..540 seconds — a zero slice opens the run and returns now without "
-            "starting an attempt, so progress comes from a re-invocation with a positive slice)"
+            "(a slice of 0..540 seconds — on `dispatch-review` a zero slice opens the run and "
+            "returns now without starting an attempt; on `dispatch-write` a zero or too-short slice "
+            "can return terminal `git-preflight-timeout` with nothing opened, so size the launch "
+            "slice to the repository's git-preflight cost; progress comes from a re-invocation with "
+            "a positive slice)"
         ),
         "(positive, never 0 — a zero slice launches nothing)",
     )
