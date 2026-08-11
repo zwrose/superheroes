@@ -171,17 +171,25 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
         return _malformed_past_grace(lock_path, now)
     h = holder
     same_host = h.get("host") == socket.gethostname()
-    if same_host and hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id()) is False:
+    boots = hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id())
+    if same_host and boots is False:
         return True
-    # A holder recorded under a DIFFERENT hostname is not evidence of a different
-    # machine: a laptop changing networks renames itself mid-run, and short-circuiting
-    # to False there wedged the lock permanently — no TTL, no dead-pid check, nothing
-    # `dispatch-abandon` could release (#953). Fall through to the TTL leg instead. Two
-    # legs stay same-host-only, because neither has evidence to stand on across a host
-    # mismatch: the dead-holder fast path (`reclaim_dead_holder`), and the bootId
-    # mismatch above, which a genuinely different machine shows on every read.
+    # `host` is not a machine identity: a laptop changing networks renames itself mid-run,
+    # and short-circuiting to False on a mismatch wedged the lock permanently — no TTL, no
+    # dead-pid check, nothing `dispatch-abandon` could release (#953). A matching bootId,
+    # though, IS positive evidence of one machine — one boot cannot span two — so a renamed
+    # holder on this boot shares our pid namespace and is judged exactly as a local one,
+    # fast path included. That corroboration is what makes the pid probe below authoritative.
+    same_machine = same_host or boots is True
+    # Neither corroborated: a foreign hostname on an unrecognized boot. `_pid_dead_on_this_host`
+    # can only probe OUR pid namespace, so it cannot establish a remote holder's death — it is
+    # kept as a brake that can refuse reclaim, never as the proof. What licenses reclaim here is
+    # TTL expiry alone, the ratified cross-host rule (#953) and the only clock both sides share.
+    # A live holder can therefore lose an expired lock — reachable only if a lock path is shared
+    # between machines, which the two callers' paths (a local run dir, a local tempdir lease)
+    # are not. Recorded as an accepted residual rather than hidden.
     # axis: what licenses reclaim is holder DEATH, not TTL expiry — and never a live holder.
-    if not (reclaim_dead_holder and same_host) and not _expired(h.get("acquiredAt"), ttl, now):
+    if not (reclaim_dead_holder and same_machine) and not _expired(h.get("acquiredAt"), ttl, now):
         return False
     return _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder)
 
