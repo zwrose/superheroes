@@ -2226,6 +2226,295 @@ def test_resume_degraded_confirmation_runs_fresh_panel(tmp_path):
 
 
 # =============================================================================
+# #720: a `recordsPath` resume restores the per-round DISCLOSURE channels
+# =============================================================================
+
+# One populated value per channel in RESUMABLE_DISCLOSURE_CHANNELS, shaped exactly as `_fold_panel`
+# records it. Used by the all-channel resume test; NOT a second copy of the channel list — the test
+# asserts this map's keys equal the module constant's, so a new channel fails here too.
+_ALL_CHANNELS = {
+    "fellOpen": [{"seat": "test-reviewer", "configured": "codex", "reason": "forfeit",
+                  "ran": "claude"}],
+    "fellOpenProvenanceMissing": ["security-reviewer"],
+    "seatMapUnavailable": ["codex"],
+    "seatMapViolations": [{"constraint": "cross-vendor", "seat": "code-reviewer",
+                           "evidence": "alternative-live"}],
+    "vacuousSeats": ["architecture-reviewer"],
+    "engagedArtifactSeats": ["premortem-reviewer"],
+    "canaryUnverified": ["code-reviewer"],
+    "canaryFailed": {"seats": ["security-reviewer"], "detail": "engaged not true",
+                     "evidence": {"probe": "none"}},
+    "canaryVerified": {"codex": {"probe": "engaged"}},
+    "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
+                                                  "manifest": "codex"}]},
+}
+
+
+def _seed_record(round_no, disclosures=None, **over):
+    rec = {"schemaVersion": 2, "round": round_no, "kind": "baseline",
+           "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
+                                            "tier": "reviewer-deep", "findings": []}},
+           "findings": [], "coverageDecisions": []}
+    if disclosures is not None:
+        rec["disclosures"] = disclosures
+    rec.update(over)
+    return rec
+
+
+def _round_channels(receipt, round_no):
+    """The disclosure channels the receipt's round entry actually carries."""
+    entry = next((r for r in receipt["rounds"] if r["round"] == round_no), None)
+    assert entry is not None, (
+        "the receipt has no round %d entry at all — that round's disclosures were dropped "
+        "(rounds present: %s)" % (round_no, [r["round"] for r in receipt["rounds"]]))
+    return {k: v for k, v in entry.items() if k in RD.RESUMABLE_DISCLOSURE_CHANNELS}
+
+
+def _round_disclosures(receipt, round_no):
+    return [line for line in receipt["degraded"] if "(round %d)" % round_no in line]
+
+
+def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
+    """A resumed run's terminal receipt carries EVERY per-round disclosure channel the durable
+    record holds, with the same disclosure prose an unbroken run emits (#720). Before the fix
+    `_seed_resume` restored findings/coverage only, so `state["rounds"]` came back EMPTY and the
+    receipt silently under-disclosed every pre-resume round."""
+    assert set(_ALL_CHANNELS) == set(RD.RESUMABLE_DISCLOSURE_CHANNELS), \
+        "this fixture must cover exactly the restorable channel set"
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, dict(_ALL_CHANNELS))]))
+    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+
+    assert _round_channels(receipt, 1) == _ALL_CHANNELS
+    prose = "\n".join(_round_disclosures(receipt, 1))
+    for marker in ("reviewer-fell-open (round 1): seat test-reviewer",
+                   "reviewer-fell-open-provenance-unavailable (round 1): cross-vendor seat(s) "
+                   "security-reviewer",
+                   "reviewer-fell-open-seatmap-unavailable (round 1): live cross-vendor vendor(s) "
+                   "codex",
+                   "vacuous-seat (round 1): seat(s) architecture-reviewer",
+                   "engaged-artifact-seat (round 1): seat(s) premortem-reviewer",
+                   "canary-unverified (round 1): cross-vendor seat(s) code-reviewer",
+                   "engaged probe recorded for vendor(s) codex",
+                   "canary-failed (round 1): the control probe showed no engagement",
+                   "adapter-provenance (round 1): vendor echo mismatch"):
+        assert marker in prose, marker
+    # seatMapViolations is a BREACH channel: restoring it must reach the receipt's breach
+    # disclosure, not just the round entry.
+    assert any(line.startswith("seat-map constraint breach:") and "cross-vendor" in line
+               for line in receipt["degraded"])
+
+
+def _vacuous_round1_seams():
+    """Round 1: one vacuous seat (a real `vacuousSeats` + `seatMapUnavailable` record) plus a
+    blocking finding so the run continues past round 1 to a terminal."""
+    finding = {"title": "bug", "severity": "Important", "file": "f.py", "line": 2,
+               "dimension": "Code"}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if rnd == 1 and dim == "test-reviewer":
+            return {"vacuous": True, "findings": []}
+        if rnd == 1 and dim == "code-reviewer":
+            return {"findings": [dict(finding)]}
+        return []
+
+    def fix_step(batch, rnd, payload):
+        return {"fixes": [], "headDiff": HEAD_NEW_SURFACE, "changedSubjects": ["Code"]}
+
+    return _seams(reviewer=reviewer, fix_step=fix_step)
+
+
+def test_resumed_round_discloses_the_same_as_the_unbroken_run(tmp_path):
+    """Disclosure EQUIVALENCE (#720): a run whose round 1 ran live and a run that resumes past that
+    round off the durable record emit the SAME round-1 channels and the SAME round-1 disclosure
+    prose. Not merely "the key exists" — the receipt content is compared line for line."""
+    unbroken = RD.run_loop(
+        _vacuous_round1_seams(),
+        _cfg(dimensions=["test-reviewer", "code-reviewer"], maxRounds=8))
+    live_channels = _round_channels(unbroken, 1)
+    live_prose = _round_disclosures(unbroken, 1)
+    assert live_channels and live_prose, "the unbroken run must actually disclose something"
+
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, dict(live_channels), kind="baseline")]))
+    resumed = RD.run_loop(
+        _seams(), _cfg(dimensions=["test-reviewer", "code-reviewer"],
+                       recordsPath=str(records), maxRounds=8))
+
+    assert _round_channels(resumed, 1) == live_channels
+    assert _round_disclosures(resumed, 1) == live_prose
+
+
+def test_resume_without_a_disclosure_block_adds_no_round_entry(tmp_path):
+    """An OLDER records file (no `disclosures`) resumes exactly as before — no crash, and no
+    fabricated round entry or empty channel. Absence must never read as "checked and clean"."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1)]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["rounds"] == {}
+    assert state["round"] == 2
+    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert not any(r["round"] == 1 for r in receipt["rounds"])
+    assert receipt["verdict"]
+
+
+def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
+    """FAIL-CLOSED edge: a channel whose durable value has the wrong type (a string where a list
+    belongs, a list where a dict belongs) is DROPPED — never restored as a truthy channel that
+    would emit a false disclosure — while the round's well-shaped channels still resume."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {
+        "vacuousSeats": "architecture-reviewer",          # str, not a list of str
+        "fellOpen": ["not-a-row"],                         # list of str, not list of dict
+        "canaryFailed": ["security-reviewer"],             # list, not a dict
+        "canaryVerified": ["codex"],                       # list, not a vendor->evidence dict
+        "seatMapUnavailable": ["codex"],                   # well-shaped — survives
+    })]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["rounds"] == {"1": {"seatMapUnavailable": ["codex"]}}
+    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert _round_channels(receipt, 1) == {"seatMapUnavailable": ["codex"]}
+    prose = "\n".join(_round_disclosures(receipt, 1))
+    assert "vacuous-seat" not in prose and "canary-failed" not in prose
+    assert "reviewer-fell-open (round 1)" not in prose
+
+
+def test_resume_does_not_restore_an_empty_list_channel_as_a_disclosure(tmp_path):
+    """FAIL-CLOSED edge: an EMPTY list channel is not a disclosure. `canaryVerified` is the one
+    channel whose empty object `{}` still restores on key presence — see G item v21."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {
+        "vacuousSeats": [], "fellOpen": [], "canaryFailed": {}, "seatMapViolations": [],
+    })]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["rounds"] == {}
+    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert not any(r["round"] == 1 for r in receipt["rounds"])
+    assert not any(line.startswith("seat-map constraint breach:") for line in receipt["degraded"])
+
+
+def test_resume_restores_canary_verified_on_presence_even_when_empty(tmp_path):
+    """`canaryVerified` emits on key presence: an empty object still means a control probe ran."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {"canaryVerified": {}})]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["rounds"]["1"]["canaryVerified"] == {}
+
+
+def test_restored_channel_never_clobbers_a_live_round(tmp_path):
+    """Restoration is ADDITIVE: a live post-resume round that records the same channel for the same
+    round number wins, and the restore leaves every other key on that round entry untouched."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {"vacuousSeats": ["stale-seat"]})]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["rounds"]["1"] == {"vacuousSeats": ["stale-seat"]}
+    state["round"] = 1
+    RD._record_round(state, "vacuousSeats", ["live-seat"])
+    RD._record_round(state, "blockingCount", 3)
+    assert state["rounds"]["1"] == {"vacuousSeats": ["live-seat"], "blockingCount": 3}
+
+
+def test_corrupt_resume_records_still_park_with_disclosures_present(tmp_path):
+    """The corrupt-state fail-closed path is UNCHANGED by the disclosure restore: a mangled records
+    file is `_resumeCorrupt` → cannot-certify park, never a partial restore off unreadable memory."""
+    records = tmp_path / "round-records.json"
+    records.write_text('[{"round": 1, "disclosures": {"vacuousSeats": ["x"]}')  # truncated JSON
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state["_resumeCorrupt"]
+    assert state["rounds"] == {}
+    receipt = RD.run_loop(_seams(), _cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certificationShape"] is None
+    assert not any(r["round"] == 1 for r in receipt["rounds"])
+
+
+def test_disclosure_block_survives_the_durable_skeleton(tmp_path):
+    """The channels ride the record schema `review_memory` already models — a persisted round record
+    keeps its `disclosures` block through skeletonization (which strips evidence bodies), and a
+    record without one gains no key."""
+    rm = _load("review_memory")
+    rec = rm.record_from_dimension_results(
+        1, "baseline", {"test-reviewer": {"status": "run", "findings": []}}, None, [], None,
+        disclosures={"vacuousSeats": ["architecture-reviewer"]})
+    assert rec["disclosures"] == {"vacuousSeats": ["architecture-reviewer"]}
+    assert rm.summarize_record(rec)["disclosures"] == {"vacuousSeats": ["architecture-reviewer"]}
+    assert "disclosures" not in rm.summarize_record(
+        rm.record_from_dimension_results(1, "baseline", {}, None, [], None))
+
+
+# --- the census: the channel set is closed BY CONSTRUCTION --------------------
+
+def _round_driver_ast():
+    import ast
+    with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
+        return ast.parse(fh.read()), ast
+
+
+def _fn_node(tree, ast_mod, name):
+    node = next((n for n in ast_mod.walk(tree)
+                 if isinstance(n, ast_mod.FunctionDef) and n.name == name), None)
+    assert node is not None, "round_driver has no function %r — the census parse is inert" % name
+    return node
+
+
+def test_panel_round_channels_are_all_accounted_for():
+    """CENSUS (#720) — closes the set by construction, not by listing sites.
+
+    Every per-round key `_fold_panel` records is enumerated FROM THE SOURCE with `ast` and must have
+    exactly one module-level home: `RESUMABLE_DISCLOSURE_CHANNELS` (the channels `build_receipt`
+    emits and a `recordsPath` resume restores) or `UNRESTORED_PANEL_ROUND_KEYS` (the deliberate
+    not-restored list, each with its reason in the source). A NEW `_record_round` channel that ships
+    without a resume path fails HERE — instead of silently under-disclosing every resumed run's
+    terminal receipt, which is the defect this test exists to prevent recurring.
+    """
+    tree, ast_mod = _round_driver_ast()
+    fold = _fn_node(tree, ast_mod, "_fold_panel")
+    recorded = set()
+    for node in ast_mod.walk(fold):
+        if not (isinstance(node, ast_mod.Call) and isinstance(node.func, ast_mod.Name)
+                and node.func.id == "_record_round"):
+            continue
+        assert len(node.args) >= 2, "_record_round must be called with (state, key, value)"
+        key = node.args[1]
+        assert isinstance(key, ast_mod.Constant) and isinstance(key.value, str), (
+            "a _record_round key must be a string LITERAL so the census can enumerate it")
+        recorded.add(key.value)
+    assert len(recorded) >= 9, "the census enumerated %d keys — the parse looks inert" % len(recorded)
+
+    fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
+    restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
+    unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
+    assert fold_provenance <= restorable, (
+        "fold provenance channels must be restorable: %s"
+        % sorted(fold_provenance - restorable))
+    assert not (restorable & unrestored), \
+        "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
+    accounted = restorable | unrestored
+    assert recorded | fold_provenance == accounted, (
+        "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
+        "stale (named but no longer recorded): %s"
+        % (sorted((recorded | fold_provenance) - accounted),
+           sorted(accounted - (recorded | fold_provenance))))
+
+
+def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
+    """The census is the whole story only if `build_receipt` and the resume both READ the constant
+    rather than a hand-copied literal list — and only if every named channel is really consumed by
+    the receipt (a fossil channel would pass the census while disclosing nothing)."""
+    tree, ast_mod = _round_driver_ast()
+    for fn in ("build_receipt", "_restore_round_disclosures"):
+        names = {n.id for n in ast_mod.walk(_fn_node(tree, ast_mod, fn))
+                 if isinstance(n, ast_mod.Name)}
+        assert "RESUMABLE_DISCLOSURE_CHANNELS" in names, \
+            "%s must read the channel set from its one home" % fn
+    with open(os.path.join(_LIB, "round_driver.py"), encoding="utf-8") as fh:
+        src = fh.read()
+    for chan in RD.RESUMABLE_DISCLOSURE_CHANNELS:
+        assert source_obj_accesses_key(src, "rec|rrec", chan), \
+            "%r is named restorable but no round record read consumes it" % chan
+
+
+# =============================================================================
 # git-derived changed subjects (#507 finding v2) — the confirmation re-arm's
 # cross-cutting input is SCRIPT-computed from git, never the fixer's self-report
 # =============================================================================

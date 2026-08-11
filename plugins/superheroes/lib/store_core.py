@@ -278,12 +278,55 @@ def get_remote(cwd):
     return get_remote_result(cwd)[0]
 
 
+def _terminal_gitdir_outcome(res, cwd, what):
+    """Shared fail-closed classification for a terminal git-dir rev-parse result (issue #742).
+
+    ONE classification, used by every sanctioned git-dir resolver here: git-could-not-run is
+    unknown (``GIT_UNAVAILABLE``), a canonical not-a-repository decline (and a decline at a cwd
+    that is not a directory) goes through ``_declined_not_a_repository_outcome``, and anything
+    else is an authoritative refusal."""
+    if res.status == GIT_UNAVAILABLE:
+        raise RepoRootUnavailable(
+            "git could not be run at %s: %s" % (cwd, res.detail),
+            git_status=GIT_UNAVAILABLE)
+    if not_a_repository(res):
+        return _declined_not_a_repository_outcome(res, cwd)
+    if not os.path.isdir(cwd):
+        return _declined_not_a_repository_outcome(res, cwd)
+    raise RepoRootUnavailable(
+        "git declined %s at %s: %s" % (what, cwd, res.detail),
+        git_status=GIT_DECLINED)
+
+
+def get_worktree_gitdir(cwd, run=None):
+    """realpath of THIS worktree's own git dir (never the shared common-dir).
+
+    ``get_gitdir`` answers the git-COMMON-dir, which every linked worktree of a repository
+    shares; a caller that writes a PER-WORKTREE artifact (the review handback sidecar) must not
+    use it, or two sibling worktrees read and write one another's file. This resolver answers
+    ``rev-parse --absolute-git-dir`` — inside a linked worktree that is
+    ``<common>/worktrees/<name>`` — and classifies its terminal result through the SAME
+    fail-closed handling ``get_gitdir`` uses (``_terminal_gitdir_outcome``), including the same
+    declined-not-a-repository outcome.
+
+    ``run`` is an injectable ``run_git_result``-shaped seam (default: ``run_git_result``) so a
+    caller's test can drive the failure path without a real broken repository."""
+    runner = run or run_git_result
+    res = runner(cwd, "rev-parse", "--absolute-git-dir")
+    if res.status == GIT_OK and res.out:
+        return os.path.realpath(res.out)
+    return _terminal_gitdir_outcome(res, cwd, "rev-parse --absolute-git-dir")
+
+
 def get_gitdir(cwd):
     """realpath of the git-common-dir (shared by all worktrees).
 
     Three-step chain mirrors ``control_plane._common_git_dir``: absolute common-dir,
     bare common-dir (joining relative output onto ``cwd``), then absolute-git-dir.
     On total failure, classifies the terminal result fail-closed (issue #742).
+
+    Per-worktree callers want ``get_worktree_gitdir`` instead — this answer is SHARED by every
+    linked worktree of the repository.
     """
     res = run_git_result(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
     if res.status == GIT_OK and res.out:
@@ -304,17 +347,7 @@ def get_gitdir(cwd):
     if res.status == GIT_OK and res.out:
         return os.path.realpath(res.out)
 
-    if res.status == GIT_UNAVAILABLE:
-        raise RepoRootUnavailable(
-            "git could not be run at %s: %s" % (cwd, res.detail),
-            git_status=GIT_UNAVAILABLE)
-    if not_a_repository(res):
-        return _declined_not_a_repository_outcome(res, cwd)
-    if not os.path.isdir(cwd):
-        return _declined_not_a_repository_outcome(res, cwd)
-    raise RepoRootUnavailable(
-        "git declined rev-parse --absolute-git-dir at %s: %s" % (cwd, res.detail),
-        git_status=GIT_DECLINED)
+    return _terminal_gitdir_outcome(res, cwd, "rev-parse --absolute-git-dir")
 
 
 def derive_identifiers(cwd):
