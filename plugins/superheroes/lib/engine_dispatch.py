@@ -22,8 +22,11 @@ import argparse
 import hashlib
 import json
 import os
+import posixpath
+import re
 import secrets
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -80,6 +83,18 @@ _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_D
                      "GIT_CONFIG_SYSTEM", "GIT_COMMON_DIR")
 
 RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceiling (never borderline)
+ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
+ITEM_IDENTITY_MAX_BYTES = 8 * 1024 * 1024
+MAX_EXPECTED_ITEMS = 1000
+ITEM_DETAIL_UNDELIVERED = "items-undelivered"
+ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
+ITEM_CHECK_FIELDS = frozenset(("declared", "expected", "delivered", "missing"))
+ITEM_EVIDENCE_CAUSE_FALSY_BASE = "falsy-base-sha"
+ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT = "diff-timeout"
+ITEM_EVIDENCE_CAUSE_DIFF_FAILED = "diff-failed"
+ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT = "status-timeout"
+ITEM_EVIDENCE_CAUSE_STATUS_FAILED = "status-failed"
+BASE_SHA_UNRESOLVABLE = "base-sha-unresolvable"
 HEARTBEAT_INTERVAL = 10     # DoD 4: seconds between liveness heartbeats (time-based, not output-based)
 _STDERR_TAIL = 4096
 MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdout — the result JSON
@@ -426,6 +441,241 @@ def _worktree_baseline(cwd_real, timeout=None):
         "headSha": (head.stdout or "").strip(),
         "porcelainSha256": hashlib.sha256(porcelain.encode("utf-8")).hexdigest(),
     }
+
+
+_BASE_SHA_OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
+
+
+def _normalize_expected_item(raw):
+    if not isinstance(raw, str):
+        return False, "expected-item-empty"
+    stripped = raw.strip()
+    if not stripped:
+        return False, "expected-item-empty"
+    if "\\" in stripped:
+        return False, "expected-item-backslash"
+    if stripped.startswith("/"):
+        return False, "expected-item-absolute"
+    if stripped.endswith("/"):
+        return False, "expected-item-directory"
+    normalized = posixpath.normpath(stripped)
+    if normalized in (".", ".."):
+        return False, "expected-item-escapes-worktree"
+    if any(seg == ".." for seg in normalized.split("/")):
+        return False, "expected-item-escapes-worktree"
+    return True, normalized
+
+
+def _read_expected_items(items, items_file):
+    if items is None and items_file is None:
+        return True, None
+    collected = []
+    if items:
+        collected.extend(items)
+    if items_file is not None:
+        try:
+            with open(items_file, "r", encoding="utf-8") as fh:
+                for line in fh:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    collected.append(line)
+        except (OSError, UnicodeDecodeError):
+            return False, "expected-items-file-unreadable"
+    normalized = []
+    for raw in collected:
+        ok, detail = _normalize_expected_item(raw)
+        if not ok:
+            return False, detail
+        normalized.append(detail)
+    normalized = sorted(set(normalized))
+    if len(normalized) > MAX_EXPECTED_ITEMS:
+        return False, "expected-items-too-many"
+    return True, normalized
+
+
+def _validate_base_sha(base_sha):
+    if base_sha is None:
+        return True, None
+    if not isinstance(base_sha, str) or not _BASE_SHA_OBJECT_ID_RE.match(base_sha):
+        return False, "base-sha-not-an-object-id"
+    return True, base_sha
+
+
+def _verify_base_sha_resolves(cwd_real, base_sha, timeout=None):
+    try:
+        result = _git_scrubbed(
+            cwd_real, "cat-file", "-e", "%s^{commit}" % base_sha, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return False
+    return result.returncode == 0
+
+
+def _parse_porcelain_z_paths(data):
+    """Extract every path from ``git status --porcelain=v1 -z`` output."""
+    text = data if isinstance(data, str) else (data or "").decode("utf-8", errors="surrogateescape")
+    paths = []
+    parts = text.split("\0")
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        if not entry:
+            index += 1
+            continue
+        status_xy = entry[:2]
+        path = entry[3:] if len(entry) > 2 and entry[2] == " " else entry[2:]
+        if status_xy[0] in ("R", "C") or status_xy[1] in ("R", "C"):
+            index += 1
+            old_path = parts[index] if index < len(parts) else ""
+            paths.append(path)
+            if old_path:
+                paths.append(old_path)
+        else:
+            paths.append(path)
+        index += 1
+    return paths
+
+
+def _parse_name_status_z_paths(data):
+    """Extract every path from ``git diff --name-status -z`` output."""
+    text = data if isinstance(data, str) else (data or "").decode("utf-8", errors="surrogateescape")
+    paths = set()
+    parts = text.split("\0")
+    index = 0
+    while index < len(parts):
+        status = parts[index]
+        if not status:
+            index += 1
+            continue
+        index += 1
+        if status[0] in ("R", "C"):
+            if index >= len(parts):
+                break
+            old_path = parts[index]
+            index += 1
+            if index < len(parts):
+                new_path = parts[index]
+                index += 1
+                if old_path:
+                    paths.add(old_path)
+                if new_path:
+                    paths.add(new_path)
+        else:
+            if index >= len(parts):
+                break
+            path = parts[index]
+            index += 1
+            if path:
+                paths.add(path)
+    return paths
+
+
+def _path_content_identity(cwd_real, rel_path):
+    abs_path = os.path.join(cwd_real, rel_path)
+    try:
+        st = os.lstat(abs_path)
+    except OSError:
+        return "<absent>"
+    if not stat.S_ISREG(st.st_mode):
+        return "<absent>"
+    try:
+        with open(abs_path, "rb") as fh:
+            data = fh.read(ITEM_IDENTITY_MAX_BYTES)
+        digest = hashlib.sha256(data).hexdigest()
+        if st.st_size > ITEM_IDENTITY_MAX_BYTES:
+            return "%s:%d" % (digest, st.st_size)
+        return digest
+    except OSError:
+        return "<absent>"
+
+
+def _baseline_dirty_map(cwd_real, declared_paths, timeout=None):
+    if not declared_paths:
+        return {}
+    literal_pathspecs = [":(literal)%s" % p for p in declared_paths]
+    try:
+        status = _git_scrubbed(
+            cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=traditional",
+            "--", *literal_pathspecs,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if status.returncode != 0:
+        return None
+    declared_set = set(declared_paths)
+    result = {}
+    for path in _parse_porcelain_z_paths(status.stdout or ""):
+        if path and path in declared_set:
+            result[path] = _path_content_identity(cwd_real, path)
+    return result
+
+
+def _delivered_paths(cwd_real, base_sha, timeout=None):
+    """Paths changed since ``base_sha`` in the working tree, plus on-disk status-only paths.
+
+    The diff against ``base_sha`` is authoritative for whether a path counts as delivered.
+    Status supplies only paths git cannot express there (untracked/ignored files on disk).
+    Status-derived paths absent from disk are excluded so a committed-then-reverted deletion
+    cannot be credited when the final worktree matches base.
+
+    Returns a ``set`` of paths on success, or an evidence-cause token string on failure.
+    """
+    if not base_sha:
+        return ITEM_EVIDENCE_CAUSE_FALSY_BASE
+    try:
+        diff = _git_scrubbed(
+            cwd_real, "diff", "--name-status", "-z", "-M", base_sha, timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT
+    if diff.returncode != 0:
+        return ITEM_EVIDENCE_CAUSE_DIFF_FAILED
+    paths = _parse_name_status_z_paths(diff.stdout or "")
+    try:
+        status = _git_scrubbed(
+            cwd_real, "status", "--porcelain=v1", "-z", "-uall", "--ignored=traditional",
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return ITEM_EVIDENCE_CAUSE_STATUS_TIMEOUT
+    if status.returncode != 0:
+        return ITEM_EVIDENCE_CAUSE_STATUS_FAILED
+    for path in _parse_porcelain_z_paths(status.stdout or ""):
+        if path and os.path.lexists(os.path.join(cwd_real, path)):
+            paths.add(path)
+    return paths
+
+
+def _item_delivery_check(cwd_real, opened, timeout=None):
+    """Collection-time declared-item check. ``None`` when nothing was declared."""
+    expected_items = opened.get("expectedItems")
+    if expected_items is None:
+        return None
+    baseline_dirty = opened.get("baselineDirty") or {}
+    delivered_result = _delivered_paths(cwd_real, opened.get("baseSha"), timeout=timeout)
+    if not isinstance(delivered_result, set):
+        return {
+            "evidenceUnavailable": True,
+            "evidenceCause": delivered_result,
+        }
+    missing = []
+    for path in expected_items:
+        if path not in delivered_result:
+            missing.append(path)
+            continue
+        if path in baseline_dirty:
+            current = _path_content_identity(cwd_real, path)
+            if current == baseline_dirty[path]:
+                missing.append(path)
+    field_values = {
+        "declared": True,
+        "expected": len(expected_items),
+        "delivered": len(expected_items) - len(missing),
+        "missing": sorted(missing),
+    }
+    return {field: field_values[field] for field in ITEM_CHECK_FIELDS}
 
 
 def _worktree_lease_path(cwd_real):
@@ -1914,11 +2164,54 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 engine = opened["engine"]
                 if grade.get("ok"):
                     if run_kind == RUN_KIND_WRITE:
-                        result = _with_run_fields(
-                            {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
-                             "evidence": grade.get("evidence", {}), "attempts": latest},
-                            run_dir=run_dir_real, argv=argv,
+                        item_check = _item_delivery_check(
+                            os.path.realpath(opened["cwd"]), opened,
+                            timeout=ITEM_EVIDENCE_TIMEOUT,
                         )
+                        if item_check is None:
+                            result = _with_run_fields(
+                                {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
+                                 "evidence": grade.get("evidence", {}), "attempts": latest},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                        elif item_check.get("evidenceUnavailable"):
+                            cause = item_check.get("evidenceCause", "unknown")
+                            result = _with_run_fields(
+                                {"ok": False, "terminal": True,
+                                 "reason": dispatch_outcome.REASON_FORFEITED,
+                                 "detail": "%s:%s" % (ITEM_DETAIL_EVIDENCE_UNAVAILABLE, cause),
+                                 "attempts": latest, "forfeited": True,
+                                 "disclosure": (
+                                     "Declared-item evidence collection failed (%s); this is not "
+                                     "an engine forfeit — the runner's own git evidence collection "
+                                     "failed. The worktree is left exactly as the engine left it."
+                                     % cause
+                                 )},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                        elif item_check.get("missing"):
+                            expected = item_check["expected"]
+                            delivered = item_check["delivered"]
+                            result = _with_run_fields(
+                                {"ok": False, "terminal": True,
+                                 "reason": dispatch_outcome.REASON_FORFEITED,
+                                 "detail": ITEM_DETAIL_UNDELIVERED,
+                                 "attempts": latest, "forfeited": True,
+                                 "itemCheck": item_check,
+                                 "disclosure": (
+                                     "Declared-item check: %d of %d expected paths were not "
+                                     "delivered; the worktree is left exactly as the engine "
+                                     "left it." % (expected - delivered, expected)
+                                 )},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                        else:
+                            result = _with_run_fields(
+                                {"ok": True, "terminal": True, "signal": grade.get("signal", "ok"),
+                                 "evidence": grade.get("evidence", {}), "attempts": latest},
+                                run_dir=run_dir_real, argv=argv,
+                            )
+                            result["itemCheck"] = item_check
                     else:
                         result = _with_run_fields(
                             {"ok": True, "terminal": True, "findings": grade.get("findings", []),
@@ -2392,7 +2685,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
-                    repo_root=None):
+                    repo_root=None, expected_items=None, baseline_dirty=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2428,6 +2721,8 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewPath": None,
         "baseSha": base_sha,
         "worktreeBaseline": worktree_baseline,
+        "expectedItems": expected_items,
+        "baselineDirty": baseline_dirty,
         "repoRoot": repo_root_real,
         "repoId": repo_id,
         "supervisorPid": os.getpid(),
@@ -2441,7 +2736,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
                    order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                    retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                   run_dir=None, max_wait=None):
+                   run_dir=None, max_wait=None, expected_items=None, expected_items_file=None):
     """Build-scoped dispatch into a linked worktree (#702). Role is HARD-CODED 'build'
     (workspace-write sandbox). ok: True means the engine reported success — the runner never
     commits and never mutates git state; whether a commit lands is the caller's business.
@@ -2452,6 +2747,7 @@ def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path
             prompt_path=prompt_path, cwd=cwd, order_id=order_id, base_sha=base_sha,
             timeout=timeout, retry_timeout=retry_timeout, progress_path=progress_path,
             run_engine=run_engine, run_dir=run_dir, max_wait=max_wait,
+            expected_items=expected_items, expected_items_file=expected_items_file,
         )
     except Exception as exc:
         return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
@@ -2461,7 +2757,8 @@ def dispatch_write(engine, *, model, effort=None, engine_model=None, prompt_path
 def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, prompt_path, cwd,
                          order_id=None, base_sha=None, timeout=RETRY_MIN_TIMEOUT,
                          retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
-                         run_dir=None, max_wait=None):
+                         run_dir=None, max_wait=None, expected_items=None,
+                         expected_items_file=None):
     """Build-scoped dispatch — role HARD-CODED 'build'. Never commits or mutates git."""
     role_kind = "build"
     argv = []
@@ -2555,16 +2852,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             run_dir=run_dir_real, argv=argv,
         )
 
-    if base_sha is None:
-        try:
-            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
-        except subprocess.TimeoutExpired:
-            return _write_preflight_terminal(
-                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "git-preflight-timeout",
-                 "attempts": 0, "forfeited": False, "terminal": True},
-                run_dir=run_dir_real, argv=argv,
-            )
-        base_sha = (head.stdout or "").strip() if head.returncode == 0 else None
+    caller_omitted_expected = expected_items is None and expected_items_file is None
 
     try:
         records, _corrupt = _journal_read(run_dir_real)
@@ -2585,13 +2873,94 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                     run_dir=run_dir_real, argv=opened.get("argv") or argv,
                 )
             argv = opened.get("argv") or argv
+            if state.get("folded") is not None:
+                return _with_run_fields(state["folded"], run_dir=run_dir_real, argv=argv)
+            if state.get("abandoned") is not None:
+                return _with_run_fields(
+                    _stored_abandon_result(run_dir_real, state),
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+        ok_sha, sha_detail = _validate_base_sha(base_sha)
+        if not ok_sha:
+            return _write_preflight_terminal(
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": sha_detail,
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir=run_dir_real, argv=argv,
+            )
+
+        ok_items, items_detail = _read_expected_items(expected_items, expected_items_file)
+        if not ok_items:
+            return _write_preflight_terminal(
+                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": items_detail,
+                 "attempts": 0, "forfeited": False, "terminal": True},
+                run_dir=run_dir_real, argv=argv,
+            )
+        declared_expected_items = items_detail
+
+        if opened is not None:
+            if not caller_omitted_expected:
+                stored_items = opened.get("expectedItems")
+                if declared_expected_items != stored_items:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "expected-items-mismatch",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    )
         else:
+            if base_sha is None:
+                try:
+                    head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=preflight_timeout)
+                except subprocess.TimeoutExpired:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "git-preflight-timeout",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    )
+                base_sha = (head.stdout or "").strip() if head.returncode == 0 else None
+
+            if declared_expected_items is not None and not base_sha:
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": BASE_SHA_UNRESOLVABLE,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
+            if (
+                declared_expected_items is not None
+                and base_sha is not None
+                and not _verify_base_sha_resolves(
+                    cwd_real, base_sha, timeout=preflight_timeout,
+                )
+            ):
+                return _write_preflight_terminal(
+                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                     "detail": BASE_SHA_UNRESOLVABLE,
+                     "attempts": 0, "forfeited": False, "terminal": True},
+                    run_dir=run_dir_real, argv=argv,
+                )
+
             if _run_dir_nonempty(run_dir_real):
                 return _write_preflight_terminal(
                     {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-not-empty-unopened",
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
+            if declared_expected_items is not None:
+                baseline_dirty = _baseline_dirty_map(
+                    cwd_real, declared_expected_items, timeout=preflight_timeout,
+                )
+                if baseline_dirty is None:
+                    return _write_preflight_terminal(
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "baseline-capture-failed",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv,
+                    )
+            else:
+                baseline_dirty = None
             baseline = _worktree_baseline(cwd_real, timeout=preflight_timeout)
             if baseline is None and preflight_timeout is not None:
                 return _write_preflight_terminal(
@@ -2615,6 +2984,8 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 worktree_baseline=baseline,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
                 repo_root=repo_root,
+                expected_items=declared_expected_items,
+                baseline_dirty=baseline_dirty,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
@@ -2908,6 +3279,8 @@ def build_parser():
                     default=RETRY_MIN_TIMEOUT, type=int)
     cc.add_argument(w, "--max-wait", contract="integer", default=None, type=int)
     cc.add_argument(w, "--progress-file", contract="free-text", default=None)
+    cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
+    cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
 
     p = sub.add_parser("dispatch-poll")
     cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
@@ -2937,7 +3310,9 @@ def main(argv):
                              cwd=args.cwd, order_id=args.order_id, base_sha=args.base_sha,
                              run_dir=args.run_dir, timeout=args.timeout,
                              retry_timeout=args.retry_timeout, max_wait=args.max_wait,
-                             progress_path=args.progress_file)
+                             progress_path=args.progress_file,
+                             expected_items=args.expect_item,
+                             expected_items_file=args.expect_items_file)
     elif args.cmd == "dispatch-poll":
         res = dispatch_poll(args.run_dir)
     elif args.cmd == "dispatch-abandon":

@@ -25,6 +25,8 @@ REFUSAL_DOCUMENT_OWNER_MISMATCH = "policy-document-owner-mismatch"
 REFUSAL_DOCUMENT_MODE_INSECURE = "policy-document-mode-insecure"
 REFUSAL_DOCUMENT_UNREADABLE = "policy-document-unreadable"
 REFUSAL_DOCUMENT_INVALID = "policy-document-invalid"
+REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID = "policy-ownership-probe-account-invalid"
+REFUSAL_OWNERSHIP_PROBE_ACCOUNT_UNDECLARED = "policy-ownership-probe-account-undeclared"
 REFUSAL_SCHEMA_VERSION_UNSUPPORTED = "policy-schema-version-unsupported"
 REFUSAL_MATERIAL_IN_RESULT = "policy-material-in-result"
 REFUSAL_MATERIAL_INVALID = "policy-material-invalid"
@@ -45,9 +47,16 @@ _FIELD_NAME_SHAPED_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*\Z")
 # neither may be exempted by spelling.
 _KEY_CARVE_OUT_CLASS = "mintable-account"
 
-_TOP_LEVEL_KEYS = frozenset(
-    {"schemaVersion", "declaration", "protectedTargets", "datastore", "slots"}
+_TOP_LEVEL_REQUIRED_KEYS = frozenset(
+    {
+        "schemaVersion",
+        "declaration",
+        "protectedTargets",
+        "datastore",
+        "slots",
+    }
 )
+_TOP_LEVEL_ALLOWED_KEYS = _TOP_LEVEL_REQUIRED_KEYS | frozenset({"ownershipProbe"})
 _DATASTORE_REQUIRED_KEYS = frozenset(
     {"expectedIdentity", "connectionDetail", "observer"}
 )
@@ -65,13 +74,22 @@ CONTAINMENT_SENTINEL_KEYS = frozenset(
 # `test_pilot_placeholder_census` is the census that keeps it that way (#866).
 NAMESPACE_PLACEHOLDER = pilot_contract.NAMESPACE_PLACEHOLDER
 SENTINEL_PLACEHOLDER = "{sentinel}"
+ACCOUNT_PLACEHOLDER = "{account}"
+ACCOUNT_CLASS_TOKEN_RE = re.compile(r"^[a-z][a-z0-9-]{0,31}\Z")
 _PLACEHOLDER_RE = pilot_contract.PLACEHOLDER_RE
 _ALLOWED_PLACEHOLDERS = frozenset(
     {NAMESPACE_PLACEHOLDER, SENTINEL_PLACEHOLDER}
 )
+_OWNERSHIP_PROBE_KEYS = frozenset({"command", "connectionEnvVar"})
 OBSERVER_KEYS = frozenset({"command", "connectionEnvVar"})
 _SLOT_KEYS = frozenset(
-    {"origin", "permittedRedirects", "expectedIdentities", "mintableAccounts"}
+    {
+        "origin",
+        "permittedRedirects",
+        "expectedIdentities",
+        "mintableAccounts",
+        "accountClasses",
+    }
 )
 _SLOT_REQUIRED_KEYS = frozenset(
     {"origin", "permittedRedirects", "expectedIdentities"}
@@ -175,7 +193,11 @@ def validate_policy(doc):
     """Structural validation of a policy document; returns the document."""
     # bite-axis: document structure — schema version, top-level keys, datastore, slots, and each
     # slot shape must match the policy schema; any structural violation raises REFUSAL_DOCUMENT_INVALID.
-    if not isinstance(doc, dict) or set(doc.keys()) != _TOP_LEVEL_KEYS:
+    if not isinstance(doc, dict):
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    extra = set(doc.keys()) - _TOP_LEVEL_ALLOWED_KEYS
+    missing = _TOP_LEVEL_REQUIRED_KEYS - set(doc.keys())
+    if extra or missing:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
     schema_version = doc["schemaVersion"]
@@ -218,6 +240,18 @@ def validate_policy(doc):
         except pilot_slot.PilotSlotError:
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
         _validate_slot(slot)
+
+    ownership_probe = doc.get("ownershipProbe")
+    if ownership_probe is not None:
+        if (
+            not isinstance(ownership_probe, dict)
+            or set(ownership_probe.keys()) != _OWNERSHIP_PROBE_KEYS
+        ):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        _validate_ownership_probe_command(ownership_probe["command"])
+        env_var = ownership_probe["connectionEnvVar"]
+        if not isinstance(env_var, str) or not ENV_VAR_RE.match(env_var):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
     return doc
 
@@ -564,7 +598,9 @@ def _validate_containment(containment):
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
 
-def _validate_sentinel_command(command):
+def _validate_placeholder_command(
+    command, *, required_placeholders, allowed_placeholders
+):
     if not isinstance(command, list) or not command:
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     for item in command:
@@ -573,20 +609,75 @@ def _validate_sentinel_command(command):
     executable = command[0]
     if not os.path.isabs(executable):
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
-    if (
-        NAMESPACE_PLACEHOLDER in executable
-        or SENTINEL_PLACEHOLDER in executable
-    ):
+    if _PLACEHOLDER_RE.findall(executable):
         raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     args = command[1:]
-    has_namespace = any(NAMESPACE_PLACEHOLDER in part for part in args)
-    has_sentinel = any(SENTINEL_PLACEHOLDER in part for part in args)
-    if not has_namespace or not has_sentinel:
-        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    for placeholder in required_placeholders:
+        if not any(placeholder in part for part in args):
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
     for part in command:
         for match in _PLACEHOLDER_RE.findall(part):
-            if match not in _ALLOWED_PLACEHOLDERS:
+            if match not in allowed_placeholders:
                 raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+
+def _validate_sentinel_command(command):
+    _validate_placeholder_command(
+        command,
+        required_placeholders=(
+            NAMESPACE_PLACEHOLDER,
+            SENTINEL_PLACEHOLDER,
+        ),
+        allowed_placeholders=_ALLOWED_PLACEHOLDERS,
+    )
+
+
+def _validate_ownership_probe_command(command):
+    _validate_placeholder_command(
+        command,
+        required_placeholders=(ACCOUNT_PLACEHOLDER,),
+        allowed_placeholders=frozenset({ACCOUNT_PLACEHOLDER}),
+    )
+
+
+def _declared_slot_accounts(policy):
+    accounts = set()
+    slots = policy.get("slots")
+    if not isinstance(slots, dict):
+        return accounts
+    for slot in slots.values():
+        if not isinstance(slot, dict):
+            continue
+        identities = slot.get("expectedIdentities")
+        if not isinstance(identities, dict):
+            continue
+        for declared_account in identities:
+            if isinstance(declared_account, str) and declared_account:
+                accounts.add(declared_account)
+    return accounts
+
+
+def ownership_probe_request(policy, account):
+    """Return the resolved argv and environment for the policy's ownership probe."""
+    validate_policy(policy)
+    ownership_probe = policy.get("ownershipProbe")
+    if ownership_probe is None:
+        raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+    if not isinstance(account, str) or not account:
+        raise PilotPolicyError(REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID)
+    if not _FIELD_NAME_SHAPED_RE.match(account):
+        raise PilotPolicyError(REFUSAL_OWNERSHIP_PROBE_ACCOUNT_INVALID)
+    if account not in _declared_slot_accounts(policy):
+        raise PilotPolicyError(REFUSAL_OWNERSHIP_PROBE_ACCOUNT_UNDECLARED)
+
+    command = ownership_probe["command"]
+    resolved_argv = [command[0]]
+    for part in command[1:]:
+        resolved_argv.append(part.replace(ACCOUNT_PLACEHOLDER, account))
+    return {
+        "argv": resolved_argv,
+        "connectionEnvVar": ownership_probe["connectionEnvVar"],
+    }
 
 
 def _validate_observer(observer):
@@ -644,6 +735,19 @@ def _validate_slot(slot):
             raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
         for account in mintable:
             if not isinstance(account, str) or not account:
+                raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+
+    if "accountClasses" in slot:
+        account_classes = slot["accountClasses"]
+        if not isinstance(account_classes, dict) or not account_classes:
+            raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+        for account, class_token in account_classes.items():
+            if not isinstance(account, str) or not account:
+                raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
+            if (
+                not isinstance(class_token, str)
+                or not ACCOUNT_CLASS_TOKEN_RE.match(class_token)
+            ):
                 raise PilotPolicyError(REFUSAL_DOCUMENT_INVALID)
 
 

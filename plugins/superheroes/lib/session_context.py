@@ -126,6 +126,44 @@ def covenant(cwd, plugin_root):
         return ""
 
 
+# ----------------------------------------------------------------- charter recovery (post-compact)
+def _charter_skill_path(plugin_root, charter):
+    return os.path.join(os.path.abspath(plugin_root or "."), "skills", charter, "SKILL.md")
+
+
+def charter_recovery(transcript_path, source, plugin_root):
+    """After compaction, remind a charter session to re-read its SKILL.md from disk.
+
+    Fires only when ``source == "compact"`` and ``detect_charter`` finds a charter.
+    READ-ONLY — detection only, never mutates project state. A probe error → '' with a
+    breadcrumb (absence is the status quo for non-charter or non-compact sessions)."""
+    text, _hint = _charter_recovery_parts(transcript_path, source, plugin_root)
+    return text
+
+
+def _charter_recovery_parts(transcript_path, source, plugin_root):
+    try:
+        if source != "compact":
+            return "", ""
+        import charter_detect
+        charter = charter_detect.detect_charter(transcript_path)
+        if charter not in ("showrunner", "workhorse"):
+            return "", ""
+        skill_path = _charter_skill_path(plugin_root, charter)
+        return (
+            "This session was operating under the **%s** charter before compaction. "
+            "The post-compaction summary is a paraphrase — re-read your charter "
+            "SKILL.md from disk before acting:\n\n"
+            "%s\n\n"
+            "The file on disk is the authority, not the summary.\n"
+            "If a resume point exists at the top of this session's ledger, re-read it "
+            "and prefer it over anything the summary asserts."
+        ) % (charter, skill_path), skill_path
+    except Exception as exc:
+        _breadcrumb("Charter recovery", type(exc).__name__)
+        return "", ""
+
+
 # ----------------------------------------------------------------- cache hygiene nudge
 _NUDGE_MAX_CHARS = 400
 _NUDGE_TAIL = (
@@ -217,11 +255,11 @@ def cache_hygiene(plugin_root):
 _Rec = collections.namedtuple("_Rec", "name text hint")
 
 
-def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
+def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000, source=None):
     """Compose the injected `additionalContext` block, best-effort, never raising.
 
-    Priority order: resolved roots → plugin cache hygiene nudge → covenant (calibrated
-    projects only).
+    Priority order: charter recovery (compact + charter only) → resolved roots → plugin
+    cache hygiene nudge → covenant (calibrated projects only).
     The block stays under char_budget; an oversized
     source is truncated with a marker and stops the walk, and any present source
     dropped by that stop is named in an in-block omitted-line AND breadcrumbed
@@ -233,7 +271,10 @@ def assemble(cwd, transcript_path, plugin_root, host, char_budget=9000):
     hook's stderr (which an owner's agent cannot see)."""
     del _FAILURES[:]                                  # reset the per-assemble failure collector
     try:
+        _charter_text, _charter_hint = _charter_recovery_parts(
+            transcript_path, source, plugin_root)
         records = [
+            _Rec("Charter recovery", _charter_text, _charter_hint),
             _Rec("Resolved plugin roots", resolved_roots(plugin_root, host),
                  os.path.join(os.path.abspath(plugin_root or "."), "hosts", "%s-tools.md" % host)),
             _Rec("Plugin cache hygiene", cache_hygiene(plugin_root), _cache_parent_hint(plugin_root)),

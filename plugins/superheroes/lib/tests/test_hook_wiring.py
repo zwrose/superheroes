@@ -87,10 +87,27 @@ def test_hooks_codex_still_wires_nothing():
 
 def test_retired_spine_hooks_are_not_wired():
     # Regression guard for the spine retirement (#468): the enforcer PreToolUse floor and
-    # the PreCompact resume-brief refresh are gone — neither may reappear in either host map.
+    # the retired precompact.py resume-brief refresh must not return. Issue #911 ratified a
+    # new stateless PreCompact hook (compaction_context.py) — a different file, different
+    # contract — so the blanket "no PreCompact" guard narrows to filename checks only.
     for path in (_HOOKS, _HOOKS_CODEX):
         raw = open(path).read()
         assert "enforcer.py" not in raw, f"{path} still wires the retired enforcer"
         assert "precompact.py" not in raw, f"{path} still wires the retired precompact hook"
     claude = json.load(open(_HOOKS))
-    assert "PreCompact" not in claude["hooks"], "PreCompact hook must be unwired"
+    pc_cmds = _cmds(claude, "PreCompact")
+    if pc_cmds:
+        for c in pc_cmds:
+            assert "compaction_context.py" in c, (
+                "PreCompact must wire compaction_context.py, not another hook"
+            )
+            assert "precompact.py" not in c, "retired precompact.py must not reappear"
+            assert "|| true" in c, "PreCompact must be fail-open (|| true suffix)"
+
+
+def test_precompact_hook_is_wired_fail_open():
+    cfg = json.load(open(_HOOKS))
+    pc = _cmds(cfg, "PreCompact")
+    assert pc, "PreCompact must wire compaction_context.py"
+    assert all("compaction_context.py" in c for c in pc)
+    assert all("|| true" in c for c in pc)

@@ -29,6 +29,8 @@ REFUSAL_DATASTORE_IDENTITY_WEAKER_UNACCEPTED = "provision-datastore-identity-wea
 REFUSAL_WEAKER_ACCEPTANCE_INVALID = "provision-weaker-acceptance-invalid"
 REFUSAL_DATASTORE_IDENTITY_STRENGTH_UNKNOWN = "provision-datastore-identity-strength-unknown"
 REFUSAL_MINT_DECLARATION_MISSING = "provision-mint-declaration-missing"
+REFUSAL_ACCOUNT_CLASS_UNDECLARED = "provision-account-class-undeclared"
+REFUSAL_ACCOUNT_CLASS_SPAN = "provision-account-class-span"
 
 # Re-exported from the one home in `pilot_boundary`, which produces the observations these
 # words describe (#866). Kept as module names because callers and tests read them from here.
@@ -489,6 +491,48 @@ def validate_weaker_acceptance(record):
 _validate_weaker_acceptance = validate_weaker_acceptance
 
 
+def gate_account_classes(policy, slot_ref, block):
+    """Refuse when credential-set accounts lack declared classes or span classes."""
+    try:
+        slot, _generation = pilot_slot.parse_slot_ref(slot_ref)
+    except pilot_slot.PilotSlotError:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+    slot_config = policy.get("slots", {}).get(slot)
+    if slot_config is None:
+        raise PilotProvisionError(REFUSAL_SLOT_UNKNOWN)
+
+    if not isinstance(block, dict):
+        raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+
+    credential_set = block.get("credentialSet")
+    if not isinstance(credential_set, list) or not credential_set:
+        raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+
+    account_classes = slot_config.get("accountClasses")
+    if account_classes is None or not isinstance(account_classes, dict):
+        # bite-axis: undeclared account class — every credential-set account must map to a class.
+        raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+
+    accounts = []
+    for entry in credential_set:
+        if not isinstance(entry, dict):
+            raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+        account = entry.get("account")
+        if not isinstance(account, str) or not account:
+            raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+        accounts.append(account)
+
+    for account in accounts:
+        if account not in account_classes:
+            # bite-axis: undeclared account class — partial maps refuse, not pass.
+            raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_UNDECLARED)
+
+    distinct_classes = {account_classes[account] for account in accounts}
+    if len(distinct_classes) > 1:
+        # bite-axis: account class span — more than one class across the credential set refuses.
+        raise PilotProvisionError(REFUSAL_ACCOUNT_CLASS_SPAN)
+
+
 def gate_datastore_identity(verdict, *, weaker_acceptance=None):
     """Gate provisioning on datastore identity strength and weaker acceptance.
 
@@ -539,6 +583,7 @@ def gate_provisioning(verdict, policy, slot_ref, block, registry, *, weaker_acce
     # bite-axis: provisioning composition — authorize_credentials must run before identity and
     # declaration gates; assert_results_only refuses policy material in the receipt.
     pilot_boundary.authorize_credentials(verdict, slot_ref, policy_digest(policy))
+    gate_account_classes(policy, slot_ref, block)
     identity_gate = gate_datastore_identity(verdict, weaker_acceptance=weaker_acceptance)
     declarations = require_declarations_exercised(block, policy, slot_ref, registry)
     slot, generation = pilot_slot.parse_slot_ref(slot_ref)

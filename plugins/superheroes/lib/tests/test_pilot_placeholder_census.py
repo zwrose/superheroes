@@ -27,6 +27,7 @@ _LIB = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _PLACEHOLDER_HOMES = {
     "{namespace}": "pilot_contract.py",
     "{sentinel}": "pilot_policy.py",
+    "{account}": "pilot_policy.py",
 }
 
 
@@ -119,6 +120,7 @@ def test_consumers_read_the_placeholders_from_their_home():
     assert pilot_cleanup.SENTINEL_PLACEHOLDER is pilot_policy.SENTINEL_PLACEHOLDER
     assert pilot_contract.NAMESPACE_PLACEHOLDER == "{namespace}"
     assert pilot_policy.SENTINEL_PLACEHOLDER == "{sentinel}"
+    assert pilot_policy.ACCOUNT_PLACEHOLDER == "{account}"
 
 
 def _placeholder_re_compile_sites():
