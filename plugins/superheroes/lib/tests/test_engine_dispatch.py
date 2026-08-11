@@ -22,6 +22,11 @@ def _load():
 
 ED = _load()
 
+_EA = importlib.util.spec_from_file_location(
+    "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+EA = importlib.util.module_from_spec(_EA)
+_EA.loader.exec_module(EA)
+
 _SV = importlib.util.spec_from_file_location(
     "sanitized_view", os.path.join(_HERE, "..", "sanitized_view.py"))
 _SV_MOD = importlib.util.module_from_spec(_SV)
@@ -1439,8 +1444,36 @@ def _linked_worktree(tmp_path):
     return wt
 
 
+def _contracted_fed_prompt(base):
+    if base and not base.endswith("\n"):
+        return base + "\n" + EA.WRITE_REPORT_CONTRACT
+    return base + EA.WRITE_REPORT_CONTRACT
+
+
 def _build_ok_stdout():
-    return json.dumps({"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}})
+    body = json.dumps({
+        "ok": True, "signal": "ok",
+        "evidence": {"testFailed": False, "testPassed": True},
+    })
+    return "Receipt prose.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
+
+
+def _honest_refusal_stdout():
+    body = json.dumps({
+        "ok": False, "signal": "plan_wrong",
+        "evidence": {"testFailed": True, "testPassed": False},
+    })
+    return "Stopped per order.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
+
+
+def test_write_fixture_stdout_gradeable_by_runner():
+    fed = _contracted_fed_prompt("Review this code.\n")
+    ok_res = EA.grade_write_report("codex", "build", _build_ok_stdout(), fed)
+    assert ok_res["ok"] is True
+    assert ok_res["signal"] == "ok"
+    refusal_res = EA.grade_write_report("codex", "build", _honest_refusal_stdout(), fed)
+    assert refusal_res["ok"] is False
+    assert refusal_res["signal"] == "plan_wrong"
 
 
 # --- WO F1: continuation owns argv/cwd/view; journal before build_view -------------
@@ -1915,17 +1948,6 @@ def _git_init(path):
         check=True,
     )
     return path
-
-
-def _build_ok_stdout():
-    return json.dumps({"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}})
-
-
-def _honest_refusal_stdout():
-    return json.dumps({
-        "ok": False, "signal": "plan_wrong",
-        "evidence": {"testFailed": True, "testPassed": False},
-    })
 
 
 @pytest.mark.parametrize("scenario", [
