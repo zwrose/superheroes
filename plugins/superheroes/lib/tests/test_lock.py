@@ -879,6 +879,12 @@ def test_same_boot_does_not_read_the_usec_leg_as_the_sec_leg():
     assert hostinfo.same_boot(a, b) is False
     assert hostinfo._normalize(a) == "boottime:sec:100"
     assert hostinfo._normalize(b) == "boottime:sec:200"
+    # A render carrying ONLY the jittering leg has no sec leg to fold to, and must not
+    # borrow the usec digits as one — that would equate two ids the render never claimed
+    # were the same boot. (Ordering hides this in a full render, where `sec` is matched
+    # first either way; the check has to put `usec` where nothing else can match.)
+    assert hostinfo._normalize("boottime:{ usec = 500 }") == "boottime:{ usec = 500 }"
+    assert hostinfo.same_boot("boottime:{ usec = 500 }", "boottime:{ sec = 500 }") is False
 
 
 def test_same_boot_is_none_when_either_side_cannot_corroborate():
