@@ -89,12 +89,41 @@ def check_toc(reference_path):
 # external engine) cite a step-body by plugin-relative path instead of pasting its contents. Those
 # readers have no Skill tool and no directory context, so a citation must be self-contained and must
 # resolve — a dangling pointer is the loud half of the trade that makes pointers beat inline copies.
-# Deliberately narrow: only a backticked path under a known plugin top-level dir with a known
-# extension counts, so ordinary prose cannot false-positive.
-_CITATION = re.compile(
-    r"`((?:agents|skills|rubric|reference|lib|templates|hosts|eval)"
-    r"/[A-Za-z0-9._/\-]+\.(?:md|py|json|js))`"
+# Deliberately narrow: only a backticked path under a plugin top-level dir with a file extension
+# counts, so ordinary prose cannot false-positive. Top-level dirs are derived from plugin_dir at
+# runtime so new roots (e.g. hooks/) are covered without maintaining a hard-coded list.
+_NEVER_MATCH = re.compile(r"(?!)")
+_CITATION_SUFFIX = r"`((?:{top})/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+)`"
+_ABSOLUTE_CITATION = re.compile(
+    r"(?:^|[\s(.,>])`(/(?:[A-Za-z0-9._\-]+/)+[A-Za-z0-9._\-]+\.[A-Za-z0-9]+)`"
 )
+
+
+def _top_level_dirs(plugin_dir):
+    try:
+        entries = os.listdir(plugin_dir)
+    except OSError:
+        return []
+    return sorted(
+        name for name in entries
+        if os.path.isdir(os.path.join(plugin_dir, name))
+    )
+
+
+def _citation_pattern(plugin_dir):
+    top_dirs = _top_level_dirs(plugin_dir)
+    if not top_dirs:
+        return _NEVER_MATCH
+    top = "|".join(re.escape(d) for d in top_dirs)
+    return re.compile(_CITATION_SUFFIX.format(top=top))
+
+
+def _cited_paths(text, plugin_dir):
+    pattern = _citation_pattern(plugin_dir)
+    paths = list(dict.fromkeys(pattern.findall(text)))
+    for m in _ABSOLUTE_CITATION.finditer(text):
+        paths.append(m.group(1))
+    return list(dict.fromkeys(paths))
 
 
 def check_citations(rel_label, text, plugin_dir):
@@ -105,8 +134,16 @@ def check_citations(rel_label, text, plugin_dir):
     text came from, which a dispatched consumer reading the path out of a work order does not.
     """
     out = []
-    for rel in dict.fromkeys(_CITATION.findall(text)):
-        if not os.path.exists(os.path.join(plugin_dir, rel)):
+    for rel in _cited_paths(text, plugin_dir):
+        if os.path.isabs(rel):
+            out.append(f"citation: {rel_label}: unresolved citation {rel}")
+            continue
+        norm = os.path.normpath(rel)
+        if norm.startswith(".."):
+            out.append(f"citation: {rel_label}: unresolved citation {rel}")
+            continue
+        target = os.path.join(plugin_dir, norm)
+        if not os.path.isfile(target):
             out.append(f"citation: {rel_label}: unresolved citation {rel}")
     return out
 
@@ -188,10 +225,10 @@ def _skill_key(path):
 # (both the plugin-root one and each skill's). SKILL.md itself is excluded — its ${ROOT}-form
 # references are check_links' job, and its readers hold the skill's own directory context.
 _CITATION_GLOBS = (
-    ("*", "agents", "*.md"),
-    ("*", "rubric", "*.md"),
-    ("*", "reference", "*.md"),
-    ("*", "skills", "*", "reference", "*.md"),
+    ("*", "agents", "**", "*.md"),
+    ("*", "rubric", "**", "*.md"),
+    ("*", "reference", "**", "*.md"),
+    ("*", "skills", "*", "reference", "**", "*.md"),
 )
 
 
@@ -199,7 +236,7 @@ def citation_scan_paths(plugins_root):
     import glob as _glob
     out = []
     for parts in _CITATION_GLOBS:
-        out += _glob.glob(os.path.join(plugins_root, *parts))
+        out += _glob.glob(os.path.join(plugins_root, *parts), recursive=True)
     return out
 
 
@@ -289,8 +326,14 @@ def main(argv=None):
     # §11.4: plugin-relative citations resolve, in the docs dispatched consumers read.
     for doc in sorted(citation_scan_paths(PLUGINS)):
         plugin_dir = _plugin_dir_of(doc, PLUGINS)
-        with open(doc, encoding="utf-8") as fh:
-            errors += check_citations(os.path.relpath(doc, REPO), fh.read(), plugin_dir)
+        rel_doc = os.path.relpath(doc, REPO)
+        try:
+            with open(doc, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"citation: {rel_doc}: unreadable scan file ({exc})")
+            continue
+        errors += check_citations(rel_doc, text, plugin_dir)
 
     if errors:
         sys.stderr.write(f"\n✗ {len(errors)} skill problem(s):\n")

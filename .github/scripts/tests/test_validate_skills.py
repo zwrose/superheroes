@@ -275,6 +275,7 @@ def test_citations_resolve(tmp_path):
 
 
 def test_citations_flag_missing_target(tmp_path):
+    (tmp_path / "skills").mkdir()
     text = "Follow `skills/test-pilot-execute/reference/execution-steps.md` before driving."
     out = vs.check_citations("agents/pilot.md", text, str(tmp_path))
     assert out and "citation:" in out[0]
@@ -284,6 +285,7 @@ def test_citations_flag_missing_target(tmp_path):
 def test_citations_reject_sibling_relative_even_when_the_sibling_exists(tmp_path):
     # The file exists next to the citing doc, but the citation is not self-contained: a dispatched
     # consumer reading this path out of a work order has no idea which directory it came from.
+    (tmp_path / "reference").mkdir()
     refdir = tmp_path / "skills" / "review-code" / "reference"
     os.makedirs(str(refdir))
     (refdir / "round-driver.md").write_text("x")
@@ -299,17 +301,19 @@ def test_citations_ignore_prose_that_is_not_a_plugin_path(tmp_path):
 
 
 def test_citations_deduplicate_repeated_path(tmp_path):
+    (tmp_path / "lib").mkdir()
     text = "`lib/gone.py` and again `lib/gone.py`"
     assert len(vs.check_citations("rubric/x.md", text, str(tmp_path))) == 1
 
 
 def test_citation_scan_covers_dispatched_reader_docs_and_excludes_skill_md(tmp_path):
     root = tmp_path / "plugins" / "p"
-    for sub in [("agents",), ("rubric",), ("reference",),
+    for sub in [("agents",), ("rubric",), ("rubric", "orders"), ("reference",),
                 ("skills", "s", "reference"), ("skills", "s")]:
         os.makedirs(str(root.joinpath(*sub)), exist_ok=True)
     root.joinpath("agents", "a.md").write_text("x")
     root.joinpath("rubric", "r.md").write_text("x")
+    root.joinpath("rubric", "orders", "dispatch.md").write_text("x")
     root.joinpath("reference", "f.md").write_text("x")
     root.joinpath("skills", "s", "reference", "g.md").write_text("x")
     root.joinpath("skills", "s", "SKILL.md").write_text("x")
@@ -319,6 +323,7 @@ def test_citation_scan_covers_dispatched_reader_docs_and_excludes_skill_md(tmp_p
     assert found == {
         os.path.join("p", "agents", "a.md"),
         os.path.join("p", "rubric", "r.md"),
+        os.path.join("p", "rubric", "orders", "dispatch.md"),
         os.path.join("p", "reference", "f.md"),
         os.path.join("p", "skills", "s", "reference", "g.md"),
     }
@@ -327,6 +332,7 @@ def test_citation_scan_covers_dispatched_reader_docs_and_excludes_skill_md(tmp_p
 def test_main_wires_citation_rule(tmp_path, monkeypatch, capsys):
     root = str(tmp_path / "plugins")
     os.makedirs(os.path.join(root, "p", "agents"))
+    os.makedirs(os.path.join(root, "p", "skills"))
     with open(os.path.join(root, "p", "agents", "pilot.md"), "w", encoding="utf-8") as fh:
         fh.write("Read `skills/test-pilot-execute/reference/execution-steps.md`.\n")
     monkeypatch.setattr(vs, "PLUGINS", root)
@@ -347,3 +353,75 @@ def test_main_fails_closed_without_pyyaml(capsys):
     captured = capsys.readouterr()
     assert "PyYAML" in captured.err or "pyyaml" in captured.err.lower()
     assert "✓" not in captured.out
+
+
+def test_citations_recursive_scan_reaches_rubric_orders(tmp_path):
+    (tmp_path / "agents").mkdir()
+    orders = tmp_path / "rubric" / "orders"
+    orders.mkdir(parents=True)
+    (orders / "dispatch.md").write_text(
+        "See `agents/missing-pilot.md` for the entry point.")
+    out = vs.check_citations("plugins/p/rubric/orders/dispatch.md",
+                             (orders / "dispatch.md").read_text(), str(tmp_path))
+    assert out and "missing-pilot.md" in out[0]
+
+
+def test_citations_check_hooks_style_path(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    text = "Floor in `hooks/bash_timeout.py` (#204)."
+    out = vs.check_citations("skills/review-code/reference/auto-fix-loop.md", text, str(tmp_path))
+    assert out and "bash_timeout.py" in out[0]
+
+
+def test_citations_reject_traversal_even_when_target_exists_outside_plugin(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    plugin = repo / "plugins" / "p"
+    conventions = repo / "CONVENTIONS.md"
+    conventions.parent.mkdir(parents=True)
+    conventions.write_text("# Conventions\n")
+    (plugin / "skills").mkdir(parents=True)
+    text = "See `skills/../../../CONVENTIONS.md`."
+    out = vs.check_citations("agents/pilot.md", text, str(plugin))
+    assert out and "CONVENTIONS.md" in out[0]
+
+
+def test_citations_reject_absolute_path(tmp_path):
+    (tmp_path / "agents").mkdir()
+    out = vs.check_citations("rubric/x.md", "read `/etc/malicious.conf`", str(tmp_path))
+    assert out and "/etc/malicious.conf" in out[0]
+
+
+def test_citations_reject_directory_with_extension_name(tmp_path):
+    (tmp_path / "lib").mkdir()
+    (tmp_path / "lib" / "pkg.py").mkdir()
+    out = vs.check_citations("rubric/x.md", "import `lib/pkg.py`", str(tmp_path))
+    assert out and "lib/pkg.py" in out[0]
+
+
+def test_citations_accept_extension_beyond_md_py_json_js(tmp_path):
+    (tmp_path / "hooks").mkdir()
+    (tmp_path / "hooks" / "bash_timeout.py").write_text("# timeout hook")
+    text = "Hook at `hooks/bash_timeout.py`."
+    assert vs.check_citations("agents/pilot.md", text, str(tmp_path)) == []
+
+
+def test_citations_accept_traversal_that_normalizes_inside_plugin(tmp_path):
+    (tmp_path / "skills").mkdir()
+    agents = tmp_path / "agents"
+    agents.mkdir()
+    (agents / "pilot.md").write_text("pilot")
+    text = "See `skills/../agents/pilot.md`."
+    assert vs.check_citations("rubric/x.md", text, str(tmp_path)) == []
+
+
+def test_citations_empty_plugin_dir_yields_no_matches(tmp_path):
+    text = "See `agents/pilot.md` and `skills/foo.md`."
+    assert vs.check_citations("rubric/x.md", text, str(tmp_path)) == []
+
+
+def test_citation_scan_yields_nothing_when_standard_dirs_absent(tmp_path):
+    root = tmp_path / "plugins" / "p"
+    root.mkdir(parents=True)
+    (root / "lib").mkdir()
+    (root / "lib" / "only.py").write_text("x")
+    assert vs.citation_scan_paths(str(tmp_path / "plugins")) == []
