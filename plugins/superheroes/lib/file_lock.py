@@ -4,6 +4,11 @@ Stale reclaim: a holder is stale when it is EXPIRED by TTL and its
 pid is dead-on-this-boot, OR when its bootId no longer matches (the host
 rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
 
+A holder recorded under a different hostname is reclaimable on the TTL leg alone —
+never on the dead-holder fast path and never on a bootId mismatch (#953). Treating a
+host mismatch as "not stale" wedged locks permanently the first time a laptop renamed
+itself mid-run, which is the normal case on a machine that changes networks.
+
 `reclaim_dead_holder=True` (#862) drops the TTL wait for a holder whose pid is
 CONFIRMED dead on this host: the TTL only ever delayed reclaim of a holder that was
 already gone, and on a lock whose holder is the only worker (engine_dispatch's
@@ -151,11 +156,12 @@ def _pid_dead_on_this_host(holder, zombie_is_dead=False):
 
 
 def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
-    """Stale iff (bootId mismatch) OR (expired by TTL AND pid dead-on-this-host)
-    OR (malformed holder past grace window).
+    """Stale iff (bootId mismatch on this host) OR (expired by TTL AND pid
+    dead-on-this-host) OR (malformed holder past grace window).
 
     With `reclaim_dead_holder=True` a pid dead-on-this-host is stale immediately, with
-    no TTL wait (#862). A LIVE holder is never stale under either setting."""
+    no TTL wait (#862) — same-host holders only. A LIVE holder is never stale under
+    either setting."""
     if not os.path.lexists(lock_path):
         return False
     status, holder = _read_holder_state(lock_path)
@@ -164,13 +170,18 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     if status == "unusable" or _holder_fields_unusable(holder):
         return _malformed_past_grace(lock_path, now)
     h = holder
-    if h.get("host") != socket.gethostname():
-        return False
-    bid, cur = h.get("bootId"), hostinfo.boot_id()
-    if bid is not None and cur is not None and bid != cur:
+    same_host = h.get("host") == socket.gethostname()
+    if same_host and hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id()) is False:
         return True
+    # A holder recorded under a DIFFERENT hostname is not evidence of a different
+    # machine: a laptop changing networks renames itself mid-run, and short-circuiting
+    # to False there wedged the lock permanently — no TTL, no dead-pid check, nothing
+    # `dispatch-abandon` could release (#953). Fall through to the TTL leg instead. Two
+    # legs stay same-host-only, because neither has evidence to stand on across a host
+    # mismatch: the dead-holder fast path (`reclaim_dead_holder`), and the bootId
+    # mismatch above, which a genuinely different machine shows on every read.
     # axis: what licenses reclaim is holder DEATH, not TTL expiry — and never a live holder.
-    if not reclaim_dead_holder and not _expired(h.get("acquiredAt"), ttl, now):
+    if not (reclaim_dead_holder and same_host) and not _expired(h.get("acquiredAt"), ttl, now):
         return False
     return _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder)
 
