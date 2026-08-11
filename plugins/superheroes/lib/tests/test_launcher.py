@@ -2935,3 +2935,850 @@ def test_cli_launch_boundary_happy_path_forwards(tmp_path, monkeypatch):
     assert forwarded.get("boundary") == boundary
     assert forwarded.get("slot") == "slot-a"
     assert forwarded.get("generation") == 1
+
+
+# --- slot reservation gate (issue #909) --------------------------------------
+
+
+def _slot_calibrated(monkeypatch):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_DECLARED,
+            "cause": L.pilot_calibration.CAUSE_DECLARED,
+            "path": None,
+        },
+    )
+
+
+def _not_slot_calibrated(monkeypatch):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_ABSENT,
+            "cause": L.pilot_calibration.CAUSE_NO_CALIBRATION,
+            "path": None,
+        },
+    )
+
+
+def _reserve_live_lane(repo, batch_id, launch_id, slot=None, generation=None, surfaces=None):
+    rec = {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch_id,
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": surfaces or ["plugins/superheroes/lib/other"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    }
+    if slot is not None:
+        rec["slot"] = slot
+    if generation is not None:
+        rec["generation"] = generation
+    ll.reserve(repo, rec)
+
+
+def test_slot_gate_parallel_unslotted_refuses(tmp_path, monkeypatch):
+  # axis: slot-calibrated + parallel declared + no slot refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert result["missing"] == ["this-launch"]
+    assert "--slot" in result["remedy"]
+    assert "--generation" in result["remedy"]
+
+
+def test_slot_gate_parallel_slotted_passes(tmp_path, monkeypatch):
+  # axis: slot-calibrated + parallel + slot/generation passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(
+        _all_checks(),
+        repo,
+        batch_id="wave-test",
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is True
+
+
+def test_slot_gate_single_lane_unslotted_passes(tmp_path, monkeypatch):
+  # axis: slot-calibrated + single-lane + no slot passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_non_pilot_parallel_passes(tmp_path, monkeypatch):
+  # axis: non-pilot + parallel + no slot passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _not_slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_parallel_by_live_lane(tmp_path, monkeypatch):
+  # axis: parallel by live lane without declaration refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    _reserve_live_lane(repo, "wave-test", "live-1", slot="slot-a", generation=1)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+
+
+def test_slot_gate_unslotted_sibling_refuses(tmp_path, monkeypatch):
+  # axis: slotted launch refuses when unslotted sibling in same batch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    _reserve_live_lane(repo, "wave-test", "sibling-unslotted")
+    result = L.walk_preflight(
+        _all_checks(),
+        repo,
+        batch_id="wave-test",
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert "sibling-unslotted" in result["missing"]
+    assert "this-launch" not in result["missing"]
+
+
+def test_slot_gate_different_batch_unslotted_passes(tmp_path, monkeypatch):
+  # axis: unslotted lane in different batch does not make this launch parallel
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    _reserve_live_lane(repo, "other-batch", "other-live")
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_different_batch_unslotted_not_in_missing(tmp_path, monkeypatch):
+  # axis: a live unslotted lane in a DIFFERENT batch never enters `missing` for this batch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-x", 2)
+    _reserve_live_lane(repo, "other-wave", "other-lane")
+    result = L.walk_preflight(
+        _all_checks(), repo, batch_id="wave-x", slot="slot-a", generation=1,
+    )
+    assert result["ok"] is True
+
+
+def test_launch_build_slot_refusal_propagates_missing_and_remedy(tmp_path, monkeypatch):
+  # axis: launch_build propagates missing and remedy on slot refusal
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert result["missing"] == ["this-launch"]
+    assert "--slot" in result["remedy"]
+    assert "--generation" in result["remedy"]
+
+
+def test_cli_preflight_slot_reservation_refusal(tmp_path, monkeypatch):
+  # axis: CLI preflight reproduces launch slot refusal with --batch
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    checks_path = tmp_path / "checks.json"
+    _write_json(checks_path, _all_checks())
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "preflight",
+            "--repo-root", repo,
+            "--checks", str(checks_path),
+            "--batch", "wave-test",
+        ])
+    assert exit_code == 1
+    payload = json.loads(buf.getvalue())
+    assert payload["reason"] == "preflight-slot-reservation-required"
+
+
+def test_launch_build_post_reserve_slot_recheck_refuses(tmp_path, monkeypatch):
+  # axis: post-reserve re-check refuses without spawning when batch became parallel
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    real_compose = L.compose_launch
+
+    def compose_then_sibling(*args, **kwargs):
+        sibling = {
+            "event": "reserved",
+            "launchId": "race-sibling",
+            "ts": time.time(),
+            "schema": ll.SCHEMA,
+            "batchId": "wave-test",
+            "repoId": ll.repo_identity(repo),
+            "issue": 656,
+            "surfaces": ["other/path"],
+            "premise": {},
+            "preflight": {},
+            "argv": [],
+            "doctrineDigest": "d",
+            "model": "m",
+        }
+        ll.reserve(repo, sibling)
+        return real_compose(*args, **kwargs)
+
+    monkeypatch.setattr(L, "compose_launch", compose_then_sibling)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert spawn_called is False
+    records = ll.read(repo)["records"]
+    refused = [
+        r for r in records
+        if r.get("event") == "refused" and r.get("launchId") != "race-sibling"
+    ]
+    assert len(refused) == 1
+
+
+def test_slot_gate_disjoint_surfaces_na_parallel_unslotted_refuses(tmp_path, monkeypatch):
+  # axis: slot-calibrated + declared-parallel + disjoint-surfaces na + no slot refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-na", 2)
+    checks = _all_checks(**{
+        "disjoint-surfaces": {"state": "na", "reason": "first lane of the wave"},
+    })
+    result = L.walk_preflight(checks, repo, batch_id="wave-na")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert result["missing"] == ["this-launch"]
+
+
+def test_slot_gate_disjoint_surfaces_na_non_pilot_parallel_passes(tmp_path, monkeypatch):
+  # axis: non-pilot + declared-parallel + disjoint-surfaces na passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _not_slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-na", 2)
+    checks = _all_checks(**{
+        "disjoint-surfaces": {"state": "na", "reason": "first lane of the wave"},
+    })
+    result = L.walk_preflight(checks, repo, batch_id="wave-na")
+    assert result["ok"] is True
+
+
+def test_launch_build_single_lane_unslotted_spawns(tmp_path, monkeypatch):
+  # axis: exclude_launch_id lets single-lane unslotted launch spawn on slot-calibrated project
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
+def test_launch_build_post_reserve_unreadable_ledger_refuses(tmp_path, monkeypatch):
+  # axis: unreadable ledger at post-reserve re-check refuses without spawning
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+    real_live_state = L._ledger_live_state
+    calls = {"n": 0}
+
+    def unreadable_on_recheck(repo_root, env=None):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_live_state(repo_root, env=env)
+        return {
+            "ok": False,
+            "reason": "ledger-corrupt",
+            "live": [],
+            "unreadable": True,
+            "unavailable": False,
+            "detail": {},
+            "allDetail": {},
+            "declarations": {},
+        }
+
+    monkeypatch.setattr(L, "_ledger_live_state", unreadable_on_recheck)
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "post-reserve-ledger-unreadable"
+    assert spawn_called is False
+    records = ll.read(repo)["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert len(refused) == 1
+    assert refused[0]["reason"] == "post-reserve-ledger-unreadable"
+
+
+def test_launch_build_unslotted_lane_refuses_after_slotted_sibling_refused(tmp_path, monkeypatch):
+  # axis: post-reserve parallel counts terminal reservations — unslotted lane must not spawn
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    _reserve_live_lane(repo, "wave-test", "lane-a", slot="slot-a", generation=1)
+    L._terminalize(
+        repo,
+        "lane-a",
+        False,
+        "preflight-slot-reservation-required",
+        stage="preflight",
+    )
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert spawn_called is False
+
+
+def _terminalize_handback_lane(repo, batch_id, launch_id, slot=None, generation=None):
+    _reserve_live_lane(repo, batch_id, launch_id, slot=slot, generation=generation)
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 424242,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    ll.record_outcome(repo, launch_id, "handback", "done")
+
+
+def test_launch_build_single_lane_unslotted_spawns_after_handback_terminal(tmp_path, monkeypatch):
+  # axis: unrelated terminal lane does not count toward post-reserve parallelism
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    _terminalize_handback_lane(repo, "wave-test", "lane-prior")
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
+def test_launch_build_single_lane_unslotted_spawns_after_post_reserve_unreadable_terminal(
+    tmp_path, monkeypatch,
+):
+  # axis: post-reserve-ledger-unreadable terminal does not count toward parallelism
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    _reserve_live_lane(repo, "wave-test", "lane-prior")
+    L._terminalize(
+        repo,
+        "lane-prior",
+        False,
+        "post-reserve-ledger-unreadable",
+        stage="preflight",
+    )
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
+def test_preflight_and_launch_agree_after_handback_terminal(tmp_path, monkeypatch):
+  # axis: preflight and launch agree when unrelated terminal lane is in batch
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 1)
+    _terminalize_handback_lane(repo, "wave-test", "lane-prior")
+    checks = _all_checks()
+    preflight = L.walk_preflight(checks, repo, batch_id="wave-test")
+    assert preflight["ok"] is True
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    launch = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        checks,
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+    )
+    assert launch["ok"] is True
+    assert spawn_called is True
+
+
+def _unknown_calibration(monkeypatch, path="/fake/profile.md", cause="calibration-unreadable"):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_CANNOT_TELL,
+            "cause": cause,
+            "path": path,
+        },
+    )
+
+
+def test_slot_gate_unknown_calibration_parallel_refuses(tmp_path, monkeypatch):
+  # axis: unknown calibration + parallel refuses
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _unknown_calibration(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+
+
+def test_slot_gate_no_calibration_parallel_passes(tmp_path, monkeypatch):
+  # axis: no calibration at all + parallel still passes
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _not_slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_launch_build_parallel_slotted_spawns(tmp_path, monkeypatch):
+  # axis: slot-calibrated + declared-parallel + slot/generation spawns at launch_build
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    spawn_called = False
+
+    def tracking_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        nonlocal spawn_called
+        spawn_called = True
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=tracking_spawn,
+        settle_seconds=0.3,
+        slot="slot-a",
+        generation=1,
+    )
+    assert result["ok"] is True
+    assert spawn_called is True
+
+
+def test_cli_preflight_slot_generation_forwards(tmp_path, monkeypatch):
+  # axis: CLI preflight forwards --slot and --generation on declared-parallel batch
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    checks_path = tmp_path / "checks.json"
+    _write_json(checks_path, _all_checks())
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "preflight",
+            "--repo-root", repo,
+            "--checks", str(checks_path),
+            "--batch", "wave-test",
+            "--slot", "slot-a",
+            "--generation", "1",
+        ])
+    assert exit_code == 0
+    payload = json.loads(buf.getvalue())
+    assert payload["ok"] is True
+
+
+def test_slot_gate_unknown_calibration_parallel_refusal_path_and_remedy(
+    tmp_path, monkeypatch,
+):
+  # axis: calibration-unreadable refusal carries profile path and regeneration remedy
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    profile_path = "/fake/pilot-calibration.md"
+    _unknown_calibration(monkeypatch, path=profile_path)
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["path"] == profile_path
+    remedy = result["remedy"]
+    assert "profile" in remedy.lower() or "calibration" in remedy.lower()
+    assert "regenerat" in remedy.lower() or "fix" in remedy.lower()
+    assert "missing" not in remedy.lower()
+
+
+def test_slot_gate_resolver_failed_parallel_refuses(tmp_path, monkeypatch):
+  # axis: resolver-failed cannot-tell + parallel refuses with cause in payload
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _unknown_calibration(
+        monkeypatch,
+        path="/fake/pilot-calibration.md",
+        cause=L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["path"] == "/fake/pilot-calibration.md"
+    assert result["cause"] == L.pilot_calibration.CAUSE_RESOLVER_FAILED
+
+
+def test_slot_gate_absent_cause_parallel_passes(tmp_path, monkeypatch):
+  # axis: absent cause on parallel unreserved launch passes (non-pilot project untouched)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_ABSENT,
+            "cause": L.pilot_calibration.CAUSE_NO_PILOT_BLOCK,
+            "path": "/fake/profile.md",
+        },
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is True
+
+
+def test_slot_gate_unrecognized_cause_parallel_refuses(tmp_path, monkeypatch):
+  # axis: unrecognized cause fails closed with calibration-unreadable refusal
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {
+            "state": L.pilot_calibration.STATE_CANNOT_TELL,
+            "cause": "future-unknown-cause",
+            "path": "/fake/profile.md",
+        },
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["cause"] == "future-unknown-cause"
+
+
+def test_launch_build_slot_refusal_does_not_carry_cause(tmp_path, monkeypatch):
+  # axis: slot reservation refusal omits cause (not a calibration-unreadable refusal)
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _slot_calibrated(monkeypatch)
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-reservation-required"
+    assert "cause" not in result
+
+
+def test_launch_build_calibration_unreadable_propagates_cause(tmp_path, monkeypatch):
+  # axis: launch_build propagates cause on calibration-unreadable refusal
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    profile_path = "/fake/pilot-calibration.md"
+    _unknown_calibration(
+        monkeypatch,
+        path=profile_path,
+        cause=L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    log_dir = str(tmp_path / "logs")
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+    assert result["cause"] == L.pilot_calibration.CAUSE_RESOLVER_FAILED
+    assert result["path"] == profile_path
+    assert result["remedy"]
+
+
+# --- slot calibration policy census (issue #909 K2) -------------------------
+
+
+_SLOT_CALIBRATION_GATE_EXPECTATIONS = {
+    L.pilot_calibration.CAUSE_DECLARED: "continue",
+    L.pilot_calibration.CAUSE_NO_CALIBRATION: "pass",
+    L.pilot_calibration.CAUSE_NO_PILOT_BLOCK: "pass",
+    L.pilot_calibration.CAUSE_CREDENTIAL_SET_EMPTY: "pass",
+    L.pilot_calibration.CAUSE_REPO_ROOT_INVALID: "refuse",
+    L.pilot_calibration.CAUSE_RESOLVER_FAILED: "refuse",
+    L.pilot_calibration.CAUSE_CALIBRATION_UNRESOLVED: "refuse",
+    L.pilot_calibration.CAUSE_CALIBRATION_UNREADABLE: "refuse",
+    L.pilot_calibration.CAUSE_NO_CONFIG_BLOCK: "refuse",
+    L.pilot_calibration.CAUSE_CONFIG_UNPARSEABLE: "refuse",
+    L.pilot_calibration.CAUSE_PILOT_BLOCK_MALFORMED: "refuse",
+    L.pilot_calibration.CAUSE_CREDENTIAL_SET_MALFORMED: "refuse",
+}
+
+
+def _mock_declares_slots(monkeypatch, state, cause, path=None):
+    monkeypatch.setattr(
+        L.pilot_calibration,
+        "declares_slots",
+        lambda repo_root: {"state": state, "cause": cause, "path": path},
+    )
+
+
+def test_slot_calibration_cause_policy_census():
+  # axis: every CAUSE_* constant has a policy row and an explicit gate expectation
+    pc = L.pilot_calibration
+    cause_values = {
+        getattr(pc, name)
+        for name in dir(pc)
+        if name.startswith("CAUSE_") and isinstance(getattr(pc, name), str)
+    }
+    policy_keys = set(L._SLOT_CALIBRATION_POLICY.keys())
+    expectation_keys = set(_SLOT_CALIBRATION_GATE_EXPECTATIONS.keys())
+    assert cause_values == policy_keys == expectation_keys
+
+
+@pytest.mark.parametrize(
+    "cause,expected_policy",
+    sorted(_SLOT_CALIBRATION_GATE_EXPECTATIONS.items()),
+)
+def test_slot_gate_policy_per_cause(tmp_path, monkeypatch, cause, expected_policy):
+  # axis: each calibration cause honours its explicit pass/refuse/continue policy
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    state = L.pilot_calibration.CAUSE_STATE_MAP[cause]
+    _mock_declares_slots(monkeypatch, state, cause, path="/fake/profile.md")
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    if expected_policy == "pass":
+        assert result["ok"] is True
+    elif expected_policy == "refuse":
+        assert result["ok"] is False
+        assert result["reason"] == "preflight-slot-calibration-unreadable"
+        assert result["cause"] == cause
+    else:
+        assert result["ok"] is False
+        assert result["reason"] == "preflight-slot-reservation-required"
+
+
+def test_slot_gate_contradictory_state_cause_refuses(tmp_path, monkeypatch):
+  # axis: state/cause mismatch refuses fail-closed like any other cannot-tell
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _mock_declares_slots(
+        monkeypatch,
+        L.pilot_calibration.STATE_ABSENT,
+        L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+        path=None,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    assert result["reason"] == "preflight-slot-calibration-unreadable"
+
+
+def test_slot_gate_resolver_failed_remedy_without_path(tmp_path, monkeypatch):
+  # axis: remedy names the cause when no profile path is available
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _mock_declares_slots(
+        monkeypatch,
+        L.pilot_calibration.STATE_CANNOT_TELL,
+        L.pilot_calibration.CAUSE_RESOLVER_FAILED,
+        path=None,
+    )
+    ll.declare_batch(repo, "wave-test", 2)
+    result = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert result["ok"] is False
+    remedy = result["remedy"]
+    assert L.pilot_calibration.CAUSE_RESOLVER_FAILED in remedy
+    assert "null" not in remedy.lower()
+    assert "`path`" not in remedy
+
+
+def test_slot_gate_policy_bite_refuse_to_pass_no_config_block(tmp_path, monkeypatch):
+  # axis: flipping a refuse row to pass reddens the no-config-block gate test
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    cause = L.pilot_calibration.CAUSE_NO_CONFIG_BLOCK
+    state = L.pilot_calibration.CAUSE_STATE_MAP[cause]
+    _mock_declares_slots(monkeypatch, state, cause, path="/fake/profile.md")
+    ll.declare_batch(repo, "wave-test", 2)
+    saved = L._SLOT_CALIBRATION_POLICY[cause]
+    try:
+        L._SLOT_CALIBRATION_POLICY[cause] = "pass"
+        red = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+        assert red["ok"] is True
+    finally:
+        L._SLOT_CALIBRATION_POLICY[cause] = saved
+    green = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert green["ok"] is False
+    assert green["reason"] == "preflight-slot-calibration-unreadable"
+
+
+def test_slot_gate_policy_bite_pass_to_refuse_no_calibration(tmp_path, monkeypatch):
+  # axis: flipping a pass row to refuse reddens the no-calibration gate test
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    cause = L.pilot_calibration.CAUSE_NO_CALIBRATION
+    state = L.pilot_calibration.CAUSE_STATE_MAP[cause]
+    _mock_declares_slots(monkeypatch, state, cause, path=None)
+    ll.declare_batch(repo, "wave-test", 2)
+    saved = L._SLOT_CALIBRATION_POLICY[cause]
+    try:
+        L._SLOT_CALIBRATION_POLICY[cause] = "refuse"
+        red = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+        assert red["ok"] is False
+        assert red["reason"] == "preflight-slot-calibration-unreadable"
+    finally:
+        L._SLOT_CALIBRATION_POLICY[cause] = saved
+    green = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
+    assert green["ok"] is True

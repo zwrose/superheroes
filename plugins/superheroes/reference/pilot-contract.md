@@ -31,6 +31,9 @@
 29. [The provisioning gate](#the-provisioning-gate)
 30. [Per-slot app lifecycle](#per-slot-app-lifecycle)
 31. [Wave runtime — deadline and teardown](#wave-runtime--deadline-and-teardown)
+32. [The per-slot artifact store](#the-per-slot-artifact-store)
+33. [The conformance run](#the-conformance-run)
+34. [The acceptance matrix](#the-acceptance-matrix)
 
 ---
 
@@ -291,6 +294,44 @@ receipt does not carry `result: "pass"` counts as **absent**.
 | `pilot-declaration-unexercised` | `require_exercised` is called for a declaration that has no matching exercised record |
 | `pilot-declaration-kind-unknown` | `is_exercised` or `require_exercised` is called with a `kind` not in the declaration-kind set |
 
+### Conformance declaration rows
+
+A conformance run can enumerate declaration coverage across **every slot in the policy** and
+**every declaration kind** without stopping at the first refusal. This pass is separate from
+provisioning's `require_declarations_exercised` gate, which raises on the first unexercised kind.
+
+**`attested` is not `exercised`.** `is_exercised` proves a prior registry receipt matches the
+current declaration digest and passed. Reporting that as `exercised` in a configure-time
+conformance run would overstate coverage — the run did not exercise anything. Rows therefore use
+`attested` when a matching registry receipt exists, never `exercised`.
+
+**A kind is not an instance.** `declaration_for(kind, block, policy, slot_ref)` is parameterized
+by slot: `app-lifecycle`, `mint-gate-off`, and `mint-account-allowlist` can differ per slot, and
+their digests differ with them. Rows are keyed by **`(kind, slotRef, declarationDigest)`** and
+enumerate every slot in the policy, not just one.
+
+Each row carries exactly:
+
+| Key | Meaning |
+|---|---|
+| `kind` | declaration kind |
+| `slotRef` | canonical slot reference (`<slot>@<generation>`; generation `1` when enumerating policy slot ids) |
+| `status` | `attested`, `absent`, or `not-applicable` |
+| `declarationDigest` | digest of the current declaration when applicable; `null` when not applicable or refused before extraction |
+| `reason` | `null` when `attested` or `not-applicable`; refusal token when `absent` |
+
+The `declarations` envelope adds `schemaVersion`, `rows`, `attested`, `absent`,
+`notApplicable`, and `ok`. **`ok` is true only when there is at least one row and no row is
+`absent`.** An empty row list is `ok: false` — a vacuous pass is refused.
+
+Rows carry kinds, slot refs, digests, and refusal tokens only — never policy material (origins,
+identities, allowlist entries, or commands). `assert_results_only` enforces this on every row set.
+
+Registry input resolves from `--registry-path` and requires the pilot block, policy document, and
+registry together. When the registry cannot be read, the `declarations` top-level key is `null`
+and resolution records a `conformance-input-*` reason — the run does not synthesize an empty
+registry.
+
 ## The target boundary
 
 A **binding** is a validated per-slot target contract: a canonical slot reference, an exact
@@ -308,6 +349,30 @@ redirect. There is **no `--allow-protected` equivalent** on this path — unlike
 `gate_violations`, which `--allow-protected` can bypass, protected-target refusal here is
 unconditional.
 
+### Local development locality
+
+`target_binding` refuses any **origin** or **permitted redirect** that is not a local
+development host. This is the mechanical §14 gate: non-local targets are refused **before**
+any credential exists, with no acceptance-record escape hatch, override flag, or environment
+variable bypass.
+
+**Accepted host forms** (closed set — nothing else qualifies):
+
+- IPv4 loopback `127.0.0.0/8` (for example `127.0.0.1`, `127.0.0.53`)
+- IPv6 loopback `[::1]`
+- The literal host `localhost` (case-insensitive)
+- Any host ending in `.localhost` (case-insensitive; RFC 6761 reserves the subtree)
+
+**Deliberately excluded:** private LAN ranges (`10.0.0.0/8`, `172.16.0.0/12`,
+`192.168.0.0/16`), `0.0.0.0`, `[::]`, public hostnames, and hosts that merely contain
+`localhost` without being `localhost` or a `.localhost` subdomain.
+
+**Protected targets are exempt** from the locality check — they name forbidden destinations
+(for example a production URL in `protectedTargets` is correct and does not refuse binding).
+
+Malformed origins still refuse `boundary-origin-invalid` (origin) or
+`boundary-redirects-invalid` (redirect) before the locality check runs.
+
 Protected targets are a **two-class** list:
 
 1. **URL-shaped entries** (contain `://`) — parsed and canonicalized to exact origins
@@ -323,8 +388,9 @@ Protected targets are a **two-class** list:
 URL-shaped entries that do not parse refuse at binding time. Opaque tokens are never
 interpreted as hostnames for origin matching.
 
-Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_target`,
-`check_redirect`, `check_protected_identity`, `boundary_verdict`, `authorize_credentials`.
+Public API in `lib/pilot_boundary.py`: `parse_origin`, `is_local_development_origin`,
+`target_binding`, `check_target`, `check_redirect`, `check_protected_identity`,
+`boundary_verdict`, `authorize_credentials`.
 
 ### Target boundary refusal tokens
 
@@ -334,6 +400,7 @@ Public API in `lib/pilot_boundary.py`: `parse_origin`, `target_binding`, `check_
 | `boundary-slot-ref-invalid` | `target_binding` receives a slot reference that does not parse |
 | `boundary-redirects-invalid` | `permitted_redirects` is not a list, or any redirect does not parse as an exact origin |
 | `boundary-protected-targets-invalid` | `protected_targets` is missing, empty, not a list, contains a non-string or empty entry, or contains a URL-shaped entry that does not parse |
+| `boundary-target-not-local-development` | `target_binding`: origin or any permitted redirect is canonical but not a local-development host |
 | `boundary-target-off-allowlist` | `check_target`: parsed origin is not the binding origin and is not protected |
 | `boundary-redirect-off-allowlist` | `check_redirect`: parsed origin is neither the binding origin nor a permitted redirect and is not protected |
 | `boundary-protected-target-refused` | `check_target`, `check_redirect`, or `check_protected_identity`: parsed origin or identity names a protected target |
@@ -431,16 +498,25 @@ as a relative path.
       "origin": "http://127.0.0.1:5173",
       "permittedRedirects": ["http://127.0.0.1:9000"],
       "expectedIdentities": {"owner": "pilot-owner@example.test"},
-      "mintableAccounts": ["pilot-owner"]
+      "mintableAccounts": ["pilot-owner"],
+      "accountClasses": {"owner": "dev", "guest": "dev"}
     }
+  },
+  "ownershipProbe": {
+    "command": ["/opt/pilot/ownership-probe", "--account", "{account}"],
+    "connectionEnvVar": "PILOT_DB_URL"
   }
 }
 ```
 
 Top-level keys are exactly `schemaVersion`, `declaration`, `protectedTargets`, `datastore`,
-and `slots`. Each slot requires `origin`, `permittedRedirects`, and `expectedIdentities`
-(non-empty dict mapping account names to identity strings). `mintableAccounts` is optional.
-`datastore.observer` may be `null` (app-reported path) or an object with `command` (non-empty
+`slots`, and `ownershipProbe`. Each slot requires `origin`, `permittedRedirects`, and
+`expectedIdentities` (non-empty dict mapping account names to identity strings).
+`mintableAccounts` and `accountClasses` are optional. When present, `accountClasses` is a
+non-empty dict mapping each account name (non-empty string) to a class token matching
+`^[a-z][a-z0-9-]{0,31}$`. `ownershipProbe` may be `null` or an object with exactly
+`command` and `connectionEnvVar`; `command` is validated like sentinel commands but requires
+`{account}` in `command[1:]` and permits only that placeholder. `datastore.observer` may be `null` (app-reported path) or an object with `command` (non-empty
 argv list) and `connectionEnvVar` (valid env-var name). `datastore.containment` is **optional**;
 when present its keys are exactly `permissions` and `sentinel`, and each may be `null`.
 `permissions` requires a real-boolean `cannotReachForeignNamespaces` and non-empty `evidence`.
@@ -451,7 +527,23 @@ non-empty argv of non-empty strings with an **absolute** `argv[0]` that carries 
 `declaration` field must match the identifier used to open it.
 
 Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy`,
-`policy_material`.
+`policy_material`, `ownership_probe_request`.
+
+`ownership_probe_request(policy, account)` is a pure resolution function: it substitutes
+`{account}` in `ownershipProbe.command[1:]` (never in `argv[0]`), returns the resolved argv and
+`connectionEnvVar` name, and refuses `policy-document-invalid` when the policy declares no
+`ownershipProbe`. The account must match the policy account-name grammar
+(`^[A-Za-z_][A-Za-z0-9_-]*$`) and appear among a slot's `expectedIdentities` keys; otherwise the
+resolver refuses `policy-ownership-probe-account-invalid` or
+`policy-ownership-probe-account-undeclared`. The conformance `ownership-probe` exercise executes
+the resolved command under the same observer confinement checks as `datastore.observer`, with
+`run_cwd` allocated outside every reach root; the resolver never runs it.
+
+§14 treats whether the pilot account is gaining real data, rights, or billing as prose, only partly
+checkable. When declared, the ownership probe exercises the mechanical half at launch: every
+credential-set account must answer `ownsNothing: true` at that instant. A passing probe does not
+close the §14 limit — an account quietly accumulating data over time is not something the
+framework detects. This one relies on the owner noticing.
 
 ### Policy document refusal tokens
 
@@ -467,6 +559,8 @@ Public API in `lib/pilot_policy.py`: `resolve_policy_document`, `validate_policy
 | `policy-document-mode-insecure` | Document mode grants group- or world-write |
 | `policy-document-unreadable` | Document or an ancestor cannot be opened or read |
 | `policy-document-invalid` | JSON parse failure, wrong top-level shape, declaration mismatch, or any structural validation failure in `validate_policy` |
+| `policy-ownership-probe-account-invalid` | `ownership_probe_request`: account missing, empty, or fails account-name grammar |
+| `policy-ownership-probe-account-undeclared` | `ownership_probe_request`: account is not declared in any slot's `expectedIdentities` |
 | `policy-schema-version-unsupported` | `schemaVersion` is not integer `1` |
 
 ## Results travel, never policy
@@ -610,6 +704,8 @@ verification, or with a stale verdict), not a hostile process in another address
 | `provision-account-unknown` | `authorized_seed_request`: account is not in the slot's `expectedIdentities` |
 | `provision-mint-unsupported` | `authorized_mint_request`: slot has no `mintableAccounts` or the list is empty |
 | `provision-launch-invalid` | `authorized_app_launch`: `launch` is not a mapping, or `baseUrl` / `readinessUrl` is absent, non-string, or empty |
+| `provision-account-class-undeclared` | `gate_account_classes` or `gate_provisioning`: slot has no `accountClasses`, or a credential-set account lacks a class entry |
+| `provision-account-class-span` | `gate_account_classes` or `gate_provisioning`: credential-set accounts map to more than one distinct class token within the slot |
 
 ## Seed and mint call shapes
 
@@ -1280,7 +1376,42 @@ being omitted — an absent boundary is itself worth seeing in the batch account
 and `boundary` keyword arguments and passes them through on the refusal path via
 `_try_reserve_for_refusal`, so a wave slot whose launch is refused at preflight, premise, or compose
 is still attributable to its slot. The `launch` CLI exposes the same three fields (`--slot`,
-`--generation`, `--boundary`).
+`--generation`, `--boundary`). The launcher also **refuses** a parallel launch on a slot-calibrated
+project (a `pilot` block with a non-empty `credentialSet`, plus a batch declared with
+`expectedLaunches > 1` or a batch that already has a live lane) that carries no slot reservation,
+with refusal token `preflight-slot-reservation-required`. The refusal payload carries `missing` (the
+lanes lacking a reservation, with the literal `this-launch` standing for the launch being attempted)
+and `remedy` (the command shape). Single-lane launches and projects whose calibration probe returns
+`absent` (no profile, no `pilot` block, or an empty `credentialSet`) are untouched. When calibration
+cannot be determined (`cannot-tell`, including resolver failure), the gate refuses fail-closed with
+`preflight-slot-calibration-unreadable`, carrying `path` and `cause`. Enforcement is a preflight
+check plus a post-reserve re-check, not a predicate inside
+`launch_ledger.reserve`'s lock, so two launches racing on an *undeclared* batch can both pass
+preflight — the post-reserve re-check then refuses at least one of them before any spawn.
+A reserved-but-never-started lane has no CLI transition today — it is resolved when that
+launch itself reaches a terminal outcome; `record-outcome` cannot clear it
+(`outcome-without-started`).
+
+**Parallel-gate calibration policy** (`lib/pilot_calibration.py` causes →
+`lib/launcher.py` `_SLOT_CALIBRATION_POLICY`). Each cause belongs to exactly one probe
+`state`; a contradictory `state`/`cause` pair refuses fail-closed. When `path` is absent,
+the refusal `remedy` names the `cause` and what to check (repo root, test-pilot store) rather
+than a null profile path.
+
+| Cause | Probe state | Parallel gate |
+|---|---|---|
+| `declared` | `declared` | continue (slot reservation may still be required) |
+| `no-calibration` | `absent` | pass |
+| `no-pilot-block` | `absent` | pass |
+| `credential-set-empty` | `absent` | pass |
+| `repo-root-invalid` | `cannot-tell` | refuse |
+| `resolver-failed` | `cannot-tell` | refuse |
+| `calibration-unresolved` | `cannot-tell` | refuse |
+| `calibration-unreadable` | `cannot-tell` | refuse |
+| `no-config-block` | `cannot-tell` | refuse |
+| `config-unparseable` | `cannot-tell` | refuse |
+| `pilot-block-malformed` | `cannot-tell` | refuse |
+| `credential-set-malformed` | `cannot-tell` | refuse |
 
 **Results-only scan at the durable write boundary.** `boundary_record` accepts an optional
 `material` argument; when the caller passes it, the composer scans the record it is about to return
@@ -1325,6 +1456,9 @@ stated here rather than implied clean.
 | `ledger-boundary-strong-with-acceptance` | `boundary_record`: strong verdict with a `weaker_acceptance` supplied |
 | `ledger-boundary-acceptance-reason-too-long` | `boundary_record`: acceptance `reason` exceeds 500 characters |
 | `ledger-boundary-material-in-record` | `boundary_record`: composed record carries policy material when `material` is supplied |
+| `preflight-slot-reservation-required` | a parallel launch on a slot-calibrated project carries no slot reservation for one or more lanes |
+| `preflight-slot-calibration-unreadable` | a parallel launch on a project whose pilot-slot calibration probe returned `cannot-tell` (unreadable profile, resolver failure, calibration present but unresolved, missing or unparseable config block, or malformed `pilot`/`credentialSet`; payload carries `path` and `cause`) |
+| `post-reserve-ledger-unreadable` | the post-reserve re-check could not read the launch ledger |
 
 ## The identity-probe exercise
 
@@ -2539,7 +2673,28 @@ share a UID by design (#660 §14). It prevents ordering mistakes, not a hostile 
 another address space.
 
 Public API in `lib/pilot_provision.py`: `declaration_for`, `require_declarations_exercised`,
-`gate_datastore_identity`, `gate_provisioning`.
+`gate_datastore_identity`, `gate_account_classes`, `gate_provisioning`.
+
+### The account-class gate
+
+§14 accepts an unsandboxed pilot session authority on conditions; the first is mechanical:
+**credentials spanning more than one account class** refuses at provisioning. Each slot may
+declare `accountClasses` — a map from account name to class token. At provisioning,
+`gate_account_classes` collects every account named in the block's `credentialSet` and requires
+each to have a class entry in that slot's `accountClasses`. The set of distinct class tokens
+across those accounts must have exactly one member; two or more refuses
+(`provision-account-class-span`). Scope is **per slot**, not project-wide: two slots may each be
+internally single-class without matching each other.
+
+Extra entries in `accountClasses` naming accounts **not** in the credential set are **ignored,
+not refused** — a policy may describe more accounts than a given block uses. There is no
+override: the gate cannot be bypassed by omitting the field from the schema — `accountClasses`
+is optional in the policy document but **required at the gate**, so an existing policy that never
+declared classes now refuses at provisioning (`provision-account-class-undeclared`). That adoption
+consequence is deliberate: a mechanical tripwire satisfied by omission is decorative.
+
+This is an **in-process chokepoint, not a sandbox** (same §14 UID-sharing model as the other
+provisioning gates).
 
 ### Provisioning gate refusal tokens
 
@@ -2553,6 +2708,8 @@ Public API in `lib/pilot_provision.py`: `declaration_for`, `require_declarations
 | `provision-weaker-acceptance-invalid` | `gate_datastore_identity`: `weaker_acceptance` is not a dict with exactly `acceptedBy`, `acceptedAt`, and `reason` as non-empty strings, with `acceptedAt` in ISO-8601 UTC `Z` form |
 | `provision-datastore-identity-strength-unknown` | `gate_datastore_identity`: strength is neither `strong` nor `weaker` |
 | `provision-mint-declaration-missing` | `declaration_for` for a mint kind: slot policy grants `mintableAccounts` but `pilot.mint` is absent from the block |
+| `provision-account-class-undeclared` | `gate_account_classes` or `gate_provisioning`: slot has no `accountClasses`, or a credential-set account lacks a class entry |
+| `provision-account-class-span` | `gate_account_classes` or `gate_provisioning`: credential-set accounts map to more than one distinct class token within the slot |
 
 ## Per-slot app lifecycle
 
@@ -2834,3 +2991,477 @@ slot list makes `complete` false.
 | `wave-park-latch-write-failed` | park latch could not be written or slot lock failed |
 | `wave-park-latch-unreadable` | park latch file is present but cannot be read — reads as latched |
 | `wave-fence-unconfirmed` | destructive step reached before all fence steps are `confirmed` |
+
+## The per-slot artifact store
+
+Run evidence from a pilot execution is retained in an **external per-slot artifact store**
+outside any worktree. The store root is the test-pilot entry's `artifacts_dir`. Each retained
+payload is keyed by `store.artifact_key(branch, slot)` and then by artifact class beneath that
+key. **The slot is mandatory** — the branch-only `artifact_key(branch)` overload is not reachable
+here; every retain call must supply both branch and slot.
+
+### Artifact classes
+
+| Class | Default / opt-in | Redaction basis | Default retention (hours) |
+|---|---|---|---|
+| `step-log` | default | `scrubbed` | 168 |
+| `failure-screenshot` | default | `capture-scope` | 168 |
+| `trace` | opt-in | `archive-member-scrub` | 24 |
+
+`step-log` and `failure-screenshot` persist by default. `trace` is captured only when a run
+explicitly opts in.
+
+### Redaction bases
+
+A class whose redaction cannot be established is **not retained**.
+
+- **`scrubbed`** — the payload text passes through the band's single scrub source
+  (`pr_comment.scrub`), then a **substring** residue scan for every policy-material string;
+  any surviving material refuses retention (`artifact-redaction-unestablished`).
+- **`capture-scope`** — image pixels cannot be scrubbed, so the basis is a capture receipt
+  **bound to the bytes**: a permitted capture scope (`viewport`), plus a sha256 in the receipt
+  that must equal the payload's own digest, plus an image-format check (PNG or JPEG magic) so an
+  archive cannot enter as a screenshot. **Declared limit:** the framework does not and cannot
+  prove that rendered pixels carry no secret — only that the receipt matches the bytes retained.
+- **`archive-member-scrub`** — every archive member is enumerated, decoded as UTF-8, scrubbed, and
+  residue-scanned; the **rewritten** archive is what is retained. A member that cannot be decoded
+  means the framework cannot scrub it, so retention is refused. **Practical consequence:** a trace
+  carrying binary frames is refused.
+
+### Permissions and retention
+
+Directories are created `0o700` and files `0o600`. A store whose mode is looser is refused
+rather than tightened (`artifact-store-permissions-unsafe`). Each artifact carries a **sidecar**
+(`.meta.json`) holding its `expiresAt` deadline; there is **no index file** — a corrupt shared
+index would strand every deadline. Removal happens on the deadline **whether or not anyone read
+the artifact**; a sweep runs **on every write**; a payload whose sidecar cannot be recovered is
+removed rather than retained forever (`artifact-sidecar-unrecoverable`). A payload still awaiting
+its sidecar or bearing an unrecognized sidecar schema is **retained** with a warning instead, so
+concurrent writes and forward-compatible readers do not destroy valid artifacts.
+
+### Artifact store refusal tokens
+
+| Token | When returned |
+|---|---|
+| `artifact-class-unknown` | `artifact_class` is not one of the declared classes |
+| `artifact-class-not-opted-in` | an opt-in class (`trace`) is requested without `opted_in=True` |
+| `artifact-slot-invalid` | `slot` is missing, empty, or does not match the slot grammar |
+| `artifact-branch-invalid` | `branch` is missing, empty, or `artifact_key` construction fails |
+| `artifact-retention-invalid` | `retention_hours` is not an integer in the permitted range |
+| `artifact-now-invalid` | `now` is not valid ISO-8601 UTC-Z |
+| `artifact-material-invalid` | `material` is missing, empty, or contains a non-string entry |
+| `artifact-payload-invalid` | payload shape does not match the class (text vs path) |
+| `artifact-payload-unreadable` | payload path is missing, a symlink, not a regular file, or unreadable |
+| `artifact-payload-format-invalid` | capture bytes are not PNG/JPEG, or archive shape is invalid |
+| `artifact-payload-oversize` | text or archive exceeds the configured byte/member limits |
+| `artifact-capture-receipt-invalid` | capture receipt keys, scope, or sha256 do not match the payload |
+| `artifact-redaction-unestablished` | scrub/residue scan failed, or an archive member cannot be decoded and scrubbed |
+| `artifact-store-path-unsafe` | store path is a symlink, not a directory, or otherwise unsafe |
+| `artifact-store-permissions-unsafe` | store directory grants group or other permission bits |
+| `artifact-write-failed` | atomic payload or sidecar write failed |
+| `artifact-sidecar-unrecoverable` | sidecar is missing or corrupt during sweep — payload removed |
+| `artifact-sidecar-pending` | payload has no sidecar yet and is inside the write-grace window — payload retained with warning |
+| `artifact-sidecar-schema-unknown` | sidecar `schemaVersion` is unrecognized — payload retained with warning |
+| `artifact-retention-expired` | `expiresAt` is at or before `now` during sweep |
+| `artifact-sweep-failed` | sweep could not unlink a path safely |
+
+## The conformance run
+
+A **conformance run** is a headless pass that exercises declared framework surfaces so a report
+can cite receipts rather than intentions. It drives in-repo library surfaces only — no live app,
+no browser, no network.
+
+### Exercise record and report shapes
+
+An **exercise record** carries exactly these keys:
+
+| Key | Meaning |
+|---|---|
+| `schemaVersion` | integer schema version (currently `1`) |
+| `exercise` | exercise name (`artifact-store`, `cleanup-end-to-end`, …) |
+| `surfaces` | non-empty list of surface names this exercise claims |
+| `result` | one of `pass`, `fail`, `skipped`, `refused` |
+| `reason` | refusal/skip token when `result` is not `pass`; `null` on pass |
+| `evidence` | short human-readable receipt string |
+| `exercisedAt` | ISO-8601 UTC-Z timestamp |
+| `warnings` | list of warning dicts (may be empty) |
+
+A **conformance report** aggregates validated records:
+
+| Key | Meaning |
+|---|---|
+| `schemaVersion` | integer schema version (currently `1`) |
+| `ok` | `true` only when nothing is unexercised and every exercise passed |
+| `exercises` | validated exercise records |
+| `surfaces` | sorted list of surfaces covered by **passing** exercises only |
+| `unexercised` | sorted set difference: required inventory minus covered surfaces |
+| `warnings` | warnings folded from all exercises, each tagged with its exercise name |
+| `resolution` | why inputs could not be resolved — one entry per skipped exercise input |
+| `declarations` | declaration row envelope when pilot block, policy, and registry all resolved; `null` otherwise |
+
+**Coverage guarantee:** `surfaces` carries **passing** exercises only, `unexercised` is the
+**set difference** against the closed inventory, and `ok` is true only when nothing is unexercised
+and every exercise passed — so a surface with no exercise at all still shows up in
+`unexercised`, and a skipped exercise never reads as covered.
+
+### Required surface inventory
+
+| Surface | Exercise |
+|---|---|
+| `pilot_appctl.assert_unique_endpoints` | `wave-headless` |
+| `pilot_appctl.resolve_invocation` | `wave-headless` |
+| `pilot_artifacts.retain` | `artifact-store` |
+| `pilot_artifacts.sweep` | `artifact-store` |
+| `pilot_boundary.check_protected_identity` | `boundary-refusals` |
+| `pilot_boundary.check_redirect` | `boundary-refusals` |
+| `pilot_boundary.check_target` | `boundary-refusals` |
+| `pilot_boundary.is_local_development_origin` | `boundary-refusals` |
+| `pilot_cleanup.cleanup_effect_receipt` | `cleanup-end-to-end` |
+| `pilot_cleanup.receipt_valid_for` | `cleanup-end-to-end` |
+| `pilot_cleanup.registry_record` | `cleanup-end-to-end` |
+| `pilot_cleanup.resolve_containment` | `cleanup-end-to-end` |
+| `pilot_cleanup.resurrection_plan` | `cleanup-end-to-end` |
+| `pilot_horizon.account_margin` | `horizon-validity` |
+| `pilot_horizon.validate_observation` | `horizon-validity` |
+| `pilot_mint.gate_off_receipt` | `mint-gate-off` |
+| `pilot_mint.run_gate_off_test` | `mint-gate-off` |
+| `pilot_policy.ownership_probe_request` | `ownership-probe` |
+| `pilot_reclaim.sweep` | `reclaim-sweep` |
+| `pilot_wave.admit_work` | `wave-headless` |
+| `pilot_wave.assert_destructive_allowed` | `wave-headless` |
+| `pilot_wave.validate_step_result` | `wave-headless` |
+| `pilot_wave.wave_anchor` | `wave-headless` |
+| `pilot_wave.wave_phase` | `wave-headless` |
+
+### Exercises
+
+**`artifact-store`** — exercises `pilot_artifacts.retain` and `pilot_artifacts.sweep` on a
+disposable external store instance (not the configured project's store): a clean step-log is
+retained with restrictive permissions, a dirty log is refused by redaction, an opt-out trace is
+refused, and a short-retention artifact is swept on deadline. The exercise proves the store's
+*behaviour* against that disposable instance, not the configured store's current *state*.
+Expected outcome: **pass** when all four expectations hold.
+
+**`boundary-refusals`** — effect-free §14 local-development tripwire. Constructs bindings from
+the project's resolved policy and fires pure boundary predicates against the project's own first
+slot (sorted by slot name): the declared origin and redirects must bind; off-allowlist targets and
+redirects, protected targets, non-local-development origins, and protected identity tokens must
+refuse with the exact boundary tokens. `protectedTargets` is a two-class list (URL-shaped origins
+and opaque identity tokens); when only one class is present the missing class's leg is skipped and
+recorded in the evidence string rather than failing the exercise. When the project's declared origin
+is not local development, the exercise **fails** with the binding refusal token rather than skipping.
+Expected outcome: **pass** when every applicable leg holds.
+
+**`cleanup-end-to-end`** — drives the cleanup receipt, registry record, receipt binding,
+containment resolution, and resurrection planner on synthetic inputs. The resurrection plan is
+**produced, never executed**. Expected outcome: **pass** when every step holds and the plan
+action is `resurrect`.
+
+**`mint-gate-off`** — runs `pilot_mint.run_gate_off_test` and builds `pilot_mint.gate_off_receipt`
+from the result. A gate-off run that does not produce a usable receipt is reported as
+**unexercised**, never recorded as exercised. Expected outcome: **pass** when the runner succeeds
+and the receipt is well-formed.
+
+**`horizon-validity`** — effect-free §13 validity-provenance extrapolation point. Uses the
+project's declared `validityProvenance` from its pilot block and the exercise's `now` argument
+(timezone-aware UTC epoch arithmetic only — never wall clock). Exercises `account_margin` in both
+directions (comfortably covered and `horizon-margin-exceeded`), refuses malformed observations via
+`validate_observation`, and when `validityProvenance` is `unknown` fires
+`horizon-unknown-provenance-unattended`; otherwise records that leg as not applicable inside the
+evidence string. Expected outcome: **pass** when every applicable leg holds.
+
+**`ownership-probe`** — effect-bearing §14 account-owns-nothing tripwire when the policy declares
+`ownershipProbe`. Resolves and runs the probe for **every** account in the pilot block's
+`credentialSet` under `pilot_bounded_run`, with observer confinement on the declared command and a
+`run_cwd` outside reach roots. Exit 0 with stdout JSON `{"ownsNothing": true, "account": "<name>"}`
+matching the probed account passes for that account; exit 0 with any other body fails with
+`ownership-probe-answer-invalid` (a process that merely started is not evidence the account owns
+nothing); non-zero exit fails with `ownership-probe-refused`; undeclared probe skips with
+`ownership-probe-undeclared`. A passing probe proves a narrow point-in-time subclaim only — an
+account quietly accumulating data over time is not something the framework detects. This one relies
+on the owner noticing. Expected outcome: **pass** when every declared account answers
+`ownsNothing: true` on a pass.
+
+**`reclaim-sweep`** — seeds a past-grace quarantine entry and exercises `pilot_reclaim.sweep`,
+requiring warnings on the seeded entry. Expected outcome: **pass** when sweep warns and retains
+as expected.
+
+**`wave-headless`** — exercises wave deadline math, admission, step validation, destructive
+gates, appctl fencing, and invocation resolution without a browser. Expected outcome: **pass**
+when every headless check holds.
+
+### Effect-bearing exercises
+
+Three exercises execute the **project's own commands against the project's real resources**:
+
+| Exercise | Live effects |
+|---|---|
+| `cleanup-end-to-end` | Plants sentinels, writes the operational slot journal, runs the declared cleanup command against the live datastore |
+| `mint-gate-off` | Runs the declared gate-off command in the live checkout |
+| `ownership-probe` | Runs the declared ownership probe command for every credential-set account |
+
+Headless exercises (`wave-headless`, `reclaim-sweep`, `artifact-store`, `boundary-refusals`,
+`horizon-validity`) touch only disposable subtrees they create themselves or pure in-memory
+predicates.
+
+By default, `resolve_inputs` leaves `cleanup`, `mint`, and `ownership_probe` inputs **absent** with
+`conformance-input-live-effects-not-permitted`; those exercises return `skipped`, `ok` is
+`false`, and their surfaces appear in `unexercised` rather than being silently omitted from the
+report. Pass `--allow-live-effects` to resolve and run the effect-bearing trio; the run will
+execute the project's own cleanup, gate-off, and ownership-probe commands against the project's
+real datastore and checkout. Operators who pass that flag also accept the declared limit that
+`pilot_bounded_run` does not signal the process group when a command exits cleanly after
+detaching a helper (see `pilot_conformance_cleanup.py` module docstring; issue #833 acceptance
+matrix).
+
+### CLI
+
+```text
+python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+       /lib/pilot_conformance.py run --cwd <path>
+       [--policy-root <path>] [--reach-root <path> ...] [--slots-dir <path>]
+       [--slot-ref <ref>] [--branch <name>] [--slot <id>]
+       [--artifacts-dir <path>] [--registry-path <path>] [--now <iso8601-utc-Z>]
+       [--allow-live-effects]
+```
+
+Stdout is the report JSON and nothing else; diagnostics go to stderr. **Exit 0** when `ok` is
+true, **exit 1** when it is false (including an all-skipped run — a run that exercised nothing
+is not a pass), **exit 2** on a usage error or a pre-flight refusal.
+
+### Unresolved inputs
+
+Unresolved inputs are **absent, never defaulted**. An input the run cannot resolve is left out of
+the exercise inputs; the exercise reading it returns `skipped`, and the report's `resolution`
+list records why under a `conformance-input-*` token naming **which** input failed and **why**. A
+substituted default would convert "could not exercise" into "passed".
+
+### Conformance refusal tokens
+
+| Token | When returned |
+|---|---|
+| `conformance-record-invalid` | record dict has wrong keys, schema version, or fails re-validation |
+| `conformance-record-unregistered` | exercise record names a different exercise or surfaces outside its registration |
+| `conformance-result-invalid` | `result` is not one of the four allowed strings |
+| `conformance-exercise-name-invalid` | exercise name fails the name grammar |
+| `conformance-exercise-name-duplicate` | two records share the same exercise name in one report |
+| `conformance-surfaces-empty` | `surfaces` is missing or empty |
+| `conformance-surface-unknown` | a surface is not in `REQUIRED_SURFACES` |
+| `conformance-surface-duplicate` | duplicate surface in one record's `surfaces` list |
+| `conformance-reason-invalid` | `reason` shape invalid for the `result` |
+| `conformance-evidence-invalid` | `evidence` missing, too long, or contains control characters |
+| `conformance-exercised-at-invalid` | `exercisedAt` is not valid ISO-8601 UTC-Z |
+| `conformance-warning-invalid` | a warning entry is malformed |
+| `conformance-exercise-fn-invalid` | registered exercise function is malformed |
+| `conformance-exercise-raised` | exercise raised an exception without a normalized reason |
+| `conformance-cli-cwd-invalid` | `--cwd` is not an existing directory (exit 2) |
+| `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
+| `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
+| `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
+| `conformance-input-live-effects-not-permitted` | cleanup, mint, or ownership-probe input: `--allow-live-effects` was not passed |
+| `conformance-input-no-artifacts-dir` | artifacts input: artifacts directory could not be resolved |
+| `conformance-input-no-calibration` | pilot block input: calibration config could not be loaded for cwd |
+| `conformance-input-no-material` | artifacts input: policy material list is empty after resolution |
+| `conformance-input-no-mint` | mint input: pilot block has no usable mint envelope or enabling env var |
+| `conformance-input-no-pilot-block` | pilot block input: calibration config has no `pilot` key |
+| `conformance-input-no-policy-root` | policy or cleanup input: `--policy-root` was not supplied |
+| `conformance-input-no-slot` | artifacts or cleanup input: slot name could not be resolved from `--slot` or `--slot-ref` |
+| `conformance-input-no-slot-ref` | wave or cleanup input: `--slot-ref` missing or empty |
+| `conformance-input-no-slots-dir` | wave, reclaim, or cleanup input: `--slots-dir` missing or not a directory |
+| `conformance-input-pilot-block-invalid` | pilot block input: `pilot` value is not a dict or fails pilot-block validation |
+| `conformance-input-policy-unresolved` | policy or cleanup input: declaration missing or policy document could not be resolved |
+| `conformance-input-no-registry-path` | declarations input: `--registry-path` was not supplied |
+| `conformance-input-registry-missing` | declarations input: registry path does not exist |
+| `conformance-input-registry-unreadable` | declarations input: registry file could not be read |
+| `conformance-input-registry-invalid-json` | declarations input: registry file is not valid JSON |
+| `conformance-input-registry-invalid-shape` | declarations input: registry document is not `{"schemaVersion": 1, "records": [...]}` |
+| `conformance-declaration-row-raised` | declaration row: `declaration_for` raised an exception without a normalized reason token |
+| `conformance-runtime-inputs-missing` | runtime exercise input key absent |
+| `conformance-runtime-inputs-malformed` | runtime exercise input present but wrong shape |
+| `conformance-runtime-slots-dir-invalid` | `slots_dir` missing or not a directory |
+| `conformance-runtime-expectation-unmet` | headless wave/reclaim expectation did not hold |
+| `conformance-runtime-sweep-warnings-empty` | reclaim sweep produced no warnings for seeded entry |
+| `conformance-runtime-gate-off-unverified` | mint gate-off run or receipt could not be verified |
+| `conformance-runtime-boundary-expectation-unmet` | boundary-refusals leg did not hold or refusal token mismatch |
+| `conformance-runtime-horizon-expectation-unmet` | horizon-validity leg did not hold or refusal token mismatch |
+| `ownership-probe-undeclared` | ownership-probe: policy declares no `ownershipProbe` (normal skip) |
+| `ownership-probe-refused` | ownership-probe: probe command exited non-zero |
+| `ownership-probe-answer-invalid` | ownership-probe: exit 0 but stdout is not JSON with `ownsNothing: true` |
+| `conformance-cleanup-inputs-missing` | cleanup exercise inputs absent |
+| `conformance-cleanup-inputs-malformed` | cleanup exercise inputs present but incomplete |
+| `conformance-cleanup-receipt-not-pass` | cleanup effect receipt did not pass |
+| `conformance-cleanup-registry-invalid` | registry record invalid for a passing receipt |
+| `conformance-cleanup-binding-failed` | `receipt_valid_for` refused |
+| `conformance-cleanup-containment-not-receipt` | containment did not resolve through receipt path |
+| `conformance-cleanup-containment-refused` | containment resolution refused |
+| `conformance-cleanup-plan-not-resurrect` | resurrection plan action was not `resurrect` |
+| `conformance-cleanup-plan-refused` | resurrection plan parked or refused |
+| `conformance-cleanup-run-cwd-inside-reach` | cleanup exercise `run_cwd` must be outside all reach roots |
+
+## The acceptance matrix
+
+An **acceptance matrix** states row by row what framework capabilities are exercised by a
+reference project's conformance run, what is a declared limit the owner carries, and what remains
+prose residue. It exists because one project implements the contract end to end — generality cannot
+be validated before shipping without an explicit, pinned matrix.
+
+**Overstatement failure mode:** a matrix row reading `exercised` when nothing actually exercised
+that capability is worse than no matrix, because it launders an assumption into a receipt. Resolution
+downgrades any row whose evidence does not resolve to `unexercised` — never to `not-applicable`.
+
+### Pinned reference
+
+Every matrix carries a **reference** record: `project` (non-empty name), `commit` (a full object
+id), and `dirty` (boolean). A **pin** is an object id — exactly 40 or 64 lowercase hex characters.
+A short sha, branch name, tag, `HEAD`, or mixed-case hex is not a pin and refuses
+`acceptance-reference-commit-invalid`. A dirty reference worktree is recorded and permitted but
+forces the matrix's `ok` to false — a matrix taken against a tree that does not match its pin is not
+a receipt.
+
+### Status vocabulary
+
+| Status | Meaning |
+|---|---|
+| `exercised` | Evidence resolves to a **passing** exercise record from this run whose `surfaces` list contains the cited surface |
+| `attested` | A declaration row matches the cited `kind`, `slotRef`, and `digest` with status `attested` |
+| `unexercised` | The row is applicable but evidence did not resolve |
+| `declared-limit` | A stated framework limit with `limit_id`, `closure_path`, and `ruling` |
+| `prose-residue` | The framework cannot check it; the owner carries it |
+| `not-applicable` | An affirmative author decision that the row does not apply — resolution never produces this |
+
+**`exercised` vs `attested`:** `exercised` binds to a conformance exercise record from **this
+run**. `attested` binds to a registry receipt for the current declaration digest — prior exercise,
+not this run's.
+
+### Evidence pointers
+
+Exercise-backed:
+
+```json
+{"exercise": "<conformance exercise name>", "surface": "<REQUIRED_SURFACES member>"}
+```
+
+Declaration-backed:
+
+```json
+{"kind": "<declaration kind>", "slotRef": "<slot ref>", "digest": "<declaration digest>"}
+```
+
+**Surface-binding rule:** a row may not read `exercised` unless the named passing exercise record's
+`surfaces` list contains the cited surface. Citing a real but unrelated passing record must fail
+resolution.
+
+**Totality:** `framework_rows` always returns the full framework row set for any well-formed report
+and declarations block, including empty ones. Rows whose evidence does not resolve become
+`unexercised` with a stated reason — the builder never raises and never goes silent. An adopter whose
+run lacks the evidence a row wanted sees readable `unexercised` rows, not a traceback.
+
+### Matrix `ok`
+
+`ok` is true only when **all** of these hold:
+
+1. `rows` is non-empty;
+2. no row has status `unexercised`;
+3. the reference is not `dirty`;
+4. `report_data["unexercised"]` is empty;
+5. `report_data["ok"]` is true;
+6. `declarations_block["ok"]` is true.
+
+An empty row list yields `ok: false`.
+
+### Framework declared limits
+
+Seven rows in `FRAMEWORK_DECLARED_LIMITS` (`lib/pilot_acceptance.py`), each `area:
+declared-limit`, `status: declared-limit`:
+
+| `limit_id` | `ruling` |
+|---|---|
+| `results-only-key-position` | `owner-ruled` |
+| `sentinel-account-attestation` | `owner-ruled` |
+| `appctl-stop-pgid-reuse` | `owner-ruled` |
+| `bounded-run-clean-exit-containment` | `owner-ruled` |
+| `residue-scan-encoded-material` | `pending-owner-ruling` |
+| `screenshot-pixels-uninspectable` | `pending-owner-ruling` |
+| `trace-retention-usually-refuses` | `pending-owner-ruling` |
+
+### Extrapolation rows
+
+Five `generality` rows in `EXTRAPOLATION_POINTS` — generalized from one project's shape. Default
+statuses: `sign-in-cardinality` (`prose-residue`, no exercise), `declared-session-surface`
+(`attested` via `session-surface` declaration), `validity-provenance` (`exercised` via
+`horizon-validity` / `pilot_horizon.account_margin`), `one-app-instance-per-slot` (`exercised` via
+`wave-headless` / `pilot_appctl.assert_unique_endpoints`), `filesystem-reclaim` (`exercised` via
+`reclaim-sweep` / `pilot_reclaim.sweep`).
+
+### Tripwire rows and the two-row ownership rule
+
+Four `accepted-limit-tripwire` rows in `TRIPWIRE_ROWS`:
+
+- **`multi-account-class`** — `prose-residue`: enforced at provisioning, not exercised by the
+  conformance run.
+- **`local-development-only`** — `exercised` via `boundary-refusals` /
+  `pilot_boundary.is_local_development_origin`.
+- **`account-owns-nothing`** — `prose-residue` **permanently**: the framework does not detect an
+  account quietly accumulating data.
+- **`account-owns-nothing-probe`** — `exercised` via `ownership-probe` /
+  `pilot_policy.ownership_probe_request` when the project declares an ownership probe.
+
+These are **two rows, permanently**. A passing ownership probe may read `exercised` on the narrow
+probe row; the broad `account-owns-nothing` row stays `prose-residue` no matter what the probe
+returns.
+
+### CLI
+
+```text
+python3 -B pilot_acceptance.py matrix --report-path <json> --project <name> --commit <oid>
+       [--dirty | --clean] [--generated-at <iso>] [--format json|markdown]
+```
+
+The report JSON is the output of `pilot_conformance.py run`; `declarations` is read from the
+top-level key. When the `declarations` key is **absent**, the matrix CLI treats it as an empty
+envelope (`ok: false`, no rows) and records `acceptance-cli-declarations-absent`. When
+`declarations` is **explicitly null** (no registry was supplied to the conformance run), the matrix
+CLI treats it the same way but records `acceptance-cli-declarations-null`. A **present but
+malformed** envelope refuses `acceptance-cli-declarations-malformed`; a non-object value refuses
+`acceptance-cli-declarations-invalid`. Default format `json`.
+Matrix JSON on stdout, diagnostics on stderr. **Exit 0** when `ok` is true, **exit 1** when it is
+false (output still prints), **exit 2** on refusal. When neither `--dirty` nor `--clean` is
+passed, dirty is derived from `git status --porcelain` in the **CLI process's current working
+directory**; pass `--dirty` or `--clean` to override explicitly.
+
+### Acceptance-matrix refusal tokens
+
+| Token | When returned |
+|---|---|
+| `acceptance-reference-project-invalid` | `project` is empty, non-string, or contains control characters |
+| `acceptance-reference-commit-invalid` | `commit` is not a full lowercase hex object id |
+| `acceptance-reference-dirty-invalid` | `dirty` is not a real boolean |
+| `acceptance-row-area-invalid` | `area` is empty, non-string, or contains control characters |
+| `acceptance-row-claim-invalid` | `claim` is empty, non-string, or contains control characters |
+| `acceptance-row-status-invalid` | `status` is not in the closed vocabulary |
+| `acceptance-row-evidence-required` | `evidence` missing where required |
+| `acceptance-row-evidence-forbidden` | `evidence` present where forbidden |
+| `acceptance-row-evidence-shape-invalid` | exercise or declaration evidence pointer has wrong keys |
+| `acceptance-row-limit-id-required` | `declared-limit` row missing `limit_id` |
+| `acceptance-row-limit-id-forbidden` | `limit_id` present on a non-limit row |
+| `acceptance-row-closure-path-required` | `declared-limit` row missing `closure_path` |
+| `acceptance-row-closure-path-forbidden` | `closure_path` present on a non-limit row |
+| `acceptance-row-ruling-required` | `declared-limit` row missing `ruling` |
+| `acceptance-row-ruling-invalid` | `ruling` is not `owner-ruled` or `pending-owner-ruling` |
+| `acceptance-row-ruling-forbidden` | `ruling` present on a non-limit row |
+| `acceptance-evidence-exercise-absent` | downgrade: cited exercise is not in the report |
+| `acceptance-evidence-exercise-skipped` | downgrade: cited exercise was skipped, not failed |
+| `acceptance-evidence-exercise-failed` | downgrade: cited exercise is present but did not pass |
+| `acceptance-evidence-exercise-refused` | downgrade: cited exercise returned `refused`, not pass or skip |
+| `acceptance-evidence-surface-unbound` | downgrade: passing record's `surfaces` does not contain the cited surface |
+| `acceptance-evidence-declaration-absent` | downgrade: no declaration row matches the cited pointer |
+| `acceptance-evidence-declaration-not-attested` | downgrade: declaration row exists but is not `attested` |
+| `acceptance-cli-report-path-invalid` | `--report-path` missing or empty |
+| `acceptance-cli-report-invalid` | report file unreadable, not a JSON object, or wrong `schemaVersion` |
+| `acceptance-cli-declarations-invalid` | `declarations` is present but not a JSON object |
+| `acceptance-cli-declarations-malformed` | `declarations` object has wrong `schemaVersion` or envelope shape |
+| `acceptance-cli-declarations-null` | `declarations` key is explicitly null — degraded to empty envelope |
+| `acceptance-cli-declarations-absent` | `declarations` key is missing — degraded to empty envelope |
+| `acceptance-cli-dirty-conflicting` | both `--dirty` and `--clean` were passed |
+| `acceptance-cli-dirty-unresolved` | dirty not overridden and `git status --porcelain` could not be read |
+| `acceptance-cli-generated-at-invalid` | `--generated-at` is not valid ISO-8601 UTC-Z |

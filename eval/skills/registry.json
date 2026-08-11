@@ -55,6 +55,12 @@
       "refresh the-architect's doc-policy layer",
       "reached from `superheroes:configure`"
     ],
+    "superheroes/checkpoint": [
+      "Use before compaction in a showrunner or workhorse charter session",
+      "freshen live state and emit a ready-to-paste `/compact` command",
+      "`/compact` has no programmatic trigger; one paste is the floor",
+      "Not configure, review, or discovery"
+    ],
     "superheroes/configure": [
       "set up, fix, view, or tune a project's superheroes calibration",
       "the single front door for superheroes configuration",

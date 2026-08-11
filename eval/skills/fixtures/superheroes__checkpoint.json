@@ -1,0 +1,15 @@
+{
+  "should_fire": [
+    "run checkpoint before I compact this showrunner session",
+    "freshen live state and give me the /compact command to paste",
+    "prepare this charter session for context compaction",
+    "emit a ready-to-paste compact line before my context fills up",
+    "I need to compact soon — update the resume point and give me /compact text"
+  ],
+  "should_not_fire": [
+    "set up superheroes in this project for the first time",
+    "review the code changes on this branch before merging",
+    "build this approved issue and take it to a ready PR",
+    "turn this fuzzy idea into an owner-approved spec"
+  ]
+}

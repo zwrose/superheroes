@@ -1785,6 +1785,195 @@
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "prepare this charter session for context compaction",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "prepare this charter session for context compaction",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "prepare this charter session for context compaction",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "emit a ready-to-paste compact line before my context fills up",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "emit a ready-to-paste compact line before my context fills up",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "emit a ready-to-paste compact line before my context fills up",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "I need to compact soon — update the resume point and give me /compact text",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "I need to compact soon — update the resume point and give me /compact text",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "I need to compact soon — update the resume point and give me /compact text",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "review the code changes on this branch before merging",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "review the code changes on this branch before merging",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "review the code changes on this branch before merging",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
     }
   ]
 }

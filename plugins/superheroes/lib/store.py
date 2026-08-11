@@ -77,14 +77,32 @@ def _entry_dirs(entry_dir):
     return {"blocks_dir": os.path.join(entry_dir, "blocks"),
             "manifests_dir": os.path.join(entry_dir, "manifests"),
             "plans_dir": os.path.join(entry_dir, "plans"),
-            "state_dir": os.path.join(entry_dir, "state")}
+            "state_dir": os.path.join(entry_dir, "state"),
+            "artifacts_dir": os.path.join(entry_dir, "artifacts")}
+
+
+def _legacy_in_repo_profile_path(repo_root):
+    return os.path.join(repo_root, ".claude", "test-pilot", "profile.md")
+
+
+def _legacy_global_profile_path(g):
+    return os.path.join(g["dir"], "profile.md")
+
+
+def _in_repo_layer_path(repo_root):
+    return os.path.join(repo_root, ".claude", "superheroes", "test-pilot.md")
+
+
+def _global_layer_path(cwd):
+    import mode_registry  # lazy: mode_registry lazily imports store (decide_mode path)
+    return os.path.join(mode_registry.project_store_dir(cwd), "config", "test-pilot.md")
 
 
 def _in_repo_layer(repo_root):
     """Physical in-repo path to the unified calibration layer (#412), or None if absent.
     Same convention core_md/calibration_resolve use for the in-repo layer — a direct
     file probe, so this read path never triggers a mode_registry backfill WRITE."""
-    p = os.path.join(repo_root, ".claude", "superheroes", "test-pilot.md")
+    p = _in_repo_layer_path(repo_root)
     return p if os.path.isfile(p) else None
 
 
@@ -94,9 +112,20 @@ def _global_layer(cwd):
     branch and calibration_resolve._unified_global_layer) — never a hardcoded ~/.claude
     path. Always the real control-plane project store: resolve()'s `root` is TEST-PILOT's
     store root, not the superheroes core store base, so it must not be threaded here."""
-    import mode_registry
-    p = os.path.join(mode_registry.project_store_dir(cwd), "config", "test-pilot.md")
+    p = _global_layer_path(cwd)
     return p if os.path.isfile(p) else None
+
+
+def candidate_profile_paths(cwd, root):
+    """The ordered profile-source candidates resolve() considers, existing or not."""
+    repo_root_path = get_repo_root(cwd)
+    candidates = [_legacy_in_repo_profile_path(repo_root_path)]
+    g = resolve_global(cwd, root, _consumer="test_pilot store")
+    if g is not None:
+        candidates.append(_legacy_global_profile_path(g))
+    candidates.append(_in_repo_layer_path(repo_root_path))
+    candidates.append(_global_layer_path(cwd))
+    return candidates
 
 
 def _layer_has_config_block(path):
@@ -130,7 +159,7 @@ def resolve(cwd, root):
     layer). The core_md migration path that deleted profile.md was removed (#724); a legacy
     profile.md now produces a named refusal via core_md.resolve_shared. blocks_dir/manifests_dir
     follow the mode the
-    winning source physically lives in. plans_dir/state_dir ALWAYS point into the global
+    winning source physically lives in. plans_dir/state_dir/artifacts_dir ALWAYS point into the global
     entry (machine-local)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
@@ -138,20 +167,21 @@ def resolve(cwd, root):
     entry_id = g["entry_id"] if g else ident["gitdir_hash"]
     entry_dir = os.path.join(root, "entries", entry_id)
     machine = {k: v for k, v in _entry_dirs(entry_dir).items()
-               if k in ("plans_dir", "state_dir")}
+               if k in ("plans_dir", "state_dir", "artifacts_dir")}
 
-    in_repo = os.path.join(repo_root, ".claude", "test-pilot")
-    if os.path.exists(os.path.join(in_repo, "profile.md")):
+    legacy_in_repo = _legacy_in_repo_profile_path(repo_root)
+    in_repo = os.path.dirname(legacy_in_repo)
+    if os.path.exists(legacy_in_repo):
         return {"location": "in-repo", "exists": True, "entry_id": entry_id,
-                "profile": os.path.join(in_repo, "profile.md"),
+                "profile": legacy_in_repo,
                 "profileSource": "profile-md",
                 "blocks_dir": os.path.join(in_repo, "blocks"),
                 "manifests_dir": os.path.join(in_repo, "manifests"),
                 **machine}
-    if g is not None and os.path.exists(os.path.join(g["dir"], "profile.md")):
+    if g is not None and os.path.exists(_legacy_global_profile_path(g)):
         d = _entry_dirs(g["dir"])
         return {"location": "global", "exists": True, "entry_id": g["entry_id"],
-                "profile": os.path.join(g["dir"], "profile.md"),
+                "profile": _legacy_global_profile_path(g),
                 "profileSource": "profile-md", **d}
     # #412: migrated projects carry calibration in the unified layer, not profile.md. The
     # layer is the calibration SSOT; read the same config block from it (in-repo first, then
@@ -204,6 +234,8 @@ def create(cwd, location, root):
     d = _entry_dirs(entry_dir)
     os.makedirs(d["plans_dir"], exist_ok=True)
     os.makedirs(d["state_dir"], exist_ok=True)
+    # Do not makedirs artifacts_dir here — pilot_artifacts creates it with 0o700; a
+    # directory pre-created under the ambient umask would be 0o755 and refused.
 
     # #428: a MIGRATED project's calibration lives in the unified layer — create() must
     # point callers (test-pilot-init Step 6 writes the profile at this path) AT THE LAYER,
@@ -241,7 +273,8 @@ def create(cwd, location, root):
     return {"location": location, "exists": os.path.exists(profile),
             "entry_id": entry_id, "profile": profile, "profileSource": profile_source,
             "blocks_dir": blocks, "manifests_dir": manifests,
-            "plans_dir": d["plans_dir"], "state_dir": d["state_dir"]}
+            "plans_dir": d["plans_dir"], "state_dir": d["state_dir"],
+            "artifacts_dir": d["artifacts_dir"]}
 
 
 def decide_location(env_value, interactive, cwd=None, root=None):

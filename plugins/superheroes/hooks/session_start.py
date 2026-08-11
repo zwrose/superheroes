@@ -27,13 +27,14 @@ _PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SOURCES = {"startup", "resume", "clear", "compact"}
 
 
-def _bootstrap(cwd, transcript_path, host):
+def _bootstrap(cwd, transcript_path, host, source=None):
     """The always-on project-context block. On a TOTAL failure (assemble unimportable/raised),
     return a minimal in-context breadcrumb (B6, #315) rather than '' — so a fully-failed bootstrap
     still leaves the running agent something to read back, not silence (stderr is invisible to it)."""
     try:
         import session_context
-        block = session_context.assemble(cwd, transcript_path, _PLUGIN_ROOT, host)
+        block = session_context.assemble(
+            cwd, transcript_path, _PLUGIN_ROOT, host, source=source)
         return block if (block and block.strip()) else ""
     except Exception as exc:
         sys.stderr.write("superheroes session_start: bootstrap skipped (%s)\n" % type(exc).__name__)
@@ -59,7 +60,7 @@ def main():
     cwd = payload.get("cwd") or os.getcwd()
     transcript_path = payload.get("transcript_path")
 
-    boot = _bootstrap(cwd, transcript_path, args.host)   # always-on, gated by nothing
+    boot = _bootstrap(cwd, transcript_path, args.host, source=source)   # always-on, gated by nothing
     if boot:
         sys.stdout.write(json.dumps({
             "hookSpecificOutput": {"hookEventName": "SessionStart",
