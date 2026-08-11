@@ -256,6 +256,30 @@ implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS
 premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
 nowhere.
 
+**Declared items (`--expect-item`, `--expect-items-file`).** Repeatable flags union with the file
+(one path per line; `#` comments and blank lines ignored). At open time the runner normalizes paths,
+captures a per-path `baselineDirty` identity map for any pre-existing dirty files, and persists
+`expectedItems` in the journal. At collection time — only on the grade-ok success branch — a
+membership check compares the declared set against the final diff; it can **downgrade** a success to
+a forfeit but never upgrade or relabel a failure. When nothing was declared, behaviour is unchanged:
+no `baselineDirty` capture, no `itemCheck` key. When declared, a passing result includes
+`itemCheck` (`declared`, `expected`, `delivered`, `missing`). Terminal detail tokens:
+`items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`) and
+`item-evidence-unavailable:<cause>` (git evidence could not be collected — causes include
+`falsy-base-sha`, `diff-timeout`, `diff-failed`, `status-timeout`, `status-failed`). Open-time
+`unrunnable` detail `base-sha-unresolvable` refuses when a declared run's `--base-sha` does not
+resolve. Other forfeits, `unrunnable`, and `worktree-dirtied-by-attempt` never carry `itemCheck`.
+
+Evidence is the union of `git diff --name-status -z -M <baseSha>` against the **working tree**
+(not `HEAD`, so a path committed and then reverted is not credited) plus on-disk paths from
+`git status --porcelain=v1 -z -uall --ignored=traditional` that git cannot express in that diff.
+Rename/copy records contribute both the old and new paths.
+
+This is **final-diff membership, not proof of engine authorship**: it cannot distinguish created from
+modified; a create-then-delete leaves no evidence and reads as missing; a concurrent writer could
+supply a path. A file that was already dirty before the run and unchanged afterward is not credited
+as delivered.
+
 When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
 ended attempt's stdout. The outcome remains a forfeit; its contents are the implementer's claims and
 must be independently re-verified before use. Write salvage has two tiers: a structured report is

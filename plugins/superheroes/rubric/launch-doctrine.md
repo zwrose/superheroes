@@ -44,6 +44,12 @@ through the composed launch prompt (`compose_launch` sends the child only the pa
 do not assume this line reaches a builder). The load-bearing statement of this duty lives in the
 showrunner charter's orchestration duty 9.
 
+**Slot reservation gate (documentation only — not parsed).** On a project whose calibration
+declares pilot slots, `disjoint-surfaces` additionally refuses a parallel launch whose lanes carry
+no slot reservation. This is a refusal inside an existing check rather than a new check. This
+paragraph is **documentation for advisors reading the doctrine for intent** — it is **not** a parsed
+invariant and is **not** delivered to the builder through the composed launch prompt.
+
 ## Builder dispatch tier (artifact home)
 
 Headless builder launches default to the `opus` tier; the launcher pins that default explicitly

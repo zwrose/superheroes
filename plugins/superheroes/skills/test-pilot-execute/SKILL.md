@@ -65,8 +65,14 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 5. **Execute and observe each step** from the plan record: perform the
    interactions, verify `expected` via DOM/snapshot reads, watch
    console/network for silent errors. Record per step — what you did, what
-   you observed, pass/fail, and the concrete evidence (scrubbed) — in a run
-   log under `<state_dir>/runs/<key>/`. **Interaction calibration:**
+   you observed, pass/fail, and the concrete evidence (scrubbed) — through
+   the external per-slot **artifact store** (`reference/pilot-contract.md`
+   §The per-slot artifact store): each step log via the `step-log` class;
+   on a **failed** step, a screenshot via `failure-screenshot`. A **refused**
+   retention is a reportable outcome — name the refusal token in the run
+   results; never drop evidence silently. **Trace capture** is an explicit
+   per-run opt-in (off by default); an opted-in `trace` is retained only
+   when its redaction can be established. **Interaction calibration:**
    - Target controls by **accessible name** using the element reference the
      browser tool's accessibility snapshot returns — never by **index** or
      ordinal position, never by **screen coordinates**.

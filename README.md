@@ -85,6 +85,7 @@ a mechanical per-merge checkpoint exists.
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:showrunner` | Run the advisor session for this project — route work, vet PRs, coordinate releases. |
+| `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
 
 ## Workhorse — the builder session
 
@@ -98,6 +99,7 @@ finding dispositioned in the PR body, and hands back a **ready PR**. It **never 
 | Command | Use it to… |
 | --- | --- |
 | `/superheroes:workhorse` | Build a routed issue and take it to a ready-for-review PR. |
+| `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
 
 ## The Architect
 
@@ -171,7 +173,9 @@ roll out across the guardian arc; this is the sweep it runs them in.
   [`rubric/covenant.md`](plugins/superheroes/rubric/covenant.md)).
 - **An owner-authority gate backs the covenant mechanically.** A hook intercepts
   merge, release, force-push, and workflow-run actions and routes them to the owner — not just a
-  promise in a prompt.
+  promise in a prompt. On a calibrated project an owner may pre-authorize an exactly-named
+  workflow dispatch via `owner-authority-allow.json`; merge, release, and force-push are never
+  allowlistable.
 - **A worktree guard refuses silent destruction of uncommitted work — on Claude Code.** A
   second hook intercepts git commands that would irrecoverably discard uncommitted changes and
   points at recoverable alternatives — commit first, stash, or revert a probe edit with an

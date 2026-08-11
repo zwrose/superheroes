@@ -73,3 +73,85 @@ def test_main_procedure_print_returns_0_and_names_paths_version_fallback(capsys)
         assert path in out
     assert "2.1.219" in out
     assert "revert" in out.lower() or "restore" in out.lower()
+
+
+def test_precompact_evidence_passes_when_token_in_summary_region():
+    evidence = (
+        "hook payload: begin summary with ZZQX-TOKEN\n"
+        "Compaction summary\n"
+        "ZZQX-TOKEN the session preserved charter state.\n"
+    )
+    ok, reason = hp.precompact_evidence_passes(evidence, "ZZQX-TOKEN")
+    assert ok is True
+    assert reason == ""
+
+
+def test_precompact_evidence_fails_when_validation_error_present():
+    evidence = "Compaction summary\nZZQX-TOKEN\nHook JSON output validation failed\n"
+    ok, reason = hp.precompact_evidence_passes(evidence, "ZZQX-TOKEN")
+    assert ok is False
+    assert "Hook JSON output validation failed" in reason
+
+
+def test_precompact_evidence_fails_when_token_absent():
+    evidence = "Compaction summary\nno token in the summary region\n"
+    ok, reason = hp.precompact_evidence_passes(evidence, "ZZQX-TOKEN")
+    assert ok is False
+    assert "absent from generated summary region" in reason
+
+
+def test_precompact_evidence_fails_when_token_only_outside_summary_region():
+    evidence = (
+        "additionalContext: begin your summary with ZZQX-TOKEN\n"
+        "Compaction summary\n"
+        "summary text without the expected token\n"
+    )
+    ok, reason = hp.precompact_evidence_passes(evidence, "ZZQX-TOKEN")
+    assert ok is False
+    assert "absent from generated summary region" in reason
+
+
+def test_precompact_evidence_fails_when_token_only_after_summary_region():
+    evidence = (
+        "Compaction summary\n"
+        "generated summary without the expected token\n"
+        '{"additionalContext": "begin your summary with ZZQX-TOKEN"}\n'
+    )
+    ok, reason = hp.precompact_evidence_passes(evidence, "ZZQX-TOKEN")
+    assert ok is False
+    assert "absent from generated summary region" in reason
+
+
+def test_main_check_precompact_returns_0_when_token_in_summary_region(tmp_path):
+    path = tmp_path / "evidence.txt"
+    path.write_text(
+        "Compaction summary\nZZQX-TOKEN preserved showrunner charter.\n",
+        encoding="utf-8",
+    )
+    assert hp.main(["--check-precompact", str(path), "--precompact-token", "ZZQX-TOKEN"]) == 0
+
+
+def test_main_check_precompact_returns_1_when_validation_error_present(tmp_path):
+    path = tmp_path / "evidence.txt"
+    path.write_text(
+        "Compaction summary\nZZQX-TOKEN\nHook JSON output validation failed\n",
+        encoding="utf-8",
+    )
+    assert hp.main(["--check-precompact", str(path), "--precompact-token", "ZZQX-TOKEN"]) == 1
+
+
+def test_main_check_precompact_returns_1_when_token_absent(tmp_path):
+    path = tmp_path / "evidence.txt"
+    path.write_text("Compaction summary\nno token here\n", encoding="utf-8")
+    assert hp.main(["--check-precompact", str(path), "--precompact-token", "ZZQX-TOKEN"]) == 1
+
+
+def test_main_check_precompact_returns_1_when_token_only_outside_summary_region(tmp_path):
+    path = tmp_path / "evidence.txt"
+    path.write_text(
+        "hook instruction mentions ZZQX-TOKEN only here\n"
+        "Compaction summary\n"
+        "generated summary without the token\n",
+        encoding="utf-8",
+    )
+    assert hp.main(["--check-precompact", str(path), "--precompact-token", "ZZQX-TOKEN"]) == 1
