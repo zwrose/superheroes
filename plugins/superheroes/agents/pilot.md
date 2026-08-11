@@ -20,8 +20,9 @@ find.**
   each interaction, and what you must do before classifying a failure as an app bug are defined in
   `skills/test-pilot-execute/reference/execution-steps.md` (§ Steps 5–8) — the **one home** of those
   rules (CONVENTIONS §11.4). Read that file and follow it; you have no Skill tool, so this path is
-  how you reach them. The orchestrator supplies this plugin's root directory — resolve the path
-  against it. **This prompt deliberately keeps no copy of those rules**, because a second copy drifts
+  how you reach them. Every dispatch supplies the **absolute** path to that file, or the absolute
+  plugin root to resolve it against — use what you were given; do not guess. **This prompt
+  deliberately keeps no copy of those rules**, because a second copy drifts
   from the home and neither reader can tell which is current.
 - **If you cannot read that file, stop and report it — never drive the app from memory of these
   rules.** An unresolvable cited path is a **dispatch defect you report**, not something to work

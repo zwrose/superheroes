@@ -35,7 +35,14 @@ frozen: any problem you hit is a finding, never a re-provisioning.
    branch — default: every slot in sequence; an explicit slot argument
    narrows to one. None → run the test-pilot-plan skill to author one first,
    then return. The PR comment is NEVER parsed as the plan source.
-   Validate each before executing: `python3 -B "$ROOT_DIR/lib/engine.py" validate-plan --branch B [--slot S] --json` — a validation error means the plan is not runnable: (re)author it via test-pilot-plan here in setup, never an app bug. Getting a valid plan to run is provisioning the input before the run — not a fix; you never fix.
+   Validate each before executing:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   python3 -B "$ROOT_DIR/lib/engine.py" validate-plan --branch B [--slot S] --json
+   ```
+
+   A validation error means the plan is not runnable: (re)author it via test-pilot-plan here in setup, never an app bug. Getting a valid plan to run is provisioning the input before the run — not a fix; you never fix.
 2. **Seed check.** `engine.py status --json`; apply the manifest if drift or
    nothing applied (`engine.py apply --branch B [--slot S] --json`). Seeding
    provisions the data the plan needs to run — it is setup, not a fix. If
