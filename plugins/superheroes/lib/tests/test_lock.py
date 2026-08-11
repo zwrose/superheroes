@@ -773,52 +773,46 @@ def test_cross_host_live_pid_is_never_reclaimed_even_past_ttl(tmp_path):
         lock.release(p)
 
 
-def test_uncorroborated_host_ignores_the_fast_path(tmp_path, monkeypatch):
-    """`reclaim_dead_holder` trades the TTL wait for CONFIRMED holder death. With neither
-    the hostname nor the boot id corroborating one machine, the pid probe cannot confirm
-    anything, so the TTL wait stays mandatory."""
-    _assert_other_host_differs()
-    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
-    p = str(tmp_path / "engine.lock")
-    lock.acquire(p)
-    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,
-                    acquiredAt=_now_stamp(), bootId="boottime:sec:1786231679")
-    assert lock.is_stale(p, reclaim_dead_holder=True) is False
-
-
-def test_matching_boot_id_corroborates_a_renamed_machine(tmp_path):
-    """The rename this issue is about: the hostname moved, but the boot did not. One boot
-    cannot span two machines, so the holder shares our pid namespace and its death is
-    provable — the fast path is licensed exactly as it is at home."""
+def test_cross_host_ignores_the_fast_path_however_the_boot_ids_compare(tmp_path, monkeypatch):
+    """`reclaim_dead_holder` trades the TTL wait for CONFIRMED holder death — a
+    confirmation no foreign-host record can supply, because `_pid_dead_on_this_host` reads
+    OUR pid namespace and not the holder's. A matching boot id does not change that: it is
+    not evidence of a shared pid namespace (containers on one kernel share the host's
+    `btime` while differing in hostname AND pid namespace; two hosts can boot in the same
+    second). Across a host mismatch the TTL wait is mandatory whatever the boot ids say."""
     _assert_other_host_differs()
     p = str(tmp_path / "engine.lock")
-    lock.acquire(p)                                        # records THIS boot's id
+    lock.acquire(p)                                        # holder carries THIS boot's id
     _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
-    assert lock.is_stale(p) is False                       # default: still waits out the TTL
-    assert lock.is_stale(p, reclaim_dead_holder=True) is True
+    assert lock.is_stale(p, reclaim_dead_holder=True) is False        # boot ids EQUAL
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
+    assert lock.is_stale(p, reclaim_dead_holder=True) is False        # boot ids DIFFERENT
 
 
-def test_corroborated_rename_still_never_reclaims_a_live_holder(tmp_path):
+def test_equal_boot_ids_do_not_expose_a_foreign_namespace_holder(tmp_path):
+    """The round-2 review case: hostname differs, boot ids are equal, and the recorded pid
+    is absent in the reader's namespace — two containers on one kernel sharing a lock path.
+    Inside its TTL that holder stays protected; equal boot ids must not be read as proof
+    that the reader may probe the holder's pid."""
     _assert_other_host_differs()
     p = str(tmp_path / "engine.lock")
-    lock.acquire(p)                                        # holder pid is this LIVE process
-    _rewrite_holder(p, host=_OTHER_HOST, acquiredAt="1970-01-01T00:00:00Z")
-    try:
-        assert lock.is_stale(p) is False
-        assert lock.is_stale(p, reclaim_dead_holder=True) is False
-    finally:
-        lock.release(p)
+    lock.acquire(p)                                        # holder carries THIS boot's id
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
+    assert lock.is_stale(p) is False
+    assert lock.is_stale(p, reclaim_dead_holder=True) is False
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p, reclaim_dead_holder=True)
 
 
-def test_uncorroborated_expired_holder_reclaims_on_the_ttl_alone(tmp_path, monkeypatch):
+def test_expired_foreign_holder_reclaims_on_the_ttl_alone(tmp_path, monkeypatch):
     """The accepted residual, pinned rather than hidden (review finding, #953).
 
-    A holder on a foreign hostname AND an unrecognized boot cannot be probed for liveness:
-    `_pid_dead_on_this_host` reads OUR pid namespace, so a pid absent here is not evidence
-    that a remote holder died. Past its TTL such a holder is reclaimed anyway — TTL expiry
-    is the only clock both sides share, and it is the cross-host rule the issue ratified.
-    A genuinely live remote holder can therefore lose an expired lock. That is reachable
-    only where a lock path is shared between machines, which neither caller's path is (a
+    A holder on a foreign hostname cannot be probed for liveness: `_pid_dead_on_this_host`
+    reads OUR pid namespace, so a pid absent here is not evidence that a remote holder
+    died. Past its TTL such a holder is reclaimed anyway — TTL expiry is the only clock
+    both sides share, and it is the cross-host rule the issue ratified. A genuinely live
+    remote holder can therefore lose an expired lock. That is reachable only where a lock
+    path is shared between machines or pid namespaces, which neither caller's path is (a
     local run dir; a lease under the local tempdir). Change this assertion only with that
     trade re-decided."""
     _assert_other_host_differs()

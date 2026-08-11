@@ -7,7 +7,11 @@ rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHe
 A holder recorded under a different hostname is reclaimable on the TTL leg alone —
 never on the dead-holder fast path and never on a bootId mismatch (#953). Treating a
 host mismatch as "not stale" wedged locks permanently the first time a laptop renamed
-itself mid-run, which is the normal case on a machine that changes networks.
+itself mid-run, which is the normal case on a machine that changes networks. The
+"never a LIVE holder" guarantee below is therefore exact only for a SAME-HOST holder,
+whose pid we can actually probe; for a foreign-host holder the guarantee is its TTL,
+and a live one past that TTL can be reclaimed. Nothing shares these lock paths across
+machines or pid namespaces today, which is what makes that trade acceptable.
 
 `reclaim_dead_holder=True` (#862) drops the TTL wait for a holder whose pid is
 CONFIRMED dead on this host: the TTL only ever delayed reclaim of a holder that was
@@ -160,8 +164,9 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     dead-on-this-host) OR (malformed holder past grace window).
 
     With `reclaim_dead_holder=True` a pid dead-on-this-host is stale immediately, with
-    no TTL wait (#862) — same-host holders only. A LIVE holder is never stale under
-    either setting."""
+    no TTL wait (#862) — same-host holders only. A LIVE holder on THIS host is never
+    stale under either setting; a live holder on a foreign hostname is protected by its
+    TTL, not by the pid probe, which cannot reach another machine's pid namespace."""
     if not os.path.lexists(lock_path):
         return False
     status, holder = _read_holder_state(lock_path)
@@ -170,27 +175,29 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     if status == "unusable" or _holder_fields_unusable(holder):
         return _malformed_past_grace(lock_path, now)
     h = holder
+    # Three categories, and they are not the same. SAME HOST: everything below is grounded —
+    # our pid namespace is the holder's, so death is provable and the reboot check means what
+    # it says. FOREIGN HOST: `host` is not a machine identity (a laptop changing networks
+    # renames itself mid-run, #953), but neither is it evidence of a shared pid namespace —
+    # containers on one kernel differ in hostname AND pid namespace while sharing a boot id,
+    # so boot equality cannot license a pid probe. Reclaim there rests on TTL expiry alone.
     same_host = h.get("host") == socket.gethostname()
-    boots = hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id())
-    if same_host and boots is False:
-        return True
-    # `host` is not a machine identity: a laptop changing networks renames itself mid-run,
-    # and short-circuiting to False on a mismatch wedged the lock permanently — no TTL, no
-    # dead-pid check, nothing `dispatch-abandon` could release (#953). A matching bootId,
-    # though, IS positive evidence of one machine — one boot cannot span two — so a renamed
-    # holder on this boot shares our pid namespace and is judged exactly as a local one,
-    # fast path included. That corroboration is what makes the pid probe below authoritative.
-    same_machine = same_host or boots is True
-    # Neither corroborated: a foreign hostname on an unrecognized boot. `_pid_dead_on_this_host`
-    # can only probe OUR pid namespace, so it cannot establish a remote holder's death — it is
-    # kept as a brake that can refuse reclaim, never as the proof. What licenses reclaim here is
-    # TTL expiry alone, the ratified cross-host rule (#953) and the only clock both sides share.
-    # A live holder can therefore lose an expired lock — reachable only if a lock path is shared
-    # between machines, which the two callers' paths (a local run dir, a local tempdir lease)
-    # are not. Recorded as an accepted residual rather than hidden.
-    # axis: what licenses reclaim is holder DEATH, not TTL expiry — and never a live holder.
-    if not (reclaim_dead_holder and same_machine) and not _expired(h.get("acquiredAt"), ttl, now):
+    if same_host and hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id()) is False:
+        return True   # this host rebooted: the recorded pid is from a dead boot
+    # Two legs stay SAME-HOST-ONLY, both because they read the local pid namespace as if it
+    # were the holder's: the reboot check above, and the `reclaim_dead_holder` fast path below
+    # — whose whole trade is swapping the TTL wait for CONFIRMED death, a confirmation no
+    # foreign-host record can supply. A foreign holder therefore always waits out its TTL.
+    if not (reclaim_dead_holder and same_host) and not _expired(h.get("acquiredAt"), ttl, now):
         return False
+    # Same host: holder DEATH is what licenses reclaim, never TTL expiry alone, and a live
+    # holder is never stale. Foreign host: `_pid_dead_on_this_host` cannot prove a remote
+    # holder died — a pid absent here may be alive there — so it stands only as a brake that
+    # can refuse reclaim, and TTL expiry is what actually licenses it. That is the ratified
+    # cross-host rule (#953) and the only clock both sides share, but it does mean a live
+    # foreign holder can lose an expired lock. Accepted and disclosed rather than hidden;
+    # reachable only where a lock path is shared between machines or pid namespaces, which
+    # neither caller's path is today (a local run dir; a lease under the local tempdir).
     return _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder)
 
 
