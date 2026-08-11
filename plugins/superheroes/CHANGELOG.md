@@ -1,5 +1,62 @@
 # Changelog
 
+## [0.25.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.24.0...superheroes-v0.25.0) (2026-08-11)
+
+
+### Features
+
+* **superheroes:** car 4a — order emission + per-order hash binding + templates as shipped data ([#723](https://github.com/zwrose/superheroes/issues/723)) ([#942](https://github.com/zwrose/superheroes/issues/942)) ([c9bf103](https://github.com/zwrose/superheroes/commit/c9bf103f20b510590ecbeaae3caee9fa8f90a182))
+* **superheroes:** car 4b — gate-policy/1 grammar, advance wiring, configure surface, caller contracts ([#723](https://github.com/zwrose/superheroes/issues/723)) ([#943](https://github.com/zwrose/superheroes/issues/943)) ([06ae7c3](https://github.com/zwrose/superheroes/commit/06ae7c3977d7f96fda59ffec0cdb683b85d1d7ad))
+* **superheroes:** car 5 — per-phase contracts published, handback gate shipped dark, LEDGERS truth ([#723](https://github.com/zwrose/superheroes/issues/723)) ([#955](https://github.com/zwrose/superheroes/issues/955)) ([ea12306](https://github.com/zwrose/superheroes/commit/ea12306d67cbf57f5fec1994f46cabf8c1936536))
+* **superheroes:** compaction checkpoint command + charter-scoped compaction recovery hooks ([#917](https://github.com/zwrose/superheroes/issues/917)) ([23b10f3](https://github.com/zwrose/superheroes/commit/23b10f32c31b041060dab50c802eecb1cd18f01d))
+* **superheroes:** launcher batch accounting — record re-handbacks and vet outcomes the terminal counter cannot see ([#878](https://github.com/zwrose/superheroes/issues/878)) ([246be79](https://github.com/zwrose/superheroes/commit/246be79bb40d4d69fdb2edc490d918e8f3449f27))
+* **superheroes:** launcher refuses an unslotted parallel launch on a slot-calibrated project ([#913](https://github.com/zwrose/superheroes/issues/913)) ([825c468](https://github.com/zwrose/superheroes/commit/825c468dead1fda52d7174bfa97ac9d25c9db724))
+* **superheroes:** owner-calibrated workflow allowlist for the owner-authority gate ([#950](https://github.com/zwrose/superheroes/issues/950)) ([6e5a9fd](https://github.com/zwrose/superheroes/commit/6e5a9fdde8505a5d23fa09c9e9ad2de8ffad2834))
+* **superheroes:** pilot framework A1 — contract home: schema, types, probe vocabulary, seed/mint interfaces ([#837](https://github.com/zwrose/superheroes/issues/837)) ([9af98da](https://github.com/zwrose/superheroes/commit/9af98da037169530e16d6d7945d1cc40e887b382))
+* **superheroes:** pilot framework A2a — slot lifecycle: identity, generations, provisioning journal, partial-failure report ([#849](https://github.com/zwrose/superheroes/issues/849)) ([4cb84be](https://github.com/zwrose/superheroes/commit/4cb84be134d1dbebf5dd08d2e402eb2bb1165988))
+* **superheroes:** pilot framework A2b — reclaim safety: quarantine, sweep, reassignment probe, deletion rules ([#858](https://github.com/zwrose/superheroes/issues/858)) ([0f1c148](https://github.com/zwrose/superheroes/commit/0f1c1480db12a01dad3c57b6441a64b19d370151))
+* **superheroes:** pilot framework A3 — target boundary: per-slot binding, policy out of builder reach, observed datastore identity ([#841](https://github.com/zwrose/superheroes/issues/841)) ([c3fc350](https://github.com/zwrose/superheroes/commit/c3fc350dbcdbd9099cfb7a69f284db6f8f3e0295))
+* **superheroes:** pilot framework B4 — attended seeding: per-slot owner sign-in, verify-at-seed, no stored credential ([#916](https://github.com/zwrose/superheroes/issues/916)) ([41d28f7](https://github.com/zwrose/superheroes/commit/41d28f76e8e72eec0661c668c637c6a07e268bf7))
+* **superheroes:** pilot framework B5 — per-slot app lifecycle: stand-up, readiness, wave teardown, deadline runtime ([#856](https://github.com/zwrose/superheroes/issues/856)) ([65701b0](https://github.com/zwrose/superheroes/commit/65701b06bf427550b5692c17bcb8cc4f5b9ccc41))
+* **superheroes:** pilot framework B6 — auth contract exercises: identity probes, margin math, mint client, lapse path ([#852](https://github.com/zwrose/superheroes/issues/852)) ([c22ee25](https://github.com/zwrose/superheroes/commit/c22ee252e54c345a5323b6550286900328ffeedb))
+* **superheroes:** pilot framework C10 — per-slot artifact store + headless conformance run ([#923](https://github.com/zwrose/superheroes/issues/923)) ([82098f7](https://github.com/zwrose/superheroes/commit/82098f70458e3e127c3afba2e5ea355e096ca3c4))
+* **superheroes:** pilot framework C7 — per-slot browser topology: Playwright provisioning, seed injection, per-generation teardown ([#854](https://github.com/zwrose/superheroes/issues/854)) ([b995d0c](https://github.com/zwrose/superheroes/commit/b995d0c81b02e2a0163b41449c7ad381261510e5))
+* **superheroes:** pilot framework C8 — charter integration: advisor provisioning duty, workhorse verify-or-create, ledger grammar ([#906](https://github.com/zwrose/superheroes/issues/906)) ([934c11e](https://github.com/zwrose/superheroes/commit/934c11e64576049974ce7840c829ddc130fcf889))
+* **superheroes:** pilot framework C9 — cleanup effect receipt + resurrection/reseed ([#857](https://github.com/zwrose/superheroes/issues/857)) ([9c3d08e](https://github.com/zwrose/superheroes/commit/9c3d08e2d480eb903c12cd49e8b44750268253fe))
+* **superheroes:** pilot framework D11a — acceptance matrix + mechanical §14 tripwires ([#925](https://github.com/zwrose/superheroes/issues/925)) ([f2e0c0e](https://github.com/zwrose/superheroes/commit/f2e0c0e2cd63a0a52a0359adf6d885c963a65a1a))
+* **superheroes:** review-loop durability — per-seat durable records, advance/record-result/attest ([#723](https://github.com/zwrose/superheroes/issues/723) PR-1) ([#914](https://github.com/zwrose/superheroes/issues/914)) ([c02e7af](https://github.com/zwrose/superheroes/commit/c02e7afedc0011e2cec04883c66a2cc00333e304))
+* **superheroes:** round-driver commit protocol — durable intent/parts/completion + replay for multi-artifact writes ([#918](https://github.com/zwrose/superheroes/issues/918)) ([#921](https://github.com/zwrose/superheroes/issues/921)) ([027e33a](https://github.com/zwrose/superheroes/commit/027e33ac75f1e9b6eaabc8ecef2294cf4f4e4fb6))
+
+
+### Bug Fixes
+
+* **superheroes:** assert_results_only key collision — account names no longer collide with plan-step keys ([#870](https://github.com/zwrose/superheroes/issues/870)) ([1ae4207](https://github.com/zwrose/superheroes/commit/1ae4207bac3c8dc550c76f0ff193693416f9699c))
+* **superheroes:** audit target ids are per-location and unique — same-titled findings no longer collapse ([#915](https://github.com/zwrose/superheroes/issues/915)) ([#924](https://github.com/zwrose/superheroes/issues/924)) ([e840479](https://github.com/zwrose/superheroes/commit/e8404798f6104e0da0b1009e111bae58bbf43200))
+* **superheroes:** builder-tier config hardening — resolver display form, self-maintaining round-trip guard, engine-pin writer ([#840](https://github.com/zwrose/superheroes/issues/840)) ([544b31c](https://github.com/zwrose/superheroes/commit/544b31cfbccf793ff59f3058e5fba9c4bc1b586b))
+* **superheroes:** calibration_resolve refuses an unresolvable --root loudly instead of reporting a confident "none" ([#880](https://github.com/zwrose/superheroes/issues/880)) ([d61dbfd](https://github.com/zwrose/superheroes/commit/d61dbfd8cf7e906596d7da33683ba458c3c22743))
+* **superheroes:** cleanup source binding refuses a receipt when any argv-tail path cannot be content-digested ([#868](https://github.com/zwrose/superheroes/issues/868)) ([900fbda](https://github.com/zwrose/superheroes/commit/900fbda38423c49c34e357efcab1eda766db6420))
+* **superheroes:** cursor write-dispatch — diagnose the dead report channel and add declared-item delivery verification ([#951](https://github.com/zwrose/superheroes/issues/951)) ([77558ed](https://github.com/zwrose/superheroes/commit/77558edb2b303d0eeac05c654da7848585fe19c4))
+* **superheroes:** end_effect verifies the effect's origin — close the silent wrong-kind/same-slot journal hole ([#892](https://github.com/zwrose/superheroes/issues/892)) ([abca0b5](https://github.com/zwrose/superheroes/commit/abca0b51dc41581acb2204b35b881a5cb0c4cdc4))
+* **superheroes:** FR-8 document-review confirmation rule fires in production ([#890](https://github.com/zwrose/superheroes/issues/890)) ([2af20a5](https://github.com/zwrose/superheroes/commit/2af20a56619caae6106449caed3b95f265476a95))
+* **superheroes:** independent dispatches batch — concurrent shape on three surfaces, invariant pinned ([#956](https://github.com/zwrose/superheroes/issues/956)) ([a736714](https://github.com/zwrose/superheroes/commit/a736714f14129b5360ada7b07f1da6e7d5f7ab2c))
+* **superheroes:** pilot_appctl.stop() reaps before its kill loops — no more 20s burned per stop ([#876](https://github.com/zwrose/superheroes/issues/876)) ([5825467](https://github.com/zwrose/superheroes/commit/582546700d0964ea18418dde02603c30206dd007))
+* **superheroes:** PR-body skeleton emits the advisor-vet slot marker + charter specifies the owner-half register ([#900](https://github.com/zwrose/superheroes/issues/900)) ([8093041](https://github.com/zwrose/superheroes/commit/8093041b1f23a128a075d2aa47b5c4e5629c427c))
+* **superheroes:** refuse out-of-range engine_dispatch --max-wait; reclaim run.lock from a confirmed-dead holder ([#869](https://github.com/zwrose/superheroes/issues/869)) ([8cff857](https://github.com/zwrose/superheroes/commit/8cff857ff9b9f30811925e37ea8f67517a7c3a2a))
+* **superheroes:** round_driver panel submit refuses a mis-keyed seats artifact ([#877](https://github.com/zwrose/superheroes/issues/877)) ([30cfd50](https://github.com/zwrose/superheroes/commit/30cfd50d6ff8f11973fdc91d51138aa869cbecab))
+* **superheroes:** round_driver refuses malformed verify/audit submit artifacts instead of halting the loop ([#899](https://github.com/zwrose/superheroes/issues/899)) ([1f50c2a](https://github.com/zwrose/superheroes/commit/1f50c2a5a2eab7ca1f3736651b45756a633f6210))
+* **superheroes:** SAFETY_MACHINERY covers the owner-named-risk guards and their hook wrappers ([#851](https://github.com/zwrose/superheroes/issues/851)) ([63398aa](https://github.com/zwrose/superheroes/commit/63398aacbde9a15a05c38c32a900cf4aea7553e8))
+* **superheroes:** stable parametrize IDs in test_pilot_malformed_input — repr(object()) embedded a per-process address ([#898](https://github.com/zwrose/superheroes/issues/898)) ([266ebce](https://github.com/zwrose/superheroes/commit/266ebce4f418f772651a2ebf94ff177158bf4ed5))
+* **superheroes:** worktree-guard refusal message hints at the prose-mention case ([#875](https://github.com/zwrose/superheroes/issues/875)) ([ae99a18](https://github.com/zwrose/superheroes/commit/ae99a181d425a86d801ec963d5fca32375b6cd86))
+* **superheroes:** write-dispatch report salvage — recover the implementer's report from the raw stream ([#839](https://github.com/zwrose/superheroes/issues/839)) ([0a5fe48](https://github.com/zwrose/superheroes/commit/0a5fe48dd40913785d7103616230b3a92e6bdfe4))
+
+
+### Chores
+
+* **superheroes:** audit cleanup — dead modules, stale refs, vestigial tail ([#838](https://github.com/zwrose/superheroes/issues/838)) ([04c9375](https://github.com/zwrose/superheroes/commit/04c937526ac6472726309542b74189128650b46c))
+* **superheroes:** config-knobs sweep — retire five dead knobs, document the guardian-config fence ([#881](https://github.com/zwrose/superheroes/issues/881)) ([1e90dc7](https://github.com/zwrose/superheroes/commit/1e90dc79b144bfd6fdac59573e7f4660b1e8c088))
+* **superheroes:** pilot hygiene batch — conftest env pinning, bounded-runner extraction, vocabulary single-homing, contract ToC + LEDGERS row repairs ([#879](https://github.com/zwrose/superheroes/issues/879)) ([16d39ad](https://github.com/zwrose/superheroes/commit/16d39ad2a6e001bf26fb067a454baf6c51ec60e3))
+* **superheroes:** remove provision_server's legacy non-pre-spawn path — zero live callers ([#874](https://github.com/zwrose/superheroes/issues/874)) ([b441fef](https://github.com/zwrose/superheroes/commit/b441fef5c92a8147d2c930a11909f4d58da594ef))
+
 ## [0.24.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.23.0...superheroes-v0.24.0) (2026-08-02)
 
 
