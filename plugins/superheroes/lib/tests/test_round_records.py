@@ -595,13 +595,37 @@ def test_reconcile_keeps_the_store_file_authoritative(tmp_path):
 # --- session lock -----------------------------------------------------------------------------
 
 def test_session_lock_is_mutually_exclusive(tmp_path):
+    """A lockfile owned by another process still refuses acquisition — re-entrancy is not 'always allow'."""
     sd = _session(tmp_path)
+    RR.atomic_write_json(RR.session_lock_path(sd),
+                         {"pid": 424242, "createdAt": "2026-08-07T00:00:00"})
+    with pytest.raises(RR.LockHeld) as exc:
+        with RR.session_lock(sd):
+            pass
+    assert exc.value.pid == 424242
+    assert exc.value.created_at == "2026-08-07T00:00:00"
+
+
+def test_session_lock_is_reentrant_within_one_process(tmp_path):
+    sd = _session(tmp_path)
+    lock_path = RR.session_lock_path(sd)
     with RR.session_lock(sd):
-        with pytest.raises(RR.LockHeld) as exc:
+        assert os.path.exists(lock_path)
+        with RR.session_lock(sd):
+            assert os.path.exists(lock_path)
+    assert not os.path.exists(lock_path)
+
+
+def test_session_lock_reentrant_exception_releases_outer(tmp_path):
+    sd = _session(tmp_path)
+    lock_path = RR.session_lock_path(sd)
+    with pytest.raises(RuntimeError):
+        with RR.session_lock(sd):
             with RR.session_lock(sd):
-                pass
-        assert exc.value.pid == os.getpid()
-        assert isinstance(exc.value.created_at, str) and exc.value.created_at
+                raise RuntimeError("boom")
+    assert not os.path.exists(lock_path)
+    with RR.session_lock(sd):
+        pass
 
 
 def test_session_lock_is_released_on_exception(tmp_path):
@@ -750,6 +774,178 @@ def test_sidecar_stale_when_the_sidecar_itself_is_invalid():
     stale, reason = RR.sidecar_stale(obj, head_sha="head-sha", receipt_bytes=b"receipt",
                                      session_dir="/tmp/session")
     assert stale is True and reason == "sidecar-invalid:schema-unknown"
+
+
+def _validate(sd, seat=SEAT, attempt=1, current=1, rnd=1, phase=PHASE, **kw):
+    return RR.validate_landing(sd, rnd, phase, seat, attempt,
+                               current_attempt=current, roster=ROSTER, **kw)
+
+
+# --- validate_landing: refusal tokens write nothing -------------------------------------------
+
+@pytest.mark.parametrize("reason,setup", [
+    ("bootstrap-required", lambda sd: None),
+    ("reserved-seat-name", lambda sd: None),
+    ("unknown-seat", lambda sd: None),
+    ("stale-attempt", lambda sd: _land(sd, _env())),
+    ("landing-missing", lambda sd: None),
+    ("attempt-mismatch", lambda sd: _land(sd, _env(attempt=1), attempt=2)),
+    ("session-mismatch", lambda sd: _land(sd, _env(session="a" * 32))),
+    ("phase-mismatch", lambda sd: _land(sd, _env(phase="dispatch-audits"))),
+    ("round-mismatch", lambda sd: _land(sd, _env(round=2))),
+    ("schema-unknown", lambda sd: _land(sd, _env(schema="seat-result/2"))),
+    ("missing-reason", lambda sd: _land(sd, _missing_env(reason="vibes"))),
+    ("manifest-anchor-mismatch",
+     lambda sd: _land(sd, _env(manifestSha256="m" * 64, orderSha256="o" * 64))),
+    ("manifest-anchor-unanchored",
+     lambda sd: _land(sd, _env(manifestSha256="m" * 64, orderSha256="o" * 64))),
+    ("store-exists", lambda sd: (_land(sd, _env()), _ingest(sd))),
+    ("cas-expect-required", lambda sd: (_land(sd, _env()), _ingest(sd), _land(sd, _env()))),
+    ("cas-mismatch", lambda sd: (_land(sd, _env()), _ingest(sd), _land(sd, _env()))),
+    ("invalid-path", lambda sd: None),
+])
+def test_validate_landing_refusal_writes_nothing(tmp_path, reason, setup):
+    if reason == "bootstrap-required":
+        sd = str(tmp_path / "bare")
+        os.makedirs(sd)
+    else:
+        sd = _session(tmp_path)
+    setup(sd)
+    kwargs = {}
+    seat = SEAT
+    attempt = 1
+    current = 1
+    phase = PHASE
+    if reason == "reserved-seat-name":
+        seat = "_dispatch"
+    elif reason == "unknown-seat":
+        seat = "src/z.py:9"
+    elif reason == "stale-attempt":
+        current = 2
+    elif reason == "attempt-mismatch":
+        attempt = 2
+        current = 2
+    elif reason == "invalid-path":
+        phase = "../../etc"
+    elif reason == "manifest-anchor-mismatch":
+        kwargs["anchor"] = {"manifestSha256": "m" * 64, "orders": {SEAT: "different" * 8}}
+    elif reason == "manifest-anchor-unanchored":
+        kwargs["anchor"] = None
+    elif reason == "store-exists":
+        pass
+    elif reason == "cas-expect-required":
+        kwargs["supersede"] = True
+    elif reason == "cas-mismatch":
+        kwargs["supersede"] = True
+        kwargs["expect_sha256"] = "0" * 64
+    plan, refusal = _validate(sd, seat=seat, attempt=attempt, current=current, phase=phase, **kwargs)
+    assert plan is None
+    assert refusal is not None and refusal["reason"] == reason
+    if reason in ("invalid-path", "reserved-seat-name", "unknown-seat", "bootstrap-required"):
+        return
+    check_seat = SEAT if seat == "_dispatch" else seat
+    try:
+        spath = RR.store_path(sd, 1, PHASE, RR.storage_key(check_seat, 0), attempt)
+    except ValueError:
+        return
+    if reason in ("store-exists", "cas-expect-required", "cas-mismatch"):
+        assert os.path.exists(spath)
+    else:
+        assert not os.path.exists(spath)
+
+
+def test_validate_landing_refusal_landing_torn_payload(tmp_path):
+    sd = _session(tmp_path)
+    env = _env(payload={"findings": ["f1", "f2", "f3"]})
+    torn = dict(env)
+    torn["payload"] = {"findings": ["f1"]}
+    _land(sd, torn)
+    plan, refusal = _validate(sd)
+    assert plan is None and refusal["reason"] == "landing-torn"
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1))
+
+
+def test_validate_landing_refusal_landing_torn_unparseable(tmp_path):
+    sd = _session(tmp_path)
+    path = _land(sd, _env())
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('{"schema": "seat-result/1", "payl')
+    plan, refusal = _validate(sd)
+    assert plan is None and refusal["reason"] == "landing-torn"
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1))
+
+
+def test_validate_landing_refusal_seat_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env())
+    assert _ingest(sd)["ok"] is True
+    swapped_path = RR.landing_path(sd, 1, PHASE, RR.storage_key(OTHER_SEAT), 1)
+    RR.atomic_write_json(swapped_path, _env(seat=SEAT))
+    plan, refusal = _validate(sd, seat=OTHER_SEAT)
+    assert plan is None and refusal["reason"] == "seat-mismatch"
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(OTHER_SEAT), 1))
+
+
+def test_validate_landing_refusal_unknown_occurrence(tmp_path):
+    sd = _session(tmp_path)
+    plan, refusal = _validate(sd, occurrence=1)
+    assert plan is None and refusal["reason"] == "unknown-occurrence"
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT, 1), 1))
+
+
+def test_validate_landing_refusal_occurrence_mismatch(tmp_path):
+    sd = _session(tmp_path)
+    _land(sd, _env(occurrence=1))
+    plan, refusal = _validate(sd, occurrence=0)
+    assert plan is None and refusal["reason"] == "occurrence-mismatch"
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1))
+
+
+def test_validate_landing_refusal_bad_argument(tmp_path):
+    sd = _session(tmp_path)
+    plan, refusal = RR.validate_landing(sd, 1, PHASE, SEAT, 1,
+                                        current_attempt=1, roster=ROSTER, occurrence=-1)
+    assert plan is None and refusal["reason"] == "bad-argument"
+    assert not os.path.exists(RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1))
+
+
+def test_validate_landing_happy_path_writes_nothing_and_matches_ingest_bytes(tmp_path):
+    sd = _session(tmp_path)
+    env = _env()
+    _land(sd, env)
+    plan, refusal = _validate(sd)
+    assert refusal is None and plan is not None
+    spath = plan["storePath"]
+    assert not os.path.exists(spath)
+    ingest_out = _ingest(sd)
+    assert ingest_out["ok"] is True
+    with open(spath, "rb") as fh:
+        direct_bytes = fh.read()
+    os.remove(spath)
+    RR.atomic_write_json(plan["storePath"], plan["envelope"])
+    with open(spath, "rb") as fh:
+        validate_bytes = fh.read()
+    assert validate_bytes == direct_bytes
+
+
+def test_validate_landing_supersede_plan_and_cas_mismatch_preserves_store(tmp_path):
+    sd = _session(tmp_path)
+    first = _env()
+    _land(sd, first)
+    assert _ingest(sd)["ok"] is True
+    spath = RR.store_path(sd, 1, PHASE, RR.storage_key(SEAT), 1)
+    with open(spath, "rb") as fh:
+        before = fh.read()
+    second = _env(payload={"findings": ["f1", "f2"]})
+    _land(sd, second)
+    plan, refusal = _validate(sd, supersede=True, expect_sha256=first["payloadSha256"])
+    assert refusal is None and plan["superseded"] is True
+    with open(spath, "rb") as fh:
+        assert fh.read() == before
+    _, cas_refusal = _validate(sd, supersede=True, expect_sha256="0" * 64)
+    assert cas_refusal["reason"] == "cas-mismatch"
+    with open(spath, "rb") as fh:
+        assert fh.read() == before
 
 
 # --- finding 1: seat-mismatch -----------------------------------------------------------------

@@ -60,6 +60,7 @@ import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
+import round_commit  # noqa: E402
 import round_records  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map  # noqa: E402
@@ -197,7 +198,26 @@ def _canary_verified_shape(value):
 
 
 def _adapter_provenance_shape(value):
-    return isinstance(value, dict)
+    if not isinstance(value, dict):
+        return False
+    if "byPhase" in value:
+        return isinstance(value.get("byPhase"), dict)
+    return True
+
+
+def _normalize_adapter_provenance(prov):
+    """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
+    value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
+    if not isinstance(prov, dict):
+        return {}
+    if "byPhase" in prov:
+        by_phase = prov.get("byPhase")
+        if not isinstance(by_phase, dict):
+            return {}
+        return dict(by_phase)
+    if prov:
+        return {"unknown-phase": dict(prov)}
+    return {}
 
 
 # The ONE home for the per-round disclosure channels. `build_receipt` emits exactly these onto each
@@ -977,10 +997,7 @@ def _migrate_judgment_step(state):
 
 def save_state(session_dir, state):
     path = os.path.join(session_dir, STATE_FILE)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(_canonical(state))
-    os.replace(tmp, path)
+    round_commit.atomic_write_bytes(path, _canonical(state).encode("utf-8"))
 
 
 # =============================================================================================
@@ -1142,13 +1159,27 @@ def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
 
-def _record_adapter_provenance(state, artifact):
-    """Persist adapter trust disclosures for the receipt/resume path (#720)."""
+def _record_adapter_provenance(state, artifact, phase):
+    """Persist adapter trust disclosures for the receipt/resume path (#720).
+
+    Each phase's disclosures accumulate under `adapterProvenance.byPhase[phase]`; a second fold of
+    the same phase replaces that phase's entry only. A legacy flat value migrates on write to
+    `byPhase["unknown-phase"]` before the new entry is merged."""
     if not isinstance(artifact, dict):
         return
     prov = artifact.pop("provenance", None)
     if isinstance(prov, dict) and prov:
-        _record_round(state, "adapterProvenance", prov)
+        rec = state["rounds"].setdefault(str(state["round"]), {})
+        existing = rec.get("adapterProvenance")
+        if isinstance(existing, dict) and "byPhase" in existing:
+            by_phase = existing.get("byPhase")
+            by_phase = dict(by_phase) if isinstance(by_phase, dict) else {}
+        elif isinstance(existing, dict) and existing:
+            by_phase = {"unknown-phase": dict(existing)}
+        else:
+            by_phase = {}
+        by_phase[phase] = dict(prov)
+        rec["adapterProvenance"] = {"byPhase": by_phase}
 
 
 def _fold(state, config, phase, artifact, changed_subjects_seam=None):
@@ -1159,7 +1190,7 @@ def _fold(state, config, phase, artifact, changed_subjects_seam=None):
     eval harness replays the fixture's subjects); the CLI submit path passes None so the fixer fold
     wires the real git derivation. It is inert for every other phase."""
     artifact = artifact if isinstance(artifact, dict) else {}
-    _record_adapter_provenance(state, artifact)
+    _record_adapter_provenance(state, artifact, phase)
     if phase == P_PANEL:
         _fold_panel(state, config, artifact)
     elif phase == P_VERIFIERS:
@@ -2760,20 +2791,22 @@ def build_receipt(state, session_dir=None):
                 "canary-failed (round %s): the control probe showed no engagement (%s) — "
                 "cross-vendor seat(s) %s downgraded to never-ran" % (
                     rkey, detail_str, ", ".join(seats_down or [])))
-        prov = rrec.get("adapterProvenance")
-        if isinstance(prov, dict):
+        prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
+        for phase_name, prov in prov_by_phase.items():
+            if not isinstance(prov, dict):
+                continue
             if prov.get("dispatchManifestUnavailable"):
                 degraded.append(
-                    "adapter-provenance (round %s): dispatch manifest unavailable — trusted "
-                    "ranManifest/collectionManifest omitted" % rkey)
+                    "adapter-provenance (round %s, %s): dispatch manifest unavailable — trusted "
+                    "ranManifest/collectionManifest omitted" % (rkey, phase_name))
             mismatch = prov.get("vendorEchoMismatch")
             if isinstance(mismatch, list) and mismatch:
                 parts = ["%s echo=%r manifest=%r" % (row.get("seat"), row.get("echo"),
                                                      row.get("manifest"))
                          for row in mismatch if isinstance(row, dict)]
                 degraded.append(
-                    "adapter-provenance (round %s): vendor echo mismatch on seat(s): %s"
-                    % (rkey, "; ".join(parts)))
+                    "adapter-provenance (round %s, %s): vendor echo mismatch on seat(s): %s"
+                    % (rkey, phase_name, "; ".join(parts)))
     scriptran = _scriptran_summary(session_dir) if session_dir else state.get("_scriptRan") or \
         {"invocations": 0, "byPhase": {}}
     base = {k: cfg.get(k) for k in ("baseRef", "baseBranch", "baseFetch", "mode", "baseRepo",
@@ -3044,6 +3077,19 @@ def cmd_next(session_dir, config_overrides=None):
     other keys must survive). Every per-seat envelope is bound to that id, so a session that could
     not mint one can record nothing: an unmintable id refuses LOUDLY here rather than letting the
     record layer refuse `bootstrap-required` per seat later."""
+    try:
+        with round_records.session_lock(session_dir):
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "next",
+                                                sidecar_target=sidecar_target)
+            if refusal is not None:
+                return refusal
+            return _cmd_next_locked(session_dir, config_overrides)
+    except round_records.LockHeld as held:
+        return _lock_held_refusal(session_dir, "next", held)
+
+
+def _cmd_next_locked(session_dir, config_overrides=None):
     ok, loaded = load_state(session_dir)
     if not ok:
         _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
@@ -3091,8 +3137,12 @@ def cmd_next(session_dir, config_overrides=None):
                                             pending.get("round"), attempt)
         if roster_refusal is not None:
             return roster_refusal
-        _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
-                              journal_cmd="next")
+        try:
+            _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
+                                  journal_cmd="next")
+        except round_commit.CommitRefused as exc:
+            return _commit_refused_response(session_dir, "next", exc, phase=phase,
+                                          rnd=pending.get("round"), attempt=attempt)
     save_state(session_dir, state)
     _journal_append(session_dir, {"cmd": "next", "phase": pending["phase"],
                                   "round": pending["round"], "attempt": attempt,
@@ -3156,6 +3206,44 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     artifact) and mixing them within one session silently certifies a phase whose seats were never
     recorded. The fence is per-SESSION rather than the work order's per-PHASE wording: strictly
     stronger, and it never permits anything the per-phase rule forbids."""
+    try:
+        with round_records.session_lock(session_dir):
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "submit",
+                                                sidecar_target=sidecar_target)
+            if refusal is not None:
+                return refusal
+            prep = _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact,
+                                       _via_advance=_via_advance)
+            if not prep.get("_fold_ready"):
+                return prep
+            state = prep["state"]
+            round_no = prep["round_no"]
+            art_hash = prep["art_hash"]
+            _fold(state, state["config"], phase, artifact)
+            state["lastAccepted"] = {"phase": phase, "attempt": attempt, "round": round_no,
+                                     "artifactHash": art_hash}
+            journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
+                                                      phase=phase, round=round_no, attempt=attempt)
+            try:
+                c = round_commit.begin(session_dir, "submit-accept")
+                c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                                   _canonical(state).encode("utf-8"))
+                c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+                c.run()
+            except round_commit.CommitRefused as exc:
+                return _commit_refused_response(session_dir, "submit", exc, phase=phase,
+                                              rnd=round_no, attempt=attempt)
+            if state.get("terminal"):
+                fail = _terminal_receipt_gate(session_dir, state)
+                if fail:
+                    return _receipt_fault_response(fail)
+            return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
+    except round_records.LockHeld as held:
+        return _lock_held_refusal(session_dir, "submit", held)
+
+
+def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False):
     ok, loaded = load_state(session_dir)
     if not ok:
         _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": None,
@@ -3269,24 +3357,14 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                                           "outcome": "audit-ruling-shape"})
             return {"ok": False, "reason": fault}
 
-    # accept: clear the pending, fold, record lastAccepted, advance.
+    # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")
     state["pending"] = None
     if not _via_advance and _state_version(state) == STATE_SCHEMA_VERSION:
         # The other half of the interleave fence: a v3 session that has taken a HAND submit refuses
         # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
         state["_submitUsed"] = True
-    _fold(state, state["config"], phase, artifact)
-    state["lastAccepted"] = {"phase": phase, "attempt": attempt, "round": round_no,
-                             "artifactHash": art_hash}
-    save_state(session_dir, state)
-    _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": round_no,
-                                  "attempt": attempt, "outcome": "accepted"})
-    if state.get("terminal"):
-        fail = _terminal_receipt_gate(session_dir, state)
-        if fail:
-            return _receipt_fault_response(fail)
-    return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
+    return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash}
 
 
 def _write_receipt(session_dir, state):
@@ -3295,10 +3373,8 @@ def _write_receipt(session_dir, state):
     v14)."""
     receipt = build_receipt(state, session_dir)
     path = os.path.join(session_dir, RECEIPT_FILE)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-    os.replace(tmp, path)
+    round_commit.atomic_write_bytes(
+        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
     return receipt
 
 
@@ -3429,6 +3505,83 @@ def _refuse_cmd(session_dir, cmd, reason, fault=FAULT_CALLER, phase=None, rnd=No
     return body
 
 
+def _lock_held_refusal(session_dir, cmd, held):
+    return _refuse_cmd(session_dir, cmd, "%s-locked" % cmd,
+                       holder={"pid": held.pid, "createdAt": held.created_at})
+
+
+def _commit_recover_or_refuse(session_dir, cmd, sidecar_target=None):
+    try:
+        round_commit.recover(session_dir, sidecar_target=sidecar_target)
+    except round_commit.CommitRefused as exc:
+        return _refuse_cmd(session_dir, cmd, "commit-recovery-failed", fault=FAULT_INTERNAL,
+                           detail="%s: %s" % (exc.reason, exc.detail))
+    return None
+
+
+def _sidecar_target_for_recover(session_dir, state=None, git=None):
+    """Zero-arg callable that lazily resolves the sidecar path for ``recover``.
+
+    State load, gitdir resolution, and ``rev-parse HEAD`` run only when the callable is invoked
+    (during ``external-sidecar`` replay), so recovery does not depend on pre-recovery session
+    state or git subprocesses on the common path where no pending commit exists.
+
+    The callable returns an absolute sidecar path, or ``None`` when state will not load, gitdir
+    cannot be resolved, or ``rev-parse HEAD`` fails — ``round_commit`` then refuses sidecar replay
+    loudly rather than skipping it."""
+    supplied_state = state
+    run_git = git or store_core.run_git
+
+    def resolve():
+        st = supplied_state
+        if st is None:
+            ok, loaded = load_state(session_dir)
+            if not ok or loaded is None:
+                return None
+            st = loaded
+        config = st.get("config") or {}
+        repo_root = config.get("repoRoot") or os.getcwd()
+        try:
+            gitdir = store_core.get_worktree_gitdir(
+                repo_root, run=_git_result_seam(git) if git is not None else None)
+        except store_core.RepoRootUnavailable:
+            return None
+        if not run_git(repo_root, "rev-parse", "HEAD"):
+            return None
+        return _sidecar_path(gitdir)
+
+    return resolve
+
+
+def _journal_entry_for_commit(session_dir, cmd, outcome, **fields):
+    entry = {"cmd": cmd, "outcome": outcome, "session": _meta_session_id(session_dir)}
+    entry.setdefault("fault", FAULT_CALLER)
+    for key, value in fields.items():
+        entry[key] = value
+    entry.setdefault("phase", None)
+    entry.setdefault("round", None)
+    entry.setdefault("attempt", None)
+    return entry
+
+
+def _commit_refused_response(session_dir, cmd, exc, phase=None, rnd=None, attempt=None, **extra):
+    return _refuse_cmd(session_dir, cmd, exc.reason, fault=FAULT_INTERNAL, detail=exc.detail,
+                       phase=phase, rnd=rnd, attempt=attempt, **extra)
+
+
+def _envelope_with_head_diff(session_dir, envelope, content, rnd, phase, seat_key, attempt,
+                             occurrence):
+    diff_path = round_records.head_diff_store_path(session_dir, rnd, phase, seat_key, attempt,
+                                                   occurrence)
+    payload = dict(envelope.get("payload") or {})
+    payload["headDiffStorePath"] = diff_path
+    final = dict(envelope)
+    final["landedPayloadSha256"] = envelope.get("payloadSha256")
+    final["payload"] = payload
+    final["payloadSha256"] = round_records.payload_sha256(payload)
+    return diff_path, content.encode("utf-8"), final, final["payloadSha256"]
+
+
 def _state_load_fault(session_dir):
     """Classify a `load_state` failure for the record layer: (reason, fault_class, detail).
 
@@ -3557,10 +3710,18 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         anchors = {}
     anchors[_anchor_key(rnd, phase, attempt)] = anchor
     state["_ordersAnchors"] = anchors
-    save_state(session_dir, state)
-    round_records.atomic_write_json(path, manifest)
-    _journal_event(session_dir, journal_cmd, "orders-emitted", phase=phase, round=rnd,
-                   attempt=attempt, manifestSha256=manifest_sha)
+    journal_entry = _journal_entry_for_commit(session_dir, journal_cmd, "orders-emitted",
+                                              phase=phase, round=rnd, attempt=attempt,
+                                              manifestSha256=manifest_sha)
+    try:
+        c = round_commit.begin(session_dir, "orders-emit")
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        c.add_replace_file(path, round_records.canonical(manifest).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        raise exc
     return anchor
 
 
@@ -3689,33 +3850,33 @@ def _read_head_diff(path):
         return None, "head-diff-unreadable"
 
 
-def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence=0):
+def _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence=0,
+                     journal_entry=None):
     """Copy the fixer's head diff into the STORE beside its envelope and stamp the immutable copy's
     path into the stored payload.
 
-    The blob is published durably FIRST; only then is the envelope bound to it, so a crash cannot
-    leave an envelope naming a missing blob."""
+    Blob and envelope are published in one commit so a crash cannot leave them disagreeing."""
     skey = round_records.storage_key(seat_key, occurrence)
     spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-    diff_path = round_records.head_diff_store_path(session_dir, rnd, phase, seat_key, attempt,
-                                                   occurrence)
-    tmp = diff_path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        fh.write(content)
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, diff_path)
     envelope, err = round_records.read_json(spath)
     if err is not None or not isinstance(envelope, dict):
+        diff_path = round_records.head_diff_store_path(session_dir, rnd, phase, seat_key, attempt,
+                                                       occurrence)
+        round_commit.atomic_write_bytes(diff_path, content.encode("utf-8"))
         return diff_path, None
-    payload = dict(envelope.get("payload") or {})
-    payload["headDiffStorePath"] = diff_path
-    envelope = dict(envelope)
-    envelope["landedPayloadSha256"] = envelope.get("payloadSha256")
-    envelope["payload"] = payload
-    envelope["payloadSha256"] = round_records.payload_sha256(payload)
-    round_records.atomic_write_json(spath, envelope)
-    return diff_path, envelope["payloadSha256"]
+    diff_path, diff_bytes, final, payload_sha = _envelope_with_head_diff(
+        session_dir, envelope, content, rnd, phase, seat_key, attempt, occurrence)
+    try:
+        c = round_commit.begin(session_dir, "head-diff-bind")
+        c.add_replace_file(diff_path, diff_bytes)
+        c.add_replace_file(spath, round_records.canonical(final).encode("utf-8"))
+        if journal_entry is not None:
+            journal_entry["payloadSha256"] = payload_sha
+            c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        raise exc
+    return diff_path, payload_sha
 
 
 def _fixer_head_diff_needs_repair(stored):
@@ -3733,8 +3894,11 @@ def _fixer_head_diff_needs_repair(stored):
     return not os.path.exists(store_path_val)
 
 
-def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence):
-    """Repair a fixer store record whose head-diff blob was not yet bound. Returns (payload_sha, path)."""
+def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurrence, cmd=None):
+    """Repair a fixer store record whose head-diff blob was not yet bound.
+
+    Returns (payload_sha, detail) where detail is None, a refusal token string, or a
+    ``CommitRefused`` when the commit failed."""
     skey = round_records.storage_key(seat_key, occurrence)
     spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
     stored, err = round_records.read_json(spath)
@@ -3747,7 +3911,18 @@ def _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt, occurren
     content, why = _read_head_diff(head_path)
     if why is not None:
         return None, why
-    return _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content, occurrence)
+    journal_entry = None
+    if cmd is not None:
+        journal_entry = _journal_entry_for_commit(
+            session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
+            seat=seat_key, occurrence=occurrence, headDiffRepaired=True,
+            **_journal_identity_fields(phase, seat_key, occurrence, attempt))
+    try:
+        _path, payload_sha = _store_head_diff(session_dir, rnd, phase, seat_key, attempt, content,
+                                              occurrence, journal_entry=journal_entry)
+    except round_commit.CommitRefused as exc:
+        return None, exc
+    return payload_sha, None
 
 
 def _pending_of(session_dir, state, cmd):
@@ -3781,6 +3956,22 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     the only slot a key that appears once has). Two distinct audit targets can legitimately share
     one id, so without it the second target's result is unaddressable and the first's would be
     superseded by it."""
+    try:
+        with round_records.session_lock(session_dir):
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "record-result",
+                                                sidecar_target=sidecar_target)
+            if refusal is not None:
+                return refusal
+            return _cmd_record_result_locked(session_dir, seat=seat, attempt=attempt,
+                                             supersede=supersede, expect_sha256=expect_sha256,
+                                             sweep=sweep, occurrence=occurrence)
+    except round_records.LockHeld as held:
+        return _lock_held_refusal(session_dir, "record-result", held)
+
+
+def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=False,
+                              expect_sha256=None, sweep=False, occurrence=0):
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
@@ -3820,29 +4011,39 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
     else:
         head_content = None
 
-    out = round_records.ingest_landing(session_dir, rnd, phase, seat, cur_attempt,
-                                       current_attempt=cur_attempt, roster=roster,
-                                       supersede=supersede, expect_sha256=expect_sha256,
-                                       anchor=anchor, occurrence=occurrence)
-    if not out.get("ok"):
-        return _refuse_cmd(session_dir, "record-result", out.get("reason"), phase=phase, rnd=rnd,
-                           attempt=cur_attempt, seat=_slot_label(seat, occurrence),
-                           detail=out.get("message") or out.get("storePath"))
-    payload_sha = out.get("payloadSha256")
+    plan, landing_refusal = round_records.validate_landing(
+        session_dir, rnd, phase, seat, cur_attempt, current_attempt=cur_attempt, roster=roster,
+        supersede=supersede, expect_sha256=expect_sha256, anchor=anchor, occurrence=occurrence)
+    if landing_refusal is not None:
+        return _refuse_cmd(session_dir, "record-result", landing_refusal.get("reason"), phase=phase,
+                           rnd=rnd, attempt=cur_attempt, seat=_slot_label(seat, occurrence),
+                           detail=landing_refusal.get("message") or landing_refusal.get("storePath"))
+    envelope = plan["envelope"]
+    payload_sha = plan["payloadSha256"]
     head_store_path = None
+    head_diff_bytes = None
     if head_content is not None:
-        head_store_path, rehashed = _store_head_diff(session_dir, rnd, phase, seat, cur_attempt,
-                                                     head_content, occurrence)
-        payload_sha = rehashed or payload_sha
-    _journal_event(session_dir, "record-result", "recorded", phase=phase, round=rnd,
-                   attempt=cur_attempt, seat=seat, occurrence=occurrence,
-                   payloadSha256=payload_sha,
-                   superseded=bool(out.get("superseded")), headDiffStorePath=head_store_path,
-                   **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
+        head_store_path, head_diff_bytes, envelope, payload_sha = _envelope_with_head_diff(
+            session_dir, envelope, head_content, rnd, phase, seat, cur_attempt, occurrence)
+    journal_entry = _journal_entry_for_commit(
+        session_dir, "record-result", "recorded", phase=phase, round=rnd, attempt=cur_attempt,
+        seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+        superseded=bool(plan["superseded"]), headDiffStorePath=head_store_path,
+        **_journal_identity_fields(phase, seat, occurrence, cur_attempt))
+    try:
+        c = round_commit.begin(session_dir, "record-ingest")
+        c.add_replace_file(plan["storePath"], round_records.canonical(envelope).encode("utf-8"))
+        if head_store_path is not None:
+            c.add_replace_file(head_store_path, head_diff_bytes)
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return _commit_refused_response(session_dir, "record-result", exc, phase=phase, rnd=rnd,
+                                      attempt=cur_attempt, seat=_slot_label(seat, occurrence))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": cur_attempt, "seat": seat,
             "occurrence": occurrence, "payloadSha256": payload_sha,
-            "superseded": bool(out.get("superseded")),
-            "storePath": out.get("storePath"), "headDiffStorePath": head_store_path}
+            "superseded": bool(plan["superseded"]),
+            "storePath": plan["storePath"], "headDiffStorePath": head_store_path}
 
 
 def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
@@ -3865,16 +4066,14 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
         if not _fixer_head_diff_needs_repair(stored):
             continue
         rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat_key, attempt,
-                                                   occurrence)
+                                                   occurrence, cmd=cmd)
         if detail == "head-diff-unreadable":
             payload = stored.get("payload") if isinstance(stored, dict) else {}
             return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd, attempt=attempt,
                                seat=seat_key, headDiffPath=payload.get("headDiffPath"))
-        if rehashed:
-            _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                           seat=seat_key, occurrence=occurrence, payloadSha256=rehashed,
-                           headDiffRepaired=True,
-                           **_journal_identity_fields(phase, seat_key, occurrence, attempt))
+        if isinstance(detail, round_commit.CommitRefused):
+            return _commit_refused_response(session_dir, cmd, detail, phase=phase, rnd=rnd,
+                                          attempt=attempt, seat=seat_key)
     for seat_key, occurrence in round_records.roster_slots(roster):
         try:
             skey = round_records.storage_key(seat_key, occurrence)
@@ -3906,22 +4105,22 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                     seat = result.get("seatKey")
                     occurrence = result.get("occurrence") or 0
                     rehashed, detail = _repair_fixer_head_diff(session_dir, rnd, phase, seat,
-                                                               attempt, occurrence)
+                                                               attempt, occurrence, cmd=cmd)
                     if detail == "head-diff-unreadable":
                         payload = stored.get("payload") if isinstance(stored, dict) else {}
                         return _refuse_cmd(session_dir, cmd, detail, phase=phase, rnd=rnd,
                                            attempt=attempt, seat=seat,
                                            headDiffPath=payload.get("headDiffPath"))
+                    if isinstance(detail, round_commit.CommitRefused):
+                        return _commit_refused_response(session_dir, cmd, detail, phase=phase,
+                                                      rnd=rnd, attempt=attempt, seat=seat)
                     if rehashed:
-                        _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd,
-                                       attempt=attempt, seat=seat, occurrence=occurrence,
-                                       payloadSha256=rehashed, headDiffRepaired=True,
-                                       **_journal_identity_fields(phase, seat, occurrence, attempt))
                         recorded.append(_slot_label(seat, occurrence))
             continue
         seat = result.get("seatKey")
         payload_sha = result.get("payloadSha256")
         stored = round_records.read_json(result.get("storePath"))[0]
+        head_diff_journaled = False
         if phase == P_FIXER:
             payload = stored.get("payload") if isinstance(stored, dict) else None
             head_path = payload.get("headDiffPath") if isinstance(payload, dict) else None
@@ -3931,12 +4130,23 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
                 if why is not None:
                     return _refuse_cmd(session_dir, cmd, why, phase=phase, rnd=rnd,
                                        attempt=attempt, seat=seat, headDiffPath=head_path)
-                _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
-                                                     content, occurrence)
+                journal_entry = _journal_entry_for_commit(
+                    session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
+                    seat=seat, occurrence=occurrence,
+                    **_journal_identity_fields(phase, seat, occurrence, attempt))
+                try:
+                    _unused, rehashed = _store_head_diff(session_dir, rnd, phase, seat, attempt,
+                                                         content, occurrence,
+                                                         journal_entry=journal_entry)
+                except round_commit.CommitRefused as exc:
+                    return _commit_refused_response(session_dir, cmd, exc, phase=phase, rnd=rnd,
+                                                  attempt=attempt, seat=seat)
                 payload_sha = rehashed or payload_sha
-        _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
-                       seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
-                       **_journal_identity_fields(phase, seat, occurrence, attempt))
+                head_diff_journaled = True
+        if not head_diff_journaled:
+            _journal_event(session_dir, cmd, "recorded", phase=phase, round=rnd, attempt=attempt,
+                           seat=seat, occurrence=occurrence, payloadSha256=payload_sha,
+                           **_journal_identity_fields(phase, seat, occurrence, attempt))
         recorded.append(_slot_label(seat, occurrence))
     return {"ok": True, "phase": phase, "round": rnd, "attempt": attempt, "recorded": recorded}
 
@@ -3948,6 +4158,21 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
 
     `occurrence` addresses which roster slot of a repeated seat key is absent (default 0), so one
     of two audit targets sharing an id can be recorded missing WITHOUT claiming its twin is."""
+    try:
+        with round_records.session_lock(session_dir):
+            sidecar_target = _sidecar_target_for_recover(session_dir)
+            refusal = _commit_recover_or_refuse(session_dir, "record-missing",
+                                                sidecar_target=sidecar_target)
+            if refusal is not None:
+                return refusal
+            return _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path,
+                                              occurrence=occurrence)
+    except round_records.LockHeld as held:
+        return _lock_held_refusal(session_dir, "record-missing", held)
+
+
+def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path=None,
+                               occurrence=0):
     state, refusal = _load_driver_state(session_dir, "record-missing")
     if refusal is not None:
         return refusal
@@ -4026,10 +4251,10 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
 def cmd_advance(session_dir, break_lock=False, git=None):
     """Fold the pending phase off its DURABLE records and emit the next action.
 
-    The order is the contract: lock → reconcile → sweep → completeness → assemble → fold → emit.
-    A held lock refuses `advance-locked` naming the holder; `--break-lock` breaks it and JOURNALS
-    the broken holder as a `caller-error` (breaking someone else's lock is a caller's decision, and
-    it is never attest-eligible)."""
+    The order is the contract: lock → recover → reconcile → sweep → completeness → assemble → fold
+    → emit. A held lock refuses `advance-locked` naming the holder; `--break-lock` breaks it and
+    JOURNALS the broken holder as a `caller-error` (breaking someone else's lock is a caller's
+    decision, and it is never attest-eligible)."""
     broke = None
     if break_lock:
         holder = round_records.break_lock(session_dir) or {}
@@ -4037,6 +4262,11 @@ def cmd_advance(session_dir, break_lock=False, git=None):
         _journal_event(session_dir, "advance", "lock-broken", fault=FAULT_CALLER, holder=broke)
     try:
         with round_records.session_lock(session_dir):
+            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
+            refusal = _commit_recover_or_refuse(session_dir, "advance",
+                                                sidecar_target=sidecar_target)
+            if refusal is not None:
+                return refusal
             state, refusal = _load_driver_state(session_dir, "advance")
             if refusal is not None:
                 return refusal
@@ -4172,6 +4402,8 @@ def _advance_locked(session_dir, state, git=None, broke=None):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
+    # The `advanced` journal row has no partner artifact — it is a log-only row and stays outside
+    # any commit so a later reader does not try to pair it with state or a manifest.
 
     # 6. emit the next action (through `cmd_next`, so the pending/journal contract is one home).
     nxt = cmd_next(session_dir)
@@ -4233,47 +4465,31 @@ def _git_result_seam(run_git):
     return run
 
 
-def _publish_sidecar(session_dir, state, git=None):
-    """Publish `<gitdir>/superheroes/review-receipt.json` for a terminal session.
+def _prepare_sidecar(session_dir, state, git=None, journal_cmd="advance", receipt_bytes=None):
+    """Build and validate a sidecar for a terminal session without writing.
 
-    ORDERING IS THE CONTRACT: journal `sidecar-repair-begin` → publish atomically → journal
-    `sidecar-repaired`. Journalling FIRST means a sidecar is never published that the journal could
-    not record; a crash between the two leaves a begin-without-complete, and the next `advance`
-    re-validates and republishes idempotently by content hash. A sidecar that is already fresh
-    (`round_records.sidecar_stale` says no) is left exactly as it is.
-
-    Nothing in this PR READS the sidecar for enforcement — the hook that does is a later PR — so
-    there is deliberately no gate here."""
+    Returns ``{"ok": True, "path": ..., "repaired": False, "needs_write": False}`` when the on-disk
+    sidecar is already fresh, or a write bundle with ``needs_write: True`` when publication is
+    required. Refusals use ``{"reason": ..., "detail": ...}``."""
     run_git = git or store_core.run_git
     config = state.get("config") or {}
     repo_root = config.get("repoRoot") or os.getcwd()
-    # PER-WORKTREE by contract (§6): `store_core.get_worktree_gitdir`, never `get_gitdir` — the
-    # common-dir is SHARED by every linked worktree, so two sibling builds would publish and read
-    # one another's receipt. Resolution itself lives in store_core (the #742 chokepoint).
     try:
         gitdir = store_core.get_worktree_gitdir(
             repo_root, run=_git_result_seam(git) if git is not None else None)
     except store_core.RepoRootUnavailable as exc:
-        # An unresolvable git dir is a REFUSAL, never an escaping exception out of `advance`.
         return {"reason": "sidecar-gitdir-unresolvable", "detail": str(exc)}
-    # On genuine greenfield (no repository at all) that shared classification answers
-    # `realpath(repo_root)` — an IDENTITY, not a git dir. Nothing is written before the HEAD read
-    # below, and `rev-parse HEAD` in a non-repository cannot resolve, so that path still refuses
-    # `sidecar-gitdir-unresolvable` and no sidecar is ever written into a plain directory
-    # (`test_sidecar_refuses_when_the_repo_root_is_not_a_repository`). A `gitdir == repo_root`
-    # guard here would ALSO refuse a bare repository, where `--absolute-git-dir` legitimately
-    # answers the repo root itself — measured: `git rev-parse --absolute-git-dir` in `b.git`
-    # prints `b.git`.
     head_sha = run_git(repo_root, "rev-parse", "HEAD")
     if not head_sha:
         return {"reason": "sidecar-gitdir-unresolvable",
                 "detail": "git could not resolve HEAD in %r" % repo_root}
     receipt_path = os.path.join(session_dir, RECEIPT_FILE)
-    try:
-        with open(receipt_path, "rb") as fh:
-            receipt_bytes = fh.read()
-    except OSError as exc:
-        return {"reason": "sidecar-receipt-unreadable", "detail": str(exc)}
+    if receipt_bytes is None:
+        try:
+            with open(receipt_path, "rb") as fh:
+                receipt_bytes = fh.read()
+        except OSError as exc:
+            return {"reason": "sidecar-receipt-unreadable", "detail": str(exc)}
     path = _sidecar_path(gitdir)
     existing, err = round_records.read_json(path)
     if err is None and isinstance(existing, dict):
@@ -4281,15 +4497,13 @@ def _publish_sidecar(session_dir, state, git=None):
                                                   receipt_bytes=receipt_bytes,
                                                   session_dir=session_dir)
         if not stale:
-            return {"ok": True, "path": path, "repaired": False}
+            return {"ok": True, "path": path, "repaired": False, "needs_write": False}
     branch = run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD") or "detached"
     base_ref = config.get("baseRef") or "unpinned"
     base_sha = run_git(repo_root, "rev-parse", "--verify", "--quiet",
                        "%s^{commit}" % base_ref) if config.get("baseRef") else None
     certification = state.get("certification") or {}
     sidecar = round_records.build_sidecar(
-        # Every git read goes through the ONE injected seam (`run_git`) — a second, un-seamed path
-        # would shell out to the developer's real checkout in a test that injected a fake.
         repoId=(store_core.normalize_remote(run_git(repo_root, "remote", "get-url", "origin"))
                 or os.path.realpath(repo_root)),
         branch=branch,
@@ -4298,8 +4512,6 @@ def _publish_sidecar(session_dir, state, git=None):
         baseSha=base_sha or "unresolved",
         diffSha256=_sha256(state.get("reviewedDiff") or ""),
         verdict=state.get("terminal") or "unknown",
-        # A withheld certification is recorded as WITHHELD, never as an empty/absent shape: the
-        # sidecar's fields are all non-empty strings by contract, and "" would read as "no opinion".
         certificationShape=(certification.get("shape")
                             or ("attested" if state.get("_attestation") else "withheld")),
         receiptPath=receipt_path,
@@ -4309,15 +4521,52 @@ def _publish_sidecar(session_dir, state, git=None):
     ok, why = round_records.validate_sidecar(sidecar)
     if not ok:
         return {"reason": "sidecar-invalid", "detail": why}
-    _journal_event(session_dir, "advance", "sidecar-repair-begin", sidecarPath=path,
-                   receiptSha256=sidecar["receiptSha256"])
+    receipt_sha = sidecar["receiptSha256"]
+    begin_entry = _journal_entry_for_commit(session_dir, journal_cmd, "sidecar-repair-begin",
+                                            sidecarPath=path, receiptSha256=receipt_sha)
+    repaired_entry = _journal_entry_for_commit(session_dir, journal_cmd, "sidecar-repaired",
+                                               sidecarPath=path, receiptSha256=receipt_sha)
+    return {
+        "ok": True,
+        "needs_write": True,
+        "path": path,
+        "sidecar_bytes": round_records.canonical(sidecar).encode("utf-8"),
+        "resolver": lambda: _sidecar_path(gitdir),
+        "journal_entries": [begin_entry, repaired_entry],
+        "receiptSha256": receipt_sha,
+    }
+
+
+def _commit_sidecar_parts(session_dir, prepared):
+    """Apply a prepared sidecar write bundle in one commit."""
     try:
-        round_records.atomic_write_json(path, sidecar)
-    except OSError as exc:
-        return {"reason": "sidecar-unwritable", "detail": str(exc)}
-    _journal_event(session_dir, "advance", "sidecar-repaired", sidecarPath=path,
-                   receiptSha256=sidecar["receiptSha256"])
-    return {"ok": True, "path": path, "repaired": True}
+        c = round_commit.begin(session_dir, "sidecar-publish")
+        c.add_external_sidecar(prepared["sidecar_bytes"], prepared["resolver"])
+        for entry in prepared["journal_entries"]:
+            c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        return {"reason": exc.reason, "detail": exc.detail}
+    return {"ok": True, "path": prepared["path"], "repaired": True}
+
+
+def _publish_sidecar(session_dir, state, git=None, *, defer_commit=False):
+    """Publish `<gitdir>/superheroes/review-receipt.json` for a terminal session.
+
+    Sidecar bytes and its two journal halves are one commit when a write is required — the commit
+  carries correctness, not ordering between journal and file. A sidecar that is already fresh
+    (`round_records.sidecar_stale` says no) is left exactly as it is.
+
+    Nothing in this PR READS the sidecar for enforcement — the hook that does is a later PR — so
+    there is deliberately no gate here."""
+    prepared = _prepare_sidecar(session_dir, state, git=git, journal_cmd="advance")
+    if prepared.get("reason"):
+        return prepared
+    if not prepared.get("needs_write"):
+        return {"ok": True, "path": prepared["path"], "repaired": False}
+    if defer_commit:
+        return prepared
+    return _commit_sidecar_parts(session_dir, prepared)
 
 
 # --- attest (§5) ----------------------------------------------------------------------------------
@@ -4468,16 +4717,35 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
 
     Refuses outright if any terminal receipt already exists — an attestation is what a session
     writes INSTEAD of a terminal receipt, never over one."""
-    state, refusal = _load_driver_state(session_dir, "attest")
-    if refusal is not None:
-        return refusal
     if not isinstance(note, str) or not note.strip():
         return _refuse_cmd(session_dir, "attest", "attest-note-required")
-    if os.path.exists(os.path.join(session_dir, RECEIPT_FILE)) or state.get("terminal"):
-        return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
-    binding, why = _resolve_failure_ref(session_dir, failure_ref)
-    if why is not None:
-        return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
+    try:
+        with round_records.session_lock(session_dir):
+            sidecar_target = _sidecar_target_for_recover(session_dir, git=git)
+            refusal = _commit_recover_or_refuse(session_dir, "attest",
+                                                sidecar_target=sidecar_target)
+            if refusal is not None:
+                return refusal
+            state, refusal = _load_driver_state(session_dir, "attest")
+            if refusal is not None:
+                return refusal
+            if os.path.exists(os.path.join(session_dir, RECEIPT_FILE)) or state.get("terminal"):
+                return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
+            binding, why = _resolve_failure_ref(session_dir, failure_ref)
+            if why is not None:
+                return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
+            artifact_snapshot = _session_artifact_hashes(session_dir,
+                                                         exclude=(RECEIPT_FILE, STATE_FILE,
+                                                                  JOURNAL_FILE,
+                                                                  round_records.LOCK_FILE))
+            return _cmd_attest_locked(session_dir, failure_ref, note, git=git, state=state,
+                                    binding=binding, artifact_snapshot=artifact_snapshot)
+    except round_records.LockHeld as held:
+        return _lock_held_refusal(session_dir, "attest", held)
+
+
+def _cmd_attest_locked(session_dir, failure_ref, note, git=None, state=None, binding=None,
+                       artifact_snapshot=None):
     roster = _attest_roster(session_dir, state)
     state["terminal"] = ATTESTED_VERDICT
     state["certification"] = None
@@ -4494,32 +4762,47 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
     state["step"] = P_TERMINAL
     state["pending"] = None
     state["_receiptFinalized"] = True
-    save_state(session_dir, state)
-    _journal_event(session_dir, "attest", "attested", phase=binding.get("phase"),
-                   failure=binding.get("ref"), attestClass=binding.get("class"))
     receipt = build_attestation_receipt(session_dir, state, binding, note, roster=roster)
-    receipt["artifacts"] = _session_artifact_hashes(session_dir,
-                                                    exclude=(RECEIPT_FILE, STATE_FILE, JOURNAL_FILE))
+    receipt["artifacts"] = artifact_snapshot
     ok, invalid = validate_receipt(receipt)
     if not ok:
         return _refuse_cmd(session_dir, "attest", "attested-receipt-invalid", fault=FAULT_INTERNAL,
                            detail=invalid)
     path = os.path.join(session_dir, RECEIPT_FILE)
-    tmp = path + ".tmp"
+    receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+    prepared = _prepare_sidecar(session_dir, state, git=git, journal_cmd="advance",
+                                receipt_bytes=receipt_bytes)
+    if prepared.get("reason"):
+        return _refuse_cmd(session_dir, "attest", prepared["reason"], fault=FAULT_INTERNAL,
+                           detail=prepared.get("detail"))
+    attested_entry = _journal_entry_for_commit(session_dir, "attest", "attested",
+                                               phase=binding.get("phase"),
+                                               failure=binding.get("ref"),
+                                               attestClass=binding.get("class"))
     try:
-        with open(tmp, "w", encoding="utf-8") as fh:
-            fh.write(json.dumps(receipt, indent=2, sort_keys=True) + "\n")
-        os.replace(tmp, path)
-    except OSError as exc:
-        return _refuse_cmd(session_dir, "attest", "attested-receipt-unwritable",
-                           fault=FAULT_INTERNAL, detail=str(exc))
-    side = _publish_sidecar(session_dir, state, git=git)
-    if side.get("reason"):
-        return _refuse_cmd(session_dir, "attest", side["reason"], fault=FAULT_INTERNAL,
-                           detail=side.get("detail"))
+        c = round_commit.begin(session_dir, "attest-finalize")
+        c.add_replace_file(path, receipt_bytes)
+        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
+                           _canonical(state).encode("utf-8"))
+        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), attested_entry)
+        if prepared.get("needs_write"):
+            c.add_external_sidecar(prepared["sidecar_bytes"], prepared["resolver"])
+            for entry in prepared["journal_entries"]:
+                c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), entry)
+        c.run()
+    except round_commit.CommitRefused as exc:
+        if exc.reason in ("sidecar-invalid", "sidecar-target-unresolvable",
+                          "sidecar-receipt-unreadable"):
+            return _refuse_cmd(session_dir, "attest", exc.reason, fault=FAULT_INTERNAL,
+                               detail=exc.detail)
+        if exc.reason == "commit-apply-failed":
+            return _refuse_cmd(session_dir, "attest", "attested-receipt-unwritable",
+                               fault=FAULT_INTERNAL, detail=exc.detail)
+        return _commit_refused_response(session_dir, "attest", exc)
+    side_path = prepared.get("path")
     return {"ok": True, "verdict": ATTESTED_VERDICT, "receiptPath": path,
             "attestation": receipt["attestation"], "roster": receipt["roster"],
-            "sidecar": side.get("path")}
+            "sidecar": side_path}
 
 
 def _parse_seat_map(raw):
