@@ -15,7 +15,7 @@
 **Moved.** The panel specialist prompt template now ships as data and is rendered per seat by
 `round_orders.render_order` on each `next` for `dispatch-panel`. The orchestrator **dispatches the
 emitted order file** at `$SESSION_DIR/round-<N>/orders/dispatch-panel/<skey>.a<K>.md` (paths and
-landing shapes: `SKILL.md` §3; emission contract: `reference/round-driver.md` § Emitted orders) —
+landing shapes: `SKILL.md` §3; emission contract: `skills/review-code/reference/round-driver.md` § Emitted orders) —
 do not hand-compose from a fenced template.
 
 The authoritative template body lives at `rubric/orders/dispatch-panel.md` under the plugin

@@ -85,6 +85,32 @@ def check_toc(reference_path):
     return [f"table-of-contents: {rel}: file is >100 lines but does not open with a Contents heading"]
 
 
+# CONVENTIONS §11.4: docs a *dispatched* consumer reads (an implementer or pilot subagent, an
+# external engine) cite a step-body by plugin-relative path instead of pasting its contents. Those
+# readers have no Skill tool and no directory context, so a citation must be self-contained and must
+# resolve — a dangling pointer is the loud half of the trade that makes pointers beat inline copies.
+# Deliberately narrow: only a backticked path under a known plugin top-level dir with a known
+# extension counts, so ordinary prose cannot false-positive.
+_CITATION = re.compile(
+    r"`((?:agents|skills|rubric|reference|lib|templates|hosts|eval)"
+    r"/[A-Za-z0-9._/\-]+\.(?:md|py|json|js))`"
+)
+
+
+def check_citations(rel_label, text, plugin_dir):
+    """Every plugin-relative citation resolves, from the plugin root (§11.4).
+
+    Resolution is plugin-relative ONLY — a sibling-relative citation ("reference/foo.md" written
+    inside some reference/ dir) resolves only for a reader who already knows which directory the
+    text came from, which a dispatched consumer reading the path out of a work order does not.
+    """
+    out = []
+    for rel in dict.fromkeys(_CITATION.findall(text)):
+        if not os.path.exists(os.path.join(plugin_dir, rel)):
+            out.append(f"citation: {rel_label}: unresolved citation {rel}")
+    return out
+
+
 def check_phrases(skill_key, description, required_phrases):
     return [
         f"trigger-phrase: {skill_key}: description no longer contains required phrase {p!r}"
@@ -156,6 +182,30 @@ CONVENTIONS = os.path.join(REPO, "CONVENTIONS.md")
 def _skill_key(path):
     parts = path.split(os.sep)
     return f"{parts[-4]}/{parts[-2]}"
+
+
+# The docs a dispatched consumer reads: agent prompts, the rubric, and the reference/ trees
+# (both the plugin-root one and each skill's). SKILL.md itself is excluded — its ${ROOT}-form
+# references are check_links' job, and its readers hold the skill's own directory context.
+_CITATION_GLOBS = (
+    ("*", "agents", "*.md"),
+    ("*", "rubric", "*.md"),
+    ("*", "reference", "*.md"),
+    ("*", "skills", "*", "reference", "*.md"),
+)
+
+
+def citation_scan_paths(plugins_root):
+    import glob as _glob
+    out = []
+    for parts in _CITATION_GLOBS:
+        out += _glob.glob(os.path.join(plugins_root, *parts))
+    return out
+
+
+def _plugin_dir_of(doc_path, plugins_root):
+    rel = os.path.relpath(doc_path, plugins_root)
+    return os.path.join(plugins_root, rel.split(os.sep)[0])
 
 
 def known_red_ceilings(baseline):
@@ -235,6 +285,12 @@ def main(argv=None):
     import glob as _glob
     for ref in _glob.glob(os.path.join(PLUGINS, "*", "**", "reference", "*.md"), recursive=True):
         errors += check_toc(ref)
+
+    # §11.4: plugin-relative citations resolve, in the docs dispatched consumers read.
+    for doc in sorted(citation_scan_paths(PLUGINS)):
+        plugin_dir = _plugin_dir_of(doc, PLUGINS)
+        with open(doc, encoding="utf-8") as fh:
+            errors += check_citations(os.path.relpath(doc, REPO), fh.read(), plugin_dir)
 
     if errors:
         sys.stderr.write(f"\n✗ {len(errors)} skill problem(s):\n")

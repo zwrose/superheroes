@@ -988,6 +988,41 @@ the two real homes disagreed. A drift test that reads one copy and asserts again
 a hand-typed literal of the same fact is the same tautology; the assertion's right-hand side
 must trace back to the authoritative home (directly, or via the fixture the home also feeds).
 
+### 11.4 Pattern 3 — pointable step-body (the dispatched consumer cites, never copies)
+
+The fact is a **step-body** — an ordered procedure that produces an artifact — and one of its
+consumers is a **dispatched subagent or external engine, which has no Skill tool and cannot reach
+a skill at all**. Patterns 1 and 2 both assume the consumer can read the home or that a test can
+compare two copies; a work order handed to an implementer can do neither, so the step list gets
+**inlined verbatim into the order**, and the inline copy drifts.
+
+**The rule.** A write-path skill's step-body lives at a **pointable reference path** — a file under
+that skill's `reference/` — and the `SKILL.md` step section **points at that file rather than being
+its sole home**. Orders, agent prompts, and dispatch prompts then **cite the path**; they never
+paste the body. One home, one edit.
+
+*Worked example — test-pilot's execution steps.* The eight steps live at
+`skills/test-pilot-execute/reference/execution-steps.md`; `skills/test-pilot-execute/SKILL.md`
+points there, and `agents/pilot.md` — a dispatched subagent with no Skill tool — cites the same
+path instead of restating the interaction-calibration and failure-classification rules, which it
+previously kept as a condensed second copy. (`skills/review-code/reference/setup.md` is the same
+shape arrived at independently.)
+
+**Fail direction — a cited path that does not resolve fails loudly, never silently.** That
+loudness is the whole reason a pointer beats an inline copy: an inline copy that has gone stale
+still reads as authoritative, whereas a dangling pointer is visibly broken. It is enforced on two
+sides. **At order-read time**, the consumer stops and reports rather than substituting memory or a
+guess (`agents/implementer.md`, `agents/pilot.md`). **In CI**, `validate_skills.py`'s
+`check_citations` resolves every plugin-relative citation in the files dispatched consumers read —
+`agents/`, `rubric/`, and the `reference/` trees — and fails the build when one dangles. That check
+found three dangling citations already in the tree when it was introduced.
+
+**Citations are self-contained.** Write the **full plugin-relative path**
+(`skills/guardian/reference/calibration.md`), not a fragment whose meaning depends on the
+surrounding prose ("the guardian skill's `reference/calibration.md`"). A sibling-relative citation
+resolves only for a reader who already knows which directory it was written in — which a dispatched
+consumer, reading the path out of a work order, does not.
+
 ---
 
 ## 12. Verification contracts (fix-ships-its-detector, real-seam tests)

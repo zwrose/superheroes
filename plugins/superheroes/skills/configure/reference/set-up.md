@@ -62,8 +62,8 @@ fail (UFR-4).
 **Guardian** works with zero configuration on plugin defaults — sweeps run even when the owner
 skips the offer. Offer guardian only when the owner wants to tune thresholds or cadence, or to
 confirm owner-toolchain coverage; `guardian.md` is a thin adder for those deviations (empty is
-valid). The `guardian-config` fence shape is in the guardian skill's
-`reference/calibration.md`. An owner who
+valid). The `guardian-config` fence shape is in
+`skills/guardian/reference/calibration.md`. An owner who
 skips guardian still gets working sweeps.
 
 When the owner **explicitly declines** an optional hero (not merely "later"), record it so the

@@ -265,6 +265,77 @@ def test_main_wires_frontmatter_yaml_rule(tmp_path, monkeypatch, capsys):
     assert "p/bad" in captured.err
 
 
+# --- §11.4: plugin-relative citations in the docs dispatched consumers read ---
+
+def test_citations_resolve(tmp_path):
+    os.makedirs(str(tmp_path / "skills" / "guardian" / "reference"))
+    (tmp_path / "skills" / "guardian" / "reference" / "calibration.md").write_text("x")
+    text = "The fence shape is in `skills/guardian/reference/calibration.md`."
+    assert vs.check_citations("agents/pilot.md", text, str(tmp_path)) == []
+
+
+def test_citations_flag_missing_target(tmp_path):
+    text = "Follow `skills/test-pilot-execute/reference/execution-steps.md` before driving."
+    out = vs.check_citations("agents/pilot.md", text, str(tmp_path))
+    assert out and "citation:" in out[0]
+    assert "execution-steps.md" in out[0] and "agents/pilot.md" in out[0]
+
+
+def test_citations_reject_sibling_relative_even_when_the_sibling_exists(tmp_path):
+    # The file exists next to the citing doc, but the citation is not self-contained: a dispatched
+    # consumer reading this path out of a work order has no idea which directory it came from.
+    refdir = tmp_path / "skills" / "review-code" / "reference"
+    os.makedirs(str(refdir))
+    (refdir / "round-driver.md").write_text("x")
+    out = vs.check_citations("skills/review-code/reference/setup.md",
+                             "see `reference/round-driver.md`", str(tmp_path))
+    assert out and "reference/round-driver.md" in out[0]
+
+
+def test_citations_ignore_prose_that_is_not_a_plugin_path(tmp_path):
+    text = ("Run `git status --porcelain`, read `$ROOT_DIR/rubric/review-base.md`, mention "
+            "`docs/superheroes/spec.md` and a bare word like `agents`.")
+    assert vs.check_citations("rubric/x.md", text, str(tmp_path)) == []
+
+
+def test_citations_deduplicate_repeated_path(tmp_path):
+    text = "`lib/gone.py` and again `lib/gone.py`"
+    assert len(vs.check_citations("rubric/x.md", text, str(tmp_path))) == 1
+
+
+def test_citation_scan_covers_dispatched_reader_docs_and_excludes_skill_md(tmp_path):
+    root = tmp_path / "plugins" / "p"
+    for sub in [("agents",), ("rubric",), ("reference",),
+                ("skills", "s", "reference"), ("skills", "s")]:
+        os.makedirs(str(root.joinpath(*sub)), exist_ok=True)
+    root.joinpath("agents", "a.md").write_text("x")
+    root.joinpath("rubric", "r.md").write_text("x")
+    root.joinpath("reference", "f.md").write_text("x")
+    root.joinpath("skills", "s", "reference", "g.md").write_text("x")
+    root.joinpath("skills", "s", "SKILL.md").write_text("x")
+
+    found = {os.path.relpath(p, str(tmp_path / "plugins"))
+             for p in vs.citation_scan_paths(str(tmp_path / "plugins"))}
+    assert found == {
+        os.path.join("p", "agents", "a.md"),
+        os.path.join("p", "rubric", "r.md"),
+        os.path.join("p", "reference", "f.md"),
+        os.path.join("p", "skills", "s", "reference", "g.md"),
+    }
+
+
+def test_main_wires_citation_rule(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path / "plugins")
+    os.makedirs(os.path.join(root, "p", "agents"))
+    with open(os.path.join(root, "p", "agents", "pilot.md"), "w", encoding="utf-8") as fh:
+        fh.write("Read `skills/test-pilot-execute/reference/execution-steps.md`.\n")
+    monkeypatch.setattr(vs, "PLUGINS", root)
+    assert vs.main([]) == 1
+    captured = capsys.readouterr()
+    assert "citation:" in captured.err
+    assert "execution-steps.md" in captured.err
+
+
 def test_main_fails_closed_without_pyyaml(capsys):
     original = vs.yaml
     vs.yaml = None
