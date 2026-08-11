@@ -1099,8 +1099,13 @@ def test_grade_write_report_prose_json_echo_from_order_does_not_false_forfeit():
 def _salvage_prose_residue_splitting_framing_key(key, secret="supersecretvalue1234567890"):
     """Build prose residue where a raw tail slice would amputate the framing key."""
     marker = key + secret
-    suffix_len = EA.ARTIFACT_EXCERPT_BYTES - len(marker) + len(key) + 1
-    return marker + ("y" * suffix_len)
+    suffix_len = EA.ARTIFACT_EXCERPT_BYTES - len(secret)
+    prose = marker + ("y" * suffix_len)
+    # Tail slice must drop exactly len(key) bytes so the secret is wholly intact.
+    assert len(prose.encode("utf-8")) > EA.ARTIFACT_EXCERPT_BYTES
+    excerpt_raw = prose.encode("utf-8")[-EA.ARTIFACT_EXCERPT_BYTES:]
+    assert excerpt_raw.startswith(secret.encode("utf-8"))
+    return prose
 
 
 @pytest.mark.parametrize("key", ["token=", "password=", "api_key="])
