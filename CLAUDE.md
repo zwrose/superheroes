@@ -10,7 +10,10 @@ a catalog (`.claude-plugin/marketplace.json`) listing plugins under `plugins/`.
 - `plugins/superheroes/` — the plugin's components (`agents/`, `skills/`, `rubric/`, `eval/`).
 - `.github/workflows/ci.yml` — validation (manifest checks + pytest).
 - `.github/scripts/validate_marketplace.py` — catalog/manifest validator.
-- `docs/` — internal design docs and plans. **Gitignored**, kept local only.
+- `docs/` — internal design docs and plans. **Gitignored**, kept local only — **except
+  `docs/superheroes/`**, the committed home of definition-docs (specs and their work-item
+  folders: coverage maps, contract registers, package-read audit trails; doc-policy
+  confirmed 2026-08-08, owner-ruled: visibility `committed`, calibration stays out-of-repo).
 
 ## Keeping the docs fresh
 

@@ -620,6 +620,17 @@ above).
    acceptance onto the batch report, so a weaker-guarantee slot **reads visibly weaker** in the
    owner-facing count. It is deliberately a record and not a boolean so it cannot be dropped
    silently.
+   **The account-class tripwire is yours at provisioning.** A slot whose credential set spans more
+   than one declared account class refuses, and a credential-set account with no declared class
+   refuses too — both are §14's accepted-limit conditions made mechanical. There is deliberately
+   **no acceptance record** for these, unlike the weaker-identity gate: §14 states the condition
+   unconditionally, so a slot that trips it is fixed in policy, not accepted. Read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (The provisioning gate) for
+   the refusal contract — do not restate the mechanism here.
+   **Ownership-probe residue never reads as covered.** Where a project declares an ownership probe,
+   the conformance run exercises it per account, but a passing probe is a point-in-time subclaim.
+   An account quietly accumulating data over time is **not** something the framework detects, and
+   that residue rides with the owner — surface it; it never reads as covered.
    **Policy is enforced here and never travels.** What reaches the builder is a verified **result**;
    the builder never holds the policy it was judged against, so there is no file in its reach to
    edit and the rules it was judged against cannot be changed after the judging. The ledger entry
@@ -629,6 +640,12 @@ above).
    **The launcher carries the slot.** When a launch belongs to a wave, supply the slot and generation
    (and the composed boundary result) to the launcher so the ledger records which slot a lane ran in;
    a wave launch recorded without its slot is a batch report that cannot answer "which slot failed".
+   The launcher now **refuses** a parallel launch on a slot-calibrated project when a lane carries no
+   reservation, naming the missing lanes and the command shape in the refusal. A lane already live
+   without a slot must be driven to a terminal outcome and relaunched — slot metadata cannot be
+   amended onto an existing reservation. Read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` for the trigger and refusal
+   contract.
 
 ## When you're tempted
 

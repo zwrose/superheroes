@@ -7,8 +7,11 @@ __pycache__/
 .pytest_cache/
 .venv/
 
-# Internal design docs — kept local, not published
-docs/
+# Internal design docs stay local — EXCEPT definition-docs (specs + work-item folders),
+# which are committed (doc-policy confirmed 2026-08-08: docs/superheroes, visibility committed).
+# `docs/*` + negation rather than `docs/` because git cannot re-include under an excluded dir.
+docs/*
+!docs/superheroes/
 
 # Python test/coverage artifacts
 .coverage
