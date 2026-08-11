@@ -256,6 +256,27 @@ implementer path and not review-code's in-place fixer path. `BASH_MAX_TIMEOUT_MS
 premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)**; this change sets it
 nowhere.
 
+### Write-report contract
+
+On every `dispatch-write` call, the runner **appends** a write-report contract to the caller's
+prompt — the caller does not author it and cannot opt out. It is **additional to** the prose receipts
+the order asks for, never a replacement: the engine still returns those receipts, then ends with a
+sentinel line (`<<<SUPERHEROES-WRITE-REPORT>>>`) followed by exactly one JSON object as the final
+line of output.
+
+**Field semantics.** `ok: true` means the engine ran the order to completion **as specified** — it
+is **not** an acceptance verdict, and the implementer never marks its own work done. `ok: false`
+carries `signal` of `"plan_wrong"` (the order's premise is wrong) or `"needs_context"` (anything
+else). `evidence.testFailed` / `evidence.testPassed` report whether a test was **observed** failing
+/ passing during that attempt.
+
+**Grading is strict, and keyed to the prompt.** When the runner contracted the prompt, a report is
+recognised only as an exact final tail — the sentinel alone on its line, exactly one JSON object
+after it, nothing but whitespace to the end. No such report means `unreadable`; the runner does
+**not** fall back to scanning the whole stream for any JSON object, because that scan is what
+produced the false `needs_context` refusals. Prompts the runner did not contract keep the old
+behaviour.
+
 **Declared items (`--expect-item`, `--expect-items-file`).** Repeatable flags union with the file
 (one path per line; `#` comments and blank lines ignored). At open time the runner normalizes paths,
 captures a per-path `baselineDirty` identity map for any pre-existing dirty files, and persists
@@ -264,11 +285,19 @@ membership check compares the declared set against the final diff; it can **down
 a forfeit but never upgrade or relabel a failure. When nothing was declared, behaviour is unchanged:
 no `baselineDirty` capture, no `itemCheck` key. When declared, a passing result includes
 `itemCheck` (`declared`, `expected`, `delivered`, `missing`). Terminal detail tokens:
-`items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`) and
-`item-evidence-unavailable:<cause>` (git evidence could not be collected — causes include
-`falsy-base-sha`, `diff-timeout`, `diff-failed`, `status-timeout`, `status-failed`). Open-time
-`unrunnable` detail `base-sha-unresolvable` refuses when a declared run's `--base-sha` does not
-resolve. Other forfeits, `unrunnable`, and `worktree-dirtied-by-attempt` never carry `itemCheck`.
+`items-undelivered` (one or more paths missing; this forfeit **does** carry `itemCheck`);
+`report-missing-items-delivered` (the attempt ended cleanly — exit 0, not timed out, not refused — on
+a contracted prompt with no readable report, a **non-empty** declared set via `--expect-item` /
+`--expect-items-file`, and **every** declared path present in the delivery evidence; this forfeit
+**does** carry `itemCheck` with all paths delivered); and `item-evidence-unavailable:<cause>` (git
+evidence could not be collected — causes include `falsy-base-sha`, `diff-timeout`, `diff-failed`,
+`status-timeout`, `status-failed`). Open-time `unrunnable` detail `base-sha-unresolvable` refuses
+when a declared run's `--base-sha` does not resolve. A dispatch that declares nothing cannot earn
+`report-missing-items-delivered` and keeps the ordinary fail-closed details (`worktree-dirtied-by-attempt`
+and the rest) — declaring items is what buys the distinction. Other forfeits, `unrunnable`, and
+`worktree-dirtied-by-attempt` never carry `itemCheck`. Every forfeit detail above remains `ok: false`,
+`forfeited: true` — `report-missing-items-delivered` renames a condition; it never converts a forfeit
+into a success.
 
 Evidence is the union of `git diff --name-status -z -M <baseSha>` against the **working tree**
 (not `HEAD`, so a path committed and then reverted is not credited) plus on-disk paths from
@@ -278,22 +307,29 @@ Rename/copy records contribute both the old and new paths.
 This is **final-diff membership, not proof of engine authorship**: it cannot distinguish created from
 modified; a create-then-delete leaves no evidence and reads as missing; a concurrent writer could
 supply a path. A file that was already dirty before the run and unchanged afterward is not credited
-as delivered.
+as delivered. `report-missing-items-delivered` rides this same evidence and inherits **exactly** its
+limits: it proves declared paths **changed** (membership in the final diff), not authorship,
+completeness, or that the order's intent was met. Its purpose is to tell an orchestrator **not to
+re-run work that already landed** — reconstruct the change from the diff and re-verify it, never
+assume the order is done.
 
 When a terminal write result includes `salvage`, it carries a recoverable implementer report from an
-ended attempt's stdout. The outcome remains a forfeit; its contents are the implementer's claims and
-must be independently re-verified before use. Write salvage has two tiers: a structured report is
-gradeable only after that independent verification, while a prose-tier block has
-`requiresManualRead: true` and a scrubbed `excerpt` for a human or orchestrator to read. Prose is a
-pointer, never a gradeable report.
+ended attempt's stdout — the contracted final tail when the runner appended the write-report contract,
+or a prose tier when strict tail grading could not extract structured JSON. The outcome remains a
+forfeit; its contents are the implementer's claims and must be independently re-verified before use.
+Write salvage has two tiers: a structured report is gradeable only after that independent
+verification, while a prose-tier block has `requiresManualRead: true` and a scrubbed `excerpt` for a
+human or orchestrator to read. Prose is a pointer, never a gradeable report.
 
 ## Engine forfeits and order shape
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
 on-disk work already complete and correct. Field evidence: three builds in one wave; in one of them
-four of six dispatches forfeited, every one with correct files on disk. **Inspect the worktree before
-discarding or re-dispatching** — "inspect the diff" alone is not a decision rule:
+four of six dispatches forfeited, every one with correct files on disk. A
+`report-missing-items-delivered` forfeit is the same class: work landed, the contracted report did
+not. **Inspect the worktree before discarding or re-dispatching** — "inspect the diff" alone is not a
+decision rule:
 
 - **What the tree inspection establishes.** Before dispatching, the build worktree must be **clean** —
   `git status --porcelain` empty, with landed work already committed. This reference makes that
