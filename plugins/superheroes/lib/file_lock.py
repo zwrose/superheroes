@@ -19,8 +19,9 @@ already gone, and on a lock whose holder is the only worker (engine_dispatch's
 `run.lock`) that delay is pure re-attach latency. It is opt-in, not the default,
 because some locks guard a resource a child process keeps using after the holder
 dies (engine_dispatch's worktree lease) — there, holder death alone is not evidence
-the resource is free, and those call sites keep the TTL wait. The refusal to reclaim
-a LIVE holder is unconditional either way.
+the resource is free, and those call sites keep the TTL wait. For a SAME-HOST holder
+the refusal to reclaim a LIVE one is unconditional under either setting; a foreign-host
+holder's protection is its TTL, per the paragraph above.
 """
 import calendar
 import errno
@@ -175,7 +176,8 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     if status == "unusable" or _holder_fields_unusable(holder):
         return _malformed_past_grace(lock_path, now)
     h = holder
-    # Three categories, and they are not the same. SAME HOST: everything below is grounded —
+    # Two categories from here on (a malformed holder was settled above), and they are not
+    # the same. SAME HOST: everything below is grounded —
     # our pid namespace is the holder's, so death is provable and the reboot check means what
     # it says. FOREIGN HOST: `host` is not a machine identity (a laptop changing networks
     # renames itself mid-run, #953), but neither is it evidence of a shared pid namespace —
@@ -271,7 +273,8 @@ def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
     """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
 
     `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
-    TTL (#862); a live holder still raises LockHeld.
+    TTL (#862); a live holder on THIS host still raises LockHeld (a foreign-host holder is
+    protected by its TTL instead — see the module docstring).
 
     Raises only LockHeld — never propagates OSError from publish or directory setup."""
     try:

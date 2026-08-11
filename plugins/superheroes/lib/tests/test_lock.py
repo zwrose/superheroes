@@ -757,9 +757,13 @@ def test_cross_host_holder_inside_ttl_stays_protected(tmp_path):
         lock.acquire(p)
 
 
-def test_cross_host_live_pid_is_never_reclaimed_even_past_ttl(tmp_path):
-    """Fail direction (#953 scope 4): the widening may only reclaim genuinely dead
-    holders. A live pid blocks reclaim across a host mismatch exactly as it does at home."""
+def test_cross_host_live_local_pid_brakes_reclaim_even_past_ttl(tmp_path):
+    """The pid probe is kept across a host mismatch as a brake: a recorded pid that IS live
+    in our namespace refuses reclaim however long the TTL has been up.
+
+    What this does NOT prove — and cannot, since the probe reads only our own namespace — is
+    that an arbitrary live foreign holder is protected past its TTL. It is not; see
+    `test_expired_foreign_holder_reclaims_on_the_ttl_alone` for that accepted trade."""
     _assert_other_host_differs()
     p = str(tmp_path / "engine.lock")
     lock.acquire(p)
@@ -781,23 +785,31 @@ def test_cross_host_ignores_the_fast_path_however_the_boot_ids_compare(tmp_path,
     `btime` while differing in hostname AND pid namespace; two hosts can boot in the same
     second). Across a host mismatch the TTL wait is mandatory whatever the boot ids say."""
     _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:1786231679")
     p = str(tmp_path / "engine.lock")
-    lock.acquire(p)                                        # holder carries THIS boot's id
+    lock.acquire(p)
     _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
+    # pinned, not assumed: an environment where boot_id() is None would leave both sides
+    # uncorroborated and the equal-id branch below would pass without exercising anything.
+    assert lock.read_holder(p)["bootId"] == "boottime:sec:1786231679"
     assert lock.is_stale(p, reclaim_dead_holder=True) is False        # boot ids EQUAL
     monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
     assert lock.is_stale(p, reclaim_dead_holder=True) is False        # boot ids DIFFERENT
 
 
-def test_equal_boot_ids_do_not_expose_a_foreign_namespace_holder(tmp_path):
+def test_equal_boot_ids_do_not_expose_a_foreign_namespace_holder(tmp_path, monkeypatch):
     """The round-2 review case: hostname differs, boot ids are equal, and the recorded pid
     is absent in the reader's namespace — two containers on one kernel sharing a lock path.
     Inside its TTL that holder stays protected; equal boot ids must not be read as proof
     that the reader may probe the holder's pid."""
     _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:1786231679")
     p = str(tmp_path / "engine.lock")
-    lock.acquire(p)                                        # holder carries THIS boot's id
+    lock.acquire(p)
     _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
+    # the equality this regression turns on is pinned, not inherited from the environment:
+    # boot_id() may legitimately return None, and None never corroborates.
+    assert lock.read_holder(p)["bootId"] == "boottime:sec:1786231679"
     assert lock.is_stale(p) is False
     assert lock.is_stale(p, reclaim_dead_holder=True) is False
     with pytest.raises(lock.LockHeld):
