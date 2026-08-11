@@ -1888,7 +1888,8 @@ def test_write_contracted_report_success_end_to_end(tmp_path):
     assert res["itemCheck"]["missing"] == []
 
 
-def _report_missing_base_state(tmp_path, wt, *, expected_items=None, fed_prompt=None):
+def _report_missing_base_state(tmp_path, wt, *, expected_items=None, fed_prompt=None,
+                               deliver_expected_items=True):
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     wt_real = os.path.realpath(wt)
@@ -1908,6 +1909,14 @@ def _report_missing_base_state(tmp_path, wt, *, expected_items=None, fed_prompt=
     }
     if expected_items:
         opened["baselineDirty"] = ED._baseline_dirty_map(wt_real, expected_items) or {}
+        if deliver_expected_items:
+            for item in expected_items:
+                target = os.path.join(wt_real, item)
+                parent = os.path.dirname(target)
+                if parent:
+                    os.makedirs(parent, exist_ok=True)
+                with open(target, "w", encoding="utf-8") as fh:
+                    fh.write("new\n")
     state = {
         "opened": opened,
         "attempts": {
@@ -1989,6 +1998,7 @@ def test_report_missing_classifier_clause5_missing_path_not_emitted(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir, state = _report_missing_base_state(
         tmp_path, wt, expected_items=["missing.txt"],
+        deliver_expected_items=False,
     )
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 

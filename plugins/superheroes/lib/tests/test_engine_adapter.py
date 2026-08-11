@@ -875,19 +875,13 @@ def test_salvage_write_report_recovers_real_dispatch_prose_for_manual_read():
     # axis: C1 prose recovery — the measured forfeited artifact must not be written off as garbage.
     salvage = EA.salvage_write_report("codex", "build", _DISPATCH_1_PROSE, "fed prompt")
     prose_bytes = _DISPATCH_1_PROSE.encode("utf-8")
-    if len(prose_bytes) > EA.ARTIFACT_EXCERPT_BYTES:
-        excerpt_raw = prose_bytes[-EA.ARTIFACT_EXCERPT_BYTES:]
-        truncated = True
-    else:
-        excerpt_raw = prose_bytes
-        truncated = False
-    expected_excerpt = EA._scrub(excerpt_raw.decode("utf-8", errors="ignore"))
+    truncated = len(prose_bytes) > EA.ARTIFACT_EXCERPT_BYTES
     assert salvage == {
         "report": None,
         "structured": False,
         "requiresManualRead": True,
-        "excerpt": expected_excerpt,
-        "excerptBytes": len(excerpt_raw),
+        "excerpt": _DISPATCH_1_PROSE_REDACTED,
+        "excerptBytes": len(_DISPATCH_1_PROSE_REDACTED.encode("utf-8")),
         "salvaged": True,
         "truncated": truncated,
     }
@@ -1084,6 +1078,48 @@ def test_grade_write_report_rejects_prompt_decodable_example():
     assert res == {"ok": False, "reason": "unreadable"}
 
 
+def test_grade_write_report_prose_json_echo_from_order_does_not_false_forfeit():
+    fed_prompt = (
+        'Order: create a config file containing {"name": "widget", "enabled": true}\n'
+        + EA.WRITE_REPORT_CONTRACT
+    )
+    tail = (
+        EA.WRITE_REPORT_SENTINEL
+        + '\n{"ok": true, "signal": "ok", "evidence": {"testFailed": false, "testPassed": true}}'
+    )
+    stdout = (
+        'I created the config as specified: {"name": "widget", "enabled": true}\n'
+        "All tests pass.\n"
+        + tail
+    )
+    res = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    assert res.get("ok") is True
+
+
+def _salvage_prose_residue_splitting_framing_key(key, secret="supersecretvalue1234567890"):
+    """Build prose residue where a raw tail slice would amputate the framing key."""
+    marker = key + secret
+    suffix_len = EA.ARTIFACT_EXCERPT_BYTES - len(marker) + len(key) + 1
+    return marker + ("y" * suffix_len)
+
+
+@pytest.mark.parametrize("key", ["token=", "password=", "api_key="])
+def test_salvage_write_report_prose_excerpt_scrubs_split_framing_keys(key):
+    secret = "supersecretvalue1234567890"
+    stdout = _salvage_prose_residue_splitting_framing_key(key, secret)
+    salvage = EA.salvage_write_report("codex", "build", stdout, "fed prompt")
+    assert salvage is not None
+    assert secret not in salvage["excerpt"]
+
+
+def test_salvage_write_report_prose_excerpt_still_scrubs_shape_bearing_token():
+    secret = "ghp_" + ("a" * 36)
+    stdout = _salvage_prose_residue_splitting_framing_key("token=", secret)
+    salvage = EA.salvage_write_report("codex", "build", stdout, "fed prompt")
+    assert salvage is not None
+    assert secret not in salvage["excerpt"]
+
+
 def test_write_report_contract_has_no_extractable_report():
     got = EA.extract_write_report(EA.WRITE_REPORT_CONTRACT)
     assert got is None, (
@@ -1158,9 +1194,10 @@ def test_write_prompt_is_contracted():
 
 
 def test_salvage_write_report_prose_excerpt_carries_tail_when_report_follows_signoff():
-    signoff = "Thanks for reading.\n" * 50
+    signoff = "Thanks for reading.\n" * 3
     report_json = '{"ok": true, "signal": "ok", "evidence": {"testFailed": false, "testPassed": true}}'
-    stdout = ("Long enough prose for salvage.\n" * 20) + EA.WRITE_REPORT_SENTINEL + "\n" + report_json + "\n" + signoff
+    stdout = ("Long enough prose for salvage.\n" * 80) + EA.WRITE_REPORT_SENTINEL + "\n" + report_json + "\n" + signoff
+    assert len(stdout.encode("utf-8")) > EA.ARTIFACT_EXCERPT_BYTES
     salvage = EA.salvage_write_report("codex", "build", stdout, "fed prompt")
     assert salvage is not None
     assert salvage["structured"] is not True

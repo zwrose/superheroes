@@ -383,14 +383,13 @@ def grade_write_report(engine, role_kind, stdout, fed_prompt):
             stripped = ""
         stripped = stripped.replace(WRITE_REPORT_CONTRACT, "")
         if write_prompt_is_contracted(prompt):
-            stripped_objects = _top_level_json_matches(stripped, dict)
-            prompt_objects = _top_level_json_matches(prompt, dict)
-            if any(residue_object[0] == prompt_object[0]
-                   for residue_object in stripped_objects
-                   for prompt_object in prompt_objects):
-                return {"ok": False, "reason": "unreadable"}
             obj = extract_write_report(stripped)
-            if obj is None:
+            # Prompt-example guard applies only to the extracted tail object, not prose
+            # elsewhere in the output. Safe because the contract's example is non-decodable
+            # (test_write_report_contract_has_no_extractable_report), and the tail must
+            # carry the sentinel and satisfy strict grammar.
+            if obj is None or any(obj == prompt_object[0]
+                                  for prompt_object in _top_level_json_matches(prompt, dict)):
                 return {"ok": False, "reason": "unreadable"}
             return _grade_build_report_obj(obj)
         return parse_result(engine, role_kind, stdout)
@@ -680,7 +679,8 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
     """Recover a build/fix implementer's report from raw engine stdout. Never raises.
 
     In the prose tier, `truncated` means the manual-read excerpt was capped by byte length
-    (the excerpt carries the tail of the residue, where the report usually lives).
+    on the scrubbed residue (the excerpt carries the tail of the scrubbed text, where the
+    report usually lives). `excerptBytes` counts bytes from that scrubbed tail slice.
     """
     try:
         if role_kind == "review" or not isinstance(stdout, str) or not stdout.strip():
@@ -731,17 +731,18 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
                 _artifact_is_prompt_echo_residue(residue, prompt) or
                 _artifact_is_traceback_residue(residue)):
             return None
-        residue_encoded = residue.encode("utf-8")
-        truncated = residue_bytes > ARTIFACT_EXCERPT_BYTES
+        residue_scrubbed = _scrub(residue)
+        residue_scrubbed_encoded = residue_scrubbed.encode("utf-8")
+        truncated = len(residue_scrubbed_encoded) > ARTIFACT_EXCERPT_BYTES
         if truncated:
-            excerpt_raw = residue_encoded[-ARTIFACT_EXCERPT_BYTES:]
+            excerpt_raw = residue_scrubbed_encoded[-ARTIFACT_EXCERPT_BYTES:]
         else:
-            excerpt_raw = residue_encoded
+            excerpt_raw = residue_scrubbed_encoded
         return {
             "report": None,
             "structured": False,
             "requiresManualRead": True,
-            "excerpt": _scrub(excerpt_raw.decode("utf-8", errors="ignore")),
+            "excerpt": excerpt_raw.decode("utf-8", errors="ignore"),
             "excerptBytes": len(excerpt_raw),
             "salvaged": True,
             "truncated": truncated,
