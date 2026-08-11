@@ -19,9 +19,12 @@ obeys. `$ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`.
 Round 1 is always a full `reviewer-deep` baseline panel. Rounds 2+ are **delta rounds**: fix
 audits over the just-fixed findings plus a scoped finder over the fix's new surface — a full panel
 runs again only on the #174 re-arm triggers (Critical surfaced since the last qualifying panel, or
-cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). The
-orchestrator never plans, records, or decides continuation by eye — it calls `next`, dispatches
-exactly one action, and `submit`s the artifact.
+cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). On
+the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
+calls `next`, dispatches the emitted order (or fulfills a gate action), and `submit`s the
+artifact. **Prose-driven review** on the read-only paths (`--post`, `--review-only`) is a different
+lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
+is not governed by this loop contract.
 
 Degraded / single-vendor environments stay **on** the mandated path: the same driver, the same
 journal, and `independence: "degraded"` stamps on audit targets and the terminal certification
@@ -50,6 +53,12 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
 `next` that passes it is refused with `diff-path-not-fresh-state` — check raw stdout and the
 driver journal; the driver does not crash.
 
+**Why session-birth only.** The first `next` binds the round-1 diff artifact into session state
+(`config.diff`, `reviewedDiff`, and the base-guard stat binding). Rounds 2+ regenerate the diff
+from the shell per `SKILL.md` Setup; the driver refuses a later `--diff-path` because swapping the
+round-1 artifact mid-session would break the pin/stat contract the base guard stamped at birth.
+Same discipline as `--vendors` / `--fixer-vendor` on non-fresh state.
+
 After fulfilling the emitted action, fold the artifact:
 
 ```bash
@@ -70,6 +79,52 @@ step and hash. An exact duplicate `submit` (same phase/attempt/artifact) returns
 Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit` to
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
 `$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
+
+## Emitted orders
+
+Every `next` whose `phase` starts with `dispatch-` emits, atomically in one `orders-emit` commit:
+
+- one **order file** per roster slot (`round_orders.render_order` over `rubric/orders/<phase>.md`);
+- one **envelope stub** per slot (`seat-result/1` header fields knowable at emission — session,
+  round, phase, seat, attempt, vendor, model, `dispatchRef`, `orderSha256`, `manifestSha256` — but
+  not `recordedAt` / `payloadSha256`);
+- an **orders manifest** listing every slot's `orderPath`, `envelopeStubPath`, and hashes.
+
+Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
+
+| Artifact | Path |
+| --- | --- |
+| Order | `$SESSION_DIR/round-N/orders/P/skey.aK.md` |
+| Envelope stub | `$SESSION_DIR/round-N/orders/P/skey.aK.envelope.json` |
+| Manifest | `$SESSION_DIR/round-N/orders/P/manifest.aK.json` |
+
+**Landing shapes** (`round_records.ingest_landing`):
+
+| Seat kind | Landing path | What the seat writes |
+| --- | --- | --- |
+| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | Full `seat-result/1` envelope (stub header + payload) |
+| **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest |
+
+Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
+stub header fields verbatim and never recompute hashes.
+
+The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
+`orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
+they disagree).
+
+**Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
+The driver writes these in the `orders-emit` commit when it emits dispatch orders:
+`round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`, `round-<N>/scoped-hunks.json`,
+and `round-<N>/verified.json` (phase-dependent — see `_order_sidecar_writes`). When
+`round-<N>/diff.txt` is absent or its bytes do not match loop state (`reviewedDiff`),
+`_ensure_round_diff` writes it via `round_commit.atomic_write_bytes` (atomic tmp+rename) —
+outside the `orders-emit` commit, not inside it. The orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
+`setup.md`'s session-artifact table). The orchestrator must write these **before** dispatching a
+fixer, audits, or scoped order: `round-<N>/fix-batch.json` (the review-code loop's session-artifact
+table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders — it is
+**not** produced by the driver; the orchestrator must write it before dispatching those phases (the
+driver only names the path in rendered orders). The driver never creates `head.diff` or
+`fix-batch.json`.
 
 ## Base guard
 

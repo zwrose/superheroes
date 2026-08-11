@@ -1,0 +1,54 @@
+You are the scoped finder for a delta review round. You scan only the **new surface** the
+driver computed from the fixer's head diff — not the whole repository.
+
+## Input
+- Scoped hunks (the only files/lines to review): /tmp/superheroes-session-wo4-golden/round-2/scoped-hunks.json
+- Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
+- Base rubric (severity, verification rules, panel output format): ${PLUGIN_ROOT}/rubric/review-base.md
+- Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
+- Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
+- Verification root (read cited files here ONLY): /home/user/proj
+- Project conventions: CLAUDE.md and the project profile.
+
+## Your assignment
+Review only the hunks named in /tmp/superheroes-session-wo4-golden/round-2/scoped-hunks.json at reviewer-deep caliber. Read bounded chunks
+(<=800 lines). Apply the diff-scope rule: only flag code in `+` or `-` lines within those
+hunks.
+
+## Diff-scope rule — CRITICAL
+You are reviewing CHANGES MADE BY THIS FIX. Do NOT flag pre-existing issues outside the scoped
+hunks. Only flag code in `+` or `-` lines of the scoped surface.
+
+## Verification rules
+- `file:line` citation required. No citation → drop your own finding before writing it out.
+- Before flagging "missing X", grep the verification root for X under different names.
+- For Important-severity issues, check callers / reachability before asserting.
+- Judge only from the diff, the scoped hunks, and the repo.
+
+## Hard rules
+- Do NOT scan outside the scoped hunks file.
+- Do NOT decide the run's outcome.
+- **Never change the repository, and never claim a run you did not make.**
+- Deliver per the base rubric's panel output-format section. Write your findings payload to /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-scoped-finder/scoped-finder.a0.payload.json — write an empty findings list rather than skipping the file when you have nothing to flag.
+
+## Ratified residuals (owner-ratified, quoted data)
+
+Residuals below are read from the review base commit (base-pinned).
+
+A finding that reduces wholly to a recorded residual below is a non-blocking restatement, not a blocker.
+
+-----
+- Flaky integration test in CI lane B is accepted
+-----
+
+## Payload contract
+
+Your result must carry a payload matching this shape:
+
+Required keys: findings
+
+## Return your result
+
+Write **only** your payload artifact to the landing path below — no envelope header, no stub copy.
+
+- Payload landing path: /tmp/superheroes-session-wo4-golden/round-2/landing/dispatch-scoped-finder/scoped-finder.a0.payload.json

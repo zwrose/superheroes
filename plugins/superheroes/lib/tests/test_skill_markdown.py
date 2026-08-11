@@ -88,9 +88,15 @@ def test_rule2_no_literal_existence_test_in_review_skills():
     assert not offenders, "literal existence test still present:\n" + "\n".join(offenders)
 
 
+def _dispatch_prompt_path(rel_path):
+    if rel_path.startswith("rubric/"):
+        return f"plugins/superheroes/{rel_path}"
+    return f"plugins/superheroes/skills/{rel_path}"
+
+
 def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
     cases = {
-        "review-code/reference/auto-fix-loop.md": ("## Your assignment", "## Context files", (
+        "rubric/orders/dispatch-panel.md": ("## Your assignment", "## Context files", (
             "diff.txt",
             "offset/limit",
             "bounded shell",
@@ -116,7 +122,7 @@ def test_review_dispatch_prompts_require_bounded_session_artifact_reads():
     missing = []
     for rel_path, (heading, next_heading, needles) in cases.items():
         text = _section(
-            _read_repo(f"plugins/superheroes/skills/{rel_path}"),
+            _read_repo(_dispatch_prompt_path(rel_path)),
             heading,
             next_heading,
         ).lower()

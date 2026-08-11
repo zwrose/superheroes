@@ -12,83 +12,19 @@
 
 ## Specialist Dispatch Prompt Template
 
-Each specialist receives the same prompt template, parameterized by reviewer name, dimension label, findings filename, and delivery channel. Before dispatch, keep **exactly one** of the two mutually-exclusive channel lines in the `## Output` block and delete the other — keyed on the seat's assigned vendor: a `claude` seat is file-channel; a `codex`/`cursor` seat is stdout-channel (read-only sandbox). Embed the **absolute** base-rubric path (the expanded value of `RUBRIC`), `$CORE` (threat model + canonical patterns), and `$LAYER` (scope, focus, conventions). When both point at the same legacy file, read all sections from that path. Subagents do not inherit shell vars.
+**Moved.** The panel specialist prompt template now ships as data and is rendered per seat by
+`round_orders.render_order` on each `next` for `dispatch-panel`. The orchestrator **dispatches the
+emitted order file** at `$SESSION_DIR/round-<N>/orders/dispatch-panel/<skey>.a<K>.md` (paths and
+landing shapes: `SKILL.md` §3; emission contract: `reference/round-driver.md` § Emitted orders) —
+do not hand-compose from a fenced template.
 
-```
-You are reviewing <mode> for repo <repo>, target <pr-or-branch>.
+The authoritative template body lives at `rubric/orders/dispatch-panel.md` under the plugin
+root. The driver fills placeholders (`{{DIFF_PATH}}`, `{{RUBRIC_PATH}}`, channel blocks,
+ratified residuals, payload contract, landing instructions) before you dispatch.
 
-## Your assignment
-Review the diff at $SESSION_DIR/round-<round>/diff.txt for your dimension.
-Read `diff.txt` in bounded chunks (<=800 lines): use Read offset/limit when
-available, or an equivalent bounded shell range. Never one whole-file read.
-Continue with later offsets until the diff is covered.
-Read the base rubric (absolute path below) for severity calibration,
-verification rules, and the findings output format. Read the project calibration
-and CLAUDE.md for threat model, scope, focus hints, canonical patterns, and
-conventions. Apply the diff-scope rule: only flag code in `+` or
-`-` lines.
-
-## Context files
-- Diff: $SESSION_DIR/round-<round>/diff.txt
-- Base rubric (severity, verification rules, findings format): <absolute RUBRIC path>
-- Core calibration (threat model, canonical patterns): <CORE_PATH>
-- Review-crew layer (scope exclusions, focus hints, conventions): <LAYER_PATH>
-- CLAUDE.md (project conventions): CLAUDE.md
-- <PR read-only paths only> PR branch checkout: $SESSION_DIR/repo/
-- <PR mode only> Prior comments + author justifications: $SESSION_DIR/prior-comments.json
-- <if focus notes> Focus: <focus notes>  <!-- mechanical focus flags from focus_flags.py are appended here too (additions only) — see "Mechanical focus flags" below -->
-
-## Calibration precedence
-Base rubric (binding) > CLAUDE.md (conventions) > core + layer (adder over CLAUDE.md)
-> strict fallback when a needed field is absent in all of them.
-
-## PR branch checkout (--post / --review-only PR paths only)
-On the read-only PR paths the PR branch is checked out at $SESSION_DIR/repo/.
-This is the ONLY source of truth for verifying code. Use Read, Grep, and Glob
-against this directory, NOT the main repo working directory — it may be on a
-different branch with stale or missing code. (On the auto-fix loop there is no
-detached checkout: the PR branch IS the current working tree, so verify against
-the working tree directly.)
-
-## Diff-scope rule — CRITICAL
-You are reviewing CHANGES MADE BY THIS PR/BRANCH. Do NOT flag pre-existing
-issues. Only flag code in `+` or `-` lines of the diff. Context lines
-(no prefix) and unchanged code in modified files are pre-existing — SKIP
-them, even if they violate conventions. That's the #1 source of false
-findings.
-
-## Verification rules
-- `file:line` citation required. No citation → drop your own finding
-  before writing it out.
-- Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
-  for X under different names. Don't flag a missing helper that exists
-  under a slightly different name.
-- For Important findings, check callers / reachability before asserting.
-  If the only caller already guards the edge case, downgrade or drop.
-- For docs/spec changes, spot-check factual claims (function signatures,
-  error types, file paths) against actual source.
-
-## Author-justification rule (PR mode only)
-$SESSION_DIR/prior-comments.json contains prior review comments and their
-threads. If a previous review flagged a finding and the author replied
-with substantive explanatory text (not just "ok" or an emoji) explaining
-why it's intentional, **raise the finding AND note the prior justification**
-in the body — do NOT silently omit it. The **post-verification**
-author-justification filter (after `verification.merge_and_rank`) owns the
-drop decision: it may drop only a non-CONFIRMED finding (quoting the
-justification); a CONFIRMED finding survives stamped
-`challenge: "author-justified"`. Outdated comments (where
-`position == null`) still count.
-
-## Output
-Delivery is per the base rubric's "Findings output format" section. Set `tradeoff:
-true` only when a finding has multiple valid fix approaches (a judgment call);
-omit it otherwise (see the base rubric's "Triage rubric"). Set `dimension` to
-"<dimension>" on every entry. Severity caps from the base rubric apply (Nits at
-most 5 reported per agent).
-<file channel only — delete the stdout channel line> Write the JSON array to $SESSION_DIR/round-<round>/findings-<agent>.json — write `[]` rather than skipping the file when you have nothing to flag.
-<stdout channel only — delete the file channel line> Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing after it; do not write a findings file (read-only sandbox — nothing reads one).
-```
+Before dispatching a `codex`/`cursor` seat, confirm the rendered order's delivery channel matches
+the seat's vendor (stdout vs file) — the driver derives the channel block from the seat map; you
+still choose the dispatch mechanism (`dispatch-review` vs native subagent) per the blocks below.
 
 ## Mechanical focus flags
 
@@ -113,7 +49,9 @@ never drop a finding or a lens.
 > **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its findings on **stdout** rather than writing the
-> findings file. The contract shape lives in the base rubric's "Findings output format" section; the
+> findings file. The required stdout shape is `{"findings": [...], "investigated": [...]}` — a seat
+> that omits `investigated` forfeits vacuously. The contract shape also lives in the base rubric's
+> "Findings output format" section; the
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
 > top-level JSON value**, so incidental trailing prose after a valid object is tolerated. An **empty**

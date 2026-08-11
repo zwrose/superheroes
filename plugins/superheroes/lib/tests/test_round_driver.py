@@ -772,6 +772,13 @@ def test_audit_results_fault_pure():
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
+def test_submit_verifiers_empty_verdicts_accepted(tmp_path):
+    """Fail-closed edge 6: an empty verdict list is a legitimate outcome."""
+    d, n = _at(tmp_path, RD.P_VERIFIERS)
+    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                         {"verdicts": []})["ok"] is True
+
+
 def test_new_issues_usability_agrees_with_the_running_fold():
     """What the guard ACCEPTS is what the fold can USE — proven by running `apply_audit_results`
     itself, never by re-asserting `has_usable_new_issues` against its own callee.
@@ -3340,6 +3347,18 @@ _TRADEOFF = {"title": "widen the API", "severity": "Important",
 # The judgment disposition key is the per-LOCATION id (line-less finding_identity + line) so two
 # same-title tradeoff blockers at different lines never collide (#507 R2 v5).
 _TRADEOFF_ID = "f.py::widen the api@L1"
+
+
+def test_judgment_payload_rows_carry_single_classification_literal():
+    """Every present-judgment row must use the one classification literal the gate-policy enum assumes."""
+    state = RD.new_state(_cfg())
+    finding_b = {"title": "narrow the API", "severity": "Minor",
+                 "file": "g.py", "line": 2, "tradeoff": True}
+    state["_judgmentFindings"] = [dict(_TRADEOFF), finding_b]
+    state["step"] = RD.P_JUDGMENT
+    step = RD._advance(state, state["config"])
+    classifications = {row["classification"] for row in step["payload"]["findings"]}
+    assert classifications == {"judgment"}
 
 
 def test_tradeoff_blocker_routes_to_judgment_not_stall():

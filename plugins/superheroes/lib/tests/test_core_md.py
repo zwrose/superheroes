@@ -1540,6 +1540,60 @@ _SHOW_IT_BODY = (
     "**Notes:** optional"
 )
 
+_RATIFIED_RESIDUALS_BODY = (
+    "- Accept known race in cache warm-up until Q3 hardening lands\n"
+    "- Do not block on flaky integration test in CI lane B"
+)
+
+
+def test_parse_core_returns_ratified_residuals_when_section_present():
+    facts = dict(_CORE_FACTS, ratifiedResiduals=_RATIFIED_RESIDUALS_BODY)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    got = CM.parse_core(text)
+    assert got["ratifiedResiduals"] == _RATIFIED_RESIDUALS_BODY
+
+
+def test_parse_core_and_read_return_empty_ratified_residuals_when_section_absent(tmp_path):
+    text = CM.render_core(dict(_CORE_FACTS), "confirmed", "2026-06-26", "2026-06-26")
+    parsed = CM.parse_core(text)
+    assert parsed["ratifiedResiduals"] == ""
+    assert parsed["verifyCommand"] == "npm test"
+    assert parsed["stackTags"] == ["node"]
+    assert parsed["threatModel"] == "single-user"
+    assert parsed["patterns"] == "- x: a.ts:1"
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "confirmed", root=store, now="2026-06-26")
+    got = CM.read(repo, root=store)
+    assert got["ratifiedResiduals"] == ""
+    assert got["verifyCommand"] == "npm test"
+    assert got["stackTags"] == ["node"]
+    assert got["threatModel"] == "single-user"
+    assert got["patterns"] == "- x: a.ts:1"
+
+
+def test_render_core_omits_ratified_residuals_heading_when_empty():
+    facts = dict(_CORE_FACTS)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    assert "## Ratified residuals" not in text
+
+
+def test_ratified_residuals_render_parse_roundtrip_preserves_text():
+    facts = dict(_CORE_FACTS, ratifiedResiduals=_RATIFIED_RESIDUALS_BODY)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    assert CM.parse_core(text)["ratifiedResiduals"] == _RATIFIED_RESIDUALS_BODY
+    rerendered = CM.render_core(
+        CM.parse_core(text), "confirmed", "2026-06-26", "2026-06-26")
+    assert CM.parse_core(rerendered)["ratifiedResiduals"] == _RATIFIED_RESIDUALS_BODY
+
+
+def test_ratified_residuals_body_with_hash_heading_truncates_at_section_boundary():
+    """`_section` treats any line starting with `## ` as a section boundary."""
+    body = "Residual one\n## Looks like a heading\nResidual two"
+    facts = dict(_CORE_FACTS, ratifiedResiduals=body)
+    text = CM.render_core(facts, "confirmed", "2026-06-26", "2026-06-26")
+    assert CM.parse_core(text)["ratifiedResiduals"] == "Residual one"
+
 
 def test_parse_core_returns_show_it_surface_when_section_present():
     facts = dict(_CORE_FACTS, showItSurface=_SHOW_IT_BODY)

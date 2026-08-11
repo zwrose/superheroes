@@ -123,19 +123,20 @@ def _session_id(session_dir):
     return json.load(fh)["sessionId"]
 
 
-def _anchor_hashes(session_dir, rnd, phase, attempt):
+def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
   anchor = RD._orders_anchor(_state(session_dir), session_dir, rnd, phase, attempt)
   if anchor is None:
     return RR.NOT_EMITTED, RR.NOT_EMITTED
-  return anchor["manifestSha256"], anchor["orders"].get("*", RR.NOT_EMITTED)
+  skey = RR.storage_key(seat, occurrence)
+  return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
-def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
+def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
   pend = pend or _pending(session_dir)
   payload = {"findings": [], "confidence": "high", "seat": seat,
              "verificationReceipt": {"ran": True}} if payload is None else payload
-  manifest_sha, _order = _anchor_hashes(session_dir, pend["round"], pend["phase"],
-                                        pend["attempt"])
+  manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                           pend["attempt"], seat, occurrence=occurrence)
   env = {
     "schema": RR.SEAT_RESULT_SCHEMA,
     "session": _session_id(session_dir),
@@ -145,13 +146,15 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
     "attempt": pend["attempt"],
     "vendor": "claude",
     "model": "sonnet-5",
-    "dispatchRef": "dispatch-1",
-    "orderSha256": RR.NOT_EMITTED,
+    "dispatchRef": manifest_sha,
+    "orderSha256": order_sha,
     "manifestSha256": manifest_sha,
     "recordedAt": "2026-08-07T00:00:00",
     "payloadSha256": RR.payload_sha256(payload),
     "payload": payload,
   }
+  if occurrence:
+    env["occurrence"] = occurrence
   env.update(over)
   return env
 

@@ -53,62 +53,13 @@ attempt must never be globbed and honored.
    so no two verifiers race on a shared path. The apply step below concatenates every
    per-cluster file into one array (the consumer keys on `id`).
 
-   Prompt (embed the absolute paths):
+   **On the auto-fix loop**, the driver emits each verifier's complete order at
+   `$SESSION_DIR/round-<N>/orders/dispatch-verifiers/<skey>.a<K>.md` on `next` — dispatch that
+   file, do not hand-compose. Template body: `rubric/orders/dispatch-verifiers.md`.
 
-   ```
-   You are the per-finding verifier for one cluster of a review panel. You are given a
-   CLUSTER of merged findings (duplicates already collapsed, each with a staged id) and the
-   code change under review. For EACH finding decide whether it holds up against the diff
-   and the artifact.
-
-   ## Input
-   - Cluster findings: <absolute path to this cluster's findings array> — each has id, file,
-     line, title, severity, body/evidence.
-   - Diff (read cited hunks here): <absolute path to round-<N>/diff.txt>
-   - Verification root (read cited files here ONLY): <absolute verification root — working
-     tree or $SESSION_DIR/repo on --post>
-   - Severity rubric (the only tiers; calibration): <absolute $RUBRIC path>
-   - Project conventions: CLAUDE.md and the project profile.
-
-   ## Immunity (#230)
-   You read the diff and the code. You NEVER read the PR's own description, title, or any
-   author narrative — judge only from the diff and the repo.
-
-   ## One verdict per finding
-   Return one object per input finding:
-   - id: the finding's staged id, echoed verbatim — do not recompute or rename.
-   - verdict: "CONFIRMED" | "PLAUSIBLE" | "REFUTED".
-   - reason: one sentence with quoted evidence. Required for every verdict.
-   - severity: optional — the single rubric tier the evidence justifies (Critical/Important/
-     Minor/Nit); omit to keep the finding's pre-verification tier.
-   - evidence: for CONFIRMED only — name the triggering input, cite the line, and quote what
-     proves the issue is real: the code you read, a read-only command you actually ran (with
-     its output), or an execution output the orchestrator captured and supplied.
-
-   Verdict semantics:
-   - CONFIRMED — you found the triggering input and can cite it.
-   - PLAUSIBLE — the concern may be real but you could not fully prove it from the diff/repo.
-   - REFUTED — the finding clearly does NOT hold (wrong, not in changed material, already
-     handled); reason must explain why.
-
-   ## Hard rules
-   - Judge only the findings in this cluster. Do NOT add new findings, merge findings, or
-     decide the run's outcome.
-   - Every verdict carries quoted evidence in reason (and evidence for CONFIRMED).
-   - **Never change the repository, and never claim a run you did not make.** Quote code
-     you read, a read-only command you actually ran (with its output), or an execution
-     output the orchestrator captured and handed you — and never imply a run you did not
-     make. Never write a probe into the tree: a verdict that needs the code **changed** to
-     establish it stays **PLAUSIBLE**, with the needed check named in `reason` for the
-     orchestrator. (Base rubric: "A review seat never changes the repository, and never
-     claims a run it did not make.")
-
-   ## Output
-   Write a JSON array to <absolute round-<N>/verdicts-<cluster-index>.json path — THIS
-   cluster's own file, never a shared verdicts.json>:
-   [{ "id", "verdict", "reason", "severity?", "evidence?" }] — exactly one entry per cluster
-   finding.
-   ```
+   **On the read-only paths**, the orchestrator still dispatches verifiers manually; use the same
+   shipped template at `rubric/orders/dispatch-verifiers.md` only as reference for what the emitted
+   order contains — or dispatch the driver-emitted file when you have run `next` through the driver.
 
 ## Applying the verdicts
 
@@ -166,6 +117,11 @@ synthesis`) over the survivors only. Its job is **not** keep/drop — it groups 
 share the same root cause. It emits a JSON array of `{group_id, member_ids}` echoing the staged
 ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
 
+**On the auto-fix loop**, dispatch the driver-emitted order at
+`$SESSION_DIR/round-<N>/orders/dispatch-synthesis/<skey>.a<K>.md` (template body:
+`rubric/orders/dispatch-synthesis.md`). **On the read-only paths**, the orchestrator dispatches
+manually against that same shipped template.
+
 Then finalize:
 
 ```bash
@@ -207,7 +163,11 @@ Critical never GATEs and never parks**:
 2. **Confirming probe** — re-dispatch the verifier (`--role verifier`) for that single
    finding to seek the triggering input in the diff and the repo; a CONFIRMED upgrade then
    becomes GATE-eligible. Where the triggering input can only be established by a **mutation**,
-   that run is the orchestrator's — the verifier never mutates.
+   that run is the orchestrator's — the verifier never mutates. A review seat is **obliged**
+   never to change the repository and never to claim a run it did not make — the base rubric's
+   verification rule **"A review seat never changes the repository, and never claims a run it did
+   not make."** (`rubric/review-base.md`) is the authoritative statement; this is the pointer, not
+   a second copy.
 3. **Grounded advisory** — record `action: "skip"`, `advisory: true`, with the PLAUSIBLE
    verdict as the verification trace (citable ground truth). It rides the handback disclosed
    through the skipped-blocker channel and never interrupts mid-run.

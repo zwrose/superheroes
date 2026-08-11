@@ -215,22 +215,23 @@ def _session_id(session_dir):
         return json.load(fh)["sessionId"]
 
 
-def _anchor_hashes(session_dir, rnd, phase, attempt):
+def _anchor_hashes(session_dir, rnd, phase, attempt, seat, occurrence=0):
     anchor = RD._orders_anchor(_state(session_dir), session_dir, rnd, phase, attempt)
     if anchor is None:
         return RR.NOT_EMITTED, RR.NOT_EMITTED
-    return anchor["manifestSha256"], anchor["orders"].get("*", RR.NOT_EMITTED)
+    skey = RR.storage_key(seat, occurrence)
+    return anchor["manifestSha256"], (anchor.get("orders") or {}).get(skey, RR.NOT_EMITTED)
 
 
-def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
+def _result_envelope(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     pend = pend or _pending(session_dir)
     # The default payload is SEAT-SPECIFIC on purpose: two seats sharing one payload would share a
     # payload hash, and the journal/store hash matching that `reconcile` runs on would silently
     # conflate them (a deleted record would still look "seen" through its twin's hash).
     payload = {"findings": [], "confidence": "high", "seat": seat,
                "verificationReceipt": {"ran": True}} if payload is None else payload
-    manifest_sha, _order = _anchor_hashes(session_dir, pend["round"], pend["phase"],
-                                          pend["attempt"])
+    manifest_sha, order_sha = _anchor_hashes(session_dir, pend["round"], pend["phase"],
+                                             pend["attempt"], seat, occurrence=occurrence)
     env = {
         "schema": RR.SEAT_RESULT_SCHEMA,
         "session": _session_id(session_dir),
@@ -240,23 +241,26 @@ def _result_envelope(session_dir, seat, payload=None, pend=None, **over):
         "attempt": pend["attempt"],
         "vendor": "claude",
         "model": "sonnet-5",
-        "dispatchRef": "dispatch-1",
-        "orderSha256": RR.NOT_EMITTED,
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
         "manifestSha256": manifest_sha,
         "recordedAt": "2026-08-07T00:00:00",
         "payloadSha256": RR.payload_sha256(payload),
         "payload": payload,
     }
+    if occurrence:
+        env["occurrence"] = occurrence
     env.update(over)
     return env
 
 
-def _land(session_dir, seat, payload=None, pend=None, **over):
+def _land(session_dir, seat, payload=None, pend=None, occurrence=0, **over):
     """Write a seat's envelope into the LANDING area (what the host does)."""
     pend = pend or _pending(session_dir)
-    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, **over)
-    path = RR.landing_path(session_dir, pend["round"], pend["phase"], RR.storage_key(seat),
-                           pend["attempt"])
+    env = _result_envelope(session_dir, seat, payload=payload, pend=pend, occurrence=occurrence,
+                           **over)
+    path = RR.landing_path(session_dir, pend["round"], pend["phase"],
+                           RR.storage_key(seat, occurrence), pend["attempt"])
     RR.atomic_write_json(path, env)
     return path, env
 
@@ -805,6 +809,40 @@ def test_record_result_refuses_a_payload_fault(tmp_path, adapters):
     assert RD.cmd_record_result(d, "test-reviewer")["ok"] is True
 
 
+def test_record_result_refuses_bare_payload_fault(tmp_path, adapters):
+    """Bare host landings get the same record-time payload validation as full envelopes."""
+    d = _session(tmp_path)
+    pend = _pending(d)
+    skey = RR.storage_key("code-reviewer")
+    stub_path = RR.envelope_stub_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
+    os.makedirs(os.path.dirname(stub_path), exist_ok=True)
+    manifest_sha, order_sha = _anchor_hashes(d, pend["round"], pend["phase"], pend["attempt"],
+                                             "code-reviewer")
+    RR.atomic_write_json(stub_path, {
+        "schema": RR.SEAT_RESULT_SCHEMA,
+        "session": _session_id(d),
+        "round": pend["round"],
+        "phase": pend["phase"],
+        "seat": "code-reviewer",
+        "attempt": pend["attempt"],
+        "vendor": "claude",
+        "model": "sonnet-5",
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+    })
+    RR.atomic_write_json(
+        RR.bare_payload_path(d, pend["round"], pend["phase"], skey, pend["attempt"]),
+        {"findings": "not-a-list"},
+    )
+    adapters.faults["code-reviewer"] = "findings must be a list"
+    out = RD.cmd_record_result(d, "code-reviewer")
+    assert out["ok"] is False and out["reason"] == "payload-fault"
+    assert out["detail"] == "findings must be a list"
+    spath = RR.store_path(d, pend["round"], pend["phase"], skey, pend["attempt"])
+    assert not os.path.exists(spath)
+
+
 def _fixer_session(tmp_path, adapters, name="fx"):
     """A session parked at the dispatch-fixer phase with a one-seat roster."""
     d = _session(tmp_path, name=name)
@@ -990,32 +1028,109 @@ def test_advance_folds_a_complete_phase_and_emits_the_next_action(tmp_path, adap
     assert {e["occurrence"] for e in call["envelopes"]} == {0}
 
 
+def _record_panel_with_verifier_cluster(session_dir, file="f.py", line=1):
+    finding = {
+        "file": file,
+        "line": line,
+        "severity": "Important",
+        "title": "issue",
+        "dimension": "Code",
+    }
+    for seat in RD.DIMENSIONS:
+        payload = {"findings": [finding] if seat == "code-reviewer" else []}
+        _land_and_record(session_dir, seat, payload=payload)
+
+
 def test_advance_emits_the_orders_manifest_and_mirrors_its_hash_into_state(tmp_path, adapters):
     d = _session(tmp_path)
-    adapters.rosters[RD.P_VERIFIERS] = ["src/f.py:3"]
-    _record_all_panel_seats(d)
+    verifier_seat = "verifier:f.py:0"
+    adapters.rosters[RD.P_VERIFIERS] = [verifier_seat]
+    _record_panel_with_verifier_cluster(d)
     out = _advance(d, tmp_path)
     assert out["ok"] is True
     manifest_path = RD._orders_manifest_path(d, 1, RD.P_VERIFIERS, 0)
     manifest, err = RR.read_json(manifest_path)
     assert err is None
-    assert manifest["seats"]["src/f.py:3"] == {
-        "storeKey": RR.storage_key("src/f.py:3"), "vendor": None, "model": None, "engine": None,
-        "resultContract": RR.SEAT_RESULT_SCHEMA}
+    skey = RR.storage_key(verifier_seat)
     emitted = [e for e in _outcomes(d, "orders-emitted") if e.get("phase") == RD.P_VERIFIERS]
     assert len(emitted) == 1
     anchor = RD._orders_anchor(_state(d), d, 1, RD.P_VERIFIERS, 0)
     assert anchor["manifestSha256"] == emitted[0]["manifestSha256"]
+    seat_entry = manifest["seats"][skey]
+    assert seat_entry["storeKey"] == skey and seat_entry["seat"] == verifier_seat
+    assert seat_entry["orderSha256"] == anchor["orders"][skey]
+    assert anchor["orders"][skey] != RR.NOT_EMITTED
     # the anchor rides the state-hash chain, and the emitted hash is the one ingestion checks
     assert out["nextAction"]["expectedStateHash"] == RD.state_hash(_state(d))
-    assert anchor["orders"]["src/f.py:3"] == RR.NOT_EMITTED
+    assert os.path.exists(seat_entry["orderPath"])
+    assert os.path.exists(seat_entry["envelopeStubPath"])
     # an envelope claiming a DIFFERENT manifest hash is refused against the emission-time anchor
     pend = _pending(d)
-    _land(d, "src/f.py:3", pend=pend, manifestSha256="deadbeef")
-    assert RD.cmd_record_result(d, "src/f.py:3")["reason"] == "manifest-anchor-mismatch"
+    _land(d, verifier_seat, pend=pend, manifestSha256="deadbeef")
+    assert RD.cmd_record_result(d, verifier_seat)["reason"] == "manifest-anchor-mismatch"
     # A/B: the envelope carrying the anchored hash records fine
-    _land(d, "src/f.py:3", pend=pend)
-    assert RD.cmd_record_result(d, "src/f.py:3")["ok"] is True
+    _land(d, verifier_seat, pend=pend)
+    assert RD.cmd_record_result(d, verifier_seat)["ok"] is True
+
+
+def test_advance_emits_synthesis_verified_json_sidecar(tmp_path, adapters):
+    """Synthesis dispatch writes verified.json from the pending findings payload."""
+    d = _session(tmp_path)
+    _record_panel_with_verifier_cluster(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    out = _advance(d, tmp_path)              # verifiers: empty roster → synthesis dispatch
+    assert out["ok"] is True
+    assert out["nextAction"]["phase"] == RD.P_SYNTHESIS
+    verified_path = os.path.join(d, "round-1", "verified.json")
+    assert os.path.isfile(verified_path)
+    verified, err = RR.read_json(verified_path)
+    assert err is None
+    assert len(verified["findings"]) == 1
+    assert verified["findings"][0]["file"] == "f.py"
+    assert verified["findings"][0]["line"] == 1
+
+
+def _drop_orders_anchor_mirror(session_dir):
+    state = _state(session_dir)
+    state.pop("_ordersAnchors", None)
+    RD.save_state(session_dir, state)
+
+
+def test_tampered_manifest_rebuild_refuses_ingest(tmp_path, adapters):
+    """A/B — journal rebuild re-verifies manifest bytes; tampering refuses ingestion."""
+    seat = "verifier:f.py:0"
+
+    def _emit_verifiers_orders(name):
+        d = _session(tmp_path, name=name)
+        adapters.rosters[RD.P_VERIFIERS] = [seat]
+        _record_panel_with_verifier_cluster(d)
+        assert _advance(d, tmp_path)["ok"] is True
+        return d
+
+    # A: untampered manifest — mirror dropped, rebuild succeeds, ingest accepts
+    ok_session = _emit_verifiers_orders("untampered")
+    _drop_orders_anchor_mirror(ok_session)
+    assert RD._orders_anchor(_state(ok_session), ok_session, 1, RD.P_VERIFIERS, 0) is not None
+    pend = _pending(ok_session)
+    _land(ok_session, seat, pend=pend)
+    assert RD.cmd_record_result(ok_session, seat)["ok"] is True
+
+    # B: one orderSha256 edited — rebuild fails closed, ingest refuses
+    bad_session = _emit_verifiers_orders("tampered")
+    manifest_path = RD._orders_manifest_path(bad_session, 1, RD.P_VERIFIERS, 0)
+    anchor_before = RD._orders_anchor(_state(bad_session), bad_session, 1, RD.P_VERIFIERS, 0)
+    manifest_sha = anchor_before["manifestSha256"]
+    order_sha = anchor_before["orders"][RR.storage_key(seat)]
+    _drop_orders_anchor_mirror(bad_session)
+    manifest, err = RR.read_json(manifest_path)
+    assert err is None
+    skey = RR.storage_key(seat)
+    manifest["seats"][skey]["orderSha256"] = "f" * 64
+    RR.atomic_write_json(manifest_path, manifest)
+    assert RD._orders_anchor(_state(bad_session), bad_session, 1, RD.P_VERIFIERS, 0) is None
+    pend = _pending(bad_session)
+    _land(bad_session, seat, pend=pend, manifestSha256=manifest_sha, orderSha256=order_sha)
+    assert RD.cmd_record_result(bad_session, seat)["reason"] == "manifest-anchor-unanchored"
 
 
 def test_advance_refuses_an_incomplete_roster_naming_every_missing_seat(tmp_path, adapters):
@@ -1185,8 +1300,7 @@ def test_advance_journals_an_unhandled_internal_exception_as_attestable(tmp_path
     (RD.P_STALL, "advance-stall-park"),
 ], ids=["judgment", "stall"])
 def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, phase, reason):
-    """A/B — the same `advance` on a dispatch phase folds; the two OWNER gates park
-    unconditionally, because the shipped default pre-authorizes nothing."""
+    """A/B — the same `advance` on a dispatch phase folds; the two OWNER gates park unconditionally."""
     ok_session = _session(tmp_path, name="folds-" + reason)
     _record_all_panel_seats(ok_session)
     assert _advance(ok_session, tmp_path)["ok"] is True
@@ -1195,6 +1309,14 @@ def test_advance_parks_unconditionally_on_the_owner_gates(tmp_path, adapters, ph
     state = _state(d)
     state["step"] = phase
     state["pending"] = {"action": phase, "round": 1, "phase": phase, "attempt": 0, "payload": {}}
+    if phase == RD.P_JUDGMENT:
+        state["_judgmentFindings"] = [
+            {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
+             "tradeoff": True}]
+        state["_judgmentMechanical"] = []
+    if phase == RD.P_STALL:
+        state["_stallChoices"] = [c for c in RD.STALL_CHOICES if c != "accept-the-disclosed-risk"]
+        state["_acceptRiskEligible"] = False
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == reason
@@ -1694,3 +1816,69 @@ def test_death_between_sidecar_begin_and_sidecar_complete(tmp_path, adapters):
     assert out["ok"] is True
     assert os.path.exists(sidecar_path)
     assert len(_outcomes(d, "sidecar-repaired")) == completes + 1
+
+
+# --- FB-12: _ensure_round_diff atomic write + content guard -------------------------------
+
+
+def _fb12_round_dir(session_dir, rnd=1):
+    rdir = RR.round_dir(session_dir, rnd)
+    os.makedirs(rdir, exist_ok=True)
+    return rdir
+
+
+def test_ensure_round_diff_writes_when_absent(tmp_path):
+    d = str(tmp_path / "fb12-absent")
+    state = {"reviewedDiff": DIFF}
+    path = RD._ensure_round_diff(d, 1, state)
+    assert path == os.path.join(_fb12_round_dir(d), "diff.txt")
+    with open(path, encoding="utf-8") as fh:
+        assert fh.read() == DIFF
+
+
+def test_ensure_round_diff_returns_existing_when_correct(tmp_path):
+    d = str(tmp_path / "fb12-correct")
+    rdir = _fb12_round_dir(d)
+    diff_path = os.path.join(rdir, "diff.txt")
+    with open(diff_path, "w", encoding="utf-8") as fh:
+        fh.write(DIFF)
+    mtime_before = os.path.getmtime(diff_path)
+    path = RD._ensure_round_diff(d, 1, {"reviewedDiff": DIFF})
+    assert path == diff_path
+    assert os.path.getmtime(diff_path) == mtime_before
+
+
+def test_ensure_round_diff_repairs_zero_byte(tmp_path):
+    d = str(tmp_path / "fb12-zero")
+    diff_path = os.path.join(_fb12_round_dir(d), "diff.txt")
+    with open(diff_path, "wb"):
+        pass
+    path = RD._ensure_round_diff(d, 1, {"reviewedDiff": DIFF})
+    assert path == diff_path
+    with open(diff_path, encoding="utf-8") as fh:
+        assert fh.read() == DIFF
+
+
+def test_ensure_round_diff_repairs_mismatch(tmp_path):
+    d = str(tmp_path / "fb12-mismatch")
+    diff_path = os.path.join(_fb12_round_dir(d), "diff.txt")
+    with open(diff_path, "w", encoding="utf-8") as fh:
+        fh.write("stale diff\n")
+    path = RD._ensure_round_diff(d, 1, {"reviewedDiff": DIFF})
+    assert path == diff_path
+    with open(diff_path, encoding="utf-8") as fh:
+        assert fh.read() == DIFF
+
+
+@pytest.mark.parametrize("reviewed_diff", [pytest.param(None, id="none"),
+                                           pytest.param({"x": 1}, id="dict")])
+def test_ensure_round_diff_refuses_non_string_reviewed_diff(tmp_path, reviewed_diff):
+    d = str(tmp_path / "fb12-non-string")
+    with pytest.raises(ValueError, match="reviewed-diff-unavailable"):
+        RD._ensure_round_diff(d, 1, {"reviewedDiff": reviewed_diff})
+
+
+def test_ensure_round_diff_refuses_missing_reviewed_diff(tmp_path):
+    d = str(tmp_path / "fb12-missing")
+    with pytest.raises(ValueError, match="reviewed-diff-unavailable"):
+        RD._ensure_round_diff(d, 1, {})

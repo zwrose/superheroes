@@ -41,6 +41,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import sys
 import time
 import traceback
@@ -48,10 +49,15 @@ import traceback
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import audits  # noqa: E402
+import calibration_resolve  # noqa: E402
+import core_md  # noqa: E402
 import circuit_breaker  # noqa: E402
+import mode_registry  # noqa: E402
 import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
 import engine_adapter  # noqa: E402
+import engine_pref  # noqa: E402
+import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
@@ -61,6 +67,7 @@ import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
 import review_round_policy  # noqa: E402
 import round_commit  # noqa: E402
+import round_orders  # noqa: E402
 import round_records  # noqa: E402
 import round_phases  # noqa: E402
 import seat_map  # noqa: E402
@@ -135,6 +142,7 @@ LEGACY_SESSION_REFUSAL = "legacy-session-use-next-submit"
 # `round-<N>/orders/manifest.a<K>.json` would collide between them.
 ORDERS_DIRNAME = "orders"
 ORDERS_MANIFEST_SCHEMA = "orders-manifest/1"
+# External engines run in a shell and land a full envelope; host seats write payload-only.
 
 # The handback sidecar's path under the repo's git dir (§6). Nothing in this module READS it for
 # enforcement — the hook that does is a later PR.
@@ -160,8 +168,6 @@ P_JUDGMENT = round_phases.P_JUDGMENT
 P_STALL = round_phases.P_STALL
 P_TERMINAL = round_phases.P_TERMINAL
 
-# The four stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
-# ONLY for a CONFIRMED-with-receipt finding; the menu payload gates it per-run.
 STALL_CHOICES = ("ship-smaller", "spend-more", "accept-the-disclosed-risk", "hold")
 
 # The three per-finding judgment dispositions the judgment gate offers (never "judge the dispute
@@ -3197,10 +3203,13 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return roster_refusal
         try:
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
-                                  journal_cmd="next")
+                                  journal_cmd="next", pending_payload=pending.get("payload"))
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
+        except ValueError as exc:
+            return _refuse_cmd(session_dir, "next", "order-render-refused", phase=phase,
+                               rnd=pending.get("round"), attempt=attempt, detail=str(exc))
     save_state(session_dir, state)
     _journal_append(session_dir, {"cmd": "next", "phase": pending["phase"],
                                   "round": pending["round"], "attempt": attempt,
@@ -3688,6 +3697,469 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
                         "manifest.a%d.json" % attempt)
 
 
+def _plugin_resource_root():
+    return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+
+
+def _shipped_rubric_path():
+    return os.path.join(_plugin_resource_root(), "rubric", "review-base.md")
+
+
+def _shipped_escalation_wrapper_path():
+    return os.path.join(_plugin_resource_root(), "lib", "escalation_resolve.py")
+
+
+def _normalize_focus_notes(value):
+    if value is None:
+        return ""
+    if isinstance(value, str):
+        return value
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, sort_keys=True, separators=(",", ":"))
+    return str(value)
+
+
+def _calibration_path_placeholder(path, label, root_refusal=None):
+    if root_refusal:
+        return "(%s calibration refused — %s)" % (label, root_refusal)
+    if isinstance(path, str) and path and os.path.isfile(path):
+        return path
+    return "(%s calibration not resolved for this project)" % label
+
+
+def _resolved_calibration_paths(repo_root):
+    """(core_path_or_None, layer_path_or_None, root_refusal_or_None) from calibration_resolve."""
+    cwd = repo_root if isinstance(repo_root, str) and repo_root else os.getcwd()
+    try:
+        info = calibration_resolve.resolve(cwd)
+    except calibration_resolve.UnresolvableRootError as exc:
+        refusal = core_md.gate_refusal_line(
+            core_md.gate_refusal(exc.reason, str(exc.root)))
+        return None, None, refusal
+    core = info.get("dispatch_core")
+    layer = info.get("dispatch_layer")
+    core_path = core if isinstance(core, str) and os.path.isfile(core) else None
+    layer_path = layer if isinstance(layer, str) and os.path.isfile(layer) else None
+    return core_path, layer_path, None
+
+
+def _vendor_is_external_engine(vendor):
+    """True when ``vendor`` is a registered non-claude engine (codex/cursor today).
+
+    Unknown vendors fail closed to host transport — they cannot land on the engine stdout branch."""
+    if not isinstance(vendor, str) or not vendor.strip():
+        return False
+    v = vendor.strip()
+    if v == "claude":
+        return False
+    return v in model_registry.vendors()
+
+
+def _seat_is_engine(row):
+    """True when the seat's vendor is an external engine (sandboxed stdout transport)."""
+    return _vendor_is_external_engine(row.get("vendor"))
+
+
+def _reviewer_engine_vendor(repo_root):
+    """Reviewer-role engine for single-seat reviewer phases (verifiers, gap-sweep, scoped)."""
+    try:
+        prefs = engine_pref.load_engine_prefs(repo_root)
+        return engine_pref.resolve_engine("review", prefs)
+    except Exception:  # noqa: BLE001 — transport must degrade, never refuse render
+        return "claude"
+
+
+def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root):
+    """{vendor, model, engine} for transport — one home keyed to the source that actually knows."""
+    if phase == P_PANEL:
+        return _seat_dispatch_row(state, seat_key)
+    cfg = config if isinstance(config, dict) else {}
+    payload = pending_payload if isinstance(pending_payload, dict) else {}
+    if phase == P_FIXER:
+        return {"vendor": cfg.get("fixerVendor"), "model": None, "engine": None}
+    if phase == P_AUDITS:
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        for target in targets:
+            if isinstance(target, dict) and target.get("id") == seat_key:
+                return {"vendor": target.get("auditorVendor"), "model": None, "engine": None}
+        return {"vendor": None, "model": None, "engine": None}
+    if phase == P_SYNTHESIS:
+        # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
+        return {"vendor": "claude", "model": None, "engine": None}
+    if phase in (P_VERIFIERS, P_GAPSWEEP, P_SCOPED):
+        return {"vendor": _reviewer_engine_vendor(repo_root), "model": None, "engine": None}
+    return {"vendor": None, "model": None, "engine": None}
+
+
+def _seat_transport_fault(row, seat_key):
+    """Refuse when a seat names a vendor the driver does not recognise.
+
+    Vendor absent is the normal unknowable-vendor case — not a refusal."""
+    vendor = row.get("vendor")
+    if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
+        return None
+    if not isinstance(vendor, str):
+        return "unknown-vendor:%s:%s" % (seat_key, _label(vendor))
+    vendor = vendor.strip()
+    if vendor in model_registry.vendors():
+        return None
+    return "unknown-vendor:%s:%s" % (seat_key, vendor)
+
+
+def _profile_path_for_orders(repo_root):
+    """Resolved project profile path for fixer orders — never a hand-typed layout guess."""
+    try:
+        path = model_tier_overrides.resolve_profile_path(repo_root)
+    except calibration_resolve.UnresolvableRootError as exc:
+        refusal = core_md.gate_refusal_line(
+            core_md.gate_refusal(exc.reason, str(exc.root)))
+        return "(Project profile refused — %s)" % refusal
+    if isinstance(path, str) and path.strip():
+        return path
+    return "(Project profile not resolved for this project)"
+
+
+def _shell_quote_path(path):
+    """Shell-safe quoted path for commands the fixer order tells the seat to run."""
+    return shlex.quote(path if isinstance(path, str) and path else "")
+
+
+def _panel_dimension_label(seat_key):
+    """Rubric dimension label for a panel seat — from SUBJECT_FALLBACK, not filename stem."""
+    stem = AGENT_SUFFIX.get(seat_key)
+    if not isinstance(stem, str) or not stem:
+        return None
+    return review_round_policy.SUBJECT_FALLBACK.get(stem.split("-")[0].lower())
+
+
+def _session_pr_checkout_path(session_dir):
+    """Detached PR checkout path when the read-only paths created one; else empty."""
+    path = os.path.join(session_dir, "repo")
+    return path if os.path.isdir(path) else ""
+
+
+def _label(value):
+    return value if isinstance(value, str) else repr(value)
+
+
+def _paths_match(emitted, expected):
+    """True when ``emitted`` names ``expected``, whether shell-quoted or raw."""
+    if not isinstance(expected, str) or not expected:
+        return False
+    if emitted == expected:
+        return True
+    if isinstance(emitted, str) and shlex.split(emitted) == [expected]:
+        return True
+    return False
+
+
+def _shipped_resource_refusal(placeholders):
+    """Refuse when a shipped plugin resource path in placeholders does not exist."""
+    if not isinstance(placeholders, dict):
+        return None
+    checks = (
+        ("RUBRIC_PATH", _shipped_rubric_path()),
+        ("ESCALATION_WRAPPER_PATH", _shipped_escalation_wrapper_path()),
+    )
+    for name, expected in checks:
+        emitted = placeholders.get(name)
+        if _paths_match(emitted, expected) and not os.path.isfile(expected):
+            return "shipped-resource-missing:%s" % name
+    return None
+
+
+# Order-input sidecar layout — one home for commit writes and order placeholders.
+ORDER_SIDECAR_CLUSTERS_DIR = "clusters"
+ORDER_SIDECAR_AUDIT_TARGETS_DIR = "audit-targets"
+ORDER_SIDECAR_SCOPED_HUNKS_FILE = "scoped-hunks.json"
+ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
+
+
+def _order_cluster_sidecar_path(rdir, index):
+    return os.path.join(rdir, ORDER_SIDECAR_CLUSTERS_DIR, "%d.json" % index)
+
+
+def _order_audit_target_sidecar_path(rdir, skey):
+    return os.path.join(rdir, ORDER_SIDECAR_AUDIT_TARGETS_DIR, "%s.json" % skey)
+
+
+def _order_scoped_hunks_sidecar_path(rdir):
+    return os.path.join(rdir, ORDER_SIDECAR_SCOPED_HUNKS_FILE)
+
+
+def _order_verified_sidecar_path(rdir):
+    return os.path.join(rdir, ORDER_SIDECAR_VERIFIED_FILE)
+
+
+def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
+    """[(path, bytes)] sidecars named in orders, derived from the phase payload."""
+    writes = []
+    rdir = round_records.round_dir(session_dir, rnd)
+    payload = pending_payload if isinstance(pending_payload, dict) else {}
+    if phase == P_VERIFIERS:
+        clusters = payload.get("clusters")
+        if not isinstance(clusters, list):
+            clusters = []
+        for index, cluster in enumerate(clusters):
+            if not isinstance(cluster, dict):
+                cluster = {}
+            path = _order_cluster_sidecar_path(rdir, index)
+            writes.append((path, round_records.canonical(cluster).encode("utf-8")))
+    elif phase == P_AUDITS:
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        for index, (seat_key, occurrence) in enumerate(round_records.roster_slots(roster)):
+            target = targets[index] if index < len(targets) else {}
+            if not isinstance(target, dict):
+                target = {}
+            skey = round_records.storage_key(seat_key, occurrence)
+            path = _order_audit_target_sidecar_path(rdir, skey)
+            writes.append((path, round_records.canonical(target).encode("utf-8")))
+    elif phase == P_SCOPED:
+        hunks = payload.get("hunks")
+        if not isinstance(hunks, dict):
+            hunks = {}
+        path = _order_scoped_hunks_sidecar_path(rdir)
+        writes.append((path, round_records.canonical(hunks).encode("utf-8")))
+    elif phase == P_SYNTHESIS:
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        path = _order_verified_sidecar_path(rdir)
+        writes.append((path, round_records.canonical({"findings": findings}).encode("utf-8")))
+    return writes
+
+
+def _session_meta(session_dir):
+    obj, err = round_records.read_json(os.path.join(session_dir, round_records.META_FILE))
+    return obj if (err is None and isinstance(obj, dict)) else {}
+
+
+def _ensure_round_diff(session_dir, rnd, state):
+    """Write `round-<N>/diff.txt` when absent or untrusted so order templates have a real path to cite."""
+    rdir = round_records.round_dir(session_dir, rnd)
+    diff_path = os.path.join(rdir, "diff.txt")
+    diff_text = state.get("reviewedDiff")
+    if not isinstance(diff_text, str):
+        raise ValueError("reviewed-diff-unavailable")
+    expected = diff_text.encode("utf-8")
+    needs_write = True
+    if os.path.isfile(diff_path):
+        try:
+            with open(diff_path, "rb") as fh:
+                on_disk = fh.read()
+            needs_write = on_disk != expected
+        except OSError:
+            needs_write = True
+    if needs_write:
+        round_commit.atomic_write_bytes(diff_path, expected)
+    return diff_path
+
+
+def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat):
+    skey = round_records.storage_key(seat_key, occurrence)
+    env_landing = round_records.landing_path(session_dir, rnd, phase, skey, attempt)
+    bare_landing = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+    landing = bare_landing if host_seat else env_landing
+    return {
+        "storage_key": skey,
+        "landing_path": landing,
+        "envelope_landing_path": env_landing,
+        "bare_payload_path": bare_landing,
+        "envelope_stub_path": round_records.envelope_stub_path(session_dir, rnd, phase, skey,
+                                                               attempt),
+        "order_path": round_records.order_prompt_path(session_dir, rnd, phase, skey, attempt),
+    }
+
+
+def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
+                        session_dir, rnd, paths):
+    """Phase-specific placeholder dict for `round_orders.render_order`.
+
+    Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
+    — that IS the refusal channel, and `_cmd_next_locked` catches it. Do not add a caller
+    that assumes this returns on every input.
+    """
+    meta = _session_meta(session_dir)
+    cfg = config if isinstance(config, dict) else {}
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    rdir = round_records.round_dir(session_dir, rnd)
+    diff_path = _ensure_round_diff(session_dir, rnd, state)
+    rubric_path = _shipped_rubric_path()
+    core_resolved, layer_resolved, root_refusal = _resolved_calibration_paths(repo_root)
+    core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
+    layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
+                                              root_refusal)
+    payload = pending_payload if isinstance(pending_payload, dict) else {}
+    ph = {}
+
+    if phase == P_PANEL:
+        dim_label = _panel_dimension_label(seat_key)
+        if not dim_label:
+            raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
+        channel = "stdout" if _seat_is_engine(row) else "file"
+        pr_checkout = _session_pr_checkout_path(session_dir)
+        ph = {
+            "MODE": meta.get("mode") or cfg.get("mode") or "branch",
+            "REPO": meta.get("repo") or cfg.get("repo") or "unknown",
+            "TARGET": meta.get("branch") or cfg.get("branch") or "unknown",
+            "DIFF_PATH": diff_path,
+            "RUBRIC_PATH": rubric_path,
+            "CORE_PATH": core_path,
+            "LAYER_PATH": layer_path,
+            "PR_CHECKOUT_PATH": pr_checkout,
+            "PRIOR_COMMENTS_PATH": os.path.join(session_dir, "prior-comments.json"),
+            "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
+            "DIMENSION": dim_label,
+            "CHANNEL": channel,
+            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "findings-%s.json" % AGENT_SUFFIX.get(
+                seat_key, seat_key)),
+        }
+    elif phase == P_VERIFIERS:
+        prefix = "verifier:"
+        cluster_key = seat_key[len(prefix):] if seat_key.startswith(prefix) else seat_key
+        cluster_index = None
+        for index, cluster in enumerate(payload.get("clusters") or []):
+            if isinstance(cluster, dict) and cluster.get("key") == cluster_key:
+                cluster_index = index
+                break
+        if cluster_index is None:
+            raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
+        ph = {
+            "CLUSTER_FINDINGS_PATH": _order_cluster_sidecar_path(rdir, cluster_index),
+            "DIFF_PATH": diff_path,
+            "VERIFICATION_ROOT": repo_root,
+            "RUBRIC_PATH": rubric_path,
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+        }
+    elif phase == P_SYNTHESIS:
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
+        ph = {
+            "VERIFIED_FINDINGS_PATH": _order_verified_sidecar_path(rdir),
+            "DIFF_PATH": diff_path,
+            "VERIFICATION_ROOT": repo_root,
+            "RUBRIC_PATH": rubric_path,
+            "GROUPING_OUTPUT_PATH": os.path.join(rdir, "grouping.json"),
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+        }
+    elif phase == P_GAPSWEEP:
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
+        ph = {
+            "DIFF_PATH": diff_path,
+            "RUBRIC_PATH": rubric_path,
+            "CORE_PATH": core_path,
+            "LAYER_PATH": layer_path,
+            "VERIFICATION_ROOT": repo_root,
+            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+        }
+    elif phase == P_AUDITS:
+        targets = payload.get("targets")
+        if not isinstance(targets, list):
+            targets = []
+        if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
+            raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
+        ph = {
+            "TARGET_SUMMARY_PATH": _order_audit_target_sidecar_path(
+                rdir, round_records.storage_key(seat_key, occurrence)),
+            "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
+            "VERIFICATION_ROOT": repo_root,
+            "RUBRIC_PATH": rubric_path,
+            "TARGET_ID": seat_key,
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+        }
+    elif phase == P_SCOPED:
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
+        ph = {
+            "HUNKS_PATH": _order_scoped_hunks_sidecar_path(rdir),
+            "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
+            "RUBRIC_PATH": rubric_path,
+            "CORE_PATH": core_path,
+            "LAYER_PATH": layer_path,
+            "VERIFICATION_ROOT": repo_root,
+            "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
+            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+        }
+    elif phase == P_FIXER:
+        ph = {
+            "FIX_BATCH_PATH": os.path.join(rdir, "fix-batch.json"),
+            "PROFILE_PATH": _profile_path_for_orders(repo_root),
+            "RUBRIC_PATH": rubric_path,
+            "CWD": repo_root,
+            "REPO_ROOT": _shell_quote_path(repo_root),
+            "ESCALATION_WRAPPER_PATH": _shell_quote_path(_shipped_escalation_wrapper_path()),
+            "VERIFY_COMMAND": cfg.get("verifyCommand") or "none",
+            "ROUND": str(rnd),
+        }
+    return ph
+
+
+def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
+                                pending_payload):
+    cfg = state.get("config") or {}
+    meta = _session_meta(session_dir)
+    repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
+    row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending_payload, repo_root)
+    transport_fault = _seat_transport_fault(row, seat_key)
+    if transport_fault is not None:
+        skey = round_records.storage_key(seat_key, occurrence)
+        raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))
+    host_seat = not _seat_is_engine(row)
+    paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
+    base_ref = cfg.get("baseRef") or meta.get("baseRef")
+    residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
+    if not isinstance(residuals, str):
+        residuals = ""
+    core_resolved, layer_resolved, _root_refusal = _resolved_calibration_paths(repo_root)
+    return {
+        "session_dir": session_dir,
+        "round": rnd,
+        "attempt": attempt,
+        "diff_path": _ensure_round_diff(session_dir, rnd, state),
+        "rubric_path": _shipped_rubric_path(),
+        "core_path": core_resolved or "",
+        "layer_path": layer_resolved or "",
+        "repo_root": repo_root,
+        "landing_path": paths["landing_path"],
+        "envelope_stub_path": paths["envelope_stub_path"],
+        "ratified_residuals": residuals,
+        "residuals_provenance": prov,
+        "residuals_read_failure": res_failure,
+        "payload": pending_payload if isinstance(pending_payload, dict) else {},
+        "host_seat": host_seat,
+        "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
+                                              cfg, pending_payload,
+                                              session_dir, rnd, paths),
+    }, paths
+
+
+def _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence, row,
+                          manifest_sha, order_sha):
+    """`seat-result/1` header fields knowable at emission — NOT `recordedAt` / `payloadSha256`."""
+    header = {
+        "schema": round_records.SEAT_RESULT_SCHEMA,
+        "session": _meta_session_id(session_dir),
+        "round": rnd,
+        "phase": phase,
+        "seat": seat_key,
+        "attempt": attempt,
+        "vendor": row["vendor"],
+        "model": row["model"],
+        "dispatchRef": manifest_sha,
+        "orderSha256": order_sha,
+        "manifestSha256": manifest_sha,
+    }
+    if occurrence:
+        header["occurrence"] = occurrence
+    return header
+
+
 def _anchor_key(rnd, phase, attempt):
     return "%s:%s:%s" % (rnd, phase, attempt)
 
@@ -3708,7 +4180,10 @@ def _orders_anchor(state, session_dir, rnd, phase, attempt):
 
 
 def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
-    """Rebuild the dispatch anchor from the journalled emission hash when state lost the mirror."""
+    """Rebuild the dispatch anchor from the journalled emission hash when state lost the mirror.
+
+    The rebuild re-verifies the manifest file against the journalled ``manifestSha256`` before
+    trusting any per-seat order hashes read from disk."""
     for event in reversed(read_journal(session_dir)):
         if event.get("outcome") != "orders-emitted":
             continue
@@ -3719,14 +4194,25 @@ def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
             return None
         path = _orders_manifest_path(session_dir, rnd, phase, attempt)
         manifest, err = round_records.read_json(path)
-        seats = {}
-        if err is None and isinstance(manifest, dict):
+        if err is not None or not isinstance(manifest, dict):
+            return None
+        computed_sha = round_records.sha256_text(round_records.canonical(manifest))
+        if computed_sha != manifest_sha:
+            return None
+        orders = {}
+        seats = manifest.get("seats")
+        if isinstance(seats, dict):
+            for skey, entry in seats.items():
+                if not isinstance(entry, dict):
+                    continue
+                order_sha = entry.get("orderSha256")
+                if isinstance(order_sha, str) and order_sha:
+                    orders[skey] = order_sha
+        if not orders:
             raw = manifest.get("seats")
             if isinstance(raw, dict):
-                seats = raw
-        return {"manifestSha256": manifest_sha,
-                "orders": {seat: round_records.NOT_EMITTED for seat in seats},
-                "path": path}
+                orders = {seat: round_records.NOT_EMITTED for seat in raw}
+        return {"manifestSha256": manifest_sha, "orders": orders, "path": path}
     return None
 
 
@@ -3741,28 +4227,66 @@ def _seat_dispatch_row(state, seat_key):
             "engine": entry.get("engine")}
 
 
-def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance"):
-    """Emit the per-attempt orders manifest for a dispatch-* phase, journal `orders-emitted` with
-    its sha256, and mirror the anchor into state. Returns the anchor dict.
+def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
+                          pending_payload=None):
+    """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
 
-    Order PROMPT files are out of scope for PR-1, so every seat's per-order hash is the
-    `not-emitted` literal and the receipt records it as such — an unwritten order cannot have a
-    hash, and inventing one would be a claim nobody could check."""
+    Every roster SLOT is rendered, hashed, and written inside the single `orders-emit` commit
+    together with the manifest and state anchor. A render refusal for any slot refuses the whole
+    emission — a phase that dispatches some seats with orders and others without is worse than one
+    that refuses."""
+    pending_payload = pending_payload if isinstance(pending_payload, dict) else (
+        (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
     seats = {}
-    for seat_key in roster:
-        row = _seat_dispatch_row(state, seat_key)
-        seats[seat_key] = {"storeKey": round_records.storage_key(seat_key),
-                           "vendor": row["vendor"], "model": row["model"],
-                           "engine": row["engine"],
-                           "resultContract": round_records.SEAT_RESULT_SCHEMA}
+    order_hashes = {}
+    rendered = []
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        pending = pending_payload if isinstance(pending_payload, dict) else {}
+        cfg = state.get("config") or {}
+        repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
+                     or os.getcwd())
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
+        skey = round_records.storage_key(seat_key, occurrence)
+        context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
+                                                     seat_key, occurrence, pending_payload)
+        resource_reason = _shipped_resource_refusal(context.get("placeholders"))
+        if resource_reason is not None:
+            raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
+        # Order-input ownership at emission (see also round-driver.md §Emitted orders):
+        #   driver commits in orders-emit: clusters/<i>.json, audit-targets/<skey>.json,
+        #   scoped-hunks.json, verified.json
+        #   driver writes outside orders-emit commit: diff.txt (via _ensure_round_diff when absent
+        #   or untrusted — atomic tmp+rename, content-checked against state)
+        #   orchestrator must supply before dispatch: diff.txt (real git diff), head.diff,
+        #   fix-batch.json (skills/review-code/reference/setup.md session-artifact table).
+        # STUB(#723): order-input existence class not closed — placeholder set and sidecar set
+        # must derive from one source before a fail-closed guard can land here.
+        order_text, render_reason = round_orders.render_order(phase, seat_key, context)
+        if render_reason is not None or not isinstance(order_text, str):
+            raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
+        order_sha = round_records.sha256_text(order_text)
+        order_hashes[skey] = order_sha
+        seats[skey] = {
+            "storeKey": skey,
+            "seat": seat_key,
+            "occurrence": occurrence,
+            "vendor": row["vendor"],
+            "model": row["model"],
+            "engine": row["engine"],
+            "resultContract": round_records.SEAT_RESULT_SCHEMA,
+            "orderSha256": order_sha,
+            "orderPath": paths["order_path"],
+            "envelopeStubPath": paths["envelope_stub_path"],
+        }
+        rendered.append((paths["order_path"], order_text.encode("utf-8"),
+                         paths["envelope_stub_path"], order_sha, row, occurrence, seat_key))
+
     manifest = {"schema": ORDERS_MANIFEST_SCHEMA, "session": _meta_session_id(session_dir),
                 "round": rnd, "phase": phase, "attempt": attempt,
                 "orders": round_records.NOT_EMITTED, "seats": seats}
     path = _orders_manifest_path(session_dir, rnd, phase, attempt)
     manifest_sha = round_records.sha256_text(round_records.canonical(manifest))
-    anchor = {"manifestSha256": manifest_sha,
-              "orders": {seat: round_records.NOT_EMITTED for seat in seats},
-              "path": path}
+    anchor = {"manifestSha256": manifest_sha, "orders": dict(order_hashes), "path": path}
     anchors = state.get("_ordersAnchors")
     if not isinstance(anchors, dict):
         anchors = {}
@@ -3771,11 +4295,20 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     journal_entry = _journal_entry_for_commit(session_dir, journal_cmd, "orders-emitted",
                                               phase=phase, round=rnd, attempt=attempt,
                                               manifestSha256=manifest_sha)
+    sidecar_writes = _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload)
     try:
         c = round_commit.begin(session_dir, "orders-emit")
         c.add_replace_file(os.path.join(session_dir, STATE_FILE),
                            _canonical(state).encode("utf-8"))
         c.add_replace_file(path, round_records.canonical(manifest).encode("utf-8"))
+        for sidecar_path, sidecar_bytes in sidecar_writes:
+            c.add_replace_file(sidecar_path, sidecar_bytes)
+        for order_path, order_bytes, stub_path, order_sha, row, occurrence, seat_key in rendered:
+            c.add_replace_file(order_path, order_bytes)
+            # Projection of the anchor, never the authority — ingestion validates the mirrored hash.
+            stub = _envelope_stub_header(session_dir, rnd, phase, attempt, seat_key, occurrence,
+                                         row, manifest_sha, order_sha)
+            c.add_replace_file(stub_path, round_records.canonical(stub).encode("utf-8"))
         c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
         c.run()
     except round_commit.CommitRefused as exc:
@@ -3859,13 +4392,16 @@ def _seat_for_record_identity(session_dir, ident):
 
 
 def _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt, occurrence=0):
-    """(envelope, err) for a landed seat file, or (None, reason). Never raises."""
+    """(envelope, err) for a landed seat file — full envelope or bare host payload. Never raises."""
     try:
-        lpath = round_records.landing_path(
-            session_dir, rnd, phase, round_records.storage_key(seat_key, occurrence), attempt)
+        skey = round_records.storage_key(seat_key, occurrence)
     except ValueError as exc:
         return None, str(exc)
-    return round_records.read_json(lpath)
+    envelope, refusal = round_records._read_landing_envelope(
+        session_dir, rnd, phase, skey, attempt, occurrence)
+    if refusal is not None:
+        return None, refusal.get("reason")
+    return envelope, None
 
 
 def _preflight_payload_fault(phase, envelope, seat_key):
@@ -4140,9 +4676,16 @@ def _sweep_record(session_dir, state, cmd, phase, rnd, attempt, roster, anchor):
             spath = round_records.store_path(session_dir, rnd, phase, skey, attempt)
         except ValueError:
             continue
-        if not os.path.exists(lpath) or os.path.exists(spath):
+        try:
+            bare_path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+        except ValueError:
+            bare_path = None
+        has_landing = os.path.exists(lpath) or (
+            bare_path is not None and os.path.exists(bare_path))
+        if not has_landing or os.path.exists(spath):
             continue
-        envelope, _lerr = round_records.read_json(lpath)
+        envelope, _lerr = _read_landing_envelope(session_dir, rnd, phase, seat_key, attempt,
+                                                 occurrence)
         fault = _preflight_payload_fault(phase, envelope, seat_key)
         if fault:
             return _refuse_cmd(session_dir, cmd, "payload-fault", phase=phase, rnd=rnd,
@@ -4265,7 +4808,11 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
                            detail="seat %r holds %d roster slot(s); occurrence %d addresses a slot "
                                   "that does not exist" % (seat, slots, occurrence))
     anchor = _orders_anchor(state, session_dir, rnd, phase, cur_attempt)
-    row = _seat_dispatch_row(state, seat)
+    cfg = state.get("config") or {}
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    pending = ((state.get("pending") or {}).get("payload")
+               if isinstance(state.get("pending"), dict) else {})
+    row = _seat_transport_row(state, phase, seat, occurrence, cfg, pending, repo_root)
     envelope = {
         "schema": round_records.SEAT_MISSING_SCHEMA,
         "session": _meta_session_id(session_dir),
@@ -4276,7 +4823,8 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
         "vendor": row["vendor"],
         "model": row["model"],
         "dispatchRef": (anchor or {}).get("manifestSha256"),
-        "orderSha256": ((anchor or {}).get("orders") or {}).get(seat, round_records.NOT_EMITTED),
+        "orderSha256": ((anchor or {}).get("orders") or {}).get(
+            round_records.storage_key(seat, occurrence), round_records.NOT_EMITTED),
         "manifestSha256": (anchor or {}).get("manifestSha256", round_records.NOT_EMITTED),
         "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
         "reason": reason,
@@ -4912,8 +5460,9 @@ def _parse_vendors(raw):
     return cleaned, None
 
 
-def main(argv=None):
-    parser = argparse.ArgumentParser(description="the one-entrypoint review-loop round driver (#507)")
+def build_parser():
+    parser = argparse.ArgumentParser(
+        description="the one-entrypoint review-loop round driver (#507)")
     sub = parser.add_subparsers(dest="cmd", required=True)
 
     pn = sub.add_parser("next")
@@ -4982,8 +5531,11 @@ def main(argv=None):
                     help="a journal sequence number, or marker:<entryHash> for a journal-degraded "
                          "fault marker. There is NO issue reference — eligibility is allowlist-only")
     pt.add_argument("--note", required=True)
+    return parser
 
-    args = parser.parse_args(argv)
+
+def main(argv=None):
+    args = build_parser().parse_args(argv)
     try:
         return _dispatch(args)
     except JournalFaultUnrecordable as jf:

@@ -87,16 +87,21 @@ def render_core(facts, status, created, updated):
     show_it_block = ""
     if show_it:
         show_it_block = "## Show-it surface\n\n%s\n\n" % show_it
+    ratified = (facts.get("ratifiedResiduals") or "").strip()
+    ratified_block = ""
+    if ratified:
+        ratified_block = "## Ratified residuals\n\n%s\n\n" % ratified
     return (
         "<!-- superheroes-core: schemaVersion=%d status=%s created=%s updated=%s -->\n\n"
         "## Threat model\n\n%s\n\n"
         "## Canonical patterns\n\n%s\n\n"
-        "%s"
+        "%s%s"
         "```json superheroes-core\n%s\n```\n"
         % (SCHEMA_VERSION, status, created, updated,
            (facts.get("threatModel") or "").strip(),
            (facts.get("patterns") or "").strip(),
            show_it_block,
+           ratified_block,
            json.dumps(block, indent=2))
     )
 
@@ -154,6 +159,7 @@ def parse_core(text):
         "threatModel": _section(text, "Threat model"),
         "patterns": _section(text, "Canonical patterns"),
         "showItSurface": _section(text, "Show-it surface"),
+        "ratifiedResiduals": _section(text, "Ratified residuals"),
         "created": created,
         "updated": updated,
     }
@@ -172,8 +178,13 @@ def relocate_file(src, dst):
     os.remove(src)
 
 
+def in_repo_core_rel_path():
+    """Relative path from repository root to in-repo ``core.md`` — layout home for drift guards."""
+    return os.path.join(".claude", "superheroes", "core.md")
+
+
 def _core_candidates(cwd, root=None):
-    in_repo = os.path.join(_repo_root(cwd), ".claude", "superheroes", "core.md")
+    in_repo = os.path.join(_repo_root(cwd), in_repo_core_rel_path())
     global_path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", "core.md")
     return in_repo, global_path
 
@@ -331,6 +342,7 @@ def read(cwd, root=None):
         "threatModel": facts["threatModel"],
         "patterns": facts["patterns"],
         "showItSurface": facts["showItSurface"],
+        "ratifiedResiduals": facts["ratifiedResiduals"],
         "behind": behind,
         "created": facts["created"],
         "updated": facts["updated"],
@@ -421,13 +433,20 @@ def gate_config_usable_prefs(cfg):
     return {}
 
 
+def gate_refusal_reason_for_status(status):
+    """Return the canonical refusal reason string for a registered config-gate status.
+
+    Raises ``KeyError`` when *status* is not registered — fail-closed, never silently defaulted."""
+    return _GATE_REFUSAL_REASONS[status]
+
+
 def gate_config_refusal(cfg):
     """Return the ``gate_refusal`` payload for a refusal status, or ``None`` when usable/absent.
 
     An unregistered status raises ``KeyError`` — fail-closed, never silently treated as usable."""
     if not gate_config_is_refusal(cfg):
         return None
-    return gate_refusal(_GATE_REFUSAL_REASONS[cfg.status], cfg.detail)
+    return gate_refusal(gate_refusal_reason_for_status(cfg.status), cfg.detail)
 
 
 def gate_refusal(reason, detail):
@@ -1274,7 +1293,8 @@ def confirm(cwd, *, root=None, now=None):
             if existing.get("status") == "confirmed":
                 return {"action": "noop", "record": existing}
             facts = {k: existing[k] for k in (
-                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface")}
+                "verifyCommand", "stackTags", "threatModel", "patterns", "showItSurface",
+                "ratifiedResiduals")}
             created = existing.get("created") or stamp
             try:
                 store_core.atomic_write(core_path(cwd, root),

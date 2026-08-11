@@ -18,6 +18,7 @@ import audits
 import round_adapters as RA
 import round_driver as RD
 import round_records as RR
+import verification
 
 # --- diffs (same shapes test_round_driver.py drives with) ---------------------
 
@@ -151,6 +152,7 @@ def _state_without_receipt_keys(state):
                 copy = dict(anchor)
                 copy.pop("manifestSha256", None)
                 copy.pop("path", None)
+                copy.pop("orders", None)
                 stripped[key] = copy
             else:
                 stripped[key] = anchor
@@ -990,3 +992,155 @@ def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
     assert after["headDiff"] == HEAD
     assert after["rounds"]["1"]["headDiffSource"] == "path"
     assert after["rounds"]["1"]["adapterProvenance"]["byPhase"][RD.P_FIXER]["headDiffPathSource"] == "store"
+
+
+# =============================================================================
+# payload_contract — conformance with checkers
+# =============================================================================
+
+_CONTRACT_PHASES = tuple(p for p in RA.ADAPTER_PHASES if p in RA._PAYLOAD_CHECKERS)
+
+_SEAT_KEYS = {
+    RD.P_PANEL: "code-reviewer",
+    RD.P_VERIFIERS: "verifier:f.py:0",
+    RD.P_SYNTHESIS: RA.SEAT_SYNTHESIS,
+    RD.P_GAPSWEEP: RA.SEAT_GAPSWEEP,
+    RD.P_SCOPED: RA.SEAT_SCOPED,
+    RD.P_VERIFY: RA.SEAT_VERIFY,
+    RD.P_FIXER: RA.SEAT_FIXER,
+    RD.P_AUDITS: "f.py::t",
+}
+
+
+def _minimal_payload_for_contract(phase, contract, seat_key):
+    payload = {}
+    for field in contract.get("required") or []:
+        enums = contract.get("enums") or {}
+        if field in enums:
+            payload[field] = enums[field][0]
+        elif field == "findings":
+            payload[field] = []
+        elif field == "verdicts":
+            payload[field] = [{"id": "v0", "verdict": verification.VERDICTS[0]}]
+        elif field == "grouping":
+            payload[field] = None
+        elif field == "fixes":
+            payload[field] = []
+        elif field == "id":
+            payload[field] = seat_key
+        elif field == "ruling":
+            payload[field] = audits.AUDIT_RULINGS[0]
+        elif field == "reason":
+            payload[field] = "grounds"
+        else:
+            payload[field] = "x"
+    if phase == RD.P_PANEL and "findings" not in payload:
+        payload[RA.VACUOUS_FIELD] = True
+    return payload
+
+
+@pytest.mark.parametrize("phase", _CONTRACT_PHASES)
+def test_payload_contract_minimal_payload_accepted(phase):
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None, reason
+    seat_key = _SEAT_KEYS[phase]
+    payload = _minimal_payload_for_contract(phase, contract, seat_key)
+    assert RA.payload_fault(phase, payload, seat_key) is None
+
+
+@pytest.mark.parametrize("phase", _CONTRACT_PHASES)
+def test_payload_contract_required_keys_are_necessary(phase):
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None, reason
+    seat_key = _SEAT_KEYS[phase]
+    base = _minimal_payload_for_contract(phase, contract, seat_key)
+    for field in contract.get("required") or []:
+        payload = dict(base)
+        del payload[field]
+        fault = RA.payload_fault(phase, payload, seat_key)
+        assert fault is not None, (
+            "dropping required %r must be refused for %s" % (field, phase))
+
+
+def test_payload_contract_unknown_phase():
+    contract, reason = RA.payload_contract("no-such-phase")
+    assert contract == {} and reason == "unknown-phase:no-such-phase"
+
+
+def test_payload_contract_every_checker_phase_has_data():
+    for phase in RA._PAYLOAD_CHECKERS:
+        contract, reason = RA.payload_contract(phase)
+        assert reason is None, reason
+        assert isinstance(contract.get("required"), list)
+        assert isinstance(contract.get("optional"), list)
+        assert isinstance(contract.get("enums"), dict)
+
+
+def test_payload_contract_deep_copy_isolates_nested_mutation():
+    phase = RD.P_AUDITS
+    contract1, reason = RA.payload_contract(phase)
+    assert reason is None
+    contract1["required"].append("__mutated__")
+    contract1["optional"].append("__mutated__")
+    for values in contract1["enums"].values():
+        values.append("__mutated__")
+    contract1["conditional"]["__mutated__"] = True
+    contract2, reason2 = RA.payload_contract(phase)
+    assert reason2 is None
+    assert "__mutated__" not in contract2["required"]
+    assert "__mutated__" not in contract2["optional"]
+    for values in contract2["enums"].values():
+        assert "__mutated__" not in values
+    assert "__mutated__" not in contract2["conditional"]
+
+
+def test_payload_contract_bindings_match_declared_contracts():
+    for phase, binding in RA._PAYLOAD_FIELD_BINDINGS.items():
+        contract, reason = RA.payload_contract(phase)
+        assert reason is None, reason
+        assert contract.get("required") == binding.get("required")
+        assert contract.get("optional") == binding.get("optional")
+        assert contract.get("conditional") == binding.get("conditional")
+        assert contract.get("enums") == binding.get("enums")
+
+
+@pytest.mark.parametrize("phase", _CONTRACT_PHASES)
+def test_payload_contract_optional_keys_match_checker(phase):
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None, reason
+    seat_key = _SEAT_KEYS[phase]
+    base = _minimal_payload_for_contract(phase, contract, seat_key)
+    assert RA.payload_fault(phase, base, seat_key) is None
+    for field in contract.get("optional") or []:
+        payload = dict(base)
+        if field == "findings":
+            payload[field] = "not-a-list"
+        elif field in ("confidence", "tier", "reason", "command", "headDiff", "headDiffPath",
+                       "evidence", "auditorVendor"):
+            payload[field] = 1
+        elif field in ("receiptMissing", "receiptStale", RA.VACUOUS_FIELD, "escalated"):
+            payload[field] = "not-a-bool"
+        elif field == "newIssues":
+            payload[field] = "not-a-list"
+        elif field == "exit":
+            payload[field] = "not-an-int"
+        elif field == "outputSha256":
+            payload[field] = 1
+        elif field == "coverageDecisions":
+            payload[field] = "not-a-list"
+        else:
+            payload[field] = 1
+        fault = RA.payload_fault(phase, payload, seat_key)
+        assert fault is not None, "optional %r with wrong type must be refused for %s" % (field, phase)
+
+
+def test_payload_contract_audits_conditional_new_issues():
+    phase = RD.P_AUDITS
+    seat_key = _SEAT_KEYS[phase]
+    contract, reason = RA.payload_contract(phase)
+    assert reason is None
+    payload = _minimal_payload_for_contract(phase, contract, seat_key)
+    payload["ruling"] = RA.RULING_NEW_ISSUE
+    payload["newIssues"] = []
+    del payload["newIssues"]
+    assert RA.payload_fault(phase, payload, seat_key) is not None
