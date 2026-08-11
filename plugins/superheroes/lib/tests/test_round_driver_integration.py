@@ -387,110 +387,97 @@ def _drive_to_phase(session_dir, gitdir, panel_findings, head_diff_path, phase,
     raise AssertionError("never reached %r: %s" % (phase, folded))
 
 
-def test_two_audit_targets_sharing_one_id_are_both_recorded_and_both_folded(tmp_path):
-    """`finding_identity` is LINE-LESS, so two findings with the same title at DIFFERENT lines in
-    one file compile as DISTINCT findings and produce TWO audit targets with ONE id. Keyed by seat
-    alone the second target's record collides with the first, and only ONE ruling reaches the fold.
-
-    The discriminator is the `ambiguous` disclosure. `audits.apply_audit_results` keys results by
-    finding id, so it can only SEE the ambiguity when BOTH results arrive; with one arriving it
-    matches that single ruling to BOTH targets and discharges a target nobody audited. So:
-
-      - both records folded → `ambiguous: [id]`, both targets not-discharged (fail closed);
-      - one record folded   → no ambiguity, both targets DISCHARGED off one audit.
-
-    The second is a false certification, which is why the slot — not the seat — is the identity.
-    (Residual, reported not fixed: the audits FOLD still cannot tell two same-id targets apart, so
-    it fails them closed rather than discharging each on its own ruling. That is `audits.py`'s
-    line-less identity model, downstream of this seam and outside this change.)"""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide")
+def test_two_same_titled_targets_at_different_lines_one_discharged_sibling_not(tmp_path):
+    """#915 headline regression: two same-titled findings at different lines get DISTINCT audit
+    target ids. One seat's discharged ruling is recorded; the sibling arrives via record-missing.
+    Assembled through round_adapters._assemble_audits and folded through _fold_audits, the unaudited
+    sibling folds not-discharged — never silently discharged off the sibling's ruling."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="distinct-lines")
     findings = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 3)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
 
     state = _state(session_dir)
     targets = state["_auditTargets"]
     assert len(targets) == 2, targets
-    assert targets[0]["id"] == targets[1]["id"], targets
-    tid = targets[0]["id"]
+    assert targets[0]["id"] != targets[1]["id"], targets
+    assert targets[0]["identity"] == targets[1]["identity"], targets
+    tid0, tid1 = targets[0]["id"], targets[1]["id"]
+    ident = targets[0]["identity"]
 
     roster, reason = round_adapters.roster_for(round_driver.P_AUDITS, state,
                                                state.get("config") or {})
-    assert reason is None and roster == [tid, tid], roster
+    assert reason is None and roster == [tid0, tid1], roster
 
-    # each occurrence lands and records into its OWN durable slot
     pend = state["pending"]
-    _write_dispatch_manifest(session_dir, pend, _slots_of(roster), _auditor_vendor_for(state))
-    store_paths = []
-    for occurrence in (0, 1):
-        payload = {"id": tid, "ruling": "discharged", "auditorVendor": "claude",
-                   "reason": "re-read hunk #%d; the cited defect is gone" % occurrence}
-        _land(session_dir, state, pend, tid, payload, occurrence=occurrence)
-        out = _record(session_dir, tid, occurrence=occurrence)
-        assert out["ok"], (occurrence, out)
-        store_paths.append(out["storePath"])
-    assert store_paths[0] != store_paths[1], store_paths
+    _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
+    _land(session_dir, state, pend, tid0,
+          {"id": tid0, "ruling": "discharged", "auditorVendor": "claude",
+           "reason": "re-read line 2; the defect is gone"})
+    assert _record(session_dir, tid0)["ok"] is True
+    out = round_driver.cmd_record_missing(session_dir, tid1, pend["attempt"], "forfeit")
+    assert out["ok"] is True, out
 
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out["ok"] is True, out
     assert out["folded"]["phase"] == round_driver.P_AUDITS
 
-    # BOTH rulings reached the fold — neither slot's record was dropped or overwritten
     state_after = _state(session_dir)
     audits_round = state_after["auditRounds"][-1]
-    assert [a["identity"] for a in audits_round["outcomes"]] == [tid, tid], audits_round
-    # the ambiguity is VISIBLE only because two results carrying that id arrived
-    assert state_after["_auditOutcome"]["ambiguous"] == [tid], state_after["_auditOutcome"]
-    assert [a["ruling"] for a in audits_round["outcomes"]] == \
-        ["not-discharged", "not-discharged"], audits_round
-    # …and nothing was certified off a single audit: both targets stay open
-    assert state_after["_auditOutcome"]["discharged"] == [], state_after["_auditOutcome"]
-    assert state_after["_auditOutcome"]["notDischarged"] == [tid, tid], \
-        state_after["_auditOutcome"]
+    assert [a["identity"] for a in audits_round["outcomes"]] == [ident, ident], audits_round
+    outcome = state_after["_auditOutcome"]
+    assert tid0 in outcome["discharged"], outcome
+    assert tid1 in outcome["notDischarged"], outcome
+    assert tid1 in outcome["unaudited"], outcome
+    assert tid0 not in outcome["notDischarged"], outcome
 
 
 def test_a_missing_second_occurrence_is_named_by_slot_not_by_seat(tmp_path):
-    """A/B against the test above: with only occurrence 0 recorded, `advance` refuses
-    `incomplete-roster` and NAMES the absent slot `<seat>#1` — a bare `<seat>` would read as "the
-    whole target is missing" while its twin is on disk."""
+    """Two same-location findings in fixBatch yield occurrence-suffixed ids; advance names the
+    absent second target when only the first is recorded."""
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide-short")
-    findings = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 3)]
+    findings = [_blocking_finding("unchecked index", 2)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
-
     state = _state(session_dir)
-    tid = state["_auditTargets"][0]["id"]
+    dup = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 2)]
+    state["fixBatch"] = dup
+    state["_auditTargets"] = round_driver._audit_targets(state, state.get("config") or {}, {})
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    targets = state["_auditTargets"]
+    assert len(targets) == 2 and targets[0]["id"] != targets[1]["id"], targets
+    tid0, tid1 = targets[0]["id"], targets[1]["id"]
     pend = state["pending"]
-    _write_dispatch_manifest(session_dir, pend, [(tid, 0), (tid, 1)], _auditor_vendor_for(state))
-    _land(session_dir, state, pend, tid,
-          {"id": tid, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
-    assert _record(session_dir, tid)["ok"] is True
+    _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
+    _land(session_dir, state, pend, tid0,
+          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+    assert _record(session_dir, tid0)["ok"] is True
 
     out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
     assert out["ok"] is False and out["reason"] == "incomplete-roster", out
-    assert out["seats"] == ["%s#1" % tid], out
+    assert out["seats"] == [tid1], out
 
 
-def test_record_missing_addresses_the_second_occurrence(tmp_path):
-    """`record-missing` owes the same slot addressing: a second target sharing an id must be
-    recordable as absent WITHOUT claiming its twin is absent too."""
+def test_record_missing_addresses_the_second_target(tmp_path):
+    """`record-missing` on a distinct per-location id does not claim its sibling is absent."""
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide-missing")
     findings = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 3)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
 
     state = _state(session_dir)
-    tid = state["_auditTargets"][0]["id"]
+    targets = state["_auditTargets"]
+    tid0, tid1 = targets[0]["id"], targets[1]["id"]
+    assert tid0 != tid1, targets
     pend = state["pending"]
-    _land(session_dir, state, pend, tid,
-          {"id": tid, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
-    assert _record(session_dir, tid)["ok"] is True
-    out = round_driver.cmd_record_missing(session_dir, tid, pend["attempt"], "forfeit",
-                                          occurrence=1)
+    _land(session_dir, state, pend, tid0,
+          {"id": tid0, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+    assert _record(session_dir, tid0)["ok"] is True
+    out = round_driver.cmd_record_missing(session_dir, tid1, pend["attempt"], "forfeit")
     assert out["ok"] is True, out
 
     stored, err = round_records.read_json(out["storePath"])
-    assert err is None and stored["occurrence"] == 1, (err, stored)
-    # the two slots are distinct files: the missing record did not overwrite the recorded ruling
+    assert err is None and stored.get("seat") == tid1, (err, stored)
     other = round_records.store_path(session_dir, pend["round"], pend["phase"],
-                                     round_records.storage_key(tid, 0), pend["attempt"])
+                                     round_records.storage_key(tid0, 0), pend["attempt"])
     kept, err = round_records.read_json(other)
     assert err is None and kept["schema"] == round_records.SEAT_RESULT_SCHEMA, (err, kept)
 

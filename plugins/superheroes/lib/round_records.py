@@ -181,8 +181,9 @@ def storage_key(seat_key, occurrence=0):
     """Map a roster seat key onto a filename-safe, collision-resistant storage key.
 
     Roster keys are not filenames: a verifier cluster key is `src/a/b.py:3` and an audit target
-    id is `src/a/b.py::some-title` — both carry `/` and `:`, and two DISTINCT audit targets can
-    legitimately share one id (hence `occurrence`). The key is `<slug>-<sha16>`: the slug is for
+    id is `src/a/b.py::some-title@L5` (or `...#1` when occurrence-suffixed) — both carry `/` and
+    `:`, and two DISTINCT audit targets can legitimately share one roster seat key (hence
+    `occurrence`). The key is `<slug>-<sha16>`: the slug is for
     a human reading `ls`, the sha16 is what actually carries identity, so two seat keys that
     collapse onto the same truncated slug still get different keys.
 
@@ -218,8 +219,8 @@ def roster_slots(roster):
 
     THE SINGLE HOME for the slot expansion, so no layer above invents a second one. Identity on
     every layer that consumes a roster is (seat_key, occurrence), never the seat key alone: two
-    DISTINCT audit targets can legitimately share one id (`finding_identity` is line-less), so a
-    roster carrying the same key twice describes TWO real seats. `storage_key` already gives each
+    DISTINCT audit targets can legitimately share one roster seat key (same per-location id before
+    occurrence suffixing), so a roster carrying the same key twice describes TWO real seats. `storage_key` already gives each
     its own file; this gives every caller the same enumeration of them.
 
     Order is preserved, never sorted — it is SEMANTIC on the multi-seat phases (the panel folds in
