@@ -395,6 +395,49 @@ def _meta_session_id(session_dir):
     return sid if isinstance(sid, str) and sid else None
 
 
+_REVIEW_SESSION_MARKER = "review-session.json"
+_REVIEW_SESSION_SCHEMA = "review-session/1"
+
+
+def _journal_bootstrap_marker_failure(session_dir, reason):
+    try:
+        _journal_append(session_dir, {"cmd": "bootstrap-review-session-marker",
+                                      "outcome": "failed", "reason": reason})
+    except Exception:
+        pass
+
+
+def _bootstrap_review_session_marker(session_dir):
+    """Write review-session.json scope marker; failures are swallowed (#624 §4)."""
+    try:
+        meta = _session_meta(session_dir)
+        repo_root = meta.get("repoRoot")
+        if not isinstance(repo_root, str) or not repo_root:
+            repo_root = store_core.repo_root(os.getcwd())
+        if not repo_root:
+            _journal_bootstrap_marker_failure(session_dir, "repo-root-unresolvable")
+            return
+        repo_root = os.path.realpath(repo_root)
+        branch = store_core.run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD")
+        if not branch or branch == "HEAD":
+            _journal_bootstrap_marker_failure(session_dir, "detached-head")
+            return
+        gitdir = store_core.get_worktree_gitdir(repo_root)
+        super_dir = os.path.join(gitdir, SIDECAR_DIRNAME)
+        os.makedirs(super_dir, exist_ok=True)
+        marker = {
+            "schema": _REVIEW_SESSION_SCHEMA,
+            "sessionDir": os.path.realpath(session_dir),
+            "startedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "repoRoot": repo_root,
+            "branch": branch,
+        }
+        marker_path = os.path.join(super_dir, _REVIEW_SESSION_MARKER)
+        round_commit.atomic_write_bytes(marker_path, _canonical(marker).encode("utf-8"))
+    except Exception as exc:
+        _journal_bootstrap_marker_failure(session_dir, str(exc))
+
+
 def _state_version(state):
     """The state's `schemaVersion` when it is one this driver knows, else None. Read-only — a
     loaded state is NEVER stamped with a version it did not carry (the hash-preservation rule)."""
@@ -3236,6 +3279,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "attempt": None, "outcome": "refused-session-id",
                                           "reason": mint_reason})
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
+        _bootstrap_review_session_marker(session_dir)
         state = new_state(config_overrides)
     else:
         state = loaded
@@ -5420,18 +5464,22 @@ def _prepare_sidecar(session_dir, state, git=None, journal_cmd="advance", receip
                 receipt_bytes = fh.read()
         except OSError as exc:
             return {"reason": "sidecar-receipt-unreadable", "detail": str(exc)}
+    expected_base_ref = config.get("baseBranch") or "unpinned"
     path = _sidecar_path(gitdir)
     existing, err = round_records.read_json(path)
     if err is None and isinstance(existing, dict):
         stale, _why = round_records.sidecar_stale(existing, head_sha=head_sha,
                                                   receipt_bytes=receipt_bytes,
                                                   session_dir=session_dir)
+        if not stale and existing.get("baseRef") != expected_base_ref:
+            stale = True
         if not stale:
             return {"ok": True, "path": path, "repaired": False, "needs_write": False}
     branch = run_git(repo_root, "rev-parse", "--abbrev-ref", "HEAD") or "detached"
-    base_ref = config.get("baseRef") or "unpinned"
+    base_ref = expected_base_ref
+    base_pin = config.get("baseRef")
     base_sha = run_git(repo_root, "rev-parse", "--verify", "--quiet",
-                       "%s^{commit}" % base_ref) if config.get("baseRef") else None
+                       "%s^{commit}" % base_pin) if base_pin else None
     certification = state.get("certification") or {}
     sidecar = round_records.build_sidecar(
         repoId=(store_core.normalize_remote(run_git(repo_root, "remote", "get-url", "origin"))

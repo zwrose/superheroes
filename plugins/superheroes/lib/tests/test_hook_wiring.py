@@ -80,6 +80,31 @@ def test_worktree_guard_gate_wired_fail_closed_between_owner_and_timeout():
         "worktree guard must be listed after owner_authority_gate and before bash_timeout"
 
 
+def test_handback_receipt_gate_is_not_wired_shipped_dark():
+    """#954: the review-receipt handback refusal class ships dark — unwired from PreToolUse.
+
+    Re-arming requires deleting or inverting this test deliberately.
+    """
+    cfg = json.load(open(_HOOKS))
+    bash = [h for h in cfg["hooks"]["PreToolUse"] if h.get("matcher") == "Bash"]
+    assert bash, "no Bash PreToolUse matcher"
+    cmds = [h["command"] for entry in bash for h in entry["hooks"]]
+
+    handback = [c for c in cmds if "handback_receipt_gate.py" in c]
+    assert not handback, "handback_receipt_gate.py must not be wired on the Bash matcher (shipped dark, #954)"
+
+    expected = [
+        "owner_authority_gate.py",
+        "worktree_guard_gate.py",
+        "bash_timeout.py",
+    ]
+    assert len(cmds) == len(expected), (
+        f"Bash PreToolUse chain must be exactly {len(expected)} hooks, got {len(cmds)}"
+    )
+    for i, name in enumerate(expected):
+        assert name in cmds[i], f"hook {i} must be {name}, got {cmds[i]!r}"
+
+
 def test_hooks_codex_still_wires_nothing():
     cfg = json.load(open(_HOOKS_CODEX))
     assert cfg.get("hooks") == {}

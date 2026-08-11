@@ -216,6 +216,15 @@ or docs build)?** There is nothing to bring up — say so and skip the app-bring
 just your worktree + branch. **You own integration** — you merge the work orders' branches back
 together, no one else does.
 
+**Full lane only — declare the build lane.** Once the worktree and branch exist, before any
+autonomous work, run `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/build_lane.py" declare
+--repo-root "<abs>" --lane full --issue <n>` with the routed issue number. Light and micro lanes
+declare nothing. A **refusal to declare is a park**, not something to work around: the declaration
+writes the **full-lane scope marker** and that is all it does today — the marker is the record.
+**The handback receipt gate is shipped dark and enforces nothing**; arming is owned by **#954**,
+and this marker is the scope signal #954's retrospective audit and shadow mode will read. The
+marker is **bound to the branch** — when the worktree moves to other work the marker goes stale.
+
 ## 3. Preflight — the checkout before going autonomous
 
 With the app running and **before any autonomous work** (in the full lane the brief itself is
@@ -524,7 +533,7 @@ without a tool call.
   was launched by the advisor's launcher — stamp the builder liveness heartbeat at each state change:
   entering a phase, before and after a dispatch, on park, on handback. The contract lives in
   CONVENTIONS §15 — path, fields, states, and verbs there; do not restate them here. Stamp with
-  `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" stamp --repo-root <repo-root> --state <state> --phase <phase> --stale-after <seconds-until-next-stamp>`
+  `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/heartbeat.py" stamp --repo-root "<repo-root>" --state <state> --phase <phase> --stale-after <seconds-until-next-stamp>`
   (`SUPERHEROES_LAUNCH_ID` supplies `--launch-id` when unset); pick `--stale-after` for the phase you are entering — your own promise about when you will stamp again. When `SUPERHEROES_LAUNCH_ID` is **absent**, the session was
   **not** launched by the advisor's launcher: **not advisor-managed, no heartbeat coverage** — that
   is **not** permission to invent an id, and **not** a build failure. A directly-invoked workhorse

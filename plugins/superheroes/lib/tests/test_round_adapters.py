@@ -1085,6 +1085,9 @@ def test_payload_contract_deep_copy_isolates_nested_mutation():
     for values in contract1["enums"].values():
         values.append("__mutated__")
     contract1["conditional"]["__mutated__"] = True
+    contract1["types"]["__mutated__"] = "string"
+    contract1["elements"]["__mutated__"] = {"required": [], "optional": [], "types": {}, "enums": {}}
+    contract1["predicates"].append({"name": "x", "fields": ["x"], "rule": "x"})
     contract2, reason2 = RA.payload_contract(phase)
     assert reason2 is None
     assert "__mutated__" not in contract2["required"]
@@ -1092,6 +1095,67 @@ def test_payload_contract_deep_copy_isolates_nested_mutation():
     for values in contract2["enums"].values():
         assert "__mutated__" not in values
     assert "__mutated__" not in contract2["conditional"]
+    assert "__mutated__" not in contract2["types"]
+    assert "__mutated__" not in contract2["elements"]
+    assert all(p.get("name") != "x" for p in contract2["predicates"])
+
+
+def test_payload_contract_declaration_completeness():
+    """Every declared field has a type; every elements key is a list-of-objects field; every
+    predicate carries name, fields, and rule — so the declaration cannot silently go stale."""
+    list_object_types = {"list-of-objects", "nullable-list-of-objects"}
+    for phase in RA.ADAPTER_PHASES:
+        contract, reason = RA.payload_contract(phase)
+        assert reason is None, reason
+        types = contract.get("types") or {}
+        for field in (contract.get("required") or []) + (contract.get("optional") or []):
+            assert field in types, "phase %s field %r missing from types" % (phase, field)
+        for field, elem in (contract.get("elements") or {}).items():
+            assert types.get(field) in list_object_types, (
+                "elements.%r on %s must be list-of-objects or nullable-list-of-objects" % (field, phase))
+            assert isinstance(elem.get("required"), list)
+            assert isinstance(elem.get("optional"), list)
+            assert isinstance(elem.get("types"), dict)
+            assert isinstance(elem.get("enums"), dict)
+        for pred in contract.get("predicates") or []:
+            assert pred.get("name"), "predicate on %s missing name" % phase
+            assert pred.get("fields"), "predicate %r on %s missing fields" % (pred.get("name"), phase)
+            assert pred.get("rule"), "predicate %r on %s missing rule" % (pred.get("name"), phase)
+
+
+def test_declared_element_required_id_is_enforced():
+    fault = RA.payload_fault(RD.P_VERIFIERS,
+                             {"verdicts": [{"verdict": verification.VERDICTS[0]}]},
+                             "verifier:f.py:0")
+    assert fault is not None and "id" in fault
+
+
+def test_declared_element_type_reason_is_string():
+    fault = RA.payload_fault(
+        RD.P_VERIFIERS,
+        {"verdicts": [{"id": "v0", "verdict": verification.VERDICTS[0], "reason": 1}]},
+        "verifier:f.py:0")
+    assert fault is not None and "`verdicts[0].reason` is int, not a string" in fault
+
+
+def test_declared_element_enum_verdict_is_enforced():
+    fault = RA.payload_fault(RD.P_VERIFIERS,
+                             {"verdicts": [{"id": "v0", "verdict": "NOT-A-VERDICT"}]},
+                             "verifier:f.py:0")
+    assert fault is not None and "`verdicts[0].verdict` is 'NOT-A-VERDICT'" in fault
+
+
+def test_declared_top_level_type_fixes_is_list():
+    fault = RA.payload_fault(RD.P_FIXER, {"fixes": "not-a-list"}, RA.SEAT_FIXER)
+    assert fault is not None and "`fixes` is str, not a list" in fault
+
+
+def test_unknown_type_token_refuses_loudly():
+    contract = dict(RA._PAYLOAD_CONTRACTS[RD.P_SCOPED])
+    contract["types"] = dict(contract["types"])
+    contract["types"]["findings"] = "not-a-real-type"
+    with pytest.raises(ValueError, match="unknown type token"):
+        RA._check_declared({"findings": []}, contract)
 
 
 def test_payload_contract_bindings_match_declared_contracts():

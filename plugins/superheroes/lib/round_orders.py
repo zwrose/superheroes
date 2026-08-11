@@ -119,6 +119,10 @@ def _read_template(phase: str) -> tuple[str | None, str | None]:
         return None, "template-unreadable:%s:%s" % (phase, exc)
 
 
+def _element_has_shape(element: dict) -> bool:
+    return any(element.get(key) for key in ("required", "optional", "types", "enums"))
+
+
 def _format_payload_contract(phase: str) -> tuple[str | None, str | None]:
     contract, reason = round_adapters.payload_contract(phase)
     if reason:
@@ -134,13 +138,37 @@ def _format_payload_contract(phase: str) -> tuple[str | None, str | None]:
     optional = contract.get("optional") or []
     if optional:
         lines.append("Optional keys: %s" % ", ".join(optional))
+    types = contract.get("types") or {}
+    for field in sorted(types):
+        lines.append("%s type: %s" % (field, types[field]))
     enums = contract.get("enums") or {}
     for field in sorted(enums):
         values = enums[field]
         lines.append("%s enum: %s" % (field, " | ".join(values)))
+    elements = contract.get("elements") or {}
+    for field in sorted(elements):
+        element = elements[field]
+        if not _element_has_shape(element):
+            continue
+        elem_required = element.get("required") or []
+        if elem_required:
+            lines.append("%s[] required keys: %s" % (field, ", ".join(elem_required)))
+        elem_optional = element.get("optional") or []
+        if elem_optional:
+            lines.append("%s[] optional keys: %s" % (field, ", ".join(elem_optional)))
+        elem_types = element.get("types") or {}
+        for key in sorted(elem_types):
+            lines.append("%s[].%s type: %s" % (field, key, elem_types[key]))
+        elem_enums = element.get("enums") or {}
+        for key in sorted(elem_enums):
+            values = elem_enums[key]
+            lines.append("%s[].%s enum: %s" % (field, key, " | ".join(values)))
     conditional = contract.get("conditional") or {}
     for field in sorted(conditional):
         lines.append("Conditional — %s: %s" % (field, conditional[field]))
+    predicates = contract.get("predicates") or []
+    for predicate in predicates:
+        lines.append("Also enforced — %s: %s" % (predicate["name"], predicate["rule"]))
     return "\n".join(lines), None
 
 

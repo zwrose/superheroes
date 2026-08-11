@@ -1345,3 +1345,71 @@ def test_synthesis_order_channel_file_when_reviewer_engine_is_codex(tmp_path, mo
     assert reason is None
     assert "Payload landing path:" in text
     assert "stdout channel" not in text.split("## Return your result")[-1]
+
+
+# --- payload-contract doc-truth guard ------------------------------------------
+
+
+_ROUND_DRIVER_REF = os.path.join(_PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md")
+
+
+def _read_round_driver_reference():
+    with open(_ROUND_DRIVER_REF, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _split_markdown_table_row(row):
+    """Split a markdown table row on unescaped ``|`` delimiters."""
+    parts = []
+    current = []
+    i = 0
+    while i < len(row):
+        if row[i:i + 2] == "\\|":
+            current.append("|")
+            i += 2
+        elif row[i] == "|":
+            parts.append("".join(current))
+            current = []
+            i += 1
+        else:
+            current.append(row[i])
+            i += 1
+    parts.append("".join(current))
+    return parts
+
+
+def _round_driver_table_cell(phase, cell_index=1):
+    marker = "| `%s` |" % phase
+    for line in _read_round_driver_reference().splitlines():
+        if line.startswith(marker):
+            parts = _split_markdown_table_row(line)
+            if len(parts) <= cell_index + 1:
+                raise RuntimeError("table row for %r has no cell %d" % (phase, cell_index))
+            return parts[cell_index + 1].strip()
+    raise RuntimeError("no table row for phase %r in round-driver.md" % phase)
+
+
+def _submit_shape_prose(cell):
+    match = re.search(r"Submit `\{([^`]+)\}`", cell)
+    if not match:
+        raise RuntimeError("no Submit `{...}` shape in row prose")
+    return match.group(1)
+
+
+def test_round_driver_payload_contract_doc_truth_guard():
+    """round-driver.md submit shapes ↔ payload_contract() for run-verify and dispatch-fixer."""
+    verify_contract, reason = RA.payload_contract(RP.P_VERIFY)
+    assert reason is None, reason
+    verify_row = _round_driver_table_cell("run-verify")
+    for token in verify_contract["enums"]["result"]:
+        assert token in verify_row, (
+            "run-verify row missing verify result enum %r (contract drifted from docs)" % token)
+
+    fixer_contract, reason = RA.payload_contract(RP.P_FIXER)
+    assert reason is None, reason
+    fixer_row = _round_driver_table_cell("dispatch-fixer")
+    submit_shape = _submit_shape_prose(fixer_row)
+    for key in fixer_contract.get("optional") or []:
+        assert key in submit_shape, (
+            "dispatch-fixer submit shape missing optional key %r (contract drifted from docs)"
+            % key)

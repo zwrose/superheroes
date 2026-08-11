@@ -4,7 +4,7 @@ driver computed from the fixer's head diff — not the whole repository.
 ## Input
 - Scoped hunks (the only files/lines to review): /tmp/superheroes-session-wo4-golden/round-2/scoped-hunks.json
 - Head diff (read cited hunks here): /tmp/superheroes-session-wo4-golden/round-2/head.diff
-- Base rubric (severity, verification rules, panel output format): ${PLUGIN_ROOT}/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): /private/tmp/wh723-car5/plugins/superheroes/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - Verification root (read cited files here ONLY): /home/user/proj
@@ -46,6 +46,7 @@ A finding that reduces wholly to a recorded residual below is a non-blocking res
 Your result must carry a payload matching this shape:
 
 Required keys: findings
+findings type: list-of-objects
 
 ## Return your result
 
