@@ -780,8 +780,20 @@ def _write_report(ok=True, signal="ok", test_failed=True, test_passed=True):
                        "evidence": {"testFailed": test_failed, "testPassed": test_passed}})
 
 
+def _contracted_report_tail(ok=True, signal="ok", test_failed=True, test_passed=True):
+    """Prose-free tail matching I1 grammar (sentinel line + JSON object)."""
+    return EA.WRITE_REPORT_SENTINEL + "\n" + _write_report(ok, signal, test_failed, test_passed)
+
+
+def _stdout_with_contracted_report(prose="", ok=True, signal="ok", test_failed=True, test_passed=True):
+    tail = _contracted_report_tail(ok, signal, test_failed, test_passed)
+    if prose:
+        return prose.rstrip() + "\n" + tail
+    return tail
+
+
 def test_salvage_write_report_recovers_stream_enveloped_report():
-    report = _write_report()
+    report = _contracted_report_tail()
     assert EA.salvage_write_report("cursor", "build", _envelope(report), "fed prompt") == {
         "report": {"ok": True, "signal": "ok",
                    "evidence": {"testFailed": True, "testPassed": True}},
@@ -799,7 +811,7 @@ def test_salvage_write_report_empty_or_non_string_stdout_is_none(stdout):
 
 @pytest.mark.parametrize("fed_prompt", [None, "", " \n\t", 7, []])
 def test_salvage_write_report_empty_or_non_string_prompt_skips_strip(fed_prompt):
-    result = EA.salvage_write_report("codex", "fix", _write_report(), fed_prompt)
+    result = EA.salvage_write_report("codex", "fix", _contracted_report_tail(), fed_prompt)
     assert result is not None and result["report"]["ok"] is True
 
 
@@ -900,7 +912,7 @@ def test_salvage_write_report_prose_excerpt_caps_bytes_without_multibyte_failure
 
 def test_salvage_write_report_honest_refusal_is_recovered():
     result = EA.salvage_write_report(
-        "cursor", "fix", _write_report(False, "plan_wrong", True, False), "prompt")
+        "cursor", "fix", _contracted_report_tail(False, "plan_wrong", True, False), "prompt")
     assert result == {
         "report": {"ok": False, "signal": "plan_wrong",
                    "evidence": {"testFailed": True, "testPassed": False}},
@@ -912,26 +924,135 @@ def test_salvage_write_report_honest_refusal_is_recovered():
 
 
 def test_salvage_write_report_marks_partial_json_tail_truncated():
-    # axis: truncation — a complete report followed by a partial JSON object remains recoverable.
-    stdout = _write_report() + '\n{"still-writing":'
+    # axis: truncation — partial JSON in prose before a complete sentinel report is not truncated.
+    stdout = 'Working...\n{"still-writing":\n' + _contracted_report_tail()
     result = EA.salvage_write_report("codex", "build", stdout, "prompt")
-    assert result is not None and result["truncated"] is True
+    assert result is not None and result["structured"] is True and result["truncated"] is False
+
+
+def test_salvage_write_report_partial_json_after_sentinel_report_is_not_structured():
+    stdout = _contracted_report_tail() + '\n{"still-writing":'
+    result = EA.salvage_write_report("codex", "build", stdout, "prompt")
+    assert result is None or result.get("structured") is not True
 
 
 def test_salvage_write_report_does_not_mark_markdown_checklist_tail_truncated():
-    # axis: truncation — bracketed markdown after a complete report is ordinary prose, not JSON.
-    stdout = _write_report() + "\n- [x] tests green"
+    # axis: truncation — markdown in prose before the sentinel tail is not JSON truncation.
+    stdout = "Summary of work.\n- [x] tests green\n" + _contracted_report_tail()
     result = EA.salvage_write_report("codex", "build", stdout, "prompt")
     assert result is not None and result["truncated"] is False
 
 
 def test_salvage_write_report_rejects_review_role():
-    assert EA.salvage_write_report("codex", "review", _write_report(), "prompt") is None
+    assert EA.salvage_write_report("codex", "review", _contracted_report_tail(), "prompt") is None
 
 
 def test_salvage_write_report_never_raises(monkeypatch):
     monkeypatch.setattr(EA, "_unwrap_stream_envelope", lambda _stdout: (_ for _ in ()).throw(RuntimeError()))
-    assert EA.salvage_write_report("codex", "build", _write_report(), "prompt") is None
+    assert EA.salvage_write_report("codex", "build", _contracted_report_tail(), "prompt") is None
+
+
+# ---------------------------------------------------------------------------
+# Write-report contract: extract_write_report, grade_write_report (I1–I4)
+
+
+@pytest.mark.parametrize("text,expected", [
+    ("Summary.\n" + EA.WRITE_REPORT_SENTINEL + '\n{"ok": true, "signal": "ok", "evidence": {}}',
+     {"ok": True, "signal": "ok", "evidence": {}}),
+    (EA.WRITE_REPORT_SENTINEL + '\n{"ok": true}\n  \n',
+     {"ok": True}),
+    ("noise\n" + EA.WRITE_REPORT_SENTINEL + '\n{"ok": true}\n' + EA.WRITE_REPORT_SENTINEL +
+     '\n{"ok": false, "signal": "plan_wrong"}',
+     {"ok": False, "signal": "plan_wrong"}),
+    (EA.WRITE_REPORT_SENTINEL + '\n{"ok": true}\nextra prose', None),
+    (EA.WRITE_REPORT_SENTINEL + '\n{"ok": true, "trunc":', None),
+    (EA.WRITE_REPORT_SENTINEL + '\n[1, 2]', None),
+    (EA.WRITE_REPORT_SENTINEL + "\n", None),
+    ('{"ok": true, "signal": "ok"}', None),
+    ("text " + EA.WRITE_REPORT_SENTINEL + '\n{"ok": true}', None),
+])
+def test_extract_write_report_i1_grammar_adversarial(text, expected):
+    got = EA.extract_write_report(text)
+    assert got == expected
+
+
+def test_grade_write_report_echo_fail_open_plain():
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    stdout = fed_prompt
+    res = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    assert res.get("ok") is not True
+
+
+def test_grade_write_report_echo_fail_open_stream_envelope():
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    inner = fed_prompt
+    stdout = _envelope(inner)
+    res = EA.grade_write_report("cursor", "build", stdout, fed_prompt)
+    assert res.get("ok") is not True
+
+
+def test_grade_write_report_i2_contracted_stray_json_is_unreadable():
+    fed_prompt = "Order text.\n" + EA.WRITE_REPORT_CONTRACT
+    stdout = 'Prose only.\n{"foo": 1}'
+    res = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    assert res == {"ok": False, "reason": "unreadable"}
+    assert res.get("signal") != "needs_context"
+
+
+def test_grade_write_report_i2_uncontracted_matches_parse_result():
+    stdout = 'Prose only.\n{"foo": 1}'
+    fed_prompt = "plain order without contract"
+    legacy = EA.parse_result("codex", "build", stdout)
+    assert EA.grade_write_report("codex", "build", stdout, fed_prompt) == legacy
+
+
+@pytest.mark.parametrize("stdout,expected", [
+    ('', {"ok": False, "reason": "unreadable"}),
+    (json.dumps({"ok": True, "evidence": {"testFailed": False, "testPassed": True}}),
+     {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}}),
+    (json.dumps({"ok": False, "signal": "plan_wrong",
+                 "evidence": {"testFailed": True, "testPassed": False}}),
+     {"ok": False, "signal": "plan_wrong", "reason": "plan_wrong",
+      "evidence": {"testFailed": True, "testPassed": False}}),
+    (json.dumps({"ok": "false", "signal": "plan_wrong"}),
+     {"ok": False, "signal": "plan_wrong", "reason": "plan_wrong",
+      "evidence": {"testFailed": False, "testPassed": False}}),
+])
+def test_parse_result_i3_build_unchanged(stdout, expected):
+    assert EA.parse_result("codex", "build", stdout) == expected
+
+
+def test_salvage_write_report_i4_prose_fragment_without_sentinel_is_not_structured():
+    prose = _DISPATCH_1_PROSE + '\n{"ok": true, "signal": "ok"}'
+    salvage = EA.salvage_write_report("codex", "build", prose, "fed prompt")
+    assert salvage is not None
+    assert salvage["structured"] is not True
+    assert salvage["requiresManualRead"] is True
+
+
+def test_salvage_write_report_i4_sentinel_report_is_structured():
+    stdout = _stdout_with_contracted_report("Long enough prose for salvage.\n" * 20)
+    salvage = EA.salvage_write_report("codex", "build", stdout, "fed prompt")
+    assert salvage is not None and salvage["structured"] is True
+    assert salvage["report"]["ok"] is True
+
+
+def test_grade_write_report_honest_refusal_round_trip():
+    fed = EA.WRITE_REPORT_CONTRACT
+    tail = EA.WRITE_REPORT_SENTINEL + '\n{"ok": false, "signal": "plan_wrong"}'
+    res = EA.grade_write_report("codex", "build", "stopped.\n" + tail, fed)
+    assert res["ok"] is False and res["signal"] == "plan_wrong" and res["reason"] == "plan_wrong"
+    off = EA.WRITE_REPORT_SENTINEL + '\n{"ok": false, "signal": "owner-please-merge"}'
+    res2 = EA.grade_write_report("codex", "build", off, fed)
+    assert res2["ok"] is False and res2["signal"] == "needs_context"
+    assert res2["reason"] == "needs_context"
+    assert "owner" not in str(res2.get("signal", ""))
+
+
+def test_write_prompt_is_contracted():
+    assert EA.write_prompt_is_contracted("") is False
+    assert EA.write_prompt_is_contracted("plain") is False
+    assert EA.write_prompt_is_contracted("x\n" + EA.WRITE_REPORT_CONTRACT) is True
 
 
 def test_build_argv_verify_match(tmp_path, capsys):
