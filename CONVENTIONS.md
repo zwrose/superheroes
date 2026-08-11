@@ -1013,9 +1013,9 @@ loudness is the whole reason a pointer beats an inline copy: an inline copy that
 still reads as authoritative, whereas a dangling pointer is visibly broken. It is enforced on two
 sides. **At order-read time**, the consumer stops and reports rather than substituting memory or a
 guess (`agents/implementer.md`, `agents/pilot.md`). **In CI**, `validate_skills.py`'s
-`check_citations` resolves every plugin-relative citation in the files dispatched consumers read —
-`agents/`, `rubric/`, and the `reference/` trees — and fails the build when one dangles. That check
-found three dangling citations already in the tree when it was introduced.
+`check_citations` scans those same trees for path-like inline-code citations and fails the build when
+one does not resolve from the plugin root. That check found three dangling citations already in the
+tree when it was introduced.
 
 **Citations are self-contained.** Write the **full plugin-relative path**
 (`skills/guardian/reference/calibration.md`), not a fragment whose meaning depends on the
