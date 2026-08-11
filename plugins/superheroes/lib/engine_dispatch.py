@@ -37,6 +37,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import cli_contract as cc  # noqa: E402  argparse caller-contract builders
 import dispatch_outcome  # noqa: E402  outcome vocabulary chokepoint (#747)
 import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok — the pure core
 import file_lock  # noqa: E402
@@ -3235,56 +3236,66 @@ def dispatch_abandon(run_dir):
         )
 
 
-def main(argv):
+def build_parser():
     ap = argparse.ArgumentParser(prog="engine_dispatch")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("dispatch-review")
-    d.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    d.add_argument("--model", default=None)
-    d.add_argument("--effort", required=True)
-    d.add_argument("--engine-model", default=None)
-    d.add_argument("--prompt-path", required=True)
-    d.add_argument("--schema-path", default=None)
-    d.add_argument("--timeout", type=int, default=RETRY_MIN_TIMEOUT)
-    d.add_argument("--retry-timeout", type=int, default=RETRY_MIN_TIMEOUT)
-    d.add_argument("--progress-file", default=None)
-    d.add_argument("--repo-root", default=None)
-    d.add_argument("--run-dir", default=None)
-    d.add_argument("--max-wait", type=int, default=None)
-    d.add_argument("--order-id", default=None)
-    d.add_argument("--diff-base", default=None, metavar="<commit-oid>",
-                   help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
-                        "to stage the merge-base->head review patch against; a revision "
-                        "expression, branch name or tag is refused")
+    cc.add_argument(d, "--engine", contract="choices:codex,cursor",
+                    required=True, choices=("codex", "cursor"))
+    cc.add_argument(d, "--model", contract="model-not-a-role", default=None,
+                    type=cc.optional_model_not_a_role)
+    cc.add_argument(d, "--effort", contract="effort", required=True)
+    cc.add_argument(d, "--engine-model", contract="free-text", default=None)
+    cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
+    cc.add_argument(d, "--schema-path", contract="free-text", default=None)
+    cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(d, "--retry-timeout", contract="integer",
+                    default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(d, "--progress-file", contract="free-text", default=None)
+    cc.add_argument(d, "--repo-root", contract="repo-root", required=True)
+    cc.add_argument(d, "--run-dir", contract="existing-directory", default=None)
+    cc.add_argument(d, "--max-wait", contract="integer", default=None, type=int)
+    cc.add_argument(d, "--order-id", contract="free-text", default=None)
+    cc.add_argument(d, "--diff-base", contract="free-text", default=None, metavar="<commit-oid>",
+                    help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
+                         "to stage the merge-base->head review patch against; a revision "
+                         "expression, branch name or tag is refused")
 
     w = sub.add_parser("dispatch-write")
-    w.add_argument("--engine", required=True, choices=("codex", "cursor"))
-    w.add_argument("--model", default=None)
-    w.add_argument("--effort", default=None)
-    w.add_argument("--engine-model", default=None)
-    w.add_argument("--prompt-path", required=True)
-    w.add_argument("--cwd", required=True)
-    w.add_argument("--order-id", default=None)
-    w.add_argument("--base-sha", default=None)
-    w.add_argument("--run-dir", required=True)
-    w.add_argument("--timeout", type=int, default=RETRY_MIN_TIMEOUT)
-    w.add_argument("--retry-timeout", type=int, default=RETRY_MIN_TIMEOUT)
-    w.add_argument("--max-wait", type=int, default=None)
-    w.add_argument("--progress-file", default=None)
-    w.add_argument("--expect-item", action="append", default=None)
-    w.add_argument("--expect-items-file", default=None)
+    cc.add_argument(w, "--engine", contract="choices:codex,cursor",
+                    required=True, choices=("codex", "cursor"))
+    cc.add_argument(w, "--model", contract="model-not-a-role", default=None,
+                    type=cc.optional_model_not_a_role)
+    cc.add_argument(w, "--effort", contract="effort", default=None)
+    cc.add_argument(w, "--engine-model", contract="free-text", default=None)
+    cc.add_argument(w, "--prompt-path", contract="free-text", required=True)
+    cc.add_argument(w, "--cwd", contract="existing-directory", required=True)
+    cc.add_argument(w, "--order-id", contract="free-text", default=None)
+    cc.add_argument(w, "--base-sha", contract="free-text", default=None)
+    cc.add_argument(w, "--run-dir", contract="creatable-path", required=True)
+    cc.add_argument(w, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(w, "--retry-timeout", contract="integer",
+                    default=RETRY_MIN_TIMEOUT, type=int)
+    cc.add_argument(w, "--max-wait", contract="integer", default=None, type=int)
+    cc.add_argument(w, "--progress-file", contract="free-text", default=None)
+    cc.add_argument(w, "--expect-item", contract="free-text", action="append", default=None)
+    cc.add_argument(w, "--expect-items-file", contract="free-text", default=None)
 
     p = sub.add_parser("dispatch-poll")
-    p.add_argument("--run-dir", required=True)
+    cc.add_argument(p, "--run-dir", contract="existing-directory", required=True)
 
     a = sub.add_parser("dispatch-abandon")
-    a.add_argument("--run-dir", required=True)
+    cc.add_argument(a, "--run-dir", contract="existing-directory", required=True)
 
     c = sub.add_parser("run-child")
-    c.add_argument("--run-dir", required=True)
+    cc.add_argument(c, "--run-dir", contract="existing-directory", required=True)
 
-    args = ap.parse_args(argv)
+    return ap
+
+
+def main(argv):
+    args = build_parser().parse_args(argv)
     if args.cmd == "dispatch-review":
         res = dispatch_review(args.engine, model=args.model, effort=args.effort,
                               engine_model=args.engine_model, prompt_path=args.prompt_path,

@@ -43,6 +43,14 @@ def test_judgment_finding_id_delegates_to_location_id():
     assert RD._judgment_finding_id(f) == "%s@L42" % FI.finding_identity(f)
 
 
+def test_judgment_row_ids_occurrence_suffix_same_location():
+    # axis: repeated same-location judgment findings must get #1, #2, … suffixes
+    f = _finding(line=5, title="dup")
+    loc = RD._location_id(f)
+    findings = [f, dict(f), dict(f)]
+    assert RD._judgment_row_ids(findings) == [loc, "%s#1" % loc, "%s#2" % loc]
+
+
 # --- D2: unique ids + identity ------------------------------------------------
 
 def test_audit_targets_distinct_ids_same_title_different_lines():

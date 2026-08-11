@@ -2899,3 +2899,289 @@ def test_write_builder_dispatch_tier_refused_duplicate_key_in_lock_b2(tmp_path, 
     assert res["action"] == "refused"
     assert res["reason"] == "duplicate-core-key:reviewer"
     assert open(path, encoding="utf-8").read() == before
+
+
+# ---------------------------------------------------------------------------
+# review gate policy overlay writer + reader (WO-5)
+# ---------------------------------------------------------------------------
+
+def _valid_gate_policy(rules=None):
+    return {
+        "schema": "gate-policy/1",
+        "default": "park",
+        "rules": rules or [],
+    }
+
+
+def _judgment_skip_rule(severity="important"):
+    return {
+        "gate": "present-judgment",
+        "findingClass": "judgment:%s" % severity,
+        "disposition": "skip",
+    }
+
+
+def _write_core_with_ratified_residuals(tmp_path, prefs=None):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = dict(_CORE_FACTS)
+    facts["ratifiedResiduals"] = "Owner ratified: keep legacy auth path for Q3."
+    if prefs is not None:
+        facts["enginePreferences"] = dict(prefs)
+    CM.write(repo, facts, "confirmed", root=store, now="2026-06-26")
+    return repo, store
+
+
+def test_write_review_gate_policy_prose_preservation_including_ratified_residuals(tmp_path):
+    repo, store = _write_core_with_ratified_residuals(tmp_path)
+    path = CM.core_path(repo, store)
+    # Hand-edited bytes between prose and the json fence — outside every parsed section.
+    text = open(path, encoding="utf-8").read()
+    text = text.replace(
+        "```json superheroes-core",
+        "<!-- owner hand-edit marker -->\n\n```json superheroes-core",
+    )
+    open(path, "w", encoding="utf-8").write(text)
+    before = open(path, encoding="utf-8").read()
+    ratified_before = CM._section(before, "Ratified residuals")
+    threat_before = CM._section(before, "Threat model")
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    res = CM.write_review_gate_policy(repo, policy, root=store)
+    assert res["action"] == "written"
+    after = open(path, encoding="utf-8").read()
+    assert "<!-- owner hand-edit marker -->" in after
+    assert CM._section(after, "Ratified residuals") == ratified_before
+    assert CM._section(after, "Threat model") == threat_before
+    assert CM._JSON_BLOCK.sub("", before) == CM._JSON_BLOCK.sub("", after)
+
+
+def test_write_review_gate_policy_refused_invalid_schema_byte_identical(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_review_gate_policy(
+        repo, {"schema": "gate-policy/2", "default": "park", "rules": []}, root=store)
+    assert res["action"] == "refused"
+    assert "schema must be gate-policy/1" in res["reason"]
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_write_review_gate_policy_refused_unknown_finding_class_byte_identical(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    policy = _valid_gate_policy([{
+        "gate": "present-judgment",
+        "findingClass": "judgment:not-a-real-severity",
+        "disposition": "skip",
+    }])
+    res = CM.write_review_gate_policy(repo, policy, root=store)
+    assert res["action"] == "refused"
+    assert "findingClass must be one of" in res["reason"]
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_write_review_gate_policy_refused_disposition_not_allowed_byte_identical(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    policy = _valid_gate_policy([{
+        "gate": "present-stall-menu",
+        "findingClass": "stall:accept-risk-ineligible",
+        "disposition": "accept-the-disclosed-risk",
+    }])
+    res = CM.write_review_gate_policy(repo, policy, root=store)
+    assert res["action"] == "refused"
+    assert "disposition" in res["reason"]
+    assert "accept-the-disclosed-risk" in res["reason"]
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_write_review_gate_policy_refused_default_not_park_byte_identical(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    res = CM.write_review_gate_policy(
+        repo, {"schema": "gate-policy/1", "default": "skip", "rules": []}, root=store)
+    assert res["action"] == "refused"
+    assert "default must be 'park'" in res["reason"]
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_write_review_gate_policy_refused_when_core_absent(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    res = CM.write_review_gate_policy(repo, _valid_gate_policy(), root=store)
+    assert res == {"action": "refused", "reason": CM.BUILDER_DISPATCH_REASON_ABSENT}
+
+
+def test_write_review_gate_policy_deferred_when_lock_contended(tmp_path, monkeypatch):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+
+    @contextlib.contextmanager
+    def _no_lock(_cwd, _root):
+        yield False
+
+    monkeypatch.setattr(CM.mode_registry, "config_lock", _no_lock)
+    res = CM.write_review_gate_policy(repo, _valid_gate_policy(), root=store)
+    assert res["action"] == "deferred"
+    assert res["reason"] == CM.BUILDER_DISPATCH_DEFER_LOCK_CONTENDED
+
+
+def test_review_gate_policy_for_gate_structurally_ambiguous_distinct_from_absent_and_unreadable(
+        tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    CM.mode_registry.ensure_project_store(repo, store)
+    CM.write(
+        repo,
+        dict(_CORE_FACTS),
+        "confirmed",
+        root=store,
+        now="2026-06-26",
+    )
+    path = CM.core_path(repo, root=store)
+    text = open(path, encoding="utf-8").read()
+    extra = "\n```json superheroes-core\n{\"schemaVersion\": 2}\n```\n"
+    open(path, "w", encoding="utf-8").write(text + extra)
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.status == CM.CONFIG_STRUCTURAL_AMBIGUITY
+    assert gate.overlay is None
+    assert gate.detail is not None
+    assert gate.detail.startswith("multiple-core-blocks:")
+
+
+def test_review_gate_policy_for_gate_unreadable_distinct_from_absent_and_no_overlay(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    absent = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert absent.status == CM.CONFIG_ABSENT
+    assert absent.overlay is None
+
+    path = _gate_core_beside(repo)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    open(path, "w", encoding="utf-8").write("not a core document\n")
+    unreadable = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert unreadable.status == CM.CONFIG_UNREADABLE
+    assert unreadable.overlay is None
+    assert unreadable.detail is not None
+
+    os.remove(path)
+    CM.mode_registry.ensure_project_store(repo, store)
+    CM.write(
+        repo,
+        dict(_CORE_FACTS),
+        "confirmed",
+        root=store,
+        now="2026-06-26",
+    )
+    ok_no_overlay = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert ok_no_overlay.status == CM.CONFIG_OK
+    assert ok_no_overlay.overlay is None
+    assert ok_no_overlay.detail is None
+
+
+def test_write_review_gate_policy_written_and_read_roundtrip(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    res = CM.write_review_gate_policy(repo, policy, root=store)
+    assert res["action"] == "written"
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.status == CM.CONFIG_OK
+    assert gate.overlay is not None
+    assert gate.overlay["policy"]["rules"] == policy["rules"]
+
+
+def test_confirm_preserves_review_gate_policy_after_write(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    facts = {"verifyCommand": "none", "stackTags": [], "threatModel": "", "patterns": ""}
+    CM.write(repo, facts, "provisional", root=store, now="2026-06-26")
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    res = CM.confirm(repo, root=store, now="2026-06-28")
+    assert res["action"] == "confirmed"
+    record = CM.read(repo, root=store)
+    assert record is not None
+    assert record.get("reviewGatePolicy") is not None
+    assert record["reviewGatePolicy"]["policy"]["rules"] == policy["rules"]
+
+
+def test_write_review_gate_policy_clear_overlay(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    res = CM.write_review_gate_policy(repo, None, root=store)
+    assert res["action"] == "written"
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.overlay is None
+
+
+def test_cli_write_review_gate_policy_refused_malformed_json(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("{not json"))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": CM.GATE_POLICY_REASON_INPUT_UNPARSEABLE}
+
+
+def test_cli_write_review_gate_policy_clear_null_stdin(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    monkeypatch.setattr("sys.stdin", io.StringIO("null\n"))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "written"}
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.overlay is None
+
+
+def test_cli_write_review_gate_policy_refused_not_a_mapping(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    monkeypatch.setattr("sys.stdin", io.StringIO("[1, 2, 3]"))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": CM.GATE_POLICY_REASON_NOT_A_MAPPING}
+
+
+def test_cli_write_review_gate_policy_refused_duplicate_policy_key(tmp_path, capsys, monkeypatch):
+    import io
+
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    path = CM.core_path(repo, store)
+    before = open(path, encoding="utf-8").read()
+    raw = (
+        '{"schema": "gate-policy/1", "default": "park", "rules": [], '
+        '"default": "skip"}'
+    )
+    monkeypatch.setattr("sys.stdin", io.StringIO(raw))
+    rc = CM.main(["write-review-gate-policy", "--cwd", repo, "--root", store])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out == {"action": "refused", "reason": "duplicate-policy-key:default"}
+    assert open(path, encoding="utf-8").read() == before
+
+
+def test_review_gate_policy_for_gate_refuses_duplicate_policy_document_key(tmp_path):
+    repo, store = _write_core_for_pin_tests(tmp_path)
+    policy = _valid_gate_policy([_judgment_skip_rule()])
+    assert CM.write_review_gate_policy(repo, policy, root=store)["action"] == "written"
+    path = CM.core_path(repo, store)
+    text = open(path, encoding="utf-8").read()
+    inner = CM._JSON_BLOCK.search(text).group(1)
+    dup_inner = inner.replace('"rules": [', '"rules": [], "rules": [', 1)
+    open(path, "w", encoding="utf-8").write(CM._splice_single_json_block(text, dup_inner))
+    gate = CM.review_gate_policy_for_gate(cwd=repo, root=store)
+    assert gate.status == CM.CONFIG_POLICY_AMBIGUITY
+    assert gate.overlay is None
+    assert gate.detail == "duplicate-policy-key:rules"

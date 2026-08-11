@@ -201,6 +201,64 @@ when the field is absent or disagrees with `--repo-root`.
 
 ## Actions and payloads
 
+### Owner gates and gate policy (`present-judgment`, `present-stall-menu`)
+
+When the loop reaches an owner-judgment or audit-stall gate, `advance` (the record-layer subcommand
+that folds landed seats without a hand `submit`) resolves an **owner-calibrated gate policy** before
+parking: the shipped default in `rubric/review-gate-policy.json` (`gate-policy/1`, **zero rules**,
+`default: "park"` — pre-authorizes nothing) plus an optional project overlay under `core.md`'s
+`reviewGatePolicy` key (sibling of `enginePreferences`, owner-editable through `configure`). Overlay
+rules are evaluated **before** the shipped layer; the first matching rule wins. **Judgment is
+all-or-nothing** — `resolve_judgment` must find a rule for **every** finding row or the whole gate
+parks (`gate-policy-unmatched-class:<class>`). Stall resolution is per stall class
+(`stall:accept-risk-eligible` vs `stall:accept-risk-ineligible`).
+
+When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). The refusal
+carries a `detail` cause distinct from the top-level reason so operators can tell *why* it parked.
+On the orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice;
+gate policy pre-authorization is what lets `advance` fold without stopping.
+
+**Advance gate-policy park detail causes** (authoritative list — drift-tested against
+`round_driver.owner_gate_policy_park_detail_causes()`):
+
+```text
+gate-policy-calibration-unreadable
+gate-policy-calibration-absent
+gate-policy-calibration-refused
+gate-policy-calibration-structurally-ambiguous
+repo-root-unavailable
+gate-policy-judgment-no-findings
+gate-policy-unknown-phase
+gate-policy-park
+gate-policy-no-valid-layer
+gate-policy-judgment-input-not-list
+gate-policy-judgment-row-not-object
+gate-policy-judgment-row-missing-class
+gate-policy-unknown-stall-class
+```
+
+Parameterized (suffix after `:` is diagnostic detail):
+
+```text
+gate-policy-unmatched-class:<findingClass>
+```
+
+`gate-policy-calibration-unreadable`, `gate-policy-calibration-structurally-ambiguous`, and
+`repo-root-unavailable` may also carry a `: <detail>` suffix when the underlying read failure or
+structural ambiguity has a message.
+
+When the review-gate-policy overlay has ambiguous duplicate keys, `advance` parks with
+`gate.detail` returned verbatim — `duplicate-policy-key:<key>` where `<key>` is the conflicting
+policy key name. The sync test's parameterized fenced block drift-checks only
+`gate-policy-unmatched-class:<findingClass>`; this form is documented here in prose instead.
+
+**Ownership boundary (stated narrowly).** The overlay lives on the same ownership surface as
+`enginePreferences` — an honest-agent boundary, **not** a security boundary. No CLI flag can
+substitute a policy: exactly two fixed sources are read (shipped file + optional `core.md` overlay).
+Resolution returns a `layers` audit (each layer's `identity` carries `source`, `schema`, `sha256`)
+so a substitution is visible after the fact. A builder **can** change `core.md`; claiming they
+cannot is an overclaim.
+
 | `action` / `phase` | Orchestrator fulfills |
 | --- | --- |
 | `dispatch-panel` | Dispatch the round's `reviewer-deep` panel per `payload.dimensions`, `payload.tier`, and optional `payload.shards` (big-diff sharding; cross-cutting lenses always get the whole diff). Submit `{seats: {<dim>: {findings, receiptMissing?, receiptStale?, vacuous?, reason?}}, seatMap?, ranManifest?, canaryResult?}`. A seat whose `dispatch-review` returned `reason: "vacuous"` (or equivalent double vacuous forfeit) is folded with `vacuous: true` or `reason: "vacuous"`. When every configured cross-vendor seat that **ran** returned zero findings, run `seat_canary.py probe` and submit its JSON as `canaryResult` (see `auto-fix-loop.md`). `ranManifest: {<dim>: <vendor>}` is the orchestrator's OWN trusted record of which vendor produced each seat's folded findings — mirroring `collectionManifest`; an in-seat `ranVendor` echo is advisory only and authenticates nothing. The driver mechanically compares it to the seat map's configured vendor and records a per-round `fellOpen` dispatch-provenance row + a `degraded` disclosure for any `run` seat that fell open to a different vendor (#563 DoD1) — the disclosure is machinery, not builder discipline. A cross-vendor seat that ran without a trusted manifest entry is disclosed as provenance-unavailable. The guarantee is exactly as strong as the orchestrator's manifest — the driver cannot cryptographically verify engine identity and does not pretend to (the same posture as `collectionManifest`). Receipt-missing seats re-dispatch at most `REDISPATCH_BUDGET` times (`loop_plan_common.REDISPATCH_BUDGET` — the single home) before terminal `missing` with findings carried unverified. The driver refuses a submit whose seat keys are not configured dimensions — keys must be the full reviewer names from `payload.dimensions`, never the findings-file stems (`architecture`, `code`, …); unknown keys only — a partial seats map (subset of configured dimensions) and an empty one are still accepted, and an absent lens is caught later by the panel's own incomplete-panel park, not here. Recovery is to re-key the seats map and resubmit the same phase/attempt/state-hash (no re-dispatch, no fresh session dir). |

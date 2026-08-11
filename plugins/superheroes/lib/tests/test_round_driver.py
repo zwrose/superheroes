@@ -772,11 +772,51 @@ def test_audit_results_fault_pure():
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
+def test_verifier_results_fault_pure():
+    assert RD.verifier_results_fault({"verdicts": []}) is None
+    assert RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]}) is None
+    assert RD.verifier_results_fault(None) is not None
+    assert RD.verifier_results_fault({}) is not None
+    assert "missing `verdicts`" in RD.verifier_results_fault({}) or \
+        "no `verdicts` key" in RD.verifier_results_fault({})
+    fault = RD.verifier_results_fault({"findings": []})
+    assert fault is not None and "`findings`" in fault
+    assert RD.verifier_results_fault({"verdicts": {}}) is not None
+
+
+def test_submit_verifiers_findings_key_refused(tmp_path):
+    d, n = _at(tmp_path, RD.P_VERIFIERS)
+    good = {"verdicts": []}
+    bad = {"findings": []}
+    _assert_shape_refused(d, n, bad, "verifier-results-shape",
+                          ["`findings`", "`verdicts`"], good)
+
+
 def test_submit_verifiers_empty_verdicts_accepted(tmp_path):
     """Fail-closed edge 6: an empty verdict list is a legitimate outcome."""
     d, n = _at(tmp_path, RD.P_VERIFIERS)
     assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
                          {"verdicts": []})["ok"] is True
+
+
+def test_submit_verifiers_dict_verdicts_refused(tmp_path):
+    """Fail-closed edge 7: a dict-typed verdicts is refused."""
+    d, n = _at(tmp_path, RD.P_VERIFIERS)
+    _assert_shape_refused(d, n, {"verdicts": {}}, "verifier-results-shape",
+                          ["not a list"], {"verdicts": []})
+
+
+def test_bite_verifiers_shape_guard_red(monkeypatch, tmp_path):
+    """A/B: correct key succeeds; neutralizing the guard lets a findings-keyed submit through."""
+    d, n = _at(tmp_path, RD.P_VERIFIERS)
+    assert RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"],
+                         {"verdicts": []})["ok"] is True
+
+    d2, n2 = _at(tmp_path / "bite", RD.P_VERIFIERS)
+    monkeypatch.setattr(RD, "verifier_results_fault", lambda _artifact: None)
+    out = RD.cmd_submit(d2, n2["phase"], n2["attempt"], n2["expectedStateHash"],
+                        {"findings": []})
+    assert out["ok"] is True  # RED with guard neutralized
 
 
 def test_new_issues_usability_agrees_with_the_running_fold():
@@ -3525,6 +3565,60 @@ def test_mechanical_blocker_carried_through_judgment_gate():
         {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "deferred to v2"}]})
     assert state["step"] == RD.P_FIXER
     assert [b["title"] for b in state["_fixBatch"]] == ["null deref"]
+
+
+def test_judgment_row_ids_occurrence_suffix_same_location():
+    """Repeated tradeoff findings at the same location get distinct disposition ids (#1, #2, …)."""
+    loc = RD._location_id(_TRADEOFF)
+    findings = [dict(_TRADEOFF), dict(_TRADEOFF)]
+    assert RD._judgment_row_ids(findings) == [loc, "%s#1" % loc]
+
+
+def test_judgment_colliding_identity_different_severity_dispositions_not_collapse():
+    """Two tradeoff findings at the same location with different severities must each receive their
+    disposition — a skip for one must not silently override fix-as-suggested for a Critical."""
+    loc_id = RD._location_id({"title": "same choice", "severity": "Critical",
+                              "file": "f.py", "line": 10, "tradeoff": True})
+    critical = {"title": "same choice", "severity": "Critical", "file": "f.py", "line": 10,
+                "tradeoff": True}
+    important = {"title": "same choice", "severity": "Important", "file": "f.py", "line": 10,
+                 "tradeoff": True}
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(critical), dict(important)])
+    step = RD._advance(state, state["config"])
+    ids = [f["id"] for f in step["payload"]["findings"]]
+    assert ids == [loc_id, "%s#1" % loc_id]
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": ids[0], "disposition": "fix-as-suggested"},
+        {"id": ids[1], "disposition": "skip", "reason": "defer the important one"},
+    ]})
+    assert state["step"] == RD.P_FIXER
+    assert [f["severity"] for f in state["_fixBatch"]] == ["Critical"]
+    assert [s["severity"] for s in state["_skippedBlockers"]] == ["Important"]
+
+
+def test_judgment_identical_disposition_same_id_collapses():
+    """Two artifact entries with the same id and the same disposition collapse harmlessly."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
+        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
+    ]})
+    assert state["step"] == RD.P_FIXER
+    assert len(state["_fixBatch"]) == 1
+
+
+def test_judgment_conflicting_dispositions_same_id_parks():
+    """Colliding ids with conflicting dispositions park — never last-wins merge."""
+    state = RD.new_state(_cfg())
+    RD._route_judgment_blockers(state, [dict(_TRADEOFF)])
+    RD._fold_judgment(state, state["config"], {"dispositions": [
+        {"id": _TRADEOFF_ID, "disposition": "fix-as-suggested"},
+        {"id": _TRADEOFF_ID, "disposition": "skip", "reason": "conflict"},
+    ]})
+    assert state["terminal"] == "cannot-certify"
+    assert RD.JUDGMENT_DISPOSITION_COLLISION_CAUSE in (state["certification"]["reason"] or "")
 
 
 def test_stall_menu_payload_carries_no_judgment_findings():

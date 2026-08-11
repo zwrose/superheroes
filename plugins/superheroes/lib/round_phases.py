@@ -27,6 +27,18 @@ ALL_PHASES = (
 DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
               "test-reviewer", "premortem-reviewer"]
 
+# The four stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
+# ONLY for a CONFIRMED-with-receipt finding; the menu payload gates it per-run.
+ACCEPT_RISK_CHOICE = "accept-the-disclosed-risk"
+STALL_CHOICES = ("ship-smaller", "spend-more", ACCEPT_RISK_CHOICE, "hold")
+
+# The three per-finding judgment dispositions the judgment gate offers (never "judge the dispute
+# yourself"): fix the finding as the reviewer suggested, fix it with owner free-text guidance, or
+# skip it with a citable reason (a skipped blocker rides the exit disclosure — the skipped-blocking
+# channel). The judgment gate is an INTERVENTION that folds back into the fix leg, NOT a terminal
+# (#507 R2a) — the stall menu is the ONLY terminal, reachable solely from the audit-stall path.
+JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
+
 
 def panel_dimensions(config):
     """Configured panel dimensions, or the default DIMENSIONS list."""
