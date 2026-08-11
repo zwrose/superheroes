@@ -68,7 +68,7 @@ Every external tool invocation by a lens **must** go through `guardian_collect.r
 
 **A lens MUST pass absolute paths in its `run_tool` argv.** Collectors run from a **neutral cwd** (never the swept repo), and `run_tool` calls `invoke(..., targets=())` — it does **not** thread or absolutize repo-relative operands. A repo-relative operand in a `run_tool` argv would run against the neutral cwd, match nothing, and read as a clean (empty) collection. The operand-absolutization channel exists on `guardian_tools.invoke` directly (its `targets=` parameter), **not** through `run_tool`.
 
-The invocation seam (`plugins/superheroes/lib/guardian_tools.py`) provides these guarantees by construction. Guarantees #1, #3, #4, and #5 hold **through `run_tool`** (`invoke` applies them to the resolved `argv[0]` and the spawn). Guarantee #2 is a property of `invoke`'s `targets=` channel and does **not** hold through `run_tool` — see the absolute-argv rule above:
+The invocation seam (`lib/guardian_tools.py`) provides these guarantees by construction. Guarantees #1, #3, #4, and #5 hold **through `run_tool`** (`invoke` applies them to the resolved `argv[0]` and the spawn). Guarantee #2 is a property of `invoke`'s `targets=` channel and does **not** hold through `run_tool` — see the absolute-argv rule above:
 
 1. **Neutral child cwd** — collectors never run with the swept repo as their working directory. *(Holds through `run_tool`.)*
 2. **Absolute repo operands** — repo-relative *targets* passed to `guardian_tools.invoke` directly (via its `targets=` parameter) are absolutized and placed after a `--` end-of-options sentinel. **This does NOT hold through `run_tool`, which passes `targets=()`** — a lens using `run_tool` must itself pass absolute paths in its argv.

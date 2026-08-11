@@ -263,7 +263,7 @@ never drop a finding or a lens.
 >
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
 > that loops to terminal). **Launch** each `--run-dir` with a **short positive slice** (12–45 s is the
-> measured range in `workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice);
+> measured range in `skills/workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice);
 > then re-invoke **`dispatch-review`** (never `dispatch-poll`) on the same `--run-dir` with
 > `--max-wait 540` while `.terminal` is false. A non-terminal
 > `{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational

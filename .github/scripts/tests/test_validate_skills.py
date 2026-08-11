@@ -405,13 +405,158 @@ def test_citations_accept_extension_beyond_md_py_json_js(tmp_path):
     assert vs.check_citations("agents/pilot.md", text, str(tmp_path)) == []
 
 
-def test_citations_accept_traversal_that_normalizes_inside_plugin(tmp_path):
+def test_citations_reject_traversal_that_normalizes_inside_plugin(tmp_path):
     (tmp_path / "skills").mkdir()
     agents = tmp_path / "agents"
     agents.mkdir()
     (agents / "pilot.md").write_text("pilot")
     text = "See `skills/../agents/pilot.md`."
+    out = vs.check_citations("rubric/x.md", text, str(tmp_path))
+    assert out and "skills/../agents/pilot.md" in out[0]
+
+
+def test_citations_reject_symlink_escape_outside_plugin(tmp_path):
+    repo = tmp_path / "repo"
+    outside = repo / "outside"
+    outside.mkdir(parents=True)
+    (outside / "secret.txt").write_text("secret")
+    plugin = repo / "plugins" / "p"
+    (plugin / "agents").mkdir(parents=True)
+    os.symlink(outside / "secret.txt", plugin / "agents" / "leak.txt")
+    text = "See `agents/leak.txt`."
+    out = vs.check_citations("rubric/x.md", text, str(plugin))
+    assert out and "leak.txt" in out[0]
+
+
+def test_citations_accept_symlink_inside_plugin(tmp_path):
+    plugin = tmp_path / "plugins" / "p"
+    (plugin / "lib").mkdir(parents=True)
+    (plugin / "agents").mkdir()
+    (plugin / "lib" / "real.py").write_text("x")
+    os.symlink(plugin / "lib" / "real.py", plugin / "agents" / "link.py")
+    text = "See `agents/link.py`."
+    assert vs.check_citations("rubric/x.md", text, str(plugin)) == []
+
+
+def test_citations_reject_fifo(tmp_path):
+    import stat
+    (tmp_path / "lib").mkdir()
+    fifo = tmp_path / "lib" / "pipe.py"
+    os.mkfifo(fifo)
+    text = "See `lib/pipe.py`."
+    out = vs.check_citations("rubric/x.md", text, str(tmp_path))
+    assert out and "pipe.py" in out[0]
+
+
+def test_citations_commonpath_valueerror_reported(tmp_path, monkeypatch):
+    (tmp_path / "agents").mkdir()
+    (tmp_path / "agents" / "pilot.md").write_text("pilot")
+    text = "See `agents/pilot.md`."
+
+    def boom(_paths):
+        raise ValueError("different drives")
+
+    monkeypatch.setattr(vs.os.path, "commonpath", boom)
+    out = vs.check_citations("rubric/x.md", text, str(tmp_path))
+    assert out and "pilot.md" in out[0]
+
+
+def test_citations_plugins_prefix_non_canonical_when_resolves(tmp_path):
+    plugin = tmp_path / "plugins" / "p"
+    (plugin / "skills" / "foo").mkdir(parents=True)
+    (plugin / "skills" / "foo" / "bar.md").write_text("x")
+    text = "See `plugins/p/skills/foo/bar.md`."
+    out = vs.check_citations("agents/x.md", text, str(plugin))
+    assert len(out) == 1
+    assert "non-canonical" in out[0]
+    assert "skills/foo/bar.md" in out[0]
+
+
+def test_citations_plugins_prefix_unresolved_when_missing(tmp_path):
+    plugin = tmp_path / "plugins" / "p"
+    (plugin / "agents").mkdir(parents=True)
+    text = "See `plugins/p/agents/missing.md`."
+    out = vs.check_citations("rubric/x.md", text, str(plugin))
+    assert out and "unresolved" in out[0] and "missing.md" in out[0]
+
+
+def test_citations_plugins_prefix_different_plugin(tmp_path):
+    plugin_a = tmp_path / "plugins" / "a"
+    plugin_b = tmp_path / "plugins" / "b"
+    (plugin_a / "agents").mkdir(parents=True)
+    (plugin_b / "lib").mkdir(parents=True)
+    (plugin_b / "lib" / "tool.py").write_text("x")
+    text = "See `plugins/b/lib/tool.py`."
+    out = vs.check_citations("agents/x.md", text, str(plugin_a))
+    assert len(out) == 1
+    assert "non-canonical" in out[0]
+    assert "lib/tool.py" in out[0]
+
+
+def test_citations_plugins_prefix_different_plugin_unresolved(tmp_path):
+    plugin_a = tmp_path / "plugins" / "a"
+    plugin_b = tmp_path / "plugins" / "b"
+    (plugin_a / "agents").mkdir(parents=True)
+    (plugin_b / "lib").mkdir(parents=True)
+    text = "See `plugins/b/lib/missing.py`."
+    out = vs.check_citations("agents/x.md", text, str(plugin_a))
+    assert out and "unresolved" in out[0]
+
+
+def test_citations_bare_plugins_prefix_does_not_raise(tmp_path):
+    (tmp_path / "agents").mkdir()
+    text = "Mention `plugins/` alone and `plugins` without path."
     assert vs.check_citations("rubric/x.md", text, str(tmp_path)) == []
+
+
+def test_main_citation_scan_unreadable_oserror(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path / "plugins")
+    doc = os.path.join(root, "p", "agents", "bad.md")
+    os.makedirs(os.path.dirname(doc))
+    with open(doc, "w", encoding="utf-8") as fh:
+        fh.write("See `agents/pilot.md`.\n")
+    monkeypatch.setattr(vs, "PLUGINS", root)
+    original_open = open
+
+    def selective_open(path, *args, **kwargs):
+        if os.path.abspath(path) == os.path.abspath(doc):
+            raise OSError("permission denied")
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", selective_open)
+    assert vs.main([]) == 1
+    captured = capsys.readouterr()
+    assert "unreadable scan file" in captured.err
+
+
+def test_main_citation_scan_undecodable_bytes(tmp_path, monkeypatch, capsys):
+    root = str(tmp_path / "plugins")
+    doc = os.path.join(root, "p", "agents", "bad.md")
+    os.makedirs(os.path.dirname(doc))
+    with open(doc, "wb") as fh:
+        fh.write(b"\xff\xfe See `agents/pilot.md`.\n")
+    monkeypatch.setattr(vs, "PLUGINS", root)
+    assert vs.main([]) == 1
+    captured = capsys.readouterr()
+    assert "unreadable scan file" in captured.err
+
+
+def test_citation_scan_partial_layout_agents_only(tmp_path):
+    root = tmp_path / "plugins" / "p"
+    (root / "agents").mkdir(parents=True)
+    (root / "agents" / "pilot.md").write_text("x")
+    found = {os.path.relpath(p, str(tmp_path / "plugins"))
+             for p in vs.citation_scan_paths(str(tmp_path / "plugins"))}
+    assert found == {os.path.join("p", "agents", "pilot.md")}
+
+
+def test_citation_scan_partial_layout_rubric_only(tmp_path):
+    root = tmp_path / "plugins" / "p"
+    (root / "rubric").mkdir(parents=True)
+    (root / "rubric" / "covenant.md").write_text("x")
+    found = {os.path.relpath(p, str(tmp_path / "plugins"))
+             for p in vs.citation_scan_paths(str(tmp_path / "plugins"))}
+    assert found == {os.path.join("p", "rubric", "covenant.md")}
 
 
 def test_citations_empty_plugin_dir_yields_no_matches(tmp_path):

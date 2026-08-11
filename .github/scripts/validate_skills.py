@@ -94,6 +94,9 @@ def check_toc(reference_path):
 # runtime so new roots (e.g. hooks/) are covered without maintaining a hard-coded list.
 _NEVER_MATCH = re.compile(r"(?!)")
 _CITATION_SUFFIX = r"`((?:{top})/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+)`"
+_PLUGINS_PREFIX_CITATION = re.compile(
+    r"(?:^|[\s(.,>])`(plugins/[A-Za-z0-9._\-]+/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+)`"
+)
 _ABSOLUTE_CITATION = re.compile(
     r"(?:^|[\s(.,>])`(/(?:[A-Za-z0-9._\-]+/)+[A-Za-z0-9._\-]+\.[A-Za-z0-9]+)`"
 )
@@ -121,9 +124,40 @@ def _citation_pattern(plugin_dir):
 def _cited_paths(text, plugin_dir):
     pattern = _citation_pattern(plugin_dir)
     paths = list(dict.fromkeys(pattern.findall(text)))
+    for m in _PLUGINS_PREFIX_CITATION.finditer(text):
+        paths.append(m.group(1))
     for m in _ABSOLUTE_CITATION.finditer(text):
         paths.append(m.group(1))
     return list(dict.fromkeys(paths))
+
+
+def _has_dotdot_component(rel):
+    return any(part == ".." for part in rel.replace("\\", "/").split("/"))
+
+
+def _path_inside_root(root_real, target_real):
+    try:
+        return os.path.commonpath([root_real, target_real]) == root_real
+    except ValueError:
+        return False
+
+
+def _citation_target_valid(target, root_real):
+    """Target must resolve inside root_real to a regular file (symlinks followed)."""
+    if not os.path.exists(target):
+        return False
+    target_real = os.path.realpath(target)
+    if not _path_inside_root(root_real, target_real):
+        return False
+    return os.path.isfile(target_real)
+
+
+def _non_canonical_message(rel_label, rel, canonical):
+    return (
+        f"citation: {rel_label}: non-canonical citation {rel} "
+        f"(use plugin-relative path `{canonical}` instead of repo-relative "
+        f"`plugins/<plugin>/...` prefix)"
+    )
 
 
 def check_citations(rel_label, text, plugin_dir):
@@ -134,16 +168,37 @@ def check_citations(rel_label, text, plugin_dir):
     text came from, which a dispatched consumer reading the path out of a work order does not.
     """
     out = []
+    citing_plugin = os.path.basename(os.path.normpath(plugin_dir))
+    plugins_root = os.path.dirname(os.path.normpath(plugin_dir))
+    root_real = os.path.realpath(plugin_dir)
+
     for rel in _cited_paths(text, plugin_dir):
         if os.path.isabs(rel):
             out.append(f"citation: {rel_label}: unresolved citation {rel}")
             continue
-        norm = os.path.normpath(rel)
-        if norm.startswith(".."):
+
+        if _has_dotdot_component(rel):
             out.append(f"citation: {rel_label}: unresolved citation {rel}")
             continue
+
+        if rel.startswith("plugins/"):
+            parts = rel.split("/", 2)
+            if len(parts) < 3 or not parts[1]:
+                continue
+            prefix_plugin, remainder = parts[1], parts[2]
+            target_plugin_dir = os.path.join(plugins_root, prefix_plugin)
+            norm = os.path.normpath(remainder)
+            target = os.path.join(target_plugin_dir, norm)
+            prefix_root_real = os.path.realpath(target_plugin_dir)
+            if _citation_target_valid(target, prefix_root_real):
+                out.append(_non_canonical_message(rel_label, rel, norm))
+            else:
+                out.append(f"citation: {rel_label}: unresolved citation {rel}")
+            continue
+
+        norm = os.path.normpath(rel)
         target = os.path.join(plugin_dir, norm)
-        if not os.path.isfile(target):
+        if not _citation_target_valid(target, root_real):
             out.append(f"citation: {rel_label}: unresolved citation {rel}")
     return out
 
