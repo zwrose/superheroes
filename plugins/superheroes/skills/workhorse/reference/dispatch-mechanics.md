@@ -261,8 +261,8 @@ nowhere.
 On every `dispatch-write` call, the runner **appends** a write-report contract to the caller's
 prompt — the caller does not author it and cannot opt out. It is **additional to** the prose receipts
 the order asks for, never a replacement: the engine still returns those receipts, then ends with a
-sentinel line (`<<<SUPERHEROES-WRITE-REPORT>>>`) followed by exactly one JSON object as the final
-line of output.
+sentinel line (`<<<SUPERHEROES-WRITE-REPORT>>>`) followed by exactly one JSON object, then nothing
+but whitespace.
 
 **Field semantics.** `ok: true` means the engine ran the order to completion **as specified** — it
 is **not** an acceptance verdict, and the implementer never marks its own work done. `ok: false`
@@ -271,10 +271,13 @@ else). `evidence.testFailed` / `evidence.testPassed` report whether a test was *
 / passing during that attempt.
 
 **Grading is strict, and keyed to the prompt.** When the runner contracted the prompt, a report is
-recognised only as an exact final tail — the sentinel alone on its line, exactly one JSON object
-after it, nothing but whitespace to the end. No such report means `unreadable`; the runner does
-**not** fall back to scanning the whole stream for any JSON object, because that scan is what
-produced the false `needs_context` refusals. Prompts the runner did not contract keep the old
+recognised only as a final tail matching this grammar: a line whose trimmed content is the sentinel,
+then one JSON object (which may be pretty-printed across multiple lines), then nothing but whitespace
+to the end. Leading whitespace on the sentinel line and blank lines before the object are accepted;
+trailing prose after the object is not. No such report means `unreadable`; the runner does **not**
+fall back to scanning the whole stream for any JSON object, because that scan is what produced the
+false `needs_context` refusals. Prompted contracted-ness is keyed on the sentinel token (stable),
+not the contract prose (expected to be edited). Prompts the runner did not contract keep the old
 behaviour.
 
 **Declared items (`--expect-item`, `--expect-items-file`).** Repeatable flags union with the file

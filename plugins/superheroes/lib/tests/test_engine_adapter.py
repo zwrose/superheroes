@@ -800,7 +800,6 @@ def test_salvage_write_report_recovers_stream_enveloped_report():
         "structured": True,
         "requiresManualRead": False,
         "salvaged": True,
-        "truncated": False,
     }
 
 
@@ -875,14 +874,22 @@ Command report:
 def test_salvage_write_report_recovers_real_dispatch_prose_for_manual_read():
     # axis: C1 prose recovery — the measured forfeited artifact must not be written off as garbage.
     salvage = EA.salvage_write_report("codex", "build", _DISPATCH_1_PROSE, "fed prompt")
+    prose_bytes = _DISPATCH_1_PROSE.encode("utf-8")
+    if len(prose_bytes) > EA.ARTIFACT_EXCERPT_BYTES:
+        excerpt_raw = prose_bytes[-EA.ARTIFACT_EXCERPT_BYTES:]
+        truncated = True
+    else:
+        excerpt_raw = prose_bytes
+        truncated = False
+    expected_excerpt = EA._scrub(excerpt_raw.decode("utf-8", errors="ignore"))
     assert salvage == {
         "report": None,
         "structured": False,
         "requiresManualRead": True,
-        "excerpt": _DISPATCH_1_PROSE_REDACTED,
-        "excerptBytes": len(_DISPATCH_1_PROSE.encode("utf-8")),
+        "excerpt": expected_excerpt,
+        "excerptBytes": len(excerpt_raw),
         "salvaged": True,
-        "truncated": False,
+        "truncated": truncated,
     }
 
 
@@ -919,15 +926,14 @@ def test_salvage_write_report_honest_refusal_is_recovered():
         "structured": True,
         "requiresManualRead": False,
         "salvaged": True,
-        "truncated": False,
     }
 
 
-def test_salvage_write_report_marks_partial_json_tail_truncated():
-    # axis: truncation — partial JSON in prose before a complete sentinel report is not truncated.
+def test_salvage_write_report_structured_ignores_partial_json_before_sentinel():
     stdout = 'Working...\n{"still-writing":\n' + _contracted_report_tail()
     result = EA.salvage_write_report("codex", "build", stdout, "prompt")
-    assert result is not None and result["structured"] is True and result["truncated"] is False
+    assert result is not None and result["structured"] is True
+    assert "truncated" not in result
 
 
 def test_salvage_write_report_partial_json_after_sentinel_report_is_not_structured():
@@ -936,11 +942,12 @@ def test_salvage_write_report_partial_json_after_sentinel_report_is_not_structur
     assert result is None or result.get("structured") is not True
 
 
-def test_salvage_write_report_does_not_mark_markdown_checklist_tail_truncated():
-    # axis: truncation — markdown in prose before the sentinel tail is not JSON truncation.
+def test_salvage_write_report_does_not_structured_recover_markdown_checklist_prose():
+    # axis: markdown prose before the sentinel tail still yields structured recovery.
     stdout = "Summary of work.\n- [x] tests green\n" + _contracted_report_tail()
     result = EA.salvage_write_report("codex", "build", stdout, "prompt")
-    assert result is not None and result["truncated"] is False
+    assert result is not None and result["structured"] is True
+    assert "truncated" not in result
 
 
 def test_salvage_write_report_rejects_review_role():
@@ -961,6 +968,10 @@ def test_salvage_write_report_never_raises(monkeypatch):
      {"ok": True, "signal": "ok", "evidence": {}}),
     (EA.WRITE_REPORT_SENTINEL + '\n{"ok": true}\n  \n',
      {"ok": True}),
+    ("  " + EA.WRITE_REPORT_SENTINEL + '\n{"ok": true, "signal": "ok", "evidence": {}}',
+     {"ok": True, "signal": "ok", "evidence": {}}),
+    (EA.WRITE_REPORT_SENTINEL + '\n{\n  "ok": true,\n  "signal": "ok",\n  "evidence": {}\n}\n',
+     {"ok": True, "signal": "ok", "evidence": {}}),
     ("noise\n" + EA.WRITE_REPORT_SENTINEL + '\n{"ok": true}\n' + EA.WRITE_REPORT_SENTINEL +
      '\n{"ok": false, "signal": "plan_wrong"}',
      {"ok": False, "signal": "plan_wrong"}),
@@ -1043,6 +1054,36 @@ def test_grade_write_report_genuine_refusal_still_grades():
     assert res["ok"] is False and res["signal"] == "plan_wrong" and res["reason"] == "plan_wrong"
 
 
+def test_grade_write_report_contract_echo_after_genuine_tail_still_grades():
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    tail = EA.WRITE_REPORT_SENTINEL + '\n{"ok": true, "signal": "ok", "evidence": {}}'
+    stdout = "Receipt prose.\n" + tail + "\n" + EA.WRITE_REPORT_CONTRACT
+    res = EA.grade_write_report("codex", "build", stdout, fed_prompt)
+    assert res == {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": False}}
+
+
+def test_salvage_write_report_contract_echo_after_genuine_tail_still_structured():
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    tail = EA.WRITE_REPORT_SENTINEL + '\n{"ok": true, "signal": "ok", "evidence": {}}'
+    stdout = ("Long enough prose for salvage.\n" * 20) + tail + "\n" + EA.WRITE_REPORT_CONTRACT
+    salvage = EA.salvage_write_report("codex", "build", stdout, fed_prompt)
+    assert salvage is not None and salvage.get("structured") is True
+    assert salvage["report"]["ok"] is True
+
+
+def test_grade_write_report_rejects_prompt_decodable_example():
+    example = {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": True}}
+    fed_prompt = (
+        "Do the work.\n"
+        + EA.WRITE_REPORT_CONTRACT
+        + "\nExample:\n"
+        + json.dumps(example)
+    )
+    tail = EA.WRITE_REPORT_SENTINEL + "\n" + json.dumps(example)
+    res = EA.grade_write_report("codex", "build", tail, fed_prompt)
+    assert res == {"ok": False, "reason": "unreadable"}
+
+
 def test_write_report_contract_has_no_extractable_report():
     got = EA.extract_write_report(EA.WRITE_REPORT_CONTRACT)
     assert got is None, (
@@ -1113,6 +1154,20 @@ def test_write_prompt_is_contracted():
     assert EA.write_prompt_is_contracted("") is False
     assert EA.write_prompt_is_contracted("plain") is False
     assert EA.write_prompt_is_contracted("x\n" + EA.WRITE_REPORT_CONTRACT) is True
+    assert EA.write_prompt_is_contracted("mentions " + EA.WRITE_REPORT_SENTINEL + " only") is True
+
+
+def test_salvage_write_report_prose_excerpt_carries_tail_when_report_follows_signoff():
+    signoff = "Thanks for reading.\n" * 50
+    report_json = '{"ok": true, "signal": "ok", "evidence": {"testFailed": false, "testPassed": true}}'
+    stdout = ("Long enough prose for salvage.\n" * 20) + EA.WRITE_REPORT_SENTINEL + "\n" + report_json + "\n" + signoff
+    salvage = EA.salvage_write_report("codex", "build", stdout, "fed prompt")
+    assert salvage is not None
+    assert salvage["structured"] is not True
+    assert salvage["requiresManualRead"] is True
+    assert EA.WRITE_REPORT_SENTINEL in salvage["excerpt"]
+    assert '"testPassed": true' in salvage["excerpt"]
+    assert "Thanks for reading." in salvage["excerpt"]
 
 
 def test_build_argv_verify_match(tmp_path, capsys):

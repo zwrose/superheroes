@@ -316,10 +316,14 @@ def _last_json_array(stdout):
 
 
 def write_prompt_is_contracted(fed_prompt):
-    """True when the fed write prompt carries the write-report contract block."""
+    """True when the fed write prompt carries the write-report contract.
+
+    Keyed on WRITE_REPORT_SENTINEL (stable) rather than WRITE_REPORT_CONTRACT prose
+    (expected to be edited). Fail-closed: a prompt that merely mentions the sentinel
+    is treated as contracted and routes to strict tail grading."""
     if not isinstance(fed_prompt, str) or not fed_prompt:
         return False
-    return WRITE_REPORT_CONTRACT in fed_prompt
+    return WRITE_REPORT_SENTINEL in fed_prompt
 
 
 def extract_write_report(text):
@@ -379,6 +383,12 @@ def grade_write_report(engine, role_kind, stdout, fed_prompt):
             stripped = ""
         stripped = stripped.replace(WRITE_REPORT_CONTRACT, "")
         if write_prompt_is_contracted(prompt):
+            stripped_objects = _top_level_json_matches(stripped, dict)
+            prompt_objects = _top_level_json_matches(prompt, dict)
+            if any(residue_object[0] == prompt_object[0]
+                   for residue_object in stripped_objects
+                   for prompt_object in prompt_objects):
+                return {"ok": False, "reason": "unreadable"}
             obj = extract_write_report(stripped)
             if obj is None:
                 return {"ok": False, "reason": "unreadable"}
@@ -669,8 +679,8 @@ def _review_residue(stdout, fed_prompt):
 def salvage_write_report(engine, role_kind, stdout, fed_prompt):
     """Recover a build/fix implementer's report from raw engine stdout. Never raises.
 
-    In the structured tier, `truncated` means a partial JSON fragment followed a complete
-    report. In the prose tier, it means the manual-read excerpt was capped by byte length.
+    In the prose tier, `truncated` means the manual-read excerpt was capped by byte length
+    (the excerpt carries the tail of the residue, where the report usually lives).
     """
     try:
         if role_kind == "review" or not isinstance(stdout, str) or not stdout.strip():
@@ -709,23 +719,11 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
             }
             if not isinstance(report["signal"], str):
                 return None
-            lines = residue.split("\n")
-            last_idx = None
-            for i, line in enumerate(lines):
-                if line.strip() == WRITE_REPORT_SENTINEL:
-                    last_idx = i
-            suffix = "\n".join(lines[last_idx:]) if last_idx is not None else residue
-            complete_values = _top_level_json_matches(suffix)
-            tail = suffix.strip()[complete_values[-1][2]:] if complete_values else suffix
-            json_like_tail = bool(re.match(r'^\s*(?:\{\s*(?:"|\})|\[)', tail))
-            truncated = json_like_tail and _last_json_object(tail) is None and \
-                _last_json_array(tail) is None
             return scrub_salvage_block({
                 "report": report,
                 "structured": True,
                 "requiresManualRead": False,
                 "salvaged": True,
-                "truncated": truncated,
             })
 
         residue_bytes = len(residue.encode("utf-8"))
@@ -733,7 +731,12 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
                 _artifact_is_prompt_echo_residue(residue, prompt) or
                 _artifact_is_traceback_residue(residue)):
             return None
-        excerpt_raw = residue.encode("utf-8")[:ARTIFACT_EXCERPT_BYTES]
+        residue_encoded = residue.encode("utf-8")
+        truncated = residue_bytes > ARTIFACT_EXCERPT_BYTES
+        if truncated:
+            excerpt_raw = residue_encoded[-ARTIFACT_EXCERPT_BYTES:]
+        else:
+            excerpt_raw = residue_encoded
         return {
             "report": None,
             "structured": False,
@@ -741,7 +744,7 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
             "excerpt": _scrub(excerpt_raw.decode("utf-8", errors="ignore")),
             "excerptBytes": len(excerpt_raw),
             "salvaged": True,
-            "truncated": residue_bytes > ARTIFACT_EXCERPT_BYTES,
+            "truncated": truncated,
         }
     except Exception:
         return None

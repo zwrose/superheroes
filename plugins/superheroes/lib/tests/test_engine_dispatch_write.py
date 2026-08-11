@@ -506,7 +506,6 @@ def _write_report(*, ok=True):
         "structured": True,
         "requiresManualRead": False,
         "salvaged": True,
-        "truncated": False,
     }
 
 
@@ -1589,6 +1588,14 @@ def test_dispatch_mechanics_names_item_check_constants():
 
     assert "`%s`" % ED.BASE_SHA_UNRESOLVABLE in doc
 
+    sentinel_match = re.search(
+        r"sentinel line \(`([^`]+)`\)", doc,
+    )
+    assert sentinel_match, "write-report sentinel not found in dispatch-mechanics.md"
+    assert sentinel_match.group(1) == EA.WRITE_REPORT_SENTINEL, (
+        "dispatch-mechanics.md sentinel drift from engine_adapter.WRITE_REPORT_SENTINEL"
+    )
+
 
 def test_read_expected_items_non_utf8_file(tmp_path):
     bad = tmp_path / "bad-items.txt"
@@ -1919,12 +1926,37 @@ def _report_missing_base_state(tmp_path, wt, *, expected_items=None, fed_prompt=
     return run_dir, state
 
 
+def _missing_items_delivered_detail(run_dir, state, attempt):
+    got = ED._write_report_missing_items_delivered_detail(run_dir, state, attempt)
+    if got is None:
+        return None
+    return got[0]
+
+
 def test_report_missing_classifier_clause1_timed_out_not_emitted(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     run_dir, state = _report_missing_base_state(
         tmp_path, wt, expected_items=["item.txt"],
     )
     state["attempts"][1]["ended"]["timedOut"] = True
+    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
+
+
+def test_report_missing_classifier_clause1_refusal_not_emitted(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir, state = _report_missing_base_state(
+        tmp_path, wt, expected_items=["item.txt"],
+    )
+    state["attempts"][1]["ended"]["refusal"] = "attempt-died-unrecorded"
+    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
+
+
+def test_report_missing_classifier_clause1_exit_not_emitted(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir, state = _report_missing_base_state(
+        tmp_path, wt, expected_items=["item.txt"],
+    )
+    state["attempts"][1]["ended"]["exit"] = 1
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
 
 
@@ -1981,7 +2013,7 @@ def test_report_missing_classifier_bite_proof_clause1_timed_out(tmp_path):
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
     # green baseline
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
     # red: neutralize clause 1
@@ -1989,7 +2021,45 @@ def test_report_missing_classifier_bite_proof_clause1_timed_out(tmp_path):
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
     # restore
     state["attempts"][1]["ended"]["timedOut"] = False
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
+        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+    )
+
+
+def test_report_missing_classifier_bite_proof_clause1_refusal(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir, state = _report_missing_base_state(
+        tmp_path, wt, expected_items=["item.txt"],
+    )
+    target = os.path.join(wt, "item.txt")
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write("new\n")
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
+        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+    )
+    state["attempts"][1]["ended"]["refusal"] = "attempt-died-unrecorded"
+    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
+    state["attempts"][1]["ended"]["refusal"] = None
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
+        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+    )
+
+
+def test_report_missing_classifier_bite_proof_clause1_exit(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    run_dir, state = _report_missing_base_state(
+        tmp_path, wt, expected_items=["item.txt"],
+    )
+    target = os.path.join(wt, "item.txt")
+    with open(target, "w", encoding="utf-8") as fh:
+        fh.write("new\n")
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
+        ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+    )
+    state["attempts"][1]["ended"]["exit"] = 1
+    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
+    state["attempts"][1]["ended"]["exit"] = 0
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
 
@@ -2002,13 +2072,13 @@ def test_report_missing_classifier_bite_proof_clause2_uncontracted(tmp_path):
     target = os.path.join(wt, "item.txt")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
     state["opened"]["fedPrompt"] = "Build this.\n"
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
     state["opened"]["fedPrompt"] = _contracted_fed_prompt("Build this.\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
 
@@ -2021,7 +2091,7 @@ def test_report_missing_classifier_bite_proof_clause3_gradeable_report(tmp_path)
     target = os.path.join(wt, "item.txt")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
@@ -2030,7 +2100,7 @@ def test_report_missing_classifier_bite_proof_clause3_gradeable_report(tmp_path)
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write("prose only, no report tail\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
 
@@ -2043,13 +2113,13 @@ def test_report_missing_classifier_bite_proof_clause4_empty_expected(tmp_path):
     target = os.path.join(wt, "item.txt")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
     state["opened"]["expectedItems"] = []
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
     state["opened"]["expectedItems"] = ["item.txt"]
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
 
@@ -2062,13 +2132,13 @@ def test_report_missing_classifier_bite_proof_clause4_absent_expected(tmp_path):
     target = os.path.join(wt, "item.txt")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
     state["opened"]["expectedItems"] = None
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
     state["opened"]["expectedItems"] = ["item.txt"]
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
 
@@ -2081,14 +2151,14 @@ def test_report_missing_classifier_bite_proof_clause5_missing_path(tmp_path):
     target = os.path.join(wt, "item.txt")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
     os.remove(target)
     assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) is None
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    assert ED._write_report_missing_items_delivered_detail(run_dir, state, 1) == (
+    assert _missing_items_delivered_detail(run_dir, state, 1) == (
         ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
     )
 
@@ -2101,7 +2171,7 @@ def test_report_missing_classifier_all_five_emit_token(tmp_path):
     target = os.path.join(wt, "item.txt")
     with open(target, "w", encoding="utf-8") as fh:
         fh.write("new\n")
-    detail = ED._write_report_missing_items_delivered_detail(run_dir, state, 1)
+    detail = _missing_items_delivered_detail(run_dir, state, 1)
     assert detail == ED.ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
 
 
@@ -2125,6 +2195,7 @@ def test_report_missing_dirty_tree_path(tmp_path):
     assert res["itemCheck"]["missing"] == []
     assert "reconstruct the change from the diff" in res["disclosure"]
     assert "not authorship" in res["disclosure"]
+    assert "inspect and clean it yourself" in res["disclosure"]
 
 
 def test_report_missing_double_forfeit_path(tmp_path):

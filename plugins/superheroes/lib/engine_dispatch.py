@@ -1043,7 +1043,7 @@ def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
             return None
         if item_check.get("missing"):
             return None
-        return ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED
+        return (ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED, item_check)
     except Exception:
         return None
 
@@ -1051,19 +1051,19 @@ def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
 def _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempt):
     """Apply report-missing-items-delivered classifier and salvage without upgrading outcome."""
     if run_dir_real is not None and state is not None:
-        missing_detail = _write_report_missing_items_delivered_detail(
+        missing = _write_report_missing_items_delivered_detail(
             run_dir_real, state, attempt,
         )
-        if missing_detail is not None:
+        if missing is not None:
+            missing_detail, item_check = missing
             terminal = dict(terminal)
             terminal["detail"] = missing_detail
-            opened = state["opened"]
-            cwd_real = os.path.realpath(opened["cwd"])
-            item_check = _item_delivery_check(
-                cwd_real, opened, timeout=ITEM_EVIDENCE_TIMEOUT,
-            )
             terminal["itemCheck"] = item_check
-            terminal["disclosure"] = _write_report_missing_items_delivered_disclosure(engine)
+            existing = terminal.get("disclosure", "")
+            new_disclosure = _write_report_missing_items_delivered_disclosure(engine)
+            terminal["disclosure"] = (
+                "%s %s" % (existing, new_disclosure) if existing else new_disclosure
+            )
     if run_dir_real is None or state is None:
         return terminal
     return _attach_write_report_salvage(run_dir_real, state, terminal, engine)
@@ -2043,13 +2043,13 @@ def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
-def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None):
+def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts=1):
     terminal = {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
         "detail": "worktree-dirtied-by-attempt",
-        "attempts": 1,
+        "attempts": attempts,
         "forfeited": True,
         "disclosure": (
             "%s attempt 1 report was not gradeable; the retry was "
@@ -2058,7 +2058,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None):
             "and clean it yourself." % engine
         ),
     }
-    return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, 1)
+    return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
@@ -2312,6 +2312,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             return _fold_run(run_dir_real, state, _with_run_fields(
                                 _worktree_dirtied_forfeit(
                                     engine, run_dir_real=run_dir_real, state=state,
+                                    attempts=latest,
                                 ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
