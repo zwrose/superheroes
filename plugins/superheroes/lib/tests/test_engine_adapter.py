@@ -976,19 +976,79 @@ def test_extract_write_report_i1_grammar_adversarial(text, expected):
     assert got == expected
 
 
-def test_grade_write_report_echo_fail_open_plain():
+def _write_report_contract_example_tail():
+    """The contract's final two lines (sentinel + placeholder object line)."""
+    lines = EA.WRITE_REPORT_CONTRACT.split("\n")
+    for i in range(len(lines) - 1, -1, -1):
+        if lines[i].strip() == EA.WRITE_REPORT_SENTINEL:
+            return "\n".join(lines[i:i + 2])
+    raise AssertionError("WRITE_REPORT_CONTRACT missing sentinel example tail")
+
+
+def _contract_echo_stdout_variants(fed_prompt):
+    """Stdout shapes that echo all or part of the write-report contract."""
+    contract = EA.WRITE_REPORT_CONTRACT
+    example_tail = _write_report_contract_example_tail()
+    return [
+        ("whole_prompt", fed_prompt),
+        ("contract_prefix_prose", "I did the work.\n\n" + contract),
+        ("contract_suffix_prose", contract + "\n\nI did the work."),
+        ("contract_whitespace_collapsed", re.sub(r"\s+", " ", contract)),
+        ("contract_reindented", "\n".join("  " + line for line in contract.split("\n"))),
+        ("example_tail_only", "Unrelated prose about the task.\n" + example_tail),
+    ]
+
+
+@pytest.mark.parametrize("variant_name,stdout", [
+    (name, stdout)
+    for name, stdout in _contract_echo_stdout_variants("Do the work.\n" + EA.WRITE_REPORT_CONTRACT)
+])
+def test_grade_write_report_echo_table_plain(variant_name, stdout):
     fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
-    stdout = fed_prompt
     res = EA.grade_write_report("codex", "build", stdout, fed_prompt)
-    assert res.get("ok") is not True
+    assert res.get("ok") is not True, variant_name
 
 
-def test_grade_write_report_echo_fail_open_stream_envelope():
+@pytest.mark.parametrize("variant_name,stdout", [
+    (name, stdout)
+    for name, stdout in _contract_echo_stdout_variants("Do the work.\n" + EA.WRITE_REPORT_CONTRACT)
+])
+def test_grade_write_report_echo_table_stream_envelope(variant_name, stdout):
     fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
-    inner = fed_prompt
-    stdout = _envelope(inner)
-    res = EA.grade_write_report("cursor", "build", stdout, fed_prompt)
-    assert res.get("ok") is not True
+    res = EA.grade_write_report("cursor", "build", _envelope(stdout), fed_prompt)
+    assert res.get("ok") is not True, variant_name
+
+
+@pytest.mark.parametrize("variant_name,stdout", [
+    (name, stdout)
+    for name, stdout in _contract_echo_stdout_variants("Do the work.\n" + EA.WRITE_REPORT_CONTRACT)
+])
+def test_salvage_write_report_echo_table_not_structured(variant_name, stdout):
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    salvage = EA.salvage_write_report("codex", "build", stdout, fed_prompt)
+    assert salvage is None or salvage.get("structured") is not True, variant_name
+
+
+def test_grade_write_report_genuine_ok_tail_still_passes():
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    tail = EA.WRITE_REPORT_SENTINEL + '\n{"ok": true, "signal": "ok", "evidence": {}}'
+    res = EA.grade_write_report("codex", "build", tail, fed_prompt)
+    assert res == {"ok": True, "signal": "ok", "evidence": {"testFailed": False, "testPassed": False}}
+
+
+def test_grade_write_report_genuine_refusal_still_grades():
+    fed_prompt = "Do the work.\n" + EA.WRITE_REPORT_CONTRACT
+    tail = EA.WRITE_REPORT_SENTINEL + '\n{"ok": false, "signal": "plan_wrong"}'
+    res = EA.grade_write_report("codex", "build", tail, fed_prompt)
+    assert res["ok"] is False and res["signal"] == "plan_wrong" and res["reason"] == "plan_wrong"
+
+
+def test_write_report_contract_has_no_extractable_report():
+    got = EA.extract_write_report(EA.WRITE_REPORT_CONTRACT)
+    assert got is None, (
+        "WRITE_REPORT_CONTRACT must not carry a decodable example report — "
+        "an echoed contract block would grade as a false pass"
+    )
 
 
 def test_grade_write_report_i2_contracted_stray_json_is_unreadable():

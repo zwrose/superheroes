@@ -99,9 +99,10 @@ WRITE_REPORT_CONTRACT = (
     "is wrong, otherwise \"needs_context\" (only those two values).\n"
     "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
     "failing / passing during this attempt; false when not observed.\n"
-    "Example final two lines:\n"
+    "Example final two lines (placeholders — compose real JSON literals yourself):\n"
     + WRITE_REPORT_SENTINEL + "\n"
-    '{"ok": true, "signal": "ok", "evidence": {"testFailed": false, "testPassed": true}}'
+    '{"ok": <true or false>, "signal": "<ok | plan_wrong | needs_context>", '
+    '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}}'
 )
 
 # #747 WO-4a: pure engaged-artifact detector thresholds. Measured 2026-07-31 on the preserved
@@ -376,6 +377,7 @@ def grade_write_report(engine, role_kind, stdout, fed_prompt):
         stripped = strip_echoed_prompt(text, prompt)
         if not isinstance(stripped, str):
             stripped = ""
+        stripped = stripped.replace(WRITE_REPORT_CONTRACT, "")
         if write_prompt_is_contracted(prompt):
             obj = extract_write_report(stripped)
             if obj is None:
@@ -680,6 +682,7 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
         residue = strip_echoed_prompt(text, prompt)
         if not isinstance(residue, str) or not residue.strip():
             return None
+        residue = residue.replace(WRITE_REPORT_CONTRACT, "")
 
         # A partial prompt echo can retain its example verdict even when the wider prompt was not
         # removable verbatim. Do not turn that template object into an implementer claim.
