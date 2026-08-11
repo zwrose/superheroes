@@ -613,7 +613,8 @@ def test_reclaim_guard_mode_is_owner_only(tmp_path):
 
 # --- #862: confirmed-dead holder reclaim, without the TTL wait ------------------
 # axis: what licenses reclaim — holder DEATH, not TTL expiry; a live or unsignalable holder
-# is never reclaimed under either setting.
+# on THIS host is never reclaimed under either setting. (A foreign-host holder is a different
+# case, settled by TTL rather than by the pid probe — see the #953 block at the end.)
 
 
 def _now_stamp():
@@ -649,9 +650,10 @@ def test_acquire_reclaims_dead_holder_inside_ttl_when_opted_in(tmp_path):
     lock.release(p)
 
 
-def test_live_holder_is_never_reclaimed_even_past_ttl(tmp_path):
-    """The invariant the short-circuit must not touch: a LIVE holder is never stale, however
-    long it has held the lock and whichever setting the caller passes."""
+def test_same_host_live_holder_is_never_reclaimed_even_past_ttl(tmp_path):
+    """The invariant the short-circuit must not touch: a LIVE holder on THIS host is never
+    stale, however long it has held the lock and whichever setting the caller passes. The
+    fixture leaves the holder's hostname alone, so same-host is all it speaks to."""
     p = str(tmp_path / "engine.lock")
     lock.acquire(p)
     _rewrite_holder(p, acquiredAt="1970-01-01T00:00:00Z")        # ancient, but pid is this process

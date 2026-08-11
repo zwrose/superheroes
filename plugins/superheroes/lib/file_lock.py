@@ -2,7 +2,8 @@
 """File lock guarding concurrent engine applies (parallel worktree agents).
 Stale reclaim: a holder is stale when it is EXPIRED by TTL and its
 pid is dead-on-this-boot, OR when its bootId no longer matches (the host
-rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
+rebooted, so the recorded pid is meaningless). A LIVE holder on THIS host still raises
+LockHeld; a foreign-host holder's protection is its TTL (next paragraph).
 
 A holder recorded under a different hostname is reclaimable on the TTL leg alone —
 never on the dead-holder fast path and never on a bootId mismatch (#953). Treating a
