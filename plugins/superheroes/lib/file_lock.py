@@ -2,7 +2,17 @@
 """File lock guarding concurrent engine applies (parallel worktree agents).
 Stale reclaim: a holder is stale when it is EXPIRED by TTL and its
 pid is dead-on-this-boot, OR when its bootId no longer matches (the host
-rebooted, so the recorded pid is meaningless). A LIVE holder still raises LockHeld.
+rebooted, so the recorded pid is meaningless). A LIVE holder on THIS host still raises
+LockHeld; a foreign-host holder's protection is its TTL (next paragraph).
+
+A holder recorded under a different hostname is reclaimable on the TTL leg alone —
+never on the dead-holder fast path and never on a bootId mismatch (#953). Treating a
+host mismatch as "not stale" wedged locks permanently the first time a laptop renamed
+itself mid-run, which is the normal case on a machine that changes networks. The
+"never a LIVE holder" guarantee below is therefore exact only for a SAME-HOST holder,
+whose pid we can actually probe; for a foreign-host holder the guarantee is its TTL,
+and a live one past that TTL can be reclaimed. Nothing shares these lock paths across
+machines or pid namespaces today, which is what makes that trade acceptable.
 
 `reclaim_dead_holder=True` (#862) drops the TTL wait for a holder whose pid is
 CONFIRMED dead on this host: the TTL only ever delayed reclaim of a holder that was
@@ -10,8 +20,9 @@ already gone, and on a lock whose holder is the only worker (engine_dispatch's
 `run.lock`) that delay is pure re-attach latency. It is opt-in, not the default,
 because some locks guard a resource a child process keeps using after the holder
 dies (engine_dispatch's worktree lease) — there, holder death alone is not evidence
-the resource is free, and those call sites keep the TTL wait. The refusal to reclaim
-a LIVE holder is unconditional either way.
+the resource is free, and those call sites keep the TTL wait. For a SAME-HOST holder
+the refusal to reclaim a LIVE one is unconditional under either setting; a foreign-host
+holder's protection is its TTL, per the paragraph above.
 """
 import calendar
 import errno
@@ -151,11 +162,13 @@ def _pid_dead_on_this_host(holder, zombie_is_dead=False):
 
 
 def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
-    """Stale iff (bootId mismatch) OR (expired by TTL AND pid dead-on-this-host)
-    OR (malformed holder past grace window).
+    """Stale iff (bootId mismatch on this host) OR (expired by TTL AND pid
+    dead-on-this-host) OR (malformed holder past grace window).
 
     With `reclaim_dead_holder=True` a pid dead-on-this-host is stale immediately, with
-    no TTL wait (#862). A LIVE holder is never stale under either setting."""
+    no TTL wait (#862) — same-host holders only. A LIVE holder on THIS host is never
+    stale under either setting; a live holder on a foreign hostname is protected by its
+    TTL, not by the pid probe, which cannot reach another machine's pid namespace."""
     if not os.path.lexists(lock_path):
         return False
     status, holder = _read_holder_state(lock_path)
@@ -164,14 +177,30 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     if status == "unusable" or _holder_fields_unusable(holder):
         return _malformed_past_grace(lock_path, now)
     h = holder
-    if h.get("host") != socket.gethostname():
+    # Two categories from here on (a malformed holder was settled above), and they are not
+    # the same. SAME HOST: everything below is grounded —
+    # our pid namespace is the holder's, so death is provable and the reboot check means what
+    # it says. FOREIGN HOST: `host` is not a machine identity (a laptop changing networks
+    # renames itself mid-run, #953), but neither is it evidence of a shared pid namespace —
+    # containers on one kernel differ in hostname AND pid namespace while sharing a boot id,
+    # so boot equality cannot license a pid probe. Reclaim there rests on TTL expiry alone.
+    same_host = h.get("host") == socket.gethostname()
+    if same_host and hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id()) is False:
+        return True   # this host rebooted: the recorded pid is from a dead boot
+    # Two legs stay SAME-HOST-ONLY, both because they read the local pid namespace as if it
+    # were the holder's: the reboot check above, and the `reclaim_dead_holder` fast path below
+    # — whose whole trade is swapping the TTL wait for CONFIRMED death, a confirmation no
+    # foreign-host record can supply. A foreign holder therefore always waits out its TTL.
+    if not (reclaim_dead_holder and same_host) and not _expired(h.get("acquiredAt"), ttl, now):
         return False
-    bid, cur = h.get("bootId"), hostinfo.boot_id()
-    if bid is not None and cur is not None and bid != cur:
-        return True
-    # axis: what licenses reclaim is holder DEATH, not TTL expiry — and never a live holder.
-    if not reclaim_dead_holder and not _expired(h.get("acquiredAt"), ttl, now):
-        return False
+    # Same host: holder DEATH is what licenses reclaim, never TTL expiry alone, and a live
+    # holder is never stale. Foreign host: `_pid_dead_on_this_host` cannot prove a remote
+    # holder died — a pid absent here may be alive there — so it stands only as a brake that
+    # can refuse reclaim, and TTL expiry is what actually licenses it. That is the ratified
+    # cross-host rule (#953) and the only clock both sides share, but it does mean a live
+    # foreign holder can lose an expired lock. Accepted and disclosed rather than hidden;
+    # reachable only where a lock path is shared between machines or pid namespaces, which
+    # neither caller's path is today (a local run dir; a lease under the local tempdir).
     return _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder)
 
 
@@ -245,7 +274,8 @@ def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
     """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
 
     `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
-    TTL (#862); a live holder still raises LockHeld.
+    TTL (#862); a live holder on THIS host still raises LockHeld (a foreign-host holder is
+    protected by its TTL instead — see the module docstring).
 
     Raises only LockHeld — never propagates OSError from publish or directory setup."""
     try:

@@ -210,7 +210,8 @@ dispositions table and receipt link there; when the branch later becomes a PR, t
 is what the PR body carries. (The workhorse charter names the same substitute-receipt shape for
 light-lane handback.)
 
-The auto-fix loop's "never plan continuation by eye" rule (`reference/round-driver.md` § The one
+The auto-fix loop's "never plan continuation by eye" rule
+(`skills/review-code/reference/round-driver.md` § The one
 entrypoint) applies only inside `next`/`submit`; it does not forbid this lane.
 
 ## Presentation standard (show it / say it / nothing to see)

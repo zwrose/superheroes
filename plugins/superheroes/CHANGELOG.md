@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.26.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.25.0...superheroes-v0.26.0) (2026-08-12)
+
+
+### Features
+
+* **superheroes:** write-path skill step-bodies at pointable reference paths — orders cite, never inline ([#965](https://github.com/zwrose/superheroes/issues/965)) ([92448a1](https://github.com/zwrose/superheroes/commit/92448a1ff685afbbac1437dbffdd4dae3af08ddb))
+
+
+### Bug Fixes
+
+* **superheroes:** file_lock staleness survives hostname change + kern.boottime jitter ([#964](https://github.com/zwrose/superheroes/issues/964)) ([84e19cf](https://github.com/zwrose/superheroes/commit/84e19cf471137eff0a2d998ed8345ca868e95978))
+* **superheroes:** state the write-report contract the runner grades against, and name report loss honestly ([#969](https://github.com/zwrose/superheroes/issues/969)) ([d88f910](https://github.com/zwrose/superheroes/commit/d88f910dcb1484e27bc12b435ebe843df5cd518b))
+
 ## [0.25.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.24.0...superheroes-v0.25.0) (2026-08-11)
 
 
