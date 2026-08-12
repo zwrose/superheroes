@@ -546,8 +546,8 @@ def test_boot_id_is_probed_once(monkeypatch):
     monkeypatch.setattr(hostinfo.subprocess, "run", fake_run)
     monkeypatch.setattr(hostinfo, "_boot_id_cache", hostinfo._UNSET)
     monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
-    assert hostinfo.boot_id() == "boottime:{ sec = 1, usec = 0 }"
-    assert hostinfo.boot_id() == "boottime:{ sec = 1, usec = 0 }"
+    assert hostinfo.boot_id() == "boottime:sec:1"
+    assert hostinfo.boot_id() == "boottime:sec:1"
     assert calls == 1
 
 
@@ -613,7 +613,8 @@ def test_reclaim_guard_mode_is_owner_only(tmp_path):
 
 # --- #862: confirmed-dead holder reclaim, without the TTL wait ------------------
 # axis: what licenses reclaim — holder DEATH, not TTL expiry; a live or unsignalable holder
-# is never reclaimed under either setting.
+# on THIS host is never reclaimed under either setting. (A foreign-host holder is a different
+# case, settled by TTL rather than by the pid probe — see the #953 block at the end.)
 
 
 def _now_stamp():
@@ -649,9 +650,10 @@ def test_acquire_reclaims_dead_holder_inside_ttl_when_opted_in(tmp_path):
     lock.release(p)
 
 
-def test_live_holder_is_never_reclaimed_even_past_ttl(tmp_path):
-    """The invariant the short-circuit must not touch: a LIVE holder is never stale, however
-    long it has held the lock and whichever setting the caller passes."""
+def test_same_host_live_holder_is_never_reclaimed_even_past_ttl(tmp_path):
+    """The invariant the short-circuit must not touch: a LIVE holder on THIS host is never
+    stale, however long it has held the lock and whichever setting the caller passes. The
+    fixture leaves the holder's hostname alone, so same-host is all it speaks to."""
     p = str(tmp_path / "engine.lock")
     lock.acquire(p)
     _rewrite_holder(p, acquiredAt="1970-01-01T00:00:00Z")        # ancient, but pid is this process
@@ -710,3 +712,264 @@ def test_zombie_holder_is_dead_under_the_opt_in(tmp_path):
         assert lock.is_stale(p, reclaim_dead_holder=True) is True     # opt-in: reaps the wait
     finally:
         os.waitpid(pid, 0)
+
+
+# --- #953: a hostname change must not wedge the lock, and one boot must read as one boot ---
+
+_OTHER_HOST = "Mac-204.lan"          # the name this machine carried before it renamed itself
+_LEGACY_BOOT_ID = "boottime:{ sec = 1786231679, usec = 113088 } Sat Aug  8 19:27:59 2026"
+
+
+def _assert_other_host_differs():
+    assert _OTHER_HOST != socket.gethostname(), "test fixture must name a DIFFERENT host"
+
+
+def test_field_wedge_dead_holder_under_a_changed_hostname_is_stale(tmp_path):
+    """The scenario observed live on 2026-08-09: the machine renamed itself mid-run
+    (`Mac-204.lan` -> `ZWRMPB.local`), so every later reader saw a host mismatch and
+    short-circuited to 'not stale' — the holder was dead and its TTL long gone, but the
+    lock could never be reclaimed and `dispatch-abandon` could not release it."""
+    _assert_other_host_differs()
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,
+                    acquiredAt="1970-01-01T00:00:00Z")     # dead pid + expired TTL + changed host
+    assert lock.is_stale(p) is True
+
+
+def test_acquire_reclaims_the_changed_hostname_wedge(tmp_path):
+    _assert_other_host_differs()
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt="1970-01-01T00:00:00Z")
+    assert lock.acquire(p) is True                          # reclaimed, not wedged
+    assert lock.read_holder(p)["pid"] == os.getpid()
+    lock.release(p)
+
+
+def test_cross_host_holder_inside_ttl_stays_protected(tmp_path):
+    """The conservative direction the widening must keep: while the TTL is still live, a
+    holder under another hostname is not reclaimable."""
+    _assert_other_host_differs()
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
+    assert lock.is_stale(p) is False
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p)
+
+
+def test_cross_host_live_local_pid_brakes_reclaim_even_past_ttl(tmp_path):
+    """The pid probe is kept across a host mismatch as a brake: a recorded pid that IS live
+    in our namespace refuses reclaim however long the TTL has been up.
+
+    What this does NOT prove — and cannot, since the probe reads only our own namespace — is
+    that an arbitrary live foreign holder is protected past its TTL. It is not; see
+    `test_expired_foreign_holder_reclaims_on_the_ttl_alone` for that accepted trade."""
+    _assert_other_host_differs()
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, host=_OTHER_HOST, acquiredAt="1970-01-01T00:00:00Z")   # pid = this process
+    try:
+        assert lock.is_stale(p) is False
+        assert lock.is_stale(p, reclaim_dead_holder=True) is False
+        with pytest.raises(lock.LockHeld):
+            lock.acquire(p, reclaim_dead_holder=True)
+    finally:
+        lock.release(p)
+
+
+def test_cross_host_ignores_the_fast_path_however_the_boot_ids_compare(tmp_path, monkeypatch):
+    """`reclaim_dead_holder` trades the TTL wait for CONFIRMED holder death — a
+    confirmation no foreign-host record can supply, because `_pid_dead_on_this_host` reads
+    OUR pid namespace and not the holder's. A matching boot id does not change that: it is
+    not evidence of a shared pid namespace (containers on one kernel share the host's
+    `btime` while differing in hostname AND pid namespace; two hosts can boot in the same
+    second). Across a host mismatch the TTL wait is mandatory whatever the boot ids say."""
+    _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:1786231679")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
+    # pinned, not assumed: an environment where boot_id() is None would leave both sides
+    # uncorroborated and the equal-id branch below would pass without exercising anything.
+    assert lock.read_holder(p)["bootId"] == "boottime:sec:1786231679"
+    assert lock.is_stale(p, reclaim_dead_holder=True) is False        # boot ids EQUAL
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
+    assert lock.is_stale(p, reclaim_dead_holder=True) is False        # boot ids DIFFERENT
+
+
+def test_equal_boot_ids_do_not_expose_a_foreign_namespace_holder(tmp_path, monkeypatch):
+    """The round-2 review case: hostname differs, boot ids are equal, and the recorded pid
+    is absent in the reader's namespace — two containers on one kernel sharing a lock path.
+    Inside its TTL that holder stays protected; equal boot ids must not be read as proof
+    that the reader may probe the holder's pid."""
+    _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:1786231679")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST, acquiredAt=_now_stamp())
+    # the equality this regression turns on is pinned, not inherited from the environment:
+    # boot_id() may legitimately return None, and None never corroborates.
+    assert lock.read_holder(p)["bootId"] == "boottime:sec:1786231679"
+    assert lock.is_stale(p) is False
+    assert lock.is_stale(p, reclaim_dead_holder=True) is False
+    with pytest.raises(lock.LockHeld):
+        lock.acquire(p, reclaim_dead_holder=True)
+
+
+def test_expired_foreign_holder_reclaims_on_the_ttl_alone(tmp_path, monkeypatch):
+    """The accepted residual, pinned rather than hidden (review finding, #953).
+
+    A holder on a foreign hostname cannot be probed for liveness: `_pid_dead_on_this_host`
+    reads OUR pid namespace, so a pid absent here is not evidence that a remote holder
+    died. Past its TTL such a holder is reclaimed anyway — TTL expiry is the only clock
+    both sides share, and it is the cross-host rule the issue ratified. A genuinely live
+    remote holder can therefore lose an expired lock. That is reachable only where a lock
+    path is shared between machines or pid namespaces, which neither caller's path is (a
+    local run dir; a lease under the local tempdir). Change this assertion only with that
+    trade re-decided."""
+    _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,          # a pid absent on this machine
+                    acquiredAt="1970-01-01T00:00:00Z", bootId="boottime:sec:1786231679")
+    assert lock.is_stale(p) is True
+
+
+def test_cross_host_boot_id_mismatch_alone_is_not_stale(tmp_path, monkeypatch):
+    """A genuinely different machine mismatches on bootId every read. Letting that leg
+    fire across a host mismatch would reclaim a live remote holder on sight."""
+    _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,
+                    acquiredAt=_now_stamp(), bootId="boottime:sec:1786231679")
+    assert lock.is_stale(p) is False
+
+
+def test_same_host_reboot_still_reclaims_on_sight(tmp_path, monkeypatch):
+    """Unchanged behaviour: on THIS host a bootId mismatch means the recorded pid belongs
+    to a previous boot and is meaningless, so the holder is stale with no TTL wait."""
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)                                        # holder pid is this LIVE process
+    _rewrite_holder(p, acquiredAt=_now_stamp(), bootId="boottime:sec:1786231679")
+    assert lock.is_stale(p) is True
+
+
+def test_boottime_usec_jitter_does_not_read_as_a_reboot(tmp_path, monkeypatch):
+    """macOS `kern.boottime` renders a `usec` leg that has been observed to shift between
+    reads of one boot. Compared raw, that read as 'the host rebooted' and made a LIVE
+    holder stale — reclaiming a lock out from under a running process."""
+    monkeypatch.setattr(
+        lock.hostinfo, "boot_id",
+        lambda: "boottime:{ sec = 1786231679, usec = 990001 } Sat Aug  8 19:27:59 2026")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)                                        # holder pid is this LIVE process
+    _rewrite_holder(p, acquiredAt=_now_stamp(), bootId=_LEGACY_BOOT_ID)
+    try:
+        assert lock.is_stale(p) is False
+    finally:
+        lock.release(p)
+
+
+def test_legacy_boot_id_still_matches_the_recorded_form(tmp_path, monkeypatch):
+    """Upgrade path: lock files written before this change carry the full rendered
+    boottime. A reader recording the truncated form must still see them as the same boot,
+    or every pre-existing lock reads as rebooted the moment the new code lands."""
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boottime:sec:1786231679")
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, acquiredAt=_now_stamp(), bootId=_LEGACY_BOOT_ID)
+    try:
+        assert lock.is_stale(p) is False
+    finally:
+        lock.release(p)
+
+
+def test_boot_id_records_the_stable_truncated_form(monkeypatch):
+    import hostinfo
+
+    real_open = open
+
+    def fake_open(path, *args, **kwargs):
+        if path == "/proc/stat":
+            raise FileNotFoundError()
+        return real_open(path, *args, **kwargs)
+
+    class Result:
+        returncode = 0
+        stdout = "{ sec = 1786231679, usec = 113088 } Sat Aug  8 19:27:59 2026\n"
+
+    monkeypatch.setattr("builtins.open", fake_open)
+    monkeypatch.setattr(hostinfo.subprocess, "run", lambda *a, **k: Result())
+    monkeypatch.setattr(hostinfo, "_boot_id_cache", hostinfo._UNSET)
+    monkeypatch.setattr(hostinfo, "_boot_id_fail_until", 0.0)
+    assert hostinfo.boot_id() == "boottime:sec:1786231679"
+
+
+def test_same_boot_folds_jitter_and_keeps_real_differences():
+    import hostinfo
+
+    jittered = "boottime:{ sec = 1786231679, usec = 990001 } Sat Aug  8 19:27:59 2026"
+    assert hostinfo.same_boot(_LEGACY_BOOT_ID, jittered) is True
+    assert hostinfo.same_boot(_LEGACY_BOOT_ID, "boottime:sec:1786231679") is True
+    # a real reboot moves the whole second, and must still read as a different boot
+    assert hostinfo.same_boot(_LEGACY_BOOT_ID, "boottime:sec:1786231680") is False
+    assert hostinfo.same_boot("btime:1786231679", "btime:1786231680") is False
+    assert hostinfo.same_boot("btime:1786231679", "btime:1786231679") is True
+
+
+def test_same_boot_does_not_read_the_usec_leg_as_the_sec_leg():
+    """The `usec` leg is a `sec` substring; folding on it would call two different boots
+    the same boot whenever their usec happened to agree."""
+    import hostinfo
+
+    a = "boottime:{ sec = 100, usec = 500 } Sat Aug  8 19:27:59 2026"
+    b = "boottime:{ sec = 200, usec = 500 } Sat Aug  8 19:28:00 2026"
+    assert hostinfo.same_boot(a, b) is False
+    assert hostinfo._normalize(a) == "boottime:sec:100"
+    assert hostinfo._normalize(b) == "boottime:sec:200"
+    # A render carrying ONLY the jittering leg has no sec leg to fold to, and must not
+    # borrow the usec digits as one — that would equate two ids the render never claimed
+    # were the same boot. (Ordering hides this in a full render, where `sec` is matched
+    # first either way; the check has to put `usec` where nothing else can match.)
+    assert hostinfo._normalize("boottime:{ usec = 500 }") == "boottime:{ usec = 500 }"
+    assert hostinfo.same_boot("boottime:{ usec = 500 }", "boottime:{ sec = 500 }") is False
+
+
+def test_same_boot_is_none_when_either_side_cannot_corroborate():
+    """None means 'cannot corroborate' — callers degrade on it; it is never a match."""
+    import hostinfo
+
+    assert hostinfo.same_boot(None, "boottime:sec:1") is None
+    assert hostinfo.same_boot("boottime:sec:1", None) is None
+    assert hostinfo.same_boot("", "boottime:sec:1") is None
+    assert hostinfo.same_boot(12345, "boottime:sec:1") is None
+    assert hostinfo.same_boot("boottime:sec:1", "   ") is None
+
+
+def test_unrecognized_boot_id_render_compares_exactly():
+    """Anything the normalizer does not recognize falls through unchanged rather than
+    folding to something coarser — an unparsed render must never widen a match."""
+    import hostinfo
+
+    assert hostinfo.same_boot("boottime:mystery", "boottime:mystery") is True
+    assert hostinfo.same_boot("boottime:mystery", "boottime:other") is False
+
+
+def test_missing_boot_id_leaves_the_ttl_leg_in_charge(tmp_path, monkeypatch):
+    """boot_id() returning None ('cannot corroborate') must not itself make a holder
+    stale, on either side of a host mismatch."""
+    _assert_other_host_differs()
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: None)
+    p = str(tmp_path / "engine.lock")
+    lock.acquire(p)
+    _rewrite_holder(p, acquiredAt=_now_stamp(), bootId=None)      # live pid, inside TTL
+    assert lock.is_stale(p) is False
+    _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,
+                    acquiredAt="1970-01-01T00:00:00Z", bootId=None)
+    assert lock.is_stale(p) is True                                # TTL leg still reclaims
