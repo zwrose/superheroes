@@ -100,17 +100,19 @@ def _findings_stdout():
 
 
 def _build_ok_stdout():
-    return json.dumps({
+    body = json.dumps({
         "ok": True, "signal": "ok",
         "evidence": {"testFailed": False, "testPassed": True},
     })
+    return "Receipt prose.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
 
 
 def _honest_refusal_stdout():
-    return json.dumps({
+    body = json.dumps({
         "ok": False, "signal": "plan_wrong",
         "evidence": {"testFailed": True, "testPassed": False},
     })
+    return "Stopped per order.\n" + EA.WRITE_REPORT_SENTINEL + "\n" + body
 
 
 def _install_fake_engine(tmp_path, monkeypatch, name, *, stdout="", sleep_s=0, exit_code=0,

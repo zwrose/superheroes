@@ -83,6 +83,28 @@ MAX_STDOUT_TAIL_BYTES = 512 * 1024
 # echoed prompt can arrive truncated while the trailing shape-contract example survives.
 ECHO_TAIL_CHARS = 2000
 
+WRITE_REPORT_SENTINEL = "<<<SUPERHEROES-WRITE-REPORT>>>"
+
+WRITE_REPORT_CONTRACT = (
+    "Write-report contract (your graded tail is separate from prose receipts):\n"
+    "Emit the full prose report the order already asks for, first and in full.\n"
+    "The JSON object below is in addition to those receipts, never a replacement.\n"
+    "As the very last thing in your output: a line containing only:\n"
+    + WRITE_REPORT_SENTINEL + "\n"
+    "then a single JSON object on the following line, then nothing at all.\n"
+    "Field semantics:\n"
+    "  ok — true means you ran the order to completion as specified; it is not an acceptance "
+    "verdict — you never judge whether the work is good enough and you never mark your own work done.\n"
+    "  ok: false — you stopped or refused; set signal to \"plan_wrong\" when the order's premise "
+    "is wrong, otherwise \"needs_context\" (only those two values).\n"
+    "  evidence.testFailed / evidence.testPassed — booleans for whether you observed a test "
+    "failing / passing during this attempt; false when not observed.\n"
+    "Example final two lines (placeholders — compose real JSON literals yourself):\n"
+    + WRITE_REPORT_SENTINEL + "\n"
+    '{"ok": <true or false>, "signal": "<ok | plan_wrong | needs_context>", '
+    '"evidence": {"testFailed": <true or false>, "testPassed": <true or false>}}'
+)
+
 # #747 WO-4a: pure engaged-artifact detector thresholds. Measured 2026-07-31 on the preserved
 # dispatch corpus (harness 2.1.219, plugin 0.23.0): all seven prose specimens score ≥2 signals
 # under the two-of-three rule; the preserved cursor stream log (66,821 B raw) scores 1 signal and
@@ -291,6 +313,88 @@ def _last_json_array(stdout):
     or None — the tolerated bare-array reviewer shape (an engine emits `[...]` directly
     instead of `{"findings": [...]}`, #196)."""
     return _last_top_level_json(stdout, list)
+
+
+def write_prompt_is_contracted(fed_prompt):
+    """True when the fed write prompt carries the write-report contract.
+
+    Keyed on WRITE_REPORT_SENTINEL (stable) rather than WRITE_REPORT_CONTRACT prose
+    (expected to be edited). Fail-closed: a prompt that merely mentions the sentinel
+    is treated as contracted and routes to strict tail grading."""
+    if not isinstance(fed_prompt, str) or not fed_prompt:
+        return False
+    return WRITE_REPORT_SENTINEL in fed_prompt
+
+
+def extract_write_report(text):
+    """Strict tail grammar: sentinel line + one JSON object + trailing whitespace only.
+
+    Input must already be envelope-unwrapped and echo-stripped. Returns the decoded object
+    or None. Never raises."""
+    try:
+        if not isinstance(text, str) or not text:
+            return None
+        lines = text.split("\n")
+        last_idx = None
+        for i, line in enumerate(lines):
+            if line.strip() == WRITE_REPORT_SENTINEL:
+                last_idx = i
+        if last_idx is None:
+            return None
+        after = "\n".join(lines[last_idx + 1:])
+        if not after:
+            return None
+        dec = json.JSONDecoder()
+        obj, end = dec.raw_decode(after.lstrip())
+        if not isinstance(obj, dict):
+            return None
+        tail = after.lstrip()[end:]
+        if tail.strip():
+            return None
+        return obj
+    except Exception:
+        return None
+
+
+def _grade_build_report_obj(obj):
+    """Single home for build|fix report-object grading (CONVENTIONS §11). Never raises."""
+    if not isinstance(obj, dict):
+        return {"ok": False, "reason": "unreadable"}
+    ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
+    evidence = {"testFailed": bool(ev.get("testFailed")),
+                "testPassed": bool(ev.get("testPassed"))}
+    if obj.get("ok") is not True:
+        sig = "plan_wrong" if obj.get("signal") == "plan_wrong" else "needs_context"
+        return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
+    return {"ok": True, "signal": "ok", "evidence": evidence}
+
+
+def grade_write_report(engine, role_kind, stdout, fed_prompt):
+    """Grade a write dispatch stdout. Contracted prompts require the strict tail report;
+    uncontracted prompts delegate to parse_result (byte-identical legacy). Never raises."""
+    try:
+        text = stdout if isinstance(stdout, str) else ""
+        text = _unwrap_stream_envelope(text)
+        if not isinstance(text, str):
+            text = ""
+        prompt = fed_prompt if isinstance(fed_prompt, str) else ""
+        stripped = strip_echoed_prompt(text, prompt)
+        if not isinstance(stripped, str):
+            stripped = ""
+        stripped = stripped.replace(WRITE_REPORT_CONTRACT, "")
+        if write_prompt_is_contracted(prompt):
+            obj = extract_write_report(stripped)
+            # Prompt-example guard applies only to the extracted tail object, not prose
+            # elsewhere in the output. Safe because the contract's example is non-decodable
+            # (test_write_report_contract_has_no_extractable_report), and the tail must
+            # carry the sentinel and satisfy strict grammar.
+            if obj is None or any(obj == prompt_object[0]
+                                  for prompt_object in _top_level_json_matches(prompt, dict)):
+                return {"ok": False, "reason": "unreadable"}
+            return _grade_build_report_obj(obj)
+        return parse_result(engine, role_kind, stdout)
+    except Exception:
+        return {"ok": False, "reason": "unreadable"}
 
 
 def strip_echoed_prompt(stdout, prompt_text):
@@ -574,8 +678,9 @@ def _review_residue(stdout, fed_prompt):
 def salvage_write_report(engine, role_kind, stdout, fed_prompt):
     """Recover a build/fix implementer's report from raw engine stdout. Never raises.
 
-    In the structured tier, `truncated` means a partial JSON fragment followed a complete
-    report. In the prose tier, it means the manual-read excerpt was capped by byte length.
+    In the prose tier, `truncated` means the manual-read excerpt was capped by byte length
+    on the scrubbed residue (the excerpt carries the tail of the scrubbed text, where the
+    report usually lives). `excerptBytes` counts bytes from that scrubbed tail slice.
     """
     try:
         if role_kind == "review" or not isinstance(stdout, str) or not stdout.strip():
@@ -587,6 +692,7 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
         residue = strip_echoed_prompt(text, prompt)
         if not isinstance(residue, str) or not residue.strip():
             return None
+        residue = residue.replace(WRITE_REPORT_CONTRACT, "")
 
         # A partial prompt echo can retain its example verdict even when the wider prompt was not
         # removable verbatim. Do not turn that template object into an implementer claim.
@@ -598,48 +704,49 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
                     for prompt_object in prompt_objects)):
             return None
 
-        parsed = parse_result(engine, role_kind, residue)
-        if parsed.get("reason") == "unreadable":
-            residue_bytes = len(residue.encode("utf-8"))
-            if (residue_bytes < ARTIFACT_MIN_RESIDUE_BYTES or
-                    _artifact_is_prompt_echo_residue(residue, prompt) or
-                    _artifact_is_traceback_residue(residue)):
+        report_obj = extract_write_report(residue)
+        if report_obj is not None:
+            parsed = _grade_build_report_obj(report_obj)
+            if parsed.get("reason") == "unreadable":
                 return None
-            excerpt_raw = residue.encode("utf-8")[:ARTIFACT_EXCERPT_BYTES]
-            return {
-                "report": None,
-                "structured": False,
-                "requiresManualRead": True,
-                "excerpt": _scrub(excerpt_raw.decode("utf-8", errors="ignore")),
-                "excerptBytes": len(excerpt_raw),
-                "salvaged": True,
-                "truncated": residue_bytes > ARTIFACT_EXCERPT_BYTES,
+            report = {
+                "ok": parsed.get("ok") is True,
+                "signal": parsed.get("signal"),
+                "evidence": {
+                    "testFailed": bool(parsed.get("evidence", {}).get("testFailed")),
+                    "testPassed": bool(parsed.get("evidence", {}).get("testPassed")),
+                },
             }
-        report = {
-            "ok": parsed.get("ok") is True,
-            "signal": parsed.get("signal"),
-            "evidence": {
-                "testFailed": bool(parsed.get("evidence", {}).get("testFailed")),
-                "testPassed": bool(parsed.get("evidence", {}).get("testPassed")),
-            },
-        }
-        if not isinstance(report["signal"], str):
-            return None
+            if not isinstance(report["signal"], str):
+                return None
+            return scrub_salvage_block({
+                "report": report,
+                "structured": True,
+                "requiresManualRead": False,
+                "salvaged": True,
+            })
 
-        # Keep parse_result as the sole report parser. This only detects a JSON-looking partial
-        # tail after the last complete JSON value, so later markdown brackets do not look truncated.
-        complete_values = _top_level_json_matches(residue)
-        tail = residue.strip()[complete_values[-1][2]:] if complete_values else residue
-        json_like_tail = bool(re.match(r'^\s*(?:\{\s*(?:"|\})|\[)', tail))
-        truncated = json_like_tail and _last_json_object(tail) is None and \
-            _last_json_array(tail) is None
-        return scrub_salvage_block({
-            "report": report,
-            "structured": True,
-            "requiresManualRead": False,
+        residue_bytes = len(residue.encode("utf-8"))
+        if (residue_bytes < ARTIFACT_MIN_RESIDUE_BYTES or
+                _artifact_is_prompt_echo_residue(residue, prompt) or
+                _artifact_is_traceback_residue(residue)):
+            return None
+        residue_scrubbed = _scrub(residue)
+        residue_scrubbed_encoded = residue_scrubbed.encode("utf-8")
+        truncated = len(residue_scrubbed_encoded) > ARTIFACT_EXCERPT_BYTES
+        if truncated:
+            excerpt_raw = residue_scrubbed_encoded[-ARTIFACT_EXCERPT_BYTES:]
+        else:
+            excerpt_raw = residue_scrubbed_encoded
+        return {
+            "report": None,
+            "structured": False,
+            "requiresManualRead": True,
+            "excerpt": excerpt_raw.decode("utf-8", errors="ignore"),
+            "excerptBytes": len(excerpt_raw),
             "salvaged": True,
             "truncated": truncated,
-        })
+        }
     except Exception:
         return None
 
@@ -1010,33 +1117,7 @@ def parse_result(engine, role_kind, stdout):
                     "investigated": investigated}
         if obj is None:
             return {"ok": False, "reason": "unreadable"}
-        # build | fix
-        ev = obj.get("evidence") if isinstance(obj.get("evidence"), dict) else {}
-        evidence = {"testFailed": bool(ev.get("testFailed")),
-                    "testPassed": bool(ev.get("testPassed"))}
-        # HONOR the leaf's own ok/signal — a parseable stdout is NOT a build success (#288). An
-        # external build|fix worker that honestly refuses ({"ok":false,"signal":"plan_wrong"}) with
-        # partial edits must reach dispatch's write-failure path as a FALSE result: NO commit (the
-        # adapter is the sole committer, and step-6 commit runs only on ok:true), its uncommitted
-        # edits discarded by the caller (UFR-2), and it parks (UFR-3) instead of being coerced to
-        # ok:true and recorded built:passed. The native build gate's #275 fix is native-leaf-only and
-        # can never catch this — the refusal never survives THIS boundary as a falsy value unless we
-        # preserve it here. Strict boolean identity mirrors that gate (`worker.ok === true`): a real
-        # `false`, a truthy stringified "false", or a missing key all read as a refusal, never true.
-        if obj.get("ok") is not True:
-            # Normalize the refusal signal to the known worker-recovery vocabulary — NEVER pass the
-            # engine's raw `signal` string through. This is a scrub boundary (Secret-hygiene): every
-            # other branch scrubs external free-text, and `signal` here becomes `reason`, which flows
-            # into the durable journal outcome AND owner-facing narrator logs (the write-path dispatch caller).
-            # `plan_wrong` is the ONLY value the native worker-recovery twin treats specially
-            # (worker_recovery.decide); every other value — off-contract, empty, or non-string —
-            # collapses to `needs_context`, exactly as native's `worker.signal || 'needs_context'` plus
-            # the twin's non-plan_wrong bucket would. So this is behavior-identical to the native path
-            # AND leak-proof: no engine-controlled free-text can escape as signal/reason (which also
-            # keeps it disjoint from the #277 harness-dead tripwire's reserved reason tokens).
-            sig = "plan_wrong" if obj.get("signal") == "plan_wrong" else "needs_context"
-            return {"ok": False, "signal": sig, "reason": sig, "evidence": evidence}
-        return {"ok": True, "signal": "ok", "evidence": evidence}
+        return _grade_build_report_obj(obj)
     except Exception:
         return {"ok": False, "reason": "unreadable"}
 

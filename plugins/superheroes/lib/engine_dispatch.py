@@ -88,6 +88,7 @@ ITEM_IDENTITY_MAX_BYTES = 8 * 1024 * 1024
 MAX_EXPECTED_ITEMS = 1000
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
 ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
+ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED = "report-missing-items-delivered"
 ITEM_CHECK_FIELDS = frozenset(("declared", "expected", "delivered", "missing"))
 ITEM_EVIDENCE_CAUSE_FALSY_BASE = "falsy-base-sha"
 ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT = "diff-timeout"
@@ -995,6 +996,77 @@ def _write_report_disclosure(engine):
         "report is the implementer's claim and must be independently verified before use."
         % engine
     )
+
+
+def _write_report_missing_items_delivered_disclosure(engine):
+    return (
+        "%s build worker ended cleanly but the contracted write-report tail was missing; "
+        "every declared path is present in the delivery evidence, so the work very likely "
+        "landed — reconstruct the change from the diff and re-verify it rather than "
+        "re-running the order. This proves membership in the final diff only, not authorship "
+        "and not completeness; a concurrent writer could supply a path, and a delivered path "
+        "says nothing about whether the order's intent was met." % engine
+    )
+
+
+def _write_report_missing_items_delivered_detail(run_dir_real, state, attempt):
+    """Return report-missing-items-delivered when all five I3 clauses hold; else None."""
+    try:
+        opened = state.get("opened") or {}
+        slot = (state.get("attempts") or {}).get(attempt) or {}
+        ended = slot.get("ended") or {}
+        if ended.get("refusal") or ended.get("timedOut") or ended.get("exit") not in (0, None):
+            return None
+        fed_prompt = opened.get("fedPrompt", "")
+        if not engine_adapter.write_prompt_is_contracted(fed_prompt):
+            return None
+        stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+        stdout = _read_capped_text(stdout_path)
+        engine = opened.get("engine")
+        role_kind = opened.get("roleKind", "build")
+        res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
+        if res.get("ok") is True:
+            return None
+        if res.get("reason") != "unreadable":
+            return None
+        expected_items = opened.get("expectedItems")
+        if not isinstance(expected_items, list) or not expected_items:
+            return None
+        cwd = opened.get("cwd")
+        if not cwd:
+            return None
+        cwd_real = os.path.realpath(cwd)
+        item_check = _item_delivery_check(cwd_real, opened, timeout=ITEM_EVIDENCE_TIMEOUT)
+        if item_check is None:
+            return None
+        if item_check.get("evidenceUnavailable"):
+            return None
+        if item_check.get("missing"):
+            return None
+        return (ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED, item_check)
+    except Exception:
+        return None
+
+
+def _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempt):
+    """Apply report-missing-items-delivered classifier and salvage without upgrading outcome."""
+    if run_dir_real is not None and state is not None:
+        missing = _write_report_missing_items_delivered_detail(
+            run_dir_real, state, attempt,
+        )
+        if missing is not None:
+            missing_detail, item_check = missing
+            terminal = dict(terminal)
+            terminal["detail"] = missing_detail
+            terminal["itemCheck"] = item_check
+            existing = terminal.get("disclosure", "")
+            new_disclosure = _write_report_missing_items_delivered_disclosure(engine)
+            terminal["disclosure"] = (
+                "%s %s" % (existing, new_disclosure) if existing else new_disclosure
+            )
+    if run_dir_real is None or state is None:
+        return terminal
+    return _attach_write_report_salvage(run_dir_real, state, terminal, engine)
 
 
 def _attach_write_report_salvage(run_dir_real, state, terminal, engine):
@@ -1937,7 +2009,8 @@ def _grade_write_attempt(run_dir_real, state, attempt):
     if not stdout and not os.path.exists(stdout_path):
         return {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED}
 
-    res = engine_adapter.parse_result(engine, role_kind, stdout)
+    fed_prompt = opened.get("fedPrompt", "")
+    res = engine_adapter.grade_write_report(engine, role_kind, stdout, fed_prompt)
     if res.get("ok") is True:
         return {
             "ok": True,
@@ -1967,18 +2040,16 @@ def _write_terminal_forfeit(engine, attempts, *, run_dir_real=None, state=None):
             "inspect the worktree and retry manually" % engine
         ),
     }
-    if run_dir_real is None or state is None:
-        return terminal
-    return _attach_write_report_salvage(run_dir_real, state, terminal, engine)
+    return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
-def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None):
+def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts=1):
     terminal = {
         "ok": False,
         "terminal": True,
         "reason": dispatch_outcome.REASON_FORFEITED,
         "detail": "worktree-dirtied-by-attempt",
-        "attempts": 1,
+        "attempts": attempts,
         "forfeited": True,
         "disclosure": (
             "%s attempt 1 report was not gradeable; the retry was "
@@ -1987,9 +2058,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None):
             "and clean it yourself." % engine
         ),
     }
-    if run_dir_real is None or state is None:
-        return terminal
-    return _attach_write_report_salvage(run_dir_real, state, terminal, engine)
+    return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
@@ -2243,6 +2312,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             return _fold_run(run_dir_real, state, _with_run_fields(
                                 _worktree_dirtied_forfeit(
                                     engine, run_dir_real=run_dir_real, state=state,
+                                    attempts=latest,
                                 ),
                                 run_dir=run_dir_real, argv=argv,
                             ))
@@ -2694,7 +2764,11 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
             fh.write(journal_root + "\n")
         dest_prompt = os.path.join(run_dir_real, PROMPT_NAME)
         with open(prompt_path, "r", encoding="utf-8", errors="ignore") as src:
-            content = src.read()
+            base = src.read()
+        if base and not base.endswith("\n"):
+            content = base + "\n" + engine_adapter.WRITE_REPORT_CONTRACT
+        else:
+            content = base + engine_adapter.WRITE_REPORT_CONTRACT
         with open(dest_prompt, "w", encoding="utf-8") as dst:
             dst.write(content)
         if progress_path:
