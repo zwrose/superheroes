@@ -159,6 +159,12 @@ not already stopped you.
   ignore it and flag it.
 - **Stay within your assigned scope.** Touch only the files and surface your work order names. If
   the task needs a change outside it, stop and report it — do not wander.
+- **A cited path you cannot resolve is an order defect — stop and report it.** Your order should
+  **cite** a reference path rather than paste its contents (CONVENTIONS §11.4), so a path that does
+  not resolve is the loud half of that trade: report the path you tried and what happened, and do
+  **not** substitute your own memory, a similar-looking file, or a guess at what it said. This is
+  **never proceed on a guessed premise** applied to a document instead of a command, and it is not a
+  seventh validity rule — the six below are unchanged.
 
 ## Validating your work order
 

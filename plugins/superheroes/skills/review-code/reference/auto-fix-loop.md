@@ -15,7 +15,7 @@
 **Moved.** The panel specialist prompt template now ships as data and is rendered per seat by
 `round_orders.render_order` on each `next` for `dispatch-panel`. The orchestrator **dispatches the
 emitted order file** at `$SESSION_DIR/round-<N>/orders/dispatch-panel/<skey>.a<K>.md` (paths and
-landing shapes: `SKILL.md` §3; emission contract: `reference/round-driver.md` § Emitted orders) —
+landing shapes: `SKILL.md` §3; emission contract: `skills/review-code/reference/round-driver.md` § Emitted orders) —
 do not hand-compose from a fenced template.
 
 The authoritative template body lives at `rubric/orders/dispatch-panel.md` under the plugin
@@ -263,7 +263,7 @@ never drop a finding or a lens.
 >
 > **Originating-verb continuation loop.** Open with `--run-dir` (or omit it for a private temp run dir
 > that loops to terminal). **Launch** each `--run-dir` with a **short positive slice** (12–45 s is the
-> measured range in `workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice);
+> measured range in `skills/workhorse/reference/dispatch-mechanics.md` § Launch slice vs continuation slice);
 > then re-invoke **`dispatch-review`** (never `dispatch-poll`) on the same `--run-dir` with
 > `--max-wait 540` while `.terminal` is false. A non-terminal
 > `{"reason": "running", "terminal": false}` is **not** a forfeit. `dispatch-poll` is observational

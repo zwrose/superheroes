@@ -44,7 +44,7 @@ action that owns it, leaving the rest of the calibration untouched:
   (owner confirms the body on stdin). `write-layer` replaces the entire layer file — a partial
   fence silently drops every other guardian knob (thresholds, cadence, coverage, vitals,
   `reportCard`, …) and the next sweep still reads `configStatus: healthy`. The fence shape is in
-  the guardian skill's `reference/calibration.md`.
+  `skills/guardian/reference/calibration.md`.
 - **Set up a hero skipped at set-up** (FR-6) → list every optional hero not yet set up and not
   previously declined, and offer to run each one's set-up from here. Get the list from the lib —
   never guess which heroes apply:
@@ -83,7 +83,7 @@ action that owns it, leaving the rest of the calibration untouched:
   heading already exists in the project's `CLAUDE.md`, report that and change nothing.
 - **Switch the storage mode** → the confirmed switch below.
 - **Change the per-role engine** (reviewer / implementer / brief-check / pilot) → the engine step in
-  `reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch),
+  `skills/configure/reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch),
   writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`, `briefCheck`,
   `pilot`). Set a role back to `claude` (or clear it) to fall fully open — **except `briefCheck`**,
   which falls open to **codex** (the cross-vendor default; a Claude brief-check is a disclosed
