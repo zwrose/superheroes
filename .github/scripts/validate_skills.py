@@ -85,6 +85,124 @@ def check_toc(reference_path):
     return [f"table-of-contents: {rel}: file is >100 lines but does not open with a Contents heading"]
 
 
+# CONVENTIONS §11.4: docs a *dispatched* consumer reads (an implementer or pilot subagent, an
+# external engine) cite a step-body by plugin-relative path instead of pasting its contents. Those
+# readers have no Skill tool and no directory context, so a citation must be self-contained and must
+# resolve — a dangling pointer is the loud half of the trade that makes pointers beat inline copies.
+# Deliberately narrow: only a backticked path under a plugin top-level dir with a file extension
+# counts, so ordinary prose cannot false-positive. Top-level dirs are derived from plugin_dir at
+# runtime so new roots (e.g. hooks/) are covered without maintaining a hard-coded list.
+_NEVER_MATCH = re.compile(r"(?!)")
+_CITATION_SUFFIX = r"`((?:{top})/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+)`"
+_PLUGINS_PREFIX_CITATION = re.compile(
+    r"(?:^|[\s(.,>])`(plugins/[A-Za-z0-9._\-]+/[A-Za-z0-9._/\-]+\.[A-Za-z0-9]+)`"
+)
+_ABSOLUTE_CITATION = re.compile(
+    r"(?:^|[\s(.,>])`(/(?:[A-Za-z0-9._\-]+/)+[A-Za-z0-9._\-]+\.[A-Za-z0-9]+)`"
+)
+
+
+def _top_level_dirs(plugin_dir):
+    try:
+        entries = os.listdir(plugin_dir)
+    except OSError:
+        return []
+    return sorted(
+        name for name in entries
+        if os.path.isdir(os.path.join(plugin_dir, name))
+    )
+
+
+def _citation_pattern(plugin_dir):
+    top_dirs = _top_level_dirs(plugin_dir)
+    if not top_dirs:
+        return _NEVER_MATCH
+    top = "|".join(re.escape(d) for d in top_dirs)
+    return re.compile(_CITATION_SUFFIX.format(top=top))
+
+
+def _cited_paths(text, plugin_dir):
+    pattern = _citation_pattern(plugin_dir)
+    paths = list(dict.fromkeys(pattern.findall(text)))
+    for m in _PLUGINS_PREFIX_CITATION.finditer(text):
+        paths.append(m.group(1))
+    for m in _ABSOLUTE_CITATION.finditer(text):
+        paths.append(m.group(1))
+    return list(dict.fromkeys(paths))
+
+
+def _has_dotdot_component(rel):
+    return any(part == ".." for part in rel.replace("\\", "/").split("/"))
+
+
+def _path_inside_root(root_real, target_real):
+    try:
+        return os.path.commonpath([root_real, target_real]) == root_real
+    except ValueError:
+        return False
+
+
+def _citation_target_valid(target, root_real):
+    """Target must resolve inside root_real to a regular file (symlinks followed)."""
+    if not os.path.exists(target):
+        return False
+    target_real = os.path.realpath(target)
+    if not _path_inside_root(root_real, target_real):
+        return False
+    return os.path.isfile(target_real)
+
+
+def _non_canonical_message(rel_label, rel, canonical):
+    return (
+        f"citation: {rel_label}: non-canonical citation {rel} "
+        f"(use plugin-relative path `{canonical}` instead of repo-relative "
+        f"`plugins/<plugin>/...` prefix)"
+    )
+
+
+def check_citations(rel_label, text, plugin_dir):
+    """Every plugin-relative citation resolves, from the plugin root (§11.4).
+
+    Resolution is plugin-relative ONLY — a sibling-relative citation ("reference/foo.md" written
+    inside some reference/ dir) resolves only for a reader who already knows which directory the
+    text came from, which a dispatched consumer reading the path out of a work order does not.
+    """
+    out = []
+    citing_plugin = os.path.basename(os.path.normpath(plugin_dir))
+    plugins_root = os.path.dirname(os.path.normpath(plugin_dir))
+    root_real = os.path.realpath(plugin_dir)
+
+    for rel in _cited_paths(text, plugin_dir):
+        if os.path.isabs(rel):
+            out.append(f"citation: {rel_label}: unresolved citation {rel}")
+            continue
+
+        if _has_dotdot_component(rel):
+            out.append(f"citation: {rel_label}: unresolved citation {rel}")
+            continue
+
+        if rel.startswith("plugins/"):
+            parts = rel.split("/", 2)
+            if len(parts) < 3 or not parts[1]:
+                continue
+            prefix_plugin, remainder = parts[1], parts[2]
+            target_plugin_dir = os.path.join(plugins_root, prefix_plugin)
+            norm = os.path.normpath(remainder)
+            target = os.path.join(target_plugin_dir, norm)
+            prefix_root_real = os.path.realpath(target_plugin_dir)
+            if _citation_target_valid(target, prefix_root_real):
+                out.append(_non_canonical_message(rel_label, rel, norm))
+            else:
+                out.append(f"citation: {rel_label}: unresolved citation {rel}")
+            continue
+
+        norm = os.path.normpath(rel)
+        target = os.path.join(plugin_dir, norm)
+        if not _citation_target_valid(target, root_real):
+            out.append(f"citation: {rel_label}: unresolved citation {rel}")
+    return out
+
+
 def check_phrases(skill_key, description, required_phrases):
     return [
         f"trigger-phrase: {skill_key}: description no longer contains required phrase {p!r}"
@@ -156,6 +274,30 @@ CONVENTIONS = os.path.join(REPO, "CONVENTIONS.md")
 def _skill_key(path):
     parts = path.split(os.sep)
     return f"{parts[-4]}/{parts[-2]}"
+
+
+# The docs a dispatched consumer reads: agent prompts, the rubric, and the reference/ trees
+# (both the plugin-root one and each skill's). SKILL.md itself is excluded — its ${ROOT}-form
+# references are check_links' job, and its readers hold the skill's own directory context.
+_CITATION_GLOBS = (
+    ("*", "agents", "**", "*.md"),
+    ("*", "rubric", "**", "*.md"),
+    ("*", "reference", "**", "*.md"),
+    ("*", "skills", "*", "reference", "**", "*.md"),
+)
+
+
+def citation_scan_paths(plugins_root):
+    import glob as _glob
+    out = []
+    for parts in _CITATION_GLOBS:
+        out += _glob.glob(os.path.join(plugins_root, *parts), recursive=True)
+    return out
+
+
+def _plugin_dir_of(doc_path, plugins_root):
+    rel = os.path.relpath(doc_path, plugins_root)
+    return os.path.join(plugins_root, rel.split(os.sep)[0])
 
 
 def known_red_ceilings(baseline):
@@ -235,6 +377,18 @@ def main(argv=None):
     import glob as _glob
     for ref in _glob.glob(os.path.join(PLUGINS, "*", "**", "reference", "*.md"), recursive=True):
         errors += check_toc(ref)
+
+    # §11.4: plugin-relative citations resolve, in the docs dispatched consumers read.
+    for doc in sorted(citation_scan_paths(PLUGINS)):
+        plugin_dir = _plugin_dir_of(doc, PLUGINS)
+        rel_doc = os.path.relpath(doc, REPO)
+        try:
+            with open(doc, encoding="utf-8") as fh:
+                text = fh.read()
+        except (OSError, UnicodeDecodeError) as exc:
+            errors.append(f"citation: {rel_doc}: unreadable scan file ({exc})")
+            continue
+        errors += check_citations(rel_doc, text, plugin_dir)
 
     if errors:
         sys.stderr.write(f"\n✗ {len(errors)} skill problem(s):\n")

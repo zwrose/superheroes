@@ -680,9 +680,12 @@ claimed as covered.
 
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
 - **Execution is a pilot subagent** (`agents/pilot.md`) that **observes and reports structured
-  results only — it never fixes.** A bug it reports in the **full lane** (or after light-lane
-  escalation) becomes an **implementer work order** you dispatch; in the **light lane** it triggers
-  the **implementer-dispatch escalation rule** (Build lanes) — move up to full, then dispatch.
+  results only — it never fixes.** **Resolve this plugin's root and pass the absolute path to
+  `skills/test-pilot-execute/reference/execution-steps.md` (or the absolute plugin root) into every
+  pilot dispatch** — the pilot has no Skill tool and cannot resolve plugin-relative paths on its own.
+  A bug it reports in the **full lane** (or after light-lane escalation) becomes an **implementer
+  work order** you dispatch; in the **light lane** it triggers the **implementer-dispatch
+  escalation rule** (Build lanes) — move up to full, then dispatch.
 - **Test-pilot applies only to a build with an app surface.** A plugin, library, or docs build has
   nothing to pilot — record test-pilot as **N/A (no running app)** in the PR, with the positive
   evidence that stands in for it (the receipts you re-ran, the review). Do not fabricate a browser

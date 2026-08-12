@@ -89,7 +89,9 @@ edit (including a body edit) re-runs the whole workflow.
    consistency against the PR base ref (**pull-request events only**).
 3. `validate_hosts.py` — dual-host manifests and tool maps are consistent.
 4. `validate_skills.py` — skill token-shape (line counts, description sizes,
-   required phrases, reference links, CONVENTIONS citations).
+   required phrases, reference links, CONVENTIONS citations) and, per CONVENTIONS
+   §11.4, that every plugin-relative citation in the docs dispatched consumers read
+   (`agents/`, `rubric/`, the `reference/` trees) resolves from the plugin root.
 5. `validate_stubs.py` — STUB markers carry an issue reference.
 6. Install `uv` — test-pilot block-execution tests depend on it.
 7. Install `jscpd@5.0.12` via npm — guardian duplication real-channel tests

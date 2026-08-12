@@ -28,109 +28,15 @@ orchestrator or a human) routes each finding to a fix as it sees fit.
 
 ## Flow
 
-Steps 1–4 **provision the run** (a valid plan, seeded data, the app up, a
-browser tool) — this is one-time setup, done before execution begins. Steps
-5–8 **execute and observe**. Once execution starts, the plan and seed are
-frozen: any problem you hit is a finding, never a re-provisioning.
+The execution step-body lives at **`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/test-pilot-execute/reference/execution-steps.md`** — read it and
+follow it. That file is the **one home** of the eight steps; this section
+points at it rather than restating them, so a dispatched consumer that cannot
+reach this skill (the `pilot` build subagent has no Skill tool) cites the same
+path instead of keeping a copy that drifts (CONVENTIONS §11.4).
 
-1. **Resolve.** `store.py resolve`; read the profile and its config block.
-
-   ```bash
-   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-   # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
-   NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
-   [ -n "$NUDGE_MSG" ] && echo "⚠ storage-mode: $NUDGE_MSG"
-   ```
-   Find plan records `<manifests_dir>/<key>.plan.json` for the current
-   branch — default: every slot in sequence; an explicit slot argument
-   narrows to one. None → run the test-pilot-plan skill to author one first,
-   then return. The PR comment is NEVER parsed as the plan source.
-   Validate each before executing: `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/engine.py" validate-plan --branch B [--slot S] --json` — a validation error means the plan is not runnable: (re)author it via test-pilot-plan here in setup, never an app bug. Getting a valid plan to run is provisioning the input before the run — not a fix; you never fix.
-2. **Seed check.** `engine.py status --json`; apply the manifest if drift or
-   nothing applied (`engine.py apply --branch B [--slot S] --json`). Seeding
-   provisions the data the plan needs to run — it is setup, not a fix. If
-   `apply` is refused (e.g. a protected-target `EngineError`) and the user
-   has not authorized `--allow-protected` this session (boundary 1), the run
-   cannot be provisioned — post a **partial** results comment naming it
-   blocked/unprovisioned (with the scrubbed refusal), and stop. Never pass
-   `--allow-protected` on your own, and never drive the plan against unseeded
-   data.
-3. **App up.** Per the profile: if `mayManageServer`, start `devCommand` in
-   the background and poll `readinessUrl` until it answers; else verify it
-   answers and ask the user to start it if not.
-4. **Browser tool.** Profile `browserTools` order ∩ currently connected
-   (ToolSearch). Empty intersection → ABORT with remediation: "run
-   test-pilot-init to install/record a browser tool". Never continue
-   without one.
-5. **Execute and observe each step** from the plan record: perform the
-   interactions, verify `expected` via DOM/snapshot reads, watch
-   console/network for silent errors. Record per step — what you did, what
-   you observed, pass/fail, and the concrete evidence (scrubbed) — through
-   the external per-slot **artifact store** (`reference/pilot-contract.md`
-   §The per-slot artifact store): each step log via the `step-log` class;
-   on a **failed** step, a screenshot via `failure-screenshot`. A **refused**
-   retention is a reportable outcome — name the refusal token in the run
-   results; never drop evidence silently. **Trace capture** is an explicit
-   per-run opt-in (off by default); an opted-in `trace` is retained only
-   when its redaction can be established. **Interaction calibration:**
-   - Target controls by **accessible name** using the element reference the
-     browser tool's accessibility snapshot returns — never by **index** or
-     ordinal position, never by **screen coordinates**.
-   - Drive each interaction with a **pointer** action (a real input event) —
-     never an evaluated `.click()` or other **scripted event dispatch**
-     through the browser tool's script-evaluation escape hatch.
-   - When a step says "the first" or "the next" thing, skip targets
-     reported as **`aria-disabled`**.
-
-   Provisioning is finished: from here the plan and seed are frozen — a plan
-   or seed problem you hit while executing is a finding (step 6), never a
-   re-author, re-apply, or retry. **One carve-out:** if the first attempt
-   produced **no observable state change**, you may vary the interaction
-   mechanism once as a diagnostic observation that tests the procedure —
-   record the result either way; that is not a forbidden retry toward a pass.
-   If the interaction may already have taken effect, do **not** re-activate it
-   — record the failure as a finding instead, noting the mechanism could not
-   be **safely** varied. When a variation is performed and app state may
-   nonetheless have diverged from what the plan assumes, record that on the
-   step so later steps are read in that light. Re-running to obtain a pass,
-   re-authoring the plan, re-applying the seed, or re-provisioning remain
-   forbidden outright.
-6. **On failure, record a finding — never act on it.** Note the failing step.
-   Before you classify a failure as an **app bug**, if you reproduced it with
-   N identical procedures and the first attempt produced no observable state
-   change, vary the interaction mechanism once — N identical runs test the
-   procedure N times; an A/B on the same harness cannot clear that harness.
-   **Sanctioned variation axes** (index, ordinal position, screen coordinates,
-   and evaluated `.click()` / scripted event dispatch are **never** admissible):
-   **keyboard activation** of the element after focusing it (a real input
-   event, not scripted dispatch), or re-taking the accessibility snapshot and
-   re-resolving the target by **accessible name**. The pointer requirement
-   above governs the **primary** interaction; a diagnostic variation may use a
-   different real input event. If the interaction may already have taken
-   effect, do **not** re-activate it — record the finding as **app bug
-   (unconfirmed — variation unsafe)** and note the mechanism could not be
-   **safely** varied. If variation is not possible, record the finding as
-   **app bug (unconfirmed — evidence ceiling)**. If the variation **succeeds**,
-   record the asymmetry as evidence on the step — what happened concretely
-   (e.g. pointer action failed N/N; keyboard activation succeeded) — and
-   record the finding as **app bug (unconfirmed — procedure not excluded)**
-   with that asymmetry noted; attribute no cause. Otherwise classify it
-   (plan/seed problem, or app bug) and capture a scrubbed diagnosis with its
-   evidence (console, network, DOM). Then **continue the remaining steps.** You
-   never fix code, never edit or re-seed-and-retry the plan, never commit — a
-   failure is a finding the caller acts on.
-7. **Post results.** Fill `templates/results-comment.md` (verdict: PASSED /
-   FAILED / PARTIAL — the observed outcome of the run, not a certification
-   that the branch is correct; per-step table; findings with evidence; run
-   metadata). Post:
-   `pr_comment.py upsert --pr N --family results --key K --body-file F --plans-dir <plans_dir>`.
-   No PR → write to `<plans_dir>/<key>.results.md`. If the run was
-   interrupted (browser died, server unreachable), post whatever completed
-   marked **partial** — state stays intact for resumption.
-8. **Hand off.** Report what is seeded, what passed/failed, and the findings.
-   The verdict is the run's observed outcome; the human's spot-check is the
-   certifier. Fixes route to the invoking session — the PR is ready for
-   spot-checking.
+Steps 1–4 provision the run; steps 5–8 execute and observe. **If you cannot
+read that file, stop and report it** — never drive the app from memory of
+these steps.
 
 ## Rationalization table
 
@@ -143,5 +49,5 @@ frozen: any problem you hit is a finding, never a re-provisioning.
 | "It's basically done, I'll check the plan boxes" | Boxes are the human's spot-check. Leave them. |
 | "The console dump is harmless, paste it raw" | Scrub EVERY diagnostic. No raw headers, ever. |
 | "No browser tool — I'll verify via curl instead" | Abort with remediation. curl is not the plan. |
-| "I reproduced it N/N with the same steps — it's an app bug" | N identical-procedure runs test the procedure N times. Vary once (keyboard activation or re-resolve by accessible name) only if no state change occurred — on success, record the asymmetry and label **app bug (unconfirmed — procedure not excluded)**; if impossible, **app bug (unconfirmed — evidence ceiling)**. |
-| "The control doesn't respond, so the feature is broken" | Scripted clicks miss pointer/mouse-down handlers and `aria-disabled` rows can sort first — re-target by accessible name and drive with a pointer action; if state may have changed, do not re-activate — record **app bug (unconfirmed — variation unsafe)**. |
+| "I reproduced it N/N with the same steps — it's an app bug" | N identical runs only test the procedure — before calling it an app bug you must follow the failure-classification and variation rules in `skills/test-pilot-execute/reference/execution-steps.md` (§ Steps 5–8), including the three unconfirmed labels. |
+| "The control doesn't respond, so the feature is broken" | A scripted miss or a non-responsive control is not proof of a broken feature until you have followed the interaction-calibration and variation rules in `skills/test-pilot-execute/reference/execution-steps.md` (§ Steps 5–8) — including accessible-name targeting, pointer actions, and `aria-disabled` handling. |
