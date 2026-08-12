@@ -1023,6 +1023,14 @@ surrounding prose ("the guardian skill's `reference/calibration.md`"). A sibling
 resolves only for a reader who already knows which directory it was written in — which a dispatched
 consumer, reading the path out of a work order, does not.
 
+**Reference depth — a named exception, owner-ratified 2026-08-12.** A pointable step-body may
+itself cite **one hop onward**: its operational contract and its output templates (test-pilot's
+`skills/test-pilot-execute/reference/execution-steps.md` cites `reference/pilot-contract.md` and
+`templates/results-comment.md`). A step list that inlined its contract to stay one hop deep would
+recreate the copy-drift problem one level down — the exact failure this pattern exists to remove.
+This is a deliberate exception to the one-hop reference-depth expectation for skill bodies;
+teaching the depth check this citation syntax is #966's scope.
+
 ---
 
 ## 12. Verification contracts (fix-ships-its-detector, real-seam tests)
