@@ -518,7 +518,7 @@ def _unwrap_stream_envelope(stdout):
     envelope (no `ok` key -> build/fix coerced to a refusal; live: every in-child cursor
     dispatch ever recorded, issue #347). When — and only when — the LAST top-level object is
     such an envelope (`type=="result"`, a string `result`, and NOT itself a leaf verdict: no
-    `ok` key`), return the inner text for re-scanning; otherwise return stdout unchanged
+    `ok` key), return the inner text for re-scanning; otherwise return stdout unchanged
     (codex output and native shapes are byte-identical through here). An error envelope whose
     inner text carries no JSON still ends `unreadable` downstream — the honest fail
     direction."""
