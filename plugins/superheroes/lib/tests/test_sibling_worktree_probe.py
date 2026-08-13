@@ -63,6 +63,21 @@ class FakeRunner:
         return resp
 
 
+def _wt(path, *, head="a", porcelain="p", reflog=1, readable=True, **extra):
+    entry = {
+        "path": path,
+        "readable": readable,
+        "headSha": head,
+        "headMeasured": readable,
+        "porcelainSha256": porcelain,
+        "porcelainMeasured": readable,
+        "reflogCount": reflog,
+        "reflogMeasured": readable and reflog is not None,
+    }
+    entry.update(extra)
+    return entry
+
+
 def _proc(rc=0, stdout="", stderr=""):
     class P:
         returncode = rc
@@ -96,30 +111,27 @@ def test_compare_head_delta():
     before = {
         "status": "ok",
         "truncated": False,
-        "worktrees": {
-            "/wt": {"path": "/wt", "headSha": "a", "porcelainSha256": "p", "reflogCount": 1},
-        },
+        "worktrees": {"/wt": _wt("/wt", head="a")},
     }
     after = {
         "status": "ok",
         "truncated": False,
-        "worktrees": {
-            "/wt": {"path": "/wt", "headSha": "b", "porcelainSha256": "p", "reflogCount": 1},
-        },
+        "worktrees": {"/wt": _wt("/wt", head="b")},
     }
     result = SWP.compare(before, after)
     assert result["status"] == "observed"
     assert any(d["kind"] == "head-changed" for d in result["deltas"])
+    assert "coverage" in result
 
 
 def test_compare_porcelain_delta():
     before = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/wt": {"headSha": "a", "porcelainSha256": "p1", "reflogCount": 1}},
+        "worktrees": {"/wt": _wt("/wt", porcelain="p1")},
     }
     after = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/wt": {"headSha": "a", "porcelainSha256": "p2", "reflogCount": 1}},
+        "worktrees": {"/wt": _wt("/wt", porcelain="p2")},
     }
     result = SWP.compare(before, after)
     assert any(d["kind"] == "porcelain-changed" for d in result["deltas"])
@@ -128,11 +140,11 @@ def test_compare_porcelain_delta():
 def test_compare_reflog_delta():
     before = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/wt": {"headSha": "a", "porcelainSha256": "p", "reflogCount": 1}},
+        "worktrees": {"/wt": _wt("/wt", reflog=1)},
     }
     after = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/wt": {"headSha": "a", "porcelainSha256": "p", "reflogCount": 2}},
+        "worktrees": {"/wt": _wt("/wt", reflog=2)},
     }
     result = SWP.compare(before, after)
     assert any(d["kind"] == "reflog-changed" for d in result["deltas"])
@@ -141,24 +153,28 @@ def test_compare_reflog_delta():
 def test_compare_null_reflog_to_number_is_not_delta():
     before = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/wt": {"headSha": "a", "porcelainSha256": "p", "reflogCount": None}},
+        "worktrees": {
+            "/wt": _wt("/wt", reflog=None, reflogMeasured=False),
+        },
     }
     after = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/wt": {"headSha": "a", "porcelainSha256": "p", "reflogCount": 3}},
+        "worktrees": {"/wt": _wt("/wt", reflog=3)},
     }
     result = SWP.compare(before, after)
     assert result["deltas"] == []
+    assert result["coverage"]["signals"]["reflogCount"]["measuredBefore"] == 0
+    assert result["coverage"]["signals"]["reflogCount"]["measuredAfter"] == 1
 
 
 def test_compare_appeared_and_disappeared():
     before = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/gone": {"headSha": "a", "porcelainSha256": "p", "reflogCount": 1}},
+        "worktrees": {"/gone": _wt("/gone")},
     }
     after = {
         "status": "ok", "truncated": False,
-        "worktrees": {"/new": {"headSha": "b", "porcelainSha256": "q", "reflogCount": 1}},
+        "worktrees": {"/new": _wt("/new", head="b", porcelain="q")},
     }
     result = SWP.compare(before, after)
     kinds = {d["kind"] for d in result["deltas"]}
@@ -166,12 +182,14 @@ def test_compare_appeared_and_disappeared():
     assert "disappeared" in kinds
 
 
-def test_snapshot_deadline_exhaustion_returns_indeterminate():
+def test_snapshot_deadline_exhaustion_on_worktree_list_returns_indeterminate():
     def slow_run(argv, **kwargs):
         raise subprocess.TimeoutExpired(argv, 1)
 
     snap = SWP.snapshot("/repo", "/assigned", deadline=0.001, run=slow_run)
     assert snap["status"] == "indeterminate"
+    assert snap["reason"] == "deadline-exhausted"
+    assert snap.get("worktrees") in (None, {})
 
 
 def test_snapshot_truncation_reported(tmp_path, monkeypatch):
@@ -182,13 +200,20 @@ def test_snapshot_truncation_reported(tmp_path, monkeypatch):
     assert len(snap["worktrees"]) == 1
 
 
-def test_git_optional_locks_on_every_call():
+def test_git_optional_locks_on_every_call(tmp_path):
     calls = []
+    assigned = str(tmp_path / "assigned")
+    sibling = str(tmp_path / "other")
+    os.makedirs(assigned)
+    os.makedirs(sibling)
 
     def recording_run(argv, **kwargs):
         calls.append(kwargs.get("env", {}))
         if "worktree" in argv and "list" in argv:
-            return _proc(stdout="worktree /other\nHEAD abc\nbranch refs/heads/x\n")
+            return _proc(stdout=(
+                "worktree %s\nHEAD abc\nbranch refs/heads/main\n\n"
+                "worktree %s\nHEAD def\nbranch refs/heads/x\n"
+            ) % (assigned, sibling))
         if "rev-parse" in argv:
             return _proc(stdout="abc\n")
         if "status" in argv:
@@ -197,9 +222,9 @@ def test_git_optional_locks_on_every_call():
             return _proc(stdout="1\n")
         return _proc(rc=1)
 
-    snap = SWP.snapshot("/repo", "/assigned", run=recording_run)
+    snap = SWP.snapshot(str(tmp_path / "repo"), assigned, run=recording_run)
     assert snap["status"] == "ok"
-    assert calls
+    assert len(calls) == 4
     assert all(c.get("GIT_OPTIONAL_LOCKS") == "0" for c in calls)
 
 
@@ -241,6 +266,55 @@ def test_worktree_list_failure_indeterminate():
     snap = SWP.snapshot("/repo", "/assigned", run=FakeRunner([_proc(rc=1)]))
     assert snap["status"] == "indeterminate"
     assert snap["reason"] == "worktree-list-failed"
+
+
+def test_snapshot_one_unreadable_sibling_does_not_abort_snapshot(tmp_path):
+    assigned = str(tmp_path / "assigned")
+    good_path = str(tmp_path / "good")
+    bad_path = str(tmp_path / "bad")
+    for path in (assigned, good_path, bad_path):
+        os.makedirs(path)
+
+    def recording_run(argv, **kwargs):
+        if "worktree" in argv and "list" in argv:
+            return _proc(stdout=(
+                "worktree %s\nHEAD aaa\nbranch refs/heads/main\n\n"
+                "worktree %s\nHEAD bbb\nbranch refs/heads/good\n\n"
+                "worktree %s\nHEAD ccc\nbranch refs/heads/bad\n"
+            ) % (assigned, good_path, bad_path))
+        cwd = argv[argv.index("-C") + 1] if "-C" in argv else ""
+        if "rev-parse" in argv and os.path.realpath(cwd) == os.path.realpath(bad_path):
+            return _proc(rc=1, stderr="fatal: ambiguous argument 'HEAD'\n")
+        if "rev-parse" in argv:
+            return _proc(stdout="deadbeef\n")
+        if "status" in argv:
+            return _proc(stdout="")
+        if "rev-list" in argv:
+            return _proc(stdout="2\n")
+        return _proc(rc=1)
+
+    snap = SWP.snapshot(str(tmp_path / "repo"), assigned, run=recording_run)
+    assert snap["status"] == "ok"
+    assert os.path.realpath(good_path) in snap["worktrees"]
+    bad_entry = snap["worktrees"][os.path.realpath(bad_path)]
+    assert bad_entry["readable"] is False
+    assert bad_entry["reason"]
+
+
+def test_compare_unreadable_sibling_reports_kind():
+    good = os.path.realpath("/good")
+    bad = os.path.realpath("/bad")
+    before = {
+        "status": "ok",
+        "truncated": False,
+        "worktrees": {
+            good: _wt(good),
+            bad: SWP._unreadable_entry(bad, "head-failed"),
+        },
+    }
+    after = dict(before)
+    result = SWP.compare(before, after)
+    assert any(d["kind"] == "unreadable" for d in result["deltas"])
 
 
 def test_capture_sibling_baseline_never_passes_none_deadline(monkeypatch):

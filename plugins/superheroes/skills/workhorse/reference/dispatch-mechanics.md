@@ -100,7 +100,10 @@ The slice you choose depends on whether the run is a **launch** or a **continuat
   **`dispatch-review`** and for **`dispatch-write`** on repositories whose git preflight is fast.
   On **`dispatch-write`**, `--max-wait` is also the **git-preflight timeout** (`preflight_timeout`
   in `engine_dispatch.py`), bounding worktree validation, repository discovery, `rev-parse HEAD`, and
-  the baseline `git status`. The launch slice **must therefore exceed the repository's git-preflight
+  the baseline `git status`, plus the **sibling-worktree baseline snapshot** at run open (HEAD sha,
+  porcelain sha256, and reflog count on every other registered worktree — bounded by
+  `sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS` with a floor of `MIN_DEADLINE_SECONDS`). The launch
+  slice **must therefore exceed the repository's git-preflight
   cost** (which depends on repository size and disk speed and must be sized locally), or the call
   returns terminal **`git-preflight-timeout`** with nothing launched — and a continuation **cannot**
   recover a run that never opened. Run-action calls serialize and a launch call blocks for its whole
@@ -335,8 +338,10 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
 
 | Case | `siblingWorktrees` |
 |---|---|
-| write run, baseline captured, second snapshot succeeded | `{"status": "observed", "deltas": [...], "truncated": <bool>}` — `deltas` is `[]` when nothing changed |
+| write run, baseline captured, second snapshot succeeded | `{"status": "observed", "deltas": [...], "truncated": <bool>, "coverage": {...}}` — `deltas` is `[]` when nothing changed; `coverage.signals.*.measuredBefore/After/compared` shows how much was actually observed (unmeasured signals are never reported as unchanged) |
+| write run, baseline captured, one or more siblings unreadable | `observed` with `deltas` containing `{"kind": "unreadable", "reason": ...}` for those paths while other siblings still compare normally |
 | write run, baseline missing (a run opened before this change) | `{"status": "indeterminate", "reason": "no-baseline"}` |
+| write run, baseline not a dict | `{"status": "indeterminate", "reason": "baseline-invalid"}` |
 | write run, either snapshot indeterminate | `{"status": "indeterminate", "reason": "<why>"}` |
 | **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
 | review run | **key absent** |

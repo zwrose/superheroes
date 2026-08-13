@@ -714,11 +714,12 @@ def _omission_floor_marker_forms():
         ("paren", lambda n: re.compile(r"\(\s*%d\s*\)" % n)),
         ("dot", lambda n: re.compile(r"(?<!\d)%d\." % n)),
         ("paren_close", lambda n: re.compile(r"(?<!\d)(?<!\()%d\)" % n)),
+        ("auto", lambda n: re.compile(r"(?<!\d)1\.")),
     )
 
 
 def _omission_floor_find_enumeration(copy_text):
-    """After the omission-floor anchor, locate an ordered (1)(2)(3) triple of one marker form."""
+    """After the omission-floor anchor, locate an ordered triple of one marker form."""
     anchor_m = re.search(r"omission floor", copy_text, re.IGNORECASE)
     if not anchor_m:
         return None, "copy no longer names the omission floor"
@@ -726,31 +727,40 @@ def _omission_floor_find_enumeration(copy_text):
     for form_name, maker in _omission_floor_marker_forms():
         positions = []
         pos = start
-        for n in range(1, 4):
-            m = maker(n).search(copy_text, pos)
-            if not m:
-                break
-            positions.append(m.start())
-            pos = m.end()
+        if form_name == "auto":
+            for _ in range(3):
+                m = maker(1).search(copy_text, pos)
+                if not m:
+                    break
+                positions.append(m.start())
+                pos = m.end()
+        else:
+            for n in range(1, 4):
+                m = maker(n).search(copy_text, pos)
+                if not m:
+                    break
+                positions.append(m.start())
+                pos = m.end()
         if len(positions) == 3:
             return (form_name, positions), None
     return None, (
         "copy must restate the floor as an enumerated triple of three items "
-        "(markers (1)/(2)/(3), 1./2./3., or 1)/2)/3) in order after the omission-floor "
-        "anchor — this is what makes per-row drift detectable"
+        "(markers (1)/(2)/(3), 1./2./3., 1)/2)/3), or Markdown auto-numbering 1./1./1. "
+        "in order after the omission-floor anchor — this is what makes per-row drift detectable"
     )
 
 
 def _omission_floor_item3_block_end(copy_text, marker3_pos):
-    """End of marker-3's containing Markdown block — not the whole section."""
+    """End of marker-3's containing Markdown block — not the whole section.
+
+    A single blank line may separate wrapped continuation lines within item 3; only a
+    second blank line or a dedented sibling block ends the item."""
     tail = copy_text[marker3_pos:]
     end = len(copy_text)
-    blank = re.search(r"\n\n", tail)
-    if blank:
-        end = min(end, marker3_pos + blank.start())
     line_start = copy_text.rfind("\n", 0, marker3_pos) + 1
     line_prefix = copy_text[line_start:marker3_pos]
     indent = len(line_prefix) - len(line_prefix.lstrip())
+    blank_count = 0
     for m in re.finditer(r"\n", tail):
         next_line_start = marker3_pos + m.start() + 1
         if next_line_start >= len(copy_text):
@@ -759,7 +769,12 @@ def _omission_floor_item3_block_end(copy_text, marker3_pos):
         nl = rest.find("\n")
         line_content = rest[:nl] if nl != -1 else rest
         if not line_content.strip():
+            blank_count += 1
+            if blank_count >= 2:
+                end = min(end, next_line_start)
+                break
             continue
+        blank_count = 0
         line_indent = len(line_content) - len(line_content.lstrip())
         if line_indent <= indent:
             stripped = line_content.lstrip()
@@ -779,6 +794,7 @@ def test_omission_floor_find_enumeration_all_marker_forms():
         ("paren", anchor + "(1) first\n(2) second\n(3) third\n"),
         ("dot", anchor + "1. first\n2. second\n3. third\n"),
         ("paren_close", anchor + "1) first\n2) second\n3) third\n"),
+        ("auto", anchor + "1. first\n1. second\n1. third\n"),
     )
     for expected_form, copy_text in cases:
         result, err = _omission_floor_find_enumeration(copy_text)
@@ -843,6 +859,31 @@ def test_omission_floor_matches_conventions_10_7():
     )
     for label, text in copies:
         _assert_omission_floor_matches_home(text, label, home)
+
+
+# axis: per-row attribution — decoy prose outside an item cannot satisfy a hollowed row
+def test_omission_floor_per_row_attribution_bites_on_hollowed_item():
+    home = _conventions_section_10_7()
+    row_terms, markers = _omission_floor_expectations_from_home(home)
+    row2_decoy = " ".join("**%s**" % t for t in row_terms[1])
+    item1 = "1. " + " ".join("**%s**" % t for t in row_terms[0])
+    item2_hollow = "2. hollow row — row-two terms appear only in decoy below"
+    item3 = "3. " + " ".join("**%s**" % t for t in row_terms[2])
+    decoy = "Decoy outside the enumeration repeats row-two terms: " + row2_decoy
+    copy_text = "\n".join([
+        "Ship-phase honesty names the omission floor explicitly.",
+        "",
+        item1,
+        item2_hollow,
+        item3,
+        "",
+        decoy,
+        "",
+        "A **missing** `<!-- superheroes:build-record -->` is **itself** a review finding",
+        "marker absence and **None** are different states",
+    ] + list(markers))
+    with pytest.raises(AssertionError, match="row2"):
+        _assert_omission_floor_matches_home(copy_text, "synthetic per-row", home)
 
 
 def test_vet_receipt_markers_match_conventions_10_7():
