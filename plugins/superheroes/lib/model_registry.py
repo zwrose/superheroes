@@ -21,6 +21,12 @@ _MODELS: dict[str, dict[str, dict]] = {
         "gpt-5.6-terra": {"family": "openai", "dispatch": "gpt-5.6-terra", "override_only": False},
         "gpt-5.6-sol": {"family": "openai", "dispatch": "gpt-5.6-sol", "override_only": False},
     },
+    # family is an independence-accounting key (panel maker exclusion), not vendor attribution.
+    # Both cursor first-party models share ONE family so a ladder rung-up does not change the
+    # maker family (#651, owner-ratified 2026-07-26; CONVENTIONS §7.5). The string "xai" is a
+    # historical label for that family — not a claim that composer is an xAI model. A new cursor
+    # first-party model added here inherits this family by design; one that should be independent
+    # of composer needs an owner ruling — splitting the family changes panel-exclusion behaviour.
     "cursor": {
         "composer-2.5": {"family": "xai", "dispatch": "composer-2.5", "override_only": False},
         "cursor-grok-4.5": {"family": "xai", "dispatch": "cursor-grok-4.5", "override_only": False},
