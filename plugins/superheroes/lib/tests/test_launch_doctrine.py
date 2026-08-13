@@ -447,3 +447,22 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
     # test_launcher.py::test_compose_git_identity_ruling_in_prompt — not here. Re-checking the
     # block for the line at this point would be vacuous: a parsed ruling exists only because
     # _parse_rulings_block matched that exact line in that exact block.
+
+
+def test_gated_strings_ruling_is_delivered_with_its_prohibitions():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "gated-strings" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "gated-strings")
+    # Pinned in full, not by substring. Substring checks would still pass if a coordinated edit
+    # appended an exception clause around the asserted phrases, which would leave the launched
+    # payload carrying a conditional invariant. Exact equality means any softening has to edit
+    # this literal too — a third, deliberate site.
+    assert text == (
+        "gated command strings reach disk only through file-write tools: a string matching a "
+        "permission-gated command shape is never embedded inline in Bash text — a probe reads its "
+        "test string from a file, a heredoc counts as Bash text, and a memory or ledger append "
+        "carrying a gated literal is written with a file-write tool, never echoed through a shell."
+    )
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py::test_compose_gated_strings_ruling_in_prompt — not here.

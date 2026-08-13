@@ -75,6 +75,8 @@ _EXPECTED_INVARIANT_NAMES = frozenset({
     "resolve-upward",
     "not-engaged-never-passes",
     "waiver-bounds",
+    "bounded-acceptance",
+    "third-rework-stop",
 })
 
 _EXPECTED_COPY_HOLDERS = {
@@ -89,12 +91,22 @@ _EXPECTED_COPY_HOLDERS = {
     "waiver-bounds": frozenset({
         "skills/showrunner/SKILL.md",
     }),
+    "bounded-acceptance": frozenset({
+        "skills/showrunner/SKILL.md",
+        "skills/workhorse/SKILL.md",
+    }),
+    "third-rework-stop": frozenset({
+        "skills/showrunner/SKILL.md",
+        "skills/workhorse/SKILL.md",
+    }),
 }
 
 _EXPECTED_SHARED_CLAUSE_COUNTS = {
     "resolve-upward": 5,
     "not-engaged-never-passes": 5,
     "waiver-bounds": 3,
+    "bounded-acceptance": 3,
+    "third-rework-stop": 3,
 }
 
 _EXPECTED_HOLDER_CLAUSE_COUNTS = {
@@ -123,6 +135,20 @@ _EXPECTED_HOME_SECTIONS = {
         "quiet-failure question": "### Micro — owner authorization",
         "single named exception": "### Micro — owner authorization",
     },
+    "bounded-acceptance": {
+        "no new Critical or Important finding in a review round on the final head": (
+            "### Bounded acceptance — prose-contract DoDs"
+        ),
+        "with Minor residuals disclosed": "### Bounded acceptance — prose-contract DoDs",
+        "an unterminating bar can only be abandoned": (
+            "### Bounded acceptance — prose-contract DoDs"
+        ),
+    },
+    "third-rework-stop": {
+        "a third rework of the same surface is the tripwire": "### The third-rework tripwire",
+        "stopping and handing the design signal up satisfies it": "### The third-rework tripwire",
+        "a formal park binds when the lane has not converged": "### The third-rework tripwire",
+    },
 }
 
 _EXPECTED_HOLDER_SECTIONS = {
@@ -136,6 +162,16 @@ _EXPECTED_HOLDER_SECTIONS = {
     },
     "waiver-bounds": {
         "skills/showrunner/SKILL.md": "## Micro — hard-line edit",
+    },
+    "bounded-acceptance": {
+        "skills/showrunner/SKILL.md": "## Your duties",
+        "skills/workhorse/SKILL.md": "## 10. Review before handback",
+    },
+    "third-rework-stop": {
+        "skills/showrunner/SKILL.md": "## Your duties",
+        "skills/workhorse/SKILL.md": (
+            "## 7. Delegate every implementation (lane-scoped — no size exception)"
+        ),
     },
 }
 
@@ -222,6 +258,52 @@ _INVARIANT_TABLE = [
                 "owner-only, per change, never a standing grant; "
                 "the risk must be stated explicitly",
             ],
+        },
+    },
+    {
+        "name": "bounded-acceptance",
+        "clauses": [
+            {
+                "text": (
+                    "no new Critical or Important finding in a review round on the final head"
+                ),
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+            {
+                "text": "with Minor residuals disclosed",
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+            {
+                "text": "an unterminating bar can only be abandoned",
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+        ],
+        "copy_holder_sections": {
+            "skills/showrunner/SKILL.md": "## Your duties",
+            "skills/workhorse/SKILL.md": "## 10. Review before handback",
+        },
+    },
+    {
+        "name": "third-rework-stop",
+        "clauses": [
+            {
+                "text": "a third rework of the same surface is the tripwire",
+                "home_section": "### The third-rework tripwire",
+            },
+            {
+                "text": "stopping and handing the design signal up satisfies it",
+                "home_section": "### The third-rework tripwire",
+            },
+            {
+                "text": "a formal park binds when the lane has not converged",
+                "home_section": "### The third-rework tripwire",
+            },
+        ],
+        "copy_holder_sections": {
+            "skills/showrunner/SKILL.md": "## Your duties",
+            "skills/workhorse/SKILL.md": (
+                "## 7. Delegate every implementation (lane-scoped — no size exception)"
+            ),
         },
     },
 ]
@@ -988,4 +1070,116 @@ def test_negative_empty_section_body_fails_clause_check():
         },
     }]
     with pytest.raises(AssertionError, match=r"clause missing from .+ \(section ## Build lanes\)"):
+        _check_copy_holder_clauses(table, read_text)
+
+
+def test_negative_roster_bounded_acceptance_clause_deleted():
+    with pytest.raises(RuntimeError, match="shared-clause count drift"):
+        _validate_invariant_table(_table_with_clause_removed("bounded-acceptance"))
+
+
+def test_negative_roster_third_rework_stop_holder_removed():
+    with pytest.raises(RuntimeError, match="copy-holder set drift"):
+        _validate_invariant_table(
+            _table_with_holder_removed("third-rework-stop", "skills/workhorse/SKILL.md")
+        )
+
+
+def test_negative_bounded_acceptance_out_of_section_match():
+    """Regression: table copy must not satisfy doctrine-section bounds."""
+    synthetic_path = "synthetic/workhorse.md"
+    synthetic_text = "\n".join([
+        "## 10. Review before handback",
+        "Review handback without bounded-acceptance clauses here.",
+        "## When you're tempted",
+        (
+            "no new Critical or Important finding in a review round on the final head; "
+            "with Minor residuals disclosed; an unterminating bar can only be abandoned"
+        ),
+    ])
+    texts = {synthetic_path: synthetic_text}
+
+    def read_text(rel):
+        if rel not in texts:
+            raise FileNotFoundError(rel)
+        return texts[rel]
+
+    table = [{
+        "name": "bounded-acceptance",
+        "clauses": [
+            {
+                "text": (
+                    "no new Critical or Important finding in a review round on the final head"
+                ),
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+            {
+                "text": "with Minor residuals disclosed",
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+            {
+                "text": "an unterminating bar can only be abandoned",
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+        ],
+        "copy_holder_sections": {
+            synthetic_path: "## 10. Review before handback",
+        },
+    }]
+    with pytest.raises(
+        AssertionError,
+        match=r"clause missing from .+ \(section ## 10\. Review before handback\)",
+    ):
+        _check_copy_holder_clauses(table, read_text)
+
+
+def test_negative_third_rework_stop_out_of_section_match():
+    """Regression: tempted-table copy must not satisfy section 7 bounds."""
+    synthetic_path = "synthetic/workhorse.md"
+    synthetic_text = "\n".join([
+        "## 7. Delegate every implementation (lane-scoped — no size exception)",
+        "Delegate section without third-rework clauses here.",
+        "## When you're tempted",
+        (
+            "a third rework of the same surface is the tripwire; "
+            "stopping and handing the design signal up satisfies it; "
+            "a formal park binds when the lane has not converged"
+        ),
+    ])
+    texts = {synthetic_path: synthetic_text}
+
+    def read_text(rel):
+        if rel not in texts:
+            raise FileNotFoundError(rel)
+        return texts[rel]
+
+    table = [{
+        "name": "third-rework-stop",
+        "clauses": [
+            {
+                "text": "a third rework of the same surface is the tripwire",
+                "home_section": "### The third-rework tripwire",
+            },
+            {
+                "text": "stopping and handing the design signal up satisfies it",
+                "home_section": "### The third-rework tripwire",
+            },
+            {
+                "text": "a formal park binds when the lane has not converged",
+                "home_section": "### The third-rework tripwire",
+            },
+        ],
+        "copy_holder_sections": {
+            synthetic_path: (
+                "## 7. Delegate every implementation (lane-scoped — no size exception)"
+            ),
+        },
+    }]
+    with pytest.raises(
+        AssertionError,
+        match=(
+            r"clause missing from .+ \(section ## 7\. Delegate every implementation "
+            r"\(lane-scoped — no size exception\)\)"
+        ),
+    ):
         _check_copy_holder_clauses(table, read_text)
