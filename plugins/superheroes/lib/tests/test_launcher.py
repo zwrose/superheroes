@@ -3819,6 +3819,29 @@ def test_launch_spawns_child_in_build_worktree_never_repo_root(tmp_path, monkeyp
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     _worktree_root(tmp_path, monkeypatch)
+    base_sha = _head_sha(repo)
+    premise = _valid_premise(repo, baseCommit=base_sha)
+    (tmp_path / "repo" / "advance.txt").write_text("y\n")
+    subprocess.run(
+        [
+            "git", "-C", repo,
+            "-c", "user.email=test@test.local",
+            "-c", "user.name=test",
+            "add", ".",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "git", "-C", repo,
+            "-c", "user.email=test@test.local",
+            "-c", "user.name=test",
+            "commit", "-q", "-m", "advance",
+        ],
+        check=True,
+    )
+    advanced_head = _head_sha(repo)
+    assert advanced_head != base_sha
     seen = {}
 
     def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
@@ -3828,7 +3851,7 @@ def test_launch_spawns_child_in_build_worktree_never_repo_root(tmp_path, monkeyp
     result = L.launch_build(
         repo,
         656,
-        _valid_premise(repo),
+        premise,
         _all_checks(),
         str(tmp_path / "logs"),
         spawn_fn=capture_spawn,
@@ -3842,7 +3865,8 @@ def test_launch_spawns_child_in_build_worktree_never_repo_root(tmp_path, monkeyp
     # It is a real, registered worktree of THIS repo, parked at the premise's base commit.
     registered = L._registered_worktree_paths(repo)
     assert os.path.realpath(cwd) in registered
-    assert _git(cwd, "rev-parse", "HEAD") == _head_sha(repo)
+    assert _git(cwd, "rev-parse", "HEAD") == base_sha
+    assert _git(cwd, "rev-parse", "HEAD") != advanced_head
     assert _git(cwd, "rev-parse", "--show-toplevel")
 
 
@@ -3903,6 +3927,9 @@ def test_launch_refuses_a_worktree_path_collision_and_never_reuses_it(tmp_path, 
     assert refused
     assert refused[-1]["reason"] == "launch-worktree-collision"
     assert refused[-1]["stage"] == "worktree"
+    reserved = [r for r in records if r.get("event") == "reserved"]
+    assert reserved
+    assert "worktree" not in reserved[-1]
 
 
 def test_create_build_worktree_refuses_a_path_git_still_registers(tmp_path, monkeypatch):
@@ -3987,7 +4014,10 @@ def test_build_worktree_path_is_unique_per_launch_and_names_the_issue(tmp_path, 
     root = _worktree_root(tmp_path, monkeypatch)
     first = L.build_worktree_path(repo, 974, "launch-aaaaaaaaaaaaaaaa")
     second = L.build_worktree_path(repo, 974, "launch-bbbbbbbbbbbbbbbb")
+    same_prefix_a = L.build_worktree_path(repo, 974, "launch-aaaaaaaa11111111")
+    same_prefix_b = L.build_worktree_path(repo, 974, "launch-aaaaaaaa22222222")
     assert first != second
+    assert same_prefix_a != same_prefix_b
     assert first.startswith(root + os.sep)
     assert os.path.basename(first).startswith("issue-974-")
     assert os.path.basename(os.path.dirname(first)) == os.path.basename(repo)

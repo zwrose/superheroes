@@ -189,7 +189,7 @@ def build_worktree_path(repo_root, issue, launch_id, env=None):
     root = worktree_root(env=env)
     if not root:
         return None
-    suffix = launch_id.rsplit("-", 1)[-1][:8] if isinstance(launch_id, str) else ""
+    suffix = launch_id.rsplit("-", 1)[-1] if isinstance(launch_id, str) else ""
     if not suffix:
         return None
     return os.path.join(root, _repo_tag(repo_root), "issue-%s-%s" % (issue, suffix))
@@ -1124,6 +1124,35 @@ def launch_build(
                 )
         return _fail("launch-worktree-path-unresolvable", launchId=launch_id)
 
+    worktree_result = create_build_worktree(
+        repo_root, worktree_path, stamped["baseCommit"], env=env,
+    )
+    if not worktree_result["ok"]:
+        refusal_reason = worktree_result["reason"]
+        reserve_result = _try_reserve_for_refusal(
+            repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
+            slot=slot, generation=generation, boundary=boundary,
+        )
+        extra = {"path": worktree_result["path"]}
+        if "remedy" in worktree_result:
+            extra["remedy"] = worktree_result["remedy"]
+        if reserve_result.get("reserved"):
+            term = _terminalize(
+                repo_root,
+                launch_id,
+                False,
+                refusal_reason,
+                stage="worktree",
+                env=env,
+            )
+            if not term["ok"]:
+                return _fail(
+                    _terminalization_reason(term, refusal_reason),
+                    launchId=launch_id,
+                    **extra,
+                )
+        return _fail(refusal_reason, launchId=launch_id, **extra)
+
     resolution = compose_result["modelResolution"]
     model_reason = resolution["reason"]
     reserved = {
@@ -1181,25 +1210,6 @@ def launch_build(
             launchId=launch_id,
             **_preflight_extra(slot_refusal),
         )
-
-    worktree_result = create_build_worktree(
-        repo_root, worktree_path, stamped["baseCommit"], env=env,
-    )
-    if not worktree_result["ok"]:
-        refusal_reason = worktree_result["reason"]
-        term = _terminalize(
-            repo_root,
-            launch_id,
-            False,
-            refusal_reason,
-            stage="worktree",
-            env=env,
-        )
-        reason = _terminalization_reason(term, refusal_reason)
-        extra = {"path": worktree_result["path"]}
-        if "remedy" in worktree_result:
-            extra["remedy"] = worktree_result["remedy"]
-        return _fail(reason, launchId=launch_id, **extra)
 
     try:
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
