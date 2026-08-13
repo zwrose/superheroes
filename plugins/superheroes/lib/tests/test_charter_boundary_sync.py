@@ -146,7 +146,7 @@ _EXPECTED_HOME_SECTIONS = {
             "### Bounded acceptance — prose-contract DoDs"
         ),
         "with Minor residuals disclosed": "### Bounded acceptance — prose-contract DoDs",
-        "an unterminating bar can only be abandoned": (
+        "unterminating bar can only be abandoned": (
             "### Bounded acceptance — prose-contract DoDs"
         ),
     },
@@ -280,7 +280,7 @@ _INVARIANT_TABLE = [
                 "home_section": "### Bounded acceptance — prose-contract DoDs",
             },
             {
-                "text": "an unterminating bar can only be abandoned",
+                "text": "unterminating bar can only be abandoned",
                 "home_section": "### Bounded acceptance — prose-contract DoDs",
             },
         ],

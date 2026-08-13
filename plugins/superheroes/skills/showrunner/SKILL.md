@@ -212,7 +212,7 @@ above).
      exception: **no new Critical or Important finding in a review round on the final head**, after a
      stated number of rounds, **with Minor residuals disclosed**. The **advisor at vet** (or the
      **owner**, when they set the bound before review begins) states that number of rounds, and it is
-     recorded in the **PR body** or the **vet receipt**. **an unterminating bar can only be abandoned**.
+     recorded in the **PR body** or the **vet receipt**. **An unterminating bar can only be abandoned**.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where
@@ -360,11 +360,18 @@ above).
      never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
      empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
      replacing the reminder, and re-stamp the marker only when a body rewrite has dropped it.
-     On a PR that **predates this contract** and therefore carries no slot at all — identified by
-     having **no vet-receipt comment** — the advisor **creates the slot itself at vet**: the
-     `## Advisor vet` heading plus `<!-- superheroes:advisor-vet -->`, then writes into it.
-     Retroactive creation applies **only** to those pre-contract PRs, never as a way to re-seed a
-     slot whose advisor write was dropped — that case is ruled in the check below.
+     A body that carries the `## Advisor vet` heading **without** the
+     `<!-- superheroes:advisor-vet -->` marker is a current-contract builder that failed to stamp —
+     the advisor **re-stamps the marker** and writes into the existing slot; that is **not**
+     retroactive creation. On a PR that **predates this contract** and therefore carries **no
+     `## Advisor vet` heading at all** — a missing heading is ambiguous between a genuine
+     pre-contract PR and a current-contract body rewrite that dropped the whole slot; resolve it
+     against the advisor's own vet-receipt comment: **a receipt exists** → the slot was dropped
+     (restore it as a dropped write, per the check below), **no receipt comment** → a genuine
+     pre-contract PR, **create the slot itself at vet**: the `## Advisor vet` heading plus
+     `<!-- superheroes:advisor-vet -->`, then writes into it. Retroactive creation applies
+     **only** to those pre-contract PRs, never as a way to re-seed a slot whose advisor write was
+     dropped — that case is ruled in the check below.
      The reminder is the **one** piece of builder-emitted text you are expected to remove, so it is not an
      exception to "never the builder's prose"; if you ever find your verdict and the reminder both
      present, the verdict wins — delete the reminder on that read.
