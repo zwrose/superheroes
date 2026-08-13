@@ -1202,9 +1202,11 @@ def test_owner_authority_allowlist_doc_matches_code():
         re.DOTALL,
     )
     assert schema_block, "owner-authority-allowlist.md: schema JSON block not found"
-    assert '"schemaVersion": %d' % oa.ALLOW_SCHEMA_VERSION in schema_block.group(1), (
-        "owner-authority-allowlist.md schema block missing schemaVersion %d"
-        % oa.ALLOW_SCHEMA_VERSION)
+    for ver in oa.ALLOW_SCHEMA_VERSIONS:
+        assert '"schemaVersion": %d' % ver in doc, (
+            "owner-authority-allowlist.md missing schemaVersion %d" % ver)
+    assert '"ref": "any"' in doc, (
+        "owner-authority-allowlist.md missing v2 ref sentinel")
 
     never_section = re.search(
         r"## What can never be allowlisted\n(.*?)(?=\n## )",
@@ -1222,10 +1224,13 @@ def test_owner_authority_allowlist_doc_matches_code():
             "owner-authority-allowlist.md missing ALLOWLISTABLE_ACTIONS member %r" % action)
 
     also_asks = _owner_authority_also_asks_bullet(doc)
-    for flag in oa._SCOPE_CHANGING_FLAGS:
+    for flag in oa._REPO_FLAGS:
         assert flag in also_asks, (
-            "owner-authority-allowlist.md 'Also asks' bullet missing _SCOPE_CHANGING_FLAGS "
+            "owner-authority-allowlist.md 'Also asks' bullet missing _REPO_FLAGS "
             "member %r" % flag)
+    for flag in oa._REF_FLAGS:
+        assert flag in doc, (
+            "owner-authority-allowlist.md missing _REF_FLAGS member %r" % flag)
 
     accepted_doc, refused_doc = _charset_lists_from_doc(doc)
     pattern = oa._LITERAL_SAFE_COMMAND

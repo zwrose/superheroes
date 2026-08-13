@@ -1,3 +1,14 @@
+# Contents
+
+1. [What this is](#what-this-is)
+2. [Where the file goes](#where-the-file-goes)
+3. [The schema (v1)](#the-schema-v1)
+4. [Schema v2 — ref-carrying dispatches](#schema-v2--ref-carrying-dispatches)
+5. [Worked example](#worked-example)
+6. [What can never be allowlisted](#what-can-never-be-allowlisted)
+7. [When the file is wrong](#when-the-file-is-wrong)
+8. [Limitations in v1](#limitations-in-v1)
+
 # Owner-authority workflow allowlist
 
 If you arrived here from an approval prompt, you are in the right place. The gate asked because
@@ -31,10 +42,35 @@ Hand-edit only — no `configure` surface yet.
 }
 ```
 
-- `schemaVersion` — must be `1`; any other value is ignored (gate behaves as if no file exists).
+- `schemaVersion` — must be `1` or `2`; any other value is ignored (gate behaves as if no file exists).
 - `allow` — list of entries. In v1 each entry has `action` (`run-workflow` only) and `workflow`
   (exact name or id as typed on the command line; case-sensitive; no wildcards, globs, or
   `.yml`/display-name equivalence).
+
+## Schema v2 — ref-carrying dispatches
+
+Use `schemaVersion: 2` when you need to pre-authorize a dispatch that names a ref (`-r` /
+`--ref`). Add `ref: "any"` to opt in — the only supported value:
+
+```json
+{
+  "schemaVersion": 2,
+  "allow": [
+    { "action": "run-workflow", "workflow": "Preview seed", "ref": "any" }
+  ]
+}
+```
+
+**Threat model:** granting `ref: "any"` on a workflow means **any ref's definition of that
+workflow may run** — not just the default branch. For a seed workflow whose design is that the
+dispatched ref *is* the target (no branch input), this is precisely what you want. Ref *patterns*
+(`feat/*`) are deliberately not supported in this shape.
+
+A v2 entry with `ref: "any"` also covers the bare dispatch (no ref flag) — a superset grant
+includes the default ref. Entries without a `ref` key behave identically under both schema versions.
+
+Under `schemaVersion: 1`, a `ref` key on any entry is **dropped** with a loud note — it never
+silently degrades to a bare-name grant.
 
 ## Worked example
 
@@ -42,6 +78,12 @@ Workflow named `Preview seed` — write the JSON above, then this runs without p
 
 ```bash
 gh workflow run "Preview seed"
+```
+
+**Branch-preview seeding** (requires v2 with `ref: "any"`):
+
+```bash
+gh workflow run "Preview seed" --ref my-feature-branch
 ```
 
 **Near-misses that still ask:**
@@ -85,6 +127,9 @@ does not (inputs, environment overrides).
   `Preview & seed` **cannot be pre-authorized in v1** and will keep asking — an extra prompt, never
   an unapproved run.
 - Also asks regardless of the file: compound commands, env-var prefixes, absolute `gh` path,
-  unrecognized flags, `-R` / `-r` / `--ref` / `--repo` (a dispatch naming another repository or
-  another ref is not the dispatch you pre-authorized), or anything that does not name exactly one
-  workflow.
+  unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
+  you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
+  `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them. **Known
+  limitation:** repo flags are refused by the allowlist parser, but a dispatch carrying them in the
+  inherited position (`gh -R owner/repo workflow run X`) never reaches the gate at all, because
+  `OWNER_AUTHORITY_COMMANDS` requires `gh` adjacent to the subcommand.

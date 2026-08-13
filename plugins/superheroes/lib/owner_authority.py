@@ -48,7 +48,8 @@ OWNER_AUTHORITY_COMMANDS = [
 ]
 
 ALLOW_FILENAME = "owner-authority-allow.json"
-ALLOW_SCHEMA_VERSION = 1
+ALLOW_SCHEMA_VERSIONS = (1, 2)
+ALLOW_SCHEMA_VERSION = ALLOW_SCHEMA_VERSIONS[-1]
 # Entries can only match actions in this tuple — structural exclusions (NEVER_ALLOWLISTABLE) are
 # enforced by omission from here, not by a separate filter. NEVER_ALLOWLISTABLE exists so
 # ignored entries are loud (stderr + ask reason), not to perform the exclusion itself.
@@ -57,7 +58,7 @@ NEVER_ALLOWLISTABLE = ("merge-pr", "merge-api", "merge-graphql", "release", "for
 
 _KNOWN_GATE_ACTIONS = frozenset(a for a, _ in OWNER_AUTHORITY_COMMANDS)
 
-# Informational only — has no authority over the allow decision (workflow_run_target does).
+# Informational only — has no authority over the allow decision (workflow_run_dispatch does).
 _WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
 
 # bite-proof axis: refuses shell-expandable text, so an allow entry can never match
@@ -65,13 +66,15 @@ _WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
 # Uses fullmatch (not $-anchored match) because $ exempts a trailing newline in Python.
 _LITERAL_SAFE_COMMAND = re.compile(r"[A-Za-z0-9 _\-./:=,'\"@+]+")
 
-# Repo/ref flags change *where* the dispatch lands and *which* ref's definition runs.
-# The allow file is project-scoped, but only the command text is classified — ambient gh
+# Repo flags change *where* the dispatch lands; ref flags change *which* ref's definition
+# runs. The allow file is project-scoped, but only the command text is classified — ambient gh
 # env overrides (e.g. GH_REPO) are invisible here (see reference doc). Input flags
 # (-F/--field, -f/--raw-field, --json) are accepted as a deliberate v1 scope decision; an
 # allow entry does not pin inputs — a pre-authorized workflow is pre-authorized with any
 # inputs, which matters when a workflow's inputs influence what it checks out or runs.
-_SCOPE_CHANGING_FLAGS = frozenset(("-R", "--repo", "-r", "--ref"))
+_REPO_FLAGS = frozenset(("-R", "--repo"))
+_REF_FLAGS = frozenset(("-r", "--ref"))
+_REF_ANY_SENTINEL = "any"
 
 _VALUE_FLAG_LONG = frozenset(("--field", "--raw-field"))
 _VALUE_FLAGS = frozenset(("-F", "--field", "-f", "--raw-field"))
@@ -133,7 +136,7 @@ def read_allow_file(cwd, root=None):
 
     ver = raw.get("schemaVersion")
     # bite-proof axis: a wrong-schema file must not yield entries (bool-int trap included).
-    if not isinstance(ver, int) or isinstance(ver, bool) or ver != ALLOW_SCHEMA_VERSION:
+    if not isinstance(ver, int) or isinstance(ver, bool) or ver not in ALLOW_SCHEMA_VERSIONS:
         notes.append(_rejected_file_note("bad schemaVersion"))
         return entries, notes
 
@@ -173,13 +176,31 @@ def read_allow_file(cwd, root=None):
                             "ignored malformed allow entry (unknown action %r)" % action))
             continue
 
-        entries.append({"action": action, "workflow": workflow})
+        allows_refs = False
+        if "ref" in item:
+            if ver == 1:
+                notes.append(("malformed", action,
+                                "ignored entry with ref key under schemaVersion 1 — "
+                                "bump owner-authority-allow.json to schemaVersion 2"))
+                continue
+            ref_val = item.get("ref")
+            if not isinstance(ref_val, str) or ref_val != _REF_ANY_SENTINEL:
+                notes.append(("malformed", action,
+                                "ignored entry with invalid ref %r — only ref: \"any\" "
+                                "is supported under schemaVersion 2" % ref_val))
+                continue
+            allows_refs = True
+
+        entry = {"action": action, "workflow": workflow}
+        if allows_refs:
+            entry["allows_refs"] = True
+        entries.append(entry)
 
     return entries, notes
 
 
-def workflow_run_target(command):
-    """The exact workflow id/name from a `gh workflow run` command, or None."""
+def workflow_run_dispatch(command):
+    """Parse a `gh workflow run` command into workflow name and optional ref, or None."""
     if not isinstance(command, str) or not command or len(command) > 4096:
         return None
 
@@ -195,6 +216,7 @@ def workflow_run_target(command):
         return None
 
     positionals = []
+    ref = None
     i = 3
     while i < len(tokens):
         tok = tokens[i]
@@ -203,17 +225,31 @@ def workflow_run_target(command):
             break
         if tok.startswith("-"):
             if "=" in tok:
-                flag = tok.split("=", 1)[0]
-                # bite-proof axis: repo/ref flags must never be skipped — they change scope.
-                if flag in _SCOPE_CHANGING_FLAGS:
+                flag, value = tok.split("=", 1)
+                # bite-proof axis: repo flags must never be skipped — they change scope.
+                if flag in _REPO_FLAGS:
                     return None
+                if flag in _REF_FLAGS:
+                    if not value or ref is not None:
+                        return None
+                    ref = value
+                    i += 1
+                    continue
                 # bite-proof axis: flag values must not be misread as the workflow name.
                 if flag not in _VALUE_FLAG_LONG:
                     return None
                 i += 1
                 continue
-            if tok in _SCOPE_CHANGING_FLAGS:
+            if tok in _REPO_FLAGS:
                 return None
+            if tok in _REF_FLAGS:
+                if i + 1 >= len(tokens) or ref is not None:
+                    return None
+                ref = tokens[i + 1]
+                if not ref:
+                    return None
+                i += 2
+                continue
             if tok in _VALUE_FLAGS:
                 if i + 1 >= len(tokens):
                     return None
@@ -228,7 +264,7 @@ def workflow_run_target(command):
 
     if len(positionals) != 1 or not positionals[0]:
         return None
-    return positionals[0]
+    return {"workflow": positionals[0], "ref": ref}
 
 
 def allowlisted(command, action, entries):
@@ -237,15 +273,17 @@ def allowlisted(command, action, entries):
     # cannot reach silence via file content.
     if action not in ALLOWLISTABLE_ACTIONS:
         return False
-    # Fail closed: this function resolves targets only via workflow_run_target. A future
+    # Fail closed: this function resolves targets only via workflow_run_dispatch. A future
     # ALLOWLISTABLE_ACTIONS entry must ship its own extractor — do not fall through here.
     if action != "run-workflow":
         return False
-    target = workflow_run_target(command)
-    if target is None:
+    parsed = workflow_run_dispatch(command)
+    if parsed is None:
         return False
     for entry in entries:
-        if entry["action"] == action and entry["workflow"] == target:
+        if entry["action"] != action or entry["workflow"] != parsed["workflow"]:
+            continue
+        if parsed["ref"] is None or entry.get("allows_refs"):
             return True
     return False
 
@@ -303,7 +341,7 @@ def calibration_state(cwd):
 
 def _ask_reason(action, command, notes):
     reason = "owner-authority action '%s' needs your live approval" % action
-    # Informational pointer only — driven by cheap regex, not workflow_run_target.
+    # Informational pointer only — driven by cheap regex, not workflow_run_dispatch.
     if _WORKFLOW_RUN_POINTER.search(command):
         reason += (" — to pre-authorize this workflow, see the superheroes plugin's "
                    "reference/owner-authority-allowlist.md")

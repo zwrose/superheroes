@@ -292,28 +292,33 @@ def _write_allow_at(store, content):
 _VALID_ENTRY = {"action": "run-workflow", "workflow": "deploy.yml"}
 
 
-# --- workflow_run_target: accepts ------------------------------------------------
-# Bites on: workflow_run_target returns the exact workflow name when flags are limited to
-# inputs (-f/-F/--field) or valueless --json — never repo/ref scope-changing flags.
+# --- workflow_run_dispatch: accepts ------------------------------------------------
+# Bites on: workflow_run_dispatch returns workflow+ref when flags are limited to
+# inputs (-f/-F/--field) or valueless --json — never repo scope-changing flags.
 
 @pytest.mark.parametrize("command,expected", [
-    ("gh workflow run deploy.yml", "deploy.yml"),
-    ("gh workflow run 'Preview seed'", "Preview seed"),
-    ('gh workflow run "Preview seed"', "Preview seed"),
-    ("gh workflow run ci.yml", "ci.yml"),
-    ("gh workflow run -f k=v deploy.yml", "deploy.yml"),
-    ("gh workflow run -F k=v deploy.yml", "deploy.yml"),
-    ("gh workflow run --field=k=v deploy.yml", "deploy.yml"),
-    ("gh workflow run --json deploy.yml", "deploy.yml"),
-    ("gh workflow run -- deploy.yml", "deploy.yml"),
+    ("gh workflow run deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run 'Preview seed'", {"workflow": "Preview seed", "ref": None}),
+    ('gh workflow run "Preview seed"', {"workflow": "Preview seed", "ref": None}),
+    ("gh workflow run ci.yml", {"workflow": "ci.yml", "ref": None}),
+    ("gh workflow run -f k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run -F k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run --field=k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run --json deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run -- deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run --ref main deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh workflow run --ref=main deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh workflow run -r main deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh workflow run deploy.yml --ref main", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh workflow run deploy.yml --ref=main", {"workflow": "deploy.yml", "ref": "main"}),
 ])
-def test_workflow_run_target_accepts(command, expected):
-    assert oa.workflow_run_target(command) == expected
+def test_workflow_run_dispatch_accepts(command, expected):
+    assert oa.workflow_run_dispatch(command) == expected
 
 
-# --- workflow_run_target: refuses ------------------------------------------------
-# Bites on: workflow_run_target returns None for shell-expandable text, scope-changing
-# repo/ref flags, malformed commands, and any dispatch that does not name exactly one workflow.
+# --- workflow_run_dispatch: refuses ------------------------------------------------
+# Bites on: workflow_run_dispatch returns None for shell-expandable text, repo
+# scope-changing flags, malformed commands, and any dispatch that does not name exactly one workflow.
 
 @pytest.mark.parametrize("command", [
     "gh workflow run $VAR",
@@ -354,24 +359,20 @@ def test_workflow_run_target_accepts(command, expected):
     "gh workflow run deploy.yml\r\n",
     None,
     "x" * 4097,
-    "gh workflow run --ref main",
-    # scope-changing repo/ref flags — never pre-authorized regardless of allow file
+    # scope-changing repo flags — never pre-authorized regardless of allow file
     "gh workflow run -R o/r deploy.yml",
     "gh workflow run --repo o/r deploy.yml",
     "gh workflow run --repo=o/r deploy.yml",
-    "gh workflow run -r main deploy.yml",
-    "gh workflow run --ref main deploy.yml",
-    "gh workflow run --ref=main deploy.yml",
     "gh workflow run deploy.yml -R o/r",
     "gh workflow run deploy.yml --repo o/r",
     "gh workflow run deploy.yml --repo=o/r",
-    "gh workflow run deploy.yml -r main",
-    "gh workflow run deploy.yml --ref main",
-    "gh workflow run deploy.yml --ref=main",
-    "gh workflow run --ref main deploy.yml",
+    # ref flag edge cases — refuse
+    "gh workflow run --ref= deploy.yml",
+    "gh workflow run --ref a --ref b deploy.yml",
+    "gh workflow run --ref=main$ deploy.yml",
 ])
-def test_workflow_run_target_refuses(command):
-    assert oa.workflow_run_target(command) is None
+def test_workflow_run_dispatch_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
 
 
 # --- read_allow_file: fail direction (§A) --------------------------------------
@@ -395,7 +396,7 @@ def test_workflow_run_target_refuses(command):
     "schema_str_1",
     "schema_null",
     "schema_0",
-    "schema_2",
+    "schema_3",
     "allow_missing",
     "allow_dict",
     "exception_on_path",
@@ -451,8 +452,8 @@ def test_read_allow_file_fail_direction_yields_no_entries(setup, tmp_path, monke
         _write_allow_at(store, {"schemaVersion": None, "allow": [_VALID_ENTRY]})
     elif setup == "schema_0":
         _write_allow_at(store, {"schemaVersion": 0, "allow": [_VALID_ENTRY]})
-    elif setup == "schema_2":
-        _write_allow_at(store, {"schemaVersion": 2, "allow": [_VALID_ENTRY]})
+    elif setup == "schema_3":
+        _write_allow_at(store, {"schemaVersion": 3, "allow": [_VALID_ENTRY]})
     elif setup == "allow_missing":
         # No allow key — cannot carry a valid entry by construction.
         _write_allow_at(store, {"schemaVersion": 1})
@@ -479,7 +480,7 @@ def test_read_allow_file_fail_direction_yields_no_entries(setup, tmp_path, monke
     ("unreadable", "unreadable"),
     ("bad_json", "invalid JSON"),
     ("top_array", "top level is not an object"),
-    ("schema_2", "bad schemaVersion"),
+    ("schema_3", "bad schemaVersion"),
     ("allow_dict", "allow is not a list"),
     ("exception_on_path", "path resolution failed"),
 ])
@@ -500,8 +501,8 @@ def test_read_allow_file_rejected_file_note(setup, defect_fragment, tmp_path, mo
             fh.write("{ not json")
     elif setup == "top_array":
         _write_allow_at(store, [_VALID_ENTRY])
-    elif setup == "schema_2":
-        _write_allow_at(store, {"schemaVersion": 2, "allow": [_VALID_ENTRY]})
+    elif setup == "schema_3":
+        _write_allow_at(store, {"schemaVersion": 3, "allow": [_VALID_ENTRY]})
     elif setup == "allow_dict":
         _write_allow_at(store, {"schemaVersion": 1, "allow": {}})
     elif setup == "exception_on_path":
@@ -647,7 +648,7 @@ def test_allowlisted_exact_match():
 def test_allowlisted_near_miss(workflow, quoted):
     entries = [{"action": "run-workflow", "workflow": "Preview seed"}]
     cmd = "gh workflow run %s" % quoted
-    assert oa.workflow_run_target(cmd) == workflow
+    assert oa.workflow_run_dispatch(cmd) == {"workflow": workflow, "ref": None}
     assert oa.allowlisted(cmd, "run-workflow", entries) is False
 
 
@@ -782,5 +783,178 @@ def test_classify_workflow_target_none_still_asks_despite_matching_entry(tmp_pat
     _write_allow_at(store, {"schemaVersion": 1,
                             "allow": [{"action": "run-workflow", "workflow": "main"}]})
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
-    decision, _ = oa.classify("gh workflow run --ref main", str(tmp_path))
+    decision, _ = oa.classify("gh workflow run --repo=o/r", str(tmp_path))
     assert decision == "ask"
+
+
+# --- invariant: repo-flag census -------------------------------------------------
+# Every _REPO_FLAGS member refuses parse in both spellings and both positions.
+
+@pytest.mark.parametrize("flag", sorted(oa._REPO_FLAGS))
+def test_repo_flags_refuse_parse_census(flag):
+    workflow = "deploy.yml"
+    spaced_before = "gh workflow run %s o/r %s" % (flag, workflow)
+    spaced_after = "gh workflow run %s %s o/r" % (workflow, flag)
+    eq_before = "gh workflow run %s=o/r %s" % (flag, workflow)
+    eq_after = "gh workflow run %s %s=o/r" % (workflow, flag)
+    for cmd in (spaced_before, spaced_after, eq_before, eq_after):
+        assert oa.workflow_run_dispatch(cmd) is None, cmd
+
+
+# --- invariant: ref-flag census --------------------------------------------------
+# Every _REF_FLAGS member never matches bare-name entry but matches opted-in v2 entry.
+
+_V2_REF_ENTRY = [
+    {"action": "run-workflow", "workflow": "Preview seed", "allows_refs": True},
+]
+_BARE_ENTRY = [{"action": "run-workflow", "workflow": "Preview seed"}]
+
+
+@pytest.mark.parametrize("flag", sorted(oa._REF_FLAGS))
+def test_ref_flags_never_match_bare_name_census(flag):
+    workflow = "Preview seed"
+    for cmd in (
+        'gh workflow run "%s" %s main' % (workflow, flag),
+        'gh workflow run "%s" %s=main' % (workflow, flag),
+    ):
+        assert oa.allowlisted(cmd, "run-workflow", _BARE_ENTRY) is False, cmd
+
+
+@pytest.mark.parametrize("flag", sorted(oa._REF_FLAGS))
+def test_ref_flags_match_opted_in_v2_census(flag):
+    workflow = "Preview seed"
+    for cmd in (
+        'gh workflow run "%s" %s main' % (workflow, flag),
+        'gh workflow run "%s" %s=main' % (workflow, flag),
+    ):
+        assert oa.allowlisted(cmd, "run-workflow", _V2_REF_ENTRY) is True, cmd
+
+
+# --- invariant: branch-preview acceptance pair -----------------------------------
+_BRANCH_PREVIEW_CMD = 'gh workflow run "Preview seed" --ref my-feature-branch'
+_V2_ALLOW_FILE = {
+    "schemaVersion": 2,
+    "allow": [
+        {"action": "run-workflow", "workflow": "Preview seed", "ref": "any"},
+    ],
+}
+
+
+def test_branch_preview_refuses_without_v2_grant(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "Preview seed"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, _ = oa.classify(_BRANCH_PREVIEW_CMD, str(tmp_path))
+    assert decision == "ask"
+
+
+def test_branch_preview_allows_with_v2_grant(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, _V2_ALLOW_FILE)
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    assert oa.classify(_BRANCH_PREVIEW_CMD, str(tmp_path)) == ("allow", "")
+
+
+# --- fail-closed edges (enumerated) ----------------------------------------------
+
+def test_edge_ref_flag_missing_value_refuses():
+    assert oa.workflow_run_dispatch("gh workflow run deploy.yml --ref") is None
+
+
+def test_edge_repeated_ref_flag_refuses():
+    assert oa.workflow_run_dispatch("gh workflow run --ref a --ref b deploy.yml") is None
+
+
+def test_edge_empty_ref_eq_form_refuses():
+    assert oa.workflow_run_dispatch("gh workflow run --ref= deploy.yml") is None
+
+
+def test_edge_ref_command_against_bare_name_entry_no_match():
+    cmd = 'gh workflow run "Preview seed" --ref main'
+    entries = [{"action": "run-workflow", "workflow": "Preview seed"}]
+    assert oa.allowlisted(cmd, "run-workflow", entries) is False
+
+
+@pytest.mark.parametrize("bad_ref", ["main", "feat/*", ""])
+def test_edge_v2_entry_bad_ref_dropped_at_read(tmp_path, monkeypatch, bad_ref):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 2, "allow": [
+        {"action": "run-workflow", "workflow": "deploy.yml", "ref": bad_ref},
+    ]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert any("invalid ref" in text for _, _, text in notes)
+
+
+def test_edge_v1_ref_key_dropped_not_bare_grant(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1, "allow": [
+        {"action": "run-workflow", "workflow": "deploy.yml", "ref": "any"},
+    ]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert any("schemaVersion 1" in text for _, _, text in notes)
+    cmd = "gh workflow run deploy.yml"
+    assert oa.allowlisted(cmd, "run-workflow", entries) is False
+
+
+@pytest.mark.parametrize("bad_ref", [True, 1, None, [], {}])
+def test_edge_v2_ref_wrong_type_dropped(tmp_path, monkeypatch, bad_ref):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 2, "allow": [
+        {"action": "run-workflow", "workflow": "deploy.yml", "ref": bad_ref},
+    ]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert any("invalid ref" in text for _, _, text in notes)
+
+
+def test_edge_shell_expandable_in_ref_refuses():
+    assert oa.workflow_run_dispatch('gh workflow run deploy.yml --ref=$BRANCH') is None
+
+
+def test_edge_zero_positionals_refuses():
+    assert oa.workflow_run_dispatch("gh workflow run") is None
+
+
+def test_edge_multiple_positionals_refuses():
+    assert oa.workflow_run_dispatch("gh workflow run a b") is None
+
+
+def test_edge_enable_never_allowlistable(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 2, "allow": [
+        {"action": "run-workflow", "workflow": "ci.yml", "ref": "any"},
+    ]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, _ = oa.classify("gh workflow enable ci.yml", str(tmp_path))
+    assert decision == "ask"
+
+
+def test_edge_structural_excluded_with_ref_still_ignored(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 2, "allow": [
+        {"action": "merge-pr", "workflow": "x", "ref": "any"},
+    ]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == []
+    assert any(kind == "structural" for kind, _, _ in notes)
+
+
+def test_read_allow_file_v2_valid_ref_any_entry(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 2, "allow": [
+        {"action": "run-workflow", "workflow": "Preview seed", "ref": "any"},
+    ]})
+    entries, notes = oa.read_allow_file(str(tmp_path))
+    assert entries == [{"action": "run-workflow", "workflow": "Preview seed",
+                        "allows_refs": True}]
+    assert notes == []
+
+
+def test_v2_entry_covers_bare_dispatch(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, _V2_ALLOW_FILE)
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    assert oa.classify('gh workflow run "Preview seed"', str(tmp_path)) == ("allow", "")
