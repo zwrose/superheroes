@@ -2795,7 +2795,11 @@ def test_diff_timeout(tmp_path, monkeypatch):
             sv._stage_review_diff(
                 repo_real, head_sha, view_root, base_sha, time.monotonic()
             )
-        assert exc.value.detail == "sanitized-view-diff-failed"
+        # Which deadline mechanism wins is wall-clock dependent; pin one token and the test flakes.
+        assert exc.value.detail in (
+            "sanitized-view-diff-failed",
+            "sanitized-view-export-timeout",
+        )
     finally:
         if view_root is not None:
             sv.destroy_sanitized_view(view_root)
