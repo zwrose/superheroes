@@ -179,6 +179,7 @@ def test_cross_vendor_cli_probe_argv_override():
     assert captured["argv"] == ["codex", "--version"]
 
 
+# axis: exact equality of preamble-then-ask, not a suffix match
 def test_probe_prompt_asks_for_a_single_word_and_nothing_else():
     # The probe must stay a no-op: an ask that invites WORK turns every compose
     # into a real dispatch under probe_command's 120s timeout.
@@ -230,6 +231,7 @@ def test_cross_vendor_cli_probe_unknown_engine_no_stdin_prompt():
 
 # --- Rider 29: engine-CLI probes pin cwd to disposable scratch repo -------------------------
 
+# axis: the cwd handed to the engine is a disposable git repo that is not the caller's tree, and it is removed afterwards
 def test_cross_vendor_cli_probe_codex_uses_disposable_scratch_repo_cwd(tmp_path):
     repo_root = str(tmp_path)
     run, captured = _make_scratch_cwd_recording_run(repo_root=repo_root)
@@ -334,6 +336,7 @@ def test_gh_auth_probe_does_not_use_scratch_repo():
 
 # --- Rider 30: probe argv drift guard (order + multiplicity) ------------------------------
 
+# axis: token order and multiplicity, not set membership
 def test_probe_argv_drift_guard_duplicate_builder_token_fails():
     builder = [
         "cursor-agent", "--model", "composer-2.5", "-p", "--trust",

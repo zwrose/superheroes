@@ -1391,9 +1391,11 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
 def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
     """Best-effort sibling snapshot at write-run open. Never raises."""
     try:
-        deadline = None
+        default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
         if preflight_timeout is not None:
-            deadline = preflight_timeout / 4.0
+            deadline = min(preflight_timeout / 4.0, default_deadline)
+        else:
+            deadline = default_deadline
         return sibling_worktree_probe.snapshot(repo_root, cwd_real, deadline=deadline)
     except Exception:
         return {"status": "indeterminate", "reason": "probe-raised"}
