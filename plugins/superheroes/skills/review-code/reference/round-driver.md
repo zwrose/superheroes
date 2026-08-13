@@ -85,7 +85,8 @@ Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit`
 
 ## Durable-record path
 
-Each pending phase folds by **one** of two paths — they are **mutually exclusive, per phase**:
+Each pending phase folds by **one** of two paths — they are **mutually exclusive, per SESSION**
+(the first path a session uses is the path it keeps for every later phase — not a per-phase choice):
 
 - **Hand path** — `submit` folds **the artifact you compile**; it **never reads** the durable
   store.
@@ -93,8 +94,10 @@ Each pending phase folds by **one** of two paths — they are **mutually exclusi
   store; **`advance` assembles the phase artifact from those records** and folds it. `record-result`
   **never feeds** `submit`.
 
-Mixing them does not merge. A hand `submit` after `record-result --sweep` ignores every store record
-and folds the caller's artifact instead — the field failure mode that motivated this section.
+Before the record-submit interleave fence existed, a hand `submit` after `record-result --sweep`
+ignored every store record and folded the caller's artifact instead — the field failure mode that
+motivated this section. **Now** that combination is refused (`record-submit-interleaved` below); the
+store records remain on disk and the pending phase is unchanged until you `advance`.
 
 **Hand path** (every phase that accepts a compiled artifact):
 
@@ -128,8 +131,8 @@ No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not
 
 | `reason` | condition | recovery |
 | --- | --- | --- |
-| `advance-submit-interleaved` | a hand `submit` after `advance` has already driven this session (**per-session**) | use `advance` for record-capable phases; hand `submit` only on phases you compiled yourself |
-| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced with a real result (`record-result --supersede --expect-sha256 …`) |
+| `advance-submit-interleaved` | a hand `submit` after any `advance` has already driven this session (**session-wide** — `_advanceUsed` is stamped on the first `advance` and refuses every later hand `submit`, even on a different phase) | use `advance` for record-capable phases; hand `submit` only on phases you compiled yourself |
+| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` (**per-attempt**, records-present — narrower than the session-wide stamps above) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced with a real result (`record-result --supersede --expect-sha256 …`) |
 
 **Durable-record artifacts** (round `N`, phase `P`, attempt `K`, storage key `skey`, vendor `vendor`):
 

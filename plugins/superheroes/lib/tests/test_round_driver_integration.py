@@ -371,6 +371,14 @@ def test_sweep_record_path_reaches_populated_terminal_receipt(tmp_path):
             _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
         sweep = round_driver.cmd_record_result(session_dir, sweep=True)
         assert sweep["ok"] is True, (phase, sweep)
+        recorded = sweep.get("recorded") or []
+        assert sorted(recorded) == sorted(round_driver._slot_label(seat, occurrence)
+                                          for seat, occurrence in slots), (phase, sweep, slots)
+        for seat, occurrence in slots:
+            spath = round_records.store_path(
+                session_dir, pend["round"], phase,
+                round_records.storage_key(seat, occurrence), pend["attempt"])
+            assert os.path.exists(spath), (phase, seat, occurrence, spath)
         out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
         return phase, out
 

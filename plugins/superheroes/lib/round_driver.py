@@ -37,6 +37,7 @@ its shape). The confirmation economics (`review_round_policy.confirmation_follow
 not re-implemented.
 """
 import argparse
+import errno
 import hashlib
 import json
 import os
@@ -4489,11 +4490,26 @@ def _slot_label(seat_key, occurrence):
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
 
 
+def _store_file_exists(spath):
+    """True when a store path is present for the record-submit fence — fail-closed on ambiguity.
+
+    axis: EXISTENCE probe only — only a definite ``ENOENT`` / ``ENOTDIR`` counts as absent; a broken
+    symlink, an unstattable path, and every other ``lstat`` outcome count as present so the fence
+    refuses hand submit rather than folding over an unknown store state."""
+    try:
+        os.lstat(spath)
+        return True
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return False
+        return True
+
+
 def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
     """Sorted slot labels whose store file EXISTS at (round, phase, attempt).
 
-    axis: EXISTENCE of a store file per roster slot — not readability; an unreadable record counts
-    as present so the fence fails closed.
+    axis: EXISTENCE of a store file per roster slot — not readability; a broken symlink, an
+    unstattable path, and an unreadable record all count as present so the fence fails closed.
 
     Existence probe only — not a read/parse check. The record-submit interleave fence must treat an
     UNREADABLE store file as PRESENT (the durable-record path already wrote something a hand submit
@@ -4507,7 +4523,7 @@ def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
                 round_records.storage_key(seat_key, occurrence), attempt)
         except ValueError:
             continue
-        if os.path.exists(spath):
+        if _store_file_exists(spath):
             found.append(_slot_label(seat_key, occurrence))
     return sorted(found)
 
@@ -5327,29 +5343,49 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     return response
 
 
+def _read_dispatch_manifest(path):
+    """``read_json`` for the dispatch manifest at ``advance`` — never raises.
+
+    ``round_records.read_json`` maps every ``OSError`` to ``"missing"`` and lets ``UnicodeDecodeError``
+    escape; this wrapper keeps the advance path on the disclosure surface instead."""
+    try:
+        return round_records.read_json(path)
+    except UnicodeDecodeError:
+        return None, "not-utf-8"
+
+
 def _dispatch_manifest_disclosure(mpath, merr):
     """Operator-facing block when the dispatch manifest is absent or unreadable.
 
     axis: which status is reported (absent vs unreadable) and that a path is named at all — not
     whether the manifest's contents are valid, and never a refusal (a manifest-less run is a
-    disclosed degradation by design).
+    disclosed degradation by design). A definite ``ENOENT`` / ``ENOTDIR`` is ``absent``; every other
+    read failure on a path that exists (or cannot be ruled absent) is ``unreadable``.
 
     Manifest-less runs are a disclosed degradation by design — this never refuses `advance`, only
     surfaces the expected path so an operator is not left guessing after a stall."""
+    if merr is None:
+        return None
     abs_path = os.path.abspath(mpath)
-    if merr == "missing":
-        return {"path": abs_path, "status": "absent", "detail": None}
-    if merr is not None:
+    try:
+        os.lstat(abs_path)
         return {"path": abs_path, "status": "unreadable", "detail": merr}
-    return None
+    except OSError as exc:
+        if exc.errno in (errno.ENOENT, errno.ENOTDIR):
+            return {"path": abs_path, "status": "absent", "detail": None}
+        return {"path": abs_path, "status": "unreadable", "detail": merr}
+
+
+def _journal_dispatch_manifest_disclosure(session_dir, rnd, phase, attempt, disc):
+    if disc is not None:
+        _journal_event(session_dir, "advance", "dispatch-manifest-disclosure",
+                       phase=phase, round=rnd, attempt=attempt, **disc)
 
 
 def _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, attempt, disc):
     if disc is not None:
         response = dict(response)
         response["dispatchManifest"] = disc
-        _journal_event(session_dir, "advance", "dispatch-manifest-disclosure",
-                       phase=phase, round=rnd, attempt=attempt, **disc)
     return response
 
 
@@ -5439,8 +5475,9 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     # mapping cannot, and `assemble` refuses one outright: `envelopes-not-a-list`).
     records = [env for _seat, _occurrence, env in slots]
     manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt)
-    manifest, _merr = round_records.read_json(manifest_path)
+    manifest, _merr = _read_dispatch_manifest(manifest_path)
     manifest_disc = _dispatch_manifest_disclosure(manifest_path, _merr)
+    _journal_dispatch_manifest_disclosure(session_dir, rnd, phase, attempt, manifest_disc)
     artifact, why = _adapters().assemble(phase, records, state, config,
                                          dispatch_manifest=manifest if _merr is None else None,
                                          canary=_canary_landings(session_dir, state, rnd, attempt),

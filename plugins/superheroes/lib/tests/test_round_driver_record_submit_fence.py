@@ -150,6 +150,30 @@ def test_hand_submit_non_adapter_phase_no_spurious_roster_journal(tmp_path):
     assert spurious == [], spurious
 
 
+def test_durable_slot_records_broken_symlink_fires_fence(tmp_path):
+    """Existence probe: a broken symlink at the pending attempt counts as present."""
+    session_dir = str(tmp_path / "symlink-probe")
+    os.makedirs(session_dir, exist_ok=True)
+    roster = ["code-reviewer"]
+    rnd, phase, attempt = 1, round_driver.P_PANEL, 0
+    spath = round_records.store_path(session_dir, rnd, phase,
+                                     round_records.storage_key("code-reviewer", 0), attempt)
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    os.symlink(os.path.join(session_dir, "missing-record.json"), spath)
+    found = round_driver._durable_slot_records(session_dir, rnd, phase, attempt, roster)
+    assert found == ["code-reviewer"], found
+
+
+def test_durable_slot_records_absent_store_does_not_fire_fence(tmp_path):
+    """Existence probe: a genuinely absent store file is not reported."""
+    session_dir = str(tmp_path / "absent-probe")
+    os.makedirs(session_dir, exist_ok=True)
+    roster = ["code-reviewer"]
+    rnd, phase, attempt = 1, round_driver.P_PANEL, 0
+    found = round_driver._durable_slot_records(session_dir, rnd, phase, attempt, roster)
+    assert found == [], found
+
+
 def test_durable_slot_records_second_occurrence_only(tmp_path):
     """Repeated roster key: only the occurrence-1 store path is reported."""
     session_dir = str(tmp_path / "probe")
@@ -208,6 +232,126 @@ def test_advance_reports_absent_dispatch_manifest_via_cmd_advance(tmp_path):
     assert out["ok"] is True, out
     disc = out.get("dispatchManifest")
     assert disc == {"path": expected, "status": "absent", "detail": None}, disc
+
+
+def test_advance_reports_unreadable_dispatch_manifest_directory(tmp_path):
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    state = _state(session_dir)
+    pend = state["pending"]
+    slots = _slots_of(round_adapters.roster_for(pend["phase"], state, state["config"])[0])
+    mpath = round_records.dispatch_manifest_path(session_dir, pend["round"], pend["phase"],
+                                                 pend["attempt"])
+    os.makedirs(mpath, exist_ok=True)
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat,
+              _payload_for(session_dir, state, pend, seat, [], head_path), occurrence=occurrence)
+        assert round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)["ok"]
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is True, out
+    disc = out.get("dispatchManifest")
+    assert disc["status"] == "unreadable", disc
+    assert disc["path"] == os.path.abspath(mpath)
+    assert disc["detail"] == "missing"
+
+
+def test_advance_reports_unreadable_dispatch_manifest_invalid_utf8(tmp_path):
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    state = _state(session_dir)
+    pend = state["pending"]
+    slots = _slots_of(round_adapters.roster_for(pend["phase"], state, state["config"])[0])
+    mpath = round_records.dispatch_manifest_path(session_dir, pend["round"], pend["phase"],
+                                                 pend["attempt"])
+    os.makedirs(os.path.dirname(mpath), exist_ok=True)
+    with open(mpath, "wb") as fh:
+        fh.write(b"\xff\xfe")
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat,
+              _payload_for(session_dir, state, pend, seat, [], head_path), occurrence=occurrence)
+        assert round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)["ok"]
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is True, out
+    assert out.get("reason") != "driver-internal-exception", out
+    disc = out.get("dispatchManifest")
+    assert disc["status"] == "unreadable", disc
+    assert disc["detail"] == "not-utf-8"
+
+
+def _drive_one_phase_no_manifest(session_dir, gitdir, head_path, panel_findings):
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state.get("config") or {})
+    assert reason is None, (pend["phase"], reason)
+    slots = _slots_of(roster)
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat,
+              _payload_for(session_dir, state, pend, seat, panel_findings, head_path),
+              occurrence=occurrence)
+        assert round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)["ok"]
+    return round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+
+
+def _count_phases_to_terminal(session_dir, gitdir, head_path, panel_findings):
+    count = 0
+    for _ in range(30):
+        if _state(session_dir).get("terminal"):
+            return count
+        out = _drive_one_phase_no_manifest(session_dir, gitdir, head_path, panel_findings)
+        assert out["ok"] is True, out
+        count += 1
+    raise AssertionError("did not reach terminal in 30 phases")
+
+
+def test_terminal_advance_disclosure_journal_fault_not_plain_ok(tmp_path, monkeypatch):
+    """Disclosure journal append before the terminal receipt gate — a fault must not answer ok."""
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="terminal-fault-count")
+    phases_to_terminal = _count_phases_to_terminal(session_dir, gitdir, head_path, findings)
+
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="terminal-fault")
+    for _ in range(phases_to_terminal - 1):
+        out = _drive_one_phase_no_manifest(session_dir, gitdir, head_path, findings)
+        assert out["ok"] is True, out
+
+    real_append = round_driver._journal_append
+
+    def fail_disclosure_append(sd, entry):
+        if entry.get("outcome") == "dispatch-manifest-disclosure":
+            round_driver._mark_journal_fault(sd, entry, OSError("simulated disclosure journal fault"))
+            return
+        return real_append(sd, entry)
+
+    monkeypatch.setattr(round_driver, "_journal_append", fail_disclosure_append)
+    out = _drive_one_phase_no_manifest(session_dir, gitdir, head_path, findings)
+    assert out.get("ok") is not True, out
+    assert out.get("reason") == "receipt-fault", out
+
+
+def test_advance_audits_without_manifest_discloses_absent(tmp_path):
+    """dispatch-audits with no manifest carries disclosure on the advance response."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="audits-disc")
+    findings = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 3)]
+    _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == round_driver.P_AUDITS
+    targets = state["_auditTargets"]
+    assert len(targets) == 2, targets
+    tid0, tid1 = targets[0]["id"], targets[1]["id"]
+    roster, reason = round_adapters.roster_for(round_driver.P_AUDITS, state, state.get("config") or {})
+    assert reason is None and roster == [tid0, tid1], roster
+    for tid in (tid0, tid1):
+        _land(session_dir, state, pend, tid,
+              {"id": tid, "ruling": "discharged", "auditorVendor": "claude",
+               "reason": "re-read the fixed hunk; the cited defect is gone"})
+        assert round_driver.cmd_record_result(session_dir, tid, occurrence=0)["ok"]
+    expected = os.path.abspath(round_records.dispatch_manifest_path(
+        session_dir, pend["round"], pend["phase"], pend["attempt"]))
+    assert not os.path.exists(expected)
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out.get("dispatchManifest") == {
+        "path": expected, "status": "absent", "detail": None}, out
+    assert out["ok"] is True, out
+    assert out["folded"]["phase"] == round_driver.P_AUDITS
 
 
 def test_advance_reports_unreadable_dispatch_manifest(tmp_path):

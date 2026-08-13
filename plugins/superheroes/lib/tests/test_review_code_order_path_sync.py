@@ -14,10 +14,12 @@ Authoritative homes (code builders, derived at runtime — never retyped as lite
   - round_records.canary_path
   - round_records.store_path
   - round_records.head_diff_store_path
+  - round_adapters.missing_policy (refuse-fold phase recovery row)
 """
 import os
 import re
 
+import round_adapters as RA
 import round_driver as RD
 import round_phases as RP
 import round_records as RR
@@ -227,6 +229,23 @@ def _code_paths(session=_TEST_SESSION, rnd=_TEST_RND, phase=_TEST_PHASE,
     }
 
 
+def _refuse_fold_phases_from_code():
+    """Phases whose ``missing_policy`` is ``refuse-fold`` — derived, never hand-typed."""
+    return sorted(phase for phase in RA._MISSING_POLICY
+                  if RA.missing_policy(phase) == RA.MISSING_REFUSE_FOLD)
+
+
+def _refuse_fold_phases_from_doc(text):
+    idx = text.index("refuse-fold phase (")
+    chunk = text[idx:]
+    end = chunk.index(")")
+    inner = chunk[len("refuse-fold phase ("):end]
+    listed = re.findall(r"`([^`]+)`", inner)
+    if not listed:
+        raise RuntimeError("refuse-fold phase list not parsed from round-driver.md")
+    return sorted(listed)
+
+
 def _round_suffix(path, session, rnd):
     prefix = RR.round_dir(session, rnd)
     assert path.startswith(prefix), "path %r not under round dir %r" % (path, prefix)
@@ -321,3 +340,13 @@ def test_round_driver_durable_record_table_matches_code_builders():
     assert not unmapped, (
         "code durable builder(s) with no round-driver.md durable-record row: %s"
         % sorted(unmapped))
+
+
+def test_round_driver_refuse_fold_recovery_row_matches_missing_policy():
+    """round-driver.md refuse-fold recovery row ↔ round_adapters.missing_policy (both directions)."""
+    doc_phases = _refuse_fold_phases_from_doc(_read(_REF))
+    code_phases = _refuse_fold_phases_from_code()
+    assert doc_phases == code_phases, (
+        "round-driver.md refuse-fold list drifted from round_adapters.missing_policy\n"
+        "  documented: %r\n  code home:   %r" % (doc_phases, code_phases))
+    assert doc_phases, "expected at least one refuse-fold phase"
