@@ -652,8 +652,8 @@ def _scrub_investigated(investigated):
 _REVIEW_NEAR_MISS_ALLOWED_KEYS = frozenset({"investigated"})
 
 
-def _review_object_is_error_control_envelope(obj):
-    """True when a review dict is a crash/error/control envelope, not a clean near-miss."""
+def _review_object_has_error_control_markers(obj):
+    """Shared error/control marker vocabulary for review dicts and stream envelopes."""
     if not isinstance(obj, dict):
         return True
     if "error" in obj or obj.get("is_error"):
@@ -664,15 +664,40 @@ def _review_object_is_error_control_envelope(obj):
     subtype = obj.get("subtype")
     if isinstance(subtype, str) and subtype.lower() in ("error", "failed", "failure"):
         return True
+    return False
+
+
+def _review_object_is_error_control_envelope(obj):
+    """True when a review dict is a crash/error/control envelope, not a clean near-miss."""
+    if _review_object_has_error_control_markers(obj):
+        return True
     if obj.get("type") == "result" and "ok" not in obj and "findings" not in obj:
         return True
     return False
+
+
+def _raw_stream_envelope_has_error_control(stdout):
+    """True when the LAST top-level object is a stream envelope carrying error/control markers.
+
+    Inspected on raw stdout before _unwrap_stream_envelope discards outer metadata (#949)."""
+    obj = _last_json_object(stdout)
+    if not (isinstance(obj, dict) and obj.get("type") == "result"
+            and isinstance(obj.get("result"), str) and "ok" not in obj):
+        return False
+    return _review_object_has_error_control_markers(obj)
 
 
 def _attach_investigated_parse_rejections(result, rejected):
     if rejected:
         result["investigatedRejectedRecords"] = rejected
         result["investigatedRejected"] = [r["reason"] for r in rejected]
+    return result
+
+
+def _attach_findings_parse_rejections(result, rejected):
+    if rejected:
+        result["findingsRejectedRecords"] = rejected
+        result["findingsRejected"] = [r["reason"] for r in rejected]
     return result
 
 
@@ -1165,6 +1190,7 @@ def parse_result(engine, role_kind, stdout):
     Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
     scrubbed HERE (Secret-hygiene). Never raises."""
     try:
+        outer_envelope_error = _raw_stream_envelope_has_error_control(stdout)
         stdout = _unwrap_stream_envelope(stdout)   # #347: see the unwrap's docstring
         obj = _last_json_object(stdout)
         if role_kind == "review":
@@ -1186,14 +1212,13 @@ def parse_result(engine, role_kind, stdout):
                     if arr and not findings_list:
                         return {"ok": False, "reason": "unreadable"}
                     result = {"ok": True, "findings": findings_list, "investigated": []}
-                    if findings_rejected:
-                        result["findingsRejectedRecords"] = findings_rejected
-                    return result
+                    return _attach_findings_parse_rejections(result, findings_rejected)
                 return {"ok": False, "reason": "unreadable"}
             if not isinstance(obj, dict):
                 return {"ok": False, "reason": "unreadable"}
             if "findings" not in obj and "investigated" in obj:
-                if (_review_object_is_error_control_envelope(obj)
+                if (outer_envelope_error
+                        or _review_object_is_error_control_envelope(obj)
                         or set(obj.keys()) != _REVIEW_NEAR_MISS_ALLOWED_KEYS):
                     return {"ok": False, "reason": "unreadable"}
                 investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
@@ -1214,8 +1239,7 @@ def parse_result(engine, role_kind, stdout):
             if "investigated" in obj:
                 investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
             result = {"ok": True, "findings": findings_list, "investigated": investigated}
-            if findings_rejected:
-                result["findingsRejectedRecords"] = findings_rejected
+            result = _attach_findings_parse_rejections(result, findings_rejected)
             return _attach_investigated_parse_rejections(result, inv_rejected)
         if obj is None:
             return {"ok": False, "reason": "unreadable"}

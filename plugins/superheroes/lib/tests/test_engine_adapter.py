@@ -1608,6 +1608,43 @@ def test_parse_result_review_error_object_with_investigated_stays_unreadable(tmp
     assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
 
 
+def test_parse_result_cursor_error_envelope_near_miss_inner_unreadable(tmp_path):
+    """#949 WO-4: outer error metadata must gate near-miss after envelope unwrap."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    real = repo_root / "real.py"
+    real.write_text("x", encoding="utf-8")
+    rel = "real.py"
+    inner = json.dumps({"investigated": [rel]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_cursor_error_markers_only_on_outer_envelope_unreadable(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    real = repo_root / "existing.py"
+    real.write_text("x", encoding="utf-8")
+    rel = "existing.py"
+    inner = json.dumps({"investigated": [rel]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_cursor_clean_envelope_near_miss_still_readable():
+    inner = json.dumps({"investigated": ["src/main.py"]})
+    res = EA.parse_result("cursor", "review", _envelope(inner))
+    assert res == {"ok": True, "findings": [], "investigated": ["src/main.py"]}
+
+
+def test_parse_result_cursor_envelope_real_findings_unchanged():
+    inner = json.dumps({"findings": [{"id": "f1", "severity": "Minor", "title": "t", "body": "b"}]})
+    res = EA.parse_result("cursor", "review", _envelope(inner))
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["id"] == "f1"
+
+
 def test_parse_result_review_investigated_not_a_list_rejected():
     stdout = json.dumps({"findings": [], "investigated": "not-a-list"})
     res = EA.parse_result("codex", "review", stdout)

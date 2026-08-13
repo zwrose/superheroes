@@ -1989,6 +1989,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
         res.get("investigated"), cwd, generated_artifacts=generated)
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
+    findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
+    findings_rejected_reasons = list(res.get("findingsRejected") or [])
     if findings:
         engagement = _engagement_with_read(engagement, findings=findings)
         result = {"ok": True, "findings": findings, "engagement": engagement}
@@ -1998,6 +2000,10 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             result["investigatedRejectedRecords"] = rejected_records
         if rejected_reasons:
             result["investigatedRejected"] = rejected_reasons
+        if findings_rejected_records:
+            result["findingsRejectedRecords"] = findings_rejected_records
+        if findings_rejected_reasons:
+            result["findingsRejected"] = findings_rejected_reasons
         return result
 
     if accepted:
@@ -2007,6 +2013,10 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             result["investigatedRejectedRecords"] = rejected_records
         if rejected_reasons:
             result["investigatedRejected"] = rejected_reasons
+        if findings_rejected_records:
+            result["findingsRejectedRecords"] = findings_rejected_records
+        if findings_rejected_reasons:
+            result["findingsRejected"] = findings_rejected_reasons
         return result
     engagement = _engagement_with_read(engagement, findings=[], investigated=None)
     return {
@@ -2015,6 +2025,8 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         "engagement": engagement,
         "investigatedRejected": rejected_reasons,
         "investigatedRejectedRecords": rejected_records,
+        "findingsRejected": findings_rejected_reasons,
+        "findingsRejectedRecords": findings_rejected_records,
     }
 
 
@@ -2323,6 +2335,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         if grade.get("investigatedRejectedRecords"):
                             result["investigatedRejectedRecords"] = grade[
                                 "investigatedRejectedRecords"]
+                        if grade.get("findingsRejected"):
+                            result["findingsRejected"] = grade["findingsRejected"]
+                        if grade.get("findingsRejectedRecords"):
+                            result["findingsRejectedRecords"] = grade[
+                                "findingsRejectedRecords"]
                         view = opened.get("viewMeta")
                         if view:
                             result = _attach_sanitized_view(result, view)
