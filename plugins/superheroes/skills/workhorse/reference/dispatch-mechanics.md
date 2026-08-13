@@ -324,6 +324,23 @@ Write salvage has two tiers: a structured report is gradeable only after that in
 verification, while a prose-tier block has `requiresManualRead: true` and a scrubbed `excerpt` for a
 human or orchestrator to read. Prose is a pointer, never a gradeable report.
 
+### Sibling worktree observation (`siblingWorktrees`)
+
+On every **terminal** `dispatch-write` fold, the runner attaches a top-level `siblingWorktrees`
+block recording an **unattributed observed delta**: whether any **other** registered worktree in the
+same repository changed while this write run was open. It cannot say who changed a sibling worktree,
+and it is **not** an escape claim. Concurrent authorized write dispatches in different worktrees
+routinely produce deltas here — that is expected, legitimate concurrency, not a signal that
+something went wrong. The block never affects `ok`, `terminal`, or `reason`.
+
+| Case | `siblingWorktrees` |
+|---|---|
+| write run, baseline captured, second snapshot succeeded | `{"status": "observed", "deltas": [...], "truncated": <bool>}` — `deltas` is `[]` when nothing changed |
+| write run, baseline missing (a run opened before this change) | `{"status": "indeterminate", "reason": "no-baseline"}` |
+| write run, either snapshot indeterminate | `{"status": "indeterminate", "reason": "<why>"}` |
+| **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
+| review run | **key absent** |
+
 ## Engine forfeits and order shape
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
