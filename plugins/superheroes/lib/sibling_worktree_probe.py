@@ -187,7 +187,6 @@ def snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=
         if truncated:
             siblings = siblings[:max_worktrees]
         worktrees = {}
-        partial = False
         for block in siblings:
             if _deadline_exhausted(deadline_end):
                 return {
@@ -212,14 +211,11 @@ def snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=
             entry["locked"] = bool(block.get("locked"))
             entry["prunable"] = bool(block.get("prunable"))
             worktrees[entry["path"]] = entry
-        out = {
+        return {
             "status": "ok",
             "truncated": truncated,
             "worktrees": worktrees,
         }
-        if partial:
-            out["partial"] = True
-        return out
     except Exception as exc:
         return {"status": "indeterminate", "reason": str(exc)}
 

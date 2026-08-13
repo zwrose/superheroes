@@ -34,6 +34,7 @@ def test_there_are_skills_to_check():
 
 @pytest.mark.parametrize("path", _PATHS, ids=[skills.skill_key(p) for p in _PATHS])
 def test_frontmatter_round_trips_through_yaml(path):
+    # axis: the validator's own verdict per skill, not a re-derived YAML rule
     key = skills.skill_key(path)
     with open(path, encoding="utf-8") as fh:
         raw = fh.read()

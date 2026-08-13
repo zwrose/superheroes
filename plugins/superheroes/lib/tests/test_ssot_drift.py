@@ -713,7 +713,7 @@ def _omission_floor_marker_forms():
     return (
         ("paren", lambda n: re.compile(r"\(\s*%d\s*\)" % n)),
         ("dot", lambda n: re.compile(r"(?<!\d)%d\." % n)),
-        ("paren_close", lambda n: re.compile(r"(?<!\d)(?<!\()\d+\)" % n)),
+        ("paren_close", lambda n: re.compile(r"(?<!\d)(?<!\()%d\)" % n)),
     )
 
 
@@ -772,7 +772,25 @@ def _omission_floor_item3_block_end(copy_text, marker3_pos):
     return end
 
 
+def test_omission_floor_find_enumeration_all_marker_forms():
+    """Each accepted marker shape must yield three ascending positions after the anchor."""
+    anchor = "omission floor\n"
+    cases = (
+        ("paren", anchor + "(1) first\n(2) second\n(3) third\n"),
+        ("dot", anchor + "1. first\n2. second\n3. third\n"),
+        ("paren_close", anchor + "1) first\n2) second\n3) third\n"),
+    )
+    for expected_form, copy_text in cases:
+        result, err = _omission_floor_find_enumeration(copy_text)
+        assert err is None, copy_text
+        form_name, positions = result
+        assert form_name == expected_form
+        assert positions == sorted(positions)
+        assert len(positions) == 3
+
+
 def _assert_omission_floor_matches_home(copy_text, label, home):
+    # axis: per-row presence of each home-derived floor row inside its own enumeration item
     row_terms, markers = _omission_floor_expectations_from_home(home)
     lower = copy_text.lower()
     missing = []

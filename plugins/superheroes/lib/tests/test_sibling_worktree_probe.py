@@ -91,6 +91,7 @@ def test_snapshot_excludes_symlink_assigned_path(tmp_path):
     assert os.path.realpath(wts[0]) not in snap["worktrees"]
 
 
+# axis: each of the three change signals (head sha, porcelain sha256, reflog count) is compared independently
 def test_compare_head_delta():
     before = {
         "status": "ok",
@@ -240,3 +241,27 @@ def test_worktree_list_failure_indeterminate():
     snap = SWP.snapshot("/repo", "/assigned", run=FakeRunner([_proc(rc=1)]))
     assert snap["status"] == "indeterminate"
     assert snap["reason"] == "worktree-list-failed"
+
+
+def test_capture_sibling_baseline_never_passes_none_deadline(monkeypatch):
+    """_capture_sibling_baseline must always bound snapshot, including when preflight_timeout is None."""
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location(
+        "engine_dispatch",
+        os.path.join(_HERE, "..", "engine_dispatch.py"),
+    )
+    ed = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ed)
+    captured = []
+
+    def recording_snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=None):
+        captured.append(deadline)
+        return {"status": "ok", "truncated": False, "worktrees": {}}
+
+    monkeypatch.setattr(ed.sibling_worktree_probe, "snapshot", recording_snapshot)
+    for preflight_timeout in (None, 0, 1, 120, 1000):
+        captured.clear()
+        ed._capture_sibling_baseline("/repo", "/assigned", preflight_timeout=preflight_timeout)
+        assert len(captured) == 1
+        assert captured[0] is not None
