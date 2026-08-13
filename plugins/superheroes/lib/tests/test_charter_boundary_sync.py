@@ -55,9 +55,12 @@ clauses.
 Copy-holder disposition (§11.2 caveat — adding a copy means extending the table):
 
 - **``rubric/review-discipline.md``** — authoritative home for the cross-lane invariants.
-- **``skills/showrunner/SKILL.md``** — all three invariant rows.
-- **``skills/workhorse/SKILL.md``** — resolve-upward and not-engaged-never-passes only; deliberately
-  excluded from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
+- **``skills/showrunner/SKILL.md``** — resolve-upward, not-engaged-never-passes, waiver-bounds,
+  bounded-acceptance, and third-rework-stop invariant rows.
+- **``skills/workhorse/SKILL.md``** — resolve-upward, not-engaged-never-passes, bounded-acceptance
+  (§ ``## 10. Review before handback``), and third-rework-stop (§
+  ``## 7. Delegate every implementation (lane-scoped — no size exception)``); deliberately excluded
+  from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
 """
 import copy
 import os
@@ -70,6 +73,9 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _SKILLS = os.path.join(_PLUGIN_ROOT, "skills")
 _HOME = "rubric/review-discipline.md"
 _MARKER = "**The boundary (both charters state it):**"
+_PRECEDENCE_MARKER = (
+    "**When charter text and a newer owner ruling disagree in-session,"
+)
 
 _EXPECTED_INVARIANT_NAMES = frozenset({
     "resolve-upward",
@@ -588,12 +594,33 @@ def _boundary_line(skill):
     raise RuntimeError(f"{skill}/SKILL.md: boundary line ({_MARKER!r}) not found")
 
 
+def _precedence_line(skill):
+    path = os.path.join(_SKILLS, skill, "SKILL.md")
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            if _PRECEDENCE_MARKER in line:
+                return line.strip()
+    raise RuntimeError(
+        f"{skill}/SKILL.md: precedence line ({_PRECEDENCE_MARKER!r}) not found"
+    )
+
+
 def test_boundary_line_is_identical_in_both_charters():
     showrunner = _boundary_line("showrunner")
     workhorse = _boundary_line("workhorse")
     assert showrunner == workhorse, (
         "The boundary line differs between the showrunner and workhorse charters — "
         f"re-sync them.\n  showrunner: {showrunner}\n  workhorse:  {workhorse}"
+    )
+
+
+def test_precedence_line_is_identical_in_both_charters():
+    showrunner = _precedence_line("showrunner")
+    workhorse = _precedence_line("workhorse")
+    assert showrunner == workhorse, (
+        "The charter-vs-ruling precedence line differs between the showrunner and "
+        f"workhorse charters — re-sync them.\n  showrunner: {showrunner}\n  "
+        f"workhorse:  {workhorse}"
     )
 
 
@@ -1073,113 +1100,49 @@ def test_negative_empty_section_body_fails_clause_check():
         _check_copy_holder_clauses(table, read_text)
 
 
-def test_negative_roster_bounded_acceptance_clause_deleted():
-    with pytest.raises(RuntimeError, match="shared-clause count drift"):
-        _validate_invariant_table(_table_with_clause_removed("bounded-acceptance"))
-
-
-def test_negative_roster_third_rework_stop_holder_removed():
-    with pytest.raises(RuntimeError, match="copy-holder set drift"):
-        _validate_invariant_table(
-            _table_with_holder_removed("third-rework-stop", "skills/workhorse/SKILL.md")
-        )
-
-
-def test_negative_bounded_acceptance_out_of_section_match():
-    """Regression: table copy must not satisfy doctrine-section bounds."""
-    synthetic_path = "synthetic/workhorse.md"
-    synthetic_text = "\n".join([
-        "## 10. Review before handback",
-        "Review handback without bounded-acceptance clauses here.",
-        "## When you're tempted",
-        (
-            "no new Critical or Important finding in a review round on the final head; "
-            "with Minor residuals disclosed; an unterminating bar can only be abandoned"
-        ),
-    ])
-    texts = {synthetic_path: synthetic_text}
-
-    def read_text(rel):
-        if rel not in texts:
-            raise FileNotFoundError(rel)
-        return texts[rel]
-
-    table = [{
-        "name": "bounded-acceptance",
-        "clauses": [
-            {
-                "text": (
-                    "no new Critical or Important finding in a review round on the final head"
-                ),
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "with Minor residuals disclosed",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-            {
-                "text": "an unterminating bar can only be abandoned",
-                "home_section": "### Bounded acceptance — prose-contract DoDs",
-            },
-        ],
-        "copy_holder_sections": {
-            synthetic_path: "## 10. Review before handback",
-        },
-    }]
-    with pytest.raises(
-        AssertionError,
-        match=r"clause missing from .+ \(section ## 10\. Review before handback\)",
-    ):
-        _check_copy_holder_clauses(table, read_text)
-
-
 def test_negative_third_rework_stop_out_of_section_match():
-    """Regression: tempted-table copy must not satisfy section 7 bounds."""
-    synthetic_path = "synthetic/workhorse.md"
-    synthetic_text = "\n".join([
-        "## 7. Delegate every implementation (lane-scoped — no size exception)",
+    """Regression: tempted-table copy must not satisfy section 7 bounds.
+
+    Mutant axis: real workhorse charter keeps third-rework clauses only in the
+    ``## When you're tempted`` table while §7 body is stripped — the older
+    section-scope synthetic tests do not read the real charter file.
+    """
+    workhorse_rel = "skills/workhorse/SKILL.md"
+    section_heading = (
+        "## 7. Delegate every implementation (lane-scoped — no size exception)"
+    )
+    real_text = _read_plugin(workhorse_rel)
+    lines = real_text.splitlines()
+    start = next(
+        i for i, line in enumerate(lines) if line.strip() == section_heading
+    )
+    start_level = _heading_level(lines[start])
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        level = _heading_level(lines[i])
+        if level is not None and level <= start_level:
+            end = i
+            break
+    original_section = "\n".join(lines[start:end])
+    stripped_section = "\n".join([
+        section_heading,
         "Delegate section without third-rework clauses here.",
-        "## When you're tempted",
-        (
-            "a third rework of the same surface is the tripwire; "
-            "stopping and handing the design signal up satisfies it; "
-            "a formal park binds when the lane has not converged"
-        ),
     ])
-    texts = {synthetic_path: synthetic_text}
+    mutated_text = real_text.replace(original_section, stripped_section, 1)
 
     def read_text(rel):
-        if rel not in texts:
-            raise FileNotFoundError(rel)
-        return texts[rel]
+        if rel == workhorse_rel:
+            return mutated_text
+        return _read_plugin(rel)
 
-    table = [{
-        "name": "third-rework-stop",
-        "clauses": [
-            {
-                "text": "a third rework of the same surface is the tripwire",
-                "home_section": "### The third-rework tripwire",
-            },
-            {
-                "text": "stopping and handing the design signal up satisfies it",
-                "home_section": "### The third-rework tripwire",
-            },
-            {
-                "text": "a formal park binds when the lane has not converged",
-                "home_section": "### The third-rework tripwire",
-            },
-        ],
-        "copy_holder_sections": {
-            synthetic_path: (
-                "## 7. Delegate every implementation (lane-scoped — no size exception)"
-            ),
-        },
-    }]
     with pytest.raises(
         AssertionError,
         match=(
-            r"clause missing from .+ \(section ## 7\. Delegate every implementation "
-            r"\(lane-scoped — no size exception\)\)"
+            r"clause missing from skills/workhorse/SKILL\.md \(section ## 7\. "
+            r"Delegate every implementation \(lane-scoped — no size exception\)\)"
         ),
     ):
-        _check_copy_holder_clauses(table, read_text)
+        third_rework_table = [
+            row for row in _INVARIANT_TABLE if row["name"] == "third-rework-stop"
+        ]
+        _check_copy_holder_clauses(third_rework_table, read_text)

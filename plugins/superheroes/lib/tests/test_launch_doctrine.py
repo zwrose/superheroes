@@ -466,3 +466,69 @@ def test_gated_strings_ruling_is_delivered_with_its_prohibitions():
     )
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py::test_compose_gated_strings_ruling_in_prompt — not here.
+
+
+def test_await_dispatches_ruling_is_delivered_with_its_prohibitions():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "await-dispatches" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "await-dispatches")
+    # Pinned in full, not by substring. Substring checks would still pass if a coordinated edit
+    # dropped the ruling from both markdown sites and RULING_TEXT while leaving invariant phrases
+    # elsewhere — a third, deliberate site.
+    assert text == LD.RULING_TEXT["await-dispatches"]
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py — not here.
+
+
+def test_doctrine_gated_strings_ruling_invariant_missing():
+    text = _mutate_once(
+        _read_doctrine(),
+        "- `gated-strings` — gated command strings reach disk only through file-write tools: "
+        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+        "- `gated-strings` — gated command strings reach disk only through file-write tools: "
+        "a string matching a permission-gated command shape is not embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:gated-strings:never embedded inline in Bash text"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+
+
+def test_reworded_gated_strings_ruling_refuses():
+    text = _mutate_once(
+        _read_doctrine(),
+        "- `gated-strings` — gated command strings reach disk only through file-write tools: "
+        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+        "- `gated-strings` — gated command strings go to disk only through file-write tools: "
+        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == "doctrine-ruling-text-mismatch:gated-strings"
+
+
+def test_gated_strings_ruling_invariants_registered():
+    assert "gated-strings" in LD.RULING_INVARIANTS
+    assert LD.RULING_INVARIANTS["gated-strings"] == (
+        "never embedded inline in Bash text",
+        "a heredoc counts as Bash text",
+        "written with a file-write tool",
+    )
