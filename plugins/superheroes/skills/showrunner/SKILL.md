@@ -411,15 +411,9 @@ above).
    - **Test 1:** would a user notice this without reading the diff?
    - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
      already owns?
-   **Test 1's net (default)** — a change is perceivable when it moves any of:
-   - what it **says** (copy, messages, errors, generated reports);
-   - what the user reads to **operate** it (docs, help text, labels);
-   - what it **asks of them** (prompts, confirmations, how often it interrupts and why);
-   - what it **costs** (latency and spend on paths users actually hit);
-   - what it **leaves behind** (files, data, artifacts in the user's space);
-   - what it **emits on their behalf** (posts, notifications, third-party calls, public records);
-   - **defaults and failure policy** (unconfigured behavior; what happens when something breaks);
-   - **visual and interactive surface** (UI, layout, flow).
+   **Test 1's net (default)** — the enumerable net lives one hop away in
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/perceivability.md`; read it
+   when you make the call.
    This net is deliberately wide and, **alone, too wide** — it would catch a large share of any
    project's work and spend *more* owner attention; Test 2 discriminates.
    **Fail-direction is explicitly not an owner call** — the premortem and security lenses own it;
@@ -506,24 +500,15 @@ above).
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
    checks:**
-<!-- launch-doctrine:preflight-charter:begin -->
-   1. **Account and quota headroom** (`quota`, always) — a mid-batch weekly-limit death killed a launch outright.
-   2. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
-   3. **Base state matches the premise** (`base-state`, always) — merged, green (stale-retarget premise; stacked-base
-      collapses).
-   4. **Surfaces genuinely disjoint**, if launching in parallel (`disjoint-surfaces`, conditional) — claimed disjointness was wrong once.
-   5. **Workspace isolation, one per build** (`workspace-isolation`, always) — the shared-checkout collision.
-   6. **Standing rulings present verbatim**, not reconstructed from memory (`standing-rulings`, conditional) — that collision's direct
-      cause.
-   7. **Owner-capability preconditions cleared, with a stated duration** (`owner-capability`, conditional) (see below).
-   8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
-      grant, or work outside the grant's enumerated scope.
-<!-- launch-doctrine:preflight-charter:end -->
+   The enumerated checks live one hop away in
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/dispatch-preflight.md` — read
+   them at dispatch time. Check 7's "(see below)" points at the owner-involvement taxonomy later in
+   this duty, not at anything in that file.
    **Invoke the launcher — never hand-compose a launch.** Run
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
    headless builder session, so **standing rulings come verbatim from
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
-   from memory is what caused the shared-checkout collision. Supply the **eight checks above as data**;
+   from memory is what caused the shared-checkout collision. Supply the **eight checks as data**;
    the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
    establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
    batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
@@ -611,7 +596,7 @@ above).
    **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
    round-trip that never touches disk — so **780 green config checks were able to coexist undetected
    with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
-   must mean in a wave; it does **not** add a ninth check to the eight-check list above.
+   must mean in a wave; it does **not** add a ninth check to the eight-check list.
 10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
    across multiple accounts, provisioning is yours before any headless builder launches — the builder
    never self-provisions. **The sequence is load-bearing:** backend identity is only observable on

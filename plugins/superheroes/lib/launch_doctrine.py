@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Machine home of the launch doctrine artifact.
 
-Parses ``rubric/launch-doctrine.md`` and the showrunner charter's marked preflight block.
+Parses ``rubric/launch-doctrine.md`` and ``skills/showrunner/reference/dispatch-preflight.md``.
 Every refusal is fail-closed: a caller that cannot parse the doctrine must never proceed as if
 it had. None of these functions raise out of themselves."""
 from __future__ import annotations
@@ -317,7 +317,7 @@ def _extract_charter_block(text: str) -> tuple[str | None, str | None]:
 
 
 def charter_checks(charter_text: object) -> dict:
-    """Parse the charter's marked preflight block. Never raises."""
+    """Parse dispatch-preflight.md's marked block. Never raises."""
     if not isinstance(charter_text, str) or not charter_text:
         return {"ok": False, "reason": "charter-missing-block", "checks": []}
 
