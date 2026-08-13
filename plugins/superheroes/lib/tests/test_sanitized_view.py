@@ -2764,9 +2764,10 @@ def test_diff_timeout(tmp_path, monkeypatch):
     fake_tmp = str(tmp_path / "tmpdir")
     os.makedirs(fake_tmp)
     monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
-    monkeypatch.setattr(sv, "SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS", 0.1)
+    monkeypatch.setattr(sv, "SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS", 30)
 
     real_popen = subprocess.Popen
+    slow_wait_fired = {"value": False}
 
     def wrapping_popen(argv, **kwargs):
         proc = real_popen(argv, **kwargs)
@@ -2778,9 +2779,8 @@ def test_diff_timeout(tmp_path, monkeypatch):
             and "diff" in argv
             and "--name-only" not in argv
         ):
-            real_wait = proc.wait
-
             def slow_wait(timeout=None):
+                slow_wait_fired["value"] = True
                 raise subprocess.TimeoutExpired(argv, timeout or 0.1)
 
             proc.wait = slow_wait
@@ -2795,11 +2795,8 @@ def test_diff_timeout(tmp_path, monkeypatch):
             sv._stage_review_diff(
                 repo_real, head_sha, view_root, base_sha, time.monotonic()
             )
-        # Which deadline mechanism wins is wall-clock dependent; pin one token and the test flakes.
-        assert exc.value.detail in (
-            "sanitized-view-diff-failed",
-            "sanitized-view-export-timeout",
-        )
+        assert exc.value.detail == "sanitized-view-diff-failed"
+        assert slow_wait_fired["value"] is True
     finally:
         if view_root is not None:
             sv.destroy_sanitized_view(view_root)
