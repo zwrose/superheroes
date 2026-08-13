@@ -502,6 +502,12 @@ def prompt_path_ok(path):
     return True, ""
 
 
+def _is_stream_result_envelope(obj):
+    """True when obj is a cursor stream-json RESULT envelope (not a leaf verdict)."""
+    return (isinstance(obj, dict) and obj.get("type") == "result"
+            and isinstance(obj.get("result"), str) and "ok" not in obj)
+
+
 def _unwrap_stream_envelope(stdout):
     """Unwrap a stream-json RESULT ENVELOPE before the role parsers scan for the leaf's
     payload (#347). cursor-agent `--output-format stream-json` (the format the byte-activity
@@ -512,13 +518,12 @@ def _unwrap_stream_envelope(stdout):
     envelope (no `ok` key -> build/fix coerced to a refusal; live: every in-child cursor
     dispatch ever recorded, issue #347). When — and only when — the LAST top-level object is
     such an envelope (`type=="result"`, a string `result`, and NOT itself a leaf verdict: no
-    `ok` key), return the inner text for re-scanning; otherwise return stdout unchanged
+    `ok` key`), return the inner text for re-scanning; otherwise return stdout unchanged
     (codex output and native shapes are byte-identical through here). An error envelope whose
     inner text carries no JSON still ends `unreadable` downstream — the honest fail
     direction."""
     obj = _last_json_object(stdout)
-    if (isinstance(obj, dict) and obj.get("type") == "result"
-            and isinstance(obj.get("result"), str) and "ok" not in obj):
+    if _is_stream_result_envelope(obj):
         return obj["result"]
     return stdout
 
@@ -617,8 +622,7 @@ def _scrub_investigated(investigated):
         rejected.append({"path": _render_rejection_entry(entry), "reason": reason})
 
     if not isinstance(investigated, list):
-        if investigated is not None:
-            _reject(investigated, "not-a-list")
+        _reject(investigated, "not-a-list")
         return [], rejected
     accepted = []
     for entry in investigated:
@@ -667,24 +671,19 @@ def _review_object_has_error_control_markers(obj):
     return False
 
 
-def _review_object_is_error_control_envelope(obj):
-    """True when a review dict is a crash/error/control envelope, not a clean near-miss."""
-    if _review_object_has_error_control_markers(obj):
-        return True
-    if obj.get("type") == "result" and "ok" not in obj and "findings" not in obj:
-        return True
-    return False
-
-
 def _raw_stream_envelope_has_error_control(stdout):
     """True when the LAST top-level object is a stream envelope carrying error/control markers.
 
     Inspected on raw stdout before _unwrap_stream_envelope discards outer metadata (#949)."""
     obj = _last_json_object(stdout)
-    if not (isinstance(obj, dict) and obj.get("type") == "result"
-            and isinstance(obj.get("result"), str) and "ok" not in obj):
+    if not _is_stream_result_envelope(obj):
         return False
     return _review_object_has_error_control_markers(obj)
+
+
+def _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
+    """Single gate for #949: outer error/control envelope + no usable findings → unreadable."""
+    return outer_envelope_error and not findings_list
 
 
 def _attach_investigated_parse_rejections(result, rejected):
@@ -1160,10 +1159,17 @@ def spot_check_investigated(investigated, repo_root, *, generated_artifacts=()):
         if not isinstance(entry, str) or not entry.strip():
             _reject(entry, "not-a-path")
             continue
+        if "\x00" in entry:
+            _reject(entry, "invalid-path")
+            continue
         if os.path.isabs(entry):
             _reject(entry, "absolute")
             continue
-        real = os.path.realpath(os.path.join(repo_root, entry))
+        try:
+            real = os.path.realpath(os.path.join(repo_root, entry))
+        except (OSError, ValueError):
+            _reject(entry, "invalid-path")
+            continue
         if real != root_real and not real.startswith(root_prefix):
             _reject(entry, "escapes-repo")
             continue
@@ -1209,6 +1215,8 @@ def parse_result(engine, role_kind, stdout):
                 arr = _last_json_array(stdout)
                 if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
                     findings_list, findings_rejected = _scrub_findings(arr)
+                    if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
+                        return {"ok": False, "reason": "unreadable"}
                     if arr and not findings_list:
                         return {"ok": False, "reason": "unreadable"}
                     result = {"ok": True, "findings": findings_list, "investigated": []}
@@ -1217,8 +1225,7 @@ def parse_result(engine, role_kind, stdout):
             if not isinstance(obj, dict):
                 return {"ok": False, "reason": "unreadable"}
             if "findings" not in obj and "investigated" in obj:
-                if (outer_envelope_error
-                        or _review_object_is_error_control_envelope(obj)
+                if (_outer_envelope_error_makes_unreadable(outer_envelope_error, [])
                         or set(obj.keys()) != _REVIEW_NEAR_MISS_ALLOWED_KEYS):
                     return {"ok": False, "reason": "unreadable"}
                 investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
@@ -1232,6 +1239,8 @@ def parse_result(engine, role_kind, stdout):
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
             findings_list, findings_rejected = _scrub_findings(findings)
+            if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
+                return {"ok": False, "reason": "unreadable"}
             if findings and not findings_list:
                 return {"ok": False, "reason": "unreadable"}
             investigated = []

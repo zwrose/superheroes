@@ -1620,15 +1620,44 @@ def test_parse_result_cursor_error_envelope_near_miss_inner_unreadable(tmp_path)
     assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
 
 
-def test_parse_result_cursor_error_markers_only_on_outer_envelope_unreadable(tmp_path):
+def test_parse_result_cursor_error_envelope_empty_findings_with_investigated_unreadable(tmp_path):
+    """#949 WO-5: outer error envelope + empty findings must not certify clean."""
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    real = repo_root / "real.py"
+    real.write_text("x", encoding="utf-8")
+    rel = "real.py"
+    inner = json.dumps({"findings": [], "investigated": [rel]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_cursor_error_envelope_real_findings_still_readable():
+    inner = json.dumps({
+        "findings": [{"id": "f1", "severity": "Minor", "title": "t", "body": "b"}],
+        "investigated": ["src/main.py"],
+    })
+    res = EA.parse_result("cursor", "review", _envelope(inner, subtype="error", is_error=True))
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+
+
+def test_parse_result_cursor_error_envelope_non_json_inner_unreadable():
+    stream = _envelope("not json at all", subtype="error", is_error=True)
+    assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_clean_envelope_empty_findings_with_investigated_readable(tmp_path):
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     real = repo_root / "existing.py"
     real.write_text("x", encoding="utf-8")
     rel = "existing.py"
-    inner = json.dumps({"investigated": [rel]})
-    stream = _envelope(inner, subtype="error", is_error=True)
-    assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+    inner = json.dumps({"findings": [], "investigated": [rel]})
+    res = EA.parse_result("cursor", "review", _envelope(inner))
+    assert res["ok"] is True
+    assert res["findings"] == []
+    assert res["investigated"] == [rel]
 
 
 def test_parse_result_cursor_clean_envelope_near_miss_still_readable():
@@ -1668,6 +1697,22 @@ def test_parse_result_review_empty_investigated_near_miss_unreadable():
         {"ok": False, "reason": "unreadable"}
 
 
+def test_parse_result_review_rejected_findings_path_scrubs_secret():
+    secret = "ghp_EXAMPLEfakenotarealtoken000000000"
+    stdout = json.dumps({
+        "findings": [f"leak {secret}", {"id": "f1", "title": "ok"}],
+        "investigated": ["ok.py"],
+    })
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["id"] == "f1"
+    assert res["findingsRejected"] == ["not-a-dict"]
+    blob = json.dumps(res["findingsRejectedRecords"])
+    assert secret not in blob
+    assert "[REDACTED]" in blob
+
+
 def test_parse_result_review_rejected_investigated_path_scrubs_secret():
     secret = "ghp_EXAMPLEfakenotarealtoken000000000"
     stdout = json.dumps({
@@ -1685,14 +1730,21 @@ def test_parse_result_review_rejected_investigated_path_scrubs_secret():
 
 def test_parse_result_review_never_raises_on_fail_closed_edges():
     shapes = [
-        json.dumps({"findings": [], "investigated": None}),
-        json.dumps({"findings": None, "investigated": ["a.py"]}),
-        json.dumps({"findings": 1, "investigated": ["a.py"]}),
-        json.dumps({"investigated": {"path": "a.py"}}),
+        (json.dumps({"findings": [], "investigated": None}),
+         {"ok": True, "findings": [], "investigated": [],
+          "investigatedRejected": ["not-a-list"]}),
+        (json.dumps({"findings": None, "investigated": ["a.py"]}),
+         {"ok": False, "reason": "unreadable"}),
+        (json.dumps({"findings": 1, "investigated": ["a.py"]}),
+         {"ok": False, "reason": "unreadable"}),
+        (json.dumps({"investigated": {"path": "a.py"}}),
+         {"ok": False, "reason": "unreadable"}),
     ]
-    for stdout in shapes:
+    for stdout, expected in shapes:
         res = EA.parse_result("codex", "review", stdout)
-        assert isinstance(res, dict) and "ok" in res
+        assert isinstance(res, dict)
+        for key, val in expected.items():
+            assert res.get(key) == val, (stdout, key, res)
 
 
 def test_parse_result_review_missing_investigated_key_yields_empty_list():
@@ -1788,6 +1840,16 @@ def test_spot_check_investigated_mixed_one_valid_three_rejects(tmp_path):
     assert ok is True
     assert accepted == ["ok.py"]
     assert len(rejected) == 3
+
+
+def test_spot_check_investigated_rejects_embedded_nul(tmp_path):
+    root = tmp_path / "repo"
+    root.mkdir()
+    hostile = "a.py\x00evil"
+    ok, accepted, rejected = EA.spot_check_investigated([hostile], str(root))
+    assert ok is False
+    assert accepted == []
+    assert rejected == [{"path": hostile, "reason": "invalid-path"}]
 
 
 def test_spot_check_investigated_fail_closed_edges_no_raise(tmp_path):

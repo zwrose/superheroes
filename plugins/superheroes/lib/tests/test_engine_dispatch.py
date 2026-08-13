@@ -866,8 +866,12 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     )
     assert res["ok"] is False
     assert res["reason"] == "vacuous"
+    assert res["terminal"] is True
     assert res["attempts"] == 2
     assert res["investigatedRejected"] == ["absolute", "missing"]
+    assert len(res["investigatedRejectedRecords"]) == 2
+    assert any(r["reason"] == "absolute" for r in res["investigatedRejectedRecords"])
+    assert any(r["reason"] == "missing" for r in res["investigatedRejectedRecords"])
 
 
 def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
@@ -885,20 +889,6 @@ def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
     assert res["findingsRejected"] == ["not-a-dict"]
     assert len(res["findingsRejectedRecords"]) == 1
     assert res["findingsRejectedRecords"][0]["reason"] == "not-a-dict"
-
-
-def test_dispatch_mixed_findings_rejected_records_survive_terminal(tmp_path):
-    repo_root = _repo(tmp_path)
-    stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
-    fake = FakeRunner([(stdout, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["terminal"] is True
-    assert res["findingsRejectedRecords"]
-    assert res["findingsRejected"] == ["not-a-dict"]
 
 
 def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_path):

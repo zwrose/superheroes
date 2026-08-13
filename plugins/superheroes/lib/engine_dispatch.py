@@ -1905,6 +1905,20 @@ def _merge_investigated_rejections(parse_res, spot_rejected):
     return records, reasons
 
 
+def _attach_review_rejection_fields(result, rejected_records=(), rejected_reasons=(),
+                                    findings_rejected_records=(), findings_rejected_reasons=()):
+    """Attach parse-boundary rejection diagnostics when present. Never raises."""
+    if rejected_records:
+        result["investigatedRejectedRecords"] = rejected_records
+    if rejected_reasons:
+        result["investigatedRejected"] = rejected_reasons
+    if findings_rejected_records:
+        result["findingsRejectedRecords"] = findings_rejected_records
+    if findings_rejected_reasons:
+        result["findingsRejected"] = findings_rejected_reasons
+    return result
+
+
 def _grade_review_attempt(run_dir_real, state, attempt):
     """Grade a completed review attempt from durable stdout files."""
     opened = state["opened"]
@@ -1996,28 +2010,22 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         result = {"ok": True, "findings": findings, "engagement": engagement}
         if accepted:
             result["investigated"] = accepted
-        if rejected_records:
-            result["investigatedRejectedRecords"] = rejected_records
-        if rejected_reasons:
-            result["investigatedRejected"] = rejected_reasons
-        if findings_rejected_records:
-            result["findingsRejectedRecords"] = findings_rejected_records
-        if findings_rejected_reasons:
-            result["findingsRejected"] = findings_rejected_reasons
-        return result
+        return _attach_review_rejection_fields(
+            result,
+            rejected_records=rejected_records,
+            rejected_reasons=rejected_reasons,
+            findings_rejected_records=findings_rejected_records,
+            findings_rejected_reasons=findings_rejected_reasons,
+        )
 
     if accepted:
         engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
         result = {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
-        if rejected_records:
-            result["investigatedRejectedRecords"] = rejected_records
-        if rejected_reasons:
-            result["investigatedRejected"] = rejected_reasons
-        if findings_rejected_records:
-            result["findingsRejectedRecords"] = findings_rejected_records
-        if findings_rejected_reasons:
-            result["findingsRejected"] = findings_rejected_reasons
-        return result
+        return _attach_review_rejection_fields(
+            result,
+            rejected_records=rejected_records,
+            rejected_reasons=rejected_reasons,
+        )
     engagement = _engagement_with_read(engagement, findings=[], investigated=None)
     return {
         "forfeit": True,
@@ -2025,8 +2033,6 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         "engagement": engagement,
         "investigatedRejected": rejected_reasons,
         "investigatedRejectedRecords": rejected_records,
-        "findingsRejected": findings_rejected_reasons,
-        "findingsRejectedRecords": findings_rejected_records,
     }
 
 
@@ -2330,16 +2336,13 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         )
                         if grade.get("investigated") is not None:
                             result["investigated"] = grade["investigated"]
-                        if grade.get("investigatedRejected"):
-                            result["investigatedRejected"] = grade["investigatedRejected"]
-                        if grade.get("investigatedRejectedRecords"):
-                            result["investigatedRejectedRecords"] = grade[
-                                "investigatedRejectedRecords"]
-                        if grade.get("findingsRejected"):
-                            result["findingsRejected"] = grade["findingsRejected"]
-                        if grade.get("findingsRejectedRecords"):
-                            result["findingsRejectedRecords"] = grade[
-                                "findingsRejectedRecords"]
+                        _attach_review_rejection_fields(
+                            result,
+                            rejected_records=grade.get("investigatedRejectedRecords") or [],
+                            rejected_reasons=grade.get("investigatedRejected") or [],
+                            findings_rejected_records=grade.get("findingsRejectedRecords") or [],
+                            findings_rejected_reasons=grade.get("findingsRejected") or [],
+                        )
                         view = opened.get("viewMeta")
                         if view:
                             result = _attach_sanitized_view(result, view)
