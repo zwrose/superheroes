@@ -3891,6 +3891,38 @@ def test_launch_records_worktree_on_the_reserved_record(tmp_path, monkeypatch):
     assert ll.fold(records)["ok"] is True
 
 
+def test_launch_reserve_refusal_leaves_no_orphan_worktree(tmp_path, monkeypatch):
+    # axis: a reserve refusal after worktree creation removes the checkout
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    before = L._registered_worktree_paths(repo) or set()
+    refusal_reason = "surface-overlap:launch-deadbeef"
+
+    def refuse_reserve(repo_root, record, env=None):
+        return {"ok": False, "reason": refusal_reason}
+
+    monkeypatch.setattr(L.ll, "reserve", refuse_reserve)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == refusal_reason
+    assert "launchId" in result
+    assert "orphanedWorktree" not in result
+    worktree_path = L.build_worktree_path(repo, 656, result["launchId"])
+    after = L._registered_worktree_paths(repo) or set()
+    assert after == before
+    assert worktree_path not in after
+    assert not os.path.exists(worktree_path)
+
+
 def test_launch_refuses_a_worktree_path_collision_and_never_reuses_it(tmp_path, monkeypatch):
     # axis: collision refuses loudly; the occupied checkout is neither reused nor spawned into
     repo = _init_repo(tmp_path / "repo")

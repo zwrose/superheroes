@@ -1181,7 +1181,14 @@ def launch_build(
         reserved["boundary"] = boundary
     reserve_result = ll.reserve(repo_root, reserved, env=env)
     if not reserve_result["ok"]:
-        return _fail(reserve_result["reason"], launchId=launch_id)
+        extra = {}
+        proc = _git_scrubbed(
+            repo_root, "worktree", "remove", worktree_path,
+            env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+        )
+        if proc is None or proc.returncode != 0:
+            extra["orphanedWorktree"] = worktree_path
+        return _fail(reserve_result["reason"], launchId=launch_id, **extra)
 
     ledger_recheck = _ledger_live_state(repo_root, env=env)
     slot_refusal = _slot_reservation_gate(
