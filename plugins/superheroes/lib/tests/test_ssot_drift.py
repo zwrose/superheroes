@@ -708,14 +708,95 @@ def _owner_half_register_from_home():
     return [i.strip().rstrip(".") for i in items]
 
 
+def _omission_floor_marker_forms():
+    """Three accepted enumeration marker shapes; all three rows must use the same one."""
+    return (
+        ("paren", lambda n: re.compile(r"\(\s*%d\s*\)" % n)),
+        ("dot", lambda n: re.compile(r"(?<!\d)%d\." % n)),
+        ("paren_close", lambda n: re.compile(r"(?<!\d)(?<!\()\d+\)" % n)),
+    )
+
+
+def _omission_floor_find_enumeration(copy_text):
+    """After the omission-floor anchor, locate an ordered (1)(2)(3) triple of one marker form."""
+    anchor_m = re.search(r"omission floor", copy_text, re.IGNORECASE)
+    if not anchor_m:
+        return None, "copy no longer names the omission floor"
+    start = anchor_m.end()
+    for form_name, maker in _omission_floor_marker_forms():
+        positions = []
+        pos = start
+        for n in range(1, 4):
+            m = maker(n).search(copy_text, pos)
+            if not m:
+                break
+            positions.append(m.start())
+            pos = m.end()
+        if len(positions) == 3:
+            return (form_name, positions), None
+    return None, (
+        "copy must restate the floor as an enumerated triple of three items "
+        "(markers (1)/(2)/(3), 1./2./3., or 1)/2)/3) in order after the omission-floor "
+        "anchor — this is what makes per-row drift detectable"
+    )
+
+
+def _omission_floor_item3_block_end(copy_text, marker3_pos):
+    """End of marker-3's containing Markdown block — not the whole section."""
+    tail = copy_text[marker3_pos:]
+    end = len(copy_text)
+    blank = re.search(r"\n\n", tail)
+    if blank:
+        end = min(end, marker3_pos + blank.start())
+    line_start = copy_text.rfind("\n", 0, marker3_pos) + 1
+    line_prefix = copy_text[line_start:marker3_pos]
+    indent = len(line_prefix) - len(line_prefix.lstrip())
+    for m in re.finditer(r"\n", tail):
+        next_line_start = marker3_pos + m.start() + 1
+        if next_line_start >= len(copy_text):
+            break
+        rest = copy_text[next_line_start:]
+        nl = rest.find("\n")
+        line_content = rest[:nl] if nl != -1 else rest
+        if not line_content.strip():
+            continue
+        line_indent = len(line_content) - len(line_content.lstrip())
+        if line_indent <= indent:
+            stripped = line_content.lstrip()
+            if stripped.startswith("-") or stripped.startswith("*"):
+                end = min(end, next_line_start)
+                break
+            if re.match(r"\d+[.)]", stripped):
+                end = min(end, next_line_start)
+                break
+    return end
+
+
 def _assert_omission_floor_matches_home(copy_text, label, home):
     row_terms, markers = _omission_floor_expectations_from_home(home)
     lower = copy_text.lower()
     missing = []
-    for i, terms in enumerate(row_terms, 1):
-        for term in terms:
-            if term.lower() not in lower:
-                missing.append("row%d term %r" % (i, term))
+    enum_result, enum_err = _omission_floor_find_enumeration(copy_text)
+    if enum_result is None:
+        missing.append(enum_err)
+    else:
+        _, positions = enum_result
+        spans = [
+            (positions[0], positions[1]),
+            (positions[1], positions[2]),
+            (
+                positions[2],
+                _omission_floor_item3_block_end(copy_text, positions[2]),
+            ),
+        ]
+        for i, terms in enumerate(row_terms, 1):
+            item_text = copy_text[spans[i - 1][0]:spans[i - 1][1]]
+            item_lower = item_text.lower()
+            for term in terms:
+                if term.lower() not in item_lower:
+                    missing.append(
+                        "row%d term %r missing from item %d span" % (i, term, i)
+                    )
     for marker in markers:
         if marker not in copy_text:
             missing.append("marker %r" % marker)
