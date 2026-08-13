@@ -96,6 +96,20 @@ pinned to the harness versions they were observed on.
 Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
 The slice you choose depends on whether the run is a **launch** or a **continuation**:
 
+**Run-dir caller traps** — read these before you compose a dispatch:
+
+- **Trap 1 — a symlinked `--run-dir` is refused.** The refusal token is `run-dir-is-symlink`. This
+  bites constantly on macOS because `mktemp -d /tmp/...` produces exactly that (`/tmp` is a symlink to
+  `/private/tmp`). Field evidence: three codex review seats on one PR all first returned
+  `unrunnable` / `run-dir-is-symlink` with `attempts: 0` before being re-dispatched against the
+  **resolved** path. Resolve the path (or create the run directory under `/private/tmp` directly)
+  before dispatching.
+- **Trap 2 — `attempts: 0` means a caller error, not an engine forfeit.** An `unrunnable` result
+  carrying `attempts: 0` means **nothing was ever spawned** — the runner refused the call. **Read the
+  reason before blaming the engine.** This matters because the reflex on a failed dispatch is to
+  escalate or re-dispatch against a different engine, and neither fixes a caller error. (A missing
+  run-dir leaf is handled separately and is not one of these two traps.)
+
 - **LAUNCH** — the **first** call on a fresh `--run-dir`. Use a **short** positive slice for
   **`dispatch-review`** and for **`dispatch-write`** on repositories whose git preflight is fast.
   On **`dispatch-write`**, `--max-wait` is also the **git-preflight timeout** (`preflight_timeout`
@@ -257,6 +271,12 @@ premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)*
 nowhere.
 
 ### Write-report contract
+
+`~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
+invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
+in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
+that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
+may be another session's settings.
 
 On every `dispatch-write` call, the runner **appends** a write-report contract to the caller's
 prompt — the caller does not author it and cannot opt out. It is **additional to** the prose receipts
