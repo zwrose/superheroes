@@ -733,6 +733,7 @@ def _release_worktree_lease(state):
 def _acquire_worktree_lease(cwd_real, run_dir_real):
     lease_path = _worktree_lease_path(cwd_real)
     reclaimed = False
+    reclaim_reason = None
     if _lease_blocks_acquisition(lease_path):
         return False, "worktree-lease-held", None, lease_path
     if os.path.exists(lease_path) and file_lock.is_stale(lease_path):
@@ -740,8 +741,7 @@ def _acquire_worktree_lease(cwd_real, run_dir_real):
         if _worktree_lease_holder_live(holder):
             return False, "worktree-lease-held", None, lease_path
     try:
-        if file_lock.acquire(lease_path):
-            reclaimed = True
+        reclaimed, reclaim_reason = file_lock.acquire_with_reason(lease_path)
     except file_lock.LockHeld:
         return False, "worktree-lease-held", None, lease_path
     token = secrets.token_hex(16)
@@ -755,7 +755,9 @@ def _acquire_worktree_lease(cwd_real, run_dir_real):
         return False, "lease-record-failed", None, lease_path
     if reclaimed:
         _journal_append(run_dir_real, {
-            "kind": "lease-reclaimed", "reason": "malformed-holder", "at": time.time(),
+            "kind": "lease-reclaimed",
+            "reason": reclaim_reason or "unknown",
+            "at": time.time(),
         })
     if not _journal_append(run_dir_real, {
         "kind": "lease-acquired", "cwd": cwd_real, "leaseToken": token, "at": time.time(),

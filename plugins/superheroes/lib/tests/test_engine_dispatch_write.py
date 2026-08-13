@@ -3,6 +3,7 @@ import hashlib
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import time
@@ -469,7 +470,50 @@ def test_malformed_lease_reclaim(tmp_path):
     res = _dispatch_write(tmp_path, fake, cwd=wt)
     assert res["ok"] is True
     records, _ = ED._journal_read(str(tmp_path / "run"))
-    assert any(r.get("kind") == "lease-reclaimed" for r in records)
+    reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
+    assert len(reclaimed) == 1
+    assert reclaimed[0].get("reason") == "malformed-holder"
+
+
+def test_boot_id_mismatch_lease_reclaim_journal_reason(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree(tmp_path)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    monkeypatch.setattr(_file_lock.hostinfo, "boot_id", lambda: "boot-A")
+    with open(lease_path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "pid": os.getpid(),
+            "host": socket.gethostname(),
+            "acquiredAt": "1970-01-01T00:00:00Z",
+            "bootId": "boot-OLD",
+        }, fh)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
+    assert len(reclaimed) == 1
+    assert reclaimed[0].get("reason") == "boot-id-mismatch"
+
+
+def test_expired_dead_holder_lease_reclaim_journal_reason(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    with open(lease_path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "pid": 99999999,
+            "host": socket.gethostname(),
+            "acquiredAt": "1970-01-01T00:00:00Z",
+            "bootId": None,
+        }, fh)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
+    assert len(reclaimed) == 1
+    assert reclaimed[0].get("reason") == "expired-dead-holder"
 
 
 def test_worktree_dirtied_refuses_retry(tmp_path):
