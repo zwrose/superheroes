@@ -82,12 +82,15 @@ _GIT_ROUTING_VARS = (
     "GIT_REPLACE_REF_BASE",
 )
 
-# Reader-wide pin on every source-repository command that peels a commit (head
-# export, head census, review-diff census, diff-base verify, patch, merge-base).
-# A commit-graph file lives in the object directory we alternate to; the
-# guarantee is conditional on git honoring this control.
+# Reader-wide security pin carried by every source-repository command that peels
+# a commit (head export, head census, review-diff census, diff-base verify,
+# patch, merge-base). A commit-graph file lives in the object directory we
+# alternate to; the guarantee is conditional on git honoring this control.
 _COMMIT_GRAPH_OFF = ("-c", "core.commitGraph=false")
 
+# Patch-presentation policy for ``git diff`` only: the commit-graph pin plus
+# quotePath and diff formatting overrides. Do not borrow this bundle for
+# non-patch commands (e.g. diff-base ``rev-parse`` peeling).
 _DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
     "-c",
     "core.quotePath=false",
@@ -452,13 +455,14 @@ def _expected_git_type_for_mode(mode):
     return None
 
 
-def _git_ls_tree_census(repo_real, head_sha):
+def _git_ls_tree_export(repo_real, head_sha):
+    """Tree enumerator for export materialization (path -> mode, type, oid)."""
     # ls-tree uses capture_output=True, so an absurdly large tree may allocate in
     # full before the post-exit byte-limit check runs; bounding that would need
     # streaming parse and is accepted as out of scope for now.
     try:
         proc = _git_run(
-            ["git", "-C", repo_real, *_COMMIT_GRAPH_OFF, "ls-tree", "-r", "-z", head_sha],
+            ["git", "-C", repo_real, *_CENSUS_CONFIG_OVERRIDES, "ls-tree", "-r", "-z", head_sha],
             capture_output=True,
         )
     except OSError:
@@ -471,7 +475,7 @@ def _git_ls_tree_census(repo_real, head_sha):
 
 
 def _git_tree_entries(repo_real, sha, started):
-    """Authoritative tree enumerator for review-diff census (path -> mode, type, oid)."""
+    """Tree enumerator for review-diff census (path -> mode, type, oid)."""
     _check_export_deadline(started)
     timeout = _remaining_export_timeout(started)
     try:
@@ -1021,7 +1025,7 @@ def _materialize_from_tree(repo_real, head_sha, view_root, started):
     ``git cat-file`` returns raw blob bytes, so export-ignore and export-subst from
     .gitattributes cannot apply.
     """
-    census = _git_ls_tree_census(repo_real, head_sha)
+    census = _git_ls_tree_export(repo_real, head_sha)
     gitlink_oids = [oid for mode, _obj_type, oid, _path in census if mode == "160000"]
     gitlink_types = _resolve_gitlink_object_types(repo_real, gitlink_oids, started)
     stripped_set = set()
@@ -1801,7 +1805,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
                 "git",
                 "-C",
                 repo_real,
-                *_DIFF_CONFIG_OVERRIDES,
+                *_COMMIT_GRAPH_OFF,
                 "rev-parse",
                 "--verify",
                 "--end-of-options",
