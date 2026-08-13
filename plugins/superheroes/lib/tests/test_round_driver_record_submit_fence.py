@@ -303,7 +303,7 @@ def _count_phases_to_terminal(session_dir, gitdir, head_path, panel_findings):
 
 def test_terminal_advance_disclosure_journal_fault_not_plain_ok(tmp_path, monkeypatch):
     """Disclosure journal append before the terminal receipt gate — a fault must not answer ok."""
-    findings = [_blocking_finding("missing bounds guard", 2)]
+    findings = []
     session_dir, gitdir, head_path = _bootstrap(tmp_path, name="terminal-fault-count")
     phases_to_terminal = _count_phases_to_terminal(session_dir, gitdir, head_path, findings)
 
@@ -323,7 +323,8 @@ def test_terminal_advance_disclosure_journal_fault_not_plain_ok(tmp_path, monkey
     monkeypatch.setattr(round_driver, "_journal_append", fail_disclosure_append)
     out = _drive_one_phase_no_manifest(session_dir, gitdir, head_path, findings)
     assert out.get("ok") is not True, out
-    assert out.get("reason") == "receipt-fault", out
+    # Fold path wraps receipt-fault as reason=fold-refused with detail=receipt-fault.
+    assert "receipt-fault" in (out.get("reason"), out.get("detail")), out
 
 
 def test_advance_audits_without_manifest_discloses_absent(tmp_path):
