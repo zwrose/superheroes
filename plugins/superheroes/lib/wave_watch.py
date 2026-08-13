@@ -1,7 +1,18 @@
 #!/usr/bin/env python3
 """Ledger-driven single-shot wave watcher (#982).
 
-Watch one launch batch until the first qualifying event. stdlib only."""
+Watch one launch batch until the first qualifying event. stdlib only.
+
+Contract:
+- Refusals (ok=False): batch-invalid, interval-invalid, max-seconds-invalid,
+  repo-root-invalid, store-unresolvable, internal-error.
+- Events (ok=True): lane-terminal, lane-blocked, builder-exited, pr-set-changed,
+  timer.
+- Degradations (non-fatal): ledger-unreadable, heartbeat-unreadable,
+  pid-probe-uncertain, pr-signal-unavailable.
+- Precedence: lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >
+  pr-set-changed (E4) > timer (E5).
+"""
 import argparse
 import json
 import os
@@ -93,8 +104,10 @@ def _derive_live_lanes(repo_root, batch_id, env, degraded):
     }
 
 
-def _evaluate_lane_terminal(repo_root, live_lanes, env, degraded):
+def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
+    """One heartbeat read per lane; derive E1 terminal and E2 blocked lists."""
     terminal_launches = []
+    blocked_launches = []
     for lid in sorted(live_lanes):
         hb_result = hb.read_heartbeat(repo_root, lid, env=env)
         hb_class = hb_result.get("class")
@@ -107,28 +120,12 @@ def _evaluate_lane_terminal(repo_root, live_lanes, env, degraded):
                 "launchId": lid,
                 "state": hb_result.get("state"),
             })
-    if not terminal_launches:
-        return None
-    return terminal_launches
-
-
-def _evaluate_lane_blocked(repo_root, live_lanes, env, degraded):
-    blocked_launches = []
-    for lid in sorted(live_lanes):
-        hb_result = hb.read_heartbeat(repo_root, lid, env=env)
-        hb_class = hb_result.get("class")
-        hb_reason = hb_result.get("reason")
-        if hb_class == "unknown" and hb_reason != "heartbeat-missing":
-            degraded.add("heartbeat-unreadable")
-            continue
-        if hb_result.get("state") == "blocked":
+        elif hb_result.get("state") == "blocked":
             blocked_launches.append({
                 "launchId": lid,
                 "state": "blocked",
             })
-    if not blocked_launches:
-        return None
-    return blocked_launches
+    return terminal_launches, blocked_launches
 
 
 def _evaluate_builder_exited(live_lanes, degraded):
@@ -258,10 +255,10 @@ def run(
         while True:
             live_lanes = _derive_live_lanes(repo_root, batch_id, env, degraded)
 
-            terminal_launches = _evaluate_lane_terminal(
+            terminal_launches, blocked_launches = _evaluate_lane_heartbeats(
                 repo_root, live_lanes, env, degraded,
             )
-            if terminal_launches is not None:
+            if terminal_launches:
                 return _event_result(
                     "lane-terminal",
                     batch_id,
@@ -270,10 +267,7 @@ def run(
                     launches=terminal_launches,
                 )
 
-            blocked_launches = _evaluate_lane_blocked(
-                repo_root, live_lanes, env, degraded,
-            )
-            if blocked_launches is not None:
+            if blocked_launches:
                 return _event_result(
                     "lane-blocked",
                     batch_id,

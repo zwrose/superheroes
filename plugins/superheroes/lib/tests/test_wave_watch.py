@@ -223,6 +223,24 @@ def test_refusal_r5_store_unresolvable(tmp_path):
     assert result["batchId"] == "batch-982"
 
 
+def test_refusal_internal_error_on_read_exception(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+
+    def raiser(repo_root, env=None):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(ww.ll, "read", raiser)
+    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1)
+    assert result["ok"] is False
+    assert result["reason"] == "internal-error"
+    exit_code = ww.main([
+        "wave_watch.py", "run", "--repo-root", repo, "--batch", "batch-982",
+        "--max-seconds", "1", "--interval-seconds", "1",
+    ])
+    assert exit_code == 1
+
+
 # --- events E1–E5 -------------------------------------------------------------
 
 
@@ -264,11 +282,6 @@ def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     calls = []
 
-    def gh_run(argv, **kwargs):
-        calls.append({"argv": list(argv), "cwd": kwargs.get("cwd")})
-        stdout = json.dumps([{"number": 1}, {"number": 3}])
-        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
-
     pr_sets = [{1, 2}, {1, 3}]
     idx = [0]
 
@@ -303,6 +316,105 @@ def test_event_e5_timer(tmp_path, monkeypatch):
     assert result["event"] == "timer"
     assert result["batchId"] == "batch-982"
     assert result["degraded"] == []
+
+
+# --- fail-closed degradation edges --------------------------------------------
+
+
+def test_corrupt_ledger_interior_corrupt_emits_timer_degraded(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-a", pid=999999999))
+    assert ll.read(repo)["state"] == "ok"
+    ledger_file = ll.ledger_path(repo)["path"]
+    with open(ledger_file, "ab") as fh:
+        fh.write(b"not-valid-json\n")
+    assert ll.read(repo)["state"] == "interiorCorrupt"
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert "ledger-unreadable" in result["degraded"]
+
+
+def test_torn_tail_ledger_still_detects_builder_exited(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    dead_pid = 999999999
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-a", pid=dead_pid))
+    ledger_file = ll.ledger_path(repo)["path"]
+    with open(ledger_file, "ab") as fh:
+        fh.write(b'{"event":"started"')
+    assert ll.read(repo)["state"] == "tornTail"
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "builder-exited"
+    assert result["pids"] == [dead_pid]
+    assert "ledger-unreadable" not in result["degraded"]
+
+
+def test_corrupt_heartbeat_emits_timer_degraded(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    launch_id = "lane-a"
+    _setup_live_lane(
+        repo, tmp_path, monkeypatch, launch_id=launch_id, pid=os.getpid(),
+        stamp_state="working",
+    )
+    hb_path = hb.heartbeat_path(repo, launch_id)["path"]
+    with open(hb_path, "wb") as fh:
+        fh.write(b"not json")
+    hb_result = hb.read_heartbeat(repo, launch_id)
+    assert hb_result["class"] == "unknown"
+    assert hb_result["reason"] != "heartbeat-missing"
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert "heartbeat-unreadable" in result["degraded"]
+
+
+def test_pid_probe_uncertain_emits_timer_not_builder_exited(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(repo, tmp_path, monkeypatch, pid=os.getpid())
+
+    def raiser(pid, sig):
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(ww.os, "kill", raiser)
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert "pid-probe-uncertain" in result["degraded"]
+    assert result["event"] != "builder-exited"
+
+
+def test_pid_is_live_all_branches(monkeypatch):
+    assert ww._pid_is_live(os.getpid()) is True
+    assert ww._pid_is_live(999999999) is False
+    assert ww._pid_is_live(0) is None
+    assert ww._pid_is_live(-1) is None
+    assert ww._pid_is_live(None) is None
+    assert ww._pid_is_live(True) is None
+
+    def permission_error(pid, sig):
+        raise PermissionError()
+
+    monkeypatch.setattr(ww.os, "kill", permission_error)
+    assert ww._pid_is_live(999999999) is True
+
+    def os_error(pid, sig):
+        raise OSError()
+
+    monkeypatch.setattr(ww.os, "kill", os_error)
+    assert ww._pid_is_live(12345) is None
 
 
 # --- acceptance paths ---------------------------------------------------------
@@ -371,7 +483,7 @@ def test_precedence_terminal_beats_builder_exited(tmp_path, monkeypatch):
 # --- lane-blocked vs working --------------------------------------------------
 
 
-def test_lane_blocked_fires_e2_working_fires_nothing(tmp_path, monkeypatch):
+def test_working_lane_fires_nothing(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=os.getpid(), stamp_state="working")
     result = ww.run(
