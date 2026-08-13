@@ -3909,7 +3909,7 @@ def test_write_terminal_refusal_fold_carries_sibling_worktrees(tmp_path):
     )
     assert res["reason"] == "plan_wrong"
     assert "siblingWorktrees" in res
-    assert res["siblingWorktrees"]["status"] in ("observed", "indeterminate")
+    assert res["siblingWorktrees"]["status"] == "observed"
 
 
 def test_write_preflight_terminal_omits_sibling_worktrees(tmp_path):
@@ -3961,8 +3961,11 @@ def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkey
     )
     assert res_observed["siblingWorktrees"]["status"] == "observed"
     indeterminate = {"status": "indeterminate", "reason": "probe-boom"}
-    monkeypatch.setattr(ED, "_capture_sibling_baseline", lambda *a, **k: indeterminate)
-    monkeypatch.setattr(ED, "_fold_sibling_worktrees", lambda state: indeterminate)
+
+    def _snap_indeterminate(*a, **k):
+        return indeterminate
+
+    monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_indeterminate)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
         "codex", model="sonnet", effort="high",
@@ -3986,8 +3989,11 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
         run_dir=str(tmp_path / "run-probe-timeout-ok"), order_id="sib-8", run_engine=fake_ok,
     )
     timeout_snap = {"status": "indeterminate", "reason": "deadline-exhausted"}
-    monkeypatch.setattr(ED, "_capture_sibling_baseline", lambda *a, **k: timeout_snap)
-    monkeypatch.setattr(ED, "_fold_sibling_worktrees", lambda state: timeout_snap)
+
+    def _snap_timeout(*a, **k):
+        return timeout_snap
+
+    monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_timeout)
     fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
     res_indeterminate = ED.dispatch_write(
         "codex", model="sonnet", effort="high",
@@ -3995,6 +4001,19 @@ def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkey
         run_dir=str(tmp_path / "run-probe-timeout"), order_id="sib-9", run_engine=fake_fail,
     )
     assert _core(res_observed) == _core(res_indeterminate)
+
+
+def test_write_fold_malformed_sibling_baseline_never_raises(tmp_path):
+    run_dir, _repo = _open_write_run_manual(tmp_path, _linked_worktree(tmp_path))
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["siblingBaseline"] = "not-a-dict"
+    state = ED._journal_state(records)
+    result = ED._fold_run(run_dir, state, {"ok": True, "terminal": True, "attempts": 1})
+    assert result["siblingWorktrees"] == {
+        "status": "indeterminate", "reason": "baseline-invalid",
+    }
 
 
 def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):

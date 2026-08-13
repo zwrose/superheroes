@@ -16,6 +16,9 @@ import time
 
 MAX_SIBLING_WORKTREES = 16
 DEFAULT_DEADLINE_SECONDS = 30.0
+MIN_DEADLINE_SECONDS = 10.0
+
+_SIGNALS = ("headSha", "porcelainSha256", "reflogCount")
 
 
 def _git_env(base=None):
@@ -90,15 +93,18 @@ def _reflog_count(cwd, *, run, deadline_end, env):
         cwd, ("rev-list", "--walk-reflogs", "HEAD", "--count"),
         run=run, deadline_end=deadline_end, env=env,
     )
-    if proc is None or proc.returncode != 0:
-        return None
+    if proc is None:
+        return None, err or "reflog-unmeasured"
+    if proc.returncode != 0:
+        detail = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        return None, detail or "reflog-failed"
     text = (proc.stdout or "").strip()
     if not text:
-        return None
+        return None, "reflog-empty"
     try:
-        return int(text)
+        return int(text), None
     except ValueError:
-        return None
+        return None, "reflog-unparseable"
 
 
 def _porcelain_sha256(cwd, *, run, deadline_end, env):
@@ -106,8 +112,11 @@ def _porcelain_sha256(cwd, *, run, deadline_end, env):
         cwd, ("status", "--porcelain=v1"),
         run=run, deadline_end=deadline_end, env=env,
     )
-    if proc is None or proc.returncode != 0:
-        return None, err or "status-failed"
+    if proc is None:
+        return None, err or "status-unmeasured"
+    if proc.returncode != 0:
+        detail = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        return None, detail or "status-failed"
     porcelain = proc.stdout or ""
     return hashlib.sha256(porcelain.encode("utf-8")).hexdigest(), None
 
@@ -117,39 +126,62 @@ def _head_sha(cwd, *, run, deadline_end, env):
         cwd, ("rev-parse", "HEAD"),
         run=run, deadline_end=deadline_end, env=env,
     )
-    if proc is None or proc.returncode != 0:
-        return None, err or "head-failed"
+    if proc is None:
+        return None, err or "head-unmeasured"
+    if proc.returncode != 0:
+        detail = ((proc.stdout or "") + (proc.stderr or "")).strip()
+        return None, detail or "head-failed"
     return (proc.stdout or "").strip(), None
+
+
+def _unreadable_entry(real_path, reason):
+    return {
+        "path": real_path,
+        "readable": False,
+        "reason": reason,
+        "locked": False,
+        "prunable": False,
+        "disappeared": False,
+        "headSha": None,
+        "headMeasured": False,
+        "porcelainSha256": None,
+        "porcelainMeasured": False,
+        "reflogCount": None,
+        "reflogMeasured": False,
+    }
 
 
 def _probe_worktree(path, *, run, deadline_end, env):
     real_path = os.path.realpath(path)
-    entry = {
-        "path": real_path,
-        "locked": False,
-        "prunable": False,
-        "disappeared": False,
-    }
     if not os.path.exists(path):
+        entry = _unreadable_entry(real_path, "path-missing")
         entry["disappeared"] = True
-        entry["headSha"] = None
-        entry["porcelainSha256"] = None
-        entry["reflogCount"] = None
         return entry, None
     head, head_err = _head_sha(real_path, run=run, deadline_end=deadline_end, env=env)
     if head_err:
-        return None, head_err
+        return _unreadable_entry(real_path, head_err), None
     porcelain, porcelain_err = _porcelain_sha256(
         real_path, run=run, deadline_end=deadline_end, env=env,
     )
     if porcelain_err:
-        return None, porcelain_err
-    entry["headSha"] = head
-    entry["porcelainSha256"] = porcelain
-    entry["reflogCount"] = _reflog_count(
+        return _unreadable_entry(real_path, porcelain_err), None
+    reflog_count, reflog_err = _reflog_count(
         real_path, run=run, deadline_end=deadline_end, env=env,
     )
-    return entry, None
+    return {
+        "path": real_path,
+        "readable": True,
+        "locked": False,
+        "prunable": False,
+        "disappeared": False,
+        "headSha": head,
+        "headMeasured": True,
+        "porcelainSha256": porcelain,
+        "porcelainMeasured": True,
+        "reflogCount": reflog_count,
+        "reflogMeasured": reflog_err is None,
+        **({"reflogUnmeasuredReason": reflog_err} if reflog_err else {}),
+    }, None
 
 
 def snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=None):
@@ -171,8 +203,6 @@ def snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=
         )
         if proc is None or proc.returncode != 0:
             reason = err or "worktree-list-failed"
-            if proc is not None and proc.returncode != 0:
-                reason = "worktree-list-failed"
             return {"status": "indeterminate", "reason": reason}
         blocks = _parse_worktree_list(proc.stdout or "")
         siblings = []
@@ -197,17 +227,9 @@ def snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=
                     "worktrees": worktrees,
                 }
             wt_path = block["path"]
-            entry, probe_err = _probe_worktree(
+            entry, _probe_err = _probe_worktree(
                 wt_path, run=run, deadline_end=deadline_end, env=env,
             )
-            if probe_err:
-                return {
-                    "status": "indeterminate",
-                    "reason": probe_err,
-                    "partial": bool(worktrees),
-                    "truncated": truncated,
-                    "worktrees": worktrees,
-                }
             entry["locked"] = bool(block.get("locked"))
             entry["prunable"] = bool(block.get("prunable"))
             worktrees[entry["path"]] = entry
@@ -220,12 +242,57 @@ def snapshot(repo_root, assigned_cwd, *, deadline=None, run=None, max_worktrees=
         return {"status": "indeterminate", "reason": str(exc)}
 
 
-def _reflog_delta(before_val, after_val):
-    if before_val is None or after_val is None:
+def _signal_measured(entry, signal):
+    if not isinstance(entry, dict):
+        return False
+    if not entry.get("readable", True):
+        return False
+    key = signal + "Measured"
+    if key in entry:
+        return bool(entry[key])
+    if signal == "reflogCount":
+        return entry.get("reflogCount") is not None
+    return entry.get(signal) is not None
+
+
+def _reflog_delta(before_entry, after_entry):
+    if not _signal_measured(before_entry, "reflogCount"):
         return None
+    if not _signal_measured(after_entry, "reflogCount"):
+        return None
+    before_val = before_entry.get("reflogCount")
+    after_val = after_entry.get("reflogCount")
     if before_val != after_val:
         return {"before": before_val, "after": after_val}
     return None
+
+
+def _coverage_tally(before_wt, after_wt, all_paths):
+    coverage = {
+        "worktreesCompared": len(all_paths),
+        "signals": {},
+    }
+    for signal in _SIGNALS:
+        measured_before = 0
+        measured_after = 0
+        compared = 0
+        for path in all_paths:
+            b = before_wt.get(path) or {}
+            a = after_wt.get(path) or {}
+            b_ok = _signal_measured(b, signal)
+            a_ok = _signal_measured(a, signal)
+            if b_ok:
+                measured_before += 1
+            if a_ok:
+                measured_after += 1
+            if b_ok and a_ok:
+                compared += 1
+        coverage["signals"][signal] = {
+            "measuredBefore": measured_before,
+            "measuredAfter": measured_after,
+            "compared": compared,
+        }
+    return coverage
 
 
 def compare(before, after):
@@ -249,27 +316,41 @@ def compare(before, after):
             if a is None and b is not None:
                 deltas.append({"path": path, "kind": "disappeared"})
                 continue
+            b = b or {}
+            a = a or {}
+            if not b.get("readable", True) or not a.get("readable", True):
+                reason = a.get("reason") or b.get("reason") or "unreadable"
+                deltas.append({"path": path, "kind": "unreadable", "reason": reason})
+                continue
             if b.get("disappeared") and not a.get("disappeared"):
                 deltas.append({"path": path, "kind": "appeared"})
                 continue
             if not b.get("disappeared") and a.get("disappeared"):
                 deltas.append({"path": path, "kind": "disappeared"})
                 continue
-            if b.get("headSha") != a.get("headSha"):
+            if (
+                _signal_measured(b, "headSha")
+                and _signal_measured(a, "headSha")
+                and b.get("headSha") != a.get("headSha")
+            ):
                 deltas.append({
                     "path": path,
                     "kind": "head-changed",
                     "before": b.get("headSha"),
                     "after": a.get("headSha"),
                 })
-            if b.get("porcelainSha256") != a.get("porcelainSha256"):
+            if (
+                _signal_measured(b, "porcelainSha256")
+                and _signal_measured(a, "porcelainSha256")
+                and b.get("porcelainSha256") != a.get("porcelainSha256")
+            ):
                 deltas.append({
                     "path": path,
                     "kind": "porcelain-changed",
                     "before": b.get("porcelainSha256"),
                     "after": a.get("porcelainSha256"),
                 })
-            reflog = _reflog_delta(b.get("reflogCount"), a.get("reflogCount"))
+            reflog = _reflog_delta(b, a)
             if reflog is not None:
                 deltas.append({
                     "path": path,
@@ -277,7 +358,13 @@ def compare(before, after):
                     **reflog,
                 })
         truncated = bool(before.get("truncated") or after.get("truncated"))
-        return {"status": "observed", "deltas": deltas, "truncated": truncated}
+        coverage = _coverage_tally(before_wt, after_wt, all_paths)
+        return {
+            "status": "observed",
+            "deltas": deltas,
+            "truncated": truncated,
+            "coverage": coverage,
+        }
     except Exception as exc:
         return {"status": "indeterminate", "reason": str(exc)}
 

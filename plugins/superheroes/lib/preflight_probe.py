@@ -107,7 +107,7 @@ def _engine_probe_in_scratch_repo(tool, argv, run, stdin_text):
         try:
             init_proc = subprocess.run(
                 ["git", "-C", scratch, "init", "--quiet", "--template="],
-                capture_output=True, text=True)
+                capture_output=True, text=True, timeout=30)
             if init_proc.returncode != 0:
                 detail = (init_proc.stdout + init_proc.stderr).strip()
                 return {"tool": tool, "ok": False, "exit": None,

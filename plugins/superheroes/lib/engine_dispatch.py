@@ -1392,8 +1392,12 @@ def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
     """Best-effort sibling snapshot at write-run open. Never raises."""
     try:
         default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
+        min_deadline = sibling_worktree_probe.MIN_DEADLINE_SECONDS
         if preflight_timeout is not None:
-            deadline = min(preflight_timeout / 4.0, default_deadline)
+            deadline = max(
+                min_deadline,
+                min(preflight_timeout / 4.0, default_deadline),
+            )
         else:
             deadline = default_deadline
         return sibling_worktree_probe.snapshot(repo_root, cwd_real, deadline=deadline)
@@ -1403,35 +1407,43 @@ def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
 
 def _fold_sibling_worktrees(state):
     """Attach siblingWorktrees for write runs only. Never raises."""
-    opened = state.get("opened") or {}
-    if opened.get("runKind") != RUN_KIND_WRITE:
-        return None
-    baseline = opened.get("siblingBaseline")
-    if baseline is None:
-        return {"status": "indeterminate", "reason": "no-baseline"}
-    if baseline.get("status") == "indeterminate":
-        return {
-            "status": "indeterminate",
-            "reason": baseline.get("reason", "baseline-indeterminate"),
-        }
-    repo_root = opened.get("repoRoot")
-    cwd = opened.get("cwd")
-    if not repo_root or not cwd:
-        return {"status": "indeterminate", "reason": "run-context-incomplete"}
-    timeout = opened.get("timeout") or RETRY_MIN_TIMEOUT
     try:
-        after = sibling_worktree_probe.snapshot(
-            repo_root, cwd,
-            deadline=min(30.0, timeout / 4.0),
-        )
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE:
+            return None
+        baseline = opened.get("siblingBaseline")
+        if baseline is None:
+            return {"status": "indeterminate", "reason": "no-baseline"}
+        if not isinstance(baseline, dict):
+            return {"status": "indeterminate", "reason": "baseline-invalid"}
+        if baseline.get("status") == "indeterminate":
+            return {
+                "status": "indeterminate",
+                "reason": baseline.get("reason", "baseline-indeterminate"),
+            }
+        repo_root = opened.get("repoRoot")
+        cwd = opened.get("cwd")
+        if not repo_root or not cwd:
+            return {"status": "indeterminate", "reason": "run-context-incomplete"}
+        default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
+        min_deadline = sibling_worktree_probe.MIN_DEADLINE_SECONDS
+        timeout = opened.get("timeout") or RETRY_MIN_TIMEOUT
+        deadline = max(min_deadline, min(default_deadline, timeout / 4.0))
+        try:
+            after = sibling_worktree_probe.snapshot(
+                repo_root, cwd,
+                deadline=deadline,
+            )
+        except Exception:
+            return {"status": "indeterminate", "reason": "probe-raised"}
+        if after.get("status") != "ok":
+            return {
+                "status": "indeterminate",
+                "reason": after.get("reason", "after-snapshot-indeterminate"),
+            }
+        return sibling_worktree_probe.compare(baseline, after)
     except Exception:
         return {"status": "indeterminate", "reason": "probe-raised"}
-    if after.get("status") != "ok":
-        return {
-            "status": "indeterminate",
-            "reason": after.get("reason", "after-snapshot-indeterminate"),
-        }
-    return sibling_worktree_probe.compare(baseline, after)
 
 
 def _fold_run(run_dir_real, state, result):
