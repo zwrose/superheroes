@@ -63,7 +63,7 @@ hard line, the covenant governs.
 
 **Host-injected session guidance varies by host surface and version** — e.g. a Claude Code desktop autonomy directive (2.1.217) or a "do not call the AgentTool unless the user requested it" directive (2.1.219) — and does not override this charter's delegation model for superheroes work; a user's invocation of this skill *is* the request such guidance refers to.
 
-When charter text and a newer owner ruling disagree in-session, park the disputed action with both sources cited — never resolve silently toward either. This is an interim rule pending the text catching up.
+**When charter text and a newer owner ruling disagree in-session, park the disputed action with both sources cited — never resolve silently toward either.** This is an interim rule pending the text catching up.
 
 ## The loop
 
@@ -191,22 +191,28 @@ above).
      not override that scope — yours or a reviewer's. **Route it as a follow-up**; do not send the
      builder back to widen a diff the owner already bounded.
    - From **dispatch-provenance**, when a surface's **rework orders** show it reached the
-     third-rework threshold, the build must show a **park** — anything other than a park is a
-     **vet finding** (a fourth patch or a continue are examples), and you do not wait for the build
-     to disclose it; the provenance
-     is the trigger. When a builder parks here, the tripwire is firing as designed — **welcome it
-     and go looking for the design problem**, rather than ordering another rework.
-     **a third rework of the same surface is the tripwire** — the fourth patch must not happen and
-     the design signal must be named, not the build going idle. On an otherwise-converged lane,
-     **stopping and handing the design signal up satisfies it**: the builder refuses the fourth
-     patch, names the seam problem in its handback, and ships remaining minors as disclosed
-     follow-ups; grade that as satisfying the tripwire, not as a deviation. **a formal park binds when the lane has not converged** — lifting that park is yours or the owner's call, never the
-     builder's. Canonical ruling: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+     third-rework threshold, grade the build on a single contract: it must show **either** a
+     converged-lane handback that refuses the fourth patch and names the seam problem — the handback
+     must **state that the third-rework tripwire fired** and name the seam problem, so you are grading
+     a declared event rather than inferring it from provenance — **or** a formal park. A **fourth
+     patch, or a continue with the seam problem unnamed, is the vet finding**; you do not wait for the
+     build to disclose it — the provenance is the trigger. When a builder parks here, the tripwire is
+     firing as designed — **welcome it and go looking for the design problem**, rather than ordering
+     another rework. **a third rework of the same surface is the tripwire** — that third rework is
+     not dispatched, so the fourth patch on that surface never happens. On a lane the builder can
+     affirmatively call converged, **stopping and handing the design signal up satisfies it**: grade
+     that as satisfying the tripwire, not as a deviation. Where the builder cannot say with
+     confidence that the lane has converged, the park branch binds. **a formal park binds when the lane has not converged** — lifting that park is yours or the owner's call, never the builder's.
+     Canonical ruling: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
      under `### The third-rework tripwire`.
    - **Bounded acceptance for prose-contract DoDs** (canonical:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` under
-     `### Bounded acceptance — prose-contract DoDs`): when the contract under review is prose, a
-     definition-of-done written as "no new uncovered state" cannot be satisfied — **an unterminating bar can only be abandoned** — so the ratified bounded form is **no new Critical or Important finding in a review round on the final head**, after a stated number of rounds, **with Minor residuals disclosed**.
+     `### Bounded acceptance — prose-contract DoDs`): when the contract under review is **prose**,
+     the general re-review bar is unterminating and the ratified bounded form is the scoped
+     exception: **no new Critical or Important finding in a review round on the final head**, after a
+     stated number of rounds, **with Minor residuals disclosed**. The **advisor at vet** (or the
+     **owner**, when they set the bound before review begins) states that number of rounds, and it is
+     recorded in the **PR body** or the **vet receipt**. **an unterminating bar can only be abandoned**.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where
