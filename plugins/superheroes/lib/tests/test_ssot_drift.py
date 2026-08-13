@@ -1207,7 +1207,7 @@ def test_owner_authority_allowlist_doc_matches_code():
         assert '"schemaVersion": %d' % ver in doc, (
             "owner-authority-allowlist.md missing schemaVersion %d" % ver)
     # bite-proof axis: the v2 opt-in sentinel is documented.
-    assert '"ref": "any"' in doc, (
+    assert '"ref": "%s"' % oa._REF_ANY_SENTINEL in doc, (
         "owner-authority-allowlist.md missing v2 ref sentinel")
 
     never_section = re.search(

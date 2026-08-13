@@ -61,6 +61,9 @@ Use `schemaVersion: 2` when you need to pre-authorize a dispatch that names a re
 }
 ```
 
+Grant `ref: "any"` only for a workflow whose definition you are willing to have run from any
+branch of this repository.
+
 **Threat model:** granting `ref: "any"` on a workflow means **any ref's definition of that
 workflow may run** — not just the default branch. For a seed workflow whose design is that the
 dispatched ref *is* the target (no branch input), this is precisely what you want. Ref *patterns*
@@ -69,8 +72,16 @@ dispatched ref *is* the target (no branch input), this is precisely what you wan
 A v2 entry with `ref: "any"` also covers the bare dispatch (no ref flag) — a superset grant
 includes the default ref. Entries without a `ref` key behave identically under both schema versions.
 
-Under `schemaVersion: 1`, a `ref` key on any entry is **dropped** with a loud note — it never
-silently degrades to a bare-name grant.
+Under `schemaVersion: 1`, a `ref` key on any entry is **dropped** — the note is printed to
+stderr, not promoted into the approval prompt, and the entry does not apply (you see an extra
+prompt, not an unapproved run). Bump to `schemaVersion: 2` if you need ref support. An invalid
+`ref` value under v2 is dropped the same way — stderr notice only, entry ignored.
+
+**Rollback:** bumping the file to `schemaVersion: 2` means an older superheroes install
+rejects the **entire** file (its check is `ver != 1`), so every entry — including plain bare-name
+grants that would otherwise still work — stops applying and the gate asks for everything. That
+direction is correct (fail closed). Keep v1 if you may roll back to an older plugin, and expect
+extra prompts rather than unapproved runs if you bump to 2 and then roll back.
 
 ## Worked example
 
@@ -99,7 +110,13 @@ Structurally excluded in code — an entry naming one is **ignored**, with notic
 the approval prompt: `merge-pr`, `merge-api`, `merge-graphql`, `release`, `force-push`. **Why:**
 the gate is the never-merge floor; a config that could exempt a merge would be no gate.
 
-Also not allowlistable in v1: `push-to-default` (ignored with a quieter note); `gh workflow enable`
+Those actions can never be allowlisted **directly**. A `ref: "any"` grant can still reach them
+**indirectly** — GitHub runs the workflow file as it exists on the named ref, and a workflow step
+on an ungated branch can perform actions the gate lists as never allowlistable (for example, a
+step that merges a pull request). **As the owner, treat `ref: "any"` as authorizing whatever CI
+code exists under that workflow name on any branch, with `GITHUB_TOKEN`.**
+
+Also not allowlistable: `push-to-default` (ignored with a quieter note); `gh workflow enable`
 and `gh workflow disable` (only `run` can be pre-authorized).
 
 ## When the file is wrong
@@ -107,8 +124,9 @@ and `gh workflow disable` (only `run` can be pre-authorized).
 Missing, unreadable, malformed, or wrong-schema file **changes nothing** — the gate asks as today.
 The allowlist is read only when calibration is positively known; an indeterminate probe (corrupt or
 unreadable registry) → gate asks, file not read. **Promise:** nothing in this file can widen silence
-beyond a workflow you named by hand — see the limitations below for what that name pins and what it
-does not (inputs, environment overrides).
+beyond a workflow you named by hand — the workflow **name** is still pinned by hand, but with
+`ref: "any"` the **content** that name runs is not (see the limitations below for what the name
+pins and what it does not: inputs, environment overrides, ref-selected workflow definitions).
 
 ## Limitations
 
@@ -124,12 +142,12 @@ does not (inputs, environment overrides).
   `_ - . / : = , ' " @ +`. Any other character anywhere — `$`, backtick, `*`, `?`, `[`, `]`, `{`,
   `}`, `~`, `\`, `;`, `&`, `|`, `<`, `>` — means the gate asks. A name the shell could expand or
   glob cannot be matched honestly, so the mechanism refuses rather than guesses. **Consequence:**
-  `Preview & seed` **cannot be pre-authorized in v1** and will keep asking — an extra prompt, never
+  `Preview & seed` **cannot be pre-authorized** and will keep asking — an extra prompt, never
   an unapproved run.
 - Also asks regardless of the file: compound commands, env-var prefixes, absolute `gh` path,
   unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
   you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
   `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them. **Known
-  limitation:** repo flags are refused by the allowlist parser, but a dispatch carrying them in the
-  inherited position (`gh -R owner/repo workflow run X`) never reaches the gate at all, because
-  `OWNER_AUTHORITY_COMMANDS` requires `gh` adjacent to the subcommand.
+  limitation:** a dispatch that places a repository-selection flag before the `gh` subcommand is
+  not recognised by the gate at all, because the command patterns require `gh` adjacent to the
+  subcommand — honest disclosure only; no recipe here.

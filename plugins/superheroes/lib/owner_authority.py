@@ -49,7 +49,7 @@ OWNER_AUTHORITY_COMMANDS = [
 
 ALLOW_FILENAME = "owner-authority-allow.json"
 ALLOW_SCHEMA_VERSIONS = (1, 2)
-ALLOW_SCHEMA_VERSION = ALLOW_SCHEMA_VERSIONS[-1]
+_REF_KEY_VERSIONS = frozenset((2,))
 # Entries can only match actions in this tuple — structural exclusions (NEVER_ALLOWLISTABLE) are
 # enforced by omission from here, not by a separate filter. NEVER_ALLOWLISTABLE exists so
 # ignored entries are loud (stderr + ask reason), not to perform the exclusion itself.
@@ -107,7 +107,9 @@ def _rejected_file_note(defect):
 def read_allow_file(cwd, root=None):
     """(entries, notes) from the allow file. PURE — never writes, never raises.
 
-    entries: list of {"action": str, "workflow": str}
+    entries: list of {"action": str, "workflow": str, "allows_refs": bool (optional)}
+        allows_refs is True only when derived from a validated ref sentinel under a schema version
+        in _REF_KEY_VERSIONS — never copied from file input.
     notes:   list of (kind, action_or_None, text)"""
     entries = []
     notes = []
@@ -178,10 +180,17 @@ def read_allow_file(cwd, root=None):
 
         allows_refs = False
         if "ref" in item:
-            if ver == 1:
+            if ver not in _REF_KEY_VERSIONS:
+                ref_versions = sorted(_REF_KEY_VERSIONS)
+                if len(ref_versions) == 1:
+                    bump_hint = "schemaVersion %d" % ref_versions[0]
+                else:
+                    bump_hint = "schemaVersion " + " or ".join(
+                        str(v) for v in ref_versions)
                 notes.append(("malformed", action,
-                                "ignored entry with ref key under schemaVersion 1 — "
-                                "bump owner-authority-allow.json to schemaVersion 2"))
+                                "ignored entry with ref key under schemaVersion %s — "
+                                "bump owner-authority-allow.json to %s"
+                                % (ver, bump_hint)))
                 continue
             ref_val = item.get("ref")
             if not isinstance(ref_val, str) or ref_val != _REF_ANY_SENTINEL:

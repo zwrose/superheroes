@@ -856,6 +856,54 @@ def test_branch_preview_allows_with_v2_grant(tmp_path, monkeypatch):
     assert oa.classify(_BRANCH_PREVIEW_CMD, str(tmp_path)) == ("allow", "")
 
 
+_V2_BARE_ALLOW_FILE = {
+    "schemaVersion": 2,
+    "allow": [{"action": "run-workflow", "workflow": "Preview seed"}],
+}
+_BARE_DISPATCH = 'gh workflow run "Preview seed"'
+
+
+def test_classify_v2_bare_entry_allows_bare_dispatch(tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, _V2_BARE_ALLOW_FILE)
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    assert oa.classify(_BARE_DISPATCH, str(tmp_path)) == ("allow", "")
+
+
+@pytest.mark.parametrize("flag", sorted(oa._REF_FLAGS))
+def test_classify_v2_bare_entry_refuses_ref_dispatch(flag, tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, _V2_BARE_ALLOW_FILE)
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    workflow = "Preview seed"
+    for cmd in (
+        'gh workflow run "%s" %s main' % (workflow, flag),
+        'gh workflow run "%s" %s=main' % (workflow, flag),
+    ):
+        decision, _ = oa.classify(cmd, str(tmp_path))
+        assert decision == "ask", cmd
+
+
+@pytest.mark.parametrize("flag", sorted(oa._REF_FLAGS))
+def test_classify_v2_ref_any_allows_ref_dispatch(flag, tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, _V2_ALLOW_FILE)
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    workflow = "Preview seed"
+    for cmd in (
+        'gh workflow run "%s" %s main' % (workflow, flag),
+        'gh workflow run "%s" %s=main' % (workflow, flag),
+    ):
+        assert oa.classify(cmd, str(tmp_path)) == ("allow", ""), cmd
+
+
+def test_classify_ref_dispatch_without_grant_still_asks(tmp_path, monkeypatch):
+    _pin_allow_store(tmp_path, monkeypatch)
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, _ = oa.classify(_BRANCH_PREVIEW_CMD, str(tmp_path))
+    assert decision == "ask"
+
+
 # --- fail-closed edges (enumerated) ----------------------------------------------
 
 def test_edge_ref_flag_missing_value_refuses():
@@ -894,7 +942,13 @@ def test_edge_v1_ref_key_dropped_not_bare_grant(tmp_path, monkeypatch):
     ]})
     entries, notes = oa.read_allow_file(str(tmp_path))
     assert entries == []
-    assert any("schemaVersion 1" in text for _, _, text in notes)
+    assert any(
+        text == (
+            "ignored entry with ref key under schemaVersion 1 — "
+            "bump owner-authority-allow.json to schemaVersion 2"
+        )
+        for _, _, text in notes
+    )
     cmd = "gh workflow run deploy.yml"
     assert oa.allowlisted(cmd, "run-workflow", entries) is False
 
