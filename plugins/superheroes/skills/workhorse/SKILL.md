@@ -364,11 +364,16 @@ work-order protocol:
 - **Claude subagent** → dispatch the template as-is.
 - **External engine** (codex / cursor CLI) → **inline
   `agents/implementer.md`, minus its frontmatter, verbatim** into the dispatch prompt.
-- **Cited paths in every implementer dispatch** — **resolve this plugin's root and pass any path an
-  order cites as an absolute path** (or pre-resolved against the absolute plugin root) into every
-  implementer dispatch — an implementer cannot resolve a path written against the plugin-root
-  variable or a plugin-relative path on its own, and a cited path it cannot open is a stalled
-  order.
+
+**Cited paths in every dispatched seat** — paths cited to an implementer **or** pilot dispatch
+resolve against **the build's own worktree** when the cited file is part of the change under build
+(this repo's plugin-is-the-product case), because `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}` resolves to the *installed*
+cache and would hand the seat released text while the branch is editing exactly that text. Before
+passing a canonical-home citation into a dispatch, confirm the absolute path is inside the build
+worktree. **`--expect-item` does not cover this** — it is final-diff membership, never proof of
+which copy the seat read. Plugin-relative citations in *this* charter (for a reading session) are
+not contradictory with this rule: they govern what gets **passed into a dispatch**, not how you
+read your own charter.
 
 **Every implementer write-dispatch declares its deliverables.** Pass `--expect-item <path>`
 (repeatable) or `--expect-items-file <file>` on `dispatch-write`, naming every file the order must
@@ -450,11 +455,12 @@ then carries its own provenance through any number of session deaths.
 A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
-**third** rework of the same surface in one build, **a third rework of the same surface is the tripwire** — what it demands is that the fourth patch does not happen and the design signal must be
-named, not that the build goes idle. On an otherwise-converged lane, **stopping and handing the design signal up satisfies it**: refuse the fourth patch, name the seam problem in the handback,
-ship remaining minors as disclosed follow-ups; say what the seam problem looks like. Where the lane
-has not converged and the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — park with receipts; resumption after the park is owner- or advisor-ruled, and a
-builder cannot lift the park on its own.
+**third** rework of the same surface in one build, **do not dispatch it**: **a third rework of the same surface is the tripwire** — that third rework is not dispatched, so the fourth patch on that
+surface never happens. On a lane you can affirmatively call converged, **stopping and handing the design signal up satisfies it**: refuse the fourth patch, name the seam problem in the handback, and
+ship remaining minors as disclosed follow-ups; the handback must **state that the third-rework
+tripwire fired** and name the seam problem. Where you cannot say with confidence that the lane has
+converged, the park branch binds. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — park with receipts; resumption after the park is owner- or
+advisor-ruled, and a builder cannot lift the park on its own.
 The ratified ruling lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
 under `### The third-rework tripwire`.
 
@@ -498,10 +504,14 @@ without a tool call.
   liveness rule you already carry — act only on direct observation of processes **you own**. If you
   did not record the PID, you do not have a kill target, and going hunting for one is precisely how
   you end up holding someone else's.
-- **Gated strings never inline in Bash.** A command string matching a permission-gated shape is
-  never embedded inline in Bash text — a probe reads its test string **from a file**; **a heredoc
-  counts as Bash text**; a memory, ledger, or seat-note append carrying a gated literal is **written
-  with a file-write tool**, never echoed through a shell. Two unattended sessions self-hung for
+- **Gated strings as data, never inline in Bash.** A permission-gated literal that is being **written
+  or matched as data** — a probe's test string, a memory or ledger append, any carrier that is not
+  the command you intend to run — is never embedded inline in Bash text; a probe reads its test
+  string **from a file**; **a heredoc counts as Bash text**; a memory, ledger, or seat-note append
+  carrying a gated literal is **written with a file-write tool**, never echoed through a shell. **A
+  command the session genuinely intends to execute** — including the preflight **`gh` write** — is
+  issued as itself in Bash so the permission classifier sees it; staging a gated command in a file
+  and executing the file to dodge the gate is **forbidden**. Two unattended sessions self-hung for
   roughly 2.5 hours in a single night on inline gated strings — the session blocks on a permission
   prompt no one is present to answer.
 - **Long-running external dispatches from a headless session — native shape, polled in-turn.**
@@ -616,7 +626,9 @@ pending external outcome** — the same trap catches a background waiter (#600),
 watch (#608), and anything else that resolves outside your turn (#526 evidence trail): **anything
 long-running — an engine dispatch or a local command (a full-suite run, a build, a long script) —
 is awaited in-turn; never end a turn to wait.** **Poll synchronously in-turn** until it resolves, or
-**park durably**. This is the **fifth** recorded instance of a turn-end death across five sessions.
+**park durably**. Field record: the 0.18.0 wave logged four turn-end deaths from standalone
+narrative messages, dispatch-mechanics documents three on **2026-08-02**, and this paragraph is
+another instance of the same class.
 
 **Long dispatches you own get room to finish and a stuck/runaway monitor** — **never a borderline
 limit you expect to just barely clear**. For a **native subagent dispatch there is no detach** — the
@@ -637,10 +649,10 @@ The **timeout** contract stays the skill's; the **channel** duty attaches to wha
 **Verification authority never delegates.** Every receipt an implementer claims — tests pass, types
 clean, build green — **you re-run yourself and read the raw output**. An implementer's claim is an
 *input* to your verification, never a substitute for it. **A handback may claim a live process only
-with evidence that it survives turn end; otherwise it states the wait as owed to the reader rather
-than implying something is running** — a `-p` (headless) session's turn-end exit kills its background
-children, so "it is running in the background" is routinely false the moment the turn ends. Run the
-**full local gates** and **watch CI**. **A full-gate run starts only on a clean, settled tree —
+with evidence of which physics applies** — **harness-tracked** background work dies at turn end; a
+**shell-detached child with durable on-disk output** survives and is recoverable (see §7 "Channel and
+wait are two choices", two-physics bullet). Without that evidence, state the wait as owed to the
+reader rather than implying something is running. Run the **full local gates** and **watch CI**. **A full-gate run starts only on a clean, settled tree —
 ideally a detached pinned worktree** — three builds burned roughly five full-suite runs against
 in-flight edits; a suite started while edits are still landing measures a tree that no longer exists,
 and its green is not a receipt.
@@ -714,9 +726,9 @@ claimed as covered.
 
 - **You** do test-pilot **planning and seeding** (invoke `test-pilot-plan`).
 - **Execution is a pilot subagent** (`agents/pilot.md`) that **observes and reports structured
-  results only — it never fixes.** **Resolve this plugin's root and pass the absolute path to
-  `skills/test-pilot-execute/reference/execution-steps.md` (or the absolute plugin root) into every
-  pilot dispatch** — the pilot has no Skill tool and cannot resolve plugin-relative paths on its own.
+  results only — it never fixes.** Apply the **Cited paths in every dispatched seat** rule (§7) to
+  every pilot dispatch — pass the absolute path to
+  `skills/test-pilot-execute/reference/execution-steps.md` (or the absolute plugin root).
   A bug it reports in the **full lane** (or after light-lane escalation) becomes an **implementer
   work order** you dispatch; in the **light lane** it triggers the **implementer-dispatch
   escalation rule** (Build lanes) — move up to full, then dispatch.
@@ -752,9 +764,8 @@ them without your context. The scope-beats-convention rule (§1 intake) governs 
 for a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
 security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
-**Bounded acceptance for prose-contract DoDs** — when the contract under review is prose, a
-definition-of-done written as "no new uncovered state" cannot be satisfied — an unterminating bar can only be abandoned — so the ratified bounded form is no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed.
-The canonical statement lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+**Bounded acceptance for prose-contract DoDs** — when the contract under review is **prose**, the
+general re-review bar is unterminating and the ratified bounded form is the scoped exception: no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed. The **advisor at vet** (or the **owner**, when they set the bound before review begins) states that number of rounds, and it is recorded in the **PR body** or the **vet receipt**. An unterminating bar can only be abandoned. The canonical statement lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
 under `### Bounded acceptance — prose-contract DoDs`.
 
 ## 11. Hand back the ready PR
