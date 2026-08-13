@@ -118,9 +118,7 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
   --session-dir "$SESSION_DIR" --seat "<seat>"  # or: record-result --sweep
 # … record-missing for any slot that forfeit/timeout …
 python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
-  --session-dir "$SESSION_DIR" \
-  --phase "<phase from next>" \
-  --attempt <attempt from next>
+  --session-dir "$SESSION_DIR"
 ```
 
 No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not pass

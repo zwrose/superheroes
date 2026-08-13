@@ -3560,31 +3560,28 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
     # `advance` instead (or supersede a `seat-missing` slot on a refuse-fold phase, then advance).
     if not _via_advance:
         rnd = pending.get("round")
-        roster, roster_refusal = _roster_of(session_dir, state, "submit", phase, rnd, attempt)
-        if roster_refusal is None:
-            found = []
-            for seat_key, occurrence in round_records.roster_slots(roster):
-                try:
-                    spath = round_records.store_path(
-                        session_dir, rnd, phase,
-                        round_records.storage_key(seat_key, occurrence), attempt)
-                except ValueError:
-                    continue
-                if os.path.exists(spath):
-                    found.append(_slot_label(seat_key, occurrence))
-            if found:
-                detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
-                          "path folds through `advance`; a hand submit ignores them. A slot recorded "
-                          "missing on a refuse-fold phase must first be replaced with a real result "
-                          "(`record-result --supersede --expect-sha256 …`) before `advance` can fold."
-                          % (attempt, ", ".join(sorted(found))))
-                _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": rnd,
-                                              "attempt": attempt,
-                                              "outcome": "record-submit-interleaved",
-                                              "fault": FAULT_CALLER,
-                                              "session": _meta_session_id(session_dir)})
-                return {"ok": False, "reason": "record-submit-interleaved", "detail": detail,
-                        "seats": sorted(found)}
+        # Only adapter phases carry durable store records — gate phases (present-judgment,
+        # present-stall-menu) are hand-submitted and have no roster. Resolve without journaling:
+        # `_roster_of` would append a spurious `roster-unavailable` refusal row on lookup failure.
+        if phase in _adapters().ADAPTER_PHASES:
+            roster, roster_reason = _adapters().roster_for(
+                phase, state, state.get("config") or {})
+            if roster_reason is None and isinstance(roster, (list, tuple)):
+                roster = [s for s in roster if isinstance(s, str)]
+                found = _durable_slot_records(session_dir, rnd, phase, attempt, roster)
+                if found:
+                    detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
+                              "path folds through `advance`; a hand submit ignores them. A slot recorded "
+                              "missing on a refuse-fold phase must first be replaced with a real result "
+                              "(`record-result --supersede --expect-sha256 …`) before `advance` can fold."
+                              % (attempt, ", ".join(found)))
+                    _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": rnd,
+                                                  "attempt": attempt,
+                                                  "outcome": "record-submit-interleaved",
+                                                  "fault": FAULT_CALLER,
+                                                  "session": _meta_session_id(session_dir)})
+                    return {"ok": False, "reason": "record-submit-interleaved", "detail": detail,
+                            "seats": found}
 
     # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")
@@ -4488,6 +4485,26 @@ def _slot_label(seat_key, occurrence):
     plain form is kept for the overwhelmingly common single-slot case so no existing caller's
     reason string changes shape."""
     return seat_key if not occurrence else "%s#%d" % (seat_key, occurrence)
+
+
+def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
+    """Sorted slot labels whose store file EXISTS at (round, phase, attempt).
+
+    Existence probe only — not a read/parse check. The record-submit interleave fence must treat an
+    UNREADABLE store file as PRESENT (the durable-record path already wrote something a hand submit
+    would ignore). ``_seat_slot_records`` maps unreadable JSON to ``None``, which would let the
+    fence fail open if reused here."""
+    found = []
+    for seat_key, occurrence in round_records.roster_slots(roster):
+        try:
+            spath = round_records.store_path(
+                session_dir, rnd, phase,
+                round_records.storage_key(seat_key, occurrence), attempt)
+        except ValueError:
+            continue
+        if os.path.exists(spath):
+            found.append(_slot_label(seat_key, occurrence))
+    return sorted(found)
 
 
 def _seat_slot_records(session_dir, rnd, phase, attempt, roster):

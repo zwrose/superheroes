@@ -126,33 +126,70 @@ def test_advance_still_folds_with_records_present(tmp_path):
     assert out["folded"]["phase"] == round_driver.P_PANEL
 
 
-def test_repeated_seat_key_second_occurrence_probed_by_slot(tmp_path):
-    """Two roster slots sharing one seat key: a record on occurrence 1 fires the fence."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="collide")
+def test_hand_submit_non_adapter_phase_no_spurious_roster_journal(tmp_path):
+    """Hand submit of a gate phase must not journal a roster-unavailable refusal."""
+    session_dir, _gitdir, _head_path = _bootstrap(tmp_path, name="judgment-fence")
+    state = _state(session_dir)
+    finding = {"title": "widen the API", "severity": "Important", "file": "f.py", "line": 1,
+               "tradeoff": True}
+    state["step"] = round_driver.P_JUDGMENT
+    state["_judgmentFindings"] = [finding]
+    state["_judgmentMechanical"] = []
+    state["pending"] = {"action": round_driver.P_JUDGMENT, "round": 1,
+                        "phase": round_driver.P_JUDGMENT, "attempt": 0, "payload": {}}
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    before = len(round_driver.read_journal(session_dir))
+    row_id = round_driver._judgment_row_ids([finding])[0]
+    art = {"dispositions": [{"id": row_id, "disposition": "skip", "reason": "owner declined"}]}
+    out = round_driver.cmd_submit(session_dir, round_driver.P_JUDGMENT, 0,
+                                  round_driver.state_hash(state), art)
+    assert out["ok"] is True, out
+    added = round_driver.read_journal(session_dir)[before:]
+    spurious = [e for e in added if e.get("reason") == "roster-unavailable"]
+    assert spurious == [], spurious
+
+
+def test_durable_slot_records_second_occurrence_only(tmp_path):
+    """Repeated roster key: only the occurrence-1 store path is reported."""
+    session_dir = str(tmp_path / "probe")
+    os.makedirs(session_dir, exist_ok=True)
+    roster = ["t", "t"]
+    rnd, phase, attempt = 1, round_driver.P_PANEL, 0
+    spath = round_records.store_path(session_dir, rnd, phase,
+                                     round_records.storage_key("t", 1), attempt)
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    with open(spath, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+    found = round_driver._durable_slot_records(session_dir, rnd, phase, attempt, roster)
+    assert found == ["t#1"], found
+
+
+def test_second_distinct_audit_target_record_fires_fence_on_hand_submit(tmp_path):
+    """Natural two-target audits roster: a record on only the second slot fires the fence."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="second-slot")
     findings = [_blocking_finding("unchecked index", 2), _blocking_finding("unchecked index", 3)]
     _drive_to_phase(session_dir, gitdir, findings, head_path, round_driver.P_AUDITS)
     state = _state(session_dir)
-    targets = list(state["_auditTargets"])
-    shared_id = targets[0]["id"]
-    dup = dict(targets[1])
-    dup["id"] = shared_id
-    state["_auditTargets"] = [targets[0], dup]
-    round_driver.save_state(session_dir, state)
-    state = _state(session_dir)
+    targets = state["_auditTargets"]
+    assert len(targets) == 2 and targets[0]["id"] != targets[1]["id"], targets
+    tid0, tid1 = targets[0]["id"], targets[1]["id"]
     pend = state["pending"]
-    slots = [(shared_id, 0), (shared_id, 1)]
-    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
-    _land(session_dir, state, pend, shared_id,
-          {"id": shared_id, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"},
-          occurrence=1)
-    assert round_driver.cmd_record_result(session_dir, shared_id, occurrence=1)["ok"] is True
+    _write_dispatch_manifest(session_dir, pend, [(tid0, 0), (tid1, 0)], _auditor_vendor_for(state))
+    _land(session_dir, state, pend, tid1,
+          {"id": tid1, "ruling": "discharged", "reason": "re-read the hunk; the defect is gone"})
+    assert round_driver.cmd_record_result(session_dir, tid1, occurrence=0)["ok"] is True
+    state = _state(session_dir)
+    # Prior phases folded via `advance`; isolate the record-submit fence under test.
+    state.pop("_advanceUsed", None)
+    round_driver.save_state(session_dir, state)
     state = _state(session_dir)
     out = round_driver.cmd_submit(
         session_dir, pend["phase"], pend["attempt"], round_driver.state_hash(state),
-        {"results": [{"id": shared_id, "ruling": "discharged", "reason": "ok"},
-                     {"id": shared_id, "ruling": "discharged", "reason": "ok"}]})
+        {"results": [{"id": tid0, "ruling": "discharged", "reason": "ok"},
+                     {"id": tid1, "ruling": "discharged", "reason": "ok"}]})
     assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
-    assert "%s#1" % shared_id in out.get("seats", []), out
+    assert tid1 in out.get("seats", []), out
 
 
 def test_advance_reports_absent_dispatch_manifest_via_cmd_advance(tmp_path):
