@@ -3553,6 +3553,39 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "outcome": "verifier-results-shape"})
             return {"ok": False, "reason": fault}
 
+    # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
+    # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
+    # HAND submit silently discards recorded seats and can certify an incomplete panel while
+    # answering `ok`. Refuse HERE, before the fold, so the pending step survives; fold through
+    # `advance` instead (or supersede a `seat-missing` slot on a refuse-fold phase, then advance).
+    if not _via_advance:
+        rnd = pending.get("round")
+        roster, roster_refusal = _roster_of(session_dir, state, "submit", phase, rnd, attempt)
+        if roster_refusal is None:
+            found = []
+            for seat_key, occurrence in round_records.roster_slots(roster):
+                try:
+                    spath = round_records.store_path(
+                        session_dir, rnd, phase,
+                        round_records.storage_key(seat_key, occurrence), attempt)
+                except ValueError:
+                    continue
+                if os.path.exists(spath):
+                    found.append(_slot_label(seat_key, occurrence))
+            if found:
+                detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
+                          "path folds through `advance`; a hand submit ignores them. A slot recorded "
+                          "missing on a refuse-fold phase must first be replaced with a real result "
+                          "(`record-result --supersede --expect-sha256 …`) before `advance` can fold."
+                          % (attempt, ", ".join(sorted(found))))
+                _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": rnd,
+                                              "attempt": attempt,
+                                              "outcome": "record-submit-interleaved",
+                                              "fault": FAULT_CALLER,
+                                              "session": _meta_session_id(session_dir)})
+                return {"ok": False, "reason": "record-submit-interleaved", "detail": detail,
+                        "seats": sorted(found)}
+
     # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")
     state["pending"] = None
@@ -5272,6 +5305,28 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     return response
 
 
+def _dispatch_manifest_disclosure(mpath, merr):
+    """Operator-facing block when the dispatch manifest is absent or unreadable.
+
+    Manifest-less runs are a disclosed degradation by design — this never refuses `advance`, only
+    surfaces the expected path so an operator is not left guessing after a stall."""
+    abs_path = os.path.abspath(mpath)
+    if merr == "missing":
+        return {"path": abs_path, "status": "absent", "detail": None}
+    if merr is not None:
+        return {"path": abs_path, "status": "unreadable", "detail": merr}
+    return None
+
+
+def _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, attempt, disc):
+    if disc is not None:
+        response = dict(response)
+        response["dispatchManifest"] = disc
+        _journal_event(session_dir, "advance", "dispatch-manifest-disclosure",
+                       phase=phase, round=rnd, attempt=attempt, **disc)
+    return response
+
+
 def _advance_locked(session_dir, state, git=None, broke=None):
     config = state.get("config") or {}
     if state.get("terminal"):
@@ -5357,15 +5412,19 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     # (seat, occurrence) — the only shape that can carry two seats sharing one id (a seat-keyed
     # mapping cannot, and `assemble` refuses one outright: `envelopes-not-a-list`).
     records = [env for _seat, _occurrence, env in slots]
-    manifest, _merr = round_records.read_json(
-        round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt))
+    manifest_path = round_records.dispatch_manifest_path(session_dir, rnd, phase, attempt)
+    manifest, _merr = round_records.read_json(manifest_path)
+    manifest_disc = _dispatch_manifest_disclosure(manifest_path, _merr)
     artifact, why = _adapters().assemble(phase, records, state, config,
                                          dispatch_manifest=manifest if _merr is None else None,
                                          canary=_canary_landings(session_dir, state, rnd, attempt),
                                          session_dir=session_dir)
     if why is not None or not isinstance(artifact, dict):
-        return _refuse_cmd(session_dir, "advance", "assemble-refused", phase=phase, rnd=rnd,
-                           attempt=attempt, detail=why)
+        return _attach_dispatch_manifest_disclosure(
+            session_dir,
+            _refuse_cmd(session_dir, "advance", "assemble-refused", phase=phase, rnd=rnd,
+                        attempt=attempt, detail=why),
+            rnd, phase, attempt, manifest_disc)
 
     artifact_for_fold = dict(artifact)
 
@@ -5373,8 +5432,11 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), artifact_for_fold,
                         _via_advance=True)
     if not folded.get("ok"):
-        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
-                           attempt=attempt, detail=folded.get("reason"))
+        return _attach_dispatch_manifest_disclosure(
+            session_dir,
+            _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
+                        attempt=attempt, detail=folded.get("reason")),
+            rnd, phase, attempt, manifest_disc)
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
     # The `advanced` journal row has no partner artifact — it is a log-only row and stays outside
     # any commit so a later reader does not try to pair it with state or a manifest.
@@ -5392,11 +5454,15 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     if after.get("terminal"):
         side = _publish_sidecar(session_dir, after, git=git)
         if side.get("reason"):
-            return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
-                               detail=side.get("detail"))
+            return _attach_dispatch_manifest_disclosure(
+                session_dir,
+                _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                            detail=side.get("detail")),
+                rnd, phase, attempt, manifest_disc)
         response["terminal"] = after.get("terminal")
         response["sidecar"] = side.get("path")
-    return response
+    return _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, attempt,
+                                                manifest_disc)
 
 
 def _canary_landings(session_dir, state, rnd, attempt):

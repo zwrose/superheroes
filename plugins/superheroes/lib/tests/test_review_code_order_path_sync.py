@@ -2,13 +2,18 @@
 
 Copy-holders (CONVENTIONS §11.2):
   - plugins/superheroes/skills/review-code/SKILL.md — emitted-order path table
-  - plugins/superheroes/skills/review-code/reference/round-driver.md — order + landing tables
+  - plugins/superheroes/skills/review-code/reference/round-driver.md — order + landing +
+    durable-record tables
 Authoritative homes (code builders, derived at runtime — never retyped as literals):
   - round_records.order_prompt_path
   - round_records.envelope_stub_path
   - round_records.landing_path
   - round_records.bare_payload_path
   - round_driver._orders_manifest_path
+  - round_records.dispatch_manifest_path
+  - round_records.canary_path
+  - round_records.store_path
+  - round_records.head_diff_store_path
 """
 import os
 import re
@@ -27,6 +32,7 @@ _TEST_RND = 2
 _TEST_PHASE = RP.P_PANEL
 _TEST_SKEY = RR.storage_key("code-reviewer", 0)
 _TEST_ATTEMPT = 0
+_TEST_VENDOR = "codex"
 
 # Binding only — path strings come from docs (parsed) or builders (called).
 _BUILDER_KEYS = frozenset({
@@ -37,10 +43,17 @@ _BUILDER_KEYS = frozenset({
     "landing_host",
 })
 
+_DURABLE_BUILDER_KEYS = frozenset({
+    "dispatch_manifest",
+    "canary",
+    "store",
+    "head_diff_store",
+})
+
 _SKILL_ARTIFACT_TO_BUILDER = {
     "Order (dispatch this)": "order",
     "Envelope stub (header fields the seat must copy verbatim)": "envelope_stub",
-    "Dispatch manifest (every slot's `orderPath`, `envelopeStubPath`, hashes)": "manifest",
+    "Orders manifest (every slot's `orderPath`, `envelopeStubPath`, hashes)": "manifest",
     "Landing — **engine** seat (`codex`/`cursor`)": "landing_engine",
     "Landing — **host** seat (`claude` native subagent)": "landing_host",
 }
@@ -54,6 +67,13 @@ _REF_ORDER_ARTIFACT_TO_BUILDER = {
 _REF_LANDING_ARTIFACT_TO_BUILDER = {
     "**Engine** (`codex`/`cursor`)": "landing_engine",
     "**Host** (`claude` native subagent)": "landing_host",
+}
+
+_REF_DURABLE_ARTIFACT_TO_BUILDER = {
+    "Dispatch manifest": "dispatch_manifest",
+    "Canary probe": "canary",
+    "Seat store": "store",
+    "Head-diff store": "head_diff_store",
 }
 
 
@@ -120,6 +140,35 @@ def _parse_three_column_landing_table(text):
     return rows
 
 
+def _parse_durable_record_table(text):
+    """Return {artifact_label: path_cell} from the durable-record artifacts table."""
+    idx = text.index("**Durable-record artifacts**")
+    chunk = text[idx:]
+    rows = {}
+    in_table = False
+    for line in chunk.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            if in_table and rows:
+                break
+            continue
+        if re.match(r"^\|\s*---", stripped):
+            in_table = True
+            continue
+        if not in_table:
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 2:
+            continue
+        artifact, path = cells[0], cells[1]
+        if artifact.lower() == "artifact":
+            continue
+        rows[artifact] = path
+    if not rows:
+        raise RuntimeError("durable-record artifacts table not parsed from round-driver.md")
+    return rows
+
+
 def _strip_path_prose(path_cell):
     """Drop trailing em-dash prose from a SKILL path cell."""
     return path_cell.split(" — ")[0].strip().strip("`")
@@ -153,14 +202,28 @@ def _instantiate_ref_landing_suffix(pattern, phase, skey, attempt):
                 .replace(".aK.", ".a%d." % attempt))
 
 
+def _instantiate_ref_durable_pattern(pattern, session, rnd, phase, skey, attempt, vendor):
+    path = pattern.strip().strip("`")
+    return (path.replace("$SESSION_DIR", session)
+                .replace("round-N", "round-%d" % rnd)
+                .replace("/P/", "/%s/" % phase)
+                .replace("/skey.", "/%s." % skey)
+                .replace("/vendor.", "/%s." % vendor)
+                .replace(".aK.", ".a%d." % attempt))
+
+
 def _code_paths(session=_TEST_SESSION, rnd=_TEST_RND, phase=_TEST_PHASE,
-                skey=_TEST_SKEY, attempt=_TEST_ATTEMPT):
+                skey=_TEST_SKEY, attempt=_TEST_ATTEMPT, vendor=_TEST_VENDOR):
     return {
         "order": RR.order_prompt_path(session, rnd, phase, skey, attempt),
         "envelope_stub": RR.envelope_stub_path(session, rnd, phase, skey, attempt),
         "manifest": RD._orders_manifest_path(session, rnd, phase, attempt),
         "landing_engine": RR.landing_path(session, rnd, phase, skey, attempt),
         "landing_host": RR.bare_payload_path(session, rnd, phase, skey, attempt),
+        "dispatch_manifest": RR.dispatch_manifest_path(session, rnd, phase, attempt),
+        "canary": RR.canary_path(session, rnd, vendor, attempt),
+        "store": RR.store_path(session, rnd, phase, skey, attempt),
+        "head_diff_store": RR.head_diff_store_path(session, rnd, phase, "code-reviewer", attempt),
     }
 
 
@@ -235,3 +298,26 @@ def test_round_driver_landing_table_matches_code_builders():
     unmapped = landing_builders - mapped_builders
     assert not unmapped, (
         "code landing builder(s) with no round-driver.md landing row: %s" % sorted(unmapped))
+
+
+def test_round_driver_durable_record_table_matches_code_builders():
+    """round-driver.md durable-record table ↔ store/manifest builders (both directions)."""
+    ref_rows = _parse_durable_record_table(_read(_REF))
+    mapped_builders = set()
+    homes = _code_paths()
+    for artifact, pattern in ref_rows.items():
+        builder_key = _REF_DURABLE_ARTIFACT_TO_BUILDER.get(artifact)
+        assert builder_key is not None, (
+            "round-driver.md durable-record row %r has no builder binding" % artifact)
+        mapped_builders.add(builder_key)
+        expected = _instantiate_ref_durable_pattern(
+            pattern, _TEST_SESSION, _TEST_RND, _TEST_PHASE, _TEST_SKEY, _TEST_ATTEMPT,
+            _TEST_VENDOR)
+        actual = homes[builder_key]
+        assert actual == expected, (
+            "round-driver.md durable-record %r drifted from %s\n  documented: %r\n  code home:   %r"
+            % (artifact, builder_key, expected, actual))
+    unmapped = _DURABLE_BUILDER_KEYS - mapped_builders
+    assert not unmapped, (
+        "code durable builder(s) with no round-driver.md durable-record row: %s"
+        % sorted(unmapped))
