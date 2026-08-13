@@ -193,6 +193,21 @@ roughly **47 Critical findings**, a majority of them restatements of a single al
 residual. That is not a review finding defects — it is a **bar mis-set**, and it burns the rounds the
 real findings need.
 
+### Bounded acceptance — prose-contract DoDs
+
+When the contract under review is prose, a definition-of-done written as *"no new uncovered
+state"* is unterminating. Five review rounds on one PR produced different, narrower findings
+every round and never zero — the bar kept moving because the contract had no fixed stopping
+point. The ratified bounded form is: no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed. That is the
+written rule rather than a per-build improvisation; it is the bar already applied in practice.
+Say plainly that an unterminating bar can only be abandoned, which is what *accept the residual at
+merge* keeps meaning — you name what you are shipping with, not pretend the bar was met when it
+was not.
+
+### The third-rework tripwire
+
+In one build, after two reworks of the same surface, a third rework of the same surface is the tripwire. What the tripwire demands is that the fourth patch does not happen and that the design signal is named, not that the build goes idle. On an otherwise-converged lane, stopping and handing the design signal up satisfies it — refusing the fourth patch, naming what the seam problem looks like in the handback, and shipping the remaining minors as disclosed follow-ups. When the build cannot truthfully hand back, a formal park binds when the lane has not converged — stopping is a park, with receipts, and lifting it is owner- or advisor-ruled rather than the builder's own call. Two field specimens deviated from the letter while honouring the substance, which is what prompted the ruling.
+
 ## Prose-driven review (`--post`, `--review-only`)
 
 A **prose-driven review** is a sanctioned lane on the read-only paths — not a shortcut, not a
