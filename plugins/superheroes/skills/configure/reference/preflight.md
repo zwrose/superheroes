@@ -54,7 +54,11 @@ These three are never config-inspected — each is **run for real**, once, right
 once: the MCP/extension connection exists, the per-origin approval is in place, and the dev
 server is actually reachable on the port this project is configured to use (the weekly-eats
 run-13 port-mismatch class of failure — the spine probing one port while the dev server binds
-another). This is a **host-tool action** — an MCP call the orchestrator makes directly; a Python
+another). The Playwright MCP **browser profile is a single-holder resource across concurrent
+sessions** — a second session gets a **hard refusal, not a queue**; a failed browser probe under
+parallel sessions is **contention**, not breakage, and must not be read as a broken tool — establish
+whether another session holds the profile before treating the failure as a preflight blocker. This
+is a **host-tool action** — an MCP call the orchestrator makes directly; a Python
 subprocess cannot drive a browser. Record the outcome yourself:
 
 ```python
@@ -148,10 +152,17 @@ never read.
 The `run` and `compose-liveness` subcommands also emit a top-level `configRead` object —
 `{status, reason, readError}` — recording whether the **core.md** read succeeded for that
 invocation. Model tiers are read separately by each consumer and are **not** covered by
-`configRead`. A non-null `reason` means the project's engine preferences were **not** read and
-any `crossVendorEngines` list in the same output is defaulted rather than configured. Fold the
-**reason token** and a **workspace-relative or redacted** path into the brief and the PR — not
-the raw absolute `readError` string.
+`configRead`. Distinguish three cases for `crossVendorEngines` in the same output: **configured**
+(the list was derived from the project's engine preferences because the read succeeded), **selected**
+(the caller passed an explicit `run --engine …` on the command line — a deliberate choice, not a
+default), and **defaulted** (preferences were not read — `configRead.reason` is non-null — and the
+probe derived engines without that read). Only the third case may be reported as defaulted, because
+only that case means the preferences were never read; recording an explicitly selected engine as a
+default misreports what actually ran. **Never fold a raw read-error line into the brief or the PR,
+from any field of these payloads** — carry the **reason token** and a **workspace-relative or
+redacted** path instead. That obligation covers the `configRead` object, the dispatch-calibration
+marker row, and any `compose-liveness` note whose `reason` is the raw read-error line (the probe
+appends one when `configRead.readError` is non-null).
 
 ### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
 
