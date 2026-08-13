@@ -3568,6 +3568,8 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                 phase, state, state.get("config") or {})
             if roster_reason is None and isinstance(roster, (list, tuple)):
                 roster = [s for s in roster if isinstance(s, str)]
+                # axis: REFUSAL of a hand fold when durable records exist at the pending slot — not
+                # whether the caller's artifact is correct, and not whether the records are complete.
                 found = _durable_slot_records(session_dir, rnd, phase, attempt, roster)
                 if found:
                     detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
@@ -4490,6 +4492,9 @@ def _slot_label(seat_key, occurrence):
 def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
     """Sorted slot labels whose store file EXISTS at (round, phase, attempt).
 
+    axis: EXISTENCE of a store file per roster slot — not readability; an unreadable record counts
+    as present so the fence fails closed.
+
     Existence probe only — not a read/parse check. The record-submit interleave fence must treat an
     UNREADABLE store file as PRESENT (the durable-record path already wrote something a hand submit
     would ignore). ``_seat_slot_records`` maps unreadable JSON to ``None``, which would let the
@@ -5324,6 +5329,10 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
 
 def _dispatch_manifest_disclosure(mpath, merr):
     """Operator-facing block when the dispatch manifest is absent or unreadable.
+
+    axis: which status is reported (absent vs unreadable) and that a path is named at all — not
+    whether the manifest's contents are valid, and never a refusal (a manifest-less run is a
+    disclosed degradation by design).
 
     Manifest-less runs are a disclosed degradation by design — this never refuses `advance`, only
     surfaces the expected path so an operator is not left guessing after a stall."""
