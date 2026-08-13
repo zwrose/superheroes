@@ -1202,9 +1202,11 @@ def test_owner_authority_allowlist_doc_matches_code():
         re.DOTALL,
     )
     assert schema_block, "owner-authority-allowlist.md: schema JSON block not found"
+    # bite-proof axis: every supported schema version is documented.
     for ver in oa.ALLOW_SCHEMA_VERSIONS:
         assert '"schemaVersion": %d' % ver in doc, (
             "owner-authority-allowlist.md missing schemaVersion %d" % ver)
+    # bite-proof axis: the v2 opt-in sentinel is documented.
     assert '"ref": "any"' in doc, (
         "owner-authority-allowlist.md missing v2 ref sentinel")
 
@@ -1224,13 +1226,17 @@ def test_owner_authority_allowlist_doc_matches_code():
             "owner-authority-allowlist.md missing ALLOWLISTABLE_ACTIONS member %r" % action)
 
     also_asks = _owner_authority_also_asks_bullet(doc)
+    _flag_token = r"(?<![-\w])%s(?![-\w])"
+    # bite-proof axis: every repo flag is named in the always-asks bullet.
     for flag in oa._REPO_FLAGS:
-        assert flag in also_asks, (
+        assert re.search(_flag_token % re.escape(flag), also_asks), (
             "owner-authority-allowlist.md 'Also asks' bullet missing _REPO_FLAGS "
             "member %r" % flag)
+    # bite-proof axis: every ref flag is named in that bullet.
     for flag in oa._REF_FLAGS:
-        assert flag in doc, (
-            "owner-authority-allowlist.md missing _REF_FLAGS member %r" % flag)
+        assert re.search(_flag_token % re.escape(flag), also_asks), (
+            "owner-authority-allowlist.md 'Also asks' bullet missing _REF_FLAGS "
+            "member %r" % flag)
 
     accepted_doc, refused_doc = _charset_lists_from_doc(doc)
     pattern = oa._LITERAL_SAFE_COMMAND

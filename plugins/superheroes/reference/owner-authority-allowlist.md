@@ -7,7 +7,7 @@
 5. [Worked example](#worked-example)
 6. [What can never be allowlisted](#what-can-never-be-allowlisted)
 7. [When the file is wrong](#when-the-file-is-wrong)
-8. [Limitations in v1](#limitations-in-v1)
+8. [Limitations](#limitations)
 
 # Owner-authority workflow allowlist
 
@@ -110,7 +110,7 @@ unreadable registry) → gate asks, file not read. **Promise:** nothing in this 
 beyond a workflow you named by hand — see the limitations below for what that name pins and what it
 does not (inputs, environment overrides).
 
-## Limitations in v1
+## Limitations
 
 - Hand-edited only; exact names only; **Claude Code only** (Codex hook config has no PreToolUse
   entry).
