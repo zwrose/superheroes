@@ -147,7 +147,7 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
 - Also asks regardless of the file: compound commands, env-var prefixes, absolute `gh` path,
   unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
   you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
-  `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them. **Known
-  limitation:** a dispatch that places a repository-selection flag before the `gh` subcommand is
-  not recognised by the gate at all, because the command patterns require `gh` adjacent to the
-  subcommand — honest disclosure only; no recipe here.
+  `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them.
+- **No prompt (silent bypass):** a dispatch that places a repository-selection flag before the
+  `gh` subcommand is not recognised by the gate at all, because the command patterns require `gh`
+  adjacent to the subcommand — honest disclosure only; no recipe here.

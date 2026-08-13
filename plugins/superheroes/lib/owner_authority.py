@@ -181,12 +181,8 @@ def read_allow_file(cwd, root=None):
         allows_refs = False
         if "ref" in item:
             if ver not in _REF_KEY_VERSIONS:
-                ref_versions = sorted(_REF_KEY_VERSIONS)
-                if len(ref_versions) == 1:
-                    bump_hint = "schemaVersion %d" % ref_versions[0]
-                else:
-                    bump_hint = "schemaVersion " + " or ".join(
-                        str(v) for v in ref_versions)
+                bump_hint = "schemaVersion " + " or ".join(
+                    str(v) for v in sorted(_REF_KEY_VERSIONS))
                 notes.append(("malformed", action,
                                 "ignored entry with ref key under schemaVersion %s — "
                                 "bump owner-authority-allow.json to %s"
@@ -194,9 +190,12 @@ def read_allow_file(cwd, root=None):
                 continue
             ref_val = item.get("ref")
             if not isinstance(ref_val, str) or ref_val != _REF_ANY_SENTINEL:
+                ref_hint = "schemaVersion " + " or ".join(
+                    str(v) for v in sorted(_REF_KEY_VERSIONS))
                 notes.append(("malformed", action,
-                                "ignored entry with invalid ref %r — only ref: \"any\" "
-                                "is supported under schemaVersion 2" % ref_val))
+                                "ignored entry with invalid ref %r — only ref: %r "
+                                "is supported under %s"
+                                % (ref_val, _REF_ANY_SENTINEL, ref_hint)))
                 continue
             allows_refs = True
 

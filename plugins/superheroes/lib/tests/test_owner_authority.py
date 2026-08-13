@@ -369,6 +369,8 @@ def test_workflow_run_dispatch_accepts(command, expected):
     # ref flag edge cases — refuse
     "gh workflow run --ref= deploy.yml",
     "gh workflow run --ref a --ref b deploy.yml",
+    # --ref consumes main as its value, leaving zero positionals (distinct from empty/missing value)
+    "gh workflow run --ref main",
     "gh workflow run --ref=main$ deploy.yml",
 ])
 def test_workflow_run_dispatch_refuses(command):
@@ -1012,3 +1014,17 @@ def test_v2_entry_covers_bare_dispatch(tmp_path, monkeypatch):
     _write_allow_at(store, _V2_ALLOW_FILE)
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
     assert oa.classify('gh workflow run "Preview seed"', str(tmp_path)) == ("allow", "")
+
+
+@pytest.mark.parametrize("schema_version", [1, 2])
+def test_classify_file_supplied_allows_refs_never_authorizes_ref_dispatch(
+        schema_version, tmp_path, monkeypatch):
+    """allows_refs in file input is never honored — only derived from validated ref sentinel."""
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": schema_version, "allow": [
+        {"action": "run-workflow", "workflow": "Preview seed", "allows_refs": True},
+    ]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    cmd = 'gh workflow run "Preview seed" --ref my-feature-branch'
+    decision, _ = oa.classify(cmd, str(tmp_path))
+    assert decision == "ask", cmd

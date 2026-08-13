@@ -1196,16 +1196,13 @@ def test_owner_authority_allowlist_doc_matches_code():
     assert oa.ALLOW_FILENAME in doc, (
         "owner-authority-allowlist.md missing ALLOW_FILENAME %r" % oa.ALLOW_FILENAME)
 
-    schema_block = re.search(
-        r"```json\n(\{.*?\})\n```",
-        doc,
-        re.DOTALL,
-    )
-    assert schema_block, "owner-authority-allowlist.md: schema JSON block not found"
-    # bite-proof axis: every supported schema version is documented.
+    schema_blocks = re.findall(r"```json\n(.*?)\n```", doc, re.DOTALL)
+    assert schema_blocks, "owner-authority-allowlist.md: schema JSON block not found"
+    # bite-proof axis: every supported schema version is documented in a schema JSON block.
     for ver in oa.ALLOW_SCHEMA_VERSIONS:
-        assert '"schemaVersion": %d' % ver in doc, (
-            "owner-authority-allowlist.md missing schemaVersion %d" % ver)
+        assert any('"schemaVersion": %d' % ver in block for block in schema_blocks), (
+            "owner-authority-allowlist.md missing schemaVersion %d in a schema JSON block"
+            % ver)
     # bite-proof axis: the v2 opt-in sentinel is documented.
     assert '"ref": "%s"' % oa._REF_ANY_SENTINEL in doc, (
         "owner-authority-allowlist.md missing v2 ref sentinel")
@@ -1232,11 +1229,22 @@ def test_owner_authority_allowlist_doc_matches_code():
         assert re.search(_flag_token % re.escape(flag), also_asks), (
             "owner-authority-allowlist.md 'Also asks' bullet missing _REPO_FLAGS "
             "member %r" % flag)
-    # bite-proof axis: every ref flag is named in that bullet.
+    # bite-proof axis: ref-policy conditional — ref flags ask unless v2+sentinel covers them.
     for flag in oa._REF_FLAGS:
         assert re.search(_flag_token % re.escape(flag), also_asks), (
             "owner-authority-allowlist.md 'Also asks' bullet missing _REF_FLAGS "
             "member %r" % flag)
+    ref_versions = sorted(oa._REF_KEY_VERSIONS)
+    ref_policy = re.compile(
+        r"unless.*?schemaVersion:\s*(%s).*?ref:\s*[\"']%s[\"']"
+        % ("|".join(str(v) for v in ref_versions),
+           re.escape(oa._REF_ANY_SENTINEL)),
+        re.I | re.DOTALL,
+    )
+    assert ref_policy.search(also_asks), (
+        "owner-authority-allowlist.md 'Also asks' bullet missing ref-policy conditional "
+        "(ref flags ask unless schemaVersion %s entry with ref: %r covers them)"
+        % (" or ".join(str(v) for v in ref_versions), oa._REF_ANY_SENTINEL))
 
     accepted_doc, refused_doc = _charset_lists_from_doc(doc)
     pattern = oa._LITERAL_SAFE_COMMAND
