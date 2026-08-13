@@ -2198,7 +2198,7 @@ def test_resurrection_plan_unknown_sign_in_path_raises_at_reseed_dispatch(privat
 
 
 def test_resurrection_plan_in_contract_sign_in_paths_do_not_raise_at_reseed_dispatch(private_tmp):
-    """In-contract signInPath values must reach dispatch without the reseed guard raising."""
+    """In-contract signInPath values must reach reseed dispatch and return its outcome."""
     policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
     journal_path = os.path.join(private_tmp, "j.jsonl")
@@ -2211,7 +2211,7 @@ def test_resurrection_plan_in_contract_sign_in_paths_do_not_raise_at_reseed_disp
         _effects_escape_record(attended_block),
         _cleanup_containment_record(attended_block, attended_receipt),
     )
-    pc.resurrection_plan(
+    attended_plan = pc.resurrection_plan(
         policy,
         attended_block,
         _SLOT_REF,
@@ -2226,6 +2226,8 @@ def test_resurrection_plan_in_contract_sign_in_paths_do_not_raise_at_reseed_disp
         identity_provenance="observed",
         identity_strength="strong",
     )
+    assert attended_plan["action"] == pc.ACTION_PARK
+    assert attended_plan["reason"] == pc.REASON_ATTENDED_RESEED_REQUIRES_OWNER
 
     minted_block = _pilot_block(cleanup_script)
     minted_block["signInPath"] = "minted"
@@ -2245,7 +2247,7 @@ def test_resurrection_plan_in_contract_sign_in_paths_do_not_raise_at_reseed_disp
         _effects_escape_record(minted_block),
         _cleanup_containment_record(minted_block, minted_receipt),
     )
-    pc.resurrection_plan(
+    minted_plan = pc.resurrection_plan(
         policy,
         minted_block,
         _SLOT_REF,
@@ -2261,6 +2263,7 @@ def test_resurrection_plan_in_contract_sign_in_paths_do_not_raise_at_reseed_disp
         identity_provenance="observed",
         identity_strength="strong",
     )
+    assert minted_plan["action"] == pc.ACTION_RESURRECT
 
 
 def test_resurrection_plan_unmapped_dispatch_kind_raises(private_tmp, monkeypatch):
