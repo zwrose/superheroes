@@ -697,7 +697,15 @@ fail-closed by `lib/launch_doctrine.py`) — never reconstructed from session me
 (LEDGERS.md §4 seat ruling B). The launcher stamps the premise durably at dispatch in
 `lib/launch_ledger.py`: base commit, surfaces, enumerated grant scope, owner-capability
 preconditions with a stated horizon, and the standing exclusions it applies itself (release
-PRs excluded, force-push never). That record carries R1's mechanical park/refusal accounting
+PRs excluded, force-push never). **The launcher also provisions the build worktree** (#974):
+`launch` creates it before spawning — one per launch, detached at the premise's base commit,
+under `SUPERHEROES_WORKTREES_ROOT` when set and `~/.superheroes-worktrees` otherwise — records
+its path on the `reserved` record, and starts the session with that worktree as its working
+directory, never the primary checkout. A target path that already exists on disk, or that git
+still registers, is a **collision**: the launch refuses (`launch-worktree-collision`) rather than
+reuse a checkout another build may be holding. The `own-worktree` standing ruling stays in the
+composed prompt as defense in depth — a builder that never sees the primary checkout cannot
+violate it. That record carries R1's mechanical park/refusal accounting
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
 parks is a signal to inspect, never a clean sheet. The same record also carries **post-terminal
 amendments** — a second terminal-outcome write, an advisor vet ruling, or an evidence correction —

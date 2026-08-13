@@ -521,6 +521,12 @@ above).
    The project can change the builder tier through `configure`'s tune menu; an unset or unreadable
    configuration resolves to **`opus`**, never to an inherited session tier. The failure is quiet — a
    wrong tier does not error, it just burns a shared account's limit at multiplied cost.
+   **The launcher provisions each build's worktree** — `launch` creates it pre-spawn, one per launch,
+   detached at the premise's base commit, records the path on the `reserved` record, and starts the
+   session inside it, so **you never hand a builder a worktree and never launch one into the primary
+   checkout**. A path that already exists or that git still registers **refuses the launch**
+   (`launch-worktree-collision`) — reap the stale checkout, then relaunch; never force it.
+   Reaping a finished lane's worktree is yours, not the builder's.
    **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
    isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
    needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A

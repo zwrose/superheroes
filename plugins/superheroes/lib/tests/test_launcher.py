@@ -2,6 +2,7 @@ import argparse
 import importlib.util
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -110,6 +111,13 @@ def _valid_premise(repo, **overrides):
     }
     base.update(overrides)
     return base
+
+
+def _spawn_cwd(tmp_path):
+    """A build-worktree stand-in: `_spawn_attempt` refuses a cwd that is the repo root."""
+    path = tmp_path / "build-worktree"
+    path.mkdir(parents=True, exist_ok=True)
+    return str(path)
 
 
 def _write_json(path, data):
@@ -2304,6 +2312,7 @@ def test_spawn_attempt_exports_heartbeat_env_without_ledger_root(tmp_path, monke
         900000,
         env={ll.LEDGER_ROOT_ENV: ledger_root},
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
     )
     assert result["ok"] is True
     assert captured.get(hb.LAUNCH_ID_ENV) == launch_id
@@ -2355,6 +2364,7 @@ def test_spawn_attempt_exports_slot_ref_when_supplied(tmp_path, monkeypatch):
         900000,
         env={ll.LEDGER_ROOT_ENV: ledger_root},
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
         slot="slot-a",
         generation=1,
     )
@@ -2390,6 +2400,7 @@ def test_spawn_attempt_omits_slot_ref_without_generation(tmp_path, monkeypatch):
         900000,
         env={ll.LEDGER_ROOT_ENV: ledger_root},
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
         slot="slot-a",
         generation=None,
     )
@@ -2441,6 +2452,7 @@ def test_spawn_attempt_strips_inherited_slot_ref_when_unslotted(tmp_path, monkey
         900000,
         env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: stale_ref},
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
     )
     assert result["ok"] is True
     assert L.SLOT_REF_ENV not in captured
@@ -2490,6 +2502,7 @@ def test_spawn_attempt_replaces_inherited_slot_ref_when_slotted(tmp_path, monkey
         900000,
         env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: stale_ref},
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
         slot="slot-a",
         generation=1,
     )
@@ -2544,6 +2557,7 @@ def test_spawn_attempt_strips_slot_ref_from_process_env_when_unslotted(
         900000,
         env=None,
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
     )
     assert result["ok"] is True
     assert L.SLOT_REF_ENV not in captured
@@ -2593,6 +2607,7 @@ def test_spawn_attempt_strips_empty_string_slot_ref_when_unslotted(tmp_path, mon
         900000,
         env={ll.LEDGER_ROOT_ENV: ledger_root, L.SLOT_REF_ENV: ""},
         spawn_fn=capture_spawn,
+        cwd=_spawn_cwd(tmp_path),
     )
     assert result["ok"] is True
     assert L.SLOT_REF_ENV not in captured
@@ -3782,3 +3797,209 @@ def test_slot_gate_policy_bite_pass_to_refuse_no_calibration(tmp_path, monkeypat
         L._SLOT_CALIBRATION_POLICY[cause] = saved
     green = L.walk_preflight(_all_checks(), repo, batch_id="wave-test")
     assert green["ok"] is True
+
+
+# --- build worktree (#974) ---------------------------------------------------
+
+
+def _worktree_root(tmp_path, monkeypatch):
+    root = str(tmp_path / "worktrees")
+    monkeypatch.setenv(L.WORKTREES_ROOT_ENV, root)
+    return root
+
+
+def _git(repo, *args):
+    return subprocess.run(
+        ["git", "-C", repo, *args], capture_output=True, text=True, check=True,
+    ).stdout.strip()
+
+
+def test_launch_spawns_child_in_build_worktree_never_repo_root(tmp_path, monkeypatch):
+    # axis: the spawned session's cwd is a dedicated build worktree, never the primary checkout
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    seen = {}
+
+    def capture_spawn(argv, cwd, out_fh, err_fh, child_env):
+        seen["cwd"] = cwd
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=capture_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    cwd = seen["cwd"]
+    assert os.path.realpath(cwd) != os.path.realpath(repo)
+    assert result["worktree"] == cwd
+    assert os.path.isdir(cwd)
+    # It is a real, registered worktree of THIS repo, parked at the premise's base commit.
+    registered = L._registered_worktree_paths(repo)
+    assert os.path.realpath(cwd) in registered
+    assert _git(cwd, "rev-parse", "HEAD") == _head_sha(repo)
+    assert _git(cwd, "rev-parse", "--show-toplevel")
+
+
+def test_launch_records_worktree_on_the_reserved_record(tmp_path, monkeypatch):
+    # axis: the worktree is registered in the durable record, pre-spawn
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    records = ll.read(repo)["records"]
+    reserved = [r for r in records if r["event"] == "reserved"]
+    assert reserved[0]["worktree"] == result["worktree"]
+    assert ll.fold(records)["ok"] is True
+
+
+def test_launch_refuses_a_worktree_path_collision_and_never_reuses_it(tmp_path, monkeypatch):
+    # axis: collision refuses loudly; the occupied checkout is neither reused nor spawned into
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    occupied = tmp_path / "occupied"
+    occupied.mkdir()
+    (occupied / "someone-elses-work.txt").write_text("uncommitted\n")
+    monkeypatch.setattr(L, "build_worktree_path", lambda *a, **k: str(occupied))
+    spawned = {"n": 0}
+
+    def counting_spawn(argv, cwd, out_fh, err_fh, child_env):
+        spawned["n"] += 1
+        return _make_spawn_fn("sleep")(argv, cwd, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=counting_spawn,
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "launch-worktree-collision"
+    assert result["path"] == str(occupied)
+    assert "one worktree per build" in result["remedy"].lower()
+    assert spawned["n"] == 0
+    assert (occupied / "someone-elses-work.txt").read_text() == "uncommitted\n"
+    # The refusal is accounted in the ledger, not silently dropped.
+    records = ll.read(repo)["records"]
+    refused = [r for r in records if r.get("event") == "refused"]
+    assert refused
+    assert refused[-1]["reason"] == "launch-worktree-collision"
+    assert refused[-1]["stage"] == "worktree"
+
+
+def test_create_build_worktree_refuses_a_path_git_still_registers(tmp_path, monkeypatch):
+    # axis: never reuse — a registered-but-vanished worktree is a collision, not a free path
+    repo = _init_repo(tmp_path / "repo")
+    _worktree_root(tmp_path, monkeypatch)
+    path = str(tmp_path / "wt-a")
+    first = L.create_build_worktree(repo, path, _head_sha(repo))
+    assert first["ok"] is True
+    shutil.rmtree(path)
+    assert not os.path.exists(path)
+    again = L.create_build_worktree(repo, path, _head_sha(repo))
+    assert again["ok"] is False
+    assert again["reason"] == "launch-worktree-collision"
+
+
+def test_create_build_worktree_refuses_when_the_worktree_list_is_unreadable(
+    tmp_path, monkeypatch,
+):
+    # axis: an unreadable worktree list fails closed rather than assuming the path is free
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(L, "_registered_worktree_paths", lambda *a, **k: None)
+    result = L.create_build_worktree(repo, str(tmp_path / "wt-b"), _head_sha(repo))
+    assert result["ok"] is False
+    assert result["reason"] == "launch-worktree-list-failed"
+
+
+def test_spawn_attempt_refuses_a_cwd_that_is_the_repo_root(tmp_path, monkeypatch):
+    # axis: the own-worktree invariant is enforced at the spawn chokepoint, not per caller
+    repo = _init_repo(tmp_path / "repo")
+    ledger_root = _ledger_env(tmp_path, monkeypatch)
+    launch_id = "launch-cwd-guard"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-cwd-guard",
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "abc",
+        "model": "test",
+    })
+    spawned = {"n": 0}
+
+    def counting_spawn(argv, cwd, out_fh, err_fh, child_env):
+        spawned["n"] += 1
+        raise AssertionError("must not spawn")
+
+    log_dir = str(tmp_path / "logs")
+    os.makedirs(log_dir)
+    for cwd, expected in (
+        (repo, "spawn-cwd-is-repo-root"),
+        (os.path.join(repo, "..", os.path.basename(repo)), "spawn-cwd-is-repo-root"),
+        (None, "spawn-cwd-missing"),
+        ("", "spawn-cwd-missing"),
+    ):
+        result = L._spawn_attempt(
+            repo,
+            launch_id,
+            1,
+            ["claude", "-p", "test"],
+            os.path.join(log_dir, "out.log"),
+            os.path.join(log_dir, "err.log"),
+            900000,
+            env={ll.LEDGER_ROOT_ENV: ledger_root},
+            spawn_fn=counting_spawn,
+            cwd=cwd,
+        )
+        assert result["ok"] is False
+        assert result["reason"] == expected
+    assert spawned["n"] == 0
+
+
+def test_build_worktree_path_is_unique_per_launch_and_names_the_issue(tmp_path, monkeypatch):
+    # axis: one worktree per BUILD — an adoption relaunch of the same issue gets its own path
+    repo = _init_repo(tmp_path / "repo")
+    root = _worktree_root(tmp_path, monkeypatch)
+    first = L.build_worktree_path(repo, 974, "launch-aaaaaaaaaaaaaaaa")
+    second = L.build_worktree_path(repo, 974, "launch-bbbbbbbbbbbbbbbb")
+    assert first != second
+    assert first.startswith(root + os.sep)
+    assert os.path.basename(first).startswith("issue-974-")
+    assert os.path.basename(os.path.dirname(first)) == os.path.basename(repo)
+    assert L.build_worktree_path(repo, 974, "") is None
+
+
+def test_worktree_root_prefers_the_env_then_home(tmp_path, monkeypatch):
+    # axis: worktrees land outside the repo — under the configured root, else the home default
+    monkeypatch.setenv(L.WORKTREES_ROOT_ENV, str(tmp_path / "explicit"))
+    assert L.worktree_root() == str(tmp_path / "explicit")
+    monkeypatch.delenv(L.WORKTREES_ROOT_ENV, raising=False)
+    assert L.worktree_root({"HOME": "/home/someone"}) == os.path.join(
+        "/home/someone", L.WORKTREES_DIR_NAME,
+    )
+    assert L.worktree_root({"HOME": "relative/path"}) is None

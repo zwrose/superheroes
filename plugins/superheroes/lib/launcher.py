@@ -29,6 +29,8 @@ import pilot_calibration  # noqa: E402
 import pilot_slot  # noqa: E402
 
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
+WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
+WORKTREES_DIR_NAME = ".superheroes-worktrees"
 
 STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 
@@ -49,6 +51,17 @@ _GIT_SCRUB_VARS = (
 
 _VALID_STATES = frozenset({"pass", "fail", "na"})
 _HEX40 = re.compile(r"^[0-9a-fA-F]{40}$")
+
+_WORKTREE_GIT_TIMEOUT = 180
+_WORKTREE_TAG_UNSAFE = re.compile(r"[^A-Za-z0-9._-]")
+
+_WORKTREE_COLLISION_REMEDY = (
+    "A build worktree already exists at this path (on disk, or registered with git and "
+    "since removed). One worktree per build — the launcher never reuses or forces one, "
+    "because a shared checkout is how one session's `git checkout` wiped a sibling's "
+    "uncommitted work. Reap the stale worktree first (`git worktree remove <path>`, or "
+    "`git worktree prune` when the directory is already gone), then relaunch."
+)
 
 _WORKHORSE_CMD = "/superheroes:workhorse"
 
@@ -144,6 +157,86 @@ def _git_scrubbed(repo_root, *args, env=None, timeout=None):
 
 def _append_under_lock(repo_root, record, env=None):
     return ll.append_under_lock(repo_root, record, env=env)
+
+
+def worktree_root(env=None):
+    """Where build worktrees live. ``SUPERHEROES_WORKTREES_ROOT`` wins; else ~/. Never raises."""
+    base = dict(env if env is not None else os.environ)
+    configured = base.get(WORKTREES_ROOT_ENV)
+    if isinstance(configured, str) and configured.strip():
+        return os.path.abspath(os.path.expanduser(configured.strip()))
+    home = base.get("HOME")
+    if not isinstance(home, str) or not home.strip():
+        home = os.path.expanduser("~")
+    if not os.path.isabs(home):
+        return None
+    return os.path.join(home, WORKTREES_DIR_NAME)
+
+
+def _repo_tag(repo_root):
+    """A readable, filesystem-safe stem for the repo the build belongs to."""
+    tag = _WORKTREE_TAG_UNSAFE.sub("-", os.path.basename(os.path.abspath(repo_root)))
+    return tag.strip("-") or "repo"
+
+
+def build_worktree_path(repo_root, issue, launch_id, env=None):
+    """The path this launch's build worktree gets. One per launch, never shared.
+
+    The launch id's suffix is what makes the name unique per launch: an adoption launch
+    for an issue whose prior lane still has a worktree on disk gets its own path rather
+    than colliding with — or reusing — the dead build's checkout.
+    """
+    root = worktree_root(env=env)
+    if not root:
+        return None
+    suffix = launch_id.rsplit("-", 1)[-1][:8] if isinstance(launch_id, str) else ""
+    if not suffix:
+        return None
+    return os.path.join(root, _repo_tag(repo_root), "issue-%s-%s" % (issue, suffix))
+
+
+def _registered_worktree_paths(repo_root, env=None):
+    """Realpaths git currently registers as worktrees, or None when unreadable."""
+    proc = _git_scrubbed(
+        repo_root, "worktree", "list", "--porcelain",
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if proc is None or proc.returncode != 0:
+        return None
+    paths = set()
+    for line in (proc.stdout or "").splitlines():
+        if line.startswith("worktree "):
+            paths.add(os.path.realpath(line[len("worktree "):].strip()))
+    return paths
+
+
+def create_build_worktree(repo_root, path, base_commit, env=None):
+    """Create the build worktree at *path*, detached at *base_commit*. Never raises.
+
+    Fail-closed on every uncertainty: a path that already exists on disk, a path git
+    still registers, an unreadable worktree list, or a failed `git worktree add` all
+    refuse rather than hand a builder a checkout someone else may be holding.
+    """
+    if os.path.lexists(path):
+        return _fail("launch-worktree-collision", path=path, remedy=_WORKTREE_COLLISION_REMEDY)
+    registered = _registered_worktree_paths(repo_root, env=env)
+    if registered is None:
+        return _fail("launch-worktree-list-failed", path=path)
+    if os.path.realpath(path) in registered:
+        return _fail("launch-worktree-collision", path=path, remedy=_WORKTREE_COLLISION_REMEDY)
+    try:
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+    except OSError:
+        return _fail("launch-worktree-root-create-failed", path=path)
+    proc = _git_scrubbed(
+        repo_root, "worktree", "add", "--detach", path, base_commit,
+        env=env, timeout=_WORKTREE_GIT_TIMEOUT,
+    )
+    if proc is None or proc.returncode != 0:
+        return _fail("launch-worktree-create-failed", path=path)
+    if not os.path.isdir(path):
+        return _fail("launch-worktree-create-failed", path=path)
+    return {"ok": True, "reason": None, "path": path}
 
 
 def _parse_json_object(text, duplicate_reason):
@@ -758,10 +851,10 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
     }
 
 
-def _default_spawn(argv, repo_root, out_fh, err_fh, child_env):
+def _default_spawn(argv, cwd, out_fh, err_fh, child_env):
     return subprocess.Popen(
         argv,
-        cwd=repo_root,
+        cwd=cwd,
         stdin=subprocess.DEVNULL,
         stdout=out_fh,
         stderr=err_fh,
@@ -816,9 +909,19 @@ def _spawn_attempt(
     spawn_fn=None,
     slot=None,
     generation=None,
+    cwd=None,
 ):
-    """Spawn one attempt; return dict with ok, proc, reason."""
+    """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
+
+    Every spawn this launcher makes passes through here, so the own-worktree invariant is
+    asserted here rather than at each caller: a child whose cwd is the primary checkout is
+    refused, never spawned.
+    """
     spawn = spawn_fn or _default_spawn
+    if not isinstance(cwd, str) or not cwd.strip():
+        return {"ok": False, "reason": "spawn-cwd-missing", "proc": None}
+    if os.path.realpath(cwd) == os.path.realpath(repo_root):
+        return {"ok": False, "reason": "spawn-cwd-is-repo-root", "proc": None}
     child_env = _scrub_env(env)
     child_env[hb.LAUNCH_ID_ENV] = launch_id
     if slot is not None and generation is not None:
@@ -840,7 +943,7 @@ def _spawn_attempt(
         return {"ok": False, "reason": "log-open-failed", "proc": None}
 
     try:
-        proc = spawn(argv, repo_root, out_fh, err_fh, child_env)
+        proc = spawn(argv, cwd, out_fh, err_fh, child_env)
     except OSError:
         out_fh.close()
         err_fh.close()
@@ -1003,6 +1106,24 @@ def launch_build(
     doctrine = compose_result["doctrine"]
     argv = compose_result["argv"]
 
+    worktree_path = build_worktree_path(repo_root, issue, launch_id, env=env)
+    if not worktree_path:
+        reserve_result = _try_reserve_for_refusal(
+            repo_root, launch_id, issue, stamped, preflight_result, compose_result, env,
+            slot=slot, generation=generation, boundary=boundary,
+        )
+        if reserve_result.get("reserved"):
+            term = _terminalize(
+                repo_root, launch_id, False, "launch-worktree-path-unresolvable",
+                stage="worktree", env=env,
+            )
+            if not term["ok"]:
+                return _fail(
+                    _terminalization_reason(term, "launch-worktree-path-unresolvable"),
+                    launchId=launch_id,
+                )
+        return _fail("launch-worktree-path-unresolvable", launchId=launch_id)
+
     resolution = compose_result["modelResolution"]
     model_reason = resolution["reason"]
     reserved = {
@@ -1021,6 +1142,7 @@ def launch_build(
         "model": compose_result["model"],
         "modelSource": resolution["source"],
         "modelReason": model_reason if model_reason is not None else "",
+        "worktree": worktree_path,
     }
     if slot is not None:
         reserved["slot"] = slot
@@ -1059,6 +1181,25 @@ def launch_build(
             launchId=launch_id,
             **_preflight_extra(slot_refusal),
         )
+
+    worktree_result = create_build_worktree(
+        repo_root, worktree_path, stamped["baseCommit"], env=env,
+    )
+    if not worktree_result["ok"]:
+        refusal_reason = worktree_result["reason"]
+        term = _terminalize(
+            repo_root,
+            launch_id,
+            False,
+            refusal_reason,
+            stage="worktree",
+            env=env,
+        )
+        reason = _terminalization_reason(term, refusal_reason)
+        extra = {"path": worktree_result["path"]}
+        if "remedy" in worktree_result:
+            extra["remedy"] = worktree_result["remedy"]
+        return _fail(reason, launchId=launch_id, **extra)
 
     try:
         os.makedirs(log_dir, mode=0o700, exist_ok=True)
@@ -1104,6 +1245,7 @@ def launch_build(
             spawn_fn=spawn_fn,
             slot=slot,
             generation=generation,
+            cwd=worktree_path,
         )
         if spawn_result.get("refused"):
             return _fail(spawn_result["reason"], launchId=launch_id)
@@ -1207,6 +1349,7 @@ def launch_build(
                 "attempt": attempt,
                 "model": compose_result["model"],
                 "modelResolution": compose_result["modelResolution"],
+                "worktree": worktree_path,
             }
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
