@@ -708,7 +708,7 @@ launches still refuse — see `lib/launch_ledger.py` for the authoritative seman
 every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
 `ledger_path()` reports). The
 Showrunner advisor invokes the launcher
-per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
+per launch; the eight dispatch-preflight checks live in `skills/showrunner/reference/dispatch-preflight.md` and the artifact, bound
 by a drift test — cite those homes, do not duplicate them here. The recovery half —
 adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript
 pinning, liveness reads, and quota-death suspicion — lives in `rubric/launch-doctrine.md` §
@@ -1139,10 +1139,11 @@ this section is enough to block a hook or gate that skipped either step.
 ## 14. Owner involvement before the merge click
 
 > **Contract framing, not the operative rule.** Repo-root conventions do not ship in the plugin
-> package (`plugins/superheroes/**` does). The two tests, the perceivability list, the
+> package (`plugins/superheroes/**` does). The two tests, the
 > **show it** / **say it** / **nothing to see** levels, and the presentation duty live in the
 > **Showrunner charter**
-> (`skills/showrunner/SKILL.md`) so a consuming **advisor** can read them. This section records
+> (`skills/showrunner/SKILL.md`); the perceivability list lives in
+> `skills/showrunner/reference/perceivability.md` so a consuming **advisor** can read them. This section records
 > why the rule keys on what it keys on, what standard it holds itself to, what evidence backs
 > it, and what is still unbuilt — it does **not** duplicate that list (§11: two hand-maintained
 > copies with no drift test is a review-blocking violation).
@@ -1156,11 +1157,11 @@ what must happen *before* that constant fires.
 **Key on behavior, not file paths.** File-based heuristics miss most of what owners care about —
 copy, defaults, cost, what gets emitted on their behalf, visual surface. The ruling keys on two
 behavioral tests instead — **Test 1** (perceivability without reading the diff) and **Test 2**
-(owner taste or trade vs. craft judgment the review lenses own). Operative wording, the default
-perceivability list, the **show it** / **say it** / **nothing to see** levels, and the
+(owner taste or trade vs. craft judgment the review lenses own). Operative wording, the **show it** / **say it** / **nothing to see** levels, and the
 presentation standard the charter sets — judged by
 zero reconstruction, show the after-state — live in the **Showrunner charter**
-(`skills/showrunner/SKILL.md`); cite that home, do not restate it here.
+(`skills/showrunner/SKILL.md`); the default perceivability list lives in
+`skills/showrunner/reference/perceivability.md` — cite those homes, do not restate them here.
 
 **Why one test is not enough.** Test 1's net is deliberately wide; alone it would catch a large
 share of any project's work and spend *more* owner attention, not less. Test 2 discriminates craft
