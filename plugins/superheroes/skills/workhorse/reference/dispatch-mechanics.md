@@ -227,6 +227,12 @@ stdout, and deliver nothing gradeable through our transport (`stages.engaged: tr
 
 ## Supervised write dispatch
 
+`~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
+invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
+in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
+that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
+may be another session's settings.
+
 The sanctioned way to dispatch a long-running **external implementer** is the supervised runner:
 
 ```bash
@@ -271,12 +277,6 @@ premise field owned by [#656](https://github.com/zwrose/superheroes/issues/656)*
 nowhere.
 
 ### Write-report contract
-
-`~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
-invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
-in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
-that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
-may be another session's settings.
 
 On every `dispatch-write` call, the runner **appends** a write-report contract to the caller's
 prompt — the caller does not author it and cannot opt out. It is **additional to** the prose receipts

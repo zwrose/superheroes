@@ -196,21 +196,17 @@ above).
      to disclose it; the provenance
      is the trigger. When a builder parks here, the tripwire is firing as designed — **welcome it
      and go looking for the design problem**, rather than ordering another rework.
-     **`a third rework of the same surface is the tripwire`** — the fourth patch must not happen
-     and the design signal must be named, not the build going idle. On an otherwise-converged lane,
-     **`stopping and handing the design signal up satisfies it`**: the builder refuses the fourth
+     **a third rework of the same surface is the tripwire** — the fourth patch must not happen and
+     the design signal must be named, not the build going idle. On an otherwise-converged lane,
+     **stopping and handing the design signal up satisfies it**: the builder refuses the fourth
      patch, names the seam problem in its handback, and ships remaining minors as disclosed
-     follow-ups; grade that as satisfying the tripwire, not as a deviation. **`a formal park binds
-     when the lane has not converged`** — lifting that park is yours or the owner's call, never the
+     follow-ups; grade that as satisfying the tripwire, not as a deviation. **a formal park binds when the lane has not converged** — lifting that park is yours or the owner's call, never the
      builder's. Canonical ruling: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
      under `### The third-rework tripwire`.
    - **Bounded acceptance for prose-contract DoDs** (canonical:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` under
      `### Bounded acceptance — prose-contract DoDs`): when the contract under review is prose, a
-     definition-of-done written as "no new uncovered state" cannot be satisfied —
-     **`an unterminating bar can only be abandoned`** — so the ratified bounded form is **`no new
-     Critical or Important finding in a review round on the final head`**, after a stated number of
-     rounds, **`with Minor residuals disclosed`**.
+     definition-of-done written as "no new uncovered state" cannot be satisfied — **an unterminating bar can only be abandoned** — so the ratified bounded form is **no new Critical or Important finding in a review round on the final head**, after a stated number of rounds, **with Minor residuals disclosed**.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where

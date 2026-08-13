@@ -366,8 +366,9 @@ work-order protocol:
   `agents/implementer.md`, minus its frontmatter, verbatim** into the dispatch prompt.
 - **Cited paths in every implementer dispatch** — **resolve this plugin's root and pass any path an
   order cites as an absolute path** (or pre-resolved against the absolute plugin root) into every
-  implementer dispatch — an implementer cannot resolve a `${CLAUDE_PLUGIN_ROOT}`-relative or
-  plugin-relative path on its own, and a cited path it cannot open is a stalled order.
+  implementer dispatch — an implementer cannot resolve a path written against the plugin-root
+  variable or a plugin-relative path on its own, and a cited path it cannot open is a stalled
+  order.
 
 **Every implementer write-dispatch declares its deliverables.** Pass `--expect-item <path>`
 (repeatable) or `--expect-items-file <file>` on `dispatch-write`, naming every file the order must
@@ -449,7 +450,11 @@ then carries its own provenance through any number of session deaths.
 A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
-**third** rework of the same surface in one build, **a third rework of the same surface is the tripwire** — the fourth patch does not happen and the design signal must be named, not that the build goes idle. On an otherwise-converged lane, **stopping and handing the design signal up satisfies it** — refuse the fourth patch, name the seam problem in the handback, ship remaining minors as disclosed follow-ups. Say what the seam problem looks like. **a formal park binds when the lane has not converged** — where the build cannot truthfully hand back, park with receipts; resumption after the park is owner- or advisor-ruled — a builder cannot lift the park on its own.
+**third** rework of the same surface in one build, **a third rework of the same surface is the tripwire** — what it demands is that the fourth patch does not happen and the design signal must be
+named, not that the build goes idle. On an otherwise-converged lane, **stopping and handing the design signal up satisfies it**: refuse the fourth patch, name the seam problem in the handback,
+ship remaining minors as disclosed follow-ups; say what the seam problem looks like. Where the lane
+has not converged and the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — park with receipts; resumption after the park is owner- or advisor-ruled, and a
+builder cannot lift the park on its own.
 The ratified ruling lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
 under `### The third-rework tripwire`.
 
@@ -747,9 +752,10 @@ them without your context. The scope-beats-convention rule (§1 intake) governs 
 for a proposal *unrelated* to the behavior the diff introduces or worsens; a blocking correctness or
 security finding on that behavior is fixed or honestly parked, never deferred as out of scope.
 
-**Bounded acceptance for prose-contract DoDs** — when the contract under review is prose, a definition-of-done written as "no new uncovered state" cannot be satisfied — `an unterminating bar can only be abandoned` — so the ratified bounded form is `no new Critical or Important finding in a review round on the final head`, after a stated number of rounds, `with Minor residuals disclosed`. The canonical statement lives in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` under `### Bounded acceptance —
-prose-contract DoDs`.
+**Bounded acceptance for prose-contract DoDs** — when the contract under review is prose, a
+definition-of-done written as "no new uncovered state" cannot be satisfied — an unterminating bar can only be abandoned — so the ratified bounded form is no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed.
+The canonical statement lives in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+under `### Bounded acceptance — prose-contract DoDs`.
 
 ## 11. Hand back the ready PR
 
