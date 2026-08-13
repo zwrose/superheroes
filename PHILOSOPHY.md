@@ -163,7 +163,7 @@ wins:
 5. **Delivery** — subject to all the above, runs should *finish* and hand back
    something real. A product that mostly parks is honest and useless.
 
-The order is descriptive of decisions already made (the owner-approval rule, the honesty
+The order is descriptive of decisions already made (the never-merge floor, the honesty
 gate family, fail-closed parks, high-ceilings-plus-monitors) — and prescriptive for the
 ones ahead. When a proposal trades a higher value for a lower one, the answer is no.
 

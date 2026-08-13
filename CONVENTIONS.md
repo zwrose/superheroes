@@ -807,9 +807,10 @@ PR-body markers from the retired execution spine survive independently of it:
     slot, together with an advisor-facing reminder comment beneath it that the advisor's write
     replaces — and the advisor writes **beneath** it, re-stamping it only when a body rewrite dropped it.
 
-  Shape and contents live in `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` — the
-  authoritative home; this bullet names the literals and their locations, and does not restate the
-  receipt's shape.
+  Receipt shape and the owner-half register live in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` — the authoritative home;
+  **when** the vet runs and what else it does are the **showrunner** charter's duty 4. This bullet
+  names the literals and their locations, and does not restate the receipt's shape.
 
   **Lifecycle — and why nothing flags their absence.** `advisor-vet` **is** a builder obligation
   (the §11 skeleton stamps it); the other two are not, and **none of the three is a review-seat
