@@ -43,6 +43,7 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import review_findings_schema  # noqa: E402  canonical review-findings schema path (#949)
 import sanitized_view  # noqa: E402
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
@@ -2667,6 +2668,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     return _finish_preflight_terminal(
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
+                         "canonicalSchemaPath": review_findings_schema.review_findings_schema_path(),
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real or "", engine=engine,
                     )
