@@ -15,3 +15,6 @@ The eight enumerated checks the advisor runs before launching a builder session.
    8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
       grant, or work outside the grant's enumerated scope.
 <!-- launch-doctrine:preflight-charter:end -->
+
+Check 7's "(see below)" refers to the owner-involvement taxonomy in the Showrunner charter's duty
+9 (dispatch and preflight), not to anything in this file.

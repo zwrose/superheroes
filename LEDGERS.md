@@ -311,7 +311,8 @@ itself) keys on two tests. **Test 1:** would a user notice this without reading 
 already owns? Three tiers — both tests → owner spot-check; perceivable but a craft call → the PR
 states it plainly, no spot-check; neither → nothing. Fail-direction is explicitly **not** an owner
 call (premortem and security lenses own it). The operative rule lives in the Showrunner charter;
-the perceivability list lives in `skills/showrunner/reference/perceivability.md`; `CONVENTIONS.md` §14 carries the contract framing — this entry is the
+the perceivability list lives in `skills/showrunner/reference/perceivability.md`; `CONVENTIONS.md`
+§14 carries the contract framing — this entry is the
 record, not a third copy. **Untested half:** every tier-1 **visual** case — this repo has no
 visual surface, so it is a poor sole witness for that half (the ratified proposal; the review
 named the configure profile as the eventual home for per-owner taste domains). *[Superseded
@@ -408,7 +409,8 @@ proposal §1–§2, R4; charter channel-conditioned text carries §1's receipt).
 **Ruled:** existing doctrine — never go autonomous on an assumption you have not exercised — applied
 one layer up at advisor dispatch. The preflight **must scale with the batch**: cheap mechanical
 checks always; expensive ones only when the work needs them, with **explicit N/A rather than silent
-skipping**. The eight checks are enumerated in `skills/showrunner/reference/dispatch-preflight.md` (the ratified proposal lists
+skipping**. The eight checks are enumerated in `skills/showrunner/reference/dispatch-preflight.md`
+(the ratified proposal lists
 the corpus failures behind each). **Grant scope:** a grant bounded by a fuzzy noun is real looseness;
 scope is stated as **enumerated PRs, a time box, or a count**, with **release PRs excluded and
 force-push never** — anything outside needs a fresh grant (adopted effective at ratification in the
