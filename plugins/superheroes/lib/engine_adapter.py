@@ -548,18 +548,35 @@ def _scrub_finding_value(val):
     return val
 
 
+def _render_rejection_entry(entry):
+    """Render an engine-controlled value safely for rejection records. Never raises."""
+    if isinstance(entry, str):
+        return _scrub(entry)
+    if isinstance(entry, dict):
+        return _scrub_mapping(entry)
+    try:
+        return _scrub(json.dumps(entry))
+    except Exception:
+        return _scrub(str(entry))
+
+
 def _scrub_findings(findings):
-    out = []
-    for f in findings if isinstance(findings, list) else []:
+    """Return (accepted, rejected) — reject non-dicts with a named reason, never skip. Never raises."""
+    if not isinstance(findings, list):
+        return [], []
+    accepted = []
+    rejected = []
+    for f in findings:
         if not isinstance(f, dict):
+            rejected.append({"entry": _render_rejection_entry(f), "reason": "not-a-dict"})
             continue
         g = dict(f)
         for key, val in g.items():
             if key in _FINDING_STRUCTURAL_KEYS:
                 continue
             g[key] = _scrub_finding_value(val)
-        out.append(g)
-    return out
+        accepted.append(g)
+    return accepted, rejected
 
 
 def _scrub_mapping(obj):
@@ -593,14 +610,70 @@ def scrub_salvage_block(salvage):
 
 
 def _scrub_investigated(investigated):
+    """Return (accepted, rejected) — normalize or reject, never drop. Never raises."""
+    rejected = []
+
+    def _reject(entry, reason):
+        rejected.append({"path": _render_rejection_entry(entry), "reason": reason})
+
     if not isinstance(investigated, list):
-        return []
-    out = []
+        if investigated is not None:
+            _reject(investigated, "not-a-list")
+        return [], rejected
+    accepted = []
     for entry in investigated:
-        if not isinstance(entry, str) or not entry.strip():
+        path_val = None
+        if isinstance(entry, str):
+            path_val = entry
+        elif isinstance(entry, dict):
+            raw = entry.get("path")
+            if raw is None:
+                raw = entry.get("file")
+            if raw is None:
+                _reject(entry, "object-without-path")
+                continue
+            if not isinstance(raw, str):
+                _reject(entry, "invalid-path")
+                continue
+            path_val = raw
+        else:
+            _reject(entry, "not-a-string")
             continue
-        out.append(_scrub(entry))
-    return out
+        if not path_val.strip():
+            _reject(entry, "empty-path")
+            continue
+        accepted.append(_scrub(path_val))
+    return accepted, rejected
+
+
+# Whitelist for the findings-less near-miss: only objects whose keys are exactly this set
+# may be certified clean without a `findings` key. Error/control envelopes are rejected
+# before this check; unknown keys fail closed rather than blacklisting every crash shape.
+_REVIEW_NEAR_MISS_ALLOWED_KEYS = frozenset({"investigated"})
+
+
+def _review_object_is_error_control_envelope(obj):
+    """True when a review dict is a crash/error/control envelope, not a clean near-miss."""
+    if not isinstance(obj, dict):
+        return True
+    if "error" in obj or obj.get("is_error"):
+        return True
+    status = obj.get("status")
+    if isinstance(status, str) and status.lower() in ("error", "failed", "failure"):
+        return True
+    subtype = obj.get("subtype")
+    if isinstance(subtype, str) and subtype.lower() in ("error", "failed", "failure"):
+        return True
+    if obj.get("type") == "result" and "ok" not in obj and "findings" not in obj:
+        return True
+    return False
+
+
+def _attach_investigated_parse_rejections(result, rejected):
+    if rejected:
+        result["investigatedRejectedRecords"] = rejected
+        result["investigatedRejected"] = [r["reason"] for r in rejected]
+    return result
 
 
 def _bound_top_level_keys(obj):
@@ -696,6 +769,9 @@ def salvage_write_report(engine, role_kind, stdout, fed_prompt):
 
         # A partial prompt echo can retain its example verdict even when the wider prompt was not
         # removable verbatim. Do not turn that template object into an implementer claim.
+        # Salvage is deliberately stricter than grading — the broad guard was kept while grading
+        # was narrowed (PR #969); the divergence is accepted, and the fail direction is a lost
+        # recovery aid on an already-forfeited path, never a false success.
         residue_objects = _top_level_json_matches(residue, dict)
         prompt_objects = _top_level_json_matches(prompt, dict)
         if (_artifact_is_prompt_echo_residue(residue, prompt) or
@@ -1092,7 +1168,6 @@ def parse_result(engine, role_kind, stdout):
         stdout = _unwrap_stream_envelope(stdout)   # #347: see the unwrap's docstring
         obj = _last_json_object(stdout)
         if role_kind == "review":
-            findings = obj.get("findings") if isinstance(obj, dict) else None
             if obj is None:
                 # Shape tolerance (#196): the engine emitted NO top-level object at all — the
                 # genuine bare-array reviewer shape (`[...]` instead of {"findings": [...]}).
@@ -1107,14 +1182,41 @@ def parse_result(engine, role_kind, stdout):
                 # reviewed. This keeps the object path byte-identical to before the tolerance.
                 arr = _last_json_array(stdout)
                 if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
-                    findings = arr
+                    findings_list, findings_rejected = _scrub_findings(arr)
+                    if arr and not findings_list:
+                        return {"ok": False, "reason": "unreadable"}
+                    result = {"ok": True, "findings": findings_list, "investigated": []}
+                    if findings_rejected:
+                        result["findingsRejectedRecords"] = findings_rejected
+                    return result
+                return {"ok": False, "reason": "unreadable"}
+            if not isinstance(obj, dict):
+                return {"ok": False, "reason": "unreadable"}
+            if "findings" not in obj and "investigated" in obj:
+                if (_review_object_is_error_control_envelope(obj)
+                        or set(obj.keys()) != _REVIEW_NEAR_MISS_ALLOWED_KEYS):
+                    return {"ok": False, "reason": "unreadable"}
+                investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+                if not investigated:
+                    return {"ok": False, "reason": "unreadable"}
+                result = {"ok": True, "findings": [], "investigated": investigated}
+                return _attach_investigated_parse_rejections(result, inv_rejected)
+            findings = obj.get("findings")
+            if findings is None:
+                return {"ok": False, "reason": "unreadable"}
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
+            findings_list, findings_rejected = _scrub_findings(findings)
+            if findings and not findings_list:
+                return {"ok": False, "reason": "unreadable"}
             investigated = []
-            if isinstance(obj, dict):
-                investigated = _scrub_investigated(obj.get("investigated"))
-            return {"ok": True, "findings": _scrub_findings(findings),
-                    "investigated": investigated}
+            inv_rejected = []
+            if "investigated" in obj:
+                investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+            result = {"ok": True, "findings": findings_list, "investigated": investigated}
+            if findings_rejected:
+                result["findingsRejectedRecords"] = findings_rejected
+            return _attach_investigated_parse_rejections(result, inv_rejected)
         if obj is None:
             return {"ok": False, "reason": "unreadable"}
         return _grade_build_report_obj(obj)
