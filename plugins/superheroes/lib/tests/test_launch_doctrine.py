@@ -473,10 +473,35 @@ def test_await_dispatches_ruling_is_delivered_with_its_prohibitions():
     assert parsed["ok"] is True
     assert "await-dispatches" in LD.RULING_IDS
     text = next(r["text"] for r in parsed["rulings"] if r["id"] == "await-dispatches")
-    # Pinned in full, not by substring. Substring checks would still pass if a coordinated edit
-    # dropped the ruling from both markdown sites and RULING_TEXT while leaving invariant phrases
-    # elsewhere — a third, deliberate site.
-    assert text == LD.RULING_TEXT["await-dispatches"]
+    # Pinned in full, not by substring. The expectation is spelled out in this file — an
+    # independent third site — so a coordinated edit to both launch-doctrine.md and RULING_TEXT
+    # still fails here unless this literal is updated too.
+    assert text == (
+        'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message. '
+        "Until the handback or park comment is posted, every turn ends with a tool call; "
+        "await every dispatch in-turn, and run each external engine dispatch you invoke directly "
+        "through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — on "
+        "`dispatch-review` a zero slice opens the run and returns now without starting an attempt; on "
+        "`dispatch-write` a zero or too-short slice can return terminal `git-preflight-timeout` with "
+        "nothing opened, so size the launch slice to the repository's git-preflight cost; progress "
+        "comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured "
+        "result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; "
+        "independent dispatches go out CONCURRENTLY — give each member its own `--run-dir`, launch each one "
+        "with a short positive slice, then re-invoke the originating verb on every non-terminal run in rotation "
+        "until each returns terminal, so a batch costs its slowest member and not their sum; "
+        "the concurrency comes from the engines working while you poll the others, never from issuing the "
+        "calls together in one message — measured on one host: run-action calls serialize, and a launch call "
+        "blocks for its whole slice, so keep the launch slice short; a native-subagent batch is the other "
+        "channel and does go out as parallel dispatches in one message, harness-managed; "
+        "independent means no result dependency, no shared writable worktree, and no shared output path — "
+        "dependent orders and dispatches sharing a writable worktree stay sequenced; "
+        "the concurrency changes a batch's shape, never its invariant: "
+        "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an "
+        "unwatched run-dir at turn end; skill-owned seats and native subagents keep their own lifecycle; "
+        "when the in-turn poll cannot fit the turn, park durably on the issue or PR. "
+        "The same rule covers anything long-running you start locally — a full-suite run, a build, a long script — "
+        "not only engine dispatches: await it in-turn, or park; never end a turn to wait."
+    )
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py — not here.
 
