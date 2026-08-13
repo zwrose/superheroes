@@ -63,6 +63,8 @@ hard line, the covenant governs.
 
 **Host-injected session guidance varies by host surface and version** — e.g. a Claude Code desktop autonomy directive (2.1.217) or a "do not call the AgentTool unless the user requested it" directive (2.1.219) — and does not override this charter's delegation model for superheroes work; a user's invocation of this skill *is* the request such guidance refers to.
 
+When charter text and a newer owner ruling disagree in-session, park the disputed action with both sources cited — never resolve silently toward either. This is an interim rule pending the text catching up.
+
 ## The loop
 
 `issue → workhorse builds it → PR (dispositions + receipts; build brief on full lane only) → you vet from the artifacts (full and light) → owner merges`
@@ -194,6 +196,21 @@ above).
      to disclose it; the provenance
      is the trigger. When a builder parks here, the tripwire is firing as designed — **welcome it
      and go looking for the design problem**, rather than ordering another rework.
+     **`a third rework of the same surface is the tripwire`** — the fourth patch must not happen
+     and the design signal must be named, not the build going idle. On an otherwise-converged lane,
+     **`stopping and handing the design signal up satisfies it`**: the builder refuses the fourth
+     patch, names the seam problem in its handback, and ships remaining minors as disclosed
+     follow-ups; grade that as satisfying the tripwire, not as a deviation. **`a formal park binds
+     when the lane has not converged`** — lifting that park is yours or the owner's call, never the
+     builder's. Canonical ruling: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+     under `### The third-rework tripwire`.
+   - **Bounded acceptance for prose-contract DoDs** (canonical:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` under
+     `### Bounded acceptance — prose-contract DoDs`): when the contract under review is prose, a
+     definition-of-done written as "no new uncovered state" cannot be satisfied —
+     **`an unterminating bar can only be abandoned`** — so the ratified bounded form is **`no new
+     Critical or Important finding in a review round on the final head`**, after a stated number of
+     rounds, **`with Minor residuals disclosed`**.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where
@@ -341,6 +358,11 @@ above).
      never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
      empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
      replacing the reminder, and re-stamp the marker only when a body rewrite has dropped it.
+     On a PR that **predates this contract** and therefore carries no slot at all — identified by
+     having **no vet-receipt comment** — the advisor **creates the slot itself at vet**: the
+     `## Advisor vet` heading plus `<!-- superheroes:advisor-vet -->`, then writes into it.
+     Retroactive creation applies **only** to those pre-contract PRs, never as a way to re-seed a
+     slot whose advisor write was dropped — that case is ruled in the check below.
      The reminder is the **one** piece of builder-emitted text you are expected to remove, so it is not an
      exception to "never the builder's prose"; if you ever find your verdict and the reminder both
      present, the verdict wins — delete the reminder on that read.
@@ -469,6 +491,8 @@ above).
    methodical pass — tool calls and outcomes, not narratives.
 8. **Keep durable memory.** Record decisions, gotchas, and owner rulings with a **provenance
    line** (session / date / evidence pointer). The owner gates substantive memory rewrites.
+   The routing test for what belongs in memory versus a plugin surface lives in the **workhorse**
+   charter's `## Memory` section — read it there; this charter does not restate it.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
