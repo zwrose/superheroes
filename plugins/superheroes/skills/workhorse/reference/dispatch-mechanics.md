@@ -96,20 +96,6 @@ pinned to the harness versions they were observed on.
 Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
 The slice you choose depends on whether the run is a **launch** or a **continuation**:
 
-**Run-dir caller traps** — read these before you compose a dispatch:
-
-- **Trap 1 — a symlinked `--run-dir` is refused.** The refusal token is `run-dir-is-symlink`. This
-  bites constantly on macOS because `mktemp -d /tmp/...` produces exactly that (`/tmp` is a symlink to
-  `/private/tmp`). Field evidence: three codex review seats on one PR all first returned
-  `unrunnable` / `run-dir-is-symlink` with `attempts: 0` before being re-dispatched against the
-  **resolved** path. Resolve the path (or create the run directory under `/private/tmp` directly)
-  before dispatching.
-- **Trap 2 — `attempts: 0` means a caller error, not an engine forfeit.** An `unrunnable` result
-  carrying `attempts: 0` means **nothing was ever spawned** — the runner refused the call. **Read the
-  reason before blaming the engine.** This matters because the reflex on a failed dispatch is to
-  escalate or re-dispatch against a different engine, and neither fixes a caller error. (A missing
-  run-dir leaf is handled separately and is not one of these two traps.)
-
 - **LAUNCH** — the **first** call on a fresh `--run-dir`. Use a **short** positive slice for
   **`dispatch-review`** and for **`dispatch-write`** on repositories whose git preflight is fast.
   On **`dispatch-write`**, `--max-wait` is also the **git-preflight timeout** (`preflight_timeout`
@@ -227,12 +213,6 @@ stdout, and deliver nothing gradeable through our transport (`stages.engaged: tr
 
 ## Supervised write dispatch
 
-`~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
-invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
-in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
-that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
-may be another session's settings.
-
 The sanctioned way to dispatch a long-running **external implementer** is the supervised runner:
 
 ```bash
@@ -251,6 +231,12 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --expect-item "<path-from-order>" \
   --run-dir "$RUN_DIR" --max-wait 540
 ```
+
+`~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
+invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
+in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
+that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
+may be another session's settings.
 
 ### Declared items
 
@@ -345,6 +331,20 @@ verification, while a prose-tier block has `requiresManualRead: true` and a scru
 human or orchestrator to read. Prose is a pointer, never a gradeable report.
 
 ## Engine forfeits and order shape
+
+**Run-dir caller traps** — read these before you compose a dispatch:
+
+- **Trap 1 — a symlinked `--run-dir` is refused.** The refusal token is `run-dir-is-symlink`. This
+  bites constantly on macOS because `mktemp -d /tmp/...` produces exactly that (`/tmp` is a symlink to
+  `/private/tmp`). Field evidence: three codex review seats on one PR all first returned
+  `unrunnable` / `run-dir-is-symlink` with `attempts: 0` before being re-dispatched against the
+  **resolved** path. Resolve the path (or create the run directory under `/private/tmp` directly)
+  before dispatching.
+- **Trap 2 — `attempts: 0` means a caller error, not an engine forfeit.** An `unrunnable` result
+  carrying `attempts: 0` means **nothing was ever spawned** — the runner refused the call. **Read the
+  reason before blaming the engine.** This matters because the reflex on a failed dispatch is to
+  escalate or re-dispatch against a different engine, and neither fixes a caller error. (A missing
+  run-dir leaf is handled separately and is not one of these two traps.)
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
