@@ -462,10 +462,14 @@ def test_gated_strings_ruling_is_delivered_with_its_prohibitions():
     # payload carrying a conditional invariant. Exact equality means any softening has to edit
     # this literal too — a third, deliberate site.
     assert text == (
-        "gated command strings reach disk only through file-write tools: a string matching a "
-        "permission-gated command shape is never embedded inline in Bash text — a probe reads its "
-        "test string from a file, a heredoc counts as Bash text, and a memory or ledger append "
-        "carrying a gated literal is written with a file-write tool, never echoed through a shell."
+        "gated command strings reach disk only through file-write tools: a permission-gated literal "
+        "that is being written or matched as data — a probe's test string, a memory or ledger append, "
+        "any carrier that is not the command you intend to run — is never embedded inline in Bash text; "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell. A command the session genuinely intends to execute — including the preflight "
+        "`gh` write — is issued as itself in Bash so the permission classifier sees it; staging a "
+        "gated command in a file and executing the file to dodge the gate is forbidden."
     )
     # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
     # test_launcher.py::test_compose_gated_strings_ruling_in_prompt — not here.
@@ -513,15 +517,21 @@ def test_doctrine_gated_strings_ruling_invariant_missing():
     text = _mutate_once(
         _read_doctrine(),
         "- `gated-strings` — gated command strings reach disk only through file-write tools: "
-        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
-        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
-        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
-        "through a shell.",
+        "a permission-gated literal that is being written or matched as data — a probe's test string, "
+        "a memory or ledger append, any carrier that is not the command you intend to run — is never "
+        "embedded inline in Bash text; a probe reads its test string from a file, a heredoc counts as "
+        "Bash text, and a memory or ledger append carrying a gated literal is written with a file-write "
+        "tool, never echoed through a shell. A command the session genuinely intends to execute — "
+        "including the preflight `gh` write — is issued as itself in Bash so the permission classifier "
+        "sees it; staging a gated command in a file and executing the file to dodge the gate is forbidden.",
         "- `gated-strings` — gated command strings reach disk only through file-write tools: "
-        "a string matching a permission-gated command shape is not embedded inline in Bash text — "
-        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
-        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
-        "through a shell.",
+        "a permission-gated literal that is being written or matched as data — a probe's test string, "
+        "a memory or ledger append, any carrier that is not the command you intend to run — is not "
+        "embedded inline in Bash text; a probe reads its test string from a file, a heredoc counts as "
+        "Bash text, and a memory or ledger append carrying a gated literal is written with a file-write "
+        "tool, never echoed through a shell. A command the session genuinely intends to execute — "
+        "including the preflight `gh` write — is issued as itself in Bash so the permission classifier "
+        "sees it; staging a gated command in a file and executing the file to dodge the gate is forbidden.",
     )
     result = LD.parse(text)
     assert result["ok"] is False
@@ -538,15 +548,21 @@ def test_reworded_gated_strings_ruling_refuses():
     text = _mutate_once(
         _read_doctrine(),
         "- `gated-strings` — gated command strings reach disk only through file-write tools: "
-        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
-        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
-        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
-        "through a shell.",
+        "a permission-gated literal that is being written or matched as data — a probe's test string, "
+        "a memory or ledger append, any carrier that is not the command you intend to run — is never "
+        "embedded inline in Bash text; a probe reads its test string from a file, a heredoc counts as "
+        "Bash text, and a memory or ledger append carrying a gated literal is written with a file-write "
+        "tool, never echoed through a shell. A command the session genuinely intends to execute — "
+        "including the preflight `gh` write — is issued as itself in Bash so the permission classifier "
+        "sees it; staging a gated command in a file and executing the file to dodge the gate is forbidden.",
         "- `gated-strings` — gated command strings go to disk only through file-write tools: "
-        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
-        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
-        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
-        "through a shell.",
+        "a permission-gated literal that is being written or matched as data — a probe's test string, "
+        "a memory or ledger append, any carrier that is not the command you intend to run — is never "
+        "embedded inline in Bash text; a probe reads its test string from a file, a heredoc counts as "
+        "Bash text, and a memory or ledger append carrying a gated literal is written with a file-write "
+        "tool, never echoed through a shell. A command the session genuinely intends to execute — "
+        "including the preflight `gh` write — is issued as itself in Bash so the permission classifier "
+        "sees it; staging a gated command in a file and executing the file to dodge the gate is forbidden.",
     )
     result = LD.parse(text)
     assert result["ok"] is False
@@ -559,4 +575,6 @@ def test_gated_strings_ruling_invariants_registered():
         "never embedded inline in Bash text",
         "a heredoc counts as Bash text",
         "written with a file-write tool",
+        "written or matched as data",
+        "to dodge the gate is forbidden",
     )
