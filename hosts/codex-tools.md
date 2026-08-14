@@ -17,7 +17,7 @@ Skills in this plugin speak in host-neutral **actions**. On Codex they resolve t
 
 ## Dispatch Reliability
 
-The `spawn_agent` path has not exhibited the Claude post-truncation dispatch derail. When a caller expects a file output, it may still verify existence and mtime before trusting the result. Apply the Claude fallback or reroute through `general-purpose` only if a Codex-specific failure class is observed.
+The `spawn_agent` path has not exhibited the Claude post-truncation dispatch derail. When a caller expects a file output, it may still verify existence and mtime before trusting the result, but do not apply the Claude fallback or reroute through `general-purpose` unless a Codex-specific failure class is observed.
 
 - **Instructions file:** `AGENTS.md` (Codex) — wherever a skill says "your instructions file".
 - **Plugin root:** the portable seam `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` resolves to `${PLUGIN_ROOT}` on Codex. Use `$ROOT_DIR` for bundled-helper paths.
