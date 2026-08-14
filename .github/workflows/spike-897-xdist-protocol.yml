@@ -234,9 +234,13 @@ jobs:
 
           med_serial, med_auto, med_n12 = med("serial"), med("auto"), med("n12")
 
+          # The pre-registered #816 rule scopes to the ratified A/B (serial vs -n auto);
+          # the diagnostic arm can carry neither an adoption recommendation nor an
+          # adoption refusal. Its failures are still reported by name below.
+          ratified_flakes = [f for f in flakes if f.startswith(("serial", "auto"))]
           bar = {
               "1 exact per-test parity, every ratified replicate": not ratified_mismatches and not problems,
-              "2 no failures (known flakes count against parity, never waived)": not flakes,
+              "2 no failures in ratified arms (known flakes count against parity, never waived)": not ratified_flakes,
               "3 median auto <= 50% of median serial":
                   bool(med_serial and med_auto and med_auto <= 0.5 * med_serial),
               "4 every parallel replicate under 600s (context, from #816's ceiling question)":
