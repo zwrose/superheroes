@@ -872,7 +872,7 @@ def reconcile(session_dir, rnd, phase, journal_identities):
 # session lock + session id
 # =============================================================================================
 
-class LockHeld(Exception):
+class SessionLockHeld(Exception):
     """Another holder owns the session lock. Carries the holder's recorded pid and ISO timestamp
     so the caller can report WHO holds it (and decide, elsewhere, whether to break it)."""
 
@@ -883,7 +883,7 @@ class LockHeld(Exception):
 
 
 # Re-entrant depth for this process only — the on-disk lockfile contract is unchanged; a different
-# process still sees LockHeld. Only same-process nested acquire/release skips the file.
+# process still sees SessionLockHeld. Only same-process nested acquire/release skips the file.
 _session_lock_depth = 0
 
 
@@ -903,7 +903,7 @@ def read_lock(session_dir):
 def session_lock(session_dir):
     """Exclusive session lock via `O_CREAT | O_EXCL` — the create IS the mutual exclusion.
 
-    Raises `LockHeld(pid, created_at)` when the lockfile already exists and is owned by a
+    Raises `SessionLockHeld(pid, created_at)` when the lockfile already exists and is owned by a
     different process. Re-entrant within this process: a nested acquire increments depth and does
     not touch the lockfile; only the outermost release removes it. The lockfile is always removed
     on exit, INCLUDING on exception, so a raising body never leaves a stale lock.
@@ -922,7 +922,7 @@ def session_lock(session_dir):
         fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
     except FileExistsError:
         holder = read_lock(session_dir) or {}
-        raise LockHeld(holder.get("pid"), holder.get("createdAt"))
+        raise SessionLockHeld(holder.get("pid"), holder.get("createdAt"))
     _session_lock_depth = 1
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as fh:

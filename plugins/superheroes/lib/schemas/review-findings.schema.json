@@ -1,0 +1,104 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "superheroes/review-findings/v1",
+  "title": "superheroes review findings wire contract",
+  "description": "Canonical strict-mode JSON Schema for dispatch-review structured output (#949). Rubric-optional fields use required-and-nullable: every property is listed in required, and agents emit null instead of omitting optional keys.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["findings", "investigated"],
+  "properties": {
+    "findings": {
+      "type": "array",
+      "description": "Review findings in the review-base.md wire shape.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "severity",
+          "dimension",
+          "taxonomy",
+          "title",
+          "file",
+          "line",
+          "body",
+          "suggestion",
+          "evidence",
+          "confidence",
+          "tradeoff"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "Finding id, e.g. security-001."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["Critical", "Important", "Minor", "Nit"],
+            "description": "Closed severity enum from review-base.md."
+          },
+          "dimension": {
+            "type": "string",
+            "enum": [
+              "Architecture",
+              "Code",
+              "Security",
+              "Test",
+              "Failure-Mode",
+              "Clarity",
+              "Verifiability",
+              "Coherence",
+              "Safety-access",
+              "Grounding"
+            ],
+            "description": "Closed dimension enum from review-base.md."
+          },
+          "taxonomy": {
+            "type": ["string", "null"],
+            "description": "Rubric-optional — required key; emit null when no named taxonomy term applies."
+          },
+          "title": {
+            "type": "string",
+            "description": "Short descriptive title."
+          },
+          "file": {
+            "type": "string",
+            "description": "Path relative to repo root."
+          },
+          "line": {
+            "type": ["integer", "null"],
+            "description": "Line number or null."
+          },
+          "body": {
+            "type": "string",
+            "description": "Explanation with code references."
+          },
+          "suggestion": {
+            "type": ["string", "null"],
+            "description": "What to do, or null."
+          },
+          "evidence": {
+            "type": ["string", "null"],
+            "description": "Rubric-optional — required key; null for Minor/Nit or when omitted."
+          },
+          "confidence": {
+            "type": ["string", "null"],
+            "enum": ["High", "Low", null],
+            "description": "Rubric-optional — required key; null when omitted (Minor/Nit treated as High)."
+          },
+          "tradeoff": {
+            "type": ["boolean", "null"],
+            "description": "Rubric-optional — required key; null unless multiple valid fix approaches exist."
+          }
+        }
+      }
+    },
+    "investigated": {
+      "type": "array",
+      "description": "Repo-relative bare paths the seat investigated.",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

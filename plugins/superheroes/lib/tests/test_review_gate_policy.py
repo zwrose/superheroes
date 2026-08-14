@@ -3,6 +3,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import sys
 
 import panel_tally
 import pytest
@@ -344,8 +345,30 @@ def test_policy_judgment_dispositions_red_on_home_member_rename():
     spec = importlib.util.spec_from_file_location("round_phases_probe", home_path)
     probe_phases = importlib.util.module_from_spec(spec)
     exec(compile(probed, home_path, "exec"), probe_phases.__dict__)  # noqa: S102
-    derived = tuple(
-        d for d in probe_phases.JUDGMENT_DISPOSITIONS if not d.endswith("-guidance")
+
+    policy_path = _MOD
+    with open(policy_path, encoding="utf-8") as fh:
+        policy_source = fh.read()
+
+    saved_round_phases = sys.modules.get("round_phases")
+    saved_review_gate_policy = sys.modules.get("review_gate_policy")
+    probe_policy = importlib.util.module_from_spec(
+        importlib.util.spec_from_file_location("review_gate_policy_probe", policy_path)
     )
-    assert "skip" not in derived
-    assert "skip-renamed-for-census" in derived
+    try:
+        sys.modules["round_phases"] = probe_phases
+        if "review_gate_policy" in sys.modules:
+            del sys.modules["review_gate_policy"]
+        exec(compile(policy_source, policy_path, "exec"), probe_policy.__dict__)  # noqa: S102
+        derived = probe_policy.POLICY_JUDGMENT_DISPOSITIONS
+        assert "skip" not in derived
+        assert "skip-renamed-for-census" in derived
+    finally:
+        if saved_round_phases is not None:
+            sys.modules["round_phases"] = saved_round_phases
+        elif "round_phases" in sys.modules:
+            del sys.modules["round_phases"]
+        if saved_review_gate_policy is not None:
+            sys.modules["review_gate_policy"] = saved_review_gate_policy
+        elif "review_gate_policy" in sys.modules:
+            del sys.modules["review_gate_policy"]

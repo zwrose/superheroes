@@ -654,7 +654,7 @@ def test_session_lock_is_mutually_exclusive(tmp_path):
     sd = _session(tmp_path)
     RR.atomic_write_json(RR.session_lock_path(sd),
                          {"pid": 424242, "createdAt": "2026-08-07T00:00:00"})
-    with pytest.raises(RR.LockHeld) as exc:
+    with pytest.raises(RR.SessionLockHeld) as exc:
         with RR.session_lock(sd):
             pass
     assert exc.value.pid == 424242

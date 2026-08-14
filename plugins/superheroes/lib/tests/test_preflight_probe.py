@@ -6,6 +6,8 @@ import os
 import subprocess
 from types import SimpleNamespace
 
+import pytest
+
 import core_md
 import mode_registry as mr
 import store_core as sc
@@ -23,6 +25,47 @@ def _raising_run(exc):
     def _run(argv, **kwargs):
         raise exc
     return _run
+
+
+def _assert_probe_argv_matches_builder_minus_stream_json(builder, probe):
+    """Probe argv equals builder read-role argv with --output-format stream-json removed."""
+    # axis: exact positional equality — every builder token accounted for, stream-json at tail
+    expected_tail = ["--output-format", "stream-json"]
+    assert list(builder) == list(probe) + expected_tail, (
+        "probe argv must equal builder minus %r: builder=%r probe=%r"
+        % (expected_tail, list(builder), list(probe)))
+    assert builder[-2:] == expected_tail, (
+        "stream-json tokens must remain at builder tail, got %r" % list(builder[-2:]))
+
+
+def _scratch_repo_cwd_checks(kwargs, *, forbidden_realpaths=()):
+    """Property checks for disposable scratch repo cwd (Rider 29)."""
+    cwd = kwargs.get("cwd")
+    assert cwd is not None
+    process_cwd = os.getcwd()
+    cwd_real = os.path.realpath(cwd)
+    assert cwd_real != os.path.realpath(process_cwd)
+    for path in forbidden_realpaths:
+        assert cwd_real != os.path.realpath(path)
+    assert os.path.isdir(cwd)
+    assert os.path.isdir(os.path.join(cwd, ".git"))
+    entries = [e for e in os.listdir(cwd) if e != ".git"]
+    assert entries == []
+
+
+def _make_scratch_cwd_recording_run(forbidden_realpaths=(), raise_exc=None):
+    """Fake run that records cwd and asserts scratch-repo properties at call time."""
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured["cwd"] = kwargs.get("cwd")
+        captured["kwargs"] = kwargs
+        _scratch_repo_cwd_checks(kwargs, forbidden_realpaths=forbidden_realpaths)
+        if raise_exc is not None:
+            raise raise_exc
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    return _run, captured
 
 
 fake0 = _fake_run(0)
@@ -110,7 +153,7 @@ def test_cross_vendor_no_op_argv_cursor():
     assert builder[builder.index("--mode") + 1] == "plan"
     # Every read-role token the builder emits is carried by the probe, except the
     # stream-json output format the probe deliberately omits (it parses no stdout).
-    assert set(builder) - set(probe) == {"--output-format", "stream-json"}
+    _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
 
 
 def test_cross_vendor_no_op_argv_unknown_engine():
@@ -137,11 +180,17 @@ def test_cross_vendor_cli_probe_argv_override():
     assert captured["argv"] == ["codex", "--version"]
 
 
+# axis: exact equality of preamble-then-ask, not a suffix match
 def test_probe_prompt_asks_for_a_single_word_and_nothing_else():
     # The probe must stay a no-op: an ask that invites WORK turns every compose
     # into a real dispatch under probe_command's 120s timeout.
-    assert pp.probe_prompt().endswith(
-        "Reply with the single word READY and nothing else.\n")
+    # Exact equality is deliberate (Rider 31): suffix/substring match would pass
+    # prompts that invite work after the READY ask.
+    import engine_dispatch
+
+    assert pp.probe_prompt() == (
+        engine_dispatch.ANTIHIJACK_PREAMBLE
+        + "Reply with the single word READY and nothing else.\n")
 
 
 def test_cross_vendor_cli_probe_feeds_preamble_on_stdin_codex():
@@ -181,6 +230,175 @@ def test_cross_vendor_cli_probe_unknown_engine_no_stdin_prompt():
 
     pp.cross_vendor_cli_probe("mystery", run=_run)
     assert captured["input"] == ""
+
+
+# --- Rider 29: engine-CLI probes pin cwd to disposable scratch repo -------------------------
+
+# axis: the cwd handed to the engine is a disposable git repo that is not the caller's tree, and it is removed afterwards
+def test_cross_vendor_cli_probe_codex_uses_disposable_scratch_repo_cwd(tmp_path):
+    repo_root = str(tmp_path)
+    run, captured = _make_scratch_cwd_recording_run(forbidden_realpaths=(repo_root,))
+    scratch_cwd = None
+    result = pp.cross_vendor_cli_probe("codex", run=run)
+    scratch_cwd = captured["cwd"]
+    assert result["ok"] is True
+    assert not os.path.exists(scratch_cwd)
+
+
+def test_cross_vendor_cli_probe_cursor_uses_disposable_scratch_repo_cwd(tmp_path):
+    repo_root = str(tmp_path)
+    run, captured = _make_scratch_cwd_recording_run(forbidden_realpaths=(repo_root,))
+    scratch_cwd = None
+    result = pp.cross_vendor_cli_probe("cursor", run=run)
+    scratch_cwd = captured["cwd"]
+    assert result["ok"] is True
+    assert not os.path.exists(scratch_cwd)
+
+
+def test_cross_vendor_cli_probe_scratch_repo_removed_when_run_raises(tmp_path):
+    repo_root = str(tmp_path)
+    run, captured = _make_scratch_cwd_recording_run(
+        forbidden_realpaths=(repo_root,), raise_exc=OSError("boom"))
+    scratch_cwd = None
+    result = pp.cross_vendor_cli_probe("codex", run=run)
+    scratch_cwd = captured["cwd"]
+    assert result["ok"] is False
+    assert "boom" in result["detail"]
+    assert not os.path.exists(scratch_cwd)
+
+
+def test_composition_liveness_codex_uses_disposable_scratch_repo_cwd(tmp_path):
+    repo_root = str(tmp_path)
+    run, captured = _make_scratch_cwd_recording_run(forbidden_realpaths=(repo_root,))
+    scratch_cwd = None
+    needed = {"codex": [("gpt-5.6-terra", "high")]}
+    result = pp.composition_liveness(needed, run=run)
+    scratch_cwd = captured["cwd"]
+    assert result["codex"]["live"] is True
+    assert not os.path.exists(scratch_cwd)
+
+
+def test_composition_liveness_cursor_uses_disposable_scratch_repo_cwd(tmp_path):
+    repo_root = str(tmp_path)
+    run, captured = _make_scratch_cwd_recording_run(forbidden_realpaths=(repo_root,))
+    scratch_cwd = None
+    needed = {"cursor": [("composer-2.5", None)]}
+    result = pp.composition_liveness(needed, run=run)
+    scratch_cwd = captured["cwd"]
+    assert result["cursor"]["live"] is True
+    assert not os.path.exists(scratch_cwd)
+
+
+def test_composition_liveness_scratch_repo_removed_when_run_raises(tmp_path):
+    repo_root = str(tmp_path)
+    run, captured = _make_scratch_cwd_recording_run(
+        forbidden_realpaths=(repo_root,), raise_exc=OSError("boom"))
+    scratch_cwd = None
+    needed = {"codex": [("gpt-5.6-terra", "high")]}
+    result = pp.composition_liveness(needed, run=run)
+    scratch_cwd = captured["cwd"]
+    assert result["codex"]["live"] is False
+    assert not os.path.exists(scratch_cwd)
+
+
+def test_engine_probe_mkdtemp_failure_fail_loud(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise OSError("no temp space")
+
+    monkeypatch.setattr(pp.tempfile, "mkdtemp", _boom)
+    result = pp.cross_vendor_cli_probe("codex", run=fake0)
+    assert result["ok"] is False
+    assert "no temp space" in result["detail"]
+
+
+def test_engine_probe_git_init_failure_fail_loud(monkeypatch):
+    init_stderr = "fatal: scratch repo init rejected by test"
+
+    def _fail_init(argv, **kwargs):
+        if len(argv) >= 4 and argv[0] == "git" and argv[1] == "-C" and argv[3] == "init":
+            return SimpleNamespace(returncode=1, stdout="", stderr=init_stderr)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    monkeypatch.setattr(pp.subprocess, "run", _fail_init)
+    result = pp.cross_vendor_cli_probe("codex", run=fake0)
+    assert result["ok"] is False
+    assert result["detail"] == init_stderr
+
+
+def test_gh_auth_probe_does_not_use_scratch_repo():
+    captured = {}
+
+    def _run(argv, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = pp.gh_auth_probe(run=_run)
+    assert result["ok"] is True
+    assert "cwd" not in captured
+
+
+# --- Rider 30: probe argv drift guard (order + multiplicity) ------------------------------
+
+# axis: token order and multiplicity, not set membership
+def test_probe_argv_drift_guard_duplicate_builder_token_fails():
+    builder = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--mode", "plan", "--output-format", "stream-json", "--trust",
+    ]
+    probe = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--mode", "plan",
+    ]
+    with pytest.raises(AssertionError):
+        _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
+
+
+# axis: omitted builder tokens fail — not a subsequence match
+def test_probe_argv_drift_guard_builder_only_token_inserted_fails():
+    builder = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--extra", "--mode", "plan", "--output-format", "stream-json",
+    ]
+    probe = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--mode", "plan",
+    ]
+    with pytest.raises(AssertionError):
+        _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
+
+
+def test_probe_argv_drift_guard_transposed_builder_tokens_fails():
+    builder = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--mode", "plan",
+        "--trust", "--output-format", "stream-json",
+    ]
+    probe = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--mode", "plan",
+    ]
+    with pytest.raises(AssertionError):
+        _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
+
+
+def test_probe_argv_drift_guard_probe_token_missing_from_builder_fails():
+    builder = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--mode", "plan", "--output-format", "stream-json",
+    ]
+    probe = [
+        "cursor-agent", "--model", "composer-2.5", "-p", "--trust",
+        "--mode", "plan", "--bogus",
+    ]
+    with pytest.raises(AssertionError):
+        _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
+
+
+def test_probe_argv_drift_guard_real_values_pass():
+    import engine_adapter
+
+    probe = pp.cross_vendor_no_op_argv("cursor")
+    builder = engine_adapter.build_argv("cursor", "review", None, {})
+    _assert_probe_argv_matches_builder_minus_stream_json(builder, probe)
 
 
 # --- browser_probe_result ------------------------------------------------------------------

@@ -98,10 +98,11 @@ final stdout is a single JSON object and nothing after it:
 `{"findings": [], "investigated": ["src/orders.py"]}`
 
 Wrap the finding array below as the `findings` value. List in `investigated`
-every repo-relative path you actually read to ground the review. An empty
-`findings` array counts as clean only when `investigated` lists paths that
-check out; empty findings with no verifiable investigation record is a seat
-that never ran.
+every repo-relative path you actually read to ground the review — always,
+whether or not you found anything. The record is how the orchestrator knows
+the review happened. An empty `findings` array counts as clean only when
+`investigated` lists paths that check out; empty findings with no verifiable
+investigation record is a seat that never ran.
 
 **file channel** — in-process seats that can write. Emit the JSON array below
 at the path the dispatching skill names. Write `[]` when you have nothing to

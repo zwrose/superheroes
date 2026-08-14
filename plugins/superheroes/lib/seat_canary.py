@@ -23,8 +23,8 @@ You are the security reviewer seat for a one-shot dispatched review.
 Respond on stdout with a single JSON object (no prose outside it) matching this contract:
 {"findings": [{"id": "...", "severity": "...", "file": "...", "title": "...", "body": "..."}],
  "investigated": ["relative/path.py", ...]}
-The investigated array is required when you have no findings: list every repo-relative path you
-read to ground your review.
+List in `investigated` every repo-relative path you read to ground your review —
+always, whether or not you found anything.
 
 Review ONLY this diff hunk:
 

@@ -562,9 +562,13 @@ def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
         "import os, signal, subprocess, sys; "
         "pid_path = sys.argv[1]; "
         "subprocess.Popen([sys.executable, '-c', "
-        "'import os, signal, sys, time; "
+        "'import os, signal, sys, time, tempfile; "
         "signal.signal(signal.SIGTERM, signal.SIG_IGN); "
-        "open(sys.argv[1], \"w\").write(str(os.getpid())); "
+        "pid_path = sys.argv[1]; "
+        "fd, tmp = tempfile.mkstemp(dir=os.path.dirname(pid_path) or \".\"); "
+        "os.write(fd, str(os.getpid()).encode()); "
+        "os.close(fd); "
+        "os.replace(tmp, pid_path); "
         "time.sleep(120)', "
         "pid_path], stdout=sys.stdout); "
         "os._exit(0)",
@@ -588,8 +592,13 @@ def test_gate_off_grandchild_timeout_reaps_process_group(private_tmp):
         while time.monotonic() < deadline:
             if os.path.isfile(pid_file):
                 with open(pid_file) as f:
-                    gpid = int(f.read().strip())
-                break
+                    content = f.read().strip()
+                if content:
+                    try:
+                        gpid = int(content)
+                        break
+                    except ValueError:
+                        pass
             time.sleep(0.02)
         else:
             pytest.fail("grandchild never started: pid file never appeared")

@@ -282,7 +282,9 @@ def _panel_derived_placeholders(context: dict) -> dict[str, str]:
     if channel == "stdout":
         ph["OUTPUT_CHANNEL_BLOCK"] = (
             'Emit `{"findings": [...], "investigated": [...]}` as your final stdout with nothing '
-            "after it; do not write a findings file (read-only sandbox — nothing reads one)."
+            "after it; do not write a findings file (read-only sandbox — nothing reads one). "
+            "List in `investigated` every repo-relative path you actually read to ground this "
+            "review — always, whether or not you found anything."
         )
     else:
         ph["OUTPUT_CHANNEL_BLOCK"] = (
