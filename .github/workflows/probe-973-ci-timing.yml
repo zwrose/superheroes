@@ -1,0 +1,80 @@
+# Measurement instrument for the #973 CI-strategy discovery — branch-scoped, never for merge.
+# Same shape as spike #816's instrument: runs only on this probe branch, never on main or PRs,
+# adds no gate anywhere. Three arms, one SHA, one arm per fresh runner:
+#   serial     — CI's exact pytest invocation + per-test timing (junit + --durations)
+#   xdist-auto — the #816 arm (-n auto = 4 workers on ubuntu-latest) on today's suite
+#   xdist-12   — oversubscription probe: the suite is sleep/subprocess-bound (~60s CPU vs
+#                ~500s+ wall per the 2026-08-01 audit), so workers > vCPU may beat -n auto
+# pytest-xdist is installed in every arm so the only difference between arms is the -n flag.
+name: Probe 973 CI timing
+
+on:
+  push:
+    branches: [claude/ci-performance-optimization-71cbbc]
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    name: measure-${{ matrix.arm }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arm: serial
+            args: ""
+          - arm: xdist-auto
+            args: "-n auto"
+          - arm: xdist-12
+            args: "-n 12"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies (parity with ci.yml + xdist in every arm)
+        run: uv pip install --system pytest pytest-xdist jsonschema pyyaml "import-linter>=2,<3"
+
+      - name: Install jscpd (same skip surface as real CI)
+        run: npm install -g jscpd@5.0.12 && jscpd --version
+
+      - name: Install coupling collectors (same skip surface as real CI)
+        run: npm install -g dependency-cruiser@18 typescript@5 && depcruise --version
+
+      - name: Install Claude Code CLI (same skip surface as real CI)
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Run suite (${{ matrix.arm }})
+        run: |
+          start=$(date +%s)
+          set +e
+          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ \
+            -q -rs ${{ matrix.args }} \
+            --durations=200 --durations-min=0.5 \
+            --junitxml="$RUNNER_TEMP/junit-${{ matrix.arm }}.xml" \
+            2>&1 | tail -260
+          exit_code=$?
+          set -e
+          end=$(date +%s)
+          echo "ARM=${{ matrix.arm }}"
+          echo "PYTEST_EXIT=$exit_code"
+          echo "WALL_SECONDS=$((end-start))"
+          python3 -c "import platform, pytest, xdist; print('python', platform.python_version(), '| pytest', pytest.__version__, '| xdist', xdist.__version__)"
+          nproc
+
+      - name: Upload junit XML
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.arm }}
+          path: ${{ runner.temp }}/junit-*.xml
+          retention-days: 14
