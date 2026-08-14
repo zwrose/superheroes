@@ -73,10 +73,14 @@ RULING_TEXT = {
         "empty `--local` — is a park-and-report, not an improvisation."
     ),
     "gated-strings": (
-        "gated command strings reach disk only through file-write tools: a string matching a "
-        "permission-gated command shape is never embedded inline in Bash text — a probe reads its "
-        "test string from a file, a heredoc counts as Bash text, and a memory or ledger append "
-        "carrying a gated literal is written with a file-write tool, never echoed through a shell."
+        "gated command strings reach disk only through file-write tools: a permission-gated literal "
+        "that is being written or matched as data — a probe's test string, a memory or ledger append, "
+        "any carrier that is not the command you intend to run — is never embedded inline in Bash text; "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell. A command the session genuinely intends to execute — including the preflight "
+        "`gh` write — is issued as itself in Bash so the permission classifier sees it; staging a "
+        "gated command in a file and executing the file to dodge the gate is forbidden."
     ),
 }
 RULING_INVARIANTS = {
