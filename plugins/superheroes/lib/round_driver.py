@@ -1801,15 +1801,6 @@ def _location_id(finding):
     return "%s@L%s" % (finding_identity(finding), finding.get("line"))
 
 
-def _judgment_finding_id(finding):
-    """The per-LOCATION disposition key for a judgment finding — the line-less `finding_identity`
-    PLUS the line. Two same-title tradeoff blockers at DIFFERENT lines get DISTINCT ids, so the
-    owner's disposition for one never collides onto the other (the line-less identity did — #507 R2
-    v5). For the FIRST row at a location this equals ``_location_id``; repeats at the same location
-    use ``_judgment_row_ids`` (occurrence suffix)."""
-    return _location_id(finding)
-
-
 def _judgment_row_ids(findings):
     """Per-row disposition keys for judgment findings. Reuses the audit-target occurrence pattern:
     the first row at a location gets the bare per-location id; repeats get ``#1``, ``#2``, … so two
@@ -3262,7 +3253,7 @@ def cmd_next(session_dir, config_overrides=None):
             if refusal is not None:
                 return refusal
             return _cmd_next_locked(session_dir, config_overrides)
-    except round_records.LockHeld as held:
+    except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "next", held)
 
 
@@ -3428,7 +3419,7 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 if fail:
                     return _receipt_fault_response(fail)
             return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
-    except round_records.LockHeld as held:
+    except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "submit", held)
 
 
@@ -4690,7 +4681,7 @@ def cmd_record_result(session_dir, seat=None, attempt=None, supersede=False, exp
             return _cmd_record_result_locked(session_dir, seat=seat, attempt=attempt,
                                              supersede=supersede, expect_sha256=expect_sha256,
                                              sweep=sweep, occurrence=occurrence)
-    except round_records.LockHeld as held:
+    except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-result", held)
 
 
@@ -4898,7 +4889,7 @@ def cmd_record_missing(session_dir, seat, attempt, reason, evidence_path=None, o
                 return refusal
             return _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path,
                                               occurrence=occurrence)
-    except round_records.LockHeld as held:
+    except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "record-missing", held)
 
 
@@ -5007,7 +4998,7 @@ def cmd_advance(session_dir, break_lock=False, git=None):
             if refusal is not None:
                 return refusal
             return _advance_locked(session_dir, state, git=git, broke=broke)
-    except round_records.LockHeld as held:
+    except round_records.SessionLockHeld as held:
         return _refuse_cmd(session_dir, "advance", "advance-locked",
                            holder={"pid": held.pid, "createdAt": held.created_at})
     except JournalFaultUnrecordable:
@@ -5718,7 +5709,7 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
                                                                   round_records.LOCK_FILE))
             return _cmd_attest_locked(session_dir, failure_ref, note, git=git, state=state,
                                     binding=binding, artifact_snapshot=artifact_snapshot)
-    except round_records.LockHeld as held:
+    except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "attest", held)
 
 
