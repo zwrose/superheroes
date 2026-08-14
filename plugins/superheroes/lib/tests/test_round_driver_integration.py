@@ -353,6 +353,57 @@ def test_every_adapter_phase_folds_and_the_round_reaches_a_terminal_receipt(tmp_
     assert state.get("_submitUsed") is None
 
 
+def test_sweep_record_path_reaches_populated_terminal_receipt(tmp_path):
+    """Run-level acceptance: record-result --sweep per phase, then advance, through terminal."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+
+    def _drive_phase_with_sweep(panel_findings):
+        _assert_adapters_are_real()
+        state = _state(session_dir)
+        pend = state["pending"]
+        phase = pend["phase"]
+        roster, reason = round_adapters.roster_for(phase, state, state.get("config") or {})
+        assert reason is None, (phase, reason)
+        slots = _slots_of(roster)
+        _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+        for seat, occurrence in slots:
+            payload = _payload_for(session_dir, state, pend, seat, panel_findings, head_path)
+            _land(session_dir, state, pend, seat, payload, occurrence=occurrence)
+        sweep = round_driver.cmd_record_result(session_dir, sweep=True)
+        assert sweep["ok"] is True, (phase, sweep)
+        recorded = sweep.get("recorded") or []
+        assert sorted(recorded) == sorted(round_driver._slot_label(seat, occurrence)
+                                          for seat, occurrence in slots), (phase, sweep, slots)
+        for seat, occurrence in slots:
+            spath = round_records.store_path(
+                session_dir, pend["round"], phase,
+                round_records.storage_key(seat, occurrence), pend["attempt"])
+            assert os.path.exists(spath), (phase, seat, occurrence, spath)
+        out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+        return phase, out
+
+    folded = []
+    for _ in range(24):
+        if _state(session_dir).get("terminal"):
+            break
+        phase, out = _drive_phase_with_sweep(
+            [_blocking_finding("missing bounds guard", 2)])
+        assert out["ok"] is True, (phase, out)
+        folded.append(phase)
+    else:
+        raise AssertionError("did not reach terminal: %s" % folded)
+
+    state = _state(session_dir)
+    assert state["terminal"] == "converged", state.get("certification")
+    with open(os.path.join(session_dir, round_driver.RECEIPT_FILE), encoding="utf-8") as fh:
+        receipt = json.load(fh)
+    ok, why = round_driver.validate_receipt(receipt)
+    assert ok, why
+    assert receipt.get("rounds")
+    assert receipt.get("certification") is not None
+    assert receipt["scriptRan"]["byPhase"]
+
+
 def test_advance_refuses_an_incomplete_roster_before_it_ever_assembles(tmp_path):
     """A/B against the folding path above: one seat short refuses by NAME, and the refusal is the
     completeness one — never a downstream adapter reason."""
