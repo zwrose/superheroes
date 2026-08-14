@@ -82,8 +82,8 @@ stated unlock condition is met — cite this ledger instead of re-arguing.
   designed:** its deleted-line audit, caller tracing, and do-not-flag bar are all **rung-1
   (rubric amendments into the existing briefs)** — exactly the path the ban prefers. #511
   formalizes the grounding seat's brief + tier bar only; its **code-leg (review-code)
-  dispatch is gated to #510**, while the spec leg's Grounding seat is live as of
-  **#515/#517**.
+  dispatch is gated to #609** (the seat map itself shipped under #510), while the spec
+  leg's Grounding seat is live as of **#515/#517**.
 - **No traceability reviewer built on spec.** Parked behind #131 + a named consumer;
   #230's conditional-dispatch seam makes it cheap IF evidence ever calls. *(The #33
   investigation itself unlocked 2026-07-09 — the false merge-ready escape + the terminal
