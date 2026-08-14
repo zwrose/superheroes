@@ -34,7 +34,7 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Install Python dependencies (validators + tests + import-linter)
-        run: uv pip install --system pytest jsonschema pyyaml "import-linter>=2,<3"
+        run: uv pip install --system pytest pytest-xdist jsonschema pyyaml "import-linter>=2,<3"
 
       - name: Validate marketplace + plugin manifests
         run: python3 .github/scripts/validate_marketplace.py
@@ -127,8 +127,13 @@ jobs:
           fi
 
       - name: Run plugin + band-eval tests
-        # Single pytest process is safe: the four plugins merged into one superheroes
+        # One pytest invocation is safe: the four plugins merged into one superheroes
         # plugin lib tree (no shared module basenames), and eval/lib/identifiers.py was
         # removed, so the historical sys.path collision is resolved.
+        # -n auto (pytest-xdist) adopted per #897's ratified A/B: exact per-test parity
+        # across three replicates per arm at one sha, ~2.4x wall-clock. #806/#809/#882
+        # remain the load-flake watchlist — a parallel-only failure of those names is
+        # that known class, not a new regression.
+        # --durations=25 keeps the slow tail visible as the suite grows (#973).
         run: |
-          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -rs
+          python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -rs -n auto --durations=25
