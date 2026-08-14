@@ -12,8 +12,9 @@ On a positively-calibrated project, an owner may narrow asking via a hand-edited
 asking — it never widens silence. Invalid or hostile file content yields no entries (fail
 closed to ask exactly as today).
 
-The command enumeration below is LIFTED VERBATIM from the deleted `lib/enforcer.py`
-`GATED_COMMANDS` (git history, pre-#478); it is not re-derived or widened here.
+The command enumeration below originated verbatim from the retired `lib/enforcer.py`
+`GATED_COMMANDS` (git history, pre-#478). The tool-to-subcommand matching was re-derived under
+owner ratification 2026-08-13 (issue #989) to close a silent classification bypass.
 
 Scope of the decision:
 
@@ -36,29 +37,37 @@ import shlex
 import sys
 
 # LIFTED VERBATIM from the retired lib/enforcer.py GATED_COMMANDS (pre-#478). The tool-to-
-# subcommand junction was re-derived under owner ratification dated 2026-08-13 (issue #989) to
-# close a silent classification bypass; the guard otherwise still stands — do NOT re-derive or
-# widen these regexes further. First .search hit wins (see owner_authority_action).
-# A flag run between the tool word and its subcommand — gh's inherited flags (-R/--repo and the
-# rest), git's global options (-C <path>, -c k=v, --git-dir=...). Fail-closed: the tokens here are
-# NOT interpreted, so an unrecognized sequence still classifies rather than falling through to
-# None. Bounded to one shell segment so one command's tool word cannot reach another command's
-# subcommand, and LENGTH-bounded because an unbounded wildcard here is quadratic against the
-# trailing .* in merge-api: measured 12.7s on a 120KB input vs 0.04s bounded (#989 brief check).
-_FLAG_RUN = r"[^;&|\n]{0,256}"
-OWNER_AUTHORITY_COMMANDS = [
-    ("merge-pr",       re.compile(r"\bgh\b" + _FLAG_RUN + r"\bpr\s+merge\b", re.I)),
-    ("merge-api",      re.compile(r"\bgh\b" + _FLAG_RUN + r"\bapi\b.*\bpulls/[^/\s]+/merge\b", re.I)),
-    ("merge-graphql",  re.compile(r"\bmergePullRequest\b", re.I)),
-    ("release",        re.compile(r"\bgh\b" + _FLAG_RUN + r"\brelease\s+create\b", re.I)),
-    ("run-workflow",   re.compile(r"\bgh\b" + _FLAG_RUN + r"\bworkflow\s+(run|enable|disable)\b", re.I)),
-    ("force-push",     re.compile(r"\bgit\b" + _FLAG_RUN + r"\bpush\b.*(--force\b|-f\b|--force-with-lease)", re.I)),
-    ("push-to-default", re.compile(r"\bgit\b" + _FLAG_RUN + r"\bpush\b[^;&|\n]*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
-]
-# The shell removes a backslash-newline before parsing, so it is not a segment boundary. Without
-# this, `gh -R o/r \<newline>pr merge 1` runs the gated command unclassified — a bypass that also
-# defeats the pre-#989 adjacency patterns.
+# subcommand junction was re-derived under owner ratification 2026-08-13 (issue #989) to close
+# a silent classification bypass. First hit wins (see owner_authority_action).
+# Shell segment boundaries. Splitting first, then searching within a segment, replaces the old
+# tool-to-subcommand span: it removes BOTH the length cap (which fell through to None past 256
+# chars — an approval bypass) and the unbounded `.*` wildcards (quadratic in a PreToolUse hook:
+# 26.1s on a 35KB input, vs 0.002s here). Re-derived under owner ratification 2026-08-13 (#989).
+_SEGMENT_SPLIT = re.compile(r"[;&|\n]+")
+
+# The shell removes a backslash-newline before parsing, so it is not a segment boundary.
 _LINE_CONTINUATION = re.compile(r"\\\r?\n")
+
+# Subcommand words are matched as WHITESPACE-DELIMITED TOKENS, not with \b: `\bpush\b` also matches
+# inside `push.default`, which classified `git config push.default main` as push-to-default.
+# Tool words keep \b so an absolute path (`/usr/bin/gh pr merge`) still classifies.
+_GH = re.compile(r"\bgh\b", re.I)
+_GIT = re.compile(r"\bgit\b", re.I)
+
+# (action, tool-word, subcommand-token, trailing-requirement-or-None)
+# The trailing requirement is searched AFTER the subcommand match, within the same segment.
+OWNER_AUTHORITY_COMMANDS = [
+    ("merge-pr",        _GH,  re.compile(r"(?<!\S)pr\s+merge(?!\S)", re.I), None),
+    ("merge-api",       _GH,  re.compile(r"(?<!\S)api(?!\S)", re.I),
+                              re.compile(r"\bpulls/[^/\s]+/merge\b", re.I)),
+    ("merge-graphql",   None, re.compile(r"\bmergePullRequest\b", re.I), None),
+    ("release",         _GH,  re.compile(r"(?<!\S)release\s+create(?!\S)", re.I), None),
+    ("run-workflow",    _GH,  re.compile(r"(?<!\S)workflow\s+(run|enable|disable)(?!\S)", re.I), None),
+    ("force-push",      _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
+                              re.compile(r"(--force\b|-f\b|--force-with-lease)", re.I)),
+    ("push-to-default", _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
+                              re.compile(r"(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
+]
 
 ALLOW_FILENAME = "owner-authority-allow.json"
 ALLOW_SCHEMA_VERSIONS = (1, 2)
@@ -69,10 +78,11 @@ _REF_KEY_VERSIONS = frozenset((2,))
 ALLOWLISTABLE_ACTIONS = ("run-workflow",)
 NEVER_ALLOWLISTABLE = ("merge-pr", "merge-api", "merge-graphql", "release", "force-push")
 
-_KNOWN_GATE_ACTIONS = frozenset(a for a, _ in OWNER_AUTHORITY_COMMANDS)
+_KNOWN_GATE_ACTIONS = frozenset(a for a, *_ in OWNER_AUTHORITY_COMMANDS)
 
 # Informational only — has no authority over the allow decision (workflow_run_dispatch does).
-_WORKFLOW_RUN_POINTER = re.compile(r"\bgh\s+workflow\s+run\b", re.I)
+# Segment-scoped: gh before a workflow run token (tracks classifier shapes including repo flags).
+_WORKFLOW_RUN_POINTER = re.compile(r"(?<!\S)workflow\s+run(?!\S)", re.I)
 
 # bite-proof axis: refuses shell-expandable text, so an allow entry can never match
 # a name the shell will substitute. Replaces an enumerated blacklist of expansion forms.
@@ -96,13 +106,28 @@ _VALUE_FLAGS = frozenset(("-F", "--field", "-f", "--raw-field"))
 def owner_authority_action(command):
     """The action name (str) an owner-authority command performs, or None.
 
-    Returns None for a non-string. Iterates OWNER_AUTHORITY_COMMANDS in order; the first
-    regex `.search` hit wins."""
+    Returns None for a non-string. Iterates OWNER_AUTHORITY_COMMANDS in order; the first hit
+    wins. Matching is segment-scoped (split on ``;``, ``&``, ``|``, newline); within a segment
+    the subcommand token must follow the tool word when a tool word is required."""
     if not isinstance(command, str):
         return None
     command = _LINE_CONTINUATION.sub("", command)
-    for action, pattern in OWNER_AUTHORITY_COMMANDS:
-        if pattern.search(command):
+    segments = _SEGMENT_SPLIT.split(command)
+    # Rows OUTER, segments INNER — this preserves the shipped first-hit-wins precedence across the
+    # whole command. Iterating segments first would let a later row in an earlier segment win.
+    for action, tool, sub, trailing in OWNER_AUTHORITY_COMMANDS:
+        for segment in segments:
+            start = 0
+            if tool is not None:
+                m_tool = tool.search(segment)
+                if not m_tool:
+                    continue
+                start = m_tool.end()
+            m_sub = sub.search(segment, start)
+            if not m_sub:
+                continue
+            if trailing is not None and not trailing.search(segment, m_sub.end()):
+                continue
             return action
     return None
 
@@ -371,8 +396,15 @@ def calibration_state(cwd):
 
 def _ask_reason(action, command, notes):
     reason = "owner-authority action '%s' needs your live approval" % action
-    # Informational pointer only — driven by cheap regex, not workflow_run_dispatch.
-    if _WORKFLOW_RUN_POINTER.search(command):
+    # Informational pointer only — segment-scoped gh/workflow-run shape, not workflow_run_dispatch.
+    command_nc = _LINE_CONTINUATION.sub("", command)
+    pointer_hit = False
+    for segment in _SEGMENT_SPLIT.split(command_nc):
+        m_tool = _GH.search(segment)
+        if m_tool and _WORKFLOW_RUN_POINTER.search(segment, m_tool.end()):
+            pointer_hit = True
+            break
+    if pointer_hit:
         reason += (" — to pre-authorize this workflow, see the superheroes plugin's "
                    "reference/owner-authority-allowlist.md")
     structural = sorted({a for kind, a, _ in notes if kind == "structural" and a})

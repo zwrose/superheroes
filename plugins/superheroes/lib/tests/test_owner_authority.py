@@ -51,6 +51,10 @@ _NONE_FOR_ORDINARY = [
     # branches merely PREFIXED with `main` are not the default branch → must NOT gate.
     "git push origin main-feature",
     "git push origin mainline",
+    "git config push.default main",
+    "git config --global push.default simple",
+    "git config push.default current",
+    "gh api repos/o/r/pulls/42/merged",
 ]
 
 
@@ -109,6 +113,30 @@ def test_owner_authority_action_no_regression_census():
 ])
 def test_owner_authority_action_separator_bounding(command):
     assert oa.owner_authority_action(command) is None
+
+
+def test_owner_authority_action_no_fail_open_cap():
+    assert oa.owner_authority_action(
+        "git -c x.y=" + "a" * 300 + " push --force origin feature") == "force-push"
+    assert oa.owner_authority_action(
+        "git -c x.y=" + "a" * 100000 + " push --force") == "force-push"
+
+
+def test_owner_authority_action_precedence_rows_outer():
+    assert oa.owner_authority_action("git push origin main && gh pr merge 1") == "merge-pr"
+
+
+@pytest.mark.parametrize("command", [
+    "gh api " * 5000,
+    "gh " * 60000,
+    "git " * 60000,
+])
+def test_owner_authority_action_bounded_runtime_anchor_repetition(command):
+    import time
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
 
 
 def test_owner_authority_action_bounded_runtime():
@@ -819,6 +847,12 @@ def test_classify_hostile_merge_pr_file_does_not_silence_pr_merge(tmp_path, monk
 def test_classify_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeypatch):
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
     _, reason = oa.classify("gh workflow run deploy.yml", str(tmp_path))
+    assert "reference/owner-authority-allowlist.md" in reason
+
+
+def test_classify_ref_flagged_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    _, reason = oa.classify("gh -r main workflow run Seed", str(tmp_path))
     assert "reference/owner-authority-allowlist.md" in reason
 
 
