@@ -242,7 +242,10 @@ def workflow_run_dispatch(command):
     i = 1
     while i < len(tokens):
         tok = tokens[i]
+        before_run = len(positionals) < 2
         if tok == "--":
+            if before_run:
+                return None
             positionals.extend(tokens[i + 1:])
             break
         if tok.startswith("-"):
@@ -257,6 +260,8 @@ def workflow_run_dispatch(command):
                     ref = value
                     i += 1
                     continue
+                if before_run:
+                    return None
                 # bite-proof axis: flag values must not be misread as the workflow name.
                 if flag not in _VALUE_FLAG_LONG:
                     return None
@@ -272,6 +277,8 @@ def workflow_run_dispatch(command):
                     return None
                 i += 2
                 continue
+            if before_run:
+                return None
             if tok in _VALUE_FLAGS:
                 if i + 1 >= len(tokens):
                     return None
