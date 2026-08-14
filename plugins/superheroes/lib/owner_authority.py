@@ -35,17 +35,30 @@ import re
 import shlex
 import sys
 
-# LIFTED VERBATIM from the retired lib/enforcer.py GATED_COMMANDS (pre-#478). Do NOT re-derive
-# or widen these regexes. First .search hit wins (see owner_authority_action).
+# LIFTED VERBATIM from the retired lib/enforcer.py GATED_COMMANDS (pre-#478). The tool-to-
+# subcommand junction was re-derived under owner ratification dated 2026-08-13 (issue #989) to
+# close a silent classification bypass; the guard otherwise still stands — do NOT re-derive or
+# widen these regexes further. First .search hit wins (see owner_authority_action).
+# A flag run between the tool word and its subcommand — gh's inherited flags (-R/--repo and the
+# rest), git's global options (-C <path>, -c k=v, --git-dir=...). Fail-closed: the tokens here are
+# NOT interpreted, so an unrecognized sequence still classifies rather than falling through to
+# None. Bounded to one shell segment so one command's tool word cannot reach another command's
+# subcommand, and LENGTH-bounded because an unbounded wildcard here is quadratic against the
+# trailing .* in merge-api: measured 12.7s on a 120KB input vs 0.04s bounded (#989 brief check).
+_FLAG_RUN = r"[^;&|\n]{0,256}"
 OWNER_AUTHORITY_COMMANDS = [
-    ("merge-pr",       re.compile(r"\bgh\s+pr\s+merge\b", re.I)),
-    ("merge-api",      re.compile(r"\bgh\s+api\b.*\bpulls/[^/\s]+/merge\b", re.I)),
+    ("merge-pr",       re.compile(r"\bgh\b" + _FLAG_RUN + r"\bpr\s+merge\b", re.I)),
+    ("merge-api",      re.compile(r"\bgh\b" + _FLAG_RUN + r"\bapi\b.*\bpulls/[^/\s]+/merge\b", re.I)),
     ("merge-graphql",  re.compile(r"\bmergePullRequest\b", re.I)),
-    ("release",        re.compile(r"\bgh\s+release\s+create\b", re.I)),
-    ("run-workflow",   re.compile(r"\bgh\s+workflow\s+(run|enable|disable)\b", re.I)),
-    ("force-push",     re.compile(r"\bgit\s+push\b.*(--force\b|-f\b|--force-with-lease)", re.I)),
-    ("push-to-default", re.compile(r"\bgit\s+push\b[^;&|\n]*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
+    ("release",        re.compile(r"\bgh\b" + _FLAG_RUN + r"\brelease\s+create\b", re.I)),
+    ("run-workflow",   re.compile(r"\bgh\b" + _FLAG_RUN + r"\bworkflow\s+(run|enable|disable)\b", re.I)),
+    ("force-push",     re.compile(r"\bgit\b" + _FLAG_RUN + r"\bpush\b.*(--force\b|-f\b|--force-with-lease)", re.I)),
+    ("push-to-default", re.compile(r"\bgit\b" + _FLAG_RUN + r"\bpush\b[^;&|\n]*(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
 ]
+# The shell removes a backslash-newline before parsing, so it is not a segment boundary. Without
+# this, `gh -R o/r \<newline>pr merge 1` runs the gated command unclassified — a bypass that also
+# defeats the pre-#989 adjacency patterns.
+_LINE_CONTINUATION = re.compile(r"\\\r?\n")
 
 ALLOW_FILENAME = "owner-authority-allow.json"
 ALLOW_SCHEMA_VERSIONS = (1, 2)
@@ -87,6 +100,7 @@ def owner_authority_action(command):
     regex `.search` hit wins."""
     if not isinstance(command, str):
         return None
+    command = _LINE_CONTINUATION.sub("", command)
     for action, pattern in OWNER_AUTHORITY_COMMANDS:
         if pattern.search(command):
             return action
@@ -220,12 +234,12 @@ def workflow_run_dispatch(command):
     except ValueError:
         return None
 
-    if len(tokens) < 3 or tokens[0] != "gh" or tokens[1] != "workflow" or tokens[2] != "run":
+    if not tokens or tokens[0] != "gh":
         return None
 
     positionals = []
     ref = None
-    i = 3
+    i = 1
     while i < len(tokens):
         tok = tokens[i]
         if tok == "--":
@@ -270,9 +284,10 @@ def workflow_run_dispatch(command):
         positionals.append(tok)
         i += 1
 
-    if len(positionals) != 1 or not positionals[0]:
+    if (len(positionals) != 3 or positionals[0] != "workflow" or positionals[1] != "run"
+            or not positionals[2]):
         return None
-    return {"workflow": positionals[0], "ref": ref}
+    return {"workflow": positionals[2], "ref": ref}
 
 
 def allowlisted(command, action, entries):

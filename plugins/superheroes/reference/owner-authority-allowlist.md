@@ -148,6 +148,8 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
   you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
   `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them.
-- **No prompt (silent bypass):** a dispatch that places a repository-selection flag before the
-  `gh` subcommand is not recognised by the gate at all, because the command patterns require `gh`
-  adjacent to the subcommand — honest disclosure only; no recipe here.
+- **Shell-level obfuscation:** the gate matches on the **text** of the command and does not lex
+  shell quoting. A repository-selection flag before `workflow run` is now classified and **asks**
+  (it cannot be silenced by the allow file). What remains unclassified is obfuscation of the
+  command word itself — for example, quote-concatenated spellings like `g''h` — because the gate
+  matches literal text and does not interpret shell quoting.
