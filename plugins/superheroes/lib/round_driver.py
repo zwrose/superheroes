@@ -3574,26 +3574,24 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                 found = _durable_slot_records(session_dir, rnd, phase, attempt, roster)
                 if found:
                     if state.get("_submitUsed"):
-                        detail = ("durable seat record(s) at attempt %s for slot(s) %s on a session "
-                                  "that already folded a phase by hand (`submit`) — written before the "
-                                  "entry-point latch, so this session holds records it cannot fold. The "
-                                  "durable-record and hand-submit paths are mutually exclusive per session; "
-                                  "`advance` is not available here. Supersede or remove the durable "
-                                  "record(s), then compile the artifact and `submit` this phase."
-                                  % (attempt, ", ".join(found)))
+                        # Session latch is authoritative — the fence defers. Orphan records at this
+                        # slot are legacy-only (pre-latch sessions); record-result / record-missing
+                        # latches prevent new records in hand-path sessions going forward.
+                        _journal_event(session_dir, "submit", "record-orphans-ignored",
+                                       phase=phase, round=rnd, attempt=attempt, seats=found)
                     else:
                         detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
                                   "path folds through `advance`; a hand submit ignores them. A slot recorded "
                                   "missing on a refuse-fold phase must first be replaced with a real result "
                                   "(`record-result --supersede --expect-sha256 …`) before `advance` can fold."
                                   % (attempt, ", ".join(found)))
-                    _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": rnd,
-                                                  "attempt": attempt,
-                                                  "outcome": "record-submit-interleaved",
-                                                  "fault": FAULT_CALLER,
-                                                  "session": _meta_session_id(session_dir)})
-                    return {"ok": False, "reason": "record-submit-interleaved", "detail": detail,
-                            "seats": found}
+                        _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": rnd,
+                                                      "attempt": attempt,
+                                                      "outcome": "record-submit-interleaved",
+                                                      "fault": FAULT_CALLER,
+                                                      "session": _meta_session_id(session_dir)})
+                        return {"ok": False, "reason": "record-submit-interleaved", "detail": detail,
+                                "seats": found}
 
     # accept: clear the pending, then fold through cmd_submit (the fold chokepoint).
     round_no = pending.get("round")

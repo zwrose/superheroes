@@ -136,11 +136,19 @@ token names the seam, not the direction.
 | `advance-submit-interleaved` | a hand `submit` after any `advance` in this session (`_advanceUsed`) | use `advance` |
 | `advance-submit-interleaved` | an `advance` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase |
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
-| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` (**per-attempt** fence — no session latch covers records written before any fold) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
+| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
 
-**No dead ends.** Whatever path a session has committed to, **one** of `submit` / `advance` is always
-legal for the pending phase; `record-result` / `record-missing` are legal only on a session that has
-not hand-folded.
+**No dead ends** (fold-path interlocks only — not owner-gate phases such as `present-judgment` /
+`present-stall-menu`, where `advance` may park with `advance-judgment-park` / `advance-stall-park`
+when calibration has not pre-authorized the gate). Whichever fold path a session has committed to,
+that path's fold command stays legal for the pending phase: `_submitUsed` → hand `submit`;
+`_advanceUsed` → `advance`; neither latch → `advance` when durable records are present, hand `submit`
+when they are not. `record-result` / `record-missing` are legal only on a session that has not
+hand-folded.
+
+When a hand-path session (`_submitUsed`) still carries durable records at the pending slot from
+before the entry-point latch existed, hand `submit` proceeds and journals `record-orphans-ignored`
+with the slot label(s) — the records are deliberately ignored, not silently dropped.
 
 **Durable-record artifacts** (round `N`, phase `P`, attempt `K`, storage key `skey`, vendor `vendor`):
 
