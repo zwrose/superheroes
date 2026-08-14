@@ -349,7 +349,6 @@ def _assert_orders_agree(session_dir, rnd, phase, attempt):
 
 def _fold_setup(tmp_path, adapters):
   d = _session(tmp_path, name="fold")
-  _record_all_panel_seats(d)
   return d
 
 
@@ -595,6 +594,16 @@ def test_seam_c_fold_recovers_via_driver_command(tmp_path, adapters, monkeypatch
   out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)), art)
   assert out["ok"], out
   _assert_fold_agree(d, pend["phase"], pend["round"], pend["attempt"])
+  assert _commits_empty(d)
+
+
+def test_seam_c_hand_submit_refused_when_durable_records_present(tmp_path, adapters):
+  d = _session(tmp_path, name="fold-interleave")
+  _record_all_panel_seats(d)
+  pend = _pending(d)
+  art = _panel_artifact(d)
+  out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)), art)
+  assert out["ok"] is False and out["reason"] == "record-submit-interleaved"
   assert _commits_empty(d)
 
 

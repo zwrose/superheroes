@@ -2,6 +2,7 @@
 
 - [The one entrypoint](#the-one-entrypoint)
 - [next / submit protocol](#next--submit-protocol)
+- [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
 - [Lens coverage beside counts](#lens-coverage-beside-counts)
@@ -81,6 +82,82 @@ step and hash. An exact duplicate `submit` (same phase/attempt/artifact) returns
 Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit` to
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
 `$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
+
+## Durable-record path
+
+Each pending phase folds by **one** of two paths — they are **mutually exclusive, per SESSION**
+(the first path a session uses is the path it keeps for every later phase — not a per-phase choice):
+
+- **Hand path** — `submit` folds **the artifact you compile**; it **never reads** the durable
+  store.
+- **Durable-record path** — `record-result` / `record-missing` write per-seat envelopes into the
+  store; **`advance` assembles the phase artifact from those records** and folds it. `record-result`
+  **never feeds** `submit`; both **refuse** with `record-submit-interleaved` once the session has
+  hand-folded any phase (`_submitUsed`).
+
+Before the record-submit interleave fence existed, a hand `submit` after `record-result --sweep`
+ignored every store record and folded the caller's artifact instead — the field failure mode that
+motivated this section. **Now** that combination is refused (`record-submit-interleaved` below); the
+store records remain on disk and the pending phase is unchanged until you `advance`.
+
+**Hand path** (every phase that accepts a compiled artifact):
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
+# … dispatch seats, compile artifact …
+python3 -B "$ROOT_DIR/lib/round_driver.py" submit \
+  --session-dir "$SESSION_DIR" \
+  --phase "<phase from next>" \
+  --attempt <attempt from next> \
+  --state-hash "<expectedStateHash from next>" \
+  --artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
+```
+
+**Durable-record path** (panel and other record-capable phases):
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" next --session-dir "$SESSION_DIR"
+# … dispatch seats; each seat lands under landing/ …
+python3 -B "$ROOT_DIR/lib/round_driver.py" record-result \
+  --session-dir "$SESSION_DIR" --seat "<seat>"  # or: record-result --sweep
+# … record-missing for any slot that forfeit/timeout …
+python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
+  --session-dir "$SESSION_DIR"
+```
+
+No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not pass
+`--state-hash`.
+
+**Refusal tokens when paths interleave.** One token can be returned by more than one command — the
+token names the seam, not the direction.
+
+| `reason` | condition | recovery |
+| --- | --- | --- |
+| `advance-submit-interleaved` | a hand `submit` after any `advance` in this session (`_advanceUsed`) | use `advance` |
+| `advance-submit-interleaved` | an `advance` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase |
+| `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
+| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
+
+**No dead ends** (fold-path interlocks only — not owner-gate phases such as `present-judgment` /
+`present-stall-menu`, where `advance` may park with `advance-judgment-park` / `advance-stall-park`
+when calibration has not pre-authorized the gate). Whichever fold path a session has committed to,
+that path's fold command stays legal for the pending phase: `_submitUsed` → hand `submit`;
+`_advanceUsed` → `advance`; neither latch → `advance` when durable records are present, hand `submit`
+when they are not. `record-result` / `record-missing` are legal only on a session that has not
+hand-folded.
+
+When a hand-path session (`_submitUsed`) still carries durable records at the pending slot from
+before the entry-point latch existed, hand `submit` proceeds and journals `record-orphans-ignored`
+with the slot label(s) — the records are deliberately ignored, not silently dropped.
+
+**Durable-record artifacts** (round `N`, phase `P`, attempt `K`, storage key `skey`, vendor `vendor`):
+
+| Artifact | Path | Producer / what absence does |
+| --- | --- | --- |
+| Dispatch manifest | `$SESSION_DIR/round-N/landing/P/_dispatch.aK.json` | **Orchestrator** — never written by the driver; read only by `advance`. Top-level JSON keyed by the **exact roster seat key**; each value requires non-empty `vendor` (`model` / `engine` are optional, descriptive, neither validated nor trusted — `round_adapters._trusted_vendors` reads only `vendor`). **Absence:** the manifest key is omitted, the adapter discloses `dispatchManifestUnavailable`, and on `dispatch-audits` a clearing ruling (`discharged` / `discharged-but-new-issue`) is **not authenticated** — fails closed to `not-discharged` + `unauthenticated`, which can drive the audit stall and `advance-stall-park`. Check this file first on an unexplained fix-audit stall. |
+| Canary probe | `$SESSION_DIR/round-N/landing/dispatch-panel/_canary/vendor.aK.json` | **Orchestrator** (`seat_canary.py probe`) — panel phase only. Carries the cross-vendor control-probe result `advance` folds as `canaryResult`. **Absence:** no canary evidence; when every cross-vendor seat that ran returned zero findings, the round records `canaryUnverified` instead of `canaryVerified`. |
+| Seat store | `$SESSION_DIR/round-N/seats/P/skey.aK.json` | **`record-result`** / **`record-missing`** / `advance`'s sweep — the durable `seat-result/1` or `seat-missing/1` envelope for one roster slot. **Absence:** the slot is incomplete; `advance` refuses **`incomplete-roster`** until every slot has a store record or a missing envelope. |
+| Head-diff store | `$SESSION_DIR/round-N/seats/P/skey.aK.headdiff` | **`record-result`** on the fixer phase — the driver-owned post-fix diff blob referenced by the stored envelope's `headDiffStorePath`. **Absence:** fixer fold treats the changed surface as unknown (full panel on the next round), never a silent scoped skip. |
 
 ## Emitted orders
 
