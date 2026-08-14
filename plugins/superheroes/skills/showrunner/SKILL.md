@@ -116,7 +116,8 @@ above).
    composes its prompt from the byte-pinned rulings block, so the new rule never reached a launched
    builder, which kept receiving the superseded wording — the rule was "shipped" and its actual
    audience never saw it. PR #853's second segment closed that machine channel. When there is no such
-   exclusion, state consequences only when a real audience or channel remains on old behavior.
+   exclusion, write no consequence line — state consequences only when a real audience or channel
+   remains on old behavior.
    Enumerate audiences and channels rather than trusting recall; obviousness is exactly what
    produced #846. If it matters to the build it is an issue line anyone can
    read, never a launch line that evaporates with the session. (A mis-routed "ready" issue that turns out unclear is

@@ -130,6 +130,7 @@ If `commit-ledger` is skipped or fails, closures simply defer to the next consul
 **Refusal outcomes (surface honestly; follow each outcome's remedy):**
 
 - `invalid-dispositions` — same shape as finalize; fix the dispositions and re-run.
+- `raced` — the sweep lock is held by another run; re-run after it settles, the prior state stays intact.
 - `stale-bundle` — a newer sweep advanced `latest.json` since this bundle; re-run from step 1 or use a fresh bundle from the current sweep.
 - `roster-read-failed` — transient roster read error; **retryable**.
 - opaque-ledger skip — ledger content is unreadable; on-disk bytes stay untouched; closures defer.

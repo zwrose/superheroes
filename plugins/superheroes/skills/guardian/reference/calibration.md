@@ -4,7 +4,7 @@ The guardian hero layer (`guardian.md`) holds a single machine-readable fence th
 behavior. Write it through `core_md.py write-layer --hero guardian` (the same hero-layer machinery
 `configure` uses for every optional hero). The top-level parser of record is
 `guardian_sweep.read_config` — downstream modules consume its resolved output; extend that single
-parser for new parsing needs (CONVENTIONS §11).
+parser for new parsing needs, never a second parser (CONVENTIONS §11).
 
 ## Where the fence lives
 
