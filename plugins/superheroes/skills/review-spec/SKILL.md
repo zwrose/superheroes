@@ -119,7 +119,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §6). Treat `drift` here as informational only.
 
 **Profile bootstrap (run before locating the spec or dispatching anything).** The review engine reads its per-project calibration from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -141,7 +141,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
 **Locate the target spec doc.** Resolve by work-item slug, explicit path, or most-recent:
 
@@ -349,7 +349,7 @@ Per-agent substitutions:
 
 Fold `$FOCUS_NOTES` (computed in §1) into each agent's `Focus:` context line — **additive emphasis only; it never narrows the script-owned dispatch** (consistent with the classification invariant). When `$FOCUS_NOTES` is empty, omit the Focus line.
 
-After dispatch, wait for all dispatched agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator does not read agent transcripts — only the JSON files.
+After dispatch, wait for all dispatched agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator reads only the JSON files, never agent transcripts.
 
 ### 4. Compile Findings (main context)
 
@@ -394,7 +394,7 @@ Each round:
 2. **Compile** per §4 into `$SESSION_DIR/compiled.json` with verdict.
 3. **Effective findings** = `compiled.findings` whose identity is NOT in the `skip-set`.
 4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited requirement in `$SESSION_DIR/spec.md`, emit for each finding a **recommendation** (`Fix` = revise the spec; `Defer` = legitimately defer-to-build; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. rephrasing a requirement into EARS or adding an acceptance criterion; `judgment` = a real requirements question only the owner can answer — e.g. "what SHOULD happen on a double-submit?").
-   **A genuine requirements question is a `judgment` finding for the owner, never an invented answer.** review-spec must not fabricate a requirement the owner never stated; surface it.
+   **A genuine requirements question is a `judgment` finding for the owner — never invent or fabricate the answer; surface it.**
 5. **Print findings in chat** — grouped by spec section, each with its POV line. Do **not** write these to a file.
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the spec at `$SPEC_PATH` directly (EARS rephrasing, adding a missing acceptance criterion, removing leaked tech, splitting a compound requirement). Make these edits without asking. Keep the owner's voice; never invent a behavior the owner didn't state.
 7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each

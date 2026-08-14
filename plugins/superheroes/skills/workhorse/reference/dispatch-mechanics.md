@@ -429,8 +429,8 @@ and structured. The implementer template `agents/implementer.md` states this to 
 directly, so an order that additionally demands a full-suite run, a pasted diff, or a long verbatim
 report is **overriding the template against its own purpose**.
 
-Never assume the implementer can run anything — an external engine's shell availability is set
-**outside your build**; the engine CLI consults its own permission surface, not your order. It is
+An external engine's shell availability is set **outside your build** — **never assume the
+implementer can run anything**; the engine CLI consults its own permission surface, not your order. It is
 normally available on the sanctioned write path (so a blocked shell is not the expected state). But
 two builds in one wave had **every** implementer shell call rejected, and that is not yet explained
 — so it cannot be inferred from a previous build. Write every external order to be correct when the

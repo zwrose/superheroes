@@ -46,7 +46,7 @@ Same fail-loud contract as every check below — never a silent skip.
 
 ## A — Interactive-approval tools (live-exercised)
 
-These three are never config-inspected — each is **run for real**, once, right now.
+Each of these three is **run for real**, once, right now — never config-inspected.
 
 ### A.1 — Browser (only when test-pilot will drive the app this run)
 

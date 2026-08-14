@@ -57,12 +57,12 @@ emphatic its name.
 - **raw green** — output after restore.
 
 **Raw captures are bounded:** at most **32 KiB per element** and **128 KiB across the whole
-record**. Overflow goes to session-scoped scratch **outside the repository**; before removal once
-verification closes (an interrupted run leaves it as an accepted residual), quote decisive lines
-(redacted) into the durable record with what was elided and how much. **A path that no longer
-resolves is not a receipt** — quote before removal; scratch is a working artifact, not the receipt.
-Receipts in the durable record are **redacted** — secrets, tokens, private URLs, PII — and the
-redaction is said out loud.
+record**. Overflow goes to session-scoped scratch **outside the repository**; quote decisive
+lines (redacted) into the durable record — with what was elided and how much — before removal
+once verification closes (an interrupted run leaves it as an accepted residual). **A path that
+no longer resolves is not a receipt** — quote before removal; scratch is a working artifact, not
+the receipt. Receipts in the durable record are **redacted** — secrets, tokens, private URLs,
+PII — and the redaction is said out loud.
 
 **Bounded volume shape:** when a detector guards many elements, the record may group them into
 **failure-mode equivalence classes** — each class named by **the distinct failure mode it

@@ -1,6 +1,6 @@
 ---
 name: workhorse
-description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "build this out", "workhorse it", "take this to a PR", "run the builder". It reads the route — build-ready needs no discovery step; needs-discovery runs discovery to an owner-approved spec first, in the same session, then builds. Full lane — brief, delegates all implementation to tiered subagents or engines under a shared contract, test-pilot, multi-model review; light lane — you type, one independent review. It independently re-runs every receipt they claim. Hands back a ready PR with dispositions and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
+description: Use to run the build — Workhorse is the entry point that takes a routed issue all the way to a ready PR — "build this issue", "run the builder". It reads the route — build-ready builds at once; needs-discovery runs discovery to an owner-approved spec first, in the same session. Full lane delegates all implementation to tiered subagents or engines under a shared contract, with test-pilot and multi-model review; light lane — you type, one independent review. It independently re-runs every receipt they claim and hands back a ready PR with dispositions and receipts. Never merges, releases, bumps versions, or wires the board. Not advising the project (that is showrunner).
 user-invocable: true
 ---
 
@@ -455,8 +455,8 @@ then carries its own provenance through any number of session deaths.
 A dispatched order's premises — the base commit, "main will not move", the sequencing you assumed —
 bind **you, the dispatcher**. When the world moves under a live order, amend the order; an
 implementer that parks on a stale premise did the right thing. When you are about to dispatch a
-**third** rework of the same surface in one build, **do not dispatch it**: **a third rework of the same surface is the tripwire** — that third rework is not dispatched, so the fourth patch on that
-surface never happens. On a lane you can affirmatively call converged, **stopping and handing the design signal up satisfies it**: refuse the fourth patch, name the seam problem in the handback, and
+**third** rework of the same surface in one build, **do not dispatch it**: **a third rework of the same surface is the tripwire**, so the fourth patch on
+that surface never happens. On a lane you can affirmatively call converged, **stopping and handing the design signal up satisfies it**: refuse the fourth patch, name the seam problem in the handback, and
 ship remaining minors as disclosed follow-ups; the handback must **state that the third-rework
 tripwire fired** and name the seam problem. Where you cannot say with confidence that the lane has
 converged, the park branch binds. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — park with receipts; resumption after the park is owner- or
@@ -668,8 +668,7 @@ obligation, the four ways a bite-proof is vacuous, the record shape, and the dis
 the proof cannot be produced or runs under a normalization — lives in
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md`. **Read it when a build adds one.**
 The implementer produces the proof — **in a lane where you type the change, you produce it yourself,
-to the same record shape**; **you re-run it yourself** — verification authority never delegates,
-exactly as this section's first sentence already says — and **carry the red and green receipts into
+to the same record shape**; **you re-run it yourself** — and **carry the red and green receipts into
 the build record**, per guarded element (**redacted** — secrets, tokens, private URLs, PII — and say
 you did), using the mutation mechanics above (targeted revertible edit through the host's edit
 action; commit the landed work first). At verification, **accept or reject each disclosure and record
@@ -945,8 +944,8 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | "The route's unclear but I'll guess what they meant" | Disclose your call, or park. Guessed requirements are plausible-but-wrong shipped as done. |
 | "The last build escalated, so this one should too" | Escalation needs receipts from **this** work — a previous build's escalation is field evidence, never a standing rule; the registry ladder comes before any cross-vendor jump. |
 | "It's a small change, skip the brief/review" | In the **full lane**, the brief and the full review loop are the contract and the check — small work still gets both. In the **light lane**, the brief is intentionally cut (Build lanes) but **review before handback is never skipped** — one cross-vendor reviewer with the mandatory control. |
-| "I'll bump the version / merge / wire the board" | Never — merge/release/version are the owner's; the board is the advisor's. |
-| "I found follow-up work, I'll file an issue for it" | You never wire the board. List follow-ups in the PR for the advisor to file. |
+| "I'll bump the version / merge / wire the board" | Merge/release/version are the owner's; the board is the advisor's — never yours. |
+| "I found follow-up work, I'll file an issue for it" | List follow-ups in the PR for the advisor to file — you never wire the board. |
 | "The convention clearly says X, so I'll fix it while I'm here." | The issue's owner-ratified scope beats a general convention argument. Hand the gap to the advisor as a follow-up — never a silent widening of this diff. |
 | "One more patch and this surface is finally right." | **a third rework of the same surface is the tripwire** — refuse the fourth patch; on a converged lane **stopping and handing the design signal up satisfies it** (name the seam problem, ship minors as disclosed follow-ups); **a formal park binds when the lane has not converged**. See `rubric/review-discipline.md` § The third-rework tripwire. |
 | "That reviewer dispatch has been quiet too long, I'll kill it and re-dispatch." | The structural timeout is the tripwire for a configured reviewer dispatch, not your read of silence. A memory recalls context — it is not a standing kill order. |

@@ -53,7 +53,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
-**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt — do not treat the project as uncalibrated.
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -369,7 +369,7 @@ Render `$SESSION_DIR/report.md`: a markdown report grouped by category (Architec
 - **Minor / Nit:** these carry no POV; include them by default.
 
 **Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to the resolved decisions store (`$DECISIONS`), per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
-- **Do not mix tiers within a single issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
+- **Keep each tier in its own issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
 
 Present the proposed issue set in chat (title + tier + the findings each issue covers).
 
@@ -430,7 +430,7 @@ Pass the profile's current `nudge-ack` map keys (read from the resolved profile 
 - **Edit then apply** — open a free-text edit, then apply the edited version.
 - **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
 
-**NEVER auto-apply.** A proposal is applied ONLY on the user's explicit **Apply** / **Edit then apply** choice. If `proposal` is null, do nothing.
+**Apply ONLY on explicit choice** (**Apply** / **Edit then apply**) — never automatically. If `proposal` is null, do nothing.
 
 ### Provisional-profile confirmation (interactive only, end of run)
 

@@ -1,6 +1,6 @@
 ---
 name: architect-init
-description: "Internal helper reached from `superheroes:configure` to refresh the-architect's doc-policy layer — where definition-docs live, in-repo committed vs gitignored. Not a front door; owners run `superheroes:configure` to set up, fix, view, or tune calibration."
+description: "Internal helper reached from `superheroes:configure` to refresh the-architect's doc-policy layer — where definition-docs live, in-repo committed vs gitignored. Not a front door; owners run `superheroes:configure` instead."
 ---
 
 This skill speaks in host-neutral actions. Resolve them to your runtime's tools by reading the host tool map at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/hosts/<your-host>-tools.md` (the leading variable is this plugin's root directory) — `claude-tools.md` on Claude Code, `codex-tools.md` on Codex.

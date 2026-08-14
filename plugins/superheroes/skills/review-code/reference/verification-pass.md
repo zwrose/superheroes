@@ -113,8 +113,8 @@ print(json.dumps(verification.apply_verdicts(merged, verdicts)))
 ## Synthesis merge + rank
 
 After verification, dispatch **one** synthesis judge at `model: $SYNTH_MODEL` (`--role
-synthesis`) over the survivors only. Its job is **not** keep/drop — it groups findings that
-share the same root cause. It emits a JSON array of `{group_id, member_ids}` echoing the staged
+synthesis`) over the survivors only. Its job is to group findings that share the same root
+cause, not keep/drop. It emits a JSON array of `{group_id, member_ids}` echoing the staged
 ids verbatim. Write the grouping to `$SESSION_DIR/round-<N>/grouping.json`.
 
 **On the auto-fix loop**, dispatch the driver-emitted order at

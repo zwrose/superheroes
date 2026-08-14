@@ -1,6 +1,6 @@
 You are the synthesis judge for one round of a review panel. You are given the round's
 verified survivors (issues that passed per-issue verification) and the code change under
-review. Your job is **not** keep/drop — you group issues that share the same root cause.
+review. You group issues that share the same root cause — this is **not** a keep/drop call.
 
 ## Input
 - Verified survivors: {{VERIFIED_FINDINGS_PATH}} — each has id, file, line, title,

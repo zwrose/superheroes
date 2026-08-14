@@ -62,7 +62,7 @@ The engine parses ONLY this block; keep it in sync with the prose above.
 
 ## Pilot framework (optional)
 
-The `pilot` key is optional. Do not add it to the live `test-pilot-config` block above until
+The `pilot` key is optional. Add it to the live `test-pilot-config` block above only once
 the owner has answered every field — `effectsEscape`, the mint envelope, and expected pilot
 identities have no defaults; an unanswered declaration is absent and absent refuses.
 

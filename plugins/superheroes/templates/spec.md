@@ -2,7 +2,7 @@
 # {{Title}}
 
 <!-- AUTHOR GUIDANCE — for whoever fills this template; DELETE this whole comment
-     before the spec is delivered to the owner. It must not appear in the final spec.
+     before the spec is delivered to the owner.
 
   Plain-language requirements for this work — the WHAT, not the HOW. Owner co-authored.
   No technical implementation details (libraries, data models, APIs, frameworks) — those

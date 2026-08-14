@@ -43,8 +43,7 @@ emphasis; a changed dependency lockfile → supply-chain check). **Append** each
 line into every specialist's `Focus:` context block, alongside any `--focus` notes — an
 addition that never replaces the `--focus` notes and never removes or down-scopes a lens
 (that classifier-driven lens-removal is banned by #474). If nothing is emitted, append
-nothing. The detector is grep-grounded and has no authority: it can only add emphasis,
-never drop a finding or a lens.
+nothing. The detector is grep-grounded and has no authority to drop a finding or a lens.
 
 > **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
@@ -161,7 +160,7 @@ never drop a finding or a lens.
 >
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
-> false clean. Do not treat that as a clean review.
+> false clean.
 >
 > **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
 > dispatched prompt, so it performs **no echo strip**. An **empty-findings result from that path is
@@ -332,13 +331,12 @@ never drop a finding or a lens.
 > `dispatch-poll` is **observational — it never spawns an engine, never advances a run, and never
 > writes to the repository**, so the **subcommand** adds no write capability of its own; like the
 > two grants above, this grant is a **prefix** rule over a **wildcard path**, so it discriminates
-> the subcommand rather than the script's identity (owners who want script identity should pin the
-> absolute installed plugin path in their own rule). The write grant is deliberately narrower so **write autonomy is revocable on its own**. Host rules
+> the subcommand rather than the script's identity. The write grant is deliberately narrower so **write autonomy is revocable on its own**. Host rules
 > match a **prefix**, so that revocability holds only at subcommand granularity — a file-level or
 > bare-`python3` rule would cover both verbs. The path wildcard (`*/lib/engine_dispatch.py`) matches
 > any install location, so the grant discriminates the **subcommand**, not the script's identity —
 > an executable at any matching path would be covered by the same rule; owners who want script
-> identity too should pin the absolute installed plugin path in their own rule. **Absent grant → fail closed:** with no matching grant
+> identity should pin the absolute installed plugin path in their own rule. **Absent grant → fail closed:** with no matching grant
 > the dispatch does not run, no engine is spawned, nothing is written, and the caller **parks loudly**
 > — never a soft failure, never a silent fall-open. A `configure` onboarding offer for the rule is
 > deferred to [#549](https://github.com/zwrose/superheroes/issues/549); the owner pastes the rule by
