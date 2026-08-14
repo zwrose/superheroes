@@ -394,6 +394,20 @@ def _wave_watch_degradations_from_home():
     return set(wave_watch.DEGRADATIONS)
 
 
+def _wave_watch_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
+    import wave_watch
+
+    derived = set()
+    for name in dir(wave_watch):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(wave_watch, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
+
+
 def _wave_watch_precedence_from_home():
     """Precedence order from wave_watch.py's module docstring — no named data structure."""
     text = _read("lib/wave_watch.py")
@@ -490,11 +504,40 @@ def _wave_watch_precedence_from_doc(doc):
 
 
 def test_wave_watch_vocabulary_in_wave_watch_doc():
-    """§11: wave-watch.md restates wave_watch.py event/refusal/degradation tokens and precedence."""
+    """§11: wave-watch.md restates wave_watch.py vocabulary on three registry axes and one partial axis.
+
+    Axis notes:
+    - Events, refusals, degradations: the doc's bullet lists must match the module's EVENTS,
+      REFUSALS, and DEGRADATIONS frozensets (token registries).
+    - Precedence: the doc precedence line must match the module docstring's precedence sentence
+      only. Drift between that docstring and run()'s actual return-arm order is NOT caught here —
+      that would need a behaviour test in test_wave_watch.py or an ordered tuple consumed by run()
+      (#996 residual, disclosed).
+    """
+    import wave_watch
+
     home_events = _wave_watch_events_from_home()
     home_refusals = _wave_watch_refusals_from_home()
     home_degradations = _wave_watch_degradations_from_home()
     home_precedence = _wave_watch_precedence_from_home()
+    derived_events = _wave_watch_string_constants_by_prefix("EVENT_")
+    derived_refusals = _wave_watch_string_constants_by_prefix("REFUSAL_")
+    derived_degradations = _wave_watch_string_constants_by_prefix("DEGRADATION_")
+    assert derived_events == home_events, (
+        "wave_watch EVENT_* constants drift from wave_watch.EVENTS — "
+        "symmetric difference: %r"
+        % sorted(derived_events ^ home_events)
+    )
+    assert derived_refusals == home_refusals, (
+        "wave_watch REFUSAL_* constants drift from wave_watch.REFUSALS — "
+        "symmetric difference: %r"
+        % sorted(derived_refusals ^ home_refusals)
+    )
+    assert derived_degradations == home_degradations, (
+        "wave_watch DEGRADATION_* constants drift from wave_watch.DEGRADATIONS — "
+        "symmetric difference: %r"
+        % sorted(derived_degradations ^ home_degradations)
+    )
     doc = _read("skills/showrunner/reference/wave-watch.md")
     doc_events = _wave_watch_events_from_doc(doc)
     missing_events = sorted(home_events - doc_events)
@@ -526,6 +569,24 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
         "doc: %r; home: %r"
         % (doc_precedence, home_precedence)
     )
+    events_registry = set(wave_watch.EVENTS)
+    for label, precedence in (
+        ("wave_watch.py module docstring", home_precedence),
+        ("wave-watch.md", doc_precedence),
+    ):
+        prec_set = set(precedence)
+        assert prec_set == events_registry and len(precedence) == len(events_registry), (
+            "wave-watch precedence tokens drift from wave_watch.EVENTS — "
+            "%s: precedence %r (set %r, len %d); EVENTS %r (len %d)"
+            % (
+                label,
+                precedence,
+                sorted(prec_set),
+                len(precedence),
+                sorted(events_registry),
+                len(events_registry),
+            )
+        )
 
 
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------

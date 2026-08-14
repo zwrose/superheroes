@@ -35,8 +35,13 @@ python3 -B "$ROOT_DIR/lib/wave_watch.py" run \
 each launch id already handled on that arm.
 
 The call **blocks** until an event or the deadline, so `--max-seconds` is also how long the
-advisor's session is committed to this arm. On Claude Code, a foreground call whose timeout exceeds
-~600 s is converted to background and dies when the turn ends (`skills/workhorse/reference/dispatch-mechanics.md`); size `--max-seconds` to what the session can await in-turn and re-arm as the loop, rather than assuming a 40-minute arm survives unattended.
+advisor's session is committed to this arm. On Claude Code, Bash timeout has two layers
+(`hooks/bash_timeout.py`, `skills/workhorse/reference/dispatch-mechanics.md`): an **omitted**
+timeout is rewritten to 600000 ms (600 s), so a foreground arm with no explicit timeout — this
+snippet supplies none — is killed at ~600 s regardless of `--max-seconds`; an **explicit**
+timeout above ~600 s converts the call to background, where it dies when the turn ends. Size
+`--max-seconds` to what the session can await inside that in-turn window and re-arm as the loop,
+or accept that a longer arm needs a continuation mechanism this tool does not provide.
 
 ## `--ignore-launch` and re-arming
 
@@ -82,8 +87,9 @@ dead builder is `builder-exited` instead.
 The pre-loop validations (`batch-invalid`, `interval-invalid`, `max-seconds-invalid`,
 `repo-root-invalid`, `store-unresolvable`) refuse immediately — re-arming without fixing the cause
 just refuses again. `ledger-unreadable` can also arrive on the deadline path after the full
-`--max-seconds` window, and `internal-error` comes from a loop-wide exception handler — neither is
-guaranteed at arm time.
+`--max-seconds` window. `internal-error` comes from the top-level exception handler wrapping all
+of `run()` — including the pre-loop validations — so it can fire before the watch loop ever runs;
+neither `ledger-unreadable` on the deadline path nor `internal-error` is guaranteed at arm time.
 
 **Non-fatal degradations** that ride on a result:
 
