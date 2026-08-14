@@ -3823,3 +3823,19 @@ def test_count_slots_join_identifies_refused_lane(tmp_path, monkeypatch):
     assert refused_lane["terminalKind"] == "refused"
     assert result["counts"]["refusedToLaunch"] == 1
     assert slots_by_launch["l-refused"]["slotRef"] == boundary_b["slotRef"]
+
+
+@pytest.mark.parametrize("worktree", ["", "   ", "relative/build-worktree", 7, None])
+def test_reserved_worktree_must_be_an_absolute_path(worktree):
+    # axis: a recorded build worktree that cannot name a real checkout is refused, not folded
+    rec = _reserved("l1", "b", ["a"], "/tmp", worktree=worktree)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:worktree"
+
+
+def test_reserved_worktree_absolute_path_folds():
+    # axis: the launcher's own record shape folds clean
+    rec = _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-974-abcd1234")
+    result = ll.fold([rec])
+    assert result["ok"] is True

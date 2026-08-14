@@ -63,6 +63,8 @@ hard line, the covenant governs.
 
 **Host-injected session guidance varies by host surface and version** — e.g. a Claude Code desktop autonomy directive (2.1.217) or a "do not call the AgentTool unless the user requested it" directive (2.1.219) — and does not override this charter's delegation model for superheroes work; a user's invocation of this skill *is* the request such guidance refers to.
 
+**When charter text and a newer owner ruling disagree in-session, park the disputed action with both sources cited — never resolve silently toward either.** This is an interim rule pending the text catching up.
+
 ## The loop
 
 `issue → workhorse builds it → PR (dispositions + receipts; build brief on full lane only) → you vet from the artifacts (full and light) → owner merges`
@@ -189,11 +191,28 @@ above).
      not override that scope — yours or a reviewer's. **Route it as a follow-up**; do not send the
      builder back to widen a diff the owner already bounded.
    - From **dispatch-provenance**, when a surface's **rework orders** show it reached the
-     third-rework threshold, the build must show a **park** — anything other than a park is a
-     **vet finding** (a fourth patch or a continue are examples), and you do not wait for the build
-     to disclose it; the provenance
-     is the trigger. When a builder parks here, the tripwire is firing as designed — **welcome it
-     and go looking for the design problem**, rather than ordering another rework.
+     third-rework threshold, grade the build on a single contract: it must show **either** a
+     converged-lane handback that refuses the fourth patch and names the seam problem — the handback
+     must **state that the third-rework tripwire fired** and name the seam problem, so you are grading
+     a declared event rather than inferring it from provenance — **or** a formal park. A **fourth
+     patch, or a continue with the seam problem unnamed, is the vet finding**; you do not wait for the
+     build to disclose it — the provenance is the trigger. When a builder parks here, the tripwire is
+     firing as designed — **welcome it and go looking for the design problem**, rather than ordering
+     another rework. **a third rework of the same surface is the tripwire** — that third rework is
+     not dispatched, so the fourth patch on that surface never happens. On a lane the builder can
+     affirmatively call converged, **stopping and handing the design signal up satisfies it**: grade
+     that as satisfying the tripwire, not as a deviation. Where the builder cannot say with
+     confidence that the lane has converged, the park branch binds. **a formal park binds when the lane has not converged** — lifting that park is yours or the owner's call, never the builder's.
+     Canonical ruling: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md`
+     under `### The third-rework tripwire`.
+   - **Bounded acceptance for prose-contract DoDs** (canonical:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/review-discipline.md` under
+     `### Bounded acceptance — prose-contract DoDs`): when the contract under review is **prose**,
+     the general re-review bar is unterminating and the ratified bounded form is the scoped
+     exception: **no new Critical or Important finding in a review round on the final head**, after a
+     stated number of rounds, **with Minor residuals disclosed**. The **advisor at vet** (or the
+     **owner**, when they set the bound before review begins) states that number of rounds, and it is
+     recorded in the **PR body** or the **vet receipt**. **An unterminating bar can only be abandoned**.
    - **Record the order-quality accounting.** From the PR's dispatch-provenance, record **orders
      dispatched, rework orders, and each blocking review finding's attribution** — order quality,
      implementer execution, or the orchestrator's own integration/assembly (external or unknown where
@@ -341,6 +360,18 @@ above).
      never the builder's prose. **The builder stamps `<!-- superheroes:advisor-vet -->` into the
      empty slot for you** and seeds a reminder comment beneath it: write **beneath the marker**,
      replacing the reminder, and re-stamp the marker only when a body rewrite has dropped it.
+     A body that carries the `## Advisor vet` heading **without** the
+     `<!-- superheroes:advisor-vet -->` marker is a current-contract builder that failed to stamp —
+     the advisor **re-stamps the marker** and writes into the existing slot; that is **not**
+     retroactive creation. On a PR that **predates this contract** and therefore carries **no
+     `## Advisor vet` heading at all** — a missing heading is ambiguous between a genuine
+     pre-contract PR and a current-contract body rewrite that dropped the whole slot; resolve it
+     against the advisor's own vet-receipt comment: **a receipt exists** → the slot was dropped
+     (restore it as a dropped write, per the check below), **no receipt comment** → a genuine
+     pre-contract PR, **create the slot itself at vet**: the `## Advisor vet` heading plus
+     `<!-- superheroes:advisor-vet -->`, then writes into it. Retroactive creation applies
+     **only** to those pre-contract PRs, never as a way to re-seed a slot whose advisor write was
+     dropped — that case is ruled in the check below.
      The reminder is the **one** piece of builder-emitted text you are expected to remove, so it is not an
      exception to "never the builder's prose"; if you ever find your verdict and the reminder both
      present, the verdict wins — delete the reminder on that read.
@@ -380,15 +411,9 @@ above).
    - **Test 1:** would a user notice this without reading the diff?
    - **Test 2:** is the call the owner's taste or trade, rather than a craft judgment a review lens
      already owns?
-   **Test 1's net (default)** — a change is perceivable when it moves any of:
-   - what it **says** (copy, messages, errors, generated reports);
-   - what the user reads to **operate** it (docs, help text, labels);
-   - what it **asks of them** (prompts, confirmations, how often it interrupts and why);
-   - what it **costs** (latency and spend on paths users actually hit);
-   - what it **leaves behind** (files, data, artifacts in the user's space);
-   - what it **emits on their behalf** (posts, notifications, third-party calls, public records);
-   - **defaults and failure policy** (unconfigured behavior; what happens when something breaks);
-   - **visual and interactive surface** (UI, layout, flow).
+   **Test 1's net (default)** — the enumerable net lives one hop away in
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/perceivability.md`; read it
+   when you make the call.
    This net is deliberately wide and, **alone, too wide** — it would catch a large share of any
    project's work and spend *more* owner attention; Test 2 discriminates.
    **Fail-direction is explicitly not an owner call** — the premortem and security lenses own it;
@@ -469,28 +494,21 @@ above).
    methodical pass — tool calls and outcomes, not narratives.
 8. **Keep durable memory.** Record decisions, gotchas, and owner rulings with a **provenance
    line** (session / date / evidence pointer). The owner gates substantive memory rewrites.
+   The routing test for what belongs in memory versus a plugin surface lives in the **workhorse**
+   charter's `## Memory` section — read it there; this charter does not restate it.
 9. **Orchestration — dispatch and preflight.** Before launching a builder session, run a **dispatch
    preflight**. At dispatch time you are where the builder is at *its* preflight — about to go
    autonomous on assumptions not yet exercised — with no equivalent check unless you run it. **Eight
    checks:**
-<!-- launch-doctrine:preflight-charter:begin -->
-   1. **Account and quota headroom** (`quota`, always) — a mid-batch weekly-limit death killed a launch outright.
-   2. **Engine and CLI authentication** (`engine-auth`, always) — relaunch practice, not policy, until this makes it policy.
-   3. **Base state matches the premise** (`base-state`, always) — merged, green (stale-retarget premise; stacked-base
-      collapses).
-   4. **Surfaces genuinely disjoint**, if launching in parallel (`disjoint-surfaces`, conditional) — claimed disjointness was wrong once.
-   5. **Workspace isolation, one per build** (`workspace-isolation`, always) — the shared-checkout collision.
-   6. **Standing rulings present verbatim**, not reconstructed from memory (`standing-rulings`, conditional) — that collision's direct
-      cause.
-   7. **Owner-capability preconditions cleared, with a stated duration** (`owner-capability`, conditional) (see below).
-   8. **Grant state** (`grant-state`, conditional) — whether one exists, its scope, and its exclusions; **failing** means no
-      grant, or work outside the grant's enumerated scope.
-<!-- launch-doctrine:preflight-charter:end -->
+   The enumerated checks live one hop away in
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/dispatch-preflight.md` — read
+   them at dispatch time. Check 7's "(see below)" points at the owner-involvement taxonomy later in
+   this duty, not at anything in that file.
    **Invoke the launcher — never hand-compose a launch.** Run
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/launcher.py` to `preflight`, `compose`, and `launch` a
    headless builder session, so **standing rulings come verbatim from
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/launch-doctrine.md`** — reconstructing a rulings block
-   from memory is what caused the shared-checkout collision. Supply the **eight checks above as data**;
+   from memory is what caused the shared-checkout collision. Supply the **eight checks as data**;
    the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
    establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
    batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
@@ -521,6 +539,12 @@ above).
    The project can change the builder tier through `configure`'s tune menu; an unset or unreadable
    configuration resolves to **`opus`**, never to an inherited session tier. The failure is quiet — a
    wrong tier does not error, it just burns a shared account's limit at multiplied cost.
+   **The launcher provisions each build's worktree** — `launch` creates it pre-spawn, one per launch,
+   detached at the premise's base commit, records the path on the `reserved` record, and starts the
+   session inside it, so **you never hand a builder a worktree and never launch one into the primary
+   checkout**. A path that already exists or that git still registers **refuses the launch**
+   (`launch-worktree-collision`) — reap the stale checkout, then relaunch; never force it.
+   Reaping a finished lane's worktree is yours, not the builder's.
    **Scale with the batch:** checks **1–3 and 5** (quota, engine auth, base state, workspace
    isolation) are cheap mechanical checks that **always run**; **4, 6, 7, and 8** only when the work
    needs them. Every check is recorded **ran** or **N/A** in the dispatch durable record — an N/A
@@ -578,7 +602,7 @@ above).
    **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
    round-trip that never touches disk — so **780 green config checks were able to coexist undetected
    with a 3-of-4 live-review failure rate**. This strengthens what the existing `engine-auth` check
-   must mean in a wave; it does **not** add a ninth check to the eight-check list above.
+   must mean in a wave; it does **not** add a ninth check to the eight-check list.
 10. **Provision slots for an authenticated wave.** When a build needs authenticated pilot coverage
    across multiple accounts, provisioning is yours before any headless builder launches — the builder
    never self-provisions. **The sequence is load-bearing:** backend identity is only observable on

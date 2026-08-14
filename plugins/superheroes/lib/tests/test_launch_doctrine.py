@@ -8,7 +8,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _MOD = os.path.join(_HERE, "..", "launch_doctrine.py")
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _DOCTRINE = os.path.join(_PLUGIN_ROOT, "rubric", "launch-doctrine.md")
-_CHARTER = os.path.join(_PLUGIN_ROOT, "skills", "showrunner", "SKILL.md")
+# Preflight charter block lives in dispatch-preflight.md (not SKILL.md).
+_CHARTER = os.path.join(
+    _PLUGIN_ROOT, "skills", "showrunner", "reference", "dispatch-preflight.md"
+)
 
 
 def _load():
@@ -447,3 +450,113 @@ def test_git_identity_ruling_is_delivered_with_its_prohibitions():
     # test_launcher.py::test_compose_git_identity_ruling_in_prompt — not here. Re-checking the
     # block for the line at this point would be vacuous: a parsed ruling exists only because
     # _parse_rulings_block matched that exact line in that exact block.
+
+
+def test_gated_strings_ruling_is_delivered_with_its_prohibitions():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "gated-strings" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "gated-strings")
+    # Pinned in full, not by substring. Substring checks would still pass if a coordinated edit
+    # appended an exception clause around the asserted phrases, which would leave the launched
+    # payload carrying a conditional invariant. Exact equality means any softening has to edit
+    # this literal too — a third, deliberate site.
+    assert text == (
+        "gated command strings reach disk only through file-write tools: a string matching a "
+        "permission-gated command shape is never embedded inline in Bash text — a probe reads its "
+        "test string from a file, a heredoc counts as Bash text, and a memory or ledger append "
+        "carrying a gated literal is written with a file-write tool, never echoed through a shell."
+    )
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py::test_compose_gated_strings_ruling_in_prompt — not here.
+
+
+def test_await_dispatches_ruling_is_delivered_with_its_prohibitions():
+    parsed = LD.parse(_read_doctrine())
+    assert parsed["ok"] is True
+    assert "await-dispatches" in LD.RULING_IDS
+    text = next(r["text"] for r in parsed["rulings"] if r["id"] == "await-dispatches")
+    # Pinned in full, not by substring. The expectation is spelled out in this file — an
+    # independent third site — so a coordinated edit to both launch-doctrine.md and RULING_TEXT
+    # still fails here unless this literal is updated too.
+    assert text == (
+        'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message. '
+        "Until the handback or park comment is posted, every turn ends with a tool call; "
+        "await every dispatch in-turn, and run each external engine dispatch you invoke directly "
+        "through `dispatch-review`/`dispatch-write --max-wait` (a slice of 0..540 seconds — on "
+        "`dispatch-review` a zero slice opens the run and returns now without starting an attempt; on "
+        "`dispatch-write` a zero or too-short slice can return terminal `git-preflight-timeout` with "
+        "nothing opened, so size the launch slice to the repository's git-preflight cost; progress "
+        "comes from a re-invocation with a positive slice) re-invoked on the same `--run-dir` until the structured "
+        "result is terminal, never an external `setsid`/`nohup` wrapper or an exit-code sentinel; "
+        "independent dispatches go out CONCURRENTLY — give each member its own `--run-dir`, launch each one "
+        "with a short positive slice, then re-invoke the originating verb on every non-terminal run in rotation "
+        "until each returns terminal, so a batch costs its slowest member and not their sum; "
+        "the concurrency comes from the engines working while you poll the others, never from issuing the "
+        "calls together in one message — measured on one host: run-action calls serialize, and a launch call "
+        "blocks for its whole slice, so keep the launch slice short; a native-subagent batch is the other "
+        "channel and does go out as parallel dispatches in one message, harness-managed; "
+        "independent means no result dependency, no shared writable worktree, and no shared output path — "
+        "dependent orders and dispatches sharing a writable worktree stay sequenced; "
+        "the concurrency changes a batch's shape, never its invariant: "
+        "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an "
+        "unwatched run-dir at turn end; skill-owned seats and native subagents keep their own lifecycle; "
+        "when the in-turn poll cannot fit the turn, park durably on the issue or PR. "
+        "The same rule covers anything long-running you start locally — a full-suite run, a build, a long script — "
+        "not only engine dispatches: await it in-turn, or park; never end a turn to wait."
+    )
+    # Delivery into the composed builder prompt is asserted against launcher.compose_launch in
+    # test_launcher.py — not here.
+
+
+def test_doctrine_gated_strings_ruling_invariant_missing():
+    text = _mutate_once(
+        _read_doctrine(),
+        "- `gated-strings` — gated command strings reach disk only through file-write tools: "
+        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+        "- `gated-strings` — gated command strings reach disk only through file-write tools: "
+        "a string matching a permission-gated command shape is not embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == (
+        "doctrine-ruling-invariant-missing:gated-strings:never embedded inline in Bash text"
+    )
+    assert result["rulings"] == []
+    assert result["checks"] == []
+    assert result["rulingsBlock"] is None
+    assert result["digest"] is None
+
+
+def test_reworded_gated_strings_ruling_refuses():
+    text = _mutate_once(
+        _read_doctrine(),
+        "- `gated-strings` — gated command strings reach disk only through file-write tools: "
+        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+        "- `gated-strings` — gated command strings go to disk only through file-write tools: "
+        "a string matching a permission-gated command shape is never embedded inline in Bash text — "
+        "a probe reads its test string from a file, a heredoc counts as Bash text, and a memory or "
+        "ledger append carrying a gated literal is written with a file-write tool, never echoed "
+        "through a shell.",
+    )
+    result = LD.parse(text)
+    assert result["ok"] is False
+    assert result["reason"] == "doctrine-ruling-text-mismatch:gated-strings"
+
+
+def test_gated_strings_ruling_invariants_registered():
+    assert "gated-strings" in LD.RULING_INVARIANTS
+    assert LD.RULING_INVARIANTS["gated-strings"] == (
+        "never embedded inline in Bash text",
+        "a heredoc counts as Bash text",
+        "written with a file-write tool",
+    )
