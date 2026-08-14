@@ -92,7 +92,8 @@ Each pending phase folds by **one** of two paths — they are **mutually exclusi
   store.
 - **Durable-record path** — `record-result` / `record-missing` write per-seat envelopes into the
   store; **`advance` assembles the phase artifact from those records** and folds it. `record-result`
-  **never feeds** `submit`.
+  **never feeds** `submit`; both **refuse** with `record-submit-interleaved` once the session has
+  hand-folded any phase (`_submitUsed`).
 
 Before the record-submit interleave fence existed, a hand `submit` after `record-result --sweep`
 ignored every store record and folded the caller's artifact instead — the field failure mode that
@@ -127,12 +128,19 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
 No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not pass
 `--state-hash`.
 
-**Refusal tokens when paths interleave:**
+**Refusal tokens when paths interleave.** One token can be returned by more than one command — the
+token names the seam, not the direction.
 
 | `reason` | condition | recovery |
 | --- | --- | --- |
-| `advance-submit-interleaved` | a hand `submit` after any `advance` has already driven this session (**session-wide** — `_advanceUsed` is stamped on the first `advance` and refuses every later hand `submit`, even on a different phase) | use `advance` for record-capable phases; hand `submit` only on phases you compiled yourself |
-| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` (**per-attempt**, records-present — narrower than the session-wide stamps above) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced with a real result (`record-result --supersede --expect-sha256 …`) |
+| `advance-submit-interleaved` | a hand `submit` after any `advance` in this session (`_advanceUsed`) | use `advance` |
+| `advance-submit-interleaved` | an `advance` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase |
+| `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
+| `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` (**per-attempt** fence — no session latch covers records written before any fold) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
+
+**No dead ends.** Whatever path a session has committed to, **one** of `submit` / `advance` is always
+legal for the pending phase; `record-result` / `record-missing` are legal only on a session that has
+not hand-folded.
 
 **Durable-record artifacts** (round `N`, phase `P`, attempt `K`, storage key `skey`, vendor `vendor`):
 
