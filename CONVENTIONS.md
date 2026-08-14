@@ -684,8 +684,9 @@ workspace-write, confined to the builder's own worktree, with **no remote author
 the band owns every push / PR / merge, mechanically backstopped by the owner-authority
 gate (a minimal PreToolUse hook, `LEDGERS.md` §1.1) that prompts the owner before any
 merge/release/force-push shape, and never bypassed by an external engine. The
-owner-approval rule (`PHILOSOPHY.md` §4, ruling #706) and the never-merge floor
-(`lib/owner_authority.py`) are two names for this owner-authority gate. A second
+never-merge floor (`lib/owner_authority.py`) is another name for this owner-authority
+gate; the owner-approval rule (`PHILOSOPHY.md` §4, ruling #706) is the doctrine the gate
+backstops — where the gate does not fire, the rule still governs. A second
 Claude Code hook (`LEDGERS.md` §1.1) denies git commands that would irrecoverably
 discard uncommitted worktree content — the checkout-revert wipe class every implementer
 and mutation-probe path can trigger. All external
@@ -858,8 +859,8 @@ pass. An empty degradation list is only clean when the section body is the liter
 floor — `rubric/review-discipline.md` (Ship-phase honesty), `skills/workhorse/SKILL.md`
 §11, and `skills/review-code/SKILL.md` step 8 — restates it as an inline enumerated
 triple in order after the omission-floor anchor, using one accepted marker shape across
-all three rows — `(1)`/`(2)`/`(3)`, `1.`/`2.`/`3.`, `1)`/`2)`/`3)`, or Markdown
-auto-numbering (`1.`/`1.`/`1.`); that enumerated shape is what makes per-row drift
+all three rows (the accepted shapes are defined in
+`plugins/superheroes/lib/tests/test_ssot_drift.py`); that enumerated shape is what makes per-row drift
 mechanically detectable rather than a judgment call, because a copy that merges the three
 rows into prose can silently lose one.
 
