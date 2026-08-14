@@ -40,7 +40,7 @@ Pass the profile's current `nudge-ack` map keys (read from the resolved profile 
 - **Edit then apply** — open a free-text edit, then apply the edited version.
 - **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
 
-**NEVER auto-apply.** A proposal is applied ONLY on the user's explicit **Apply** / **Edit then apply** choice. If `proposal` is null, do nothing.
+**Apply ONLY on explicit choice** (**Apply** / **Edit then apply**) — never automatically. If `proposal` is null, do nothing.
 
 ### Provisional-profile confirmation (interactive only, end of run)
 
