@@ -48,7 +48,7 @@ ESC_WRAPPER="$ROOT_DIR/lib/escalation_resolve.py"   # absolute; embed the expand
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || pwd)  # absolute; the canonical safe-capture pattern, anchors the in-repo (dogfood) safety files
 ```
 
-**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt — do not treat the project as uncalibrated.
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"

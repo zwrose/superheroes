@@ -106,6 +106,7 @@ than implying none; the baseline still advances.
 
 - `invalid-dispositions` — a surfaced id is missing, duplicated, or a `validated` entry lacks required fields. Fix the dispositions and re-run finalize with the same bundle.
 - `raced` — a concurrent sweep advanced the snapshot since collect. Re-run from step 1; the prior baseline stays intact.
+- `durable-write-failed` — the vitals append failed after `report.md` landed; the baseline does not advance — retry finalize with the same bundle.
 
 ### 4. Commit the ledger (advisor, at consult/triage)
 
@@ -133,7 +134,7 @@ If `commit-ledger` is skipped or fails, closures simply defer to the next consul
 - `raced` — the sweep lock is held by another run; re-run after it settles, the prior state stays intact.
 - `stale-bundle` — a newer sweep advanced `latest.json` since this bundle; re-run from step 1 or use a fresh bundle from the current sweep.
 - `roster-read-failed` — transient roster read error; **retryable**.
-- opaque-ledger skip — ledger content is unreadable; on-disk bytes stay untouched; closures defer.
+- opaque-ledger skip — ledger content is unreadable; on-disk bytes stay untouched; closures defer to the next consult — restore the ledger's readability before then.
 - `raced-out` — the never-clobber loop exhausted its bounded retries; on-disk bytes stay untouched; retry after the concurrent edit settles.
 
 ## The report + storage
