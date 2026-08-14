@@ -271,7 +271,7 @@ def test_refusal_internal_error_on_read_exception(tmp_path, monkeypatch):
 def test_event_e1_lane_terminal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["ok"] is True
     assert result["event"] == "lane-terminal"
     assert result["batchId"] == "batch-982"
@@ -283,7 +283,7 @@ def test_event_e1_lane_terminal(tmp_path, monkeypatch):
 def test_event_e2_lane_blocked(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["ok"] is True
     assert result["event"] == "lane-blocked"
     assert result["launchId"] == "lane-a"
@@ -294,7 +294,7 @@ def test_event_e3_builder_exited(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead_pid = 999999999
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["ok"] is True
     assert result["event"] == "builder-exited"
     assert result["pids"] == [dead_pid]
@@ -483,8 +483,17 @@ def test_ledger_transient_unreadable_then_readable_emits_timer_degraded(
         return real_read(repo_root, env=env)
 
     monkeypatch.setattr(ww.ll, "read", flaky_read)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
     result = ww.run(
-        repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=_noop_gh_run,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=_noop_gh_run,
     )
     assert result["ok"] is True
     assert result["event"] == "timer"
@@ -814,12 +823,30 @@ def test_precedence_pr_set_changed_beats_lane_stale(tmp_path, monkeypatch):
 def test_precedence_builder_exited_beats_lane_stale(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead_pid = 888888888
-    _setup_stale_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
+    live_pid = os.getpid()
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 2)
+    ll.append(repo, _reserved("lane-dead", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-dead", pid=dead_pid))
+    ll.append(repo, _reserved("lane-stale", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-stale", pid=live_pid))
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id="lane-stale",
+        stale_after_seconds=1,
+        now=time.time() - 60,
+    )
+    assert hb.read_heartbeat(repo, "lane-stale")["class"] == "stale"
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["event"] == "builder-exited"
     assert result["event"] != "lane-stale"
+    assert result["pids"] == [dead_pid]
+    assert result["alsoObserved"] == {"stale": ["lane-stale"]}
 
 
 def test_stale_token_pin_in_sweep_classes():
@@ -870,7 +897,7 @@ def test_acceptance_pid_exit(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead = 888888888
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead)
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "builder-exited"
     assert result["pids"] == [dead]
 
@@ -878,7 +905,7 @@ def test_acceptance_pid_exit(tmp_path, monkeypatch):
 def test_acceptance_heartbeat_flip(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="parked")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "lane-terminal"
     assert result["launches"][0]["state"] == "parked"
 
@@ -921,7 +948,7 @@ def test_precedence_terminal_beats_builder_exited(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     dead = 777777777
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead, stamp_state="handback")
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "lane-terminal"
     assert result["event"] != "builder-exited"
 
@@ -949,7 +976,7 @@ def test_also_observed_carries_co_occurring_blocked_lane(tmp_path, monkeypatch):
         repo, state="blocked", phase="watch", launch_id="lane-b",
         stale_after_seconds=3600,
     )
-    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60)
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
     assert result["event"] == "lane-terminal"
     assert result["launchId"] == "lane-a"
     assert result["alsoObserved"] == {"blocked": ["lane-b"]}
@@ -961,7 +988,7 @@ def test_ignore_launch_suppresses_lane_event(tmp_path, monkeypatch):
     _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead, stamp_state="handback")
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        ignore_launch_ids=("lane-a",),
+        ignore_launch_ids=("lane-a",), gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
 
@@ -1007,7 +1034,8 @@ def test_mid_watch_launch_detected_within_one_interval(tmp_path, monkeypatch):
         ll.append(repo, _started("lane-late", pid=dead))
 
     result = ww.run(
-        repo, "batch-982", max_seconds=3, interval_seconds=1, sleep=sleep_fn,
+        repo, "batch-982", max_seconds=3, interval_seconds=1,
+        sleep=sleep_fn, gh_run=_noop_gh_run,
     )
     assert result["event"] == "builder-exited"
     assert result["launches"][0]["launchId"] == "lane-late"
@@ -1182,7 +1210,7 @@ def test_deadline_timer_without_overshoot(tmp_path, monkeypatch):
 
     result = ww.run(
         repo, "batch-982", max_seconds=5, interval_seconds=60,
-        monotonic=mono, sleep=fake_sleep,
+        monotonic=mono, sleep=fake_sleep, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
     assert clock[0] == 105.0
@@ -1203,7 +1231,7 @@ def test_max_seconds_shorter_than_interval_evaluates_once_then_timer(tmp_path, m
 
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60,
-        monotonic=mono, sleep=fake_sleep,
+        monotonic=mono, sleep=fake_sleep, gh_run=_noop_gh_run,
     )
     assert result["event"] == "timer"
     assert clock[0] == 2.0
@@ -1238,13 +1266,143 @@ def test_read_only_no_store_files_changed(tmp_path, monkeypatch):
     )
     before = _snapshot_files(store_root)
     before_paths = set(before.keys())
-    ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1)
+    ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
     after = _snapshot_files(store_root)
     assert set(after.keys()) == before_paths
     assert before == after
     assert not any(
         p.endswith(ll.LEDGER_NAME + _LEDGER_LOCK_SUFFIX) for p in after
     )
+
+
+# --- gh environment and deadline ------------------------------------------------
+
+
+def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    custom_env = dict(os.environ)
+    custom_env["WW_TEST_MARKER"] = "reaches-gh-child"
+    seen = []
+
+    def gh_run(argv, **kwargs):
+        seen.append(kwargs.get("env"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        env=custom_env, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert len(seen) >= 1
+    assert seen[0]["WW_TEST_MARKER"] == "reaches-gh-child"
+
+
+def test_gh_child_env_scrubs_git_routing_vars(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    custom_env = dict(os.environ)
+    custom_env["GIT_DIR"] = "/definitely/not/a/git/dir"
+    custom_env["GIT_WORK_TREE"] = "/also/wrong"
+    seen = []
+
+    def gh_run(argv, **kwargs):
+        seen.append(kwargs.get("env"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        env=custom_env, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert len(seen) >= 1
+    child_env = seen[0]
+    assert "GIT_DIR" not in child_env
+    assert "GIT_WORK_TREE" not in child_env
+
+
+def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    calls = []
+    mono_calls = [0]
+
+    def mono():
+        mono_calls[0] += 1
+        if mono_calls[0] == 1:
+            return 0.0
+        return 1.0
+
+    def gh_run(argv, **kwargs):
+        calls.append(True)
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=60,
+        monotonic=mono, sleep=lambda d: None, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert calls == []
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE not in result["degraded"]
+
+
+def test_pr_change_after_deadline_not_returned(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    calls = [0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_run(argv, **kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            body = [{"number": 1}]
+        else:
+            body = [{"number": 1}, {"number": 99}]
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps(body), stderr="",
+        )
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert result["event"] != "pr-set-changed"
+    assert calls[0] == 1
+
+
+def test_gh_timeout_never_exceeds_remaining(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    timeouts = []
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_run(argv, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=3, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert len(timeouts) >= 1
+    for idx, timeout in enumerate(timeouts):
+        remaining_at_call = 3.0 - (idx * 1.0)
+        assert timeout <= remaining_at_call
+        assert timeout <= 30
 
 
 # --- CLI smoke ----------------------------------------------------------------

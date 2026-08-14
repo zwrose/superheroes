@@ -51,6 +51,24 @@ _GH_PR_LIST_ARGV = [
     "gh", "pr", "list", "--state", "open", "--json", "number", "--limit", "1000",
 ]
 
+_GIT_SCRUB_VARS = (
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+)
+
+
+def _scrub_env(env):
+    base = dict(env)
+    for key in _GIT_SCRUB_VARS:
+        base.pop(key, None)
+    base.pop(ll.LEDGER_ROOT_ENV, None)
+    return base
+
 # --- wave_watch vocabulary (authoritative for this module) --------------------
 
 REFUSAL_BATCH_INVALID = "batch-invalid"
@@ -313,10 +331,12 @@ def _parse_pr_numbers(stdout):
 
 
 def _evaluate_pr_set_changed(
-    repo_root, deadline, monotonic, gh_run, pr_baseline, degraded,
+    repo_root, deadline, monotonic, gh_run, pr_baseline, degraded, env,
 ):
     remaining = deadline - monotonic()
-    timeout = max(1, min(30, int(remaining)))
+    if remaining <= 0:
+        return None, pr_baseline
+    timeout = min(30.0, remaining)
     try:
         proc = gh_run(
             _GH_PR_LIST_ARGV,
@@ -324,6 +344,7 @@ def _evaluate_pr_set_changed(
             text=True,
             timeout=timeout,
             cwd=repo_root,
+            env=_scrub_env(env),
         )
     except Exception:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
@@ -476,6 +497,7 @@ def run(
 
             pr_change, pr_baseline = _evaluate_pr_set_changed(
                 repo_root, deadline, monotonic, gh_run, pr_baseline, degraded,
+                env,
             )
             if pr_change is not None:
                 payload = dict(pr_change)
