@@ -44,6 +44,7 @@ import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import sanitized_view  # noqa: E402
+import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
 # must ignore the CLI's SessionStart/skill-selection bootstrap that otherwise hijacks codex into
@@ -1387,7 +1388,69 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     return _with_run_fields(result, run_dir=run_dir_real, argv=argv)
 
 
+def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
+    """Best-effort sibling snapshot at write-run open. Never raises."""
+    try:
+        default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
+        min_deadline = sibling_worktree_probe.MIN_DEADLINE_SECONDS
+        if preflight_timeout is not None:
+            deadline = max(
+                min_deadline,
+                min(preflight_timeout / 4.0, default_deadline),
+            )
+        else:
+            deadline = default_deadline
+        return sibling_worktree_probe.snapshot(repo_root, cwd_real, deadline=deadline)
+    except Exception:
+        return {"status": "indeterminate", "reason": "probe-raised"}
+
+
+def _fold_sibling_worktrees(state):
+    """Attach siblingWorktrees for write runs only. Never raises."""
+    try:
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE:
+            return None
+        baseline = opened.get("siblingBaseline")
+        if baseline is None:
+            return {"status": "indeterminate", "reason": "no-baseline"}
+        if not isinstance(baseline, dict):
+            return {"status": "indeterminate", "reason": "baseline-invalid"}
+        if baseline.get("status") == "indeterminate":
+            return {
+                "status": "indeterminate",
+                "reason": baseline.get("reason", "baseline-indeterminate"),
+            }
+        repo_root = opened.get("repoRoot")
+        cwd = opened.get("cwd")
+        if not repo_root or not cwd:
+            return {"status": "indeterminate", "reason": "run-context-incomplete"}
+        default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
+        min_deadline = sibling_worktree_probe.MIN_DEADLINE_SECONDS
+        timeout = opened.get("timeout") or RETRY_MIN_TIMEOUT
+        deadline = max(min_deadline, min(default_deadline, timeout / 4.0))
+        try:
+            after = sibling_worktree_probe.snapshot(
+                repo_root, cwd,
+                deadline=deadline,
+            )
+        except Exception:
+            return {"status": "indeterminate", "reason": "probe-raised"}
+        if after.get("status") != "ok":
+            return {
+                "status": "indeterminate",
+                "reason": after.get("reason", "after-snapshot-indeterminate"),
+            }
+        return sibling_worktree_probe.compare(baseline, after)
+    except Exception:
+        return {"status": "indeterminate", "reason": "probe-raised"}
+
+
 def _fold_run(run_dir_real, state, result):
+    sibling = _fold_sibling_worktrees(state)
+    if sibling is not None:
+        result = dict(result)
+        result["siblingWorktrees"] = sibling
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
@@ -2755,7 +2818,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
-                    repo_root=None, expected_items=None, baseline_dirty=None):
+                    repo_root=None, expected_items=None, baseline_dirty=None,
+                    sibling_baseline=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2795,6 +2859,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewPath": None,
         "baseSha": base_sha,
         "worktreeBaseline": worktree_baseline,
+        "siblingBaseline": sibling_baseline,
         "expectedItems": expected_items,
         "baselineDirty": baseline_dirty,
         "repoRoot": repo_root_real,
@@ -3042,6 +3107,9 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
+            sibling_baseline = _capture_sibling_baseline(
+                repo_root, cwd_real, preflight_timeout=preflight_timeout,
+            )
             ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
                 cwd_real, run_dir_real,
             )
@@ -3060,6 +3128,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 repo_root=repo_root,
                 expected_items=declared_expected_items,
                 baseline_dirty=baseline_dirty,
+                sibling_baseline=sibling_baseline,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)
