@@ -77,9 +77,10 @@ ship but aren't a user-facing feature or bugfix; use `fix`/`feat` when they are.
 ## CI
 
 Every PR and push to `main` runs `.github/workflows/ci.yml` (Python **3.12** on
-`ubuntu-latest`). Pull requests also fire on `edited` so the PR-title check
-re-validates when a title is fixed; because that trigger is workflow-level, any PR
-edit (including a body edit) re-runs the whole workflow.
+`ubuntu-latest`), on `opened`/`synchronize`/`reopened` only — a title or body edit
+does not re-run code checks. Title re-validation lives in its own workflow
+(`pr-title.yml`, which does fire on `edited`), and superseded runs on a PR ref are
+cancelled by the concurrency group.
 
 **Job `validate`**
 
@@ -100,7 +101,10 @@ edit (including a body edit) re-runs the whole workflow.
    (`.github/scripts/tests/`), `plugins/superheroes/` (`lib/`, `eval/`), and
    `eval/lib/` (identifier reference-impl conformance, artifact schemas, and the
    activation-result CI gate). Schema tests
-   need `jsonschema`.
+   need `jsonschema`. Runs under `pytest-xdist` (`-n auto`; adopted on #897's
+   measured parity A/B) with `--durations=25` so the slow tail stays visible as
+   the suite grows. A parallel-run failure of the #806/#809/#882 names is the
+   known load-flake class — check those issues before treating it as a regression.
 
 **Job `pr-title`** (**pull-request events only**)
 

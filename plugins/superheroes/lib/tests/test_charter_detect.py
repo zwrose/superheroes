@@ -193,6 +193,28 @@ def test_unreadable_parent_directory_emits_breadcrumb(tmp_path, capsys):
         secret.chmod(stat.S_IRWXU)
 
 
+def test_foreign_plugin_prefix_does_not_detect(tmp_path):
+    """Only /superheroes: prefix matches; foreign plugin commands are ignored."""
+    path = tmp_path / "transcript.jsonl"
+    foreign_content = (
+        "<command-message>otherplugin:workhorse</command-message>\n"
+        "<command-name>/otherplugin:workhorse</command-name>\n"
+        "<command-args>Issue: #911</command-args>"
+    )
+    foreign_rec = {
+        "type": "user",
+        "isSidechain": False,
+        "userType": "external",
+        "message": {"role": "user", "content": foreign_content},
+    }
+    _write_transcript(path, [foreign_rec])
+    assert cd.detect_charter(str(path)) is None
+
+    superheroes_path = tmp_path / "superheroes.jsonl"
+    _write_transcript(superheroes_path, [_user_charter("workhorse")])
+    assert cd.detect_charter(str(superheroes_path)) == "workhorse"
+
+
 def test_no_charter_transcript_emits_no_breadcrumb(tmp_path, capsys):
     path = tmp_path / "transcript.jsonl"
     _write_transcript(path, [

@@ -2147,6 +2147,125 @@ def test_resurrection_plan_minted_happy_path(private_tmp):
     assert plan["steps"][3]["owner"] == "C7"
 
 
+def _resurrection_plan_fixture(private_tmp, *, sign_in_path="attended", with_mint=False):
+    """Shared resurrection_plan inputs — mint branch needs mint envelope on the block."""
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    block = _pilot_block(cleanup_script)
+    block["signInPath"] = sign_in_path
+    if with_mint:
+        block["mint"] = {
+            "envelope": {
+                "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+                "enabledScopes": ["development"],
+                "forbiddenScopes": ["production"],
+                "gateOffTestCommand": ["true"],
+            },
+            "sentinelIdentifier": "pilot-sentinel-no-such-account",
+        }
+    receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
+    registry = _registry_with(
+        _effects_escape_record(block),
+        _cleanup_containment_record(block, receipt),
+    )
+    kwargs = {
+        "policy": policy,
+        "pilot_block": block,
+        "slot_ref": _SLOT_REF,
+        "registry": registry,
+        "journal_path": os.path.join(private_tmp, "j.jsonl"),
+        "verdict": _passing_verdict(policy),
+        "account": "owner",
+        "receipt": receipt,
+        "cleanup_root": cleanup_repo,
+        "run_cwd": run_cwd,
+        "observed_identity": "example_dev",
+        "identity_provenance": "observed",
+        "identity_strength": "strong",
+    }
+    if with_mint:
+        kwargs["mint_envelope"] = block["mint"]["envelope"]
+    return kwargs
+
+
+def test_resurrection_plan_unknown_sign_in_path_raises_at_reseed_dispatch(private_tmp, monkeypatch):
+    """Defense-in-depth: reseed dispatch raises when signInPath is outside the dispatch map."""
+    kwargs = _resurrection_plan_fixture(private_tmp, sign_in_path="attended")
+    kwargs["pilot_block"]["signInPath"] = "smuggled"
+    monkeypatch.setattr(pc.pilot_contract, "validate_pilot_block", lambda _block: None)
+    with pytest.raises(ValueError, match="unhandled sign_in_path: 'smuggled'"):
+        pc.resurrection_plan(**kwargs)
+
+
+def test_resurrection_plan_in_contract_sign_in_paths_do_not_raise_at_reseed_dispatch(private_tmp):
+    """In-contract signInPath values must reach reseed dispatch and return its outcome."""
+    policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
+    journal_path = os.path.join(private_tmp, "j.jsonl")
+
+    attended_block = _pilot_block(cleanup_script)
+    attended_receipt = _take_receipt(
+        private_tmp, policy, attended_block, reach_root, run_cwd, cleanup_repo,
+    )
+    attended_registry = _registry_with(
+        _effects_escape_record(attended_block),
+        _cleanup_containment_record(attended_block, attended_receipt),
+    )
+    attended_plan = pc.resurrection_plan(
+        policy,
+        attended_block,
+        _SLOT_REF,
+        registry=attended_registry,
+        journal_path=journal_path,
+        verdict=_passing_verdict(policy),
+        account="owner",
+        receipt=attended_receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert attended_plan["action"] == pc.ACTION_PARK
+    assert attended_plan["reason"] == pc.REASON_ATTENDED_RESEED_REQUIRES_OWNER
+
+    minted_block = _pilot_block(cleanup_script)
+    minted_block["signInPath"] = "minted"
+    minted_block["mint"] = {
+        "envelope": {
+            "enablingFlagEnvVar": "ALLOW_TEST_MINT",
+            "enabledScopes": ["development"],
+            "forbiddenScopes": ["production"],
+            "gateOffTestCommand": ["true"],
+        },
+        "sentinelIdentifier": "pilot-sentinel-no-such-account",
+    }
+    minted_receipt = _take_receipt(
+        private_tmp, policy, minted_block, reach_root, run_cwd, cleanup_repo,
+    )
+    minted_registry = _registry_with(
+        _effects_escape_record(minted_block),
+        _cleanup_containment_record(minted_block, minted_receipt),
+    )
+    minted_plan = pc.resurrection_plan(
+        policy,
+        minted_block,
+        _SLOT_REF,
+        registry=minted_registry,
+        journal_path=journal_path,
+        verdict=_passing_verdict(policy),
+        account="owner",
+        mint_envelope=minted_block["mint"]["envelope"],
+        receipt=minted_receipt,
+        cleanup_root=cleanup_repo,
+        run_cwd=run_cwd,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+    )
+    assert minted_plan["action"] == pc.ACTION_RESURRECT
+
+
 def test_resurrection_plan_unmapped_dispatch_kind_raises(private_tmp, monkeypatch):
     policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
@@ -3233,10 +3352,19 @@ def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_
     elapsed = time.monotonic() - started
     assert result["timedOut"] is True
     assert elapsed < 5
-    with open(pid_file, encoding="utf-8") as handle:
-        pid = int(handle.read().strip())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    pid = _read_grandchild_pid(pid_file)
+    # Kill escalation and reaping are async under CPU load (first seen as a 4-of-6
+    # failure rate on xdist CI runners): poll like the sibling test above rather than
+    # asserting the instant state. The invariant is that the SIGTERM-ignoring
+    # grandchild dies, not that it is already gone the moment run_bounded returns.
+    if not _wait_for_process_gone(pid, timeout=10):
+        state = _observed_process_state(pid)
+        detail = f"observed state: {state}"
+        try:
+            detail += f"; pgid={os.getpgid(pid)}"
+        except (ProcessLookupError, PermissionError):
+            pass
+        pytest.fail(f"grandchild pid {pid} still present after 10s poll; {detail}")
 
 
 # --- WO8 FIX-1: partial plant failure ------------------------------------------

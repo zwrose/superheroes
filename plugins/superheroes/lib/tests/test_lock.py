@@ -973,3 +973,46 @@ def test_missing_boot_id_leaves_the_ttl_leg_in_charge(tmp_path, monkeypatch):
     _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,
                     acquiredAt="1970-01-01T00:00:00Z", bootId=None)
     assert lock.is_stale(p) is True                                # TTL leg still reclaims
+
+
+# --- stale_reason classifier + acquire_with_reason --------------------------------------------
+
+
+def test_stale_reason_boot_id_mismatch(tmp_path, monkeypatch):
+    p = str(tmp_path / "engine.lock")
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boot-A")
+    with open(p, "w") as fh:
+        json.dump({"pid": os.getpid(), "host": socket.gethostname(),
+                   "acquiredAt": "1970-01-01T00:00:00Z", "bootId": "boot-OLD"}, fh)
+    assert lock.stale_reason(p) == "boot-id-mismatch"
+    assert lock.is_stale(p) is True
+
+
+def test_stale_reason_expired_dead_holder(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    with open(p, "w") as fh:
+        json.dump({"pid": 99999999, "host": socket.gethostname(),
+                   "acquiredAt": "1970-01-01T00:00:00Z", "bootId": None}, fh)
+    assert lock.stale_reason(p) == "expired-dead-holder"
+    assert lock.is_stale(p) is True
+
+
+def test_stale_reason_malformed_holder_past_grace(tmp_path):
+    p = str(tmp_path / "engine.lock")
+    open(p, "w").close()
+    old = time.time() - lock.MALFORMED_GRACE_SECONDS - 5
+    os.utime(p, (old, old))
+    assert lock.stale_reason(p) == "malformed-holder"
+    assert lock.is_stale(p) is True
+
+
+def test_acquire_with_reason_returns_guarded_stale_class(tmp_path, monkeypatch):
+    p = str(tmp_path / "engine.lock")
+    monkeypatch.setattr(lock.hostinfo, "boot_id", lambda: "boot-A")
+    with open(p, "w") as fh:
+        json.dump({"pid": os.getpid(), "host": socket.gethostname(),
+                   "acquiredAt": "1970-01-01T00:00:00Z", "bootId": "boot-OLD"}, fh)
+    reclaimed, reason = lock.acquire_with_reason(p)
+    assert reclaimed is True
+    assert reason == "boot-id-mismatch"
+    lock.release(p)

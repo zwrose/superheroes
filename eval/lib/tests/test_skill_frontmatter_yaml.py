@@ -1,21 +1,31 @@
 # eval/lib/tests/test_skill_frontmatter_yaml.py
-"""Every shipped SKILL.md frontmatter must round-trip through strict yaml.safe_load.
+"""Per-skill application of validate_skills.check_frontmatter_yaml plus non-vacuity guard.
 
-The published-skill loader and the structural validate_skills.py regex tolerate a bare
-``colon: space`` in a description, but strict ``yaml.safe_load`` rejects it. Guard against
-that drift: parse each frontmatter block — with the SAME regex skills.parse_skill uses — via
-a real YAML loader and assert the description it yields matches the one the stdlib structural
-parser (skills.parse_skill) extracts.
+The frontmatter-YAML rule is owned by validate_skills.check_frontmatter_yaml; this module
+does not re-derive it — it applies that function to every shipped SKILL.md and asserts
+an empty violation list per skill.
 """
 import os
+import sys
 
 import pytest
-import yaml
 
 import skills
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 _PATHS = skills.iter_skill_paths(os.path.join(ROOT, "plugins"))
+
+_SCRIPTS = os.path.join(ROOT, ".github", "scripts")
+if _SCRIPTS not in sys.path:
+    sys.path.insert(0, _SCRIPTS)
+
+try:
+    from validate_skills import check_frontmatter_yaml
+except ImportError as exc:
+    raise ImportError(
+        f"validate_skills is not importable from {_SCRIPTS!r} — "
+        "frontmatter-YAML gate cannot run"
+    ) from exc
 
 
 def test_there_are_skills_to_check():
@@ -24,19 +34,12 @@ def test_there_are_skills_to_check():
 
 @pytest.mark.parametrize("path", _PATHS, ids=[skills.skill_key(p) for p in _PATHS])
 def test_frontmatter_round_trips_through_yaml(path):
+    # axis: the validator's own verdict per skill, not a re-derived YAML rule
     key = skills.skill_key(path)
     with open(path, encoding="utf-8") as fh:
-        text = fh.read()
-    m = skills._FRONTMATTER.match(text)
-    assert m, f"{key}: no leading frontmatter block"
-    try:
-        data = yaml.safe_load(m.group(1))
-    except yaml.YAMLError as exc:  # pragma: no cover - the assertion message is the point
-        pytest.fail(
-            f"{key}: frontmatter is not strict-YAML (quote the description if it "
-            f"has a bare 'colon: space'): {exc}")
-    assert isinstance(data, dict) and "description" in data, \
-        f"{key}: frontmatter has no description"
-    regex_desc, _ = skills.parse_skill(text)
-    assert data["description"] == regex_desc, (
-        f"{key}: yaml.safe_load and skills.parse_skill disagree on the description")
+        raw = fh.read()
+    # Stricter than check_frontmatter_yaml alone: every shipped SKILL.md must have frontmatter.
+    assert skills._FRONTMATTER.match(raw), f"{key}: no leading frontmatter block"
+    regex_description, _ = skills.parse_skill(raw)
+    violations = check_frontmatter_yaml(key, raw, regex_description)
+    assert violations == [], f"{key}: {violations}"
