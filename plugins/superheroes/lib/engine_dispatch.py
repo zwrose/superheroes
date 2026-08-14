@@ -43,7 +43,9 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import review_findings_schema  # noqa: E402  canonical review-findings schema path (#949)
 import sanitized_view  # noqa: E402
+import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
 # must ignore the CLI's SessionStart/skill-selection bootstrap that otherwise hijacks codex into
@@ -1387,7 +1389,69 @@ def _terminate_run(run_dir_real, state, *, record_kind, result, abandon_detail=N
     return _with_run_fields(result, run_dir=run_dir_real, argv=argv)
 
 
+def _capture_sibling_baseline(repo_root, cwd_real, *, preflight_timeout):
+    """Best-effort sibling snapshot at write-run open. Never raises."""
+    try:
+        default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
+        min_deadline = sibling_worktree_probe.MIN_DEADLINE_SECONDS
+        if preflight_timeout is not None:
+            deadline = max(
+                min_deadline,
+                min(preflight_timeout / 4.0, default_deadline),
+            )
+        else:
+            deadline = default_deadline
+        return sibling_worktree_probe.snapshot(repo_root, cwd_real, deadline=deadline)
+    except Exception:
+        return {"status": "indeterminate", "reason": "probe-raised"}
+
+
+def _fold_sibling_worktrees(state):
+    """Attach siblingWorktrees for write runs only. Never raises."""
+    try:
+        opened = state.get("opened") or {}
+        if opened.get("runKind") != RUN_KIND_WRITE:
+            return None
+        baseline = opened.get("siblingBaseline")
+        if baseline is None:
+            return {"status": "indeterminate", "reason": "no-baseline"}
+        if not isinstance(baseline, dict):
+            return {"status": "indeterminate", "reason": "baseline-invalid"}
+        if baseline.get("status") == "indeterminate":
+            return {
+                "status": "indeterminate",
+                "reason": baseline.get("reason", "baseline-indeterminate"),
+            }
+        repo_root = opened.get("repoRoot")
+        cwd = opened.get("cwd")
+        if not repo_root or not cwd:
+            return {"status": "indeterminate", "reason": "run-context-incomplete"}
+        default_deadline = sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS
+        min_deadline = sibling_worktree_probe.MIN_DEADLINE_SECONDS
+        timeout = opened.get("timeout") or RETRY_MIN_TIMEOUT
+        deadline = max(min_deadline, min(default_deadline, timeout / 4.0))
+        try:
+            after = sibling_worktree_probe.snapshot(
+                repo_root, cwd,
+                deadline=deadline,
+            )
+        except Exception:
+            return {"status": "indeterminate", "reason": "probe-raised"}
+        if after.get("status") != "ok":
+            return {
+                "status": "indeterminate",
+                "reason": after.get("reason", "after-snapshot-indeterminate"),
+            }
+        return sibling_worktree_probe.compare(baseline, after)
+    except Exception:
+        return {"status": "indeterminate", "reason": "probe-raised"}
+
+
 def _fold_run(run_dir_real, state, result):
+    sibling = _fold_sibling_worktrees(state)
+    if sibling is not None:
+        result = dict(result)
+        result["siblingWorktrees"] = sibling
     return _terminate_run(run_dir_real, state, record_kind="run-folded", result=result)
 
 
@@ -1894,6 +1958,30 @@ def _validate_review_schema_path(schema_path):
     return True, None
 
 
+def _merge_investigated_rejections(parse_res, spot_rejected):
+    """Combine parse-boundary and spot-check rejection diagnostics. Never raises."""
+    records = list(parse_res.get("investigatedRejectedRecords") or [])
+    reasons = list(parse_res.get("investigatedRejected") or [])
+    for item in spot_rejected or []:
+        records.append(item)
+        reasons.append(item["reason"])
+    return records, reasons
+
+
+def _attach_review_rejection_fields(result, rejected_records=(), rejected_reasons=(),
+                                    findings_rejected_records=(), findings_rejected_reasons=()):
+    """Attach parse-boundary rejection diagnostics when present. Never raises."""
+    if rejected_records:
+        result["investigatedRejectedRecords"] = rejected_records
+    if rejected_reasons:
+        result["investigatedRejected"] = rejected_reasons
+    if findings_rejected_records:
+        result["findingsRejectedRecords"] = findings_rejected_records
+    if findings_rejected_reasons:
+        result["findingsRejected"] = findings_rejected_reasons
+    return result
+
+
 def _grade_review_attempt(run_dir_real, state, attempt):
     """Grade a completed review attempt from durable stdout files."""
     opened = state["opened"]
@@ -1969,27 +2057,45 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         return result
 
     findings = res.get("findings") or []
-    if findings:
-        engagement = _engagement_with_read(engagement, findings=findings)
-        return {"ok": True, "findings": findings, "engagement": engagement}
-
     view_meta = opened.get("viewMeta")
     generated = ()
     if isinstance(view_meta, dict):
         diff_path = view_meta.get("diffPath")
         if isinstance(diff_path, str) and diff_path:
             generated = (diff_path,)
-    ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
+    _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
         res.get("investigated"), cwd, generated_artifacts=generated)
-    if ok_inv:
+    rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
+    findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
+    findings_rejected_reasons = list(res.get("findingsRejected") or [])
+    if findings:
+        engagement = _engagement_with_read(engagement, findings=findings)
+        result = {"ok": True, "findings": findings, "engagement": engagement}
+        if accepted:
+            result["investigated"] = accepted
+        return _attach_review_rejection_fields(
+            result,
+            rejected_records=rejected_records,
+            rejected_reasons=rejected_reasons,
+            findings_rejected_records=findings_rejected_records,
+            findings_rejected_reasons=findings_rejected_reasons,
+        )
+
+    if accepted:
         engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
-        return {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+        result = {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+        return _attach_review_rejection_fields(
+            result,
+            rejected_records=rejected_records,
+            rejected_reasons=rejected_reasons,
+        )
     engagement = _engagement_with_read(engagement, findings=[], investigated=None)
     return {
         "forfeit": True,
         "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
         "engagement": engagement,
-        "investigatedRejected": [r["reason"] for r in (rejected or [])],
+        "investigatedRejected": rejected_reasons,
+        "investigatedRejectedRecords": rejected_records,
     }
 
 
@@ -2062,9 +2168,10 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
 
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
-                            investigated_rejected=None, payload_shape=None):
+                            investigated_rejected=None, investigated_rejected_records=None,
+                            payload_shape=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
-        return {
+        terminal = {
             "ok": False,
             "terminal": True,
             "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -2079,6 +2186,9 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                 "degraded vendor mix" % engine
             ),
         }
+        if investigated_rejected_records:
+            terminal["investigatedRejectedRecords"] = investigated_rejected_records
+        return terminal
     result = {
         "ok": False,
         "terminal": True,
@@ -2289,6 +2399,13 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         )
                         if grade.get("investigated") is not None:
                             result["investigated"] = grade["investigated"]
+                        _attach_review_rejection_fields(
+                            result,
+                            rejected_records=grade.get("investigatedRejectedRecords") or [],
+                            rejected_reasons=grade.get("investigatedRejected") or [],
+                            findings_rejected_records=grade.get("findingsRejectedRecords") or [],
+                            findings_rejected_reasons=grade.get("findingsRejected") or [],
+                        )
                         view = opened.get("viewMeta")
                         if view:
                             result = _attach_sanitized_view(result, view)
@@ -2339,6 +2456,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         engine, reason, MAX_ATTEMPTS,
                         engagement=grade.get("engagement"),
                         investigated_rejected=grade.get("investigatedRejected"),
+                        investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
                     )
                     terminal = _maybe_upgrade_review_terminal_forfeit(
@@ -2633,6 +2751,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     return _finish_preflight_terminal(
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
+                         "canonicalSchemaPath": review_findings_schema.review_findings_schema_path(),
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real or "", engine=engine,
                     )
@@ -2755,7 +2874,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
 def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                     prompt_path, order_id, base_sha, worktree_baseline, progress_path,
-                    repo_root=None, expected_items=None, baseline_dirty=None):
+                    repo_root=None, expected_items=None, baseline_dirty=None,
+                    sibling_baseline=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2795,6 +2915,7 @@ def _open_write_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "viewPath": None,
         "baseSha": base_sha,
         "worktreeBaseline": worktree_baseline,
+        "siblingBaseline": sibling_baseline,
         "expectedItems": expected_items,
         "baselineDirty": baseline_dirty,
         "repoRoot": repo_root_real,
@@ -3042,6 +3163,9 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                      "attempts": 0, "forfeited": False, "terminal": True},
                     run_dir=run_dir_real, argv=argv,
                 )
+            sibling_baseline = _capture_sibling_baseline(
+                repo_root, cwd_real, preflight_timeout=preflight_timeout,
+            )
             ok_lease, lease_detail, _token, lease_path = _acquire_worktree_lease(
                 cwd_real, run_dir_real,
             )
@@ -3060,6 +3184,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
                 repo_root=repo_root,
                 expected_items=declared_expected_items,
                 baseline_dirty=baseline_dirty,
+                sibling_baseline=sibling_baseline,
             )
             if not ok_open:
                 holder = file_lock.read_holder(lease_path)

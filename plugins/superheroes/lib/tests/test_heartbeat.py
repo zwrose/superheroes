@@ -625,7 +625,7 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
     log_dir = str(tmp_path / "logs")
     os.makedirs(log_dir)
     launcher._spawn_attempt(
-        wt,
+        repo,
         launch_id,
         1,
         ["claude", "-p", "test"],
@@ -634,6 +634,7 @@ def test_e2e_child_stamp_visible_from_primary_checkout(tmp_path, monkeypatch):
         900000,
         env=os.environ,
         spawn_fn=capture_spawn,
+        cwd=wt,
     )
 
     assert captured_env.get(hb.LAUNCH_ID_ENV) == launch_id
