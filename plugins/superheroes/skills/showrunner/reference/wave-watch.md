@@ -27,11 +27,16 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/wave_watch.py" run \
   --repo-root "$REPO_ROOT" --batch "$BATCH_ID" \
   --max-seconds 2400 --interval-seconds 60 \
-  --ignore-launch "$ALREADY_HANDLED_LAUNCH_ID"
+  --ignore-launch "$ALREADY_HANDLED_LAUNCH_ID"  # re-arm only — omit on first arm
 ```
 
-`$REPO_ROOT`, `$BATCH_ID`, and `$ALREADY_HANDLED_LAUNCH_ID` are session variables you supply.
-Repeat `--ignore-launch` for each launch id already handled on this arm.
+`$REPO_ROOT` and `$BATCH_ID` are session variables you supply. On a **first arm**, omit
+`--ignore-launch` — there are no handled lanes yet. On **re-arm**, repeat `--ignore-launch` for
+each launch id already handled on that arm.
+
+The call **blocks** until an event or the deadline, so `--max-seconds` is also how long the
+advisor's session is committed to this arm. On Claude Code, a foreground call whose timeout exceeds
+~600 s is converted to background and dies when the turn ends (`skills/workhorse/reference/dispatch-mechanics.md`); size `--max-seconds` to what the session can await in-turn and re-arm as the loop, rather than assuming a 40-minute arm survives unattended.
 
 ## `--ignore-launch` and re-arming
 
@@ -74,7 +79,11 @@ dead builder is `builder-exited` instead.
 - `ledger-unreadable`
 - `internal-error`
 
-A refusal is immediate and permanent — re-arming without fixing the cause just refuses again.
+The pre-loop validations (`batch-invalid`, `interval-invalid`, `max-seconds-invalid`,
+`repo-root-invalid`, `store-unresolvable`) refuse immediately — re-arming without fixing the cause
+just refuses again. `ledger-unreadable` can also arrive on the deadline path after the full
+`--max-seconds` window, and `internal-error` comes from a loop-wide exception handler — neither is
+guaranteed at arm time.
 
 **Non-fatal degradations** that ride on a result:
 
@@ -95,7 +104,9 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
   rebuilt on each arm.
 - **A mistyped batch id is indistinguishable from a quiet batch** — it produces a calm `timer`, not
   a refusal.
-- **A started lane that has never stamped a heartbeat is invisible to every signal class.**
+- **A started lane that has never stamped a heartbeat is invisible to the heartbeat-derived signal
+  classes** (`lane-terminal`, `lane-blocked`, `lane-stale`) — but `builder-exited` still surfaces
+  it when its recorded pid dies.
 
 ## How it relates to the heartbeat sweep
 
