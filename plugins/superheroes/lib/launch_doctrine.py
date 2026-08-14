@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Machine home of the launch doctrine artifact.
 
-Parses ``rubric/launch-doctrine.md`` and the showrunner charter's marked preflight block.
+Parses ``rubric/launch-doctrine.md`` and ``skills/showrunner/reference/dispatch-preflight.md``.
 Every refusal is fail-closed: a caller that cannot parse the doctrine must never proceed as if
 it had. None of these functions raise out of themselves."""
 from __future__ import annotations
@@ -18,6 +18,7 @@ RULING_IDS = (
     "await-dispatches",
     "remote-head",
     "git-identity",
+    "gated-strings",
 )
 PREFLIGHT_CHECKS = (
     ("quota", "always"),
@@ -59,7 +60,9 @@ RULING_TEXT = {
         "the concurrency changes a batch's shape, never its invariant: "
         "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an "
         "unwatched run-dir at turn end; skill-owned seats and native subagents keep their own lifecycle; "
-        "when the in-turn poll cannot fit the turn, park durably on the issue or PR."
+        "when the in-turn poll cannot fit the turn, park durably on the issue or PR. "
+        "The same rule covers anything long-running you start locally — a full-suite run, a build, a long script — "
+        "not only engine dispatches: await it in-turn, or park; never end a turn to wait."
     ),
     "remote-head": "verify the REMOTE head against your receipts before declaring the PR ready.",
     "git-identity": (
@@ -68,6 +71,12 @@ RULING_TEXT = {
         "never pass `-c user.name` or `-c user.email` and never synthesize one; a missing or "
         "wrong identity — an empty *resolved* `git config user.email`/`user.name`, never an "
         "empty `--local` — is a park-and-report, not an improvisation."
+    ),
+    "gated-strings": (
+        "gated command strings reach disk only through file-write tools: a string matching a "
+        "permission-gated command shape is never embedded inline in Bash text — a probe reads its "
+        "test string from a file, a heredoc counts as Bash text, and a memory or ledger append "
+        "carrying a gated literal is written with a file-write tool, never echoed through a shell."
     ),
 }
 RULING_INVARIANTS = {
@@ -81,6 +90,11 @@ RULING_INVARIANTS = {
         "in-turn awaiting only; never harness-external backgrounding (`&`/setsid/nohup), never an unwatched run-dir at turn end",
         "no result dependency, no shared writable worktree, and no shared output path",
         'Ending the turn ends a headless session; "wait" must be an in-turn poll, never a final message.',
+    ),
+    "gated-strings": (
+        "never embedded inline in Bash text",
+        "a heredoc counts as Bash text",
+        "written with a file-write tool",
     ),
 }
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
@@ -303,7 +317,7 @@ def _extract_charter_block(text: str) -> tuple[str | None, str | None]:
 
 
 def charter_checks(charter_text: object) -> dict:
-    """Parse the charter's marked preflight block. Never raises."""
+    """Parse dispatch-preflight.md's marked block. Never raises."""
     if not isinstance(charter_text, str) or not charter_text:
         return {"ok": False, "reason": "charter-missing-block", "checks": []}
 

@@ -54,7 +54,21 @@ These three are never config-inspected — each is **run for real**, once, right
 once: the MCP/extension connection exists, the per-origin approval is in place, and the dev
 server is actually reachable on the port this project is configured to use (the weekly-eats
 run-13 port-mismatch class of failure — the spine probing one port while the dev server binds
-another). This is a **host-tool action** — an MCP call the orchestrator makes directly; a Python
+another). The Playwright MCP **browser profile is a single-holder resource across concurrent
+sessions** — a second session gets a **hard refusal, not a queue**. When a browser probe fails under
+parallel sessions, **establish whether another session holds the profile** before recording the
+outcome:
+
+- If contention is **established** (another session is confirmed to hold the profile), record the
+  check as **N/A with the reason stated** — following this file's "N/A is a recorded finding, not a
+  skip" rule (line 33) and the gate comment's documented route (omit the helper, record the N/A per
+  §A.1). N/A means the browser was never proven, so the session must not enter autonomous test-pilot
+  work on that tool.
+- If contention **cannot be established**, the default is **`ok=False`** — a blocking preflight
+  finding. Surface it to the owner now; do not defer, do not guess a workaround.
+- Never record **`ok=True`** on a probe that did not connect+navigate+snapshot.
+
+This is a **host-tool action** — an MCP call the orchestrator makes directly; a Python
 subprocess cannot drive a browser. Record the outcome yourself:
 
 ```python
@@ -148,10 +162,17 @@ never read.
 The `run` and `compose-liveness` subcommands also emit a top-level `configRead` object —
 `{status, reason, readError}` — recording whether the **core.md** read succeeded for that
 invocation. Model tiers are read separately by each consumer and are **not** covered by
-`configRead`. A non-null `reason` means the project's engine preferences were **not** read and
-any `crossVendorEngines` list in the same output is defaulted rather than configured. Fold the
-**reason token** and a **workspace-relative or redacted** path into the brief and the PR — not
-the raw absolute `readError` string.
+`configRead`. Distinguish three cases for `crossVendorEngines` in the same output: **configured**
+(the list was derived from the project's engine preferences because the read succeeded), **selected**
+(the caller passed an explicit `run --engine …` on the command line — a deliberate choice, not a
+default), and **defaulted** (preferences were not read — `configRead.reason` is non-null — and the
+probe derived engines without that read). Only the third case may be reported as defaulted, because
+only that case means the preferences were never read; recording an explicitly selected engine as a
+default misreports what actually ran. **Never fold a raw read-error line into the brief or the PR,
+from any field of these payloads** — carry the **reason token** and a **workspace-relative or
+redacted** path instead. That obligation covers the `configRead` object, the dispatch-calibration
+marker row, and any `compose-liveness` note whose `reason` is the raw read-error line (the probe
+appends one when `configRead.readError` is non-null).
 
 ### B.1 — Seed the composition-liveness receipt (write side, #610 leg 2)
 
@@ -210,7 +231,7 @@ deciding:
 ```python
 import preflight_probe
 all_results = probes_from_run_json + [
-    preflight_probe.browser_probe_result(browser_ok, detail),           # host action (§A.1): fold in only when the browser probe actually ran; OMIT on no-app runs (their browser N/A is recorded per §A.1, not through this helper — it can't emit N/A)
+    preflight_probe.browser_probe_result(browser_ok, detail),           # host action (§A.1): fold in only when the browser probe actually ran; OMIT on no-app runs (their browser N/A is recorded per §A.1, not through this helper — it can't emit N/A) and OMIT when contention N/A is recorded per §A.1 (that route does not pass through aggregate — surface it to the owner by name rather than letting verdict["go"] stand unqualified)
     {"tool": "gh write", "ok": gh_write_ok, "detail": gh_write_detail},  # host action (§A.3): the throwaway-comment probe (always applicable)
 ]
 verdict = preflight_probe.aggregate(all_results)

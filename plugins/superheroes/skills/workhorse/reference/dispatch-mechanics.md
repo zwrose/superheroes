@@ -100,7 +100,10 @@ The slice you choose depends on whether the run is a **launch** or a **continuat
   **`dispatch-review`** and for **`dispatch-write`** on repositories whose git preflight is fast.
   On **`dispatch-write`**, `--max-wait` is also the **git-preflight timeout** (`preflight_timeout`
   in `engine_dispatch.py`), bounding worktree validation, repository discovery, `rev-parse HEAD`, and
-  the baseline `git status`. The launch slice **must therefore exceed the repository's git-preflight
+  the baseline `git status`, plus the **sibling-worktree baseline snapshot** at run open (HEAD sha,
+  porcelain sha256, and reflog count on every other registered worktree — bounded by
+  `sibling_worktree_probe.DEFAULT_DEADLINE_SECONDS` with a floor of `MIN_DEADLINE_SECONDS`). The launch
+  slice **must therefore exceed the repository's git-preflight
   cost** (which depends on repository size and disk speed and must be sized locally), or the call
   returns terminal **`git-preflight-timeout`** with nothing launched — and a continuation **cannot**
   recover a run that never opened. Run-action calls serialize and a launch call blocks for its whole
@@ -232,6 +235,12 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-write \
   --run-dir "$RUN_DIR" --max-wait 540
 ```
 
+`~/.cursor/cli-config.json` is **one global mutable permission file shared by every cursor
+invocation on the machine** — not per-project and not per-run. Concurrent writers have been observed
+in the field (six stale `.tmp` files, distinct PIDs). A **`-f` write dispatch is immune** to whatever
+that file contains; **any invocation without `-f` inherits whatever the last writer left**, which
+may be another session's settings.
+
 ### Declared items
 
 Repeat `--expect-item` for every file the order must deliver (or use `--expect-items-file` instead).
@@ -324,7 +333,40 @@ Write salvage has two tiers: a structured report is gradeable only after that in
 verification, while a prose-tier block has `requiresManualRead: true` and a scrubbed `excerpt` for a
 human or orchestrator to read. Prose is a pointer, never a gradeable report.
 
+### Sibling worktree observation (`siblingWorktrees`)
+
+On every **terminal** `dispatch-write` fold, the runner attaches a top-level `siblingWorktrees`
+block recording an **unattributed observed delta**: whether any **other** registered worktree in the
+same repository changed while this write run was open. It cannot say who changed a sibling worktree,
+and it is **not** an escape claim. Concurrent authorized write dispatches in different worktrees
+routinely produce deltas here — that is expected, legitimate concurrency, not a signal that
+something went wrong. The block never affects `ok`, `terminal`, or `reason`.
+
+| Case | `siblingWorktrees` |
+|---|---|
+| write run, baseline captured, second snapshot succeeded | `{"status": "observed", "deltas": [...], "truncated": <bool>, "coverage": {...}}` — `deltas` is `[]` when nothing changed; `coverage.signals.*.measuredBefore/After/compared` shows how much was actually observed (unmeasured signals are never reported as unchanged) |
+| write run, baseline captured, one or more siblings unreadable | `observed` with `deltas` containing `{"kind": "unreadable", "reason": ...}` for those paths while other siblings still compare normally |
+| write run, baseline missing (a run opened before this change) | `{"status": "indeterminate", "reason": "no-baseline"}` |
+| write run, baseline not a dict | `{"status": "indeterminate", "reason": "baseline-invalid"}` |
+| write run, either snapshot indeterminate | `{"status": "indeterminate", "reason": "<why>"}` |
+| **preflight-terminal** result (refused before the run opened, never reaches fold) | **key absent** — there was no run to observe |
+| review run | **key absent** |
+
 ## Engine forfeits and order shape
+
+**Run-dir caller traps** — read these before you compose a dispatch:
+
+- **Trap 1 — a symlinked `--run-dir` is refused.** The refusal token is `run-dir-is-symlink`. This
+  bites constantly on macOS because `mktemp -d /tmp/...` produces exactly that (`/tmp` is a symlink to
+  `/private/tmp`). Field evidence: three codex review seats on one PR all first returned
+  `unrunnable` / `run-dir-is-symlink` with `attempts: 0` before being re-dispatched against the
+  **resolved** path. Resolve the path (or create the run directory under `/private/tmp` directly)
+  before dispatching.
+- **Trap 2 — `attempts: 0` means a caller error, not an engine forfeit.** An `unrunnable` result
+  carrying `attempts: 0` means **nothing was ever spawned** — the runner refused the call. **Read the
+  reason before blaming the engine.** This matters because the reflex on a failed dispatch is to
+  escalate or re-dispatch against a different engine, and neither fixes a caller error. (A missing
+  run-dir leaf is handled separately and is not one of these two traps.)
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
