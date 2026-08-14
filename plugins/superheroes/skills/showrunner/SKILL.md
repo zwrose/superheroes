@@ -597,6 +597,11 @@ above).
    sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it never
    resumes anything on its own; **you** act on what it reports. Ground this in the field evidence:
    six lanes, zero handbacks by morning on harness 2.1.219, recovered only by an advisor sweep.
+   **Wave watch (wave orchestration duty).** Arm `wave_watch` instead of hand-rolling a per-session
+   watch loop — the re-arm is the loop, so single-shot means nothing to orphan. The arming pattern
+   lives one hop away in
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` — read it at
+   arming time.
    **Wave-preflight live canary (strengthens `engine-auth`, not a ninth check).** A wave preflight
    includes **one cheap live probe per engine** (~3s). The dispatch selftest validates
    **configuration, not engine liveness** — `lib/dispatch_selftest.py` is explicitly a config-time
