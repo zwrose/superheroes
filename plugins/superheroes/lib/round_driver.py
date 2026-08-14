@@ -3573,11 +3573,20 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                 # whether the caller's artifact is correct, and not whether the records are complete.
                 found = _durable_slot_records(session_dir, rnd, phase, attempt, roster)
                 if found:
-                    detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
-                              "path folds through `advance`; a hand submit ignores them. A slot recorded "
-                              "missing on a refuse-fold phase must first be replaced with a real result "
-                              "(`record-result --supersede --expect-sha256 …`) before `advance` can fold."
-                              % (attempt, ", ".join(found)))
+                    if state.get("_submitUsed"):
+                        detail = ("durable seat record(s) at attempt %s for slot(s) %s on a session "
+                                  "that already folded a phase by hand (`submit`) — written before the "
+                                  "entry-point latch, so this session holds records it cannot fold. The "
+                                  "durable-record and hand-submit paths are mutually exclusive per session; "
+                                  "`advance` is not available here. Supersede or remove the durable "
+                                  "record(s), then compile the artifact and `submit` this phase."
+                                  % (attempt, ", ".join(found)))
+                    else:
+                        detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
+                                  "path folds through `advance`; a hand submit ignores them. A slot recorded "
+                                  "missing on a refuse-fold phase must first be replaced with a real result "
+                                  "(`record-result --supersede --expect-sha256 …`) before `advance` can fold."
+                                  % (attempt, ", ".join(found)))
                     _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": rnd,
                                                   "attempt": attempt,
                                                   "outcome": "record-submit-interleaved",
@@ -4509,7 +4518,8 @@ def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
     """Sorted slot labels whose store file EXISTS at (round, phase, attempt).
 
     axis: EXISTENCE of a store file per roster slot — not readability; a broken symlink, an
-    unstattable path, and an unreadable record all count as present so the fence fails closed.
+    unstattable path, an uncomputable store path, and an unreadable record all count as present so
+    the fence fails closed.
 
     Existence probe only — not a read/parse check. The record-submit interleave fence must treat an
     UNREADABLE store file as PRESENT (the durable-record path already wrote something a hand submit
@@ -4522,6 +4532,9 @@ def _durable_slot_records(session_dir, rnd, phase, attempt, roster):
                 session_dir, rnd, phase,
                 round_records.storage_key(seat_key, occurrence), attempt)
         except ValueError:
+            # Fail closed here (opposite of `_seat_slot_records`, which maps an uncomputable slot to
+            # absent so `advance` refuses `incomplete-roster`). This probe refuses hand submit.
+            found.append(_slot_label(seat_key, occurrence))
             continue
         if _store_file_exists(spath):
             found.append(_slot_label(seat_key, occurrence))
@@ -4770,6 +4783,13 @@ def _cmd_record_result_locked(session_dir, seat=None, attempt=None, supersede=Fa
     state, refusal = _load_driver_state(session_dir, "record-result")
     if refusal is not None:
         return refusal
+    if state.get("_submitUsed"):
+        return _refuse_cmd(
+            session_dir, "record-result", "record-submit-interleaved",
+            detail=("this session already folded a phase by hand (`submit`); the durable-record and "
+                    "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
+                    "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
+                    "or `record-result`."))
     if seat is None and not sweep:
         return _refuse_cmd(session_dir, "record-result", "seat-required")
     phase, rnd, cur_attempt, refusal = _pending_of(session_dir, state, "record-result")
@@ -4978,6 +4998,13 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
     state, refusal = _load_driver_state(session_dir, "record-missing")
     if refusal is not None:
         return refusal
+    if state.get("_submitUsed"):
+        return _refuse_cmd(
+            session_dir, "record-missing", "record-submit-interleaved",
+            detail=("this session already folded a phase by hand (`submit`); the durable-record and "
+                    "hand-submit fold paths are mutually exclusive per session. For this phase, compile "
+                    "the artifact and `submit` — do not use `advance` (this session's latch refuses it) "
+                    "or `record-missing`."))
     phase, rnd, cur_attempt, refusal = _pending_of(session_dir, state, "record-missing")
     if refusal is not None:
         return refusal

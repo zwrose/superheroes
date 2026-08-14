@@ -4,6 +4,7 @@
 Real driver, real adapters, real session dir — same discipline as
 `test_round_driver_integration.py`. Reuses that module's harness helpers.
 """
+import errno
 import importlib.util
 import json
 import os
@@ -42,6 +43,50 @@ def _panel_hand_artifact(session_dir):
     dims = round_driver._panel_dimensions(_state(session_dir)["config"])
     return {"seats": {dim: {"findings": [], "confidence": "high", "tier": round_driver.DEEP}
                       for dim in dims}}
+
+
+def _verifier_hand_artifact():
+    return {"verdicts": []}
+
+
+def _hand_submit_panel(session_dir, panel_findings=None):
+    if panel_findings is not None:
+        state = _state(session_dir)
+        pend = state["pending"]
+        dims = round_driver._panel_dimensions(state["config"])
+        art = {"seats": {dim: {"findings": [], "confidence": "high", "tier": round_driver.DEEP}
+                         for dim in dims}}
+        if panel_findings:
+            seat = "code-reviewer"
+            if seat in art["seats"]:
+                art["seats"][seat] = {"findings": [dict(f) for f in panel_findings],
+                                      "confidence": "high", "tier": round_driver.DEEP}
+    else:
+        art = _panel_hand_artifact(session_dir)
+    state = _state(session_dir)
+    pend = state["pending"]
+    return round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                   round_driver.state_hash(state), art)
+
+
+def _journal_recorded_for_phase(session_dir, phase, attempt):
+    return [e for e in round_driver.read_journal(session_dir)
+            if e.get("outcome") == "recorded" and e.get("phase") == phase
+            and e.get("attempt") == attempt]
+
+
+def _expected_cmd_names():
+    return tuple(sorted(name for name in dir(round_driver) if name.startswith("cmd_")))
+
+
+_EXPECTED_CMD_NAMES = (
+    "cmd_advance",
+    "cmd_attest",
+    "cmd_next",
+    "cmd_record_missing",
+    "cmd_record_result",
+    "cmd_submit",
+)
 
 
 def _land_panel_and_sweep(session_dir, gitdir, head_path, panel_findings=None):
@@ -375,3 +420,171 @@ def test_advance_reports_unreadable_dispatch_manifest(tmp_path):
     assert disc["status"] == "unreadable", disc
     assert disc["path"] == os.path.abspath(mpath)
     assert disc["detail"] == "unparseable"
+
+
+def test_wedge_closed(tmp_path):
+    """Hand-submit panel, then record-result on the next phase is refused; hand submit still works."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    findings = [_blocking_finding("missing bounds guard", 2)]
+    assert _hand_submit_panel(session_dir, findings)["ok"] is True
+    assert _state(session_dir).get("_submitUsed") is True
+    nxt = round_driver.cmd_next(session_dir)
+    assert nxt["ok"] is True, nxt
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == round_driver.P_VERIFIERS
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state["config"])
+    assert reason is None, reason
+    seat, occurrence = _slots_of(roster)[0]
+    _land(session_dir, state, pend, seat,
+          _payload_for(session_dir, state, pend, seat, [], head_path), occurrence=occurrence)
+    out = round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)
+    assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
+    state = _state(session_dir)
+    submit = round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                     round_driver.state_hash(state), _verifier_hand_artifact())
+    assert submit["ok"] is True, submit
+
+
+def test_record_missing_honours_latch(tmp_path):
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    assert _hand_submit_panel(session_dir, [_blocking_finding("missing bounds guard", 2)])["ok"] is True
+    assert round_driver.cmd_next(session_dir)["ok"] is True
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state["config"])
+    assert reason is None, reason
+    seat, _occurrence = _slots_of(roster)[0]
+    out = round_driver.cmd_record_missing(session_dir, seat, pend["attempt"], "no artifact")
+    assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
+
+
+def test_no_record_written_on_refusal(tmp_path):
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    assert _hand_submit_panel(session_dir, [_blocking_finding("missing bounds guard", 2)])["ok"] is True
+    assert round_driver.cmd_next(session_dir)["ok"] is True
+    state = _state(session_dir)
+    pend = state["pending"]
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state["config"])
+    assert reason is None, reason
+    seat, occurrence = _slots_of(roster)[0]
+    _land(session_dir, state, pend, seat,
+          _payload_for(session_dir, state, pend, seat, [], head_path), occurrence=occurrence)
+    out = round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)
+    assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
+    spath = round_records.store_path(session_dir, pend["round"], pend["phase"],
+                                     round_records.storage_key(seat, occurrence), pend["attempt"])
+    assert not os.path.exists(spath)
+    assert _journal_recorded_for_phase(session_dir, pend["phase"], pend["attempt"]) == []
+
+
+def test_advance_still_records(tmp_path):
+    """Record-path session: record-result then advance still folds — latch does not fire."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    state = _state(session_dir)
+    pend = state["pending"]
+    slots = _slots_of(round_adapters.roster_for(pend["phase"], state, state["config"])[0])
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat,
+              _payload_for(session_dir, state, pend, seat, [], head_path), occurrence=occurrence)
+        assert round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)["ok"]
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is True, out
+    assert out["folded"]["phase"] == round_driver.P_PANEL
+
+
+def test_entry_point_census():
+    assert _expected_cmd_names() == _EXPECTED_CMD_NAMES
+
+
+def test_valueerror_slot_counts_present(tmp_path):
+    session_dir = str(tmp_path / "valueerror-probe")
+    os.makedirs(session_dir, exist_ok=True)
+    roster = ["_reserved"]
+    rnd, phase, attempt = 1, round_driver.P_PANEL, 0
+    found = round_driver._durable_slot_records(session_dir, rnd, phase, attempt, roster)
+    assert found == ["_reserved"], found
+
+
+def test_store_file_exists_non_enoent_fails_closed(tmp_path, monkeypatch):
+    session_dir = str(tmp_path / "lstat-probe")
+    os.makedirs(session_dir, exist_ok=True)
+    spath = os.path.join(session_dir, "probe.json")
+    with open(spath, "w", encoding="utf-8") as fh:
+        fh.write("{}")
+
+    def deny_lstat(_path):
+        raise OSError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(round_driver.os, "lstat", deny_lstat)
+    assert round_driver._store_file_exists(spath) is True
+
+    def missing_lstat(_path):
+        raise OSError(errno.ENOENT, "no such file")
+
+    monkeypatch.setattr(round_driver.os, "lstat", missing_lstat)
+    assert round_driver._store_file_exists(spath) is False
+
+    def notdir_lstat(_path):
+        raise OSError(errno.ENOTDIR, "not a directory")
+
+    monkeypatch.setattr(round_driver.os, "lstat", notdir_lstat)
+    assert round_driver._store_file_exists(spath) is False
+
+
+def test_disclosure_present_on_failure_response(tmp_path):
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    state = _state(session_dir)
+    pend = state["pending"]
+    slots = _slots_of(round_adapters.roster_for(pend["phase"], state, state["config"])[0])
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat,
+              _payload_for(session_dir, state, pend, seat, [], head_path), occurrence=occurrence)
+        assert round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)["ok"]
+    seat, occurrence = slots[0]
+    spath = round_records.store_path(session_dir, pend["round"], pend["phase"],
+                                     round_records.storage_key(seat, occurrence), pend["attempt"])
+    with open(spath, encoding="utf-8") as fh:
+        envelope = json.load(fh)
+    del envelope["payload"]
+    with open(spath, "w", encoding="utf-8") as fh:
+        json.dump(envelope, fh)
+    expected = os.path.abspath(round_records.dispatch_manifest_path(
+        session_dir, pend["round"], pend["phase"], pend["attempt"]))
+    assert "_dispatch.a%d.json" % pend["attempt"] in expected
+    assert not os.path.exists(expected)
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    assert out["ok"] is False and out["reason"] == "assemble-refused", out
+    disc = out.get("dispatchManifest")
+    assert disc == {"path": expected, "status": "absent", "detail": None}, disc
+    journaled = [e for e in round_driver.read_journal(session_dir)
+                 if e.get("outcome") == "dispatch-manifest-disclosure"]
+    assert journaled and journaled[-1]["status"] == "absent"
+    assert journaled[-1]["path"] == expected
+
+
+def test_fence_advice_legacy_wedged_session(tmp_path):
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    pend, _slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+    state = _state(session_dir)
+    state["_submitUsed"] = True
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    out = round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                  round_driver.state_hash(state), _panel_hand_artifact(session_dir))
+    assert out["ok"] is False and out["reason"] == "record-submit-interleaved", out
+    detail = out.get("detail", "")
+    assert "folds through `advance`" not in detail
+    assert "before `advance` can fold" not in detail
+    assert "entry-point latch" in detail
+    assert "submit" in detail.lower()
+
+    session_dir2, gitdir2, head_path2 = _bootstrap(tmp_path, name="normal-fence")
+    pend2, _slots2, _sweep2 = _land_panel_and_sweep(session_dir2, gitdir2, head_path2)
+    before = _state(session_dir2)
+    out2 = round_driver.cmd_submit(session_dir2, pend2["phase"], pend2["attempt"],
+                                   round_driver.state_hash(before),
+                                   _panel_hand_artifact(session_dir2))
+    assert out2["ok"] is False and out2["reason"] == "record-submit-interleaved", out2
+    assert "advance" in out2.get("detail", "")
