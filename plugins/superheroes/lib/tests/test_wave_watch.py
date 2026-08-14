@@ -1298,12 +1298,40 @@ def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
     assert seen[0]["WW_TEST_MARKER"] == "reaches-gh-child"
 
 
-def test_gh_child_env_scrubs_git_routing_vars(tmp_path, monkeypatch):
+# Literal list, deliberately NOT read from ww._GIT_SCRUB_VARS: a name removed from
+# the module tuple must turn exactly its own test red, never silently shrink coverage.
+_EXPECTED_SCRUBBED = [
+    "GIT_DIR",
+    "GIT_WORK_TREE",
+    "GIT_INDEX_FILE",
+    "GIT_COMMON_DIR",
+    "GIT_OBJECT_DIRECTORY",
+    "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+    "GIT_CEILING_DIRECTORIES",
+    "GH_REPO",
+    "GIT_CONFIG",
+    "GIT_CONFIG_GLOBAL",
+    "GIT_CONFIG_SYSTEM",
+    "GIT_CONFIG_COUNT",
+    "GIT_CONFIG_PARAMETERS",
+]
+
+
+# GIT_CONFIG_COUNT/PARAMETERS must be VALID for git (any git the un-scrubbed env
+# reaches chokes on malformed values before the scrub assertion runs); the test's
+# point is scrub-presence, not value validity.
+_SCRUB_PROBE_VALUES = {
+    "GIT_CONFIG_COUNT": "0",
+    "GIT_CONFIG_PARAMETERS": "'wavewatch.probe=1'",
+}
+
+
+@pytest.mark.parametrize("var", _EXPECTED_SCRUBBED)
+def test_gh_child_env_scrubs_routing_var(tmp_path, monkeypatch, var):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     custom_env = dict(os.environ)
-    custom_env["GIT_DIR"] = "/definitely/not/a/git/dir"
-    custom_env["GIT_WORK_TREE"] = "/also/wrong"
+    custom_env[var] = _SCRUB_PROBE_VALUES.get(var, "/definitely/not/right")
     seen = []
 
     def gh_run(argv, **kwargs):
@@ -1316,9 +1344,29 @@ def test_gh_child_env_scrubs_git_routing_vars(tmp_path, monkeypatch):
     )
     assert result["event"] == "timer"
     assert len(seen) >= 1
-    child_env = seen[0]
-    assert "GIT_DIR" not in child_env
-    assert "GIT_WORK_TREE" not in child_env
+    assert var not in seen[0]
+
+
+def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
+    """GH_TOKEN / GH_CONFIG_DIR must survive the scrub — stripping them breaks gh auth."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    custom_env = dict(os.environ)
+    custom_env["GH_TOKEN"] = "test-token-value"
+    custom_env["GH_CONFIG_DIR"] = "/some/config/dir"
+    seen = []
+
+    def gh_run(argv, **kwargs):
+        seen.append(kwargs.get("env"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        env=custom_env, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert seen[0].get("GH_TOKEN") == "test-token-value"
+    assert seen[0].get("GH_CONFIG_DIR") == "/some/config/dir"
 
 
 def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
