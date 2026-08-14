@@ -8,7 +8,10 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _MOD = os.path.join(_HERE, "..", "launch_doctrine.py")
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _DOCTRINE = os.path.join(_PLUGIN_ROOT, "rubric", "launch-doctrine.md")
-_CHARTER = os.path.join(_PLUGIN_ROOT, "skills", "showrunner", "SKILL.md")
+# Preflight charter block lives in dispatch-preflight.md (not SKILL.md).
+_CHARTER = os.path.join(
+    _PLUGIN_ROOT, "skills", "showrunner", "reference", "dispatch-preflight.md"
+)
 
 
 def _load():
