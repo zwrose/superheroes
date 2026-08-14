@@ -1,0 +1,297 @@
+# Instrument for the #897 xdist adoption protocol — branch-scoped, never for merge.
+# Re-runs spike #816's ratified A/B on a current sha: serial vs `-n auto`, three
+# replicates per arm, one SHA, one arm-replicate per fresh runner. A third arm
+# (`-n 12`, three replicates) is DIAGNOSTIC ONLY, per #816's Arm-B precedent — it
+# informs tuning and can never carry the adoption recommendation.
+#
+# #897's six hardening requirements, mapped:
+#   1. observed-not-inferred worker count — the driver records xdist's own
+#      "created: N workers" line from captured stdout (null for serial), plus
+#      os.cpu_count(); achieved concurrency is derivable from the junit XML.
+#   2. install verification — every npm install is `&& <tool> --version`.
+#   3. fail-closed result-schema validation — the compare job treats a missing or
+#      unparseable junit/meta as an explicit DIVERGENT outcome, never missing data.
+#   4. matrix-drift guard — every job records GITHUB_SHA; compare asserts one value.
+#   5. monotonic timing — wall time is time.monotonic() around the pytest child.
+#   6. explicit unmeasured denominator — compare reports the tests skipped in every
+#      run (never exercised under any arm) by name and count.
+# Per #897's note (owner ruling 110-(c)): the pytest stack stays unpinned; each
+# job records python/pytest/xdist versions in its meta record instead.
+name: Spike 897 xdist protocol
+
+on:
+  push:
+    branches: [claude/ci-performance-optimization-71cbbc]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spike897-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  measure:
+    name: measure-${{ matrix.arm }}-r${{ matrix.rep }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        arm: [serial, auto, n12]
+        rep: [1, 2, 3]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Install Python dependencies (xdist installed in EVERY arm — the only
+          difference between arms is the -n flag)
+        run: uv pip install --system pytest pytest-xdist jsonschema pyyaml "import-linter>=2,<3"
+
+      - name: Install jscpd (verified)
+        run: npm install -g jscpd@5.0.12 && jscpd --version
+
+      - name: Install coupling collectors (verified)
+        run: npm install -g dependency-cruiser@18 typescript@5 && depcruise --version && tsc --version
+
+      - name: Install Claude Code CLI (verified)
+        run: npm install -g @anthropic-ai/claude-code && claude --version
+
+      - name: Run arm (${{ matrix.arm }} rep ${{ matrix.rep }})
+        env:
+          ARM: ${{ matrix.arm }}
+          REP: ${{ matrix.rep }}
+        run: |
+          python3 - <<'DRIVER'
+          import json, os, platform, subprocess, sys, time
+
+          arm = os.environ["ARM"]
+          rep = int(os.environ["REP"])
+          out = os.environ["RUNNER_TEMP"]
+          extra = {"serial": [], "auto": ["-n", "auto"], "n12": ["-n", "12"]}[arm]
+          # Arm A is ci.yml's invocation verbatim; arm B/diagnostic add only -n.
+          # --junitxml is the instrument's one addition, as in #816.
+          cmd = [sys.executable, "-m", "pytest",
+                 ".github/scripts/tests/", "plugins/superheroes/lib/tests/",
+                 "plugins/superheroes/eval/tests/", "eval/lib/tests/",
+                 "-q", "-rs", *extra, "--junitxml", f"{out}/junit.xml"]
+          t0 = time.monotonic()
+          with open(f"{out}/pytest-out.txt", "wb") as f:
+              rc = subprocess.run(cmd, stdout=f, stderr=subprocess.STDOUT).returncode
+          wall = time.monotonic() - t0
+          workers_line = None
+          with open(f"{out}/pytest-out.txt", errors="replace") as f:
+              for line in f:
+                  if "workers" in line:
+                      workers_line = line.strip()
+                      break
+          import pytest, xdist
+          meta = {
+              "arm": arm, "rep": rep, "sha": os.environ["GITHUB_SHA"],
+              "monotonic_wall_s": round(wall, 1), "pytest_exit": rc,
+              "cpu_count": os.cpu_count(), "python": platform.python_version(),
+              "pytest": pytest.__version__, "xdist": xdist.__version__,
+              "workers_line_observed": workers_line,
+          }
+          with open(f"{out}/meta.json", "w") as f:
+              json.dump(meta, f, indent=1)
+          print(json.dumps(meta))
+          DRIVER
+
+      - name: Upload arm record
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spike897-${{ matrix.arm }}-r${{ matrix.rep }}
+          path: |
+            ${{ runner.temp }}/junit.xml
+            ${{ runner.temp }}/meta.json
+            ${{ runner.temp }}/pytest-out.txt
+          retention-days: 30
+
+  compare:
+    name: compare (parity + pre-registered bar)
+    needs: measure
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download all arm records
+        uses: actions/download-artifact@v4
+        with:
+          pattern: spike897-*
+          path: ${{ runner.temp }}/arms
+
+      - name: Compare (emits full record BEFORE any failure verdict)
+        run: |
+          python3 - <<'COMPARE'
+          import json, os, statistics, sys
+          import xml.etree.ElementTree as ET
+
+          base = os.path.join(os.environ["RUNNER_TEMP"], "arms")
+          ARMS = ["serial", "auto", "n12"]
+          REPS = [1, 2, 3]
+          KNOWN_FLAKES = {
+              "test_diff_timeout": "#806",
+              "test_e2e_dispatch_abandon_order_and_idempotent": "#809",
+              "test_run_bounded_kills_sigterm": "#882",
+              "test_edge8_deadline_parks": "launcher deadline specimen (#809 family)",
+          }
+
+          problems, records = [], {}
+          for arm in ARMS:
+              for rep in REPS:
+                  d = os.path.join(base, f"spike897-{arm}-r{rep}")
+                  rec = {"meta": None, "outcomes": None, "counts": None}
+                  try:
+                      rec["meta"] = json.load(open(os.path.join(d, "meta.json")))
+                  except Exception as e:
+                      problems.append(f"{arm}-r{rep}: meta.json missing/unreadable ({e})")
+                  try:
+                      root = ET.parse(os.path.join(d, "junit.xml")).getroot()
+                      suite = root.find("testsuite") if root.tag == "testsuites" else root
+                      outcomes = {}
+                      for tc in suite.iter("testcase"):
+                          nid = f"{tc.get('classname')}::{tc.get('name')}"
+                          if tc.find("error") is not None: o = "error"
+                          elif tc.find("failure") is not None: o = "failure"
+                          elif tc.find("skipped") is not None: o = "skipped"
+                          else: o = "passed"
+                          outcomes[nid] = o
+                      rec["outcomes"] = outcomes
+                      rec["counts"] = {k: suite.get(k) for k in
+                                       ("tests", "failures", "errors", "skipped")}
+                  except Exception as e:
+                      problems.append(f"{arm}-r{rep}: junit.xml missing/unparseable ({e})")
+                  records[(arm, rep)] = rec
+
+          # 4. matrix-drift guard
+          shas = {r["meta"]["sha"] for r in records.values() if r["meta"]}
+          if len(shas) > 1:
+              problems.append(f"matrix drift: multiple SHAs {sorted(shas)}")
+
+          # Parity: strict on serial+auto (the ratified A/B); n12 reported as diagnostic.
+          def diff(a, b):
+              out = []
+              ka, kb = set(a), set(b)
+              out += [f"only-in-first: {n}" for n in sorted(ka - kb)[:10]]
+              out += [f"only-in-second: {n}" for n in sorted(kb - ka)[:10]]
+              out += [f"outcome-differs: {n} ({a[n]} vs {b[n]})"
+                      for n in sorted(ka & kb) if a[n] != b[n]][:20]
+              return out
+
+          def parity(pairs):
+              mism = []
+              refk, ref = None, None
+              for key, rec in pairs:
+                  if rec["outcomes"] is None:
+                      mism.append(f"{key}: no junit (fail-closed => divergent)")
+                      continue
+                  if ref is None:
+                      refk, ref = key, rec["outcomes"]
+                      continue
+                  d = diff(ref, rec["outcomes"])
+                  if d:
+                      mism.append(f"{key} vs {refk}: " + "; ".join(d))
+              return mism
+
+          ratified = [(f"{a}-r{r}", records[(a, r)]) for a in ("serial", "auto") for r in REPS]
+          ratified_mismatches = parity(ratified)
+          diag_mismatches = parity(
+              [(f"{a}-r{r}", records[(a, r)]) for a in ("serial", "auto", "n12") for r in REPS])
+
+          # Flake accounting — named, attributed, never waived.
+          flakes = []
+          for (arm, rep), rec in records.items():
+              for nid, o in (rec["outcomes"] or {}).items():
+                  if o in ("failure", "error"):
+                      attr = next((iss for frag, iss in KNOWN_FLAKES.items() if frag in nid),
+                                  "NEW — not a known specimen")
+                      flakes.append(f"{arm}-r{rep}: {nid} = {o} [{attr}]")
+
+          # 6. unmeasured denominator: skipped in every run that produced a junit.
+          runs = [r["outcomes"] for r in records.values() if r["outcomes"]]
+          always_skipped = sorted(
+              set.intersection(*[{n for n, o in run.items() if o == "skipped"} for run in runs])
+          ) if runs else []
+
+          def med(arm):
+              ws = [records[(arm, r)]["meta"]["monotonic_wall_s"] for r in REPS
+                    if records[(arm, r)]["meta"]]
+              return statistics.median(ws) if ws else None
+
+          med_serial, med_auto, med_n12 = med("serial"), med("auto"), med("n12")
+
+          bar = {
+              "1 exact per-test parity, every ratified replicate": not ratified_mismatches and not problems,
+              "2 no failures (known flakes count against parity, never waived)": not flakes,
+              "3 median auto <= 50% of median serial":
+                  bool(med_serial and med_auto and med_auto <= 0.5 * med_serial),
+              "4 every parallel replicate under 600s (context, from #816's ceiling question)":
+                  all((records[("auto", r)]["meta"] or {}).get("monotonic_wall_s", 1e9) < 600
+                      for r in REPS),
+          }
+          verdict = "CLEAN — adoption supported on the pre-registered bar" \
+              if all(list(bar.values())[:3]) else "DIVERGENT — do not adopt on this run"
+
+          lines = ["# Spike 897 protocol record", ""]
+          lines.append(f"sha: `{sorted(shas)[0] if shas else 'UNKNOWN'}`")
+          lines.append("")
+          lines.append("| arm | rep | wall s | pytest exit | tests | fail | err | skip | workers line |")
+          lines.append("|---|---|---|---|---|---|---|---|---|")
+          for arm in ARMS:
+              for rep in REPS:
+                  m, c = records[(arm, rep)]["meta"], records[(arm, rep)]["counts"]
+                  lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+                      arm, rep,
+                      m and m["monotonic_wall_s"], m and m["pytest_exit"],
+                      c and c["tests"], c and c["failures"], c and c["errors"],
+                      c and c["skipped"],
+                      (m and m["workers_line_observed"]) or "—"))
+          lines.append("")
+          lines.append(f"medians: serial **{med_serial}s** · auto **{med_auto}s** · "
+                       f"n12 (diagnostic) **{med_n12}s**")
+          if med_serial and med_auto:
+              lines.append(f"auto/serial = **{med_auto/med_serial:.0%}**")
+          v = next((r["meta"] for r in records.values() if r["meta"]), {})
+          lines.append(f"stack (unpinned by ruling 110-(c), recorded): python {v.get('python')} · "
+                       f"pytest {v.get('pytest')} · xdist {v.get('xdist')}")
+          lines.append("")
+          lines.append("## Pre-registered bar")
+          for k, ok in bar.items():
+              lines.append(f"- {'PASS' if ok else 'FAIL'} — {k}")
+          if problems:
+              lines.append("\n## Schema/fail-closed problems\n" +
+                           "\n".join(f"- {p}" for p in problems))
+          if ratified_mismatches:
+              lines.append("\n## Ratified-arm parity mismatches\n" +
+                           "\n".join(f"- {m}" for m in ratified_mismatches))
+          if diag_mismatches and not ratified_mismatches:
+              lines.append("\n## Diagnostic-arm (n12) parity notes\n" +
+                           "\n".join(f"- {m}" for m in diag_mismatches))
+          if flakes:
+              lines.append("\n## Failure/flake accounting\n" +
+                           "\n".join(f"- {f}" for f in flakes))
+          lines.append(f"\n## Unmeasured denominator\n{len(always_skipped)} test(s) skipped "
+                       "in every run (never exercised under any arm):\n" +
+                       "\n".join(f"- `{n}`" for n in always_skipped))
+          lines.append(f"\n## VERDICT: {verdict}")
+
+          record = "\n".join(lines)
+          print(record)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write(record + "\n")
+          sys.exit(0 if verdict.startswith("CLEAN") else 1)
+          COMPARE
