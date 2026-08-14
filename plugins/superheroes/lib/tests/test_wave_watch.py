@@ -691,6 +691,31 @@ def test_stale_heartbeat_dead_pid_emits_builder_exited_not_lane_stale(
     assert result["event"] == "builder-exited"
     assert result["event"] != "lane-stale"
     assert result["pids"] == [dead_pid]
+    also_observed = result.get("alsoObserved")
+    if also_observed is not None:
+        assert "stale" not in also_observed
+
+
+def test_dead_pid_stale_heartbeat_not_in_stale_live(monkeypatch):
+    live_lanes = {
+        "lane-a": {"started": True, "pid": 999999999, "batchId": "batch-982"},
+    }
+    stale_launches = [{
+        "launchId": "lane-a",
+        "state": "working",
+        "ageSeconds": 60.0,
+        "staleAfterSeconds": 1,
+    }]
+    monkeypatch.setattr(ww, "_pid_is_live", lambda pid: False)
+    degraded = set()
+    exited, stale_live = ww._evaluate_pid_signals(
+        live_lanes, stale_launches, degraded,
+    )
+    assert stale_live == []
+    assert exited is not None
+    pids, exited_launches = exited
+    assert pids == [999999999]
+    assert exited_launches == [{"launchId": "lane-a", "pid": 999999999}]
 
 
 def test_stale_heartbeat_never_started_no_lane_stale(tmp_path, monkeypatch):
