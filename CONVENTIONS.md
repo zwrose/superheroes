@@ -697,7 +697,15 @@ fail-closed by `lib/launch_doctrine.py`) — never reconstructed from session me
 (LEDGERS.md §4 seat ruling B). The launcher stamps the premise durably at dispatch in
 `lib/launch_ledger.py`: base commit, surfaces, enumerated grant scope, owner-capability
 preconditions with a stated horizon, and the standing exclusions it applies itself (release
-PRs excluded, force-push never). That record carries R1's mechanical park/refusal accounting
+PRs excluded, force-push never). **The launcher also provisions the build worktree** (#974):
+`launch` creates it before spawning — one per launch, detached at the premise's base commit,
+under `SUPERHEROES_WORKTREES_ROOT` when set and `~/.superheroes-worktrees` otherwise — records
+its path on the `reserved` record, and starts the session with that worktree as its working
+directory, never the primary checkout. A target path that already exists on disk, or that git
+still registers, is a **collision**: the launch refuses (`launch-worktree-collision`) rather than
+reuse a checkout another build may be holding. The `own-worktree` standing ruling stays in the
+composed prompt as defense in depth — a builder that never sees the primary checkout cannot
+violate it. That record carries R1's mechanical park/refusal accounting
 — it reports **indeterminate** rather than a rate whenever it cannot see the whole batch; zero
 parks is a signal to inspect, never a clean sheet. The same record also carries **post-terminal
 amendments** — a second terminal-outcome write, an advisor vet ruling, or an evidence correction —
@@ -708,8 +716,9 @@ launches still refuse — see `lib/launch_ledger.py` for the authoritative seman
 every door fail closed with `fold-unknown-event:<kind>` until the ledger file is deleted (the path
 `ledger_path()` reports). The
 Showrunner advisor invokes the launcher
-per launch; the eight dispatch-preflight checks live in the charter §9 and the artifact, bound
-by a drift test — cite those homes, do not duplicate them here. The recovery half —
+per launch; the eight dispatch-preflight checks live in
+`skills/showrunner/reference/dispatch-preflight.md` and the artifact, bound by a drift test — cite
+those homes, do not duplicate them here. The recovery half —
 adopt-rather-than-resume across instances or accounts, the unpushed-work sweep, transcript
 pinning, liveness reads, and quota-death suspicion — lives in `rubric/launch-doctrine.md` §
 Recovery, with the two session charters as enumerated copy-holders guarded by a drift test.
@@ -807,9 +816,10 @@ PR-body markers from the retired execution spine survive independently of it:
     slot, together with an advisor-facing reminder comment beneath it that the advisor's write
     replaces — and the advisor writes **beneath** it, re-stamping it only when a body rewrite dropped it.
 
-  Shape and contents live in `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` — the
-  authoritative home; this bullet names the literals and their locations, and does not restate the
-  receipt's shape.
+  Receipt shape and the owner-half register live in
+  `plugins/superheroes/skills/showrunner/reference/vet-receipt.md` — the authoritative home;
+  **when** the vet runs and what else it does are the **showrunner** charter's duty 4. This bullet
+  names the literals and their locations, and does not restate the receipt's shape.
 
   **Lifecycle — and why nothing flags their absence.** `advisor-vet` **is** a builder obligation
   (the §11 skeleton stamps it); the other two are not, and **none of the three is a review-seat
@@ -1138,13 +1148,14 @@ this section is enough to block a hook or gate that skipped either step.
 ## 14. Owner involvement before the merge click
 
 > **Contract framing, not the operative rule.** Repo-root conventions do not ship in the plugin
-> package (`plugins/superheroes/**` does). The two tests, the perceivability list, the
-> **show it** / **say it** / **nothing to see** levels, and the presentation duty live in the
-> **Showrunner charter**
-> (`skills/showrunner/SKILL.md`) so a consuming **advisor** can read them. This section records
-> why the rule keys on what it keys on, what standard it holds itself to, what evidence backs
-> it, and what is still unbuilt — it does **not** duplicate that list (§11: two hand-maintained
-> copies with no drift test is a review-blocking violation).
+> package (`plugins/superheroes/**` does). The two tests, the **show it** / **say it** / **nothing
+> to see** levels, and the presentation duty live in the **Showrunner charter**
+> (`skills/showrunner/SKILL.md`); the perceivability list lives in
+> `skills/showrunner/reference/perceivability.md` — all in the plugin package so a consuming
+> **advisor** can read them. This section records why the rule keys on what it keys on, what
+> standard it holds itself to, what evidence backs it, and what is still unbuilt — it does **not**
+> duplicate that list (§11: two hand-maintained copies with no drift test is a review-blocking
+> violation).
 
 **Scope.** Whether the **owner** is in the loop *before* the merge click — what the **advisor**
 must surface or schedule so the owner can judge the finished work, not merely bless a green CI
@@ -1155,11 +1166,11 @@ what must happen *before* that constant fires.
 **Key on behavior, not file paths.** File-based heuristics miss most of what owners care about —
 copy, defaults, cost, what gets emitted on their behalf, visual surface. The ruling keys on two
 behavioral tests instead — **Test 1** (perceivability without reading the diff) and **Test 2**
-(owner taste or trade vs. craft judgment the review lenses own). Operative wording, the default
-perceivability list, the **show it** / **say it** / **nothing to see** levels, and the
-presentation standard the charter sets — judged by
+(owner taste or trade vs. craft judgment the review lenses own). Operative wording, the **show it**
+/ **say it** / **nothing to see** levels, and the presentation standard the charter sets — judged by
 zero reconstruction, show the after-state — live in the **Showrunner charter**
-(`skills/showrunner/SKILL.md`); cite that home, do not restate it here.
+(`skills/showrunner/SKILL.md`); the default perceivability list lives in
+`skills/showrunner/reference/perceivability.md` — cite those homes, do not restate them here.
 
 **Why one test is not enough.** Test 1's net is deliberately wide; alone it would catch a large
 share of any project's work and spend *more* owner attention, not less. Test 2 discriminates craft
