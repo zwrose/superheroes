@@ -148,6 +148,9 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
   you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
   `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them.
-- **No prompt (silent bypass):** a dispatch that places a repository-selection flag before the
-  `gh` subcommand is not recognised by the gate at all, because the command patterns require `gh`
-  adjacent to the subcommand — honest disclosure only; no recipe here.
+- **Shell quoting:** the gate matches on the **text** of the command and does not lex shell
+  quoting. Flag-prefixed dispatches (including repo-flagged ones) are classified and **ask**, at
+  any flag length. What the gate still does not resolve is shell quoting — both a
+  quote-concatenated command word (`g''h`) and a **separator inside a quoted value**
+  (`git -c user.name="x;y" push --force`) go unclassified. Both are pre-existing and unchanged
+  by #989.

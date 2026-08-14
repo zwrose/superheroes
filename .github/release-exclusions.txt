@@ -14,3 +14,4 @@
 
 4d88419716b7b7054660a7943b061420bd804ed8  4fe4d89ffb12323d09062c8d98d3ce36d3166ec6  2026-07-31  #726 — dropped by the release-please parser crash (Actions run 30597099129); re-stated as #740, shipped in 0.23.0
 2a6ac6a7259146083deb62f18171fd10c9312754  67433175164f49ffbdc5b3ce89dab752a61fd9e5  2026-07-31  #716 — dropped by the release-please parser crash (Actions run 30597099129); re-stated as #741, shipped in 0.23.0
+8b30bbdc0b1c986a46bb8039d35665379112a8e7  404be8f139af0b7fa67f1b1220fcfa3363f0e37c  2026-08-14  #983 — dropped by the release-please parser crash on the 445-line squash body (known upstream token bug; tripwire run 31799569596); re-stated as #994, ships in 0.27.0

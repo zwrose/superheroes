@@ -18,7 +18,7 @@ import owner_authority as oa
 
 # --- owner_authority_action: the enumerated set --------------------------------
 
-@pytest.mark.parametrize("command,action", [
+_RECOGNISES_EACH_SHAPE = [
     ("gh pr merge 42 --squash", "merge-pr"),
     ("gh api -X PUT repos/o/r/pulls/42/merge", "merge-api"),
     ("gh api graphql -f query='mutation { mergePullRequest(input: {}) }'", "merge-graphql"),
@@ -34,12 +34,9 @@ import owner_authority as oa
     ("git push origin feature-branch:main", "push-to-default"),
     ("git push origin master", "push-to-default"),
     ("git push origin refs/heads/main", "push-to-default"),
-])
-def test_owner_authority_action_recognises_each_shape(command, action):
-    assert oa.owner_authority_action(command) == action
+]
 
-
-@pytest.mark.parametrize("command", [
+_NONE_FOR_ORDINARY = [
     "git push origin my-branch",
     "git push -u origin superheroes/x-abc123",
     "git commit -m wip",
@@ -54,7 +51,19 @@ def test_owner_authority_action_recognises_each_shape(command, action):
     # branches merely PREFIXED with `main` are not the default branch → must NOT gate.
     "git push origin main-feature",
     "git push origin mainline",
-])
+    "git config push.default main",
+    "git config --global push.default simple",
+    "git config push.default current",
+    "gh api repos/o/r/pulls/42/merged",
+]
+
+
+@pytest.mark.parametrize("command,action", _RECOGNISES_EACH_SHAPE)
+def test_owner_authority_action_recognises_each_shape(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command", _NONE_FOR_ORDINARY)
 def test_owner_authority_action_none_for_ordinary(command):
     assert oa.owner_authority_action(command) is None
 
@@ -63,6 +72,80 @@ def test_owner_authority_action_none_for_non_string():
     assert oa.owner_authority_action(None) is None
     assert oa.owner_authority_action(123) is None
     assert oa.owner_authority_action(["gh", "pr", "merge"]) is None
+
+
+# --- owner_authority_action: flag-tolerant classification (#989) ---------------
+
+@pytest.mark.parametrize("command,action", [
+    ("gh -R zwrose/superheroes pr merge 123", "merge-pr"),
+    ("gh --repo zwrose/superheroes pr merge 123", "merge-pr"),
+    ("gh --repo zwrose/superheroes release create v1.0.0", "release"),
+    ("gh -R o/r workflow run 'Preview seed'", "run-workflow"),
+    ("gh --repo=o/r pr merge 1", "merge-pr"),
+    ("gh --repo a/b api repos/a/b/pulls/1/merge -X PUT", "merge-api"),
+    ("git -C /tmp/x push --force", "force-push"),
+    ("git -C /tmp/x push origin HEAD:main", "push-to-default"),
+    ("git -c user.name=x push --force-with-lease origin feat", "force-push"),
+])
+def test_owner_authority_action_flag_tolerant_bypass_corpus(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command", [
+    "gh -R o/r \\\npr merge 1",
+    "gh \\\npr merge 1",
+])
+def test_owner_authority_action_line_continuation_classifies(command):
+    assert oa.owner_authority_action(command) == "merge-pr"
+
+
+def test_owner_authority_action_no_regression_census():
+    for command, action in _RECOGNISES_EACH_SHAPE:
+        assert oa.owner_authority_action(command) == action
+    for command in _NONE_FOR_ORDINARY:
+        assert oa.owner_authority_action(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "git push -u origin superheroes/x && git checkout main",
+    "git push origin superheroes/x ; echo on main",
+    "gh pr list | grep 'pr merge'",
+])
+def test_owner_authority_action_separator_bounding(command):
+    assert oa.owner_authority_action(command) is None
+
+
+def test_owner_authority_action_no_fail_open_cap():
+    assert oa.owner_authority_action(
+        "git -c x.y=" + "a" * 300 + " push --force origin feature") == "force-push"
+    assert oa.owner_authority_action(
+        "git -c x.y=" + "a" * 100000 + " push --force") == "force-push"
+
+
+def test_owner_authority_action_precedence_rows_outer():
+    assert oa.owner_authority_action("git push origin main && gh pr merge 1") == "merge-pr"
+
+
+@pytest.mark.parametrize("command", [
+    "gh api " * 5000,
+    "gh " * 60000,
+    "git " * 60000,
+])
+def test_owner_authority_action_bounded_runtime_anchor_repetition(command):
+    import time
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+def test_owner_authority_action_bounded_runtime():
+    import time
+    command = "gh " + "api " * 30000
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
 
 
 # --- classify: ask on every gated shape under a calibrated cwd -----------------
@@ -304,13 +387,26 @@ _VALID_ENTRY = {"action": "run-workflow", "workflow": "deploy.yml"}
     ("gh workflow run -f k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
     ("gh workflow run -F k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
     ("gh workflow run --field=k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run --raw-field k=v deploy.yml", {"workflow": "deploy.yml", "ref": None}),
     ("gh workflow run --json deploy.yml", {"workflow": "deploy.yml", "ref": None}),
     ("gh workflow run -- deploy.yml", {"workflow": "deploy.yml", "ref": None}),
+    ("gh workflow run -- Seed", {"workflow": "Seed", "ref": None}),
+    ("gh workflow run --json Seed", {"workflow": "Seed", "ref": None}),
+    ("gh workflow run -f k=v Seed", {"workflow": "Seed", "ref": None}),
+    ("gh workflow run -F k=v Seed", {"workflow": "Seed", "ref": None}),
+    ("gh workflow run --field=k=v Seed", {"workflow": "Seed", "ref": None}),
+    ("gh workflow run --raw-field k=v Seed", {"workflow": "Seed", "ref": None}),
     ("gh workflow run --ref main deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
     ("gh workflow run --ref=main deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
     ("gh workflow run -r main deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
     ("gh workflow run deploy.yml --ref main", {"workflow": "deploy.yml", "ref": "main"}),
     ("gh workflow run deploy.yml --ref=main", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh -r main workflow run deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh --ref main workflow run deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh --ref=main workflow run deploy.yml", {"workflow": "deploy.yml", "ref": "main"}),
+    ("gh -r main workflow run Seed", {"workflow": "Seed", "ref": "main"}),
+    ("gh --ref main workflow run Seed", {"workflow": "Seed", "ref": "main"}),
+    ("gh --ref=main workflow run Seed", {"workflow": "Seed", "ref": "main"}),
 ])
 def test_workflow_run_dispatch_accepts(command, expected):
     assert oa.workflow_run_dispatch(command) == expected
@@ -366,6 +462,17 @@ def test_workflow_run_dispatch_accepts(command, expected):
     "gh workflow run deploy.yml -R o/r",
     "gh workflow run deploy.yml --repo o/r",
     "gh workflow run deploy.yml --repo=o/r",
+    # repo flags before workflow run — never pre-authorized regardless of allow file
+    "gh -R o/r workflow run deploy.yml",
+    "gh --repo o/r workflow run deploy.yml",
+    "gh --repo=o/r workflow run deploy.yml",
+    # non-ref flags before workflow run — only ref flags belong in the prefix
+    "gh -- workflow run Seed",
+    "gh --json workflow run Seed",
+    "gh -f k=v workflow run Seed",
+    "gh -F k=v workflow run Seed",
+    "gh --field=k=v workflow run Seed",
+    "gh --raw-field k=v workflow run Seed",
     # ref flag edge cases — refuse
     "gh workflow run --ref= deploy.yml",
     "gh workflow run --ref a --ref b deploy.yml",
@@ -743,6 +850,12 @@ def test_classify_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeyp
     assert "reference/owner-authority-allowlist.md" in reason
 
 
+def test_classify_ref_flagged_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    _, reason = oa.classify("gh -r main workflow run Seed", str(tmp_path))
+    assert "reference/owner-authority-allowlist.md" in reason
+
+
 def test_classify_pr_merge_ask_reason_has_no_doc_pointer(tmp_path, monkeypatch):
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
     _, reason = oa.classify("gh pr merge 42 --squash", str(tmp_path))
@@ -907,6 +1020,92 @@ def test_classify_ref_dispatch_without_grant_still_asks(tmp_path, monkeypatch):
 
 
 # --- fail-closed edges (enumerated) ----------------------------------------------
+
+# E1–E8: workflow_run_dispatch fail-closed edges (#989 invariant 3).
+
+@pytest.mark.parametrize("command", [
+    "gh -R o/r workflow run deploy.yml",
+    "gh --repo o/r workflow run deploy.yml",
+    "gh --repo=o/r workflow run deploy.yml",
+])
+def test_edge_e1_repo_flags_before_workflow_run_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh workflow run -R o/r deploy.yml",
+    "gh workflow run --repo o/r deploy.yml",
+    "gh workflow run --repo=o/r deploy.yml",
+    "gh workflow run deploy.yml -R o/r",
+    "gh workflow run deploy.yml --repo o/r",
+    "gh workflow run deploy.yml --repo=o/r",
+])
+def test_edge_e2_repo_flags_after_workflow_run_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh --zzz workflow run deploy.yml",
+    "gh workflow run --zzz deploy.yml",
+])
+def test_edge_e3_unknown_flag_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh - workflow run deploy.yml",
+    "gh workflow run - deploy.yml",
+])
+def test_edge_e4_bare_dash_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+def test_edge_e5_two_ref_flags_refuses():
+    assert oa.workflow_run_dispatch("gh --ref a --ref b workflow run deploy.yml") is None
+    assert oa.workflow_run_dispatch("gh workflow run --ref a --ref b deploy.yml") is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh --ref= workflow run deploy.yml",
+    "gh workflow run --ref= deploy.yml",
+    "gh workflow run deploy.yml --ref",
+])
+def test_edge_e6_empty_ref_value_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh workflow run",
+    "gh workflow run a b",
+    "gh workflow run deploy.yml extra",
+])
+def test_edge_e7_wrong_positional_count_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "FOO=bar gh workflow run deploy.yml",
+    "/usr/bin/gh workflow run deploy.yml",
+])
+def test_edge_e8_non_gh_token0_refuses(command):
+    assert oa.workflow_run_dispatch(command) is None
+
+
+@pytest.mark.parametrize("command", [
+    "gh -R other/repo workflow run Seed",
+    "gh --repo other/repo workflow run Seed",
+    "gh --repo=other/repo workflow run Seed",
+])
+def test_classify_repo_flagged_workflow_run_asks_despite_allow_grant(
+        command, tmp_path, monkeypatch):
+    store = _pin_allow_store(tmp_path, monkeypatch)
+    _write_allow_at(store, {"schemaVersion": 1,
+                            "allow": [{"action": "run-workflow", "workflow": "Seed"}]})
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    decision, reason = oa.classify(command, str(tmp_path))
+    assert decision == "ask"
+    assert "run-workflow" in reason
+
 
 def test_edge_ref_flag_missing_value_refuses():
     assert oa.workflow_run_dispatch("gh workflow run deploy.yml --ref") is None
