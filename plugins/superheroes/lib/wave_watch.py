@@ -7,11 +7,16 @@ Contract:
 - Refusals (ok=False): batch-invalid, interval-invalid, max-seconds-invalid,
   repo-root-invalid, store-unresolvable, ledger-unreadable, internal-error.
 - Events (ok=True): lane-terminal, lane-blocked, builder-exited, pr-set-changed,
-  timer.
+  lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable.
 - Precedence: lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >
-  pr-set-changed (E4) > timer (E5).
+  pr-set-changed (E4) > lane-stale (E5) > timer (E6).
+- lane-stale: a lane whose heartbeat class is stale and whose latest recorded
+  pid is positively live — a wedged builder alive but frozen past its own
+  staleAfterSeconds promise.
+- Observed latch: once the ledger has returned ok or tornTail, a subsequent
+  missing read is blind (store loss), not benign pre-arm silence.
 - When a lane's heartbeat is unreadable its higher-precedence E1/E2 state is
   UNKNOWN, so a lower-precedence event may be reported for it and the
   heartbeat-unreadable degradation token discloses that uncertainty.
@@ -70,6 +75,7 @@ EVENT_LANE_TERMINAL = "lane-terminal"
 EVENT_LANE_BLOCKED = "lane-blocked"
 EVENT_BUILDER_EXITED = "builder-exited"
 EVENT_PR_SET_CHANGED = "pr-set-changed"
+EVENT_LANE_STALE = "lane-stale"
 EVENT_TIMER = "timer"
 
 EVENTS = frozenset({
@@ -77,6 +83,7 @@ EVENTS = frozenset({
     EVENT_LANE_BLOCKED,
     EVENT_BUILDER_EXITED,
     EVENT_PR_SET_CHANGED,
+    EVENT_LANE_STALE,
     EVENT_TIMER,
 })
 
@@ -98,9 +105,11 @@ DEGRADATIONS = frozenset({
 
 HB_CLASS_UNKNOWN = "unknown"
 HB_CLASS_TERMINAL = "terminal"
+HB_CLASS_STALE = "stale"
 HB_STATE_BLOCKED = "blocked"
 assert HB_CLASS_UNKNOWN in hb.SWEEP_CLASSES
 assert HB_CLASS_TERMINAL in hb.SWEEP_CLASSES
+assert HB_CLASS_STALE in hb.SWEEP_CLASSES
 assert HB_STATE_BLOCKED in hb.STATES
 
 # heartbeat.py:373 uses this bare literal with no REASON_* constant at the
@@ -169,7 +178,9 @@ def _launch_ids(launches):
     return [entry["launchId"] for entry in launches]
 
 
-def _build_also_observed(event, terminal_launches, blocked_launches, exited_launches):
+def _build_also_observed(
+    event, terminal_launches, blocked_launches, exited_launches, stale_launches,
+):
     also = {}
     if event != EVENT_LANE_TERMINAL and terminal_launches:
         also["terminal"] = _launch_ids(terminal_launches)
@@ -177,29 +188,37 @@ def _build_also_observed(event, terminal_launches, blocked_launches, exited_laun
         also["blocked"] = _launch_ids(blocked_launches)
     if event != EVENT_BUILDER_EXITED and exited_launches:
         also["exited"] = _launch_ids(exited_launches)
+    if event != EVENT_LANE_STALE and stale_launches:
+        also["stale"] = _launch_ids(stale_launches)
     return also or None
 
 
-def _derive_live_lanes(repo_root, batch_id, env, degraded, ignore_launch_ids):
+def _derive_live_lanes(
+    repo_root, batch_id, env, degraded, ignore_launch_ids, ledger_observed,
+):
     read_result = ll.read(repo_root, env=env)
     state = read_result["state"]
     if state in ("ok", "tornTail"):
+        ledger_observed[0] = True
         if state == "tornTail":
             degraded.add(DEGRADATION_LEDGER_TORN_TAIL)
         records = read_result["records"]
     elif state == "missing":
+        if ledger_observed[0]:
+            degraded.add(DEGRADATION_LEDGER_UNREADABLE)
+            return {}, False
         records = []
     elif state in ("unreadable", "interiorCorrupt"):
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-        return {}, False, state
+        return {}, False
     else:
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-        return {}, False, state
+        return {}, False
 
     folded = ll.fold(records)
     if not folded["ok"]:
         degraded.add(DEGRADATION_LEDGER_UNREADABLE)
-        return {}, False, state
+        return {}, False
 
     ignore = set(ignore_launch_ids)
     return {
@@ -210,13 +229,14 @@ def _derive_live_lanes(repo_root, batch_id, env, degraded, ignore_launch_ids):
             and not info.get("terminal")
             and lid not in ignore
         )
-    }, True, state
+    }, True
 
 
 def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
-    """One heartbeat read per lane; derive E1 terminal and E2 blocked lists."""
+    """One heartbeat read per lane; derive E1 terminal, E2 blocked, stale lists."""
     terminal_launches = []
     blocked_launches = []
+    stale_launches = []
     for lid in sorted(live_lanes):
         hb_result = hb.read_heartbeat(repo_root, lid, env=env)
         hb_class = hb_result.get("class")
@@ -235,19 +255,26 @@ def _evaluate_lane_heartbeats(repo_root, live_lanes, env, degraded):
                 "launchId": lid,
                 "state": HB_STATE_BLOCKED,
             })
-    return terminal_launches, blocked_launches
+        elif hb_class == HB_CLASS_STALE:
+            stale_launches.append({
+                "launchId": lid,
+                "state": hb_state,
+                "ageSeconds": hb_result.get("ageSeconds"),
+                "staleAfterSeconds": hb_result.get("staleAfterSeconds"),
+            })
+    return terminal_launches, blocked_launches, stale_launches
 
 
-def _evaluate_builder_exited(live_lanes, degraded):
+def _evaluate_pid_signals(live_lanes, stale_launches, degraded):
+    """Probe each started lane once; derive builder-exited and live-stale lists."""
     exited_launches = []
     pids = []
+    stale_live = []
+    stale_by_id = {entry["launchId"]: entry for entry in stale_launches}
     for lid in sorted(live_lanes):
         info = live_lanes[lid]
         if not info.get("started"):
             continue
-        # Only the latest attempt's pid is probed; info['pids'] history is
-        # deliberately ignored because prior attempt pids are dead by construction
-        # on a retried lane.
         pid = info.get("pid")
         if not isinstance(pid, int) or isinstance(pid, bool) or pid <= 0:
             continue
@@ -258,9 +285,13 @@ def _evaluate_builder_exited(live_lanes, degraded):
         if not live:
             pids.append(pid)
             exited_launches.append({"launchId": lid, "pid": pid})
+        elif lid in stale_by_id:
+            stale_live.append(stale_by_id[lid])
     if not exited_launches:
-        return None
-    return pids, exited_launches
+        exited = None
+    else:
+        exited = (pids, exited_launches)
+    return exited, stale_live
 
 
 def _parse_pr_numbers(stdout):
@@ -366,21 +397,26 @@ def run(
         pr_baseline = None
         degraded = set()
         first_tick = True
+        ledger_observed = [False]
 
         while True:
-            live_lanes, ledger_readable, ledger_state = _derive_live_lanes(
+            live_lanes, ledger_readable = _derive_live_lanes(
                 repo_root, batch_id, env, degraded, ignore_launch_ids,
+                ledger_observed,
             )
 
             if first_tick and not ledger_readable:
-                if ledger_state == "interiorCorrupt" or ledger_state in ("ok", "tornTail"):
-                    return _refusal(REFUSAL_LEDGER_UNREADABLE, batch_id)
+                return _refusal(REFUSAL_LEDGER_UNREADABLE, batch_id)
             first_tick = False
 
-            terminal_launches, blocked_launches = _evaluate_lane_heartbeats(
-                repo_root, live_lanes, env, degraded,
+            terminal_launches, blocked_launches, stale_launches = (
+                _evaluate_lane_heartbeats(
+                    repo_root, live_lanes, env, degraded,
+                )
             )
-            exited = _evaluate_builder_exited(live_lanes, degraded)
+            exited, stale_live_launches = _evaluate_pid_signals(
+                live_lanes, stale_launches, degraded,
+            )
             exited_launches = exited[1] if exited is not None else []
 
             if terminal_launches:
@@ -393,6 +429,7 @@ def run(
                     terminal_launches,
                     blocked_launches,
                     exited_launches,
+                    stale_live_launches,
                 )
                 if also is not None:
                     payload["alsoObserved"] = also
@@ -410,6 +447,7 @@ def run(
                     terminal_launches,
                     blocked_launches,
                     exited_launches,
+                    stale_live_launches,
                 )
                 if also is not None:
                     payload["alsoObserved"] = also
@@ -428,6 +466,7 @@ def run(
                     terminal_launches,
                     blocked_launches,
                     exited_launches,
+                    stale_live_launches,
                 )
                 if also is not None:
                     payload["alsoObserved"] = also
@@ -439,15 +478,44 @@ def run(
                 repo_root, deadline, monotonic, gh_run, pr_baseline, degraded,
             )
             if pr_change is not None:
-                return _event_result(
+                payload = dict(pr_change)
+                also = _build_also_observed(
                     EVENT_PR_SET_CHANGED,
-                    batch_id,
-                    degraded,
-                    **pr_change,
+                    terminal_launches,
+                    blocked_launches,
+                    exited_launches,
+                    stale_live_launches,
+                )
+                if also is not None:
+                    payload["alsoObserved"] = also
+                return _event_result(
+                    EVENT_PR_SET_CHANGED, batch_id, degraded, **payload,
+                )
+
+            if stale_live_launches:
+                payload = {
+                    "launchId": stale_live_launches[0]["launchId"],
+                    "launches": stale_live_launches,
+                }
+                also = _build_also_observed(
+                    EVENT_LANE_STALE,
+                    terminal_launches,
+                    blocked_launches,
+                    exited_launches,
+                    stale_live_launches,
+                )
+                if also is not None:
+                    payload["alsoObserved"] = also
+                return _event_result(
+                    EVENT_LANE_STALE, batch_id, degraded, **payload,
                 )
 
             if monotonic() >= deadline:
-                if not ledger_readable:
+                _, deadline_readable = _derive_live_lanes(
+                    repo_root, batch_id, env, degraded, ignore_launch_ids,
+                    ledger_observed,
+                )
+                if not deadline_readable:
                     return _refusal(REFUSAL_LEDGER_UNREADABLE, batch_id)
                 return _event_result(EVENT_TIMER, batch_id, degraded)
 

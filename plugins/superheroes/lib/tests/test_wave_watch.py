@@ -149,6 +149,30 @@ def _setup_live_lane(repo, tmp_path, monkeypatch, launch_id="lane-a", batch_id="
     return store_root
 
 
+def _setup_stale_lane(
+    repo, tmp_path, monkeypatch, launch_id="lane-a", batch_id="batch-982",
+    pid=None, stamp_state="working", stale_after_seconds=1, age_seconds=60,
+):
+    if pid is None:
+        pid = os.getpid()
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, batch_id, 1)
+    ll.append(repo, _reserved(launch_id, batch_id, ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started(launch_id, pid=pid))
+    hb.stamp(
+        repo,
+        state=stamp_state,
+        phase="watch",
+        launch_id=launch_id,
+        stale_after_seconds=stale_after_seconds,
+        now=time.time() - age_seconds,
+    )
+    hb_result = hb.read_heartbeat(repo, launch_id)
+    assert hb_result["class"] == "stale"
+    return store_root
+
+
 # --- refusals R1–R5 -----------------------------------------------------------
 
 
@@ -412,11 +436,18 @@ def test_ledger_unreadable_refuses_at_timer_when_still_unreadable(tmp_path, monk
     ll.declare_batch(repo, "batch-982", 1)
     ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
     ll.append(repo, _started("lane-a", pid=os.getpid()))
-    ledger_file = ll.ledger_path(repo)["path"]
-    with open(ledger_file, "ab") as fh:
-        fh.write(b"not-valid-json\n")
-    assert ll.read(repo)["state"] == "interiorCorrupt"
+    assert ll.read(repo)["state"] == "ok"
+    real_read = ll.read
+    calls = [0]
     clock = [0.0]
+
+    def flaky_read(repo_root, env=None):
+        calls[0] += 1
+        if calls[0] >= 3:
+            return {"state": "unreadable", "records": []}
+        return real_read(repo_root, env=env)
+
+    monkeypatch.setattr(ww.ll, "read", flaky_read)
 
     def mono():
         return clock[0]
@@ -430,6 +461,7 @@ def test_ledger_unreadable_refuses_at_timer_when_still_unreadable(tmp_path, monk
     )
     assert result["ok"] is False
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert clock[0] >= 2.0
 
 
 def test_ledger_transient_unreadable_then_readable_emits_timer_degraded(
@@ -446,7 +478,7 @@ def test_ledger_transient_unreadable_then_readable_emits_timer_degraded(
 
     def flaky_read(repo_root, env=None):
         calls[0] += 1
-        if calls[0] == 1:
+        if calls[0] == 2:
             return {"state": "unreadable", "records": []}
         return real_read(repo_root, env=env)
 
@@ -457,6 +489,316 @@ def test_ledger_transient_unreadable_then_readable_emits_timer_degraded(
     assert result["ok"] is True
     assert result["event"] == "timer"
     assert ww.DEGRADATION_LEDGER_UNREADABLE in result["degraded"]
+
+
+def test_first_interval_unreadable_refuses_immediately(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    clock = [0.0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def unreadable_read(repo_root, env=None):
+        return {"state": "unreadable", "records": []}
+
+    monkeypatch.setattr(ww.ll, "read", unreadable_read)
+    result = ww.run(
+        repo, "batch-982", max_seconds=2400, interval_seconds=60,
+        monotonic=mono, sleep=fake_sleep, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    assert clock[0] < 1.0
+
+
+def test_fold_failure_refuses_on_first_interval(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, {"not": "a-valid-record"})
+    assert ll.read(repo)["state"] == "ok"
+    real_fold = ll.fold
+
+    def bad_fold(records):
+        return {"ok": False, "reason": "fold-not-an-object", "launches": {},
+                "batchDeclarations": {}}
+
+    monkeypatch.setattr(ww.ll, "fold", bad_fold)
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+    monkeypatch.setattr(ww.ll, "fold", real_fold)
+
+
+def test_unrecognized_ledger_state_refuses_on_first_interval(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+
+    def bogus_read(repo_root, env=None):
+        return {"state": "future-state", "records": []}
+
+    monkeypatch.setattr(ww.ll, "read", bogus_read)
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+
+
+def test_missing_ledger_never_observed_emits_timer(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is True
+    assert result["event"] == "timer"
+    assert "reason" not in result
+
+
+def test_observed_then_missing_refuses_at_deadline(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-a", pid=os.getpid()))
+    assert ll.read(repo)["state"] == "ok"
+    real_read = ll.read
+    calls = [0]
+    clock = [0.0]
+
+    def flaky_read(repo_root, env=None):
+        calls[0] += 1
+        if calls[0] >= 2:
+            return {"state": "missing", "records": []}
+        return real_read(repo_root, env=env)
+
+    monkeypatch.setattr(ww.ll, "read", flaky_read)
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+
+
+def test_deadline_blind_on_final_read_refuses_not_timer(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    assert ll.read(repo)["state"] == "ok"
+    real_read = ll.read
+    read_calls = [0]
+    clock = [0.0]
+
+    def flaky_read(repo_root, env=None):
+        read_calls[0] += 1
+        if read_calls[0] >= 2:
+            return {"state": "unreadable", "records": []}
+        return real_read(repo_root, env=env)
+
+    monkeypatch.setattr(ww.ll, "read", flaky_read)
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_advance(argv, **kwargs):
+        clock[0] = 3.0
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_advance,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
+
+
+# --- lane-stale (INV-2) -------------------------------------------------------
+
+
+def test_lane_stale_working_state_with_live_pid(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stale_lane(repo, tmp_path, monkeypatch, stamp_state="working")
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["ok"] is True
+    assert result["event"] == "lane-stale"
+    assert result["launchId"] == "lane-a"
+    assert result["launches"][0]["launchId"] == "lane-a"
+    assert result["launches"][0]["state"] == "working"
+    assert result["launches"][0]["ageSeconds"] is not None
+    assert result["launches"][0]["staleAfterSeconds"] == 1
+
+
+def test_lane_stale_awaiting_dispatch_state_with_live_pid(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stale_lane(repo, tmp_path, monkeypatch, stamp_state="awaiting-dispatch")
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "lane-stale"
+    assert result["launches"][0]["state"] == "awaiting-dispatch"
+
+
+def test_stale_heartbeat_pid_uncertain_no_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stale_lane(repo, tmp_path, monkeypatch)
+
+    def raiser(pid, sig):
+        raise OSError("probe failed")
+
+    monkeypatch.setattr(ww.os, "kill", raiser)
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert result["event"] != "lane-stale"
+    assert ww.DEGRADATION_PID_PROBE_UNCERTAIN in result["degraded"]
+
+
+def test_stale_heartbeat_dead_pid_emits_builder_exited_not_lane_stale(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    dead_pid = 999999999
+    _setup_stale_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "builder-exited"
+    assert result["event"] != "lane-stale"
+    assert result["pids"] == [dead_pid]
+
+
+def test_stale_heartbeat_never_started_no_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id="lane-a",
+        stale_after_seconds=1,
+        now=time.time() - 60,
+    )
+    assert hb.read_heartbeat(repo, "lane-a")["class"] == "stale"
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert result["event"] != "lane-stale"
+
+
+def test_stale_heartbeat_invalid_pid_no_lane_stale():
+    live_lanes = {
+        "lane-a": {"started": True, "pid": 0, "batchId": "batch-982"},
+    }
+    stale_launches = [{
+        "launchId": "lane-a",
+        "state": "working",
+        "ageSeconds": 60.0,
+        "staleAfterSeconds": 1,
+    }]
+    degraded = set()
+    exited, stale_live = ww._evaluate_pid_signals(
+        live_lanes, stale_launches, degraded,
+    )
+    assert exited is None
+    assert stale_live == []
+
+
+def test_blocked_and_stale_emits_lane_blocked_not_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stale_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "lane-blocked"
+    assert result["event"] != "lane-stale"
+
+
+def test_ignore_launch_suppresses_stale_lane(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_stale_lane(repo, tmp_path, monkeypatch)
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60,
+        ignore_launch_ids=("lane-a",), gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert result["event"] != "lane-stale"
+
+
+def test_precedence_pr_set_changed_beats_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(
+        repo, tmp_path, monkeypatch, pid=os.getpid(), stamp_state="working",
+    )
+    pr_sets = [{1}, {1, 2}]
+    idx = [0]
+
+    def gh_run_seq(argv, **kwargs):
+        stdout = json.dumps([{"number": n} for n in sorted(pr_sets[idx[0]])])
+        idx[0] += 1
+        return subprocess.CompletedProcess(argv, 0, stdout=stdout, stderr="")
+
+    def sleep_fn(duration):
+        hb.stamp(
+            repo,
+            state="working",
+            phase="watch",
+            launch_id="lane-a",
+            stale_after_seconds=1,
+            now=time.time() - 60,
+        )
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=5, interval_seconds=1,
+        gh_run=gh_run_seq, sleep=sleep_fn,
+    )
+    assert result["event"] == "pr-set-changed"
+    assert result["event"] != "lane-stale"
+    assert result["alsoObserved"] == {"stale": ["lane-a"]}
+
+
+def test_precedence_builder_exited_beats_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    dead_pid = 888888888
+    _setup_stale_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "builder-exited"
+    assert result["event"] != "lane-stale"
+
+
+def test_stale_token_pin_in_sweep_classes():
+    assert ww.HB_CLASS_STALE in hb.SWEEP_CLASSES
 
 
 def test_pid_probe_uncertain_emits_timer_not_builder_exited(tmp_path, monkeypatch):
