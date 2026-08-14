@@ -22,18 +22,6 @@ VALIDATED_CONTRACT_ATTR = "cli_contract_validated"
 ACTION_ONLY_CONTRACTS = frozenset({"boolean-flag"})
 
 
-def _contract_type(contract: str, converter):
-    """Attach contract metadata to an argparse type callable."""
-
-    def wrapper(value):
-        return converter(value)
-
-    wrapper.__cli_contract__ = contract
-    wrapper.__name__ = getattr(converter, "__name__", contract)
-    wrapper.__qualname__ = getattr(converter, "__qualname__", contract)
-    return wrapper
-
-
 def _format_valid(values: tuple[str, ...]) -> str:
     return ", ".join(values)
 

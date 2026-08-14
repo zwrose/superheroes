@@ -217,7 +217,10 @@ never drop a finding or a lens.
 > **`--schema-path` pre-spawn validation (#687).** Before spawn, the runner performs a **structural
 > spot-check** on the schema file: it refuses a schema that **positively forbids or displaces** a
 > top-level `findings` key (`detail` is one of `schema-missing`, `schema-unreadable`, or
-> `schema-not-findings-shaped`) with `attempts: 0` and no engine spawned. A bare `{"type": "object"}`
+> `schema-not-findings-shaped`) with `attempts: 0` and no engine spawned. Refusals also carry
+> `canonicalSchemaPath` pointing at the shipped strict-mode schema
+> (`lib/schemas/review-findings.schema.json`; resolved by
+> `review_findings_schema.review_findings_schema_path()`). A bare `{"type": "object"}`
 > is accepted (it constrains nothing). This is not full JSON Schema validation — it does not require
 > every valid schema to declare `findings`. Previously `--schema-path` **forced** a shape the grader
 > then rejected.

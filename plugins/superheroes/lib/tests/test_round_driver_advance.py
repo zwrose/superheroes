@@ -1694,7 +1694,7 @@ def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adap
     pend = RD.cmd_next(d)
     hand = RD.cmd_submit(d, pend["phase"], pend["attempt"], pend["expectedStateHash"],
                          {"dispositions": [
-                             {"id": RD._judgment_finding_id(state["_judgmentFindings"][0]),
+                             {"id": RD._location_id(state["_judgmentFindings"][0]),
                               "disposition": "fix-as-suggested"},
                          ]})
     assert hand["ok"] is True, hand
