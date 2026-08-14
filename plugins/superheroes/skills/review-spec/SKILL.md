@@ -1,6 +1,6 @@
 ---
 name: review-spec
-description: Use to review the-architect's `spec` definition-doc (the plain-language requirements / the *what* for a work-item) before the owner gives final approval. Red-teams and revises the spec in place; it never records `passed` (the owner is the spec's gate authority in Discovery) — improves the doc and reports a readiness verdict.
+description: Use to review the-architect's `spec` definition-doc (the plain-language requirements / the *what* for a work-item) before the owner gives final approval. Red-teams and revises the spec in place; it never records `passed` (the owner is the spec's gate authority in Discovery) — improves the doc and reports a readiness verdict. Not for reviewing a plan or tasks doc.
 user-invocable: true
 ---
 

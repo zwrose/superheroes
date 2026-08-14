@@ -601,7 +601,7 @@ in-turn poll, never a final message.
 independent when its members have no result dependency, no shared writable worktree, and no shared
 output path; §6's independent work orders, a review panel's dimensions, a round's verifier clusters,
 and a round's audit targets are all such batches. Give every member its **own** `--run-dir`, **launch
-each one with a short positive slice** — on **`dispatch-review`**, a zero slice opens a run without starting an attempt, so opening every run-dir at zero launches nothing; on **`dispatch-write`**, a zero slice is not a safe pre-open — `--max-wait` **also** bounds git preflight (`preflight_timeout`, floored at **1 s**), so it can return terminal **`git-preflight-timeout`** with nothing opened, and a continuation **cannot** recover an unlaunched run — then **re-invoke the originating verb on every non-terminal run in
+each one with a short positive slice** — on **`dispatch-review`**, a zero slice opens a run without starting an attempt, so opening every run-dir at zero launches nothing; on **`dispatch-write`**, a zero slice is not a safe pre-open — it risks the same terminal **`git-preflight-timeout`** described above — then **re-invoke the originating verb on every non-terminal run in
 rotation** until each returns terminal, folding each result as it lands. **The concurrency comes from
 the engines working while you poll the others**, never from issuing the calls together in one message:
 measured on one host, run-action calls serialize and a launch call blocks for its whole slice, so a
@@ -642,7 +642,6 @@ time**, before you invoke a long dispatch.
 
 A **skill-owned dispatch keeps its own structural-timeout contract** (e.g. `review-code`'s loop bounds
 each engine dispatch itself and forbids a per-dispatch watchdog) — don't override it with this rule.
-The **timeout** contract stays the skill's; the **channel** duty attaches to what the builder itself launches.
 
 ## 8. Verify — re-run every receipt yourself
 

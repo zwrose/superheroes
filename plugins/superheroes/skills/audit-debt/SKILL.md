@@ -369,7 +369,7 @@ Render `$SESSION_DIR/report.md`: a markdown report grouped by category (Architec
 - **Minor / Nit:** these carry no POV; include them by default.
 
 **Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to the resolved decisions store (`$DECISIONS`), per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
-- **Keep each tier in its own issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
+- **Do not mix tiers within a single issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
 
 Present the proposed issue set in chat (title + tier + the findings each issue covers).
 

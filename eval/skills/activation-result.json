@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-07-21",
+  "recordedAt": "2026-08-14",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -464,6 +464,195 @@
       "activated": false
     },
     {
+      "skill": "superheroes/checkpoint",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "run checkpoint before I compact this showrunner session",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "prepare this charter session for context compaction",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "prepare this charter session for context compaction",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "prepare this charter session for context compaction",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "emit a ready-to-paste compact line before my context fills up",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "emit a ready-to-paste compact line before my context fills up",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "emit a ready-to-paste compact line before my context fills up",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "I need to compact soon \u2014 update the resume point and give me /compact text",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "I need to compact soon \u2014 update the resume point and give me /compact text",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "I need to compact soon \u2014 update the resume point and give me /compact text",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "set up superheroes in this project for the first time",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "review the code changes on this branch before merging",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "review the code changes on this branch before merging",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "review the code changes on this branch before merging",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/checkpoint",
+      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
       "skill": "superheroes/configure",
       "phrase": "set up superheroes in this project for the first time",
       "direction": "should_fire",
@@ -606,6 +795,132 @@
     {
       "skill": "superheroes/configure",
       "phrase": "turn the approved plan into bite-sized executable tasks",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run the guardian sweep to check repo health",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run the guardian sweep to check repo health",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run the guardian sweep to check repo health",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run /superheroes:guardian",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run /superheroes:guardian",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "run /superheroes:guardian",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "write a spec for a new feature from these requirements",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "write a spec for a new feature from these requirements",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/guardian",
+      "phrase": "write a spec for a new feature from these requirements",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
@@ -816,132 +1131,6 @@
     {
       "skill": "superheroes/review-init",
       "phrase": "review my code changes on this branch before merging",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec definition-doc before the owner gives final approval",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec definition-doc before the owner gives final approval",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec definition-doc before the owner gives final approval",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "red-team the requirements spec and report a readiness verdict",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "red-team the requirements spec and report a readiness verdict",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "red-team the requirements spec and report a readiness verdict",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the plan document before it advances to tasks",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the plan document before it advances to tasks",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the plan document before it advances to tasks",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the tasks doc before the build runs",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the tasks doc before the build runs",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/review-spec",
-      "phrase": "review the tasks doc before the build runs",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
@@ -1661,316 +1850,127 @@
       "activated": false
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run the guardian sweep to check repo health",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run the guardian sweep to check repo health",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run the guardian sweep to check repo health",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec definition-doc before the owner gives final approval",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "skill": "superheroes/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "skill": "superheroes/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "do a maintainability sweep of the whole repo and show me what drifted",
+      "skill": "superheroes/review-spec",
+      "phrase": "red-team the requirements spec and report a readiness verdict",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "skill": "superheroes/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "skill": "superheroes/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "skill": "superheroes/review-spec",
+      "phrase": "check the plain-language requirements doc and improve it before owner sign-off",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run /superheroes:guardian",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run /superheroes:guardian",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "run /superheroes:guardian",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the spec for EARS requirements quality and unhappy-path coverage",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "review my code changes before I merge this pull request",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "review my code changes before I merge this pull request",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "review my code changes before I merge this pull request",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the plan document before it advances to tasks",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "write a spec for a new feature from these requirements",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the tasks doc before the build runs",
       "direction": "should_not_fire",
       "run": 0,
       "activated": false
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "write a spec for a new feature from these requirements",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the tasks doc before the build runs",
       "direction": "should_not_fire",
       "run": 1,
       "activated": false
     },
     {
-      "skill": "superheroes/guardian",
-      "phrase": "write a spec for a new feature from these requirements",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "run checkpoint before I compact this showrunner session",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "run checkpoint before I compact this showrunner session",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "run checkpoint before I compact this showrunner session",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "freshen live state and give me the /compact command to paste",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "freshen live state and give me the /compact command to paste",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "freshen live state and give me the /compact command to paste",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "prepare this charter session for context compaction",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "prepare this charter session for context compaction",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "prepare this charter session for context compaction",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "emit a ready-to-paste compact line before my context fills up",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "emit a ready-to-paste compact line before my context fills up",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "emit a ready-to-paste compact line before my context fills up",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "I need to compact soon — update the resume point and give me /compact text",
-      "direction": "should_fire",
-      "run": 0,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "I need to compact soon — update the resume point and give me /compact text",
-      "direction": "should_fire",
-      "run": 1,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "I need to compact soon — update the resume point and give me /compact text",
-      "direction": "should_fire",
-      "run": 2,
-      "activated": true
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "set up superheroes in this project for the first time",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "set up superheroes in this project for the first time",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "set up superheroes in this project for the first time",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "review the code changes on this branch before merging",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "review the code changes on this branch before merging",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "review the code changes on this branch before merging",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "build this approved issue and take it to a ready PR",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "build this approved issue and take it to a ready PR",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "build this approved issue and take it to a ready PR",
-      "direction": "should_not_fire",
-      "run": 2,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "turn this fuzzy idea into an owner-approved spec",
-      "direction": "should_not_fire",
-      "run": 0,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "turn this fuzzy idea into an owner-approved spec",
-      "direction": "should_not_fire",
-      "run": 1,
-      "activated": false
-    },
-    {
-      "skill": "superheroes/checkpoint",
-      "phrase": "turn this fuzzy idea into an owner-approved spec",
+      "skill": "superheroes/review-spec",
+      "phrase": "review the tasks doc before the build runs",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false

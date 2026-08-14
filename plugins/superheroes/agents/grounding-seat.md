@@ -61,12 +61,13 @@ markers). Cite `file:line` (or the PR-body row) on every finding, and carry `con
 This brief is **formalized ahead of its live dispatch** — the seat is specified now, but
 it is not yet wired as a standalone dispatched agent:
 
-- The **live-dispatch consumer is #510** (panel composition v2), which owns the seat map
-  and decides what actually gets dispatched. The formal seat activates under #510.
-- **Interim mechanism:** until #510 wires it, the **review-code orchestrator performs
+- The **live-dispatch consumer is #609**, which stages the PR body as a seat-readable
+  input; the seat map that decides what actually gets dispatched shipped under #510
+  (panel composition v2).
+- **Interim mechanism:** until #609 wires it, the **review-code orchestrator performs
   this self-claims check inline** — the PR-body honesty check (review-code SKILL.md §4
   Compile step 8 / CONVENTIONS §10.7). So this brief's content is consumed **today** by
-  that interim orchestrator-inline check; the formal standalone seat activates under #510.
+  that interim orchestrator-inline check; the formal standalone seat activates under #609.
 
 This seat is **not** counted among the five default-crew dimensions and adds none — it is
 the narrow sixth seat recorded in the base rubric.

@@ -277,10 +277,7 @@ above).
      still fires on time.
      Each entry carries **what it is**, **your recommendation**, and **the proposing vet's ordinal
      stamped on it immutably**, and is **struck when the owner rules** — closing or declining an
-     item **removes it from the collector**; nothing re-numbers what remains. Appending stamps the
-     **proposing vet's ordinal** on it **immutably** — the current vet's in the normal case, the
-     earlier recorded one when the append was deferred — carrying an item forward **never
-     re-stamps** it. A
+     item **removes it from the collector**; nothing re-numbers what remains. A
      vet receipt states only **completed dispositions and live proposals — never the future tense**.
      **The collector is a fallback, not the path** — *"the next vet will pick it up"* is the failure
      this prevents, not a workflow it licenses — and an owner-absent append is the collector doing its

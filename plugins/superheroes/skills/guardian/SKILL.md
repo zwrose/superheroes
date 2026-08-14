@@ -102,7 +102,7 @@ write `ledger.md`**. The report shows **proposed** closures (the advisor commits
 the next step). If the ledger is unreadable, finalize marks closures **deferred** rather
 than implying none; the baseline still advances.
 
-**Refusal outcomes (surface honestly, retry deliberately):**
+**Refusal outcomes (surface honestly; follow each outcome's remedy):**
 
 - `invalid-dispositions` — a surfaced id is missing, duplicated, or a `validated` entry lacks required fields. Fix the dispositions and re-run finalize with the same bundle.
 - `raced` — a concurrent sweep advanced the snapshot since collect. Re-run from step 1; the prior baseline stays intact.
@@ -127,7 +127,7 @@ surrounding prose, which the never-clobber re-splice preserves byte-for-byte.
 
 If `commit-ledger` is skipped or fails, closures simply defer to the next consult — the records keep their prior state and the next sweep re-proposes the same closure, so **no closure or owner content is lost**. One benign caveat: because `finalize` already appended this sweep's `vitals.jsonl` line, a skipped commit can leave the vitals trend one entry ahead of the ledger's sweep roster until the next successful commit — a fail-closed parity drift (the benching floor simply counts one fewer sweep), not data loss.
 
-**Refusal outcomes (surface honestly, retry deliberately):**
+**Refusal outcomes (surface honestly; follow each outcome's remedy):**
 
 - `invalid-dispositions` — same shape as finalize; fix the dispositions and re-run.
 - `stale-bundle` — a newer sweep advanced `latest.json` since this bundle; re-run from step 1 or use a fresh bundle from the current sweep.

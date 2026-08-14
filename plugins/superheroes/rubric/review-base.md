@@ -166,8 +166,8 @@ tier and **never** `mechanical` — a false "the claims check out" is a silence 
 downstream re-checks, so it must not go to the tier whose failure mode is confident wrong
 fills. On the **spec leg** this seat is already live — it is the `Grounding` label in the
 Dimensions enumeration line above, dispatched by `/superheroes:review-spec` (as of
-#515/#517). Its **code-leg (review-code) live dispatch is owned by #510** (panel
-composition v2); until then the review-code orchestrator performs the same self-claims /
+#515/#517). Its **code-leg (review-code) live dispatch is owned by #609** (the seat map
+itself shipped under #510); until then the review-code orchestrator performs the same self-claims /
 PR-body-honesty check inline (the interim mechanism). As a code-leg lens it is not yet
 part of review-code's dispatched dimensions, and no code-leg drift test should read it as
 one.
