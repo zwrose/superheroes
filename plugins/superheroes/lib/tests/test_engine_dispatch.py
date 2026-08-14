@@ -866,8 +866,29 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     )
     assert res["ok"] is False
     assert res["reason"] == "vacuous"
+    assert res["terminal"] is True
     assert res["attempts"] == 2
     assert res["investigatedRejected"] == ["absolute", "missing"]
+    assert len(res["investigatedRejectedRecords"]) == 2
+    assert any(r["reason"] == "absolute" for r in res["investigatedRejectedRecords"])
+    assert any(r["reason"] == "missing" for r in res["investigatedRejectedRecords"])
+
+
+def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["id"] == "f1"
+    assert res["findingsRejected"] == ["not-a-dict"]
+    assert len(res["findingsRejectedRecords"]) == 1
+    assert res["findingsRejectedRecords"][0]["reason"] == "not-a-dict"
 
 
 def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_path):
@@ -952,6 +973,88 @@ def test_dispatch_nonempty_findings_without_investigated_bypasses_floor(tmp_path
     assert res["attempts"] == 1
     assert len(res["findings"]) == 1
     assert "investigated" not in res
+
+
+def test_dispatch_findings_with_investigated_survives_transport(tmp_path):
+    """#949 scope-4: finding-bearing seats must carry investigated to the dispatch result."""
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "checked.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# checked\n")
+    rel = "src/checked.py"
+    stdout = json.dumps({
+        "findings": [{"id": "f1", "message": "issue", "file": rel, "line": 1}],
+        "investigated": [rel, "missing.py"],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["investigated"] == [rel]
+    assert "missing" in res["investigatedRejected"]
+    assert any(r["reason"] == "missing" for r in res["investigatedRejectedRecords"])
+
+
+def test_dispatch_findings_with_empty_investigated_still_succeeds(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({
+        "findings": [{"id": "f1", "message": "issue"}],
+        "investigated": [],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert "investigated" not in res
+
+
+def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({
+        "findings": [{"id": "f1", "message": "issue"}],
+        "investigated": ["/abs/path", 42],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert "investigated" not in res
+    assert "absolute" in res["investigatedRejected"]
+    assert "not-a-string" in res["investigatedRejected"]
+
+
+def test_dispatch_clean_success_surfaces_mixed_investigated_rejections(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "good.py")
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    stdout = json.dumps({
+        "findings": [],
+        "investigated": ["good.py", "/abs/path", ""],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["investigated"] == ["good.py"]
+    assert res["investigatedRejected"] == ["empty-path", "absolute"]
+    assert len(res["investigatedRejectedRecords"]) == 2
 
 
 def test_dispatch_double_timeout_stays_forfeited_not_vacuous(tmp_path):
@@ -3819,3 +3922,248 @@ def test_run_child_runs_the_attempt_recorded_for_it(tmp_path, monkeypatch):
     kinds = [r.get("kind") for r in ED._journal_read(run_dir)[0]]
     assert "engine-launching" in kinds
     assert "child-stood-down" not in kinds
+
+
+# --- WO-4 #754: sibling worktree delta observation --------------------------------
+
+
+def _open_write_run_manual(tmp_path, wt, *, run_dir=None, sibling_baseline=None):
+    run_dir = run_dir or str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    baseline = ED._worktree_baseline(os.path.realpath(wt))
+    repo_root = ED._repository_root_from_git_cwd(wt)
+    _EA = importlib.util.spec_from_file_location(
+        "engine_adapter", os.path.join(_HERE, "..", "engine_adapter.py"))
+    EA_mod = importlib.util.module_from_spec(_EA)
+    _EA.loader.exec_module(EA_mod)
+    built = EA_mod.build_argv_result(
+        "codex", "build", "high", {"model": "sonnet", "cwd": os.path.realpath(wt)},
+    )
+    ED._acquire_worktree_lease(os.path.realpath(wt), run_dir)
+    if sibling_baseline is None:
+        sibling_baseline = ED._capture_sibling_baseline(
+            repo_root, os.path.realpath(wt), preflight_timeout=None,
+        )
+    ED._open_write_run(
+        run_dir, engine="codex", argv=built["argv"], cwd=os.path.realpath(wt),
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=_valid_prompt(tmp_path), order_id="order-sibling",
+        base_sha="abc", worktree_baseline=baseline,
+        progress_path=os.path.join(run_dir, "progress.jsonl"),
+        repo_root=repo_root,
+        sibling_baseline=sibling_baseline,
+    )
+    return run_dir, repo_root
+
+
+def test_write_fold_carries_observed_sibling_worktrees(tmp_path):
+    main = str(tmp_path / "main")
+    os.makedirs(main, exist_ok=True)
+    subprocess.run(["git", "-C", main, "init", "-q"], check=True)
+    with open(os.path.join(main, "README.md"), "w", encoding="utf-8") as fh:
+        fh.write("hello\n")
+    subprocess.run(["git", "-C", main, "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", main, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        check=True,
+    )
+    wt0 = str(tmp_path / "wt0")
+    wt1 = str(tmp_path / "wt1")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt0], check=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt0,
+        run_dir=str(tmp_path / "run-observed"), order_id="sib-1", run_engine=fake,
+    )
+    assert res["ok"] is True
+    assert res["siblingWorktrees"]["status"] == "observed"
+    assert res["siblingWorktrees"]["deltas"] == []
+
+
+def test_write_forfeit_fold_carries_sibling_worktrees(tmp_path):
+    wt = _linked_worktree(tmp_path)
+
+    class DirtyTimeoutRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            with open(os.path.join(cwd, "dirty.txt"), "w", encoding="utf-8") as fh:
+                fh.write("x")
+            return "", True, 0, ""
+
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt,
+        run_dir=str(tmp_path / "run-forfeit-sib"), order_id="sib-2",
+        run_engine=DirtyTimeoutRunner(), max_wait=120,
+    )
+    assert res.get("forfeited") is True
+    assert res["siblingWorktrees"]["status"] == "observed"
+
+
+def test_write_terminal_refusal_fold_carries_sibling_worktrees(tmp_path):
+    wt = _linked_worktree(tmp_path)
+    fake = FakeRunner([(_honest_refusal_stdout(), False, 0, "")])
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt,
+        run_dir=str(tmp_path / "run-refusal-sib"), order_id="sib-3", run_engine=fake,
+    )
+    assert res["reason"] == "plan_wrong"
+    assert "siblingWorktrees" in res
+    assert res["siblingWorktrees"]["status"] == "observed"
+
+
+def test_write_preflight_terminal_omits_sibling_worktrees(tmp_path):
+    wt = _linked_worktree(tmp_path)
+    missing_prompt = str(tmp_path / "missing.txt")
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=missing_prompt, cwd=wt,
+        run_dir=str(tmp_path / "run-preflight-sib"), order_id="sib-4",
+        run_engine=_never_call,
+    )
+    assert res["terminal"] is True
+    assert "siblingWorktrees" not in res
+
+
+def test_review_fold_omits_sibling_worktrees(tmp_path):
+    run_dir = str(tmp_path / "run-review-sib")
+    _manual_open_review_run(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    result = ED._fold_run(run_dir, state, {"ok": True, "terminal": True, "attempts": 1})
+    assert "siblingWorktrees" not in result
+
+
+def test_write_fold_no_sibling_baseline_is_indeterminate(tmp_path):
+    run_dir, _repo = _open_write_run_manual(tmp_path, _linked_worktree(tmp_path))
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec.pop("siblingBaseline", None)
+    state = ED._journal_state(records)
+    result = ED._fold_run(run_dir, state, {"ok": True, "terminal": True, "attempts": 1})
+    assert result["siblingWorktrees"] == {
+        "status": "indeterminate", "reason": "no-baseline",
+    }
+
+
+def test_sibling_probe_failure_does_not_change_dispatch_outcome(tmp_path, monkeypatch):
+    wt = _linked_worktree(tmp_path)
+
+    def _core(res):
+        return {k: res.get(k) for k in ("ok", "terminal", "reason", "forfeited")}
+
+    fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res_observed = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt,
+        run_dir=str(tmp_path / "run-probe-ok"), order_id="sib-5", run_engine=fake_ok,
+    )
+    assert res_observed["siblingWorktrees"]["status"] == "observed"
+    indeterminate = {"status": "indeterminate", "reason": "probe-boom"}
+
+    def _snap_indeterminate(*a, **k):
+        return indeterminate
+
+    monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_indeterminate)
+    fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res_indeterminate = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt,
+        run_dir=str(tmp_path / "run-probe-boom"), order_id="sib-6", run_engine=fake_fail,
+    )
+    assert res_indeterminate["siblingWorktrees"]["status"] == "indeterminate"
+    assert _core(res_observed) == _core(res_indeterminate)
+
+
+def test_sibling_probe_timeout_does_not_change_dispatch_outcome(tmp_path, monkeypatch):
+    wt = _linked_worktree(tmp_path)
+
+    def _core(res):
+        return {k: res.get(k) for k in ("ok", "terminal", "reason", "forfeited")}
+
+    fake_ok = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res_observed = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt,
+        run_dir=str(tmp_path / "run-probe-timeout-ok"), order_id="sib-8", run_engine=fake_ok,
+    )
+    timeout_snap = {"status": "indeterminate", "reason": "deadline-exhausted"}
+
+    def _snap_timeout(*a, **k):
+        return timeout_snap
+
+    monkeypatch.setattr(ED.sibling_worktree_probe, "snapshot", _snap_timeout)
+    fake_fail = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res_indeterminate = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt,
+        run_dir=str(tmp_path / "run-probe-timeout"), order_id="sib-9", run_engine=fake_fail,
+    )
+    assert _core(res_observed) == _core(res_indeterminate)
+
+
+def test_write_fold_malformed_sibling_baseline_never_raises(tmp_path):
+    run_dir, _repo = _open_write_run_manual(tmp_path, _linked_worktree(tmp_path))
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["siblingBaseline"] = "not-a-dict"
+    state = ED._journal_state(records)
+    result = ED._fold_run(run_dir, state, {"ok": True, "terminal": True, "attempts": 1})
+    assert result["siblingWorktrees"] == {
+        "status": "indeterminate", "reason": "baseline-invalid",
+    }
+
+
+def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
+    main = str(tmp_path / "main")
+    os.makedirs(main, exist_ok=True)
+    subprocess.run(["git", "-C", main, "init", "-q"], check=True)
+    with open(os.path.join(main, "README.md"), "w", encoding="utf-8") as fh:
+        fh.write("hello\n")
+    subprocess.run(["git", "-C", main, "add", "README.md"], check=True)
+    subprocess.run(
+        ["git", "-C", main, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "init"],
+        check=True,
+    )
+    wt0 = str(tmp_path / "wt0")
+    wt1 = str(tmp_path / "wt1")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt0], check=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
+    sibling_real = os.path.realpath(wt1)
+
+    class SiblingMutator:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            path = os.path.join(sibling_real, "concurrent.txt")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("legitimate concurrent change\n")
+            subprocess.run(
+                ["git", "-C", sibling_real, "add", "concurrent.txt"], check=True,
+            )
+            subprocess.run(
+                ["git", "-C", sibling_real, "-c", "user.email=t@t.local",
+                 "-c", "user.name=t", "commit", "-qm", "concurrent"],
+                check=True,
+            )
+            return _build_ok_stdout(), False, 0, ""
+
+    res = ED.dispatch_write(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), cwd=wt0,
+        run_dir=str(tmp_path / "run-concurrent"), order_id="sib-7",
+        run_engine=SiblingMutator(),
+    )
+    assert res["ok"] is True
+    sw = res["siblingWorktrees"]
+    assert sw["status"] == "observed"
+    assert len(sw["deltas"]) >= 1
+    delta_paths = {d["path"] for d in sw["deltas"]}
+    assert sibling_real in delta_paths
+    for d in sw["deltas"]:
+        assert "accus" not in json.dumps(d).lower()
+

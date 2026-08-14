@@ -854,6 +854,13 @@ def _validate_boundary_block(block, slot, generation):
 
 
 def _validate_reserved_optional_fields(rec):
+    if "worktree" in rec:
+        worktree = rec["worktree"]
+        if not isinstance(worktree, str) or not worktree.strip():
+            return "fold-bad-field:reserved:worktree"
+        if not os.path.isabs(worktree):
+            return "fold-bad-field:reserved:worktree"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec

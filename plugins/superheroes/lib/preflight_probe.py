@@ -16,8 +16,10 @@ ok=False with a detail string, never an uncaught exception)."""
 import argparse
 import json
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -72,7 +74,7 @@ def cross_vendor_no_op_argv(engine):
     return (engine, "--version")
 
 
-def probe_command(tool, argv, run=None, *, stdin_text=None):
+def probe_command(tool, argv, run=None, *, stdin_text=None, cwd=None):
     """Run `argv` via `run` (default: `subprocess.run`, capturing stdout+stderr as text with a
     120s timeout) and return `{"tool", "ok", "exit", "detail"}`. `ok` is exactly (exit code ==
     0). ANY exception from `run` (OSError, TimeoutExpired, anything at all) is caught here —
@@ -80,8 +82,11 @@ def probe_command(tool, argv, run=None, *, stdin_text=None):
     if run is None:
         run = subprocess.run
     try:
-        proc = run(list(argv), capture_output=True, text=True, timeout=120,
-                   input=stdin_text or "")
+        run_kw = {"capture_output": True, "text": True, "timeout": 120,
+                  "input": stdin_text or ""}
+        if cwd is not None:
+            run_kw["cwd"] = cwd
+        proc = run(list(argv), **run_kw)
         exit_code = getattr(proc, "returncode", None)
         stdout = getattr(proc, "stdout", "") or ""
         stderr = getattr(proc, "stderr", "") or ""
@@ -89,6 +94,32 @@ def probe_command(tool, argv, run=None, *, stdin_text=None):
                 "detail": (stdout + stderr).strip()}
     except Exception as exc:
         return {"tool": tool, "ok": False, "exit": None, "detail": str(exc)}
+
+
+def _engine_probe_in_scratch_repo(tool, argv, run, stdin_text):
+    """Run an engine-CLI probe in a disposable scratch git repo. Never raises — setup failures
+    return ok=False with the reason in detail, never a silent fallback to the caller's cwd."""
+    try:
+        scratch = tempfile.mkdtemp(prefix="preflight-probe-scratch-")
+    except OSError as exc:
+        return {"tool": tool, "ok": False, "exit": None, "detail": str(exc)}
+    try:
+        try:
+            init_proc = subprocess.run(
+                ["git", "-C", scratch, "init", "--quiet", "--template="],
+                capture_output=True, text=True, timeout=30)
+            if init_proc.returncode != 0:
+                detail = (init_proc.stdout + init_proc.stderr).strip()
+                return {"tool": tool, "ok": False, "exit": None,
+                        "detail": detail or "git init failed"}
+        except Exception as exc:
+            return {"tool": tool, "ok": False, "exit": None, "detail": str(exc)}
+        return probe_command(tool, argv, run, stdin_text=stdin_text, cwd=scratch)
+    finally:
+        try:
+            shutil.rmtree(scratch)
+        except OSError:
+            pass
 
 
 def gh_auth_probe(run=None):
@@ -104,8 +135,10 @@ def cross_vendor_cli_probe(engine, run=None, argv=None):
     guarded `probe_command` — the fail-loud contract holds even for a malformed argument."""
     engine = str(engine)
     argv = list(argv or cross_vendor_no_op_argv(engine))
-    stdin_text = probe_prompt() if engine in ("codex", "cursor") else None
-    return probe_command("cross-vendor-cli:" + engine, argv, run, stdin_text=stdin_text)
+    tool = "cross-vendor-cli:" + engine
+    if engine in ("codex", "cursor"):
+        return _engine_probe_in_scratch_repo(tool, argv, run, probe_prompt())
+    return probe_command(tool, argv, run)
 
 
 def browser_probe_result(ok, detail=""):
@@ -341,8 +374,8 @@ def composition_liveness(needed_configs, run=None):
             if argv is None:
                 models[model] = {"ok": False, "detail": "unknown/unroutable model"}
             else:
-                r = probe_command("composition:%s:%s" % (vendor, model), argv, run,
-                                  stdin_text=probe_prompt())
+                r = _engine_probe_in_scratch_repo(
+                    "composition:%s:%s" % (vendor, model), argv, run, probe_prompt())
                 r_ok = r["ok"]
                 r_detail = r["detail"]
                 entry = {"ok": r_ok, "detail": r_detail}
