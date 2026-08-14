@@ -161,21 +161,19 @@ def _pid_dead_on_this_host(holder, zombie_is_dead=False):
     return bool(zombie_is_dead) and _pid_is_zombie(pid)
 
 
-def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
-    """Stale iff (bootId mismatch on this host) OR (expired by TTL AND pid
-    dead-on-this-host) OR (malformed holder past grace window).
+def stale_reason(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
+    """Return the staleness class when stale, else None.
 
-    With `reclaim_dead_holder=True` a pid dead-on-this-host is stale immediately, with
-    no TTL wait (#862) — same-host holders only. A LIVE holder on THIS host is never
-    stale under either setting; a live holder on a foreign hostname is protected by its
-    TTL, not by the pid probe, which cannot reach another machine's pid namespace."""
+    Classes: ``boot-id-mismatch``, ``expired-dead-holder``, ``malformed-holder``."""
     if not os.path.lexists(lock_path):
-        return False
+        return None
     status, holder = _read_holder_state(lock_path)
     if status == "read_error":
-        return False
+        return None
     if status == "unusable" or _holder_fields_unusable(holder):
-        return _malformed_past_grace(lock_path, now)
+        if _malformed_past_grace(lock_path, now):
+            return "malformed-holder"
+        return None
     h = holder
     # Two categories from here on (a malformed holder was settled above), and they are not
     # the same. SAME HOST: everything below is grounded —
@@ -186,13 +184,13 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     # so boot equality cannot license a pid probe. Reclaim there rests on TTL expiry alone.
     same_host = h.get("host") == socket.gethostname()
     if same_host and hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id()) is False:
-        return True   # this host rebooted: the recorded pid is from a dead boot
+        return "boot-id-mismatch"   # this host rebooted: the recorded pid is from a dead boot
     # Two legs stay SAME-HOST-ONLY, both because they read the local pid namespace as if it
     # were the holder's: the reboot check above, and the `reclaim_dead_holder` fast path below
     # — whose whole trade is swapping the TTL wait for CONFIRMED death, a confirmation no
     # foreign-host record can supply. A foreign holder therefore always waits out its TTL.
     if not (reclaim_dead_holder and same_host) and not _expired(h.get("acquiredAt"), ttl, now):
-        return False
+        return None
     # Same host: holder DEATH is what licenses reclaim, never TTL expiry alone, and a live
     # holder is never stale. Foreign host: `_pid_dead_on_this_host` cannot prove a remote
     # holder died — a pid absent here may be alive there — so it stands only as a brake that
@@ -201,7 +199,20 @@ def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     # foreign holder can lose an expired lock. Accepted and disclosed rather than hidden;
     # reachable only where a lock path is shared between machines or pid namespaces, which
     # neither caller's path is today (a local run dir; a lease under the local tempdir).
-    return _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder)
+    if _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder):
+        return "expired-dead-holder"
+    return None
+
+
+def is_stale(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
+    """Stale iff (bootId mismatch on this host) OR (expired by TTL AND pid
+    dead-on-this-host) OR (malformed holder past grace window).
+
+    With `reclaim_dead_holder=True` a pid dead-on-this-host is stale immediately, with
+    no TTL wait (#862) — same-host holders only. A LIVE holder on THIS host is never
+    stale under either setting; a live holder on a foreign hostname is protected by its
+    TTL, not by the pid probe, which cannot reach another machine's pid namespace."""
+    return stale_reason(lock_path, ttl, now, reclaim_dead_holder) is not None
 
 
 def _publish_lock(lock_path, holder_info):
@@ -235,34 +246,35 @@ def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False):
     try:
         fd = os.open(guard_path, os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
     except OSError:
-        return False
+        return False, None
     try:
         try:
             if not stat.S_ISREG(os.fstat(fd).st_mode):
-                return False
+                return False, None
             try:
                 os.fchmod(fd, 0o600)
             except OSError:
                 pass
         except OSError:
-            return False
+            return False, None
         try:
             fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError:
-            return False
-        if not is_stale(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder):
-            return False
+            return False, None
+        reason = stale_reason(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder)
+        if reason is None:
+            return False, None
         try:
             os.unlink(lock_path)
         except FileNotFoundError:
             pass
         except OSError:
-            return False
+            return False, None
         try:
             _publish_lock(lock_path, _holder_info())
         except OSError:
-            return False
-        return True
+            return False, None
+        return True, reason
     finally:
         os.close(fd)
 
@@ -270,8 +282,11 @@ def _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=False):
 ACQUIRE_RETRY_LIMIT = 3
 
 
-def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
-    """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
+def acquire_with_reason(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
+    """Acquire the lock. Returns (reclaimed, reason).
+
+    ``reclaimed`` is True when a stale lock was reclaimed, else False. ``reason`` is the
+    staleness class established by the guarded reclaim check, or None when not reclaimed.
 
     `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
     TTL (#862); a live holder on THIS host still raises LockHeld (a foreign-host holder is
@@ -286,21 +301,38 @@ def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
         try:
             try:
                 _publish_lock(lock_path, _holder_info())
-                return False
+                return False, None
             except OSError:
                 pass
             if not is_stale(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder):
                 if not os.path.lexists(lock_path):
                     continue
                 raise LockHeld(read_holder(lock_path)) from None
-            if _reclaim_stale_lock(lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder):
-                return True
+            reclaimed, reason = _reclaim_stale_lock(
+                lock_path, ttl, reclaim_dead_holder=reclaim_dead_holder,
+            )
+            if reclaimed:
+                return True, reason
             if not os.path.lexists(lock_path):
                 continue
             raise LockHeld(read_holder(lock_path)) from None
         except OSError:
             raise LockHeld(read_holder(lock_path)) from None
     raise LockHeld(read_holder(lock_path)) from None
+
+
+def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
+    """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
+
+    `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
+    TTL (#862); a live holder on THIS host still raises LockHeld (a foreign-host holder is
+    protected by its TTL instead — see the module docstring).
+
+    Raises only LockHeld — never propagates OSError from publish or directory setup."""
+    reclaimed, _reason = acquire_with_reason(
+        lock_path, ttl=ttl, reclaim_dead_holder=reclaim_dead_holder,
+    )
+    return reclaimed
 
 
 def release(lock_path):

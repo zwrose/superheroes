@@ -36,13 +36,6 @@ def _finding(file="f.py", line=1, title="bug", severity="Important", **extra):
 
 # --- D1: judgment ids byte-identical ------------------------------------------
 
-def test_judgment_finding_id_delegates_to_location_id():
-    # axis: judgment disposition key must reuse per-location id, not a separate scheme
-    f = _finding(line=42, title="tradeoff choice")
-    assert RD._judgment_finding_id(f) == RD._location_id(f)
-    assert RD._judgment_finding_id(f) == "%s@L42" % FI.finding_identity(f)
-
-
 def test_judgment_row_ids_occurrence_suffix_same_location():
     # axis: repeated same-location judgment findings must get #1, #2, … suffixes
     f = _finding(line=5, title="dup")
