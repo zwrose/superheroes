@@ -43,6 +43,7 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
+import review_findings_schema  # noqa: E402  canonical review-findings schema path (#949)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 
@@ -1957,6 +1958,30 @@ def _validate_review_schema_path(schema_path):
     return True, None
 
 
+def _merge_investigated_rejections(parse_res, spot_rejected):
+    """Combine parse-boundary and spot-check rejection diagnostics. Never raises."""
+    records = list(parse_res.get("investigatedRejectedRecords") or [])
+    reasons = list(parse_res.get("investigatedRejected") or [])
+    for item in spot_rejected or []:
+        records.append(item)
+        reasons.append(item["reason"])
+    return records, reasons
+
+
+def _attach_review_rejection_fields(result, rejected_records=(), rejected_reasons=(),
+                                    findings_rejected_records=(), findings_rejected_reasons=()):
+    """Attach parse-boundary rejection diagnostics when present. Never raises."""
+    if rejected_records:
+        result["investigatedRejectedRecords"] = rejected_records
+    if rejected_reasons:
+        result["investigatedRejected"] = rejected_reasons
+    if findings_rejected_records:
+        result["findingsRejectedRecords"] = findings_rejected_records
+    if findings_rejected_reasons:
+        result["findingsRejected"] = findings_rejected_reasons
+    return result
+
+
 def _grade_review_attempt(run_dir_real, state, attempt):
     """Grade a completed review attempt from durable stdout files."""
     opened = state["opened"]
@@ -2032,27 +2057,45 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         return result
 
     findings = res.get("findings") or []
-    if findings:
-        engagement = _engagement_with_read(engagement, findings=findings)
-        return {"ok": True, "findings": findings, "engagement": engagement}
-
     view_meta = opened.get("viewMeta")
     generated = ()
     if isinstance(view_meta, dict):
         diff_path = view_meta.get("diffPath")
         if isinstance(diff_path, str) and diff_path:
             generated = (diff_path,)
-    ok_inv, accepted, rejected = engine_adapter.spot_check_investigated(
+    _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
         res.get("investigated"), cwd, generated_artifacts=generated)
-    if ok_inv:
+    rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
+    findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
+    findings_rejected_reasons = list(res.get("findingsRejected") or [])
+    if findings:
+        engagement = _engagement_with_read(engagement, findings=findings)
+        result = {"ok": True, "findings": findings, "engagement": engagement}
+        if accepted:
+            result["investigated"] = accepted
+        return _attach_review_rejection_fields(
+            result,
+            rejected_records=rejected_records,
+            rejected_reasons=rejected_reasons,
+            findings_rejected_records=findings_rejected_records,
+            findings_rejected_reasons=findings_rejected_reasons,
+        )
+
+    if accepted:
         engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
-        return {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+        result = {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+        return _attach_review_rejection_fields(
+            result,
+            rejected_records=rejected_records,
+            rejected_reasons=rejected_reasons,
+        )
     engagement = _engagement_with_read(engagement, findings=[], investigated=None)
     return {
         "forfeit": True,
         "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
         "engagement": engagement,
-        "investigatedRejected": [r["reason"] for r in (rejected or [])],
+        "investigatedRejected": rejected_reasons,
+        "investigatedRejectedRecords": rejected_records,
     }
 
 
@@ -2125,9 +2168,10 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
 
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
-                            investigated_rejected=None, payload_shape=None):
+                            investigated_rejected=None, investigated_rejected_records=None,
+                            payload_shape=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
-        return {
+        terminal = {
             "ok": False,
             "terminal": True,
             "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -2142,6 +2186,9 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                 "degraded vendor mix" % engine
             ),
         }
+        if investigated_rejected_records:
+            terminal["investigatedRejectedRecords"] = investigated_rejected_records
+        return terminal
     result = {
         "ok": False,
         "terminal": True,
@@ -2352,6 +2399,13 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         )
                         if grade.get("investigated") is not None:
                             result["investigated"] = grade["investigated"]
+                        _attach_review_rejection_fields(
+                            result,
+                            rejected_records=grade.get("investigatedRejectedRecords") or [],
+                            rejected_reasons=grade.get("investigatedRejected") or [],
+                            findings_rejected_records=grade.get("findingsRejectedRecords") or [],
+                            findings_rejected_reasons=grade.get("findingsRejected") or [],
+                        )
                         view = opened.get("viewMeta")
                         if view:
                             result = _attach_sanitized_view(result, view)
@@ -2402,6 +2456,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         engine, reason, MAX_ATTEMPTS,
                         engagement=grade.get("engagement"),
                         investigated_rejected=grade.get("investigatedRejected"),
+                        investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
                     )
                     terminal = _maybe_upgrade_review_terminal_forfeit(
@@ -2696,6 +2751,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     return _finish_preflight_terminal(
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
+                         "canonicalSchemaPath": review_findings_schema.review_findings_schema_path(),
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real or "", engine=engine,
                     )

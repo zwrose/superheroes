@@ -866,8 +866,29 @@ def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     )
     assert res["ok"] is False
     assert res["reason"] == "vacuous"
+    assert res["terminal"] is True
     assert res["attempts"] == 2
     assert res["investigatedRejected"] == ["absolute", "missing"]
+    assert len(res["investigatedRejectedRecords"]) == 2
+    assert any(r["reason"] == "absolute" for r in res["investigatedRejectedRecords"])
+    assert any(r["reason"] == "missing" for r in res["investigatedRejectedRecords"])
+
+
+def test_dispatch_mixed_findings_propagates_rejected_records(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({"findings": [42, {"id": "f1", "message": "issue found"}]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["id"] == "f1"
+    assert res["findingsRejected"] == ["not-a-dict"]
+    assert len(res["findingsRejectedRecords"]) == 1
+    assert res["findingsRejectedRecords"][0]["reason"] == "not-a-dict"
 
 
 def test_dispatch_whitespace_padded_repo_root_accepts_honest_investigated(tmp_path):
@@ -952,6 +973,88 @@ def test_dispatch_nonempty_findings_without_investigated_bypasses_floor(tmp_path
     assert res["attempts"] == 1
     assert len(res["findings"]) == 1
     assert "investigated" not in res
+
+
+def test_dispatch_findings_with_investigated_survives_transport(tmp_path):
+    """#949 scope-4: finding-bearing seats must carry investigated to the dispatch result."""
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "checked.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# checked\n")
+    rel = "src/checked.py"
+    stdout = json.dumps({
+        "findings": [{"id": "f1", "message": "issue", "file": rel, "line": 1}],
+        "investigated": [rel, "missing.py"],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["investigated"] == [rel]
+    assert "missing" in res["investigatedRejected"]
+    assert any(r["reason"] == "missing" for r in res["investigatedRejectedRecords"])
+
+
+def test_dispatch_findings_with_empty_investigated_still_succeeds(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({
+        "findings": [{"id": "f1", "message": "issue"}],
+        "investigated": [],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert "investigated" not in res
+
+
+def test_dispatch_findings_with_wholly_rejected_investigated_still_succeeds(tmp_path):
+    repo_root = _repo(tmp_path)
+    stdout = json.dumps({
+        "findings": [{"id": "f1", "message": "issue"}],
+        "investigated": ["/abs/path", 42],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert "investigated" not in res
+    assert "absolute" in res["investigatedRejected"]
+    assert "not-a-string" in res["investigatedRejected"]
+
+
+def test_dispatch_clean_success_surfaces_mixed_investigated_rejections(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "good.py")
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("x")
+    stdout = json.dumps({
+        "findings": [],
+        "investigated": ["good.py", "/abs/path", ""],
+    })
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["investigated"] == ["good.py"]
+    assert res["investigatedRejected"] == ["empty-path", "absolute"]
+    assert len(res["investigatedRejectedRecords"]) == 2
 
 
 def test_dispatch_double_timeout_stays_forfeited_not_vacuous(tmp_path):
