@@ -575,4 +575,6 @@ def test_gated_strings_ruling_invariants_registered():
         "never embedded inline in Bash text",
         "a heredoc counts as Bash text",
         "written with a file-write tool",
+        "written or matched as data",
+        "to dodge the gate is forbidden",
     )

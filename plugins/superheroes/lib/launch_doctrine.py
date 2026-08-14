@@ -99,6 +99,8 @@ RULING_INVARIANTS = {
         "never embedded inline in Bash text",
         "a heredoc counts as Bash text",
         "written with a file-write tool",
+        "written or matched as data",
+        "to dodge the gate is forbidden",
     ),
 }
 LAUNCHER_OWNED_CHECKS = ("standing-rulings",)
