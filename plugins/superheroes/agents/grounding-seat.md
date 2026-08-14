@@ -54,7 +54,7 @@ Follow the **base rubric** for severity tiers, the findings JSON schema (you emi
 findings like the other seats — schema and delivery channel per the base rubric's "Findings output format" section),
 the verification rules, and the in-pass Chain-of-Verification. Do not restate them here.
 Ground the DoD/stub markers you check against **CONVENTIONS §10.7** (PR-body honesty
-markers). Cite `file:line` (or the PR-body row) on every finding, carry `confidence`.
+markers). Cite `file:line` (or the PR-body row) on every finding, and carry `confidence`.
 
 ## Activation status (formalized ahead of live dispatch)
 
