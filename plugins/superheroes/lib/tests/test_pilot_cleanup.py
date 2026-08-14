@@ -3352,10 +3352,19 @@ def test_run_bounded_kills_sigterm_ignoring_orphan_grandchild_when_leader_exits_
     elapsed = time.monotonic() - started
     assert result["timedOut"] is True
     assert elapsed < 5
-    with open(pid_file, encoding="utf-8") as handle:
-        pid = int(handle.read().strip())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    pid = _read_grandchild_pid(pid_file)
+    # Kill escalation and reaping are async under CPU load (first seen as a 4-of-6
+    # failure rate on xdist CI runners): poll like the sibling test above rather than
+    # asserting the instant state. The invariant is that the SIGTERM-ignoring
+    # grandchild dies, not that it is already gone the moment run_bounded returns.
+    if not _wait_for_process_gone(pid, timeout=10):
+        state = _observed_process_state(pid)
+        detail = f"observed state: {state}"
+        try:
+            detail += f"; pgid={os.getpgid(pid)}"
+        except (ProcessLookupError, PermissionError):
+            pass
+        pytest.fail(f"grandchild pid {pid} still present after 10s poll; {detail}")
 
 
 # --- WO8 FIX-1: partial plant failure ------------------------------------------
