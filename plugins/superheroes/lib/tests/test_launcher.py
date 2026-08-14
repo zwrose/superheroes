@@ -506,6 +506,20 @@ def test_compose_git_identity_ruling_in_prompt(tmp_path):
     assert identity_line in result["prompt"]
 
 
+def test_compose_gated_strings_ruling_in_prompt(tmp_path):
+  # axis: gated-strings ruling text reaches the composed builder prompt
+  # compose_launch verifies only ruling zero is present, so nothing else asserts that this
+  # ruling survives composition into the payload a launched builder actually receives.
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 889, premise)
+    assert result["ok"] is True
+    doctrine = LD.load()
+    gated_line = LD.ruling_line(doctrine, "gated-strings")
+    assert gated_line
+    assert gated_line in result["prompt"]
+
+
 def test_compose_ruling_zero_absent(tmp_path):
   # axis: refusal to compose a launch whose ruling 0 it could not verify
     repo = _init_repo(tmp_path / "repo")

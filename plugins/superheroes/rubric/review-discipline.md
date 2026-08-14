@@ -124,7 +124,9 @@ The advisor must say what could go wrong before the owner decides.
 
 **Re-review to convergence.** After the advisor resolves reviewer findings, the
 **non-Anthropic reviewer re-reviews the final head**, carrying the mandatory control probe
-on each re-review, until no blocking findings remain — or the change **parks**.
+on each re-review, until no blocking findings remain — or the change **parks**. When the
+contract under review is **prose**, the bounded acceptance bar in
+`### Bounded acceptance — prose-contract DoDs` below is the scoped exception to this paragraph.
 
 ## The rule — no unreviewed PRs
 
@@ -192,6 +194,31 @@ The cost of skipping this is measured, not theoretical: one change's four review
 roughly **47 Critical findings**, a majority of them restatements of a single already-ratified
 residual. That is not a review finding defects — it is a **bar mis-set**, and it burns the rounds the
 real findings need.
+
+### Bounded acceptance — prose-contract DoDs
+
+When the contract under review is **prose** — a definition-of-done written as *"no new uncovered
+state"* — the general re-review bar in `**Re-review to convergence.**` above is unterminating,
+and this section is the **scoped exception** to that paragraph. Five review rounds on one PR
+produced different, narrower findings every round and never zero — the bar kept moving because
+the contract had no fixed stopping point. The ratified bounded form is: no new Critical or Important finding in a review round on the final head, after a stated number of rounds, with Minor residuals disclosed. The **advisor at vet** (or the **owner**, when they set the bound before review
+begins) states that number of rounds, and it is recorded in the **PR body** or the **vet receipt**.
+That is the written rule rather than a per-build improvisation; it is the bar already applied in
+practice; an unterminating bar can only be abandoned — which is what *accept the residual at merge*
+keeps meaning: you name what you are shipping with, not pretend the bar was met when it was not.
+
+### The third-rework tripwire
+
+After two reworks of the same surface in one build, **a third rework of the same surface is the tripwire**: that third rework is not dispatched, so the fourth patch on that surface never happens.
+What the tripwire demands is that the design signal is named, not that the build goes idle. On a
+lane the builder can affirmatively call converged, **stopping and handing the design signal up satisfies it** — refuse the fourth patch, name what the seam problem looks like in the handback, and
+ship the remaining minors as disclosed follow-ups; the handback must **state that the third-rework
+tripwire fired** and name the seam problem, so the advisor is grading a declared event rather than
+inferring it from provenance. Where the builder cannot say with confidence that the lane has
+converged, the park branch binds — the permissive branch is available only on a lane the builder can
+affirmatively call converged. Where the build cannot truthfully hand back, **a formal park binds when the lane has not converged** — stop with receipts; lifting the park is owner- or advisor-ruled
+rather than the builder's own call. Two field specimens deviated from the letter while honouring
+the substance, which is what prompted the ruling.
 
 ## Prose-driven review (`--post`, `--review-only`)
 
