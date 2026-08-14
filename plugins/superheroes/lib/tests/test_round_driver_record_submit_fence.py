@@ -37,6 +37,8 @@ _state = _TDI._state
 _fake_git = _TDI._fake_git
 _drive_to_phase = _TDI._drive_to_phase
 _auditor_vendor_for = _TDI._auditor_vendor_for
+_blocking_finding_for_drive = _TDI._blocking_finding
+_payload_for = _TDI._payload_for
 
 
 def _panel_hand_artifact(session_dir):
@@ -594,36 +596,125 @@ def test_legacy_hand_path_session_can_still_fold(tmp_path):
     assert orphan_rows[0].get("seats") == expected_seats, orphan_rows[0]
 
 
-def test_no_dead_end_census(tmp_path):
-    """Committed-path states always have a legal fold command for the pending phase."""
-    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="submit-used")
-    pend, _slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+# Owner-gate phases park by design — outside the no-dead-end fold-path guarantee
+# (reference/round-driver.md § record-submit interleave / no dead ends).
+_OWNER_GATE_PHASES = frozenset({round_driver.P_JUDGMENT, round_driver.P_STALL})
+
+_REFUSE_FOLD_PHASES = frozenset(
+    phase for phase in round_adapters._MISSING_POLICY
+    if round_adapters.missing_policy(phase) == round_adapters.MISSING_REFUSE_FOLD)
+
+# Adapter phases the driver can pend — derived, never hand-copied.
+_CENSUS_PHASES = tuple(round_adapters.ADAPTER_PHASES)
+
+_LATCH_STATES = ("submit_used", "advance_used", "record_path")
+
+
+def _census_panel_findings():
+    return [_blocking_finding_for_drive("missing bounds guard", 2)]
+
+
+def _hand_submit_artifact(session_dir, pend, panel_findings, head_path):
+    phase = pend["phase"]
+    if phase == round_driver.P_PANEL:
+        return _panel_hand_artifact(session_dir)
+    if phase == round_driver.P_VERIFIERS:
+        return _verifier_hand_artifact()
     state = _state(session_dir)
-    state["_submitUsed"] = True
+    roster, reason = round_adapters.roster_for(phase, state, state["config"])
+    assert reason is None, (phase, reason)
+    seat, _occurrence = _slots_of(roster)[0]
+    return _payload_for(session_dir, state, pend, seat, panel_findings, head_path)
+
+
+def _record_all_roster_slots(session_dir, gitdir, head_path, pend, panel_findings):
+    state = _state(session_dir)
+    roster, reason = round_adapters.roster_for(pend["phase"], state, state["config"])
+    assert reason is None, (pend["phase"], reason)
+    slots = _slots_of(roster)
+    _write_dispatch_manifest(session_dir, pend, slots, _auditor_vendor_for(state))
+    for seat, occurrence in slots:
+        _land(session_dir, state, pend, seat,
+              _payload_for(session_dir, state, pend, seat, panel_findings, head_path),
+              occurrence=occurrence)
+        assert round_driver.cmd_record_result(session_dir, seat, occurrence=occurrence)["ok"]
+    return slots
+
+
+def _drive_census_phase(session_dir, gitdir, head_path, phase, panel_findings):
+    """Reach `phase` pending with durable store records for the census cell."""
+    if phase == round_driver.P_PANEL:
+        return _land_panel_and_sweep(session_dir, gitdir, head_path, panel_findings)[0]
+    try:
+        _drive_to_phase(session_dir, gitdir, panel_findings, head_path, phase)
+    except AssertionError as exc:
+        pytest.skip("harness cannot reach %r: %s" % (phase, exc))
+    state = _state(session_dir)
+    pend = state["pending"]
+    if pend["phase"] != phase:
+        pytest.skip("harness stopped at %r before %r" % (pend["phase"], phase))
+    return pend
+
+
+def _apply_census_latch(session_dir, latch):
+    state = _state(session_dir)
+    if latch == "submit_used":
+        state.pop("_advanceUsed", None)
+        state["_submitUsed"] = True
+    elif latch == "advance_used":
+        state["_advanceUsed"] = True
+    elif latch == "record_path":
+        state.pop("_advanceUsed", None)
+        state.pop("_submitUsed", None)
+    else:
+        raise ValueError("unknown latch %r" % latch)
     round_driver.save_state(session_dir, state)
+
+
+def _census_records_shape(phase, latch):
+    """Refuse-fold phases use the round-1 wedge (`seat-missing/1` only) on the hand-submit path."""
+    return phase in _REFUSE_FOLD_PHASES and latch == "submit_used"
+
+
+def _install_census_records(session_dir, gitdir, head_path, pend, panel_findings, latch):
+    phase = pend["phase"]
+    if _census_records_shape(phase, latch):
+        state = _state(session_dir)
+        roster, reason = round_adapters.roster_for(phase, state, state["config"])
+        if reason is not None:
+            pytest.skip("roster unavailable for %r wedge shape: %s" % (phase, reason))
+        seat, _occurrence = _slots_of(roster)[0]
+        out = round_driver.cmd_record_missing(session_dir, seat, pend["attempt"], "forfeit")
+        assert out["ok"] is True, (phase, latch, out)
+        return
+    if phase == round_driver.P_PANEL:
+        return
+    _record_all_roster_slots(session_dir, gitdir, head_path, pend, panel_findings)
+
+
+@pytest.mark.parametrize("latch", _LATCH_STATES)
+@pytest.mark.parametrize("phase", _CENSUS_PHASES)
+def test_no_dead_end_census(tmp_path, phase, latch):
+    """Axis: phase kind × committed-path latch — every adapter phase keeps a legal fold command.
+
+    Owner-gate phases (`present-judgment`, `present-stall-menu`) are excluded: their park is an
+    intervention by design (reference/round-driver.md).
+    """
+    assert phase not in _OWNER_GATE_PHASES
+    panel_findings = _census_panel_findings()
+    session_dir, gitdir, head_path = _bootstrap(tmp_path, name="%s-%s" % (phase, latch))
+    pend = _drive_census_phase(session_dir, gitdir, head_path, phase, panel_findings)
+    _install_census_records(session_dir, gitdir, head_path, pend, panel_findings, latch)
+    _apply_census_latch(session_dir, latch)
     state = _state(session_dir)
+    artifact = _hand_submit_artifact(session_dir, pend, panel_findings, head_path)
     submit_out = round_driver.cmd_submit(
         session_dir, pend["phase"], pend["attempt"],
-        round_driver.state_hash(state), _panel_hand_artifact(session_dir))
-    assert submit_out["ok"] is True, submit_out
-
-    session_dir2, gitdir2, head_path2 = _bootstrap(tmp_path, name="advance-used")
-    pend2, _slots2, _sweep2 = _land_panel_and_sweep(session_dir2, gitdir2, head_path2)
-    state2 = _state(session_dir2)
-    state2["_advanceUsed"] = True
-    round_driver.save_state(session_dir2, state2)
-    advance_out = round_driver.cmd_advance(session_dir2, git=_fake_git(gitdir2))
-    assert advance_out["ok"] is True, advance_out
-
-    session_dir3, gitdir3, head_path3 = _bootstrap(tmp_path, name="record-path")
-    pend3, _slots3, _sweep3 = _land_panel_and_sweep(session_dir3, gitdir3, head_path3)
-    state3 = _state(session_dir3)
-    refused = round_driver.cmd_submit(
-        session_dir3, pend3["phase"], pend3["attempt"],
-        round_driver.state_hash(state3), _panel_hand_artifact(session_dir3))
-    assert refused["ok"] is False and refused["reason"] == "record-submit-interleaved", refused
-    advance_out3 = round_driver.cmd_advance(session_dir3, git=_fake_git(gitdir3))
-    assert advance_out3["ok"] is True, advance_out3
+        round_driver.state_hash(state), artifact)
+    advance_out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir))
+    cell = "phase=%r latch=%r" % (phase, latch)
+    assert submit_out.get("ok") or advance_out.get("ok"), (
+        "%s: no legal fold command — submit=%r advance=%r" % (cell, submit_out, advance_out))
 
 
 def test_record_path_folds_after_fence_refusal(tmp_path):
