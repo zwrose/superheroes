@@ -3419,20 +3419,18 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
                                                       phase=phase, round=round_no, attempt=attempt)
             orphan_journal = None
-            rrec = (state.get("rounds") or {}).get(str(round_no))
-            if isinstance(rrec, dict):
-                orphan_seats = rrec.get("recordOrphansIgnored")
-                if isinstance(orphan_seats, list) and orphan_seats:
-                    orphan_journal = {
-                        "cmd": "submit",
-                        "outcome": "record-orphans-ignored",
-                        "session": _meta_session_id(session_dir),
-                        "fault": FAULT_CALLER,
-                        "phase": phase,
-                        "round": round_no,
-                        "attempt": attempt,
-                        "seats": orphan_seats,
-                    }
+            orphan_seats = prep.get("orphan_seats_found")
+            if isinstance(orphan_seats, list) and orphan_seats:
+                orphan_journal = {
+                    "cmd": "submit",
+                    "outcome": "record-orphans-ignored",
+                    "session": _meta_session_id(session_dir),
+                    "fault": FAULT_CALLER,
+                    "phase": phase,
+                    "round": round_no,
+                    "attempt": attempt,
+                    "seats": orphan_seats,
+                }
             try:
                 c = round_commit.begin(session_dir, "submit-accept")
                 c.add_replace_file(os.path.join(session_dir, STATE_FILE),
@@ -3579,6 +3577,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
     # HAND submit silently discards recorded seats and can certify an incomplete panel while
     # answering `ok`. Refuse HERE, before the fold, so the pending step survives; fold through
     # `advance` instead (or supersede a `seat-missing` slot on a refuse-fold phase, then advance).
+    orphan_seats_found = None
     if not _via_advance:
         rnd = pending.get("round")
         # Only adapter phases carry durable store records — gate phases (present-judgment,
@@ -3597,8 +3596,9 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                         # Session latch is authoritative — the fence defers. Orphan records at this
                         # slot are legacy-only (pre-latch sessions); record-result / record-missing
                         # latches prevent new records in hand-path sessions going forward.
+                        orphan_seats_found = list(found)
                         state.setdefault("rounds", {}).setdefault(str(rnd), {})[
-                            "recordOrphansIgnored"] = list(found)
+                            "recordOrphansIgnored"] = orphan_seats_found
                     else:
                         detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
                                   "path folds through `advance`; a hand submit ignores them. A slot recorded "
@@ -3620,7 +3620,8 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         # The other half of the interleave fence: a v3 session that has taken a HAND submit refuses
         # `advance` from here on. Only stamped on v3 state — a v2 state's dict is never touched.
         state["_submitUsed"] = True
-    return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash}
+    return {"_fold_ready": True, "state": state, "round_no": round_no, "art_hash": art_hash,
+            "orphan_seats_found": orphan_seats_found}
 
 
 def _write_receipt(session_dir, state):
