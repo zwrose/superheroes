@@ -40,6 +40,11 @@ import hostinfo
 DEFAULT_TTL = 1800   # seconds
 MALFORMED_GRACE_SECONDS = 60
 
+REASON_MALFORMED_HOLDER = "malformed-holder"
+REASON_BOOT_ID_MISMATCH = "boot-id-mismatch"
+REASON_EXPIRED_DEAD_HOLDER = "expired-dead-holder"
+REASON_FOREIGN_HOST_TTL_EXPIRED = "foreign-host-ttl-expired"
+
 
 class LockHeld(Exception):
     def __init__(self, holder):
@@ -164,7 +169,8 @@ def _pid_dead_on_this_host(holder, zombie_is_dead=False):
 def stale_reason(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False):
     """Return the staleness class when stale, else None.
 
-    Classes: ``boot-id-mismatch``, ``expired-dead-holder``, ``malformed-holder``."""
+    Classes: ``boot-id-mismatch``, ``expired-dead-holder``, ``foreign-host-ttl-expired``,
+    ``malformed-holder``."""
     if not os.path.lexists(lock_path):
         return None
     status, holder = _read_holder_state(lock_path)
@@ -172,7 +178,7 @@ def stale_reason(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False
         return None
     if status == "unusable" or _holder_fields_unusable(holder):
         if _malformed_past_grace(lock_path, now):
-            return "malformed-holder"
+            return REASON_MALFORMED_HOLDER
         return None
     h = holder
     # Two categories from here on (a malformed holder was settled above), and they are not
@@ -184,7 +190,7 @@ def stale_reason(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False
     # so boot equality cannot license a pid probe. Reclaim there rests on TTL expiry alone.
     same_host = h.get("host") == socket.gethostname()
     if same_host and hostinfo.same_boot(h.get("bootId"), hostinfo.boot_id()) is False:
-        return "boot-id-mismatch"   # this host rebooted: the recorded pid is from a dead boot
+        return REASON_BOOT_ID_MISMATCH   # this host rebooted: the recorded pid is from a dead boot
     # Two legs stay SAME-HOST-ONLY, both because they read the local pid namespace as if it
     # were the holder's: the reboot check above, and the `reclaim_dead_holder` fast path below
     # — whose whole trade is swapping the TTL wait for CONFIRMED death, a confirmation no
@@ -199,8 +205,10 @@ def stale_reason(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False
     # foreign holder can lose an expired lock. Accepted and disclosed rather than hidden;
     # reachable only where a lock path is shared between machines or pid namespaces, which
     # neither caller's path is today (a local run dir; a lease under the local tempdir).
+    if not same_host:
+        return REASON_FOREIGN_HOST_TTL_EXPIRED
     if _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder):
-        return "expired-dead-holder"
+        return REASON_EXPIRED_DEAD_HOLDER
     return None
 
 
@@ -324,11 +332,7 @@ def acquire_with_reason(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
 def acquire(lock_path, ttl=DEFAULT_TTL, reclaim_dead_holder=False):
     """Acquire the lock. Returns True if a stale lock was reclaimed, else False.
 
-    `reclaim_dead_holder=True` reclaims a confirmed-dead holder without waiting out the
-    TTL (#862); a live holder on THIS host still raises LockHeld (a foreign-host holder is
-    protected by its TTL instead — see the module docstring).
-
-    Raises only LockHeld — never propagates OSError from publish or directory setup."""
+    See ``acquire_with_reason`` for reclaim semantics and ``LockHeld`` behavior."""
     reclaimed, _reason = acquire_with_reason(
         lock_path, ttl=ttl, reclaim_dead_holder=reclaim_dead_holder,
     )
