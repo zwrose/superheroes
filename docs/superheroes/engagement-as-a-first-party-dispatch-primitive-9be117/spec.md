@@ -19,441 +19,481 @@ updated: "2026-08-14"
 
 When we send work to an outside engine — a review seat, an implementer, an auditor — we need to know
 one thing before we trust what comes back: **did it actually do the work?** Today nothing in the
-result says so plainly. Every part of the system that needs the answer works it out for itself, by
-reading the shape of whatever came back and drawing a conclusion. Three separate builds hit the same
-wall doing this, and the machinery that exists to compensate — the planted-defect control probe —
-costs a whole extra engine dispatch every time we want an honest answer.
+result says so plainly. Several parts of the system work it out for themselves, from the shape of
+whatever came back. The machinery that exists to compensate — the planted-defect control probe — costs
+a whole extra engine dispatch each time we want an honest answer.
 
-This design makes that answer **a stated fact carried in the result**, rather than something each
-consumer reconstructs. It is a change to how the answer is *represented and read*, not a change to
-what we require of a seat: no new refusal, no new gate, no seat held to a higher bar than today.
+This design makes that answer **a stated fact carried in the result**, wherever a consumer can
+actually receive it. It is a change to how the answer is *represented and read*: no new refusal, no new
+gate, no seat held to a higher bar than today.
 
-The value is narrow and concrete: **the same question stops getting four different answers.** Today
-one result object can simultaneously say the seat acted and say the seat never ran — and both
-statements ship, to different readers, from the same dispatch. That is the specific thing this design
-ends.
+**The round's most important finding is a limit, not a mechanism.** The issue asks for a signal
+"consumed uniformly by parse, round driver, canary, and forfeit accounting." Three of those four can
+read it directly. The **round driver cannot** — it sits behind a trust boundary and never receives a
+dispatch result at all
+[cite: plugins/superheroes/lib/round_adapters.py § claimant-controlled ADVISORY ECHO]. Reaching it means routing the
+attestation through the authenticated provenance channel, which is a materially larger change than the
+rest of this work and is scoped separately here rather than assumed.
 
 ## Who it's for
 
 - **The owner**, who reads a build's disclosures and needs "this seat never ran" to mean what it says.
   Today that phrase is sometimes an overstatement of what we actually observed.
 - **The advisor**, who vets builds from their artifacts and must be able to tell a seat that did
-  nothing from a seat whose work our transport dropped — a distinction that changes whether a review
-  happened.
-- **The builder session**, which today must know which of several inference rules applies to whichever
-  surface it is reading, and gets it wrong in ways that survive into review.
-- **The maintainer of the dispatch machinery**, for whom every new outcome token is currently a
-  fall-open risk across a scattered set of consumers.
+  nothing from a seat whose work our transport dropped.
+- **The builder session**, which today must know which inference rule applies to whichever surface it
+  is reading.
+- **The maintainer of the dispatch machinery**, for whom the same question currently has several
+  answers in several places.
 
 ## What is true today
 
-This section is the grounded analysis the rest of the design rests on. Everything in it was read from
-the code, not inferred from the issue.
+Everything in this section was read from the code. Where a claim is load-bearing it carries a citation.
 
-### Engagement is already a first-party primitive — it is just not carried, and not read
+### The classifier is sound; what surrounds it is not
 
-There is a single, well-reasoned home for the question. It is action-based: a finding returned, an
-accepted investigated path, or a tool call observed. It deliberately refuses to conclude inaction from
-absence of evidence
-[cite: plugins/superheroes/lib/engine_adapter.py § NEVER returns "inert"], and it deliberately
-excludes token spend and wall time, on measured grounds — a genuinely engaged clean review spent 2,460
-tokens while a known-vacuous seat spent roughly ten times more
+There is a single, well-reasoned home for the question. It is action-based, refuses to conclude
+inaction from absence of evidence
+[cite: plugins/superheroes/lib/engine_adapter.py § NEVER returns "inert"], and excludes token spend and
+wall time on measured grounds
 [cite: plugins/superheroes/lib/engine_adapter.py § Token spend cannot separate engaged from vacuous].
-That reasoning is sound and this design keeps all of it.
+This design keeps all of that reasoning. The defects are around it.
 
-The problem is everything around it. Five defects, stated precisely.
-
-**D1 — the attestation is not carried on every terminal result.** It is *absent* on an `unrunnable`
-refusal and *present with the value `null`* on timeout, refusal, and nonzero-exit forfeits — a shape
-the reference documents as a trap for consumers
+**D1 — the attestation is not carried on every terminal result.** It is *absent* on `unrunnable`
+refusals and *present with the value `null`* on timeout, refusal, nonzero-exit, and **missing-stdout**
+forfeits — a shape the reference documents as a trap
 [cite: plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md § is **unsafe**]. A
-consumer that cannot read the field uniformly must fall back to reasoning about `reason` tokens. That
-fallback is the payload archaeology this work exists to retire.
+consumer that cannot read the field uniformly falls back to reasoning about outcome tokens. That
+fallback is the archaeology this work retires.
 
-**D2 — the specimen: one result, two contradictory answers.** This is the sharpest statement of the
-defect, and it reproduces from the code alone. On the vacuous branch, the runner attaches an
-engagement block whose `read` is computed over `{findings: [], investigated: None, engagement:
+**D2 — the specimen: one result, two contradictory answers.** On the vacuous branch the runner attaches
+an engagement block whose verdict is computed over `{findings: [], investigated: None, engagement:
 <telemetry>}` [cite: plugins/superheroes/lib/engine_dispatch.py § _engagement_with_read]. A seat with
-at least one observed tool call therefore ships `reason: "vacuous"` **and** `engagement.read:
-"engaged"` **in the same object**. The panel then reads neither: it classifies the seat from `vacuous`
-or a not-run reason token, and discloses it as
-[cite: plugins/superheroes/lib/round_driver.py § classed as never-ran]. So the system observed the
-seat acting, recorded that observation, and then told the owner it never ran.
+an observed tool call therefore ships `reason: "vacuous"` **and** a verdict of engaged **in the same
+object** — and that same object also carries a disclosure string asserting the seat never ran, before
+any consumer sees it. The panel then reads neither, classifying from the outcome token and disclosing
+[cite: plugins/superheroes/lib/round_driver.py § classed as never-ran].
 
-The defect is **not** that we lack a third value for "provably inert". It is that **the consumer
-ignores the attestation entirely and lets outcome tokens overwrite it.**
+The defect is **not** a missing third value. It is that **the consumers ignore the attestation and let
+outcome tokens overwrite it.**
 
-**D3 — the inference is spread across five sites, not one.** Beyond the panel fold, the durable-record
-boundary independently decides ran-vs-not-ran from the same reason tokens
-[cite: plugins/superheroes/lib/round_adapters.py § _apply_predicate]; the ledger derives its own
-engaged and delivered values by a third rule
-[cite: plugins/superheroes/lib/engine_dispatch.py § _ledger_stages]; the control probe computes its
-verdict from the outcome token first and only then consults the shared classifier
-[cite: plugins/superheroes/lib/seat_canary.py § Fail-closed: artifact engaged but delivery failed];
-and a separate residue-shape heuristic carries its own independent `engaged` flag whose own contract
-admits a long error dump can score positive
-[cite: plugins/superheroes/lib/engine_adapter.py § a long engine error dump]. Five mechanisms, one
-word.
+**D3 — the derivation is spread across at least eight sites.** Enumerated rather than counted, because
+the migration set must not depend on anyone's recall:
 
-**D4 — the two axes exist in name only.** The vocabulary module declares stage names for the two
-questions [cite: plugins/superheroes/lib/dispatch_outcome.py § STAGE_ENGAGED], and the reference
-states plainly that they are two variables
-[cite: plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md § Engaged vs delivered are two variables].
-But no producer or consumer references those constants — every site uses raw string keys — and two
-neighbouring helpers in the same module have no call sites at all. The names exist as if they were a
-contract seam; they are not wired to anything.
+| # | Site | What it derives |
+| --- | --- | --- |
+| 1 | `round_driver._fold_panel` | ran-vs-not-ran, from `vacuous` / not-run tokens; reads no attestation |
+| 2 | `round_adapters._apply_predicate` | whether a seat owes a findings field, from the same two keys [cite: plugins/superheroes/lib/round_adapters.py § _apply_predicate] |
+| 3 | `engine_dispatch._ledger_stages` | ledger engaged/delivered — the residue scan takes **precedence** over the classifier, which is consulted only as a fallback [cite: plugins/superheroes/lib/engine_dispatch.py § _ledger_stages] |
+| 4 | `seat_canary.run_canary` | the probe's own verdict, outcome-token-first [cite: plugins/superheroes/lib/seat_canary.py § Fail-closed: artifact engaged but delivery failed] |
+| 5 | `engine_adapter.review_artifact_shape` | an independent resemblance score whose own contract admits an error dump can pass [cite: plugins/superheroes/lib/engine_adapter.py § a long engine error dump] |
+| 6 | `round_driver.canary_liveness` | per-vendor proven/dead/unproven, from probe flags plus its own payload check |
+| 7 | `forfeit_ledger` attribution | engaged-but-not-delivered, from the delivery stage plus exit code and stdout size |
+| 8 | the disclosure emitters | `engine_dispatch._review_terminal_forfeit` and the receipt summary each render a never-ran claim in owner-facing text |
 
-**D5 — the write path has no attestation at all.** Write dispatches build no engagement block
-[cite: plugins/superheroes/lib/engine_dispatch.py § _grade_write_attempt]. Their ledger stage is
-derived from whether the run succeeded or produced a salvage block — a structurally different
-measurement wearing the same name as the review path's.
+Sites 2 and 5 are **not** migration targets — 2 is a schema check on claimant input that predates any
+attestation, and 5 stays confined to salvage. They are listed because a build that meets them must
+know why they are exempt.
 
-### What is *not* a defect, and must survive
+**D4 — the two axes exist in name only.** The vocabulary module declares stage names
+[cite: plugins/superheroes/lib/dispatch_outcome.py § STAGE_ENGAGED] and the reference states they are
+two variables
+[cite: plugins/superheroes/skills/workhorse/reference/dispatch-mechanics.md § Engaged vs delivered are two variables],
+but no producer or consumer references those constants, and two neighbouring helpers in the module
+have no call sites at all.
 
-Two things resemble the above and are not instances of it.
+**D5 — the write path has no attestation.** Write dispatches build no engagement block
+[cite: plugins/superheroes/lib/engine_dispatch.py § _grade_write_attempt]; their ledger stage is
+derived from success or the presence of a salvage block.
 
-- **Audit-collection provenance is authorization, not engagement.** The audit fold authenticates a
-  clearing ruling against the vendor the orchestrator recorded dispatching
-  [cite: plugins/superheroes/lib/audits.py § apply_audit_results]. It answers *which seat was this*,
-  never *did it act*. An engagement attestation must not absorb or weaken it: an engaged but
-  misrouted auditor must still fail to discharge a finding.
-- **The engaged-artifact forfeit is deliberately never credited.** A seat that demonstrably produced a
-  review our transport could not carry is a forfeit, its findings usable only under independent
-  verification, and the seat itself is not counted toward panel composition. That rule is doctrine
-  [cite: plugins/superheroes/rubric/review-discipline.md § Salvage valve], and a naive "consumers read
-  engagement uniformly" migration would break it by turning an engaged forfeit into a run.
+**D6 — the instrument is vendor-asymmetric.** A tool-call observation exists only for the cursor
+stream; the codex path yields only a token count, which is a magnitude and must not count
+[cite: plugins/superheroes/lib/engine_adapter.py § cursor_tool_calls]. For a codex seat, "we did not
+observe action" therefore often means **we had no instrument**, not that nothing happened. Any honest
+contract has to say so rather than let the two look alike.
+
+### The trust boundary — the finding that reshaped this design
+
+The round driver does **not** consume dispatch results. It consumes a seat envelope whose fields are a
+claimant-controlled advisory echo, with dispatch provenance arriving only out-of-band through the
+dispatch manifest [cite: plugins/superheroes/lib/round_adapters.py § claimant-controlled ADVISORY ECHO]. This is the same
+rule the audit leg enforces when it refuses a seat's self-reported vendor
+[cite: plugins/superheroes/lib/audits.py § apply_audit_results].
+
+So "the panel fold reads the attestation" is not a small migration — **widening the seat payload to
+carry it would make a wrapper observation relayable by the claimant**, which is precisely the
+self-attestation this design rejects. Reaching the round driver honestly means routing the attestation
+through the authenticated provenance channel. That is a real change to a trust-bearing surface, and it
+is scoped as its own deliverable below rather than folded in.
+
+### What must survive unchanged
+
+- **Audit-collection provenance is authorization, not engagement.** An engaged but misrouted auditor
+  must still fail to discharge.
+- **The engaged-artifact forfeit is never credited**
+  [cite: plugins/superheroes/rubric/review-discipline.md § Salvage valve].
+- **Credit has more axes than engagement and delivery.** A seat is also marked missing on a missing or
+  stale receipt, and a zero-finding cross-vendor seat additionally requires an engaged vendor probe. A
+  contract that says "delivery and outcome govern credit" is **false as an exhaustive statement**, and
+  the matrix below is qualified accordingly.
 
 ## Functional requirements
 
-**FR-1.** The system shall carry an engagement attestation on every **terminal** review-dispatch
-result, with no exceptions for refusals or forfeits.
-  - *Acceptance (rule):* for every terminal reason the runner can return, the result carries an
-    `engagement` object that is neither absent nor `null`.
+Vocabulary note: this design uses **activity** (not "engagement") for the verdict, **observation** (not
+"evidence") for its entries, and **gradeable** (not "delivered") for the second axis, because each of
+the obvious words is already taken by something else in this repo — see the Glossary.
 
-**FR-2.** The system shall express the attestation's verdict as exactly two values — `engaged` and
-`unknown` — and shall never express a third value asserting proven inaction.
-  - *Acceptance (rule):* `unknown` means *we did not observe action*, never *the seat did nothing*.
-    No code path produces any other value for this field.
+**FR-1.** The system shall carry an activity attestation on every **terminal** review-dispatch result,
+with no exceptions for refusals or forfeits.
+  - *Acceptance (rule):* for every terminal reason the runner can return — including `unrunnable` and
+    the missing-stdout forfeit — the result carries an attestation that is neither absent nor `null`.
 
-**FR-3.** The system shall record, alongside the verdict, the **evidence that produced it** as a list
-of named entries, each naming both what was observed and where it was observed.
-  - *Acceptance (Given-When-Then):* Given a seat that returned findings and had tool calls observed in
-    its stream, when the result is folded, then the evidence list carries one entry naming the
-    findings (observed by the wrapper) and one naming the tool calls (observed in the engine stream) —
-    not a single scalar source.
+**FR-2.** The system shall express the verdict as exactly two values — `observed` and `not-observed` —
+and shall never express a value asserting proven inaction.
+  - *Acceptance (rule):* `not-observed` means *we did not observe action*, never *the seat did nothing*.
 
-**FR-4.** The system shall make the verdict a function of the recorded evidence alone: when the
-evidence list is empty the verdict is `unknown`, and when it is non-empty the verdict is `engaged`.
-  - *Acceptance (rule):* the verdict can be recomputed from the evidence list by any reader and always
-    agrees with the recorded verdict.
+**FR-3.** The system shall record the **observations** that produced the verdict as a list of entries,
+each naming what was seen, where it was seen, and whether it was **wrapper-minted** or
+**engine-asserted**.
+  - *Acceptance (rule):* the wrapper-minted kinds are findings parsed at the wrapper's own parse
+    boundary and investigated paths that survive the spot-check. The tool-call stream count is
+    **engine-asserted**: it is parsed from the engine's own stdout, and today from *raw* stdout before
+    the prompt-echo strip, so text inside a reviewed diff can produce it. The entry says so.
 
-**FR-5.** The system shall never allow a telemetry **magnitude** — tokens spent, bytes of output,
-seconds elapsed — to produce or change the verdict.
-  - *Acceptance (rule):* no magnitude appears as an evidence entry. Magnitudes are carried for human
-    diagnosis only. A tool call *observation* is evidence; the tool-call *count* is a magnitude
-    reported beside it.
+**FR-4.** The system shall make the verdict a function of the recorded observations alone: an empty
+list yields `not-observed`; a list with at least one **schema-valid** entry yields `observed`.
+  - *Acceptance (rule):* any reader can recompute the verdict from the list and always agrees with the
+    recorded one.
 
-**FR-6.** The system shall carry a **delivery** answer beside the engagement answer, stating whether a
-gradeable result reached us, and shall define it independently of the outcome token.
-  - *Acceptance (rule):* delivery is stated normatively for each case — a graded success, a parsed
-    result that failed the investigation floor, a structured engine refusal, an item-check failure,
-    and a salvaged artifact — rather than inferred from what `reason` happens to say.
+**FR-5.** The system shall never allow a telemetry **magnitude** — tokens, bytes, seconds — to produce
+or change the verdict.
+  - *Acceptance (rule):* no magnitude is an observation. Magnitudes ride alongside for diagnosis. A
+    tool-call *observation* is an entry; its *count* is a magnitude reported beside it.
 
-**FR-7.** The system shall state, for a **non-terminal** result, that the attestation is a snapshot
-and not a final answer.
-  - *Acceptance (rule):* a `running` result either omits the attestation entirely or marks it
-    explicitly as provisional; a reader can never mistake a partial snapshot for a settled verdict, and
-    absence is never something a consumer must interpret.
+**FR-6.** The system shall carry a **gradeable** answer beside the activity verdict, defined by the
+following exhaustive truth table for review dispatches, and never inferred from the outcome token.
 
-**FR-8.** The system shall express a control probe's result as a **separate verdict about a vendor**,
-bound to the probe invocation that produced it, and shall never write a probe's conclusion into
-another dispatch's attestation.
-  - *Acceptance (Given-When-Then):* Given a probe run against a vendor, when a panel seat of that
-    vendor is folded, then the probe's verdict is consumed as a vendor-scoped signal carrying its own
-    provenance, and the seat's own attestation still reports only what that seat's dispatch showed.
+| Terminal case | `gradeable` |
+| --- | --- |
+| Findings parsed and accepted | true |
+| Empty findings with an accepted investigation record | true |
+| Empty findings, investigation floor failed | false |
+| Parse failed / unreadable payload | false |
+| Timeout, nonzero exit, missing stdout, or refusal | false |
+| Artifact recovered by salvage after a forfeit | false |
+| No attempt spawned | false |
 
-**FR-9.** The system shall have consumers **read** the attestation rather than re-derive it, while
-leaving credit decisions — certification, panel composition, fallback, discharge — governed by
-delivery and outcome.
-  - *Acceptance (rule):* every consumer named in the migration inventory reads the attestation for
-    activity and consults delivery/outcome for credit; the consumer decision matrix below is the
-    normative statement, and no consumer re-implements the classifier.
+  - *Acceptance (rule):* the write path is out of scope (see Out of scope), so item-check delivery —
+    which is a *count of declared paths*, an unrelated meaning of the same word — is not in this table.
 
-**FR-10.** The system shall keep the audit leg's collection provenance as a **separate authorization
-axis**, unchanged by this work.
-  - *Acceptance (rule):* an engaged auditor whose vendor does not match the recorded independent
-    auditor still fails to discharge its target.
+**FR-7.** The system shall carry the attestation on **non-terminal** results too, marked explicitly
+**provisional**, and shall not permit omission.
+  - *Acceptance (rule):* a `running` result carries a provisional attestation. No consumer ever
+    interprets absence, because absence does not occur. A provisional attestation is never read for a
+    credit or disclosure decision.
 
-**FR-11.** The system shall correct the disclosure wording so that a seat we did not observe acting is
-described as **unproven**, not as one that never ran.
-  - *Acceptance (rule):* no owner-facing disclosure claims a seat never ran on the strength of absent
-    evidence alone. A probe-backed vendor verdict may still say more, and says so with its provenance.
+**FR-8.** The system shall record observations **monotonically across attempts**: an observation made
+on any attempt of a run stands for the run, even if a later attempt times out.
+  - *Acceptance (Given-When-Then):* Given a first attempt with an observed tool call and a second that
+    times out, when the run folds, then the verdict is `observed` and `gradeable` is false — the
+    failure-with-activity case, distinct from failure-without.
 
-**FR-12.** The system shall tolerate results produced before this contract existed, reading them
-through a normalizer rather than failing or silently mis-reading them.
-  - *Acceptance (Given-When-Then):* Given a stored terminal result from an older run with no
-    attestation, when a consumer reads it, then it receives a well-formed attestation marked as
-    reconstructed-from-legacy, and no consumer sees an absent or `null` field.
+**FR-9.** The system shall carry a **third fact** distinguishing a forfeit that recovered an artifact
+from one that recovered nothing, kept on the **gradeable/outcome side** rather than the activity side.
+  - *Acceptance (rule):* the artifact-recovered fact is what a consumer keys on to apply the
+    salvage valve's independent-verification obligation. It is **not** an observation and does not move
+    the verdict, because the only thing that mints it is a resemblance heuristic.
+
+**FR-10.** The system shall have consumers **read** the attestation rather than re-derive it, while
+credit remains governed by the full set of credit axes — gradeable, outcome, receipt validity, and the
+applicable vendor probe ruling.
+  - *Acceptance (rule):* the consumer matrix below is normative, and its credit column is proven
+    unchanged against today's behaviour for every row.
+
+**FR-11.** The system shall express a control probe's result as a **vendor-scoped ruling** bound to the
+probe invocation, and a consumer shall bind a ruling to seats by **vendor and engine model**.
+  - *Acceptance (rule):* a ruling a consumer cannot bind resolves to the **strict** side, not the
+    permissive one — because the permissive branch today is what an unbindable probe would fall into.
+
+**FR-12.** The system shall keep audit-collection provenance as a separate authorization axis,
+unchanged.
+
+**FR-13.** The system shall correct the owner-facing disclosures so a seat we did not observe acting is
+described as **activity not observed**, not as one that never ran — at **every** emitter, including the
+two inside the dispatch result and receipt summary, not only the panel fold.
+
+**FR-14.** The system shall read results produced before this contract through a normalizer, whose
+precondition is a **terminal** result.
+  - *Acceptance (Given-When-Then):* Given a stored result carrying a legacy scalar verdict and no
+    observation list — the dominant stored shape — when a consumer reads it, then the normalizer
+    synthesizes one entry naming the legacy scalar and its source, so the recorded and recomputed
+    verdicts agree by construction, the entry is marked reconstructed, and a legacy `observed` is
+    never silently downgraded.
 
 ## When things go wrong (significant unhappy paths)
 
-**UFR-1.** If a dispatch never spawns an engine at all, then the system shall report the attestation as
-`unknown` with empty evidence — and shall not report it as proven inaction.
-  - *Acceptance:* Given a refusal raised before any attempt, when the result is folded, then the
-    verdict is `unknown`, the evidence list is empty, and delivery is false.
+**UFR-1.** If a dispatch never spawns an engine, then the attestation shall be `not-observed` with an
+empty list — never proven inaction.
 
-**UFR-2.** If a seat demonstrably produced a review that our transport could not carry, then the
-system shall record the attestation as `engaged` with delivery false, and the consumer shall still
-not credit the seat.
-  - *Acceptance:* Given an engaged-artifact forfeit, when the panel folds it, then the seat is not
-    counted toward panel composition and its salvaged findings require independent verification —
-    identical to today's behaviour, now reached by reading two fields instead of matching a token.
+**UFR-2.** If a seat forfeits and a review-shaped artifact is recovered from its stdout, then the
+attestation shall read **`not-observed`** unless an independent observation exists, and the
+artifact-recovered fact (FR-9) shall carry the salvage obligation.
+  - *Acceptance:* Given a codex seat that times out having written a review-shaped artifact, when the
+    run folds, then the verdict is `not-observed` — because the only thing that saw the artifact is the
+    resemblance heuristic — while the artifact-recovered fact is true, credit is false, and the salvage
+    findings still require independent verification. **This is the corrected form of a rule the first
+    draft got backwards.**
 
-**UFR-3.** If a control probe comes back not-engaged, then the system shall treat that as a **policy**
-verdict about the vendor with its own provenance, and shall not convert it into a factual claim of
-inaction about any individual seat.
-  - *Acceptance:* Given a probe that returns not-engaged, when the round records it, then the record
-    names the probe invocation, the vendor, and the failure class — because a negative probe cannot
-    distinguish no-spawn from transport failure from delivery failure from absence of evidence, and a
-    verdict that cannot separate those must not be stated as a fact about a seat.
+**UFR-3.** If a control probe returns not-engaged, then it shall be recorded as a **vendor ruling** with
+its own provenance, and shall not become a factual claim about any individual seat.
+  - *Acceptance:* the record names the probe invocation, vendor, model, and failure class — because a
+    negative probe cannot separate no-spawn from transport failure from delivery failure from absence
+    of evidence.
 
-**UFR-4.** If the evidence and the outcome token disagree — the specimen in D2 — then the system shall
-record both and shall resolve the disclosure in favour of the **weaker, accurate** claim.
-  - *Acceptance:* Given a result carrying evidence of action and a vacuous outcome, when it is
-    disclosed, then it is described as delivering nothing gradeable, not as never having run.
+**UFR-4.** If the observations and the outcome token disagree — the D2 specimen — then both shall be
+recorded and the disclosure shall state the **weaker, accurate** claim.
 
-**UFR-5.** If a stored result predates this contract, then the system shall present it through the
-normalizer with its reconstructed status visible, and shall not let a reconstructed attestation stand
-in for an observed one in any accounting.
-  - *Acceptance:* Given a legacy row, when accounting reads it, then it is distinguishable from an
-    observed attestation.
+**UFR-5.** If a stored result predates this contract, then its attestation shall be visibly
+reconstructed and shall not stand in for an observed one in any accounting.
 
-**UFR-6.** If a consumer encounters an evidence entry it does not recognise, then the system shall
-treat the entry as valid evidence rather than discarding it.
-  - *Acceptance:* Given an unknown evidence name, when the verdict is recomputed, then it still reads
-    `engaged` — an unrecognised observation is still an observation, and this is what keeps a future
-    evidence kind from silently reclassifying seats.
+**UFR-6.** If a consumer encounters an observation entry whose kind it does not recognise, then the
+entry shall be **retained as an opaque diagnostic and shall not count toward the verdict** until its
+kind and provenance are understood.
+  - *Acceptance:* Given a result carrying only an unrecognised entry, when the verdict is recomputed,
+    then it reads `not-observed`. **This is the corrected form of the first draft's rule**, which
+    counted unknown entries and thereby let a malformed or claimant-influenced entry manufacture
+    activity — a fail-open the review caught.
 
-## The consumer decision matrix
+**UFR-7.** If the run's terminal record cannot be made durable, then the durable accounting row shall
+not present the run as folded.
+  - *Acceptance:* the ledger row is written after — or is reconcilable with — the terminal record, so a
+    run that was abandoned after a failed fold cannot leave a folded-looking row that a later, correct
+    row is deduplicated against.
 
-This is the normative answer to *what changes when a consumer reads the attestation*. It is the
-section that prevents "consumers read the field uniformly" from breaking the salvage rule.
+## The consumer matrix
 
-**Engagement records activity. Delivery and outcome govern credit.** The two are read together; neither
-is read alone.
+Normative for FR-10. **Activity records what we saw. Credit is governed by gradeability, outcome,
+receipt validity, and the vendor probe ruling — all four.**
 
-| Case | Engagement | Delivery | Credit toward certification | Owner-facing description |
-| --- | --- | --- | --- | --- |
-| Findings returned | `engaged` | true | Yes | reviewed, with findings |
-| Empty findings, investigation record accepted | `engaged` | true | Yes | reviewed, clean |
-| Empty findings, investigation floor failed, no other evidence | `unknown` | false | **No** | delivered nothing gradeable; activity unproven |
-| Empty findings, investigation floor failed, tool calls observed | `engaged` | false | **No** | delivered nothing gradeable; the seat was observed acting |
-| Engaged artifact our transport could not carry | `engaged` | false | **No** | produced a review we could not carry; findings need independent verification |
-| Timeout / nonzero exit / refusal after an attempt | `unknown` | false | **No** | no gradeable result; activity unproven |
-| No attempt spawned | `unknown` | false | **No** | never dispatched |
+| Case | Activity | Gradeable | Artifact recovered | Credit (given a valid receipt and a probe ruling that does not bar it) | Owner-facing description |
+| --- | --- | --- | --- | --- | --- |
+| Findings returned | `observed` | true | — | Yes | reviewed, with findings |
+| Empty findings, investigation record accepted | `observed` | true | — | Yes | reviewed, clean |
+| Empty findings, floor failed, no observation | `not-observed` | false | no | **No** | nothing gradeable; activity not observed |
+| Empty findings, floor failed, tool call observed | `observed` | false | no | **No** | nothing gradeable; the seat was observed acting |
+| Forfeit, artifact recovered, no observation | `not-observed` | false | **yes** | **No** | produced something we could not carry; findings need independent verification |
+| Forfeit, artifact recovered, observation exists | `observed` | false | **yes** | **No** | as above, and the seat was observed acting |
+| Timeout / nonzero exit / refusal, observation exists | `observed` | false | no | **No** | no gradeable result; the seat was observed acting |
+| Timeout / nonzero exit / refusal, no observation | `not-observed` | false | no | **No** | no gradeable result; activity not observed |
+| No attempt spawned | `not-observed` | false | no | **No** | never dispatched |
 
-Two rows are the whole point of the table. The fourth row is today's silent contradiction, now stated
-honestly: **the credit decision does not change** — the seat still does not count — but the
-description stops overclaiming. The fifth row is the doctrine that a naive migration would have
-broken: engaged and still not credited.
+**Two independent credit axes are deliberately outside this table**, because they are not derivable
+from it and a build must not read the table as exhaustive: a **missing or stale receipt** marks a seat
+missing regardless of everything above, and a **zero-finding cross-vendor seat** additionally requires
+an engaged vendor probe ruling. The parenthetical in the credit heading is load-bearing, not a caveat.
 
 ## Before and after — what actually changes
 
 Required so that "this adds no new refusal" is demonstrable rather than asserted, against the standing
-bar on new honesty gates
-[cite: LEDGERS.md § No new honesty/grounding gates without a named escape] and on hardening beyond the
-incident record [cite: LEDGERS.md § No fail-closed hardening beyond the last observed incident].
+bars [cite: LEDGERS.md § No new honesty/grounding gates without a named escape] and
+[cite: LEDGERS.md § No fail-closed hardening beyond the last observed incident].
 
 | Decision | Today | After | Changed? |
 | --- | --- | --- | --- |
-| Does a vacuous seat count toward certification? | No | No | **No** |
-| Does an engaged-artifact seat count? | No | No | **No** |
-| Does a clean seat with an accepted investigation record count? | Yes | Yes | **No** |
-| Does a not-engaged probe downgrade that vendor's empty seats? | Yes | Yes | **No** |
-| Is the light/micro control probe still mandatory on every review? | Yes | Yes | **No** |
-| Does the investigation floor still forfeit an unproven empty seat? | Yes | Yes | **No** |
-| Does an unauthenticated auditor still fail to discharge? | Yes | Yes | **No** |
-| How is a seat we did not observe acting *described*? | "classed as never-ran" | "activity unproven" | **Yes — wording only** |
-| How does a consumer *learn* a seat's status? | Matches outcome tokens, per surface | Reads the attestation and delivery | **Yes — mechanism** |
-| Can two readers of one result disagree? | Yes (the D2 specimen) | No | **Yes — the defect closes** |
+| Vacuous seat counts toward certification? | No | No | No |
+| Engaged-artifact seat counts? | No | No | No |
+| Clean seat with accepted investigation record counts? | Yes | Yes | No |
+| Missing/stale receipt still marks a seat missing? | Yes | Yes | No |
+| Not-engaged probe still downgrades that vendor's empty seats? | Yes | Yes | No |
+| Light/micro control probe still mandatory on every review? | Yes | Yes | No |
+| Investigation floor still forfeits an unproven empty seat? | Yes | Yes | No |
+| Unauthenticated auditor still fails to discharge? | Yes | Yes | No |
+| Salvage findings still require independent verification? | Yes | Yes | No |
+| Ledger stage for an artifact-recovered forfeit | `engaged: true`, from the residue scan | unchanged — the residue scan's precedence is **preserved by construction** | No |
+| How a not-observed seat is *described* | "classed as never-ran" | "activity not observed" | **Yes — wording** |
+| How a consumer *learns* a seat's status | Re-derives per surface | Reads the attestation | **Yes — mechanism** |
+| Can two readers of one result disagree? | Yes (D2) | No | **Yes — the defect closes** |
 
-**No row adds a refusal, tightens a bar, or withholds a certification that is granted today.** The only
-behavioural deltas are a wording correction and the removal of an inconsistency. This is a
-representation change, and the table is how a reviewer checks that claim rather than taking it.
+**No row adds a refusal, tightens a bar, or withholds a certification granted today.** The ledger row
+is called out explicitly because a naive reading of "the ledger reads the attestation" would flip it —
+the residue scan currently takes precedence there, and that precedence is preserved rather than
+inherited by accident.
 
-## The owner-gate dead end (the folded rider) — honestly re-diagnosed
+## The owner-gate dead end (the folded rider)
 
-The issue folds in a reachable state with no legal next move: a session that has taken one
-advance-driven fold, arriving at an owner gate the calibration cannot authorize, can neither advance
-(the gate parks without folding) nor hand-submit (the session-mode fence refuses). The state persists
-with no move available from either entry point.
+A session that has taken one advance-driven fold, arriving at an owner gate the calibration cannot
+authorize, can neither advance (the gate parks without folding) nor hand-submit (the session-mode
+fence refuses). Both moves are closed.
 
-**The rider is real, and this design does not fix it.** None of the three paths involved reads an
-engine result or an engagement value; the collision is between a session-wide interleave fence and an
-owner-only phase. It belongs to the same *class* — a condition inferred from latches rather than
-represented as data — which is why it was folded here, but an engagement attestation cannot make it
-unrepresentable.
-
-Stating that plainly is the useful contribution. The resolution it actually needs is a state-machine
-one: an owner-gate transition that is legal for advance-driven sessions, so that authorization failure
-leaves at least one move available rather than closing both. That is named here as a **separate build
-issue**, sized and scoped on its own terms, and deliberately not smuggled into the engagement work
-where it would ride on an unrelated migration.
+**This design does not fix it, and saying so is the useful contribution.** None of the three paths
+reads an engine result or an attestation; the collision is between a session-wide interleave fence and
+an owner-only phase. It belongs to the same *class* — a condition inferred from latches rather than
+represented — which is why it was folded here, but the attestation cannot make it unrepresentable. It
+needs a state-machine resolution: an owner-gate transition legal for advance-driven sessions, so an
+authorization failure leaves at least one move available. Scoped as an independent issue below.
 
 ## Non-functional requirements
 
-- **No added dispatch cost.** The attestation is computed from evidence the runner already observes.
-  This design adds no engine call. The control probe's cost is unchanged and is stated where it is
-  incurred: a probe bounds its first attempt but a retry floors the wait, so worst case is materially
-  longer than the nominal timeout — a fact the design records so that any future proposal to change
-  the probe's trigger argues against the real number.
-- **No weakening of an existing safeguard.** Every row of the before/after table that reads "No" is a
-  safeguard preserved; a build that changes one has left this design's scope.
-- **Reconstructable accounting.** A reader of a stored result can always tell an observed attestation
-  from one reconstructed by the normalizer.
+- **No added dispatch cost.** The attestation is computed from what the runner already observes. The
+  control probe's cost is unchanged: it bounds its first attempt but floors its retry wait, so worst
+  case is materially longer than the nominal timeout — recorded so any future proposal about the
+  probe's trigger argues against the real number.
+- **No weakening of an existing safeguard.** Every "No" row above is a safeguard preserved.
+- **Reconstructable accounting.** An observed attestation is always distinguishable from a
+  reconstructed one, and a durable accounting row never presents a fold that did not happen (UFR-7).
 
 ## Definition of done / success
 
-The owner can read a build's disclosures and trust that "this seat never ran" is only said when we
-have grounds to say it; the advisor can tell, from a result alone and without the builder's context,
-whether a seat acted and whether anything gradeable arrived; and no surface of the dispatch machinery
-re-implements that judgment for itself.
-
-Concretely, the design is done when: the attestation is present and readable on every terminal review
-result; the five inference sites named in D3 read it instead of deriving their own; the consumer
-decision matrix holds with the credit column unchanged from today; and the disclosure wording no
-longer overclaims.
+The owner can trust that "this seat never ran" is only said when we have grounds to say it; the advisor
+can tell from a result alone whether a seat acted and whether anything gradeable arrived; and the sites
+enumerated as migration targets in D3 read the attestation instead of deriving their own.
 
 ## Assumptions & dependencies
 
-- The existing classifier's reasoning — action-based, never magnitude-based, never concluding inaction
-  from absence — is **kept**, not revisited. Its measured basis stands
+- The classifier's reasoning — action-based, never magnitude-based, never concluding inaction from
+  absence — is kept, not revisited. Its measured basis is in the classifier itself
+  [cite: plugins/superheroes/lib/engine_adapter.py § Measured 2026-07-26]; the separate rule that
+  telemetry never substitutes for the investigation record is doctrine
   [cite: CONVENTIONS.md § Engine telemetry corroborates engagement but never substitutes for that record].
-- The investigation-record floor is unchanged and remains the seat's own obligation
-  [cite: plugins/superheroes/rubric/review-base.md § investigation record is a seat that never ran].
-  Its *wording* is a candidate for the FR-11 correction; its *effect* is not.
-- The control-probe obligation in single-reviewer lanes is unchanged by this work
-  [cite: plugins/superheroes/rubric/review-discipline.md § review did not happen]. Any
-  change to its trigger is a separate owner decision (see Open questions).
-- Three prose surfaces carry the contract text today — the two engine references and the rubric — and
-  a clause-presence test pins the probe wording across the charters. A doctrine change lands after the
-  code, not before, and must keep that test green.
+- The investigation-record floor is unchanged in effect
+  [cite: plugins/superheroes/rubric/review-base.md § investigation record is a seat that never ran];
+  only its *wording* is in FR-13's scope.
+- The control-probe obligation in single-reviewer lanes is unchanged
+  [cite: plugins/superheroes/rubric/review-discipline.md § review did not happen].
+- **The prose surfaces carrying this contract are seven, enumerated** — not three:
+  `skills/workhorse/reference/dispatch-mechanics.md`, `skills/review-code/reference/auto-fix-loop.md`,
+  `skills/review-code/reference/round-driver.md`, `rubric/review-discipline.md`,
+  `rubric/review-base.md`, and the two charters, whose probe wording is mechanically pinned by a
+  clause-presence test that a doctrine change must keep green
+  [cite: plugins/superheroes/lib/tests/test_charter_boundary_sync.py § not-engaged-never-passes].
 
 ## Constraints
 
-- **No new refusal, gate, or fail-closed path.** The standing ledger bars adding one absent a named
-  escape that penetrated every existing layer, and bars hardening beyond the incident record. This
-  design is bound by both, and the before/after table is the evidence.
-- **The engaged-artifact seat is never credited.** Any migration that turns an engaged forfeit into a
-  counted run has failed, regardless of how uniform its reads are.
+- **No new refusal, gate, or fail-closed path.** The before/after table is the evidence.
+- **The engaged-artifact seat is never credited**, and its salvage obligation survives (FR-9).
 - **Audit authorization is untouched.**
-- **A new outcome value is a fall-open vector.** The existing literal-scan census does not prove
-  consumer exhaustiveness; it prevents duplicate spellings. Anything that widens a value set needs a
-  read/branch-site inventory and behavioural tests, landed atomically with the producer
+- **A widened value set is a fall-open vector**, and the existing literal-scan census prevents
+  duplicate spellings, not consumer exhaustiveness
   [cite: plugins/superheroes/lib/tests/test_dispatch_outcome_census.py § test_dispatch_outcome_census_clean].
-  This design's decision to keep the verdict two-valued (FR-2) is what keeps that surface small.
+  Keeping the verdict two-valued (FR-2) is what keeps that surface small.
+- **The seat payload is not a transport for wrapper observations.** An attestation arriving in a seat
+  envelope authenticates nothing.
 
 ## Out of scope
 
-- **Write dispatches.** They carry no attestation today, and the evidence that would ground one — an
-  accepted write report, declared-items delivery, an observed worktree effect — is a genuine open
-  question, not an assumption. Phase one is review dispatches; the write path is decided on its own
-  evidence before any write producer changes.
-- The terminal-design questions already held elsewhere: stall-menu spend semantics, accept-risk
-  eligibility, and the sticky-breaker criterion.
+- **Write dispatches.** They carry no attestation today, and the evidence that would ground one is a
+  genuine open question. Item-check delivery already uses the word "delivered" for a count of declared
+  paths — a collision to resolve before any write-side work.
+- Terminal-design questions held elsewhere: stall-menu spend semantics, accept-risk eligibility, the
+  sticky-breaker criterion.
 - Retiring or loosening the control probe.
-- Fixing the owner-gate dead end, which is named as its own build issue above.
+- The owner-gate dead end, scoped independently.
 
 ## Decomposition into build issues
 
-Ordered as **expand then contract**, because a producer-first or consumer-first split recreates exactly
-the silent seam this work exists to remove: a period where some readers see the attestation and others
-still infer.
+**Restructured on review evidence.** The first draft put a six-step contract train ahead of the one
+change with immediate owner-visible value, and one lens argued the whole contract was over-built for a
+defect whose only visible symptom is a disclosure string. That argument is partly right, and the
+decomposition answers it by **shipping the cheap, high-value correction first and alone**, then earning
+the contract in stages that each have an acting consumer.
 
-1. **Normalizer and tolerant readers first.** A single read-time accessor that returns a well-formed
-   attestation for any result — new, legacy, or stored — and consumers taught to call it while still
-   behaving exactly as they do today. Nothing observable changes. This is the compatibility contract
-   (FR-12, UFR-5) and it lands alone.
-2. **Producers.** The attestation constructed on every terminal review result, with evidence entries,
-   sourced entries, and delivery defined normatively (FR-1, FR-3, FR-4, FR-5, FR-6, FR-7). Still no
-   consumer behaviour change: the ledger's derivation becomes a read of the attestation rather than a
-   second rule.
-3. **Policy consumers.** The five inference sites migrate to reading it — the panel fold, the
-   durable-record boundary, the ledger stages, the probe's own computation, and the residue-shape
-   signal's confinement to salvage (FR-9), with the consumer decision matrix as the acceptance
-   artifact and the credit column proven unchanged.
-4. **Probe verdict separation.** The vendor-scoped probe verdict given its own provenance-bound shape,
-   no longer folded into a per-result field (FR-8, UFR-3).
-5. **Remove the fallbacks.** Delete the reason-token archaeology now that nothing reads it for this
-   question; retire or wire the dead stage constants and the uncalled helpers (D4).
-6. **Doctrine.** The prose surfaces updated to one contract, with the wording correction (FR-11) and
-   the clause-presence test kept green.
+1. **The disclosure correction (FR-13), alone.** Correct every emitter that claims a seat never ran on
+   absent evidence — the panel fold, the dispatch result's own disclosure, and the receipt summary.
+   Small, independently valuable, and it discharges the owner-visible harm without any new contract.
+2. **The attestation on every terminal result (FR-1..FR-9, FR-14).** Producers, the observation schema
+   with wrapper-minted/engine-asserted marking, the gradeable truth table, monotonic aggregation, the
+   artifact-recovered fact, and the legacy normalizer. Consumers keep behaving as today; the ledger's
+   residue-scan precedence is preserved explicitly.
+3. **The dispatch-result readers (part of FR-10).** The three consumers that genuinely receive dispatch
+   results — the ledger stages, the probe's own computation, and forfeit attribution — read the
+   attestation. The round driver is **not** in this issue.
+4. **The probe ruling (FR-11, UFR-3).** Vendor-scoped, invocation-bound, with a named consumer
+   inventory: the ruling's producers and both of its readers must move together, and an unbindable
+   ruling must land on the strict side.
+5. **The round-driver leg (the rest of FR-10) — only if 2 and 3 prove out.** Route the attestation to
+   the round driver through the authenticated provenance channel, never the seat payload. The
+   record boundary and the panel fold must change **atomically, through one shared accessor**, because
+   they spell the same predicate from opposite ends of one durable hop and either order alone breaks:
+   one certifies a seat nobody reviewed, the other bricks the panel. This issue also owes an
+   accept-both compatibility window for seat records written under either contract, since those records
+   outlive the code version that wrote them.
+6. **Retire the fallbacks and the dead names.** Remove the token archaeology once nothing reads it for
+   this question — gated on FR-9's artifact-recovered fact being read, not merely on the token being
+   unread. Wire or delete the unreferenced stage constants and uncalled helpers (D4).
+7. **Doctrine.** The seven enumerated prose surfaces, with the clause-presence test kept green. Last,
+   because doctrine describing a shape the code lacks is the drift this repo already pays for.
 
-Steps 1 and 2 are prerequisites for everything after them. Steps 4 and 5 are independent of each other
-once 3 lands. Step 6 lands last, because doctrine that describes a shape the code does not yet have is
-the drift this repo already pays for.
+**Ordering:** 1 is independent and ships first. 2 precedes 3, 4, 5, 6. 5 is contingent. 7 is last.
+**The owner-gate dead end** is an eighth, wholly independent issue.
 
-**The owner-gate dead end** is a seventh, independent issue, sharing nothing with the six above.
+**Rollback:** every step must be revertible against records written under the following step. That is
+why 5 carries an accept-both window and why 2 preserves precedence rather than inheriting it.
 
 ## Open questions
 
-- **Write-path evidence (blocks any write-side work, not this design's ratification).** What
-  constitutes observed action for a write dispatch? Candidates: an accepted write report, declared-items
-  delivery evidence, or an observed worktree effect. Each is weaker than the review path's tool-call
-  observation, and one of them — declared-items delivery — already uses the word "delivered" for a
-  different thing, which is a naming collision to resolve before it ships.
-- **The control probe's future trigger.** Once activity is legible per-dispatch, a narrower probe
-  trigger becomes *arguable* in the full lane. This design does not argue it: the probe's value is that
-  it is the only thing that can speak to a vendor's liveness at all, and loosening a fail-closed
-  posture is the owner's decision, not a consequence of better plumbing. Recorded so the option is
-  visible, and deliberately left unspent.
-- **Whether the disclosure wording correction (FR-11) is worth its cost.** It makes some disclosures
-  read weaker while being more accurate. That is the one owner-facing trade in this design.
+- **Write-path evidence** — blocks write-side work, not this design's ratification. What constitutes
+  observed action for a write dispatch? Each candidate is weaker than a tool-call observation, and one
+  of them collides with an existing meaning of "delivered".
+- **A codex-side action instrument (D6).** Today `not-observed` on a codex seat frequently means *no
+  instrument*. Parsing codex's own tool/exec events would close the asymmetry. Worth its own
+  assessment; not assumed here.
+- **Whether step 5 is worth its cost.** Routing the attestation across the trust boundary is the
+  largest piece of this work and the one the round driver's own design argues against. It is
+  deliberately contingent, and a decision to stop after step 4 is a legitimate outcome.
+- **The control probe's future trigger.** Recorded as visible and deliberately unspent: loosening a
+  fail-closed posture is the owner's decision, not a consequence of better plumbing.
 
 ## Glossary
 
-| Term | Meaning here |
-| --- | --- |
-| **Engagement** | Whether we observed the seat taking action. Never a claim about what it did *not* do. |
-| **Evidence entry** | One named observation supporting the verdict, carrying what was seen and where it was seen. |
-| **Delivery** | Whether a gradeable result reached us. Independent of engagement in both directions. |
-| **Credit** | Whether a seat counts toward certification or panel composition. Governed by delivery and outcome, never by engagement alone. |
-| **Unproven** | We did not observe action. Not a claim that none occurred. Replaces "never ran" where only absence of evidence supports it. |
-| **Probe verdict** | A vendor-scoped, provenance-bound policy conclusion from a control probe. Not a fact about any individual seat. |
-| **Archaeology** | Reconstructing engagement by parsing outcome tokens and payload shape — the practice this design retires. |
+Every obvious word for these concepts is already taken in this repo; the renames are deliberate.
+
+| Term | Meaning here | Why not the obvious word |
+| --- | --- | --- |
+| **Activity** (`observed` / `not-observed`) | Whether we observed the seat acting | "engaged"/"unproven" — `unproven` is already the vendor-liveness status meaning *no probe found*, and surfaces in the same disclosures |
+| **Observation** | One entry supporting the verdict: what was seen, where, and whether wrapper-minted or engine-asserted | "evidence" is already a dict of *counts* on the probe result — the very magnitudes FR-5 bars |
+| **Gradeable** | Whether a gradeable result reached us | "delivered" already means a count of declared paths on the write path, and a ledger stage with two derivations |
+| **Probe ruling** | A vendor-scoped, invocation-bound conclusion from a control probe | "verdict" is taken by verifier verdicts |
+| **Credit** | Whether a seat counts toward certification or panel composition | — |
+| **Archaeology** | Reconstructing activity by parsing outcome tokens and payload shape | — |
 
 ## Coverage
 
 | Area | Disposition | Where / why |
 | --- | --- | --- |
-| Empty & first-run | Specify | UFR-1 — no attempt spawned; and FR-12 for results predating the contract |
-| Invalid & malformed input | Specify | UFR-6 — an unrecognised evidence entry is honoured, not discarded |
-| Boundaries & limits | Specify | FR-5 — magnitudes may never move the verdict; the boundary is the evidence/magnitude line itself |
-| Errors & failures | Specify | UFR-1, UFR-2 — refusals, forfeits, and transport failure each get a defined attestation |
-| Access & permissions | Specify | FR-10 — audit authorization stays a separate axis and is not absorbed |
-| Duplicates & double-actions | Defer-to-build | Repeated probe invocations against one vendor already have a fail-closed aggregation rule; the promise is that a repeat can only make a vendor's status stricter, never looser |
-| Conflicting / simultaneous use | Specify | UFR-4 — the case where evidence and outcome disagree, resolved toward the weaker accurate claim |
-| Misuse & abuse | Specify | FR-8 and the rejected alternative below — a seat may never self-attest engagement; attestation is observed, never claimed |
+| Empty & first-run | Specify | UFR-1; FR-14 for results predating the contract |
+| Invalid & malformed input | Specify | UFR-6 — an unrecognised entry is retained but does not count |
+| Boundaries & limits | Specify | FR-5 — the observation/magnitude line; FR-8 — aggregation across attempts |
+| Errors & failures | Specify | UFR-1, UFR-2, UFR-7 |
+| Access & permissions | Specify | FR-12; and the trust-boundary section — the seat payload authenticates nothing |
+| Duplicates & double-actions | Defer-to-build | Repeated probes for one vendor already aggregate fail-closed; the promise is that a repeat can only make a vendor's status stricter |
+| Conflicting / simultaneous use | Specify | UFR-4 — observations and outcome disagreeing, resolved toward the weaker accurate claim |
+| Misuse & abuse | Specify | FR-3 and the trust boundary — a seat may never self-attest; an engine-asserted entry is marked as such |
 | Reach (i18n / a11y) | N-A | Internal machine contract with no human-language or interface surface |
 
 ## Rejected alternatives
 
-- **A third verdict value meaning "provably inert".** Unsound against the only instrument that could
-  mint it: a negative probe cannot distinguish no-spawn from transport failure from delivery failure
-  from absence of evidence, and it is explicitly fail-closed on an outcome that proves the seat *did*
-  act [cite: plugins/superheroes/lib/seat_canary.py § Fail-closed: artifact engaged but delivery failed].
-  A value that cannot be honestly minted must not exist.
-- **A new module owning engagement.** A sixth home for a word that already has five. The defect is
-  dispersion.
-- **Engines self-attesting engagement in their output.** Claimant-controlled, and exactly the input the
-  audit leg already refuses to trust. Attestation is observed by the wrapper.
-- **Making the residue-shape heuristic an evidence kind.** It measures resemblance, not action; its own
-  contract admits an error dump can score positive. It stays confined to salvage.
-- **Extending the existing literal-scan census to cover the migration.** It proves no consumer
-  exhaustiveness. Named as a constraint above rather than relied on.
-- **Producer-first or consumer-first decomposition.** Both create a window in which some readers see
-  the attestation and others still infer — the seam this work removes.
+- **A third verdict value meaning "provably inert".** Unsound: a negative probe cannot separate
+  no-spawn from transport failure from delivery failure from absence of evidence, and is explicitly
+  fail-closed on an outcome that proves the seat *did* act
+  [cite: plugins/superheroes/lib/seat_canary.py § Fail-closed: artifact engaged but delivery failed].
+- **Making the residue-shape heuristic an observation kind.** It measures resemblance, not action. It
+  stays on the gradeable/outcome side as the artifact-recovered fact (FR-9).
+- **Counting unrecognised observation entries** (the first draft's rule) — a fail-open that lets a
+  malformed or claimant-influenced entry manufacture activity.
+- **Carrying the attestation to the round driver in the seat payload.** It would make a wrapper
+  observation claimant-relayable, which is the self-attestation this design rejects.
+- **A new module owning activity.** Another home for a question that already has too many.
+- **Shipping the contract before the disclosure correction.** The correction is the owner-visible value
+  and needs none of the contract.
+- **Producer-first or consumer-first decomposition** — both open a window where some readers see the
+  attestation and others still infer.
 
 ## Amendments
 
-*(None — initial draft.)*
+**A1 (2026-08-14, round-1 review).** The first draft proposed a third verdict value, asserted that an
+engaged-artifact forfeit reads engaged, counted unrecognised evidence entries, claimed credit was
+governed by delivery and outcome alone, and put the contract train ahead of the disclosure correction.
+Four independent review seats — three doc-native lenses and one cross-vendor engine — converged on the
+engaged-artifact contradiction; the credit-axes error and the trust-boundary limit were each found by
+one seat and confirmed against the code. All five are corrected above, and the decomposition is
+restructured so the cheap, high-value change ships first.
