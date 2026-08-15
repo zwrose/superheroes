@@ -1151,7 +1151,7 @@ def test_vet_receipt_markers_match_conventions_10_7():
 _PREFLIGHT_CHARTER_BEGIN = "<!-- launch-doctrine:preflight-charter:begin -->"
 _PREFLIGHT_CHARTER_END = "<!-- launch-doctrine:preflight-charter:end -->"
 _PREFLIGHT_ENUM_ITEM = re.compile(
-    r"^\s*\d+\.\s+\*\*[^*]+\*\*\s*\(`[a-z][-a-z0-9]*`,\s*(?:always|conditional)\)",
+    r"^\s*(?:\d+\.|[-*])\s+\*\*[^*]+\*\*\s*\(`[a-z][-a-z0-9]*`,\s*(?:always|conditional)\)",
     re.MULTILINE,
 )
 _PREFLIGHT_CHECK_ID = re.compile(r"`([a-z][-a-z0-9]*)`")
