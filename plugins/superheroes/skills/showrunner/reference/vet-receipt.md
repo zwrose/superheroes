@@ -32,6 +32,13 @@ shape is wrong and the thinking wins.
    state** on that sha, and confirmation that the **remote head** contains it. A verdict pinned to
    nothing is a mood; a verdict pinned to a local-only commit is a claim about work the owner cannot
    see.
+   **Select that CI run by workflow name *and* head sha — never `gh run list --limit 1`.** The latest
+   run on a branch is whatever workflow happened to fire last, which is not necessarily the one whose
+   green you are claiming: a watcher taking `--limit 1` read a preview-anchor sync, called CI green,
+   and the **owner's** question caught it rather than the advisor's. Name the workflow and pin the
+   sha; a run that does not match both is not evidence about this head. The same selection binds
+   **any** CI watch on a head you are about to act on — a vet, a wave watch, a merge train — not only
+   the one this receipt records.
 2. **What I probed.** **Distinct from the builder's own receipts** — re-running a green suite the
    builder already ran is not a probe. Say **what bit**: the mutation that made a named test fail, the
    guard you live-fired, the refusal you provoked. Confirm every **probe residue was reverted**. A

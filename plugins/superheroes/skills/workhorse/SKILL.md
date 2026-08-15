@@ -548,7 +548,10 @@ without a tool call.
   run matched on a path and killed another session's live child. This is the same discipline as the
   liveness rule you already carry — act only on direct observation of processes **you own**. If you
   did not record the PID, you do not have a kill target, and going hunting for one is precisely how
-  you end up holding someone else's.
+  you end up holding someone else's. The one sanctioned way to recover a target you failed to record
+  — by your own run's cwd or port, never by command text — and the field record behind this rule are
+  in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md`
+  § Process cleanup.
 - **Gated strings as data, never inline in Bash.** A permission-gated literal that is being **written
   or matched as data** — a probe's test string, a memory or ledger append, any carrier that is not
   the command you intend to run — is never embedded inline in Bash text; a probe reads its test
@@ -1005,6 +1008,6 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | "The dead session's PR body says the tests passed — that's my receipt" | It is an inherited claim, not a receipt. Re-run it yourself, and sweep its worktrees for work it never pushed before you build on the pushed tip. |
 | "I'll just say where things stand and pick it up next turn." | A headless session **exits when the turn ends** — a standalone narrative message is a turn-ending act, not a pause. Until the durable handback comment or a durable park is posted, every turn ends with a **tool call**; narration rides alongside that call, never alone. |
 | "Git won't say who I am — I'll just pass my own email on the commit." | Commits inherit the identity the worktree **resolves** (repo-local config when set, else this environment's global — read it with `git config user.email`, never `--local`); `-c user.name`/`-c user.email` and any identity you synthesize are forbidden. A synthesized identity ships **unverified** commits that a downstream gate can refuse. A missing or wrong identity is a **park-and-report** (§2). |
-| "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. No recorded PID means no kill target (§7). |
+| "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. Without a recorded PID the only recovery is the one in `dispatch-mechanics.md` § Process cleanup — exactly one PID resolved from your own run's kernel-reported cwd or listener port; zero or several candidates means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |
 | "The launch said there's a slot but I can't find it — I'll just make a worktree." | A builder told a slot was supplied **refuses**. Self-provisioning is the race the advisor's provisioning duty exists to prevent — park and say the slot is missing. |

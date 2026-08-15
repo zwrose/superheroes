@@ -497,7 +497,7 @@ above).
    the one reviewer and per-change owner authorization stand in its place), CI green, branch current.
    **The gate is a backstop, not an authorization boundary** — delegation stands on advisor
    discipline with the gate behind it, never the reverse; **approval stays per-PR** ("approve once,
-   execute five" was considered and **not adopted**).
+   execute five" was considered and **not adopted**). **A merge train's "green" includes post-merge `main` CI**; **union fixes ride the last *open* PR, disclosed** — the recipe and its field cases: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat
