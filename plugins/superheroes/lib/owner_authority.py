@@ -45,8 +45,10 @@ import sys
 # quoted text would choose fail-open in a security gate. Known silent-bypass shapes are closed as
 # they are found; over-matching is an accepted cost.
 #
-# End-of-word is stated once in `_WORD_END`; every matcher row is built through `_gated` and must
-# not carry its own end anchor — so a row added later is boundary-aware by construction.
+# No row states its own end anchor; a row selects one of the two named shared anchors (`_WORD_END`
+# or `_TOKEN_END`), decided by whether the row matches a shell word or a payload identifier.
+# Every matcher row is built through `_gated` and must not carry its own end anchor — so a row
+# added later is boundary-aware by construction.
 #
 # Shell segment boundaries. Splitting first, then searching within a segment, replaces the old
 # tool-to-subcommand span: it removes BOTH the length cap (which fell through to None past 256
@@ -107,9 +109,15 @@ def _segments(command):
 _GH = re.compile(r"\bgh\b", re.I)
 _GIT = re.compile(r"\bgit\b", re.I)
 
-# End-of-word: the next character is not a word-continuation character, or end-of-string.
-# `.` and `-` deliberately continue a word (`git config push.default main`, `main-feature`).
+# A gated word that is a SHELL WORD ends at a shell word-terminator. `.` and `-` continue a
+# word here (`git config push.default main`, `git push origin main-feature`).
 _WORD_END = r"(?=[^\w.-]|$)"
+
+# A gated PAYLOAD IDENTIFIER is not a shell word — it lives INSIDE an argument (a GraphQL field
+# name, a REST path segment), where `.` and `-` are ordinary terminators, not continuations
+# (`--jq .data.mergePullRequest.number`, `pulls/42/merge-async`). This restores exactly the
+# breadth the `\b` these rows used to carry: after a word character, `\b` == `(?=\W|$)`.
+_TOKEN_END = r"(?=\W|$)"
 
 # Leading boundary for push-to-default's ref operand only — treats quote, backtick, `(`, `/` as
 # boundaries before `main`/`master`. Subcommand rows keep `(?<!\S)`; widening those would admit
@@ -122,8 +130,18 @@ _GATED_REGISTRY = set()
 _SHORT_FLAG_REGISTRY = set()
 
 
-def _gated(body, leading=r"(?<!\S)"):
-    compiled = re.compile(leading + body + _WORD_END, re.I)
+_FORBIDDEN_BODY_ANCHORS = (
+    r"(?!\S)", r"(?=\s", r"\b", r"\B", "$", r"\Z", r"\z",
+)
+
+
+def _gated(body, leading=r"(?<!\S)", ending=_WORD_END):
+    for token in _FORBIDDEN_BODY_ANCHORS:
+        if token in body:
+            raise ValueError(
+                "gated body must not contain end-anchor %r — use _WORD_END or _TOKEN_END"
+                % token)
+    compiled = re.compile(leading + body + ending, re.I)
     _GATED_REGISTRY.add(id(compiled))
     return compiled
 
@@ -153,8 +171,10 @@ def _force_push_flag_trailing():
 OWNER_AUTHORITY_COMMANDS = [
     ("merge-pr",        _GH,  _gated(r"pr\s+merge"), None),
     ("merge-api",       _GH,  _gated(r"api"),
-                              _gated(r"pulls/[^/\s]+/merge", leading=r"\b")),
-    ("merge-graphql",   None, _gated(r"mergePullRequest", leading=r"\b"), None),
+                              _gated(r"pulls/[^/\s]+/merge", leading=r"\b",
+                                     ending=_TOKEN_END)),
+    ("merge-graphql",   None, _gated(r"mergePullRequest", leading=r"\b",
+                                     ending=_TOKEN_END), None),
     ("release",         _GH,  _gated(r"release\s+create"), None),
     ("run-workflow",    _GH,  _gated(r"workflow\s+(run|enable|disable)"), None),
     ("force-push",      _GIT, _gated(r"push"),

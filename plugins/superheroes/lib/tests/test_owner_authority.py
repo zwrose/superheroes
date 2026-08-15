@@ -94,7 +94,17 @@ _CLUSTER_CENSUS = [
     ("git push \"-qf\" origin feature", "force-push"),
 ]
 
-_RECOGNISES_EACH_SHAPE = _BASE_SHAPES + _REDIRECTION_CENSUS + _CLUSTER_CENSUS
+# Invariant C — payload-identifier terminators on merge-api / merge-graphql (#1000 round-4).
+_PAYLOAD_IDENTIFIER_CENSUS = [
+    ("gh api -X PUT repos/o/r/pulls/42/merge-async", "merge-api"),
+    ("gh api repos/o/r/pulls/42/merge.json", "merge-api"),
+    ("gh api graphql -F query=@merge.graphql --jq .data.mergePullRequest.number",
+     "merge-graphql"),
+    ("gh api graphql -f query='{mergePullRequest.foo}'", "merge-graphql"),
+    ("gh api graphql --jq .mergePullRequest-x", "merge-graphql"),
+]
+
+_RECOGNISES_EACH_SHAPE = _BASE_SHAPES + _REDIRECTION_CENSUS + _CLUSTER_CENSUS + _PAYLOAD_IDENTIFIER_CENSUS
 
 _NONE_FOR_ORDINARY = [
     "git push origin my-branch",
@@ -178,7 +188,8 @@ _OWNER_AUTHORITY_ROW_COUNT = 7
 
 def test_owner_authority_commands_structural_census():
     # _gated's products are all retained in OWNER_AUTHORITY_COMMANDS, so their id()s cannot
-    # be recycled while the module is loaded.
+    # be recycled while the module is loaded. _short_flag returns a string (not a compiled
+    # pattern), so only _force_push_flag_trailing registers in _SHORT_FLAG_REGISTRY.
     assert len(oa.OWNER_AUTHORITY_COMMANDS) == _OWNER_AUTHORITY_ROW_COUNT
     assert oa._GATED_REGISTRY
     assert oa._SHORT_FLAG_REGISTRY
@@ -188,6 +199,34 @@ def test_owner_authority_commands_structural_census():
             trailing_id = id(trailing)
             assert (trailing_id in oa._GATED_REGISTRY
                     or trailing_id in oa._SHORT_FLAG_REGISTRY), action
+
+
+_GATED_CLEAN_BODIES = [
+    r"pr\s+merge",
+    r"api",
+    r"pulls/[^/\s]+/merge",
+    r"mergePullRequest",
+    r"release\s+create",
+    r"workflow\s+(run|enable|disable)",
+    r"push",
+    r"(?:refs/heads/)?(main|master)",
+]
+
+
+@pytest.mark.parametrize("body", _GATED_CLEAN_BODIES)
+def test_gated_clean_body_builds(body):
+    oa._gated(body)
+
+
+@pytest.mark.parametrize("body", [
+    r"pr\s+merge(?!\S)",
+    r"mergePullRequest\b",
+    r"api$",
+    r"push\Z",
+])
+def test_gated_rejects_body_with_end_anchor(body):
+    with pytest.raises(ValueError, match="end-anchor"):
+        oa._gated(body)
 
 
 # --- class-level behavioral census: gated-word terminators in wrappers (#1000) ---
@@ -289,6 +328,10 @@ _KNOWN_OPEN_UNCLASSIFIED = [
     'git -c user.name="x;y" push --force',          # separator inside a quoted value
     'git -c user.name="x|y" push --force',          # separator inside a quoted value
     "git push origin +feature",                     # `+` as force spelling, non-default ref
+    # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
+    "gh pr 0000000001>&1 merge 123",                # zero-padded fd defeats bounded \d{0,9}
+    "gh pr <> /dev/null merge 123",                 # composite operator <> with spaced operand
+    "gh pr <<< foo merge 123",                      # here-string operator not modelled
 ]
 
 
