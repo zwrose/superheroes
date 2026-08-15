@@ -509,10 +509,9 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
     Axis notes:
     - Events, refusals, degradations: the doc's bullet lists must match the module's EVENTS,
       REFUSALS, and DEGRADATIONS frozensets (token registries).
-    - Precedence: the doc precedence line must match the module docstring's precedence sentence
-      only. Drift between that docstring and run()'s actual return-arm order is NOT caught here —
-      that would need a behaviour test in test_wave_watch.py or an ordered tuple consumed by run()
-      (#996 residual, disclosed).
+    - Precedence: the doc precedence line must match the module docstring's precedence sentence;
+      return-arm order is bound separately by ``EVENT_PRECEDENCE`` and
+      ``test_event_precedence_matches_docstring`` in ``test_wave_watch.py``.
     """
     import wave_watch
 
@@ -1149,6 +1148,155 @@ def test_vet_receipt_markers_match_conventions_10_7():
     )
 
 
+_PREFLIGHT_CHARTER_BEGIN = "<!-- launch-doctrine:preflight-charter:begin -->"
+_PREFLIGHT_CHARTER_END = "<!-- launch-doctrine:preflight-charter:end -->"
+_PREFLIGHT_ENUM_ITEM = re.compile(
+    r"^\s*\d+\.\s+\*\*[^*]+\*\*\s*\(`[a-z][-a-z0-9]*`,\s*(?:always|conditional)\)",
+    re.MULTILINE,
+)
+_PREFLIGHT_CHECK_ID = re.compile(r"`([a-z][-a-z0-9]*)`")
+
+_NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+_ORDINAL_WORDS = {
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5,
+    "sixth": 6,
+    "seventh": 7,
+    "eighth": 8,
+    "ninth": 9,
+    "tenth": 10,
+    "eleventh": 11,
+    "twelfth": 12,
+}
+
+
+def _preflight_charter_block(text):
+    begin = text.find(_PREFLIGHT_CHARTER_BEGIN)
+    end = text.find(_PREFLIGHT_CHARTER_END)
+    assert begin != -1 and end != -1 and end > begin, (
+        "dispatch-preflight.md preflight-charter block not found (moved or renamed?)"
+    )
+    body_start = begin + len(_PREFLIGHT_CHARTER_BEGIN)
+    if body_start < len(text) and text[body_start] == "\n":
+        body_start += 1
+    body_end = end
+    if body_end > 0 and text[body_end - 1] == "\n":
+        body_end -= 1
+    return text[body_start:body_end]
+
+
+def _preflight_check_ids_from_home():
+    import launch_doctrine as ld
+
+    home_text = _read("skills/showrunner/reference/dispatch-preflight.md")
+    block = _preflight_charter_block(home_text)
+    in_block = set(re.findall(r"\(`([^`]+)`,\s*(?:always|conditional)\)", block))
+    parsed = ld.charter_checks(home_text)
+    assert parsed["ok"], parsed.get("reason")
+    home_ids = {c["id"] for c in parsed["checks"]}
+    assert in_block == home_ids, (
+        "dispatch-preflight.md charter block lists %r but charter_checks parsed %r"
+        % (sorted(in_block), sorted(home_ids))
+    )
+    return home_ids
+
+
+def test_dispatch_preflight_charter_single_home_guard():
+    """§11: dispatch-preflight.md is the single home for the eight enumerated preflight checks.
+
+    showrunner/SKILL.md must point at the home (at least one check id) and must not carry a stale
+    pasted enumeration or ids outside the home set.
+    """
+    home_ids = _preflight_check_ids_from_home()
+    charter = _read("skills/showrunner/SKILL.md")
+
+    pasted = _PREFLIGHT_ENUM_ITEM.findall(charter)
+    assert not pasted, (
+        "showrunner/SKILL.md carries pasted preflight enumeration item(s) %r — "
+        "the list belongs only in dispatch-preflight.md" % pasted[:3]
+    )
+
+    cited = set(_PREFLIGHT_CHECK_ID.findall(charter))
+    enum_form_ids = set(re.findall(r"\(`([^`]+)`,\s*(?:always|conditional)\)", charter))
+    stale = enum_form_ids - home_ids
+    assert not stale, (
+        "showrunner/SKILL.md cites preflight check id(s) %r in enumeration form that "
+        "dispatch-preflight.md does not name" % sorted(stale)
+    )
+    assert cited & home_ids, (
+        "showrunner/SKILL.md cites no dispatch-preflight check id at all — the pointer to the "
+        "home enumeration is missing"
+    )
+
+
+def test_showrunner_preflight_count_prose_matches_home():
+    """Duty 9 count words in showrunner/SKILL.md track dispatch-preflight.md's enumeration."""
+    import launch_doctrine as ld
+
+    home_text = _read("skills/showrunner/reference/dispatch-preflight.md")
+    parsed = ld.charter_checks(home_text)
+    assert parsed["ok"], parsed.get("reason")
+    check_count = len(parsed["checks"])
+    duty = _showrunner_orchestration_duty()
+
+    eight_match = re.search(r"\*\*([A-Za-z]+)\s+checks:\*\*", duty)
+    assert eight_match, (
+        "showrunner/SKILL.md duty 9 missing '<Word> checks:' count prose (moved or reworded?)"
+    )
+    eight_word = eight_match.group(1).lower()
+    assert eight_word in _NUMBER_WORDS, (
+        "showrunner/SKILL.md duty 9 uses unknown check-count word %r" % eight_word
+    )
+    assert _NUMBER_WORDS[eight_word] == check_count, (
+        "showrunner/SKILL.md duty 9 says %r checks but dispatch-preflight.md enumerates %d"
+        % (eight_word, check_count)
+    )
+
+    ninth_match = re.search(r"not a ([a-z]+) check\b", duty, re.IGNORECASE)
+    assert ninth_match, (
+        "showrunner/SKILL.md duty 9 missing 'not a <ordinal> check' prose (moved or reworded?)"
+    )
+    ninth_word = ninth_match.group(1).lower()
+    assert ninth_word in _ORDINAL_WORDS, (
+        "showrunner/SKILL.md duty 9 uses unknown ordinal %r in ninth-check guard" % ninth_word
+    )
+    assert _ORDINAL_WORDS[ninth_word] == check_count + 1, (
+        "showrunner/SKILL.md 'not a %s check' no longer matches len(home)+1 (%d+1)"
+        % (ninth_word, check_count)
+    )
+
+    list_match = re.search(r"\b([a-z]+)-check list\b", duty, re.IGNORECASE)
+    assert list_match, (
+        "showrunner/SKILL.md duty 9 missing '<word>-check list' prose (moved or reworded?)"
+    )
+    list_word = list_match.group(1).lower()
+    assert list_word in _NUMBER_WORDS, (
+        "showrunner/SKILL.md duty 9 uses unknown word %r in eight-check-list guard" % list_word
+    )
+    assert _NUMBER_WORDS[list_word] == check_count, (
+        "showrunner/SKILL.md '%s-check list' no longer matches dispatch-preflight enumeration (%d)"
+        % (list_word, check_count)
+    )
+
+
 def test_stamp_instructions_name_the_body_marker_specifically():
     """§10.7 + LEDGERS row 236's named closure: both stamp instructions name the BODY marker.
 
@@ -1544,6 +1692,25 @@ def _owner_authority_also_asks_bullet(doc):
     return m.group(1)
 
 
+def _owner_authority_also_asks_enumeration(doc):
+    """The flag-enumeration sentences of the 'Also asks' bullet — not example-only tail text."""
+    bullet = _owner_authority_also_asks_bullet(doc).strip()
+    m = re.match(
+        r"(.+?Ref flags\s*\([^)]+\)\s*ask\b[^.]*\.)",
+        bullet,
+        re.DOTALL | re.IGNORECASE,
+    )
+    if m:
+        return m.group(1)
+    m = re.match(r"([^:]+\:.+?\.)", bullet, re.DOTALL)
+    return m.group(1) if m else bullet
+
+
+def _owner_authority_flag_in_enumeration(flag, enumeration):
+    _flag_token = r"(?<![-\w])%s(?![-\w])"
+    return re.search(_flag_token % re.escape(flag), enumeration) is not None
+
+
 def test_owner_authority_allowlist_doc_matches_code():
     """§11: owner-authority-allowlist.md restates owner_authority.py constants and charset."""
     import owner_authority as oa
@@ -1580,16 +1747,17 @@ def test_owner_authority_allowlist_doc_matches_code():
             "owner-authority-allowlist.md missing ALLOWLISTABLE_ACTIONS member %r" % action)
 
     also_asks = _owner_authority_also_asks_bullet(doc)
+    also_asks_enum = _owner_authority_also_asks_enumeration(doc)
     _flag_token = r"(?<![-\w])%s(?![-\w])"
-    # bite-proof axis: every repo flag is named in the always-asks bullet.
+    # bite-proof axis: every repo flag is named in the always-asks enumeration clause.
     for flag in oa._REPO_FLAGS:
-        assert re.search(_flag_token % re.escape(flag), also_asks), (
-            "owner-authority-allowlist.md 'Also asks' bullet missing _REPO_FLAGS "
+        assert _owner_authority_flag_in_enumeration(flag, also_asks_enum), (
+            "owner-authority-allowlist.md 'Also asks' enumeration missing _REPO_FLAGS "
             "member %r" % flag)
     # bite-proof axis: ref-policy conditional — ref flags ask unless v2+sentinel covers them.
     for flag in oa._REF_FLAGS:
-        assert re.search(_flag_token % re.escape(flag), also_asks), (
-            "owner-authority-allowlist.md 'Also asks' bullet missing _REF_FLAGS "
+        assert _owner_authority_flag_in_enumeration(flag, also_asks_enum), (
+            "owner-authority-allowlist.md 'Also asks' enumeration missing _REF_FLAGS "
             "member %r" % flag)
     ref_versions = sorted(oa._REF_KEY_VERSIONS)
     ref_policy = re.compile(

@@ -3,6 +3,7 @@ call in this file passes an injected `run`, or (for the CLI test) monkeypatches 
 probe functions so `main()` never shells out."""
 import json
 import os
+import re
 import subprocess
 from types import SimpleNamespace
 
@@ -13,6 +14,46 @@ import mode_registry as mr
 import store_core as sc
 
 import preflight_probe as pp
+
+
+def _assert_read_error_payload_shape(read_error, *, reason_prefix):
+    """Payload readErrors carry the reason token and never leak absolute paths."""
+    assert read_error is not None
+    assert read_error.startswith(reason_prefix)
+    if ": " not in read_error:
+        return
+    detail = read_error.split(": ", 1)[1]
+    for token in re.findall(r"\S+", detail):
+        cleaned = token.rstrip(".,;)")
+        assert not os.path.isabs(cleaned), (
+            "absolute path leaked in readError payload: %r in %r" % (cleaned, read_error))
+
+
+def test_redact_read_error_payload_line_strips_git_stderr_and_relativizes_paths(tmp_path):
+    repo = str(tmp_path)
+    abs_core = os.path.join(repo, ".claude", "superheroes", "core.md")
+    raw = "repo-root-unavailable: git could not be run at %s: fatal: not a git repo" % repo
+    redacted = pp._redact_read_error_payload_line(raw, cwd=repo)
+    assert redacted.startswith("repo-root-unavailable: git could not be run at ")
+    assert "fatal:" not in redacted
+    _assert_read_error_payload_shape(redacted, reason_prefix="repo-root-unavailable: ")
+
+    raw_core = "core-md-unreadable: dangling symlink at %s" % abs_core
+    redacted_core = pp._redact_read_error_payload_line(raw_core, cwd=repo)
+    assert redacted_core == "core-md-unreadable: dangling symlink at .claude/superheroes/core.md"
+
+
+def test_config_read_payload_redacts_read_error(tmp_path):
+    repo = str(tmp_path)
+    abs_core = os.path.join(repo, ".claude", "superheroes", "core.md")
+    snap = {
+        "status": core_md.CONFIG_UNREADABLE,
+        "reason": core_md.GATE_REASON_UNREADABLE,
+        "readError": "core-md-unreadable: dangling symlink at %s" % abs_core,
+    }
+    payload = pp.config_read_payload(snap, cwd=repo)
+    _assert_read_error_payload_shape(payload["readError"], reason_prefix="core-md-unreadable: ")
+    assert ".claude/superheroes/core.md" in payload["readError"]
 
 
 def _fake_run(returncode, stdout="", stderr=""):
@@ -566,6 +607,7 @@ def test_dispatch_calibration_dangling_symlink_returns_marker_row(tmp_path):
     assert rows[0]["engine"] is None
     assert rows[0]["model"] is None
     assert rows[0]["readError"].startswith("core-md-unreadable: ")
+    _assert_read_error_payload_shape(rows[0]["readError"], reason_prefix="core-md-unreadable: ")
 
 
 def test_dispatch_calibration_corrupt_returns_marker_row(tmp_path):
@@ -580,6 +622,7 @@ def test_dispatch_calibration_corrupt_returns_marker_row(tmp_path):
     assert rows[0]["engine"] is None
     assert rows[0]["model"] is None
     assert rows[0]["readError"].startswith("core-md-unreadable: ")
+    _assert_read_error_payload_shape(rows[0]["readError"], reason_prefix="core-md-unreadable: ")
 
 
 def _git_unavailable(monkeypatch, detail="FileNotFoundError: no git"):
@@ -603,6 +646,8 @@ def test_dispatch_calibration_root_unavailable_returns_marker_not_defaults(tmp_p
     assert rows[0]["engine"] is None
     assert rows[0]["model"] is None
     assert rows[0]["readError"].startswith("repo-root-unavailable: ")
+    _assert_read_error_payload_shape(
+        rows[0]["readError"], reason_prefix="repo-root-unavailable: ")
     assert "readError" in rows[0]
 
 
@@ -621,6 +666,7 @@ def test_dispatch_calibration_cli_carries_marker_on_unreadable(tmp_path, monkeyp
     assert len(cal) == 1
     assert cal[0]["role"] == "*"
     assert cal[0]["readError"].startswith("core-md-unreadable: ")
+    _assert_read_error_payload_shape(cal[0]["readError"], reason_prefix="core-md-unreadable: ")
     assert payload["aggregate"]["go"] is False
     vocab = [p for p in payload["probes"] if p["tool"] == "dispatch-vocab"]
     assert len(vocab) == 1
@@ -637,7 +683,10 @@ def test_dispatch_calibration_invalid_utf8_tiers_returns_evaluation_failed_marke
     assert rows[0]["role"] == "*"
     assert rows[0]["engine"] is None
     assert rows[0]["model"] is None
-    assert rows[0]["readError"].startswith("dispatch-gate-evaluation-failed: UnicodeDecodeError:")
+    assert rows[0]["readError"].startswith("dispatch-gate-evaluation-failed: UnicodeDecodeError")
+    _assert_read_error_payload_shape(
+        rows[0]["readError"],
+        reason_prefix="dispatch-gate-evaluation-failed: UnicodeDecodeError")
 
 
 # --- configured_cross_vendor_engines -------------------------------------------------------
@@ -1426,6 +1475,8 @@ def test_run_unreadable_config_self_consistent(tmp_path, monkeypatch, capsys):
     payload = json.loads(capsys.readouterr().out)
     assert payload["configRead"]["reason"] is not None
     assert payload["configRead"]["readError"] is not None
+    _assert_read_error_payload_shape(
+        payload["configRead"]["readError"], reason_prefix="core-md-unreadable: ")
     assert payload["aggregate"]["go"] is not True
 
 
@@ -1473,9 +1524,12 @@ def test_compose_liveness_unreadable_core_config_read_and_note(tmp_path, monkeyp
     assert rc == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["configRead"]["readError"] is not None
+    _assert_read_error_payload_shape(
+        payload["configRead"]["readError"], reason_prefix="core-md-unreadable: ")
     assert payload["configRead"]["reason"] == core_md.GATE_REASON_UNREADABLE
     unread_notes = [n for n in payload["notes"] if n.get("constraint") == core_md.GATE_REASON_UNREADABLE]
     assert len(unread_notes) == 1
+    assert unread_notes[0]["reason"] == payload["configRead"]["readError"]
 
 
 def test_compose_liveness_readable_core_no_unreadable_note(tmp_path, monkeypatch, capsys):
@@ -1626,6 +1680,8 @@ def test_absent_core_with_corrupt_tiers_blocks_go(tmp_path, monkeypatch, capsys)
     assert len(cal) == 1
     assert cal[0]["role"] == "*"
     assert cal[0]["readError"].startswith("dispatch-gate-evaluation-failed: ")
+    _assert_read_error_payload_shape(
+        cal[0]["readError"], reason_prefix="dispatch-gate-evaluation-failed: ")
 
 
 def test_dispatch_selftest_config_absent_core_reads_real_tiers(tmp_path):
