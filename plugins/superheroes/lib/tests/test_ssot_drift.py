@@ -249,8 +249,13 @@ def _review_result_kind_enum_from_home():
 
 
 def _review_result_kind_tokens_from_doc_block(block):
-    tokens = set(re.findall(r"`([^`]+)`", block))
-    return {t for t in tokens if t in _review_result_kind_enum_from_home()}
+    return set(re.findall(r"`([^`]+)`", block))
+
+
+_REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
+    "skills/review-code/reference/auto-fix-loop.md": 3,
+    "skills/workhorse/reference/dispatch-mechanics.md": 2,
+}
 
 
 def _review_result_kind_enum_copies_from_doc(doc):
@@ -258,7 +263,7 @@ def _review_result_kind_enum_copies_from_doc(doc):
     patterns = [
         r"\(one of\s*(.*?)\)\s*naming the payload",
         r"\(`([^`]+)` or `([^`]+)`\) naming which payload",
-        r'exactly "`([^`]+)`" or "`([^`]+)`"',
+        r'exactly `"([^"]+)"` or `"([^"]+)"`',
     ]
     copies = []
     for pat in patterns:
@@ -275,34 +280,38 @@ def _review_result_kind_enum_copies_from_doc(doc):
     return copies
 
 
-def test_review_result_kind_enum_in_auto_fix_loop_doc():
-    """§11: every resultKind enum copy in auto-fix-loop.md matches engine_adapter."""
+def _assert_review_result_kind_enum_copies_match_home(doc_rel):
+    """§11: every pinned resultKind enum copy in doc_rel matches engine_adapter."""
     home = _review_result_kind_enum_from_home()
-    doc = _read("skills/review-code/reference/auto-fix-loop.md")
-    for i, doc_tokens in enumerate(_review_result_kind_enum_copies_from_doc(doc)):
+    doc = _read(doc_rel)
+    copies = _review_result_kind_enum_copies_from_doc(doc)
+    expected_count = _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS[doc_rel]
+    assert len(copies) == expected_count, (
+        "%s: expected %d resultKind enum copies, found %d "
+        "(a copy dropped out of recognition or a new copy was not registered?)"
+        % (doc_rel, expected_count, len(copies))
+    )
+    for i, doc_tokens in enumerate(copies):
         missing_from_doc = sorted(home - doc_tokens)
         extra_in_doc = sorted(doc_tokens - home)
         assert not missing_from_doc and not extra_in_doc, (
-            "auto-fix-loop.md resultKind enum copy %d drift from "
+            "%s resultKind enum copy %d drift from "
             "engine_adapter.REVIEW_RESULT_KINDS — "
             "missing from doc: %r; present in doc but not in home: %r"
-            % (i, missing_from_doc, extra_in_doc)
+            % (doc_rel, i, missing_from_doc, extra_in_doc)
         )
+
+
+def test_review_result_kind_enum_in_auto_fix_loop_doc():
+    """§11: every resultKind enum copy in auto-fix-loop.md matches engine_adapter."""
+    _assert_review_result_kind_enum_copies_match_home(
+        "skills/review-code/reference/auto-fix-loop.md")
 
 
 def test_review_result_kind_enum_in_dispatch_mechanics_doc():
     """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
-    home = _review_result_kind_enum_from_home()
-    doc = _read("skills/workhorse/reference/dispatch-mechanics.md")
-    for i, doc_tokens in enumerate(_review_result_kind_enum_copies_from_doc(doc)):
-        missing_from_doc = sorted(home - doc_tokens)
-        extra_in_doc = sorted(doc_tokens - home)
-        assert not missing_from_doc and not extra_in_doc, (
-            "dispatch-mechanics.md resultKind enum copy %d drift from "
-            "engine_adapter.REVIEW_RESULT_KINDS — "
-            "missing from doc: %r; present in doc but not in home: %r"
-            % (i, missing_from_doc, extra_in_doc)
-        )
+    _assert_review_result_kind_enum_copies_match_home(
+        "skills/workhorse/reference/dispatch-mechanics.md")
 
 
 # --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---

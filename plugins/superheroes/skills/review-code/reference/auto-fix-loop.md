@@ -50,8 +50,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > instead of a named subagent, and it returns its payload on **stdout** rather than writing a
 > findings file. Panel seats emit `{"findings": [...], "investigated": [...]}`; verifier seats emit
 > `{"verdicts": [...], "investigated": [...]}`. The graded result carries **`resultKind`**
-> (`findings` or `verdicts`) naming which payload key survived. A seat that omits `investigated`
-> forfeits vacuously. The contract shape also lives in the base rubric's
+> (`findings` or `verdicts`) naming which payload key survived. A non-empty `findings` or
+> `verdicts` payload succeeds without `investigated`; only an **empty** payload needs a surviving
+> `investigated` path (see below). The contract shape also lives in the base rubric's
 > "Findings output format" section; the
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
@@ -250,7 +251,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > seat emits is dropped. Callers may pin the expected kind mechanically via
 > `dispatch-review --expected-result-kind {findings,verdicts}` (library:
 > `expected_result_kind=`); a mismatched kind is refused with `detail: result-kind-mismatch`, not
-> `unreadable`. **Review panel** seats pass the **`findings`** pin; the **verify phase** passes the
+> `unreadable`. The pin is journaled when the run is **opened**; a continuation call on an existing
+> `--run-dir` keeps the journaled value rather than adopting a pin supplied later — a run's identity
+> is fixed at open. **Review panel** seats pass the **`findings`** pin; the **verify phase** passes the
 > **`verdicts`** pin. **`findings`** remains the default when no pin is set
 > (#687 findings-only posture for panel seats is unchanged). A **`verdicts`** payload now travels
 > through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
@@ -328,6 +331,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
+>   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
@@ -335,6 +339,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
+>   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
