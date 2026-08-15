@@ -2639,6 +2639,31 @@ def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     return repo_root, view
 
 
+def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
+    """Attempt 1 ended with clean findings; attempt 2 is a live child process."""
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+        "at": time.time(),
+    })
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 2, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 2, "enginePgid": proc.pid, "at": time.time(),
+    })
+    return repo_root, proc
+
+
 def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
     run_dir = str(tmp_path / "run-graded")
     _manual_two_attempt_review_poll_fixture(tmp_path, run_dir)
@@ -4393,4 +4418,223 @@ def test_dispatch_review_every_outcome_carries_mode(
     assert res["terminal"] is expected_terminal, label
     if expected_detail is not None:
         assert res.get("detail") == expected_detail, label
+
+
+# --- #763-F: dispatch_review result key-presence matrix (F-I1–F-I4) ---
+
+
+def _other_review_result_kind(kind):
+    for candidate in ED.REVIEW_RESULT_KINDS:
+        if candidate != kind:
+            return candidate
+    raise AssertionError("REVIEW_RESULT_KINDS must declare at least two kinds")
+
+
+def _matrix_clean_payload_stdout(kind):
+    if kind == "findings":
+        return _VALID_FINDINGS_STDOUT
+    return _VALID_VERDICTS_STDOUT
+
+
+def _matrix_empty_payload_stdout(kind):
+    if kind == "findings":
+        return json.dumps({"findings": []})
+    return json.dumps({"verdicts": []})
+
+
+def _matrix_investigated_only_stdout(kind, path="good.py"):
+    if kind == "findings":
+        return json.dumps({"findings": [], "investigated": [path]})
+    return json.dumps({"verdicts": [], "investigated": [path]})
+
+
+def _matrix_placeholder_stdout(kind):
+    if kind == "findings":
+        return json.dumps({"findings": [{
+            "id": EA.REVIEW_BASE_TEMPLATE_ID,
+            "severity": "Minor", "title": "t", "body": "b",
+        }]})
+    return json.dumps({"verdicts": [{
+        "id": EA.REVIEW_BASE_TEMPLATE_ID,
+        "verdict": "CONFIRMED",
+    }]})
+
+
+_AMBIGUOUS_BOTH_KEYS_STDOUT = json.dumps({"findings": [], "verdicts": []})
+
+
+def _matrix_repo_with_good_py(tmp_path):
+    repo_root = _repo(tmp_path)
+    with open(os.path.join(repo_root, "good.py"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    return repo_root
+
+
+def _assert_dispatch_review_key_contract(res, present, absent, label):
+    for key in present:
+        assert key in res, "%s: expected %r present, got keys %r" % (label, key, sorted(res))
+    for key in absent:
+        assert key not in res, "%s: expected %r absent, got %r" % (label, key, res.get(key))
+
+
+def _dispatch_review_key_matrix_rows():
+    rows = []
+    terminal_clean_present = (
+        "ok", "terminal", "resultKind", "engagement", "sanitizedView", "mode",
+    )
+    terminal_clean_absent = ("reason", "graded", "payloadShape")
+    for kind in ED.REVIEW_RESULT_KINDS:
+        other = _other_review_result_kind(kind)
+        rows.append({
+            "label": "clean-payload-%s" % kind,
+            "kind": kind,
+            "present": terminal_clean_present + (kind,),
+            "absent": terminal_clean_absent + (other,),
+            "responses": [(_matrix_clean_payload_stdout(kind), False, 0, "")],
+            "setup": "standard",
+        })
+        rows.append({
+            "label": "clean-investigated-%s" % kind,
+            "kind": kind,
+            "present": terminal_clean_present + (kind, "investigated"),
+            "absent": terminal_clean_absent + (other,),
+            "responses": [(_matrix_investigated_only_stdout(kind), False, 0, "")],
+            "setup": "investigated_repo",
+        })
+        empty = _matrix_empty_payload_stdout(kind)
+        rows.append({
+            "label": "vacuous-forfeit-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "sanitizedView", "mode",
+            ),
+            "absent": (
+                "findings", "verdicts", "investigated", "payloadShape", "graded",
+                "resultKind",
+            ),
+            "responses": [(empty, False, 0, ""), (empty, False, 0, "")],
+            "setup": "standard",
+            "expect_reason": ED.engine_adapter.REVIEW_FORFEIT_VACUOUS,
+        })
+        unreadable = _UNREADABLE_REVIEW_STDOUT
+        rows.append({
+            "label": "shape-unreadable-forfeit-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "payloadShape", "sanitizedView", "mode",
+            ),
+            "absent": ("findings", "verdicts", "investigated", "graded", "resultKind"),
+            "responses": [(unreadable, False, 0, ""), (unreadable, False, 0, "")],
+            "setup": "standard",
+        })
+        placeholder = _matrix_placeholder_stdout(kind)
+        rows.append({
+            "label": "placeholder-literal-refusal-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "payloadShape", "sanitizedView", "mode",
+            ),
+            "absent": ("findings", "verdicts", "investigated", "graded", "resultKind"),
+            "responses": [(placeholder, False, 0, ""), (placeholder, False, 0, "")],
+            "setup": "standard",
+        })
+        rows.append({
+            "label": "ambiguous-both-keys-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "payloadShape", "sanitizedView", "mode",
+            ),
+            "absent": ("findings", "verdicts", "investigated", "graded", "resultKind"),
+            "responses": [
+                (_AMBIGUOUS_BOTH_KEYS_STDOUT, False, 0, ""),
+                (_AMBIGUOUS_BOTH_KEYS_STDOUT, False, 0, ""),
+            ],
+            "setup": "standard",
+        })
+        rows.append({
+            "label": "unrunnable-refusal-%s" % kind,
+            "kind": kind,
+            "present": ("ok", "terminal", "reason", "mode"),
+            "absent": ("findings", "verdicts", "investigated", "engagement", "graded"),
+            "responses": None,
+            "setup": "unrunnable",
+        })
+    rows.append({
+        "label": "running-non-terminal",
+        "kind": None,
+        "present": ("terminal", "graded", "mode", "reason"),
+        "absent": ("findings", "verdicts", "investigated", "engagement"),
+        "responses": None,
+        "setup": "running",
+    })
+    return rows
+
+
+_DISPATCH_REVIEW_KEY_MATRIX_ROWS = _dispatch_review_key_matrix_rows()
+
+
+def test_dispatch_review_key_matrix_covers_every_declared_kind():
+    covered = {
+        row["kind"] for row in _DISPATCH_REVIEW_KEY_MATRIX_ROWS if row["kind"] is not None
+    }
+    assert covered == set(ED.REVIEW_RESULT_KINDS)
+
+
+@pytest.mark.parametrize("row", _DISPATCH_REVIEW_KEY_MATRIX_ROWS, ids=lambda r: r["label"])
+def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
+    label = row["label"]
+    present = row["present"]
+    absent = row["absent"]
+    setup = row["setup"]
+
+    if setup == "unrunnable":
+        fake = FakeRunner([])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+            build_view=_never_build_view,
+        )
+        assert len(fake.calls) == 0
+    elif setup == "running":
+        run_dir = str(tmp_path / ("run-%s" % label))
+        repo_root, proc = _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir)
+        try:
+            res = ED.dispatch_review(
+                "codex", model="sonnet", effort="high",
+                prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+                run_engine=FakeRunner([]), build_view=_never_build_view,
+                run_dir=run_dir, order_id="test-order", max_wait=1,
+            )
+            assert res["terminal"] is False
+            assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+            graded = res["graded"]
+            assert isinstance(graded, list)
+            assert len(graded) >= 1
+            assert graded[0].get("findings")
+        finally:
+            ED._terminate_process_group(proc.pid)
+            proc.wait(timeout=2)
+    else:
+        if setup == "investigated_repo":
+            repo_root = _matrix_repo_with_good_py(tmp_path)
+        else:
+            repo_root = _repo(tmp_path)
+        fake = FakeRunner(row["responses"])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        kind = row["kind"]
+        if kind is not None:
+            assert res.get("resultKind") == kind or "resultKind" in absent
+        expect_reason = row.get("expect_reason")
+        if expect_reason is not None:
+            assert res.get("reason") == expect_reason
+
+    _assert_dispatch_review_key_contract(res, present, absent, label)
 
