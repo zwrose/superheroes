@@ -75,11 +75,11 @@ omitted section is exactly what a reader cannot interpret.
 ## Follow-up economics
 
 Every proposed **filing** answers the spine's **Cost of inaction** question. An item that cannot
-answer that has not earned its keep — *"pressure test them for actual
-impact... make sure they earn their keep"* is the floor, not decoration.
+answer that has not earned its keep — *"pressure test them for actual impact... make sure they earn
+their keep"* is the floor, not decoration.
 
 **Decline-to-file is a first-class recommendation**, not a failure to find work. Recommend it by name
-when the answer to the question above is *nothing much* — *"we don't need to file and fix every tiny
+when the answer to the **Cost of inaction** question is *nothing much* — *"we don't need to file and fix every tiny
 bug ever"* is permission to say no, not an excuse to omit the recommendation.
 
 **A declined owner-named risk carries a mechanical tripwire** — when the owner has named a risk and
@@ -100,8 +100,9 @@ carry them forward unchanged.
 
 **Deliver batch 1 first and alone.** **Batch 1 is only what blocks the advisor's own next action**,
 and **explicitly excludes new-issue filings, which are never blocking**. **Batch 2 is everything else.**
-Between them the advisor **executes what batch 1 unblocked** while the owner rules on batch 2 — that
-between-batch execution is the point of splitting at all, bounded by the section below.
+**Deliver batch 2 as soon as batch-1 rulings land** — the advisor **executes what batch 1 unblocked
+alongside** the owner's batch-2 rulings, not ahead of them. That overlap is why the split exists at
+all, bounded by the section below.
 
 **State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
 failed."
@@ -119,12 +120,15 @@ correction, 2026-08-07.)
 entries are the register; each carries what it is, the recommendation, and the proposing vet's
 ordinal (see `skills/showrunner/reference/vet-receipt.md`).
 
-**Best-effort:** open **parks** and anything pending in the session. A park is free-form prose on an
-issue or PR with **no marker, label, or index**, so parks cannot be enumerated exhaustively. Reach
-them from the advisor's own durable pointer and from open issues and PRs in the project.
+**Best-effort:** open **parks** and anything **pending in the session** — decisions raised but not yet
+delivered, and decisions delivered in a prior turn that are still awaiting a ruling. A park is
+free-form prose on an issue or PR with **no marker, label, or index**, so parks cannot be enumerated
+exhaustively. Reach them from the advisor's own durable pointer and from open issues and PRs in the
+project.
 
-**Say the bound in the delivered message**: the park sweep is **not exhaustive**, and the collector
-is the only authoritative register. An unbounded promise reads as covered when it is not.
+**Say the bound in the delivered message**: state what was actually searched (collector, which open
+issues/PRs, durable pointers), and that the park sweep is **not exhaustive** — the collector is the
+only authoritative register. An unbounded promise reads as covered when it is not.
 
 **Dedup rule:** an item appearing in more than one source is delivered **once**, keyed to its
 collector entry where it has one.
@@ -159,7 +163,8 @@ or reports the malformed region, rather than deleting anything.
 **Read trigger:** about to deliver open decisions → read that file first.
 
 **Filter (duty 5):** each item names why it is the owner's (taste, trade, or commitment). Filtered,
-never swallowed — failed items listed with a one-line reason; grounds per item, not per batch.
+never swallowed — separate short list before batch 1 with a one-line reason each; grounds per item,
+not per batch.
 
 **Spine per item:** (1) why it is yours, (2) context — rule without another artifact, (3) options with
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
@@ -169,8 +174,9 @@ the cost named — Recommendation: b — …. Empty sections stated empty, never
 ship with a mechanical tripwire (≥2× worst observed).
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
-(1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; on
-batch-1 rulings, deliver batch 2 while executing what batch 1 unblocked.
+(1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
+as batch-1 rulings land, deliver batch 2 while executing what batch 1 unblocked alongside; state empty
+batches plainly.
 
 **Formatting:** one block per spine section — never one run-on paragraph.
 <!-- /superheroes:owner-decisions-contract -->
