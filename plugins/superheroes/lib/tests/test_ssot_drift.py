@@ -409,7 +409,7 @@ def _wave_watch_string_constants_by_prefix(prefix):
 
 
 def _wave_watch_precedence_from_home():
-    """Precedence order from wave_watch.py's module docstring — no named data structure."""
+    """Precedence order from wave_watch.py's module docstring."""
     text = _read("lib/wave_watch.py")
     m = re.search(
         r"- Precedence:\s*(.*?)\.",
@@ -426,6 +426,47 @@ def _wave_watch_precedence_from_home():
         order.append(token)
     assert order, "wave_watch.py: precedence sentence parsed to zero tokens"
     return order
+
+
+def _wave_watch_precedence_tuple_from_home():
+    import wave_watch
+
+    return list(wave_watch.PRECEDENCE)
+
+
+def _wave_watch_verbs_from_home():
+    """Subcommand verbs registered on main()'s argparse subparsers."""
+    import inspect
+
+    import wave_watch
+
+    source = inspect.getsource(wave_watch.main)
+    verbs = set(re.findall(r"sub\.add_parser\(\"([^\"]+)\"\)", source))
+    assert verbs, (
+        "wave_watch.py: main() subparser verbs not found "
+        "(moved or reworded?)"
+    )
+    return verbs
+
+
+def _wave_watch_verbs_from_doc(doc):
+    """Verbs documented via wave_watch.py invocation snippets in wave-watch.md."""
+    verbs = set(re.findall(r"wave_watch\.py\"\s+(\w+)", doc))
+    assert verbs, (
+        "wave-watch.md: wave_watch.py verb invocations not found "
+        "(moved or reworded?)"
+    )
+    return verbs
+
+
+def _wave_watch_exit_contract_from_doc(doc):
+    """Exit contract phrase required in wave-watch.md."""
+    phrase = "exit 0 on an event, exit 1 on a refusal"
+    assert phrase in doc, (
+        "wave-watch.md: exit contract phrase not found "
+        "(moved or reworded?): %r" % phrase
+    )
+    return phrase
 
 
 def _wave_watch_events_from_doc(doc):
@@ -504,22 +545,22 @@ def _wave_watch_precedence_from_doc(doc):
 
 
 def test_wave_watch_vocabulary_in_wave_watch_doc():
-    """§11: wave-watch.md restates wave_watch.py vocabulary on three registry axes and one partial axis.
+    """§11: wave-watch.md restates wave_watch.py vocabulary, verbs, and exit contract.
 
-    Axis notes:
-    - Events, refusals, degradations: the doc's bullet lists must match the module's EVENTS,
-      REFUSALS, and DEGRADATIONS frozensets (token registries).
-    - Precedence: the doc precedence line must match the module docstring's precedence sentence
-      only. Drift between that docstring and run()'s actual return-arm order is NOT caught here —
-      that would need a behaviour test in test_wave_watch.py or an ordered tuple consumed by run()
-      (#996 residual, disclosed).
+    Pinned axes:
+    - Events, refusals, degradations: doc bullet lists match EVENTS, REFUSALS, DEGRADATIONS.
+    - Precedence: module docstring sentence, PRECEDENCE tuple, and doc line agree; tuple is authority.
+    - Verbs: every main() subparser verb appears in doc invocation snippets; no extra doc verbs.
+    - Exit contract: required phrase present in the doc.
     """
     import wave_watch
 
     home_events = _wave_watch_events_from_home()
     home_refusals = _wave_watch_refusals_from_home()
     home_degradations = _wave_watch_degradations_from_home()
-    home_precedence = _wave_watch_precedence_from_home()
+    home_precedence_docstring = _wave_watch_precedence_from_home()
+    home_precedence_tuple = _wave_watch_precedence_tuple_from_home()
+    home_verbs = _wave_watch_verbs_from_home()
     derived_events = _wave_watch_string_constants_by_prefix("EVENT_")
     derived_refusals = _wave_watch_string_constants_by_prefix("REFUSAL_")
     derived_degradations = _wave_watch_string_constants_by_prefix("DEGRADATION_")
@@ -538,7 +579,13 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
         "symmetric difference: %r"
         % sorted(derived_degradations ^ home_degradations)
     )
+    assert home_precedence_docstring == home_precedence_tuple, (
+        "wave_watch.py module docstring precedence drift from PRECEDENCE tuple — "
+        "docstring: %r; tuple: %r"
+        % (home_precedence_docstring, home_precedence_tuple)
+    )
     doc = _read("skills/showrunner/reference/wave-watch.md")
+    _wave_watch_exit_contract_from_doc(doc)
     doc_events = _wave_watch_events_from_doc(doc)
     missing_events = sorted(home_events - doc_events)
     extra_events = sorted(doc_events - home_events)
@@ -564,14 +611,23 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
         % (missing_degradations, extra_degradations)
     )
     doc_precedence = _wave_watch_precedence_from_doc(doc)
-    assert doc_precedence == home_precedence, (
-        "wave-watch.md precedence line drift from wave_watch.py module docstring — "
-        "doc: %r; home: %r"
-        % (doc_precedence, home_precedence)
+    assert doc_precedence == home_precedence_tuple, (
+        "wave-watch.md precedence line drift from wave_watch.PRECEDENCE — "
+        "doc: %r; tuple: %r"
+        % (doc_precedence, home_precedence_tuple)
+    )
+    doc_verbs = _wave_watch_verbs_from_doc(doc)
+    missing_verbs = sorted(home_verbs - doc_verbs)
+    extra_verbs = sorted(doc_verbs - home_verbs)
+    assert not missing_verbs and not extra_verbs, (
+        "wave-watch.md verb documentation drift from main() subparsers — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_verbs, extra_verbs)
     )
     events_registry = set(wave_watch.EVENTS)
     for label, precedence in (
-        ("wave_watch.py module docstring", home_precedence),
+        ("wave_watch.PRECEDENCE tuple", home_precedence_tuple),
+        ("wave_watch.py module docstring", home_precedence_docstring),
         ("wave-watch.md", doc_precedence),
     ):
         prec_set = set(precedence)
