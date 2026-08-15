@@ -2170,13 +2170,32 @@ def test_confirm_degraded_path_bounded_git_calls(tmp_path, monkeypatch):
     assert counter["n"] <= 6
 
 
-def test_confirm_all_bounded_git_calls(tmp_path, monkeypatch):
+def test_confirm_all_bounded_git_calls_no_layers(tmp_path, monkeypatch):
     repo = _init_git_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
     store = str(tmp_path / "store")
     counter = _git_subprocess_counter(monkeypatch)
     res = CM.confirm_all(repo, root=store)
     assert res == {"core": {"action": "absent", "record": None}, "layers": {}}
     assert counter["n"] <= 6
+
+
+def test_confirm_all_bounded_git_calls_traverses_layers(tmp_path, monkeypatch):
+    """confirm_all must traverse present hero layers inside the reentrant repo_identity_memo."""
+    repo = _init_git_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    store = str(tmp_path / "store")
+    CM.write(repo, dict(_CORE_FACTS), "provisional", root=store, now="2026-06-26")
+    layer_p = CM._layer_path(repo, "review-crew", store)
+    os.makedirs(os.path.dirname(layer_p), exist_ok=True)
+    open(layer_p, "w").write(
+        '<!-- review-crew: schemaVersion=1 status=provisional created=2026-06-20 '
+        'updated=2026-06-20 nudge-ack={} -->\n\n## Scope exclusions\n- none\n')
+    counter = _git_subprocess_counter(monkeypatch)
+    res = CM.confirm_all(repo, root=store, now="2026-06-28")
+    assert res["core"]["action"] == "confirmed"
+    assert res["layers"]["review-crew"]["action"] == "confirmed"
+    # Observed: 3 git subprocess calls with one layer (memo reuses identity lookups).
+    # Bound 4: +1 slack for env variance; unmemoized per-hero identity probes would exceed it.
+    assert counter["n"] <= 4
 
 
 def test_profile_structural_refusal_none_for_normal_single_block_core(tmp_path):
