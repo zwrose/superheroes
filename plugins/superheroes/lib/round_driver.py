@@ -5577,9 +5577,15 @@ def _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, atte
     return response
 
 
+_ORCHESTRATOR_FULFILLED_USE_SEAT_PATH = object()
+
+
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
                                            git=None, broke=None):
-    """Fold an orchestrator-fulfilled phase from its host-seat bare payload — no orders manifest."""
+    """Fold an orchestrator-fulfilled phase from its host-seat bare payload when present.
+
+    When the bare payload is absent, decline so the caller can fold through the durable
+    seat-record path. A bare payload that is present but malformed refuses without fallback."""
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
@@ -5591,6 +5597,9 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
     payload, perr = round_records.read_json(path)
     if perr == "missing":
+        slots = _seat_slot_records(session_dir, rnd, phase, attempt, roster)
+        if any(env is not None for _seat, _occurrence, env in slots):
+            return _ORCHESTRATOR_FULFILLED_USE_SEAT_PATH
         return _refuse_cmd(session_dir, "advance", "orchestrator-payload-missing", phase=phase,
                            rnd=rnd, attempt=attempt, seat=seat_key, path=path,
                            detail="expected host-seat payload at %s" % path)
@@ -5598,6 +5607,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         return _refuse_cmd(session_dir, "advance", "orchestrator-payload-unreadable",
                            phase=phase, rnd=rnd, attempt=attempt, seat=seat_key, path=path,
                            detail=perr)
+    # Both a bare payload and a durable seat record may exist — the bare payload wins (no double fold).
     fault = _adapters().orchestrator_payload_fault(phase, payload)
     if fault:
         return _refuse_cmd(session_dir, "advance", fault, phase=phase, rnd=rnd, attempt=attempt,
@@ -5651,8 +5661,10 @@ def _advance_locked(session_dir, state, git=None, broke=None):
         return _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=git,
                                    broke=broke)
     if _adapters().is_orchestrator_fulfilled(phase):
-        return _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt,
+        orch = _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt,
                                                       config, git=git, broke=broke)
+        if orch is not _ORCHESTRATOR_FULFILLED_USE_SEAT_PATH:
+            return orch
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal

@@ -142,6 +142,11 @@ class FakeAdapters(object):
             return {"verdicts": []}, None
         if phase == RD.P_SYNTHESIS:
             return {"grouping": None}, None
+        if phase == RD.P_VERIFY:
+            for env in (envelopes or []):
+                if isinstance(env, dict) and env.get("schema") != RR.SEAT_MISSING_SCHEMA:
+                    return dict(env.get("payload") or {"result": "pass"}), None
+            return None, "missing-verify"
         return {}, None
 
 
@@ -1102,6 +1107,36 @@ def test_advance_does_not_fold_stale_attempt_orchestrator_payload(tmp_path, adap
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "orchestrator-payload-missing"
     assert _pending(d)["attempt"] == 1
+
+
+def test_advance_folds_run_verify_from_seat_record_without_bare_payload(tmp_path, adapters):
+    """Absent bare payload with a durable seat record folds through the seat path."""
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    _land_and_record(d, "verify", payload={"result": "pass", "command": "none", "exit": 0})
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out["folded"] == {"phase": RD.P_VERIFY, "round": 1, "attempt": 0}
+    state = _state(d)
+    assert state["rounds"]["1"]["verifyResult"] == "pass"
+    assert state["pending"]["phase"] != RD.P_VERIFY
+
+
+def test_advance_malformed_verify_payload_does_not_fallback_to_seat_record(tmp_path, adapters):
+    """Malformed bare payload refuses on the shape guard — it does not fall back to the seat path."""
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    _land_and_record(d, "verify", payload={"result": "pass", "command": "none", "exit": 0})
+    _write_verify_payload(d, {"passed": True})
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False
+    assert "`passed`" in out["reason"]
+    assert _pending(d)["phase"] == RD.P_VERIFY
+    assert _state(d)["rounds"]["1"].get("verifyResult") is None
 
 
 def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):
