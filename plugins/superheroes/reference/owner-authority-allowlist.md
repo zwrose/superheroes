@@ -171,10 +171,13 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   `echo "git push origin main"`, and `grep -r 'git push origin main' docs/`. That is the
   accepted cost of declining quote semantics. A commit message that does not put `push` and
   `main` as bare words in the same segment stays silent (e.g. `git commit -m 'merge main into
-  feature'`). **The `+` refspec form is partly closed:** `git push origin +main` and
-  `git push origin +refs/heads/main` now ask as `push-to-default` (via widened ref boundary),
-  but `+` is **still not recognised as a force spelling** — `git push origin +feature`
-  force-updates a non-default ref and stays **silent**; that gap is a separate follow-up.
+  feature'`). **The `+` refspec form is a force spelling** (owner-ruled 2026-08-15): a refspec
+  word beginning with `+` — `git push origin +feature`, `+main`, `+refs/heads/main`,
+  `+HEAD:main`, quoted or parenthesised — asks as `force-push`, exactly as `--force` does. The
+  `+` must start a word and be followed by a ref character, so `--push-option=+x`, `a+b`, a bare
+  `+`, and `git pull origin +main` are not force. **Accepted over-match:** a redirection to a file
+  whose name begins with `+` (`git push origin feature 2>+log`) asks — one prompt, never an
+  unapproved run.
   **Known-open specimens still silent today:** a **quote-concatenated command word**
   (`g''h pr merge 123`, `gi''t push --force origin f`), a **separator inside a quoted value**
   (`git -c user.name="x;y" push --force`, `git -c user.name="x|y" push --force`), a

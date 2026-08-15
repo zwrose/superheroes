@@ -397,9 +397,12 @@ _INTENDED_SHIFTS = [
     ("git push -qf origin main", "push-to-default", "force-push"),
     # merge-pr row precedes run-workflow once redirection exposes the merge segment.
     ("gh 2>&1 pr merge 123 && gh workflow run deploy.yml", "run-workflow", "merge-pr"),
-    # ref-boundary widening (_WORD_START) — `+` refspec on default branch now asks.
-    ("git push origin +main", None, "push-to-default"),
-    ("git push origin +refs/heads/main", None, "push-to-default"),
+    # `+` refspec = git's other force spelling (owner-ruled 2026-08-15): the force-push row
+    # precedes push-to-default, so `+main` shifts from push-to-default (23865a68) to force-push,
+    # and `+feature` from the known-open list (None) to force-push.
+    ("git push origin +main", "push-to-default", "force-push"),
+    ("git push origin +refs/heads/main", "push-to-default", "force-push"),
+    ("git push origin +feature", None, "force-push"),
     # ratified quoted-mention over-match (_WORD_END) — gated words in quotes/mentions now ask.
     ('git commit -m "fix the push to main"', None, "push-to-default"),
     ('git commit -m "do not push to main"', None, "push-to-default"),
@@ -414,7 +417,6 @@ _KNOWN_OPEN_UNCLASSIFIED = [
     "gi''t push --force origin f",                  # quote-concatenated command word
     'git -c user.name="x;y" push --force',          # separator inside a quoted value
     'git -c user.name="x|y" push --force',          # separator inside a quoted value
-    "git push origin +feature",                     # `+` as force spelling, non-default ref
     # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
     "gh pr 0000000001>&1 merge 123",                # zero-padded fd defeats bounded \d{0,9}
     "gh pr <> /dev/null merge 123",                 # composite operator <> with spaced operand
@@ -511,6 +513,39 @@ def test_owner_authority_action_redirection_census(command, action):
 
 @pytest.mark.parametrize("command,action", _CLUSTER_CENSUS)
 def test_owner_authority_action_cluster_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+# --- `+` refspec force spelling (owner-ruled 2026-08-15, @116-3 option a) ---
+
+_PLUS_REFSPEC_CENSUS = [
+    ("git push origin +feature", "force-push"),
+    ("git push origin +main", "force-push"),
+    ("git push origin +refs/heads/main", "force-push"),
+    ("git push origin +HEAD:main", "force-push"),
+    ('git push origin "+feature"', "force-push"),
+    ("(git push origin +feature)", "force-push"),
+    ("git push -u origin +feature", "force-push"),
+]
+
+_PLUS_REFSPEC_NEGATIVE = [
+    ("git push origin feature", None),
+    ("git push --push-option=+x origin feature", None),      # `+` after `=` is not a refspec
+    ("git push origin a+b", None),                            # mid-word `+`
+    ("git push origin +", None),                              # bare `+` — no ref follows
+    ("git push origin + feature", None),                      # `+` then space
+    ("git pull origin +main", None),                          # not a push
+    ("git push origin HEAD:refs/for/main+", "push-to-default"),  # trailing `+`, pre-existing
+]
+
+
+@pytest.mark.parametrize("command,action", _PLUS_REFSPEC_CENSUS)
+def test_owner_authority_action_plus_refspec_is_force(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _PLUS_REFSPEC_NEGATIVE)
+def test_owner_authority_action_plus_refspec_negatives(command, action):
     assert oa.owner_authority_action(command) == action
 
 

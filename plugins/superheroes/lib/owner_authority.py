@@ -189,9 +189,17 @@ def _short_flag(letter):
     return r"(?<![\w-])-(?!-)[A-Za-z0-9]*" + letter
 
 
+# git's OTHER force spelling: a refspec word beginning with `+` (`git push origin +feature`,
+# `+HEAD:main`, `+refs/heads/x`) force-updates the remote ref exactly as `--force` does. The `+`
+# must START a word (whitespace, quote, backtick or `(` before it — never `=`, `:`, `.`, `-` or a
+# word char, so `--push-option=+x`, `a+b`, `2>+f` are not force) and be followed by a ref
+# character. Owner-ruled 2026-08-15 (field report #5 triage @116-3, option a).
+_PLUS_REFSPEC = r"(?<![\w.=:+-])\+(?=[\w./:])"
+
+
 def _force_push_flag_trailing():
     compiled = re.compile(r"(--force\b|-f\b|--force-with-lease|"
-                          + _short_flag("f") + r")", re.I)
+                          + _short_flag("f") + r"|" + _PLUS_REFSPEC + r")", re.I)
     _SHORT_FLAG_REGISTRY.add(id(compiled))
     return compiled
 
