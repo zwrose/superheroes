@@ -310,6 +310,36 @@ def test_parse_result_scrubs_secret_in_finding_body():
     assert "sk-live-EXAMPLEfakekey0" not in f["suggestion"]
 
 
+def test_parse_result_scrubs_secret_in_finding_id():
+    secret = "ghp_EXAMPLEfakenotarealtoken000000000"
+    stdout = json.dumps({"findings": [
+        {"id": secret, "severity": "Important", "title": "leak", "body": "ok"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    f = res["findings"][0]
+    assert secret not in f["id"]
+    assert "[REDACTED]" in f["id"]
+
+
+def test_parse_result_scrubs_secret_in_verdict_id():
+    secret = "ghp_EXAMPLEfakenotarealtoken000000000"
+    stdout = json.dumps({"verdicts": [
+        {"id": secret, "verdict": "CONFIRMED", "reason": "ok"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert secret not in res["verdicts"][0]["id"]
+    assert "[REDACTED]" in res["verdicts"][0]["id"]
+
+
+def test_parse_result_ordinary_id_survives_on_both_paths():
+    stdout_findings = json.dumps({"findings": [
+        {"id": "code-001", "severity": "Important", "title": "t", "body": "b"}]})
+    res_findings = EA.parse_result("codex", "review", stdout_findings)
+    assert res_findings["findings"][0]["id"] == "code-001"
+    stdout_verdicts = json.dumps({"verdicts": [
+        {"id": "code-001", "verdict": "CONFIRMED", "reason": "ok"}]})
+    res_verdicts = EA.parse_result("codex", "review", stdout_verdicts)
+    assert res_verdicts["verdicts"][0]["id"] == "code-001"
+
+
 def test_parse_result_scrubs_secret_in_finding_evidence_and_title():
     # security-001: the spine reviewer's finding schema is {file,line,title,severity,evidence} — a
     # secret quoted in `evidence` or `title` (not just body/suggestion) must ALSO be scrubbed at this

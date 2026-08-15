@@ -556,11 +556,11 @@ def _scrub(text):
     return scrubbed
 
 
-# Structural keys are NEVER free text (file paths, line numbers, severity/id/dimension enums,
+# Structural keys are NEVER free text (file paths, line numbers, severity/dimension enums,
 # confidence scores) — every OTHER string value in a finding dict is untrusted external free text
-# (body/suggestion/evidence/title/description/message/etc.) and is scrubbed unconditionally so no
+# (body/suggestion/evidence/title/description/message/id/etc.) and is scrubbed unconditionally so no
 # new field name can silently reopen the leak this boundary exists to close.
-_FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "id", "dimension", "confidence"}
+_FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "dimension", "confidence"}
 _FINDING_SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
 # Tolerated aliases for substance fields — description is named in the scrub boundary
 # comment above _FINDING_STRUCTURAL_KEYS as untrusted free text.
@@ -632,7 +632,7 @@ def _review_items_have_placeholder_literal(items):
     return any(_item_has_placeholder_literal(x) for x in items)
 
 
-_VERDICT_STRUCTURAL_KEYS = {"id", "verdict"}
+_VERDICT_STRUCTURAL_KEYS = {"verdict"}
 
 
 def _scrub_verdicts(verdicts):
