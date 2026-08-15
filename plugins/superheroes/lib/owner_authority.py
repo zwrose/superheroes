@@ -276,7 +276,10 @@ def workflow_run_dispatch(command):
         if tok.startswith("-"):
             if "=" in tok:
                 flag, value = tok.split("=", 1)
-                # bite-proof axis: repo flags must never be skipped — they change scope.
+                # Defence-in-depth (currently redundant): repo flags are disjoint from _REF_FLAGS,
+                # _VALUE_FLAG_LONG, and _VALUE_FLAGS, so later branches already return None — but this
+                # guard must stay so a future repo-flag alias added to _VALUE_FLAGS cannot silently
+                # open a scope change.
                 if flag in _REPO_FLAGS:
                     return None
                 if flag in _REF_FLAGS:
@@ -292,6 +295,7 @@ def workflow_run_dispatch(command):
                     return None
                 i += 1
                 continue
+            # Same defence-in-depth repo-flag guard as the `flag=value` branch above.
             if tok in _REPO_FLAGS:
                 return None
             if tok in _REF_FLAGS:
