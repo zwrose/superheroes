@@ -134,11 +134,11 @@ def _mode_invalid_refusal(rejected_mode):
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
 
 
-def _expected_result_kind_invalid_refusal(rejected_kind):
+def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
     return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
             "detail": RESULT_KIND_REFUSAL_INVALID,
             "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-            "mode": sanitized_view.MODE_REVIEW,
+            "mode": effective_mode,
             "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
 
 
@@ -2777,7 +2777,8 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                 return _mode_invalid_refusal(mode)
         if expected_result_kind is not None:
             if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
-                return _expected_result_kind_invalid_refusal(expected_result_kind)
+                return _expected_result_kind_invalid_refusal(
+                    expected_result_kind, mode or sanitized_view.MODE_REVIEW)
         result = _dispatch_review_impl(
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout,
