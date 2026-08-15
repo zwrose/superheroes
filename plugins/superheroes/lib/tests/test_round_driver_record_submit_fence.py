@@ -624,11 +624,21 @@ def test_record_orphans_ignored_atomic_when_fold_aborts(tmp_path, monkeypatch):
     state = _state(session_dir)
     before_journal = len(round_driver.read_journal(session_dir))
 
-    def _abort_fold(state, config, phase, artifact):
-        raise RuntimeError("fold-aborted-for-test")
+    real_begin = round_driver.round_commit.begin
 
-    monkeypatch.setattr(round_driver, "_fold", _abort_fold)
-    with pytest.raises(RuntimeError, match="fold-aborted-for-test"):
+    def _abort_submit_accept_commit(session_dir_arg, kind, **kwargs):
+        commit = real_begin(session_dir_arg, kind, **kwargs)
+        if kind == "submit-accept":
+            real_run = commit.run
+
+            def _abort_run():
+                raise RuntimeError("commit-aborted-for-test")
+
+            commit.run = _abort_run
+        return commit
+
+    monkeypatch.setattr(round_driver.round_commit, "begin", _abort_submit_accept_commit)
+    with pytest.raises(RuntimeError, match="commit-aborted-for-test"):
         round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
                                 round_driver.state_hash(state),
                                 _panel_hand_artifact(session_dir))
