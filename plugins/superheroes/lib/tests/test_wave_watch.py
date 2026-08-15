@@ -416,7 +416,7 @@ def test_event_e5_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=60, gh_run=_noop_gh_run,
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["ok"] is True
     assert result["event"] == "timer"
@@ -1460,7 +1460,7 @@ def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1509,7 +1509,7 @@ def test_gh_child_env_scrubs_routing_var(tmp_path, monkeypatch, var):
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1531,7 +1531,7 @@ def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1621,6 +1621,44 @@ def test_gh_timeout_never_exceeds_remaining(tmp_path, monkeypatch):
         remaining_at_call = 3.0 - (idx * 1.0)
         assert timeout <= remaining_at_call
         assert timeout <= 30
+
+
+def test_first_tick_slow_scans_skip_gh_poll_without_overrun(tmp_path, monkeypatch):
+    """First-tick scans must not inflate poll budget when remaining is sub-floor."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    max_seconds = 2
+    scan_cost = 1.95
+    clock = [0.0]
+    gh_calls = []
+    derive_calls = [0]
+    original_derive = ww._derive_live_lanes
+
+    def slow_derive(*args, **kwargs):
+        derive_calls[0] += 1
+        if derive_calls[0] == 1:
+            clock[0] += scan_cost
+        return original_derive(*args, **kwargs)
+
+    monkeypatch.setattr(ww, "_derive_live_lanes", slow_derive)
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_run(argv, **kwargs):
+        gh_calls.append(kwargs.get("timeout"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=max_seconds, interval_seconds=60,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert gh_calls == []
+    assert clock[0] <= max_seconds
 
 
 def test_gh_poll_budget_computed_after_scans(tmp_path, monkeypatch):

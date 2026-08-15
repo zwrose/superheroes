@@ -685,11 +685,11 @@ def run(
                     poll_remaining = deadline - monotonic()
                     if is_first_loop:
                         ideal_remaining = float(max_seconds)
-                        if ideal_remaining - loop_start_remaining < 0.01:
-                            if poll_remaining < _MIN_PR_POLL_SECONDS:
-                                poll_remaining = ideal_remaining
-                            elif ideal_remaining - poll_remaining < 0.01:
-                                poll_remaining = ideal_remaining
+                        if (
+                            ideal_remaining - loop_start_remaining < 0.01
+                            and ideal_remaining - poll_remaining < 0.01
+                        ):
+                            poll_remaining = ideal_remaining
                     pr_change, pr_baseline = _evaluate_pr_set_changed(
                         repo_root, poll_remaining, gh_run, pr_baseline,
                         degraded, env, pr_poll_ever_succeeded,
