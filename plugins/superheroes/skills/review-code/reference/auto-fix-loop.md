@@ -728,8 +728,9 @@ carries `{vendor, model, effort, tier, family, source}`:
   standalone `agents/grounding-seat.md` seat on its assigned vendor is a follow-up that must first
   stage the PR body as an input the seat can Read.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
-  first-party models are ONE family**: composer and grok both carry the `xai` family (#651,
-  owner-ratified 2026-07-26). A `cursor` review seat is therefore NOT independent of a
+  first-party models are ONE family**: the token-efficient implementer and grok judge models both
+  carry the `xai` independence-accounting key (#651, owner-ratified 2026-07-26; post-acquisition
+  affiliation as of 2026-08-14 — **behaviour unchanged**). A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,
