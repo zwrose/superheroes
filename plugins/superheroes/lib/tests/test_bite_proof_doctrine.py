@@ -121,7 +121,7 @@ _CLAUSE_ROWS = [
         "copy_holder_section": "## When you're tempted",
     },
     {
-        "clause": "inert",
+        "clause": "through the path the test uses",
         "home_section": "## When the proof cannot be produced",
         "copy_holder": "agents/test-reviewer.md",
         "copy_holder_section": "## What to Flag",

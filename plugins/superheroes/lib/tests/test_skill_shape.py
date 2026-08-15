@@ -25,9 +25,12 @@ def _extract_stdout_channel_specimen(text):
 
 
 def _parse_severity_enum_from_rubric(text):
-    match = re.search(r'"severity":\s*"([^"]+)"', text)
-    assert match, "review-base.md: severity enum pipe-list not found"
-    return {part.strip() for part in match.group(1).split("|")}
+    match = re.search(
+        r"`severity`\s+is a \*\*closed enum\*\* — exactly one of ((?:`[^`]+`(?:,\s*)?)+)",
+        text,
+    )
+    assert match, "review-base.md: severity closed-enum prose bullet not found"
+    return {part.strip() for part in re.findall(r"`([^`]+)`", match.group(1))}
 
 
 def _extract_json_specimens_from_rubric(text):
