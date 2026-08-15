@@ -70,6 +70,13 @@ not already stopped you.
    (rung 1). For a premise-establishing command: **never proceed on a guessed premise**.
    **A lost output is reported as lost.**
 
+**Per-order test-command budget** — your order **may name** how many command invocations you may spend
+and which ones; the **bite-proof red and green runs the order names sit inside that budget** and are
+never squeezed out by a longer verification list; a budget naming a project-wide suite where a
+scoped invocation exists is an **order defect**; an order whose own named commands cannot fit its own
+budget is **under-specified — report it** under the existing stop-and-report rule rather than silently
+overrunning or silently truncating.
+
 - **Receipts, not summaries.** Return the raw output of every command you run — the full
   test-runner output, the typecheck output, the build log. "Tests pass" is not a receipt; the
   tool's actual output is.
