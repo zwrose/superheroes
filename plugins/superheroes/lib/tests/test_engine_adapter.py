@@ -2820,7 +2820,11 @@ def test_parse_result_review_verdicts_acceptance():
 
 def test_parse_result_review_verdict_item_predicate_is_kind_specific():
     stdout = json.dumps({"verdicts": [{"id": "v1", "verdict": "PLAUSIBLE"}]})
-    res = EA.parse_result("codex", "review", stdout)
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+    stdout_ok = json.dumps({
+        "verdicts": [{"id": "v1", "verdict": "PLAUSIBLE", "reason": "evidence in log"}],
+    })
+    res = EA.parse_result("codex", "review", stdout_ok)
     assert res["ok"] is True
     assert res["resultKind"] == "verdicts"
     assert res["verdicts"][0]["verdict"] == "PLAUSIBLE"
@@ -2877,7 +2881,9 @@ def test_parse_result_review_verdicts_with_reason_scrubbed():
 
 
 def test_parse_result_cursor_error_envelope_real_verdicts_still_readable():
-    inner = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED"}]})
+    inner = json.dumps({
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "confirmed in diff"}],
+    })
     res = EA.parse_result("cursor", "review", _envelope(inner, subtype="error", is_error=True))
     assert res["ok"] is True
     assert res["resultKind"] == "verdicts"
@@ -2897,7 +2903,7 @@ def test_normalize_review_stdout_echo_only_diagnosed():
 
 def test_review_payload_shape_valid_verdicts_returns_none():
     assert EA.review_payload_shape(json.dumps({"verdicts": [
-        {"id": "v1", "verdict": "CONFIRMED"}]})) is None
+        {"id": "v1", "verdict": "CONFIRMED", "reason": "ok"}]})) is None
     assert EA.review_payload_shape(json.dumps({"verdicts": []})) is None
 
 
@@ -2932,14 +2938,16 @@ def test_review_payload_shapes_includes_verdict_tokens():
 
 
 def test_parse_result_review_verdicts_missing_investigated_yields_empty_list():
-    stdout = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED"}]})
+    stdout = json.dumps({
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "seen in file"}],
+    })
     res = EA.parse_result("codex", "review", stdout)
     assert res["investigated"] == []
 
 
 def test_parse_result_review_verdicts_investigated_not_a_list_rejected():
     stdout = json.dumps({
-        "verdicts": [{"id": "v1", "verdict": "CONFIRMED"}],
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "seen in file"}],
         "investigated": "not-a-list",
     })
     res = EA.parse_result("codex", "review", stdout)
@@ -2963,7 +2971,7 @@ def test_parse_result_review_verdicts_investigated_all_rejected_stays_ok():
 def test_parse_result_review_verdicts_scrubs_unlisted_free_text_field():
     secret = "sk-EXAMPLEfakenotarealsecret0"
     stdout = json.dumps({"verdicts": [
-        {"id": "v1", "verdict": "CONFIRMED",
+        {"id": "v1", "verdict": "CONFIRMED", "reason": "ok",
          "note": "log shows Authorization: Bearer %s" % secret}]})
     res = EA.parse_result("codex", "review", stdout)
     assert res["ok"] is True
@@ -2974,7 +2982,7 @@ def test_parse_result_review_verdicts_scrubs_unlisted_free_text_field():
 def test_parse_result_review_verdicts_scrubs_nested_string_in_object():
     secret = "sk-EXAMPLEfakenotarealsecret0"
     stdout = json.dumps({"verdicts": [
-        {"id": "v1", "verdict": "CONFIRMED",
+        {"id": "v1", "verdict": "CONFIRMED", "reason": "ok",
          "detail": {"nested": "log shows Authorization: Bearer %s" % secret}}]})
     res = EA.parse_result("codex", "review", stdout)
     assert secret not in json.dumps(res["verdicts"][0])
@@ -2998,7 +3006,7 @@ def test_review_payload_shape_both_keys_malformed_verdicts_still_ambiguous():
 def test_engagement_read_verdicts_engaged():
     assert EA.engagement_read({
         "resultKind": "verdicts",
-        "verdicts": [{"id": "v1", "verdict": "CONFIRMED"}],
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "ok"}],
     }) == "engaged"
 
 
@@ -3011,3 +3019,50 @@ def test_parse_result_review_findings_carry_result_kind():
         {"severity": "Minor", "title": "t", "body": "b"}]})
     res = EA.parse_result("codex", "review", stdout)
     assert res["resultKind"] == "findings"
+
+
+# --- #763-G: review transport hardening ---
+
+
+def test_parse_result_review_verdict_reason_empty_or_whitespace_unreadable():
+    for reason in ("", "   ", "\n"):
+        stdout = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": reason}]})
+        assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_verdict_severity_secret_scrubbed_tier_survives():
+    secret = "ghp_EXAMPLEfakenotarealtoken000000000"
+    stdout = json.dumps({"verdicts": [
+        {"id": "v1", "verdict": "CONFIRMED", "reason": "ok", "severity": secret}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert secret not in json.dumps(res["verdicts"])
+    assert "[REDACTED]" in res["verdicts"][0]["severity"]
+    stdout_ok = json.dumps({"verdicts": [
+        {"id": "v2", "verdict": "PLAUSIBLE", "reason": "ok", "severity": "Important"}]})
+    res_ok = EA.parse_result("codex", "review", stdout_ok)
+    assert res_ok["verdicts"][0]["severity"] == "Important"
+
+
+def test_parse_result_review_second_pass_preserves_raw_envelope_error(tmp_path):
+    repo_root = tmp_path / "repo"
+    repo_root.mkdir()
+    (repo_root / "README.md").write_text("x", encoding="utf-8")
+    inner = json.dumps({"findings": [], "investigated": ["README.md"]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+    norm = EA.normalize_review_stdout(stream)
+    assert EA.parse_result(
+        "cursor", "review", norm["text"], raw_envelope_error=norm["rawEnvelopeError"],
+    ) == {"ok": False, "reason": "unreadable"}
+
+
+def test_review_payload_shape_bare_array_placeholder_literal_refusal():
+    res = EA.review_payload_shape(json.dumps([{
+        "id": EA.REVIEW_BASE_TEMPLATE_ID,
+        "severity": "Minor", "title": "t", "body": "b",
+    }]))
+    assert res == {
+        "parsed": EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
+        "topLevelKeys": [], "keysTruncated": False,
+    }

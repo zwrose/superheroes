@@ -77,7 +77,9 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 RUN_KIND_REVIEW = "review"
-REVIEW_RESULT_KINDS = ("findings", "verdicts")
+# Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
+REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
+RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
@@ -1948,14 +1950,16 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _engagement_with_read(engagement, *, items=None, investigated=None):
+def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
     """Attach engagement.read from observed attempt evidence. Never raises."""
+    read_input = {"investigated": investigated, "engagement": engagement}
+    if items is not None:
+        if result_kind == "verdicts":
+            read_input["verdicts"] = items
+        else:
+            read_input["findings"] = items
     out = dict(engagement)
-    out["read"] = engine_adapter.engagement_read({
-        "findings": items,
-        "investigated": investigated,
-        "engagement": engagement,
-    })
+    out["read"] = engine_adapter.engagement_read(read_input)
     return out
 
 
@@ -2096,13 +2100,16 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
     prompt_echo_only = norm_strip["echoOnly"]
     diagnose_stdout = norm_strip["text"]
+    envelope_error = norm_strip["rawEnvelopeError"]
 
-    res = engine_adapter.parse_result(engine, role_kind, stdout)
+    res = engine_adapter.parse_result(
+        engine, role_kind, stdout, raw_envelope_error=envelope_error)
     if not _parse_review_has_payload(res):
         stripped_text = norm_strip["text"]
         if stripped_text and stripped_text.strip():
             diagnose_stdout = stripped_text
-        res = engine_adapter.parse_result(engine, role_kind, stripped_text)
+        res = engine_adapter.parse_result(
+            engine, role_kind, stripped_text, raw_envelope_error=envelope_error)
     if not res.get("ok"):
         engagement = _engagement_with_read(engagement)
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
@@ -2128,13 +2135,15 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     kind = res["resultKind"]
     payload = res.get(kind)
-    if not isinstance(payload, list):
-        engagement = _engagement_with_read(engagement)
-        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
-        shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
-        if shape is not None:
-            result["payloadShape"] = shape
-        return result
+    expected_kind = opened.get("expectedResultKind")
+    if expected_kind in REVIEW_RESULT_KINDS and kind != expected_kind:
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": RESULT_KIND_MISMATCH_DETAIL,
+            "engagement": engagement,
+        }
 
     view_meta = opened.get("viewMeta")
     generated = ()
@@ -2148,7 +2157,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
     if payload:
-        engagement = _engagement_with_read(engagement, items=payload)
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
         if accepted:
             result["investigated"] = accepted
@@ -2161,14 +2170,15 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        engagement = _engagement_with_read(engagement, items=[], investigated=accepted)
+        engagement = _engagement_with_read(
+            engagement, result_kind=kind, items=[], investigated=accepted)
         result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": engagement}
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
             rejected_reasons=rejected_reasons,
         )
-    engagement = _engagement_with_read(engagement, items=[], investigated=None)
+    engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
     return {
         "forfeit": True,
         "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -2248,7 +2258,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                             investigated_rejected=None, investigated_rejected_records=None,
-                            payload_shape=None):
+                            payload_shape=None, detail=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         terminal = {
             "ok": False,
@@ -2282,6 +2292,8 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
     }
     if payload_shape is not None:
         result["payloadShape"] = payload_shape
+    if detail is not None:
+        result["detail"] = detail
     return result
 
 
@@ -2552,6 +2564,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         investigated_rejected=grade.get("investigatedRejected"),
                         investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
+                        detail=grade.get("detail"),
                     )
                     terminal = _maybe_upgrade_review_terminal_forfeit(
                         run_dir_real, state, terminal, engine,
@@ -2682,7 +2695,8 @@ def _attach_sanitized_view(result, view):
 
 def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
-                     progress_path, repo_root=None, mode="review"):
+                     progress_path, repo_root=None, mode="review",
+                     expected_result_kind=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2724,6 +2738,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    if expected_result_kind in REVIEW_RESULT_KINDS:
+        record["expectedResultKind"] = expected_result_kind
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
@@ -2733,7 +2749,8 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
-                    run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None):
+                    run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None,
+                    expected_result_kind=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -2748,7 +2765,8 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
-            diff_base=diff_base, mode=mode, resolved_mode=resolved)
+            diff_base=diff_base, mode=mode, resolved_mode=resolved,
+            expected_result_kind=expected_result_kind)
         stamped = dict(result)
         stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
@@ -2764,7 +2782,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, max_wait=None, order_id=None, diff_base=None,
-                          mode=None, resolved_mode=None):
+                          mode=None, resolved_mode=None, expected_result_kind=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
@@ -2920,6 +2938,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 fed_prompt=fed_prompt, order_id=order_id,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
                 repo_root=repo_detail, mode=resolved_mode["mode"],
+                expected_result_kind=expected_result_kind,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3591,6 +3610,9 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
+    cc.add_argument(d, "--expected-result-kind", contract="choices:findings,verdicts",
+                    default=None, choices=REVIEW_RESULT_KINDS,
+                    help="mechanical pin: refuse attempts whose parsed resultKind differs")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--engine", contract="choices:codex,cursor",
@@ -3633,7 +3655,8 @@ def main(argv):
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
                               max_wait=args.max_wait, order_id=args.order_id,
-                              diff_base=args.diff_base, mode=args.mode)
+                              diff_base=args.diff_base, mode=args.mode,
+                              expected_result_kind=args.expected_result_kind)
     elif args.cmd == "dispatch-write":
         res = dispatch_write(args.engine, model=args.model, effort=args.effort,
                              engine_model=args.engine_model, prompt_path=args.prompt_path,
