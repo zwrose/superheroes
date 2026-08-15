@@ -130,7 +130,20 @@ lanes it judged to be working.
 
 **The check fails toward the alert, never toward silence.** Every way the transcript read can fail to
 prove work — no worktree on the lane's ledger record, no transcript on disk, an unreadable projects
-directory, a transcript dated into the future — leaves the lane stale and the event fires.
+directory, a transcript dated into the future by any amount — leaves the lane stale and the event
+fires.
+
+**Only the lane's own transcript may vouch for it.** Three bounds enforce that: exactly one config
+root is searched (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude` — never both, because
+a same-named bucket under the other root belongs to a different session); a symlinked entry is never
+followed; and a transcript last written **before the lane's recorded start** is ignored, so a session
+that ran in that directory earlier cannot vouch for this launch.
+
+**One residual is accepted and not closed:** binding is by directory and start time, not by session
+identity, because nothing records which session id belongs to a launch. A *different* session running
+**concurrently** in the same build worktree — an operator opening the wedged lane's directory to look
+at it — writes into the same bucket and can keep a genuinely wedged lane suppressed. Closing it needs
+the launch record to carry the session id.
 
 A transcript-suppressed lane is **not** the same as an `--ignore-event` suppression: `--ignore-event`
 silences an event the watcher still believes, so the lane keeps showing up under `alsoObserved`; a

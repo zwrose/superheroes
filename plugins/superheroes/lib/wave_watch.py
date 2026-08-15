@@ -40,6 +40,12 @@ Contract:
   worktree on the ledger record, no transcript on disk, an unreadable projects
   directory, a future-dated mtime — leaves the lane STALE: the check fails toward
   the alert, never toward silence.
+- Transcript ownership: exactly ONE config root is searched (the CLAUDE_CONFIG_DIR
+  override outright, else ~/.claude), a symlinked entry is never followed, and a
+  transcript last written before the lane's recorded start is ignored — three bounds
+  that stop a transcript belonging to some other session from vouching for this
+  lane. The residual they do not close (a concurrent foreign session in the same
+  build worktree) is recorded at _stale_second_chance.
 - staleSuppressed: accumulated across an arm's ticks, keyed by launchId, and cleared
   for a lane the moment a later tick finds it still stale. It rides EVERY result of
   that arm including timer, which is what puts it in loop's --log line.
@@ -116,11 +122,6 @@ _TRANSCRIPT_DEFAULT_CONFIG_DIR = "~/.claude"
 _PROJECTS_DIR_NAME = "projects"
 _TRANSCRIPT_SUFFIX = ".jsonl"
 _PROJECT_DIR_TRANSLATION = str.maketrans({"/": "-", ".": "-"})
-
-# A transcript dated into the future is a skewed or wrong clock, not evidence of
-# work. Anything beyond this tolerance is treated as unresolvable, which fails
-# toward the alert.
-_CLOCK_SKEW_TOLERANCE_SECONDS = 60.0
 
 NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 
@@ -471,21 +472,30 @@ def _evaluate_pid_signals(live_lanes, stale_launches, degraded):
     return exited, stale_live
 
 
+def _expand_home(path, env):
+    """expanduser against the SUPPLIED env's HOME, not the ambient process env."""
+    if not path.startswith("~"):
+        return path
+    home = env.get("HOME")
+    if not isinstance(home, str) or not home:
+        return os.path.expanduser(path)
+    if path == "~" or path.startswith("~" + os.sep):
+        return home + path[1:]
+    return os.path.expanduser(path)
+
+
 def _transcript_config_dirs(env):
-    """Host config dirs to search, override first, default second, deduped."""
-    candidates = []
+    """The host config dir to search — EXACTLY ONE.
+
+    The override wins outright rather than being searched alongside the default: the
+    launcher passes CLAUDE_CONFIG_DIR through to the builder, so when it is set, a
+    same-named transcript under the default root belongs to some OTHER session and
+    must never be allowed to vouch for this lane.
+    """
     configured = env.get(_TRANSCRIPT_CONFIG_DIR_ENV)
     if isinstance(configured, str) and configured.strip():
-        candidates.append(configured.strip())
-    candidates.append(_TRANSCRIPT_DEFAULT_CONFIG_DIR)
-    seen = set()
-    roots = []
-    for candidate in candidates:
-        expanded = os.path.expanduser(candidate)
-        if expanded not in seen:
-            seen.add(expanded)
-            roots.append(expanded)
-    return roots
+        return [_expand_home(configured.strip(), env)]
+    return [_expand_home(_TRANSCRIPT_DEFAULT_CONFIG_DIR, env)]
 
 
 def _project_dir_name(worktree):
@@ -493,12 +503,20 @@ def _project_dir_name(worktree):
     return os.path.normpath(worktree).translate(_PROJECT_DIR_TRANSLATION)
 
 
-def _newest_transcript_mtime(worktree, env):
+def _newest_transcript_mtime(worktree, env, since=None):
     """Newest session-transcript mtime for this worktree, or None when unresolvable.
 
     None is the honest answer for every failure — no worktree recorded, no projects
     directory, an unreadable directory, no transcript files, a non-regular entry —
     and the caller turns None into "emit the alert anyway".
+
+    Two ownership bounds keep a transcript that is not this builder's from vouching
+    for it. *since* (the lane's recorded start) discards any transcript that cannot
+    belong to this launch — a session that ran in this directory before the lane
+    started. And a symlink is never followed: a link planted in the bucket would
+    otherwise let an unrelated file's mtime stand in for the builder's.
+
+    The residual this cannot close is stated at the call site.
     """
     if not isinstance(worktree, str) or not worktree.strip():
         return None
@@ -516,10 +534,16 @@ def _newest_transcript_mtime(worktree, env):
             if not entry.name.endswith(_TRANSCRIPT_SUFFIX):
                 continue
             try:
-                st = entry.stat()
+                # follow_symlinks=False: a symlinked entry is not this builder's
+                # transcript, and S_ISREG then rejects it.
+                st = entry.stat(follow_symlinks=False)
             except OSError:
                 continue
             if not stat.S_ISREG(st.st_mode):
+                continue
+            # bite-axis: OWNERSHIP — a transcript last written before this lane
+            # started cannot be this lane's, so it may not vouch for it.
+            if since is not None and st.st_mtime < since:
                 continue
             if newest is None or st.st_mtime > newest:
                 newest = st.st_mtime
@@ -538,6 +562,15 @@ def _stale_second_chance(
     Fail-toward-alert is the invariant: an unresolvable transcript, an unusable
     promise, a stale transcript, or a future-dated transcript all leave the lane
     in the still-stale list. Only a positively fresh transcript suppresses.
+
+    ACCEPTED RESIDUAL: the transcript is bound to the lane by directory and by the
+    lane's start time, not by session identity — nothing records which session id
+    belongs to a launch. A DIFFERENT session running concurrently in the same build
+    worktree (an operator opening the wedged lane's directory to look at it) writes
+    into the same bucket and can keep a genuinely wedged lane suppressed. The
+    launcher gives every launch its own worktree path, so the recycled-directory
+    case is closed by the start-time bound; the concurrent-foreign-session case is
+    not, and closing it needs the launch record to carry the session id.
     """
     if now is None:
         now = time.time()
@@ -548,15 +581,20 @@ def _stale_second_chance(
     for entry in stale_live:
         promise = entry.get("staleAfterSeconds")
         lane_info = live_lanes.get(entry["launchId"]) or {}
-        mtime = transcript_mtime(lane_info.get("worktree"), env)
+        mtime = transcript_mtime(
+            lane_info.get("worktree"), env, lane_info.get("startedTs"),
+        )
         # bite-axis: DIRECTION of failure — an unresolvable transcript or an unusable
         # promise alerts, never suppresses.
         if not _valid_positive_int(promise) or mtime is None:
             still_stale.append(entry)
             continue
         transcript_age = now - mtime
-        # bite-axis: a FUTURE-dated transcript is a skewed clock, not evidence of work.
-        if transcript_age < -_CLOCK_SKEW_TOLERANCE_SECONDS:
+        # bite-axis: a FUTURE-dated transcript is a skewed or wrong clock, not evidence
+        # of work. The watcher and the transcript share one host clock, so there is no
+        # skew to tolerate here, and tolerating any would contradict the documented
+        # fail-toward-alert invariant.
+        if transcript_age < 0:
             still_stale.append(entry)
             continue
         # bite-axis: FRESHNESS of the transcript against the lane's own promise —

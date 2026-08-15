@@ -2510,7 +2510,12 @@ def _stale_lane_with_worktree(
         repo,
         _reserved(launch_id, batch_id, ["plugins/superheroes/lib"], repo, **extra),
     )
-    ll.append(repo, _started(launch_id, pid=os.getpid()))
+    # The lane starts BEFORE its transcript exists, as it does in production — the
+    # ownership bound rejects a transcript older than the launch.
+    ll.append(
+        repo,
+        dict(_started(launch_id, pid=os.getpid()), ts=time.time() - age_seconds - 600),
+    )
     hb.stamp(
         repo,
         state="working",
@@ -2552,19 +2557,19 @@ def test_project_dir_name_mangles_slashes_and_dots():
     assert ww._project_dir_name("/a/b/") == "-a-b"
 
 
-def test_transcript_config_dirs_override_first_then_default(monkeypatch):
+def test_transcript_config_dirs_is_exactly_one_root(monkeypatch):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/some-config")
-    roots = ww._transcript_config_dirs(os.environ)
-    assert roots[0] == "/tmp/some-config"
-    assert roots[-1] == os.path.expanduser("~/.claude")
+    assert ww._transcript_config_dirs(os.environ) == ["/tmp/some-config"]
 
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
-    assert ww._transcript_config_dirs(os.environ) == [os.path.expanduser("~/.claude")]
+    monkeypatch.setenv("HOME", "/home/someone")
+    assert ww._transcript_config_dirs(os.environ) == ["/home/someone/.claude"]
 
 
-def test_transcript_config_dirs_dedupe_when_override_equals_default(monkeypatch):
-    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude")
-    assert ww._transcript_config_dirs(os.environ) == [os.path.expanduser("~/.claude")]
+def test_transcript_config_dirs_expands_the_supplied_home(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-three")
+    monkeypatch.setenv("HOME", "/home/someone")
+    assert ww._transcript_config_dirs(os.environ) == ["/home/someone/.claude-three"]
 
 
 def test_lane_stale_suppressed_when_transcript_fresh(tmp_path, monkeypatch):
@@ -2670,7 +2675,7 @@ def test_transcript_fresh_but_promise_unusable_still_alerts(tmp_path, monkeypatc
     }]
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
-        now=1000.0, transcript_mtime=lambda wt, env: 999.0,
+        now=1000.0, transcript_mtime=lambda wt, env, since=None: 999.0,
     )
     assert still == stale_live
     assert suppressed == []
@@ -2688,38 +2693,81 @@ def test_second_chance_boundary_is_inclusive_at_the_promise():
     # Exactly at the promise: still inside the window, so suppressed.
     still, suppressed = ww._stale_second_chance(
         entry(), live_lanes, os.environ,
-        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 - 1800,
+        now=10000.0, transcript_mtime=lambda wt, env, since=None: 10000.0 - 1800,
     )
     assert still == [] and len(suppressed) == 1
 
     # One second past it: outside the window, so it alerts.
     still, suppressed = ww._stale_second_chance(
         entry(), live_lanes, os.environ,
-        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 - 1801,
+        now=10000.0, transcript_mtime=lambda wt, env, since=None: 10000.0 - 1801,
     )
     assert len(still) == 1 and suppressed == []
 
 
-def test_small_future_skew_tolerated_large_skew_alerts():
+@pytest.mark.parametrize("ahead_seconds", [1, 30, 3600])
+def test_any_future_dated_transcript_alerts(ahead_seconds):
+    """No skew tolerance: the watcher and the transcript share one host clock, so a
+    future mtime is a wrong clock, and the fail-toward-alert invariant is absolute."""
     live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
-
-    def entry():
-        return [{
-            "launchId": "lane-a", "state": "working",
-            "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
-        }]
-
+    stale_live = [{
+        "launchId": "lane-a", "state": "working",
+        "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
+    }]
     still, suppressed = ww._stale_second_chance(
-        entry(), live_lanes, os.environ,
-        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 + 30,
-    )
-    assert len(suppressed) == 1, "30s of clock skew is not a wedge"
-
-    still, suppressed = ww._stale_second_chance(
-        entry(), live_lanes, os.environ,
-        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 + 3600,
+        stale_live, live_lanes, os.environ,
+        now=10000.0,
+        transcript_mtime=lambda wt, env, since=None: 10000.0 + ahead_seconds,
     )
     assert len(still) == 1 and suppressed == []
+
+
+def test_config_dir_override_is_searched_alone(tmp_path, monkeypatch):
+    """A same-named transcript under the DEFAULT root belongs to another session and
+    must never vouch for this lane when the override is set."""
+    worktree = str(tmp_path / "build-wt")
+    override = tmp_path / "override-config"
+    decoy = tmp_path / "decoy-home" / ".claude"
+    monkeypatch.setenv("HOME", str(tmp_path / "decoy-home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(override))
+    # Only the decoy (default-root) transcript exists, and it is fresh.
+    _write_transcript(decoy, worktree, age_seconds=5)
+
+    assert ww._transcript_config_dirs(os.environ) == [str(override)]
+    assert ww._newest_transcript_mtime(worktree, os.environ) is None, (
+        "the default root must not be searched when the override is set"
+    )
+
+    # With no override, the default root IS the one searched — via the supplied HOME.
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert ww._transcript_config_dirs(os.environ) == [str(decoy)]
+    assert ww._newest_transcript_mtime(worktree, os.environ) is not None
+
+
+def test_transcript_predating_the_launch_does_not_vouch(tmp_path, monkeypatch):
+    """A session that ran in this directory before the lane started is not this lane."""
+    worktree = str(tmp_path / "build-wt")
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=100)
+    now = time.time()
+
+    assert ww._newest_transcript_mtime(worktree, os.environ, now - 500) is not None
+    assert ww._newest_transcript_mtime(worktree, os.environ, now - 10) is None
+
+
+def test_symlinked_transcript_is_never_followed(tmp_path, monkeypatch):
+    """A link in the bucket would let an unrelated file's mtime stand in for the lane."""
+    worktree = str(tmp_path / "build-wt")
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    project_dir = os.path.join(
+        str(config_dir), "projects", ww._project_dir_name(worktree),
+    )
+    os.makedirs(project_dir, exist_ok=True)
+    target = tmp_path / "elsewhere.jsonl"
+    target.write_text("{}\n")
+    os.symlink(str(target), os.path.join(project_dir, "session-link.jsonl"))
+
+    assert ww._newest_transcript_mtime(worktree, os.environ) is None
 
 
 def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
@@ -2736,7 +2784,10 @@ def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
     ll.append(
         repo, _reserved("lane-b", "batch-982", ["lib"], repo, worktree=worktree),
     )
-    ll.append(repo, _started("lane-b", pid=os.getpid()))
+    # lane-b starts before its transcript exists, as in production.
+    ll.append(
+        repo, dict(_started("lane-b", pid=os.getpid()), ts=time.time() - 2000),
+    )
     hb.stamp(repo, state="working", phase="watch", launch_id="lane-b",
              stale_after_seconds=1800, now=time.time() - 1835)
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
@@ -2762,7 +2813,7 @@ def test_later_tick_finding_lane_still_stale_clears_its_suppression(
 
     calls = [0]
 
-    def fading_transcript(_worktree, _env):
+    def fading_transcript(_worktree, _env, _since=None):
         calls[0] += 1
         # Fresh on the first tick, long cold on every tick after it.
         return time.time() - (60 if calls[0] == 1 else 100000)

@@ -1077,6 +1077,9 @@ def fold(records):
             info["started"] = True
             info["pid"] = rec["pid"]
             info["attempt"] = rec["attempt"]
+            # When this attempt began — a consumer binding an on-disk artifact to a
+            # lane needs it to reject artifacts that predate the launch (#1023).
+            info["startedTs"] = rec["ts"]
             pids = list(info.get("pids", []))
             if rec["pid"] not in pids:
                 pids.append(rec["pid"])
