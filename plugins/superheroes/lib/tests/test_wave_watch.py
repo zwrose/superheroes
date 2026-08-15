@@ -1561,10 +1561,13 @@ def test_gh_timeout_ceiling_thirty_when_remaining_large(tmp_path, monkeypatch):
 
 
 def test_gh_poll_spacing_skips_missed_ticks(tmp_path, monkeypatch):
+    """Missed ticks must not replay back-to-back; spacing comes from the scheduler."""
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     clock = [0.0]
     gh_starts = []
+    interval_seconds = 3
+    gh_calls = [0]
 
     def mono():
         return clock[0]
@@ -1572,20 +1575,24 @@ def test_gh_poll_spacing_skips_missed_ticks(tmp_path, monkeypatch):
     def fake_sleep(duration):
         clock[0] += duration
 
-    def slow_gh_run(argv, **kwargs):
+    def paced_gh_run(argv, **kwargs):
         gh_starts.append(clock[0])
-        clock[0] += 2.5
+        gh_calls[0] += 1
+        # First poll outruns the interval; later polls are fast so gaps
+        # after a replay bug collapse to gh cost, not interval spacing.
+        gh_cost = 7.0 if gh_calls[0] == 1 else 1.0
+        clock[0] += gh_cost
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=8, interval_seconds=1,
-        monotonic=mono, sleep=fake_sleep, gh_run=slow_gh_run,
+        repo, "batch-982", max_seconds=15, interval_seconds=interval_seconds,
+        monotonic=mono, sleep=fake_sleep, gh_run=paced_gh_run,
     )
     assert result["event"] == "timer"
-    assert len(gh_starts) >= 2
+    assert len(gh_starts) >= 3
     for idx in range(1, len(gh_starts)):
         gap = gh_starts[idx] - gh_starts[idx - 1]
-        assert gap >= 1.0
+        assert gap >= interval_seconds
 
 
 def test_sub_floor_remaining_skips_gh_no_pr_degradation(tmp_path, monkeypatch):
