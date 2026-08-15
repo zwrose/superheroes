@@ -1035,6 +1035,10 @@ def fold(records):
                 "slot": rec.get("slot"),
                 "generation": rec.get("generation"),
                 "boundary": rec.get("boundary"),
+                # The launcher records the build worktree on the reserved record
+                # (launcher.py). Folding it through is what lets a consumer resolve
+                # the lane's session transcript from its worktree (#1023).
+                "worktree": rec.get("worktree"),
             }
             continue
 

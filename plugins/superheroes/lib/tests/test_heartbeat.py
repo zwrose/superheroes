@@ -848,3 +848,53 @@ def test_cli_stamp_accepts_iso_last_dispatch_started_at(tmp_path, monkeypatch, c
     out = json.loads(capsys.readouterr().out.strip())
     assert rc == 0
     assert out["ok"] is True
+
+
+# --- floored default promise (#1023) ------------------------------------------
+
+
+def test_default_stale_after_clears_twice_the_worst_measured_benign_gap():
+    # The floor is derived, not chosen: 2x the worst BENIGN inter-stamp gap
+    # measured across 10 builder lanes / 45 gaps (worst benign = 11960 s).
+    assert hb.DEFAULT_STALE_AFTER_SECONDS >= 2 * 11960
+    assert hb.DEFAULT_STALE_AFTER_SECONDS <= hb._STALE_AFTER_MAX
+
+
+def test_stamp_without_a_promise_uses_the_floored_default(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = hb.stamp(repo, state="working", phase="build", launch_id="lane-a")
+    assert result["ok"] is True
+    assert hb.read_heartbeat(repo, "lane-a")["staleAfterSeconds"] == (
+        hb.DEFAULT_STALE_AFTER_SECONDS
+    )
+
+
+def test_a_long_step_no_longer_classifies_stale_under_the_default(
+    tmp_path, monkeypatch,
+):
+    # A builder an hour into a dispatch, having stated no promise of its own:
+    # `stale` on the old 300 s default, `fresh` on the floored one.
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    hb.stamp(
+        repo, state="working", phase="build", launch_id="lane-a",
+        now=time.time() - 3600,
+    )
+    assert hb.read_heartbeat(repo, "lane-a")["class"] == "fresh"
+
+
+def test_cli_stamp_default_promise_matches_the_module_constant(
+    tmp_path, monkeypatch, capsys,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    monkeypatch.setenv(hb.LAUNCH_ID_ENV, "lane-cli")
+    rc = hb.main([
+        "stamp", "--repo-root", repo, "--state", "working", "--phase", "build",
+    ])
+    capsys.readouterr()
+    assert rc == 0
+    assert hb.read_heartbeat(repo, "lane-cli")["staleAfterSeconds"] == (
+        hb.DEFAULT_STALE_AFTER_SECONDS
+    )

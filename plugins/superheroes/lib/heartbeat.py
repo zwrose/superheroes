@@ -48,6 +48,17 @@ REASON_HEARTBEAT_MISSING = "heartbeat-missing"
 _LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _STALE_AFTER_MIN = 1
 _STALE_AFTER_MAX = 86400
+
+# The promise a caller gets when it does not state one (#1023). Floored at 2x the
+# worst BENIGN inter-stamp gap measured on this host: 11960 s, on a lane whose
+# transcript never went colder than 600 s (the host's foreground-Bash ceiling)
+# across the whole gap, so it was demonstrably working the entire time. Measured
+# over 10 builder lanes / 45 inter-stamp gaps, 44 of them benign.
+#
+# The old default was 300 s, which no real build has ever met — an omitting caller
+# was guaranteed to classify `stale` within five minutes. A builder that states its
+# own `--stale-after` is unaffected; this only moves the fallback.
+DEFAULT_STALE_AFTER_SECONDS = 24000
 _NOTE_MAX_LEN = 500
 _PHASE_MIN_LEN = 1
 _PHASE_MAX_LEN = 64
@@ -419,7 +430,7 @@ def stamp(
     phase,
     launch_id=None,
     issue=None,
-    stale_after_seconds=300,
+    stale_after_seconds=DEFAULT_STALE_AFTER_SECONDS,
     last_dispatch=None,
     note=None,
     env=None,
@@ -576,7 +587,10 @@ def main(argv=None):
     st.add_argument("--state", required=True)
     st.add_argument("--phase", required=True)
     st.add_argument("--issue", type=int, default=None)
-    st.add_argument("--stale-after", type=int, default=300, dest="stale_after")
+    st.add_argument(
+        "--stale-after", type=int, default=DEFAULT_STALE_AFTER_SECONDS,
+        dest="stale_after",
+    )
     st.add_argument("--last-dispatch", default=None, dest="last_dispatch")
     st.add_argument("--note", default=None)
     st.add_argument("--launch-id", default=None, dest="launch_id")

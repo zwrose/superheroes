@@ -2493,3 +2493,311 @@ def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
     assert out["event"] == "timer"
     assert marker.exists(), "CLI loop must invoke the gh shim, not bypass it"
 
+
+# --- transcript second chance before lane-stale (#1023) -----------------------
+
+
+def _stale_lane_with_worktree(
+    repo, tmp_path, monkeypatch, *, worktree, launch_id="lane-a",
+    batch_id="batch-982", stale_after_seconds=1800, age_seconds=1835,
+):
+    """A pid-live lane past its own promise, with the worktree on the ledger record."""
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, batch_id, 1)
+    extra = {} if worktree is None else {"worktree": worktree}
+    ll.append(
+        repo,
+        _reserved(launch_id, batch_id, ["plugins/superheroes/lib"], repo, **extra),
+    )
+    ll.append(repo, _started(launch_id, pid=os.getpid()))
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id=launch_id,
+        stale_after_seconds=stale_after_seconds,
+        now=time.time() - age_seconds,
+    )
+    assert hb.read_heartbeat(repo, launch_id)["class"] == "stale"
+    return store_root
+
+
+def _point_config_dir_at(tmp_path, monkeypatch):
+    """Isolate the transcript search so the real ~/.claude can never satisfy it."""
+    config_dir = tmp_path / "host-config"
+    config_dir.mkdir(exist_ok=True)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
+    return config_dir
+
+
+def _write_transcript(config_dir, worktree, *, age_seconds, name="session-abc.jsonl"):
+    project_dir = os.path.join(
+        str(config_dir), "projects", ww._project_dir_name(worktree),
+    )
+    os.makedirs(project_dir, exist_ok=True)
+    path = os.path.join(project_dir, name)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{}\n")
+    stamp_at = time.time() - age_seconds
+    os.utime(path, (stamp_at, stamp_at))
+    return path
+
+
+def test_project_dir_name_mangles_slashes_and_dots():
+    # The host's convention: every "/" and "." in the absolute cwd becomes "-".
+    assert ww._project_dir_name(
+        "/Users/zwrose/.superheroes-worktrees/superheroes/issue-1023-abc"
+    ) == "-Users-zwrose--superheroes-worktrees-superheroes-issue-1023-abc"
+    assert ww._project_dir_name("/a/b/") == "-a-b"
+
+
+def test_transcript_config_dirs_override_first_then_default(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/some-config")
+    roots = ww._transcript_config_dirs(os.environ)
+    assert roots[0] == "/tmp/some-config"
+    assert roots[-1] == os.path.expanduser("~/.claude")
+
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert ww._transcript_config_dirs(os.environ) == [os.path.expanduser("~/.claude")]
+
+
+def test_transcript_config_dirs_dedupe_when_override_equals_default(monkeypatch):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude")
+    assert ww._transcript_config_dirs(os.environ) == [os.path.expanduser("~/.claude")]
+
+
+def test_lane_stale_suppressed_when_transcript_fresh(tmp_path, monkeypatch):
+    """DoD: stale heartbeat + fresh transcript => NO lane-stale, and a logged note."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=150)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+
+    assert result["ok"] is True
+    assert result["event"] == "timer"
+    assert result["event"] != "lane-stale"
+    suppressed = result["staleSuppressed"]
+    assert [entry["launchId"] for entry in suppressed] == ["lane-a"]
+    assert suppressed[0]["note"] == ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH
+    assert suppressed[0]["staleAfterSeconds"] == 1800
+    assert suppressed[0]["state"] == "working"
+    assert 140 <= suppressed[0]["transcriptAgeSeconds"] <= 400
+
+
+def test_newest_transcript_mtime_takes_the_freshest_of_several(tmp_path, monkeypatch):
+    worktree = str(tmp_path / "build-wt")
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=9000, name="old.jsonl")
+    _write_transcript(config_dir, worktree, age_seconds=30, name="new.jsonl")
+    mtime = ww._newest_transcript_mtime(worktree, os.environ)
+    assert mtime is not None
+    assert time.time() - mtime < 120
+
+
+# Census: every way the transcript read can fail to prove work must still ALERT.
+# Fail toward the alert, never toward silence.
+_UNRESOLVABLE_SHAPES = (
+    "no-worktree-on-record",
+    "worktree-relative-path",
+    "no-projects-dir",
+    "empty-project-dir",
+    "non-transcript-file-only",
+    "transcript-colder-than-promise",
+    "transcript-dated-in-the-future",
+    "transcript-is-a-directory",
+)
+
+
+@pytest.mark.parametrize("shape", _UNRESOLVABLE_SHAPES)
+def test_unresolvable_transcript_still_emits_lane_stale(tmp_path, monkeypatch, shape):
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+
+    if shape == "no-worktree-on-record":
+        _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=None)
+    elif shape == "worktree-relative-path":
+        _stale_lane_with_worktree(
+            repo, tmp_path, monkeypatch, worktree=None,
+        )
+        # A relative worktree never reaches the ledger (fold rejects it), so drive
+        # the resolver directly: it must refuse rather than resolve against cwd.
+        assert ww._newest_transcript_mtime("relative/build-wt", os.environ) is None
+    else:
+        _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
+
+    project_dir = os.path.join(
+        str(config_dir), "projects", ww._project_dir_name(worktree),
+    )
+    if shape == "empty-project-dir":
+        os.makedirs(project_dir, exist_ok=True)
+    elif shape == "non-transcript-file-only":
+        os.makedirs(project_dir, exist_ok=True)
+        with open(os.path.join(project_dir, "notes.txt"), "w", encoding="utf-8") as fh:
+            fh.write("not a transcript\n")
+    elif shape == "transcript-colder-than-promise":
+        _write_transcript(config_dir, worktree, age_seconds=5400)
+    elif shape == "transcript-dated-in-the-future":
+        _write_transcript(config_dir, worktree, age_seconds=-3600)
+    elif shape == "transcript-is-a-directory":
+        os.makedirs(os.path.join(project_dir, "session-abc.jsonl"), exist_ok=True)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "lane-stale", (
+        "%s must fail toward the alert, not toward silence" % shape
+    )
+    assert result["launchId"] == "lane-a"
+    assert "staleSuppressed" not in result
+
+
+def test_transcript_fresh_but_promise_unusable_still_alerts(tmp_path, monkeypatch):
+    """A stale entry carrying no usable promise cannot be second-chanced."""
+    live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
+    stale_live = [{
+        "launchId": "lane-a",
+        "state": "working",
+        "ageSeconds": 60.0,
+        "staleAfterSeconds": None,
+    }]
+    still, suppressed = ww._stale_second_chance(
+        stale_live, live_lanes, os.environ,
+        now=1000.0, transcript_mtime=lambda wt, env: 999.0,
+    )
+    assert still == stale_live
+    assert suppressed == []
+
+
+def test_second_chance_boundary_is_inclusive_at_the_promise():
+    live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
+
+    def entry():
+        return [{
+            "launchId": "lane-a", "state": "working",
+            "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
+        }]
+
+    # Exactly at the promise: still inside the window, so suppressed.
+    still, suppressed = ww._stale_second_chance(
+        entry(), live_lanes, os.environ,
+        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 - 1800,
+    )
+    assert still == [] and len(suppressed) == 1
+
+    # One second past it: outside the window, so it alerts.
+    still, suppressed = ww._stale_second_chance(
+        entry(), live_lanes, os.environ,
+        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 - 1801,
+    )
+    assert len(still) == 1 and suppressed == []
+
+
+def test_small_future_skew_tolerated_large_skew_alerts():
+    live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
+
+    def entry():
+        return [{
+            "launchId": "lane-a", "state": "working",
+            "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
+        }]
+
+    still, suppressed = ww._stale_second_chance(
+        entry(), live_lanes, os.environ,
+        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 + 30,
+    )
+    assert len(suppressed) == 1, "30s of clock skew is not a wedge"
+
+    still, suppressed = ww._stale_second_chance(
+        entry(), live_lanes, os.environ,
+        now=10000.0, transcript_mtime=lambda wt, env: 10000.0 + 3600,
+    )
+    assert len(still) == 1 and suppressed == []
+
+
+def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
+    """A suppressed lane is not stale at all — it must not ride alsoObserved either."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 2)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["lib"], repo))
+    ll.append(repo, _started("lane-a", pid=os.getpid()))
+    hb.stamp(repo, state="blocked", phase="watch", launch_id="lane-a",
+             stale_after_seconds=3600)
+    ll.append(
+        repo, _reserved("lane-b", "batch-982", ["lib"], repo, worktree=worktree),
+    )
+    ll.append(repo, _started("lane-b", pid=os.getpid()))
+    hb.stamp(repo, state="working", phase="watch", launch_id="lane-b",
+             stale_after_seconds=1800, now=time.time() - 1835)
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=120)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "lane-blocked"
+    assert "stale" not in (result.get("alsoObserved") or {})
+    assert [e["launchId"] for e in result["staleSuppressed"]] == ["lane-b"]
+
+
+def test_later_tick_finding_lane_still_stale_clears_its_suppression(
+    tmp_path, monkeypatch,
+):
+    """The note can never contradict the event it rides on."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
+    _point_config_dir_at(tmp_path, monkeypatch)
+
+    calls = [0]
+
+    def fading_transcript(_worktree, _env):
+        calls[0] += 1
+        # Fresh on the first tick, long cold on every tick after it.
+        return time.time() - (60 if calls[0] == 1 else 100000)
+
+    monkeypatch.setattr(ww, "_newest_transcript_mtime", fading_transcript)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=4, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+
+    assert calls[0] >= 2, "needed at least two ticks to exercise the clear"
+    assert result["event"] == "lane-stale"
+    assert "staleSuppressed" not in result
+
+
+def test_loop_log_line_carries_the_suppression_note(tmp_path, monkeypatch):
+    """DoD: the loop stays honest about what it saw — the note lands in --log."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=90)
+    log_path = str(tmp_path / "watch.log")
+
+    ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        max_total_seconds=2, log_path=log_path, gh_run=_noop_gh_run,
+    )
+
+    lines = [
+        json.loads(line)
+        for line in open(log_path, encoding="utf-8").read().strip().splitlines()
+    ]
+    assert lines, "loop must have logged at least one timer arm"
+    logged = lines[0]["result"]["staleSuppressed"]
+    assert logged[0]["launchId"] == "lane-a"
+    assert logged[0]["note"] == ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH
+

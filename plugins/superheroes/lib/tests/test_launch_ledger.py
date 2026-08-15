@@ -3839,3 +3839,19 @@ def test_reserved_worktree_absolute_path_folds():
     rec = _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-974-abcd1234")
     result = ll.fold([rec])
     assert result["ok"] is True
+
+
+def test_fold_exposes_the_recorded_worktree(tmp_path):
+    # axis: worktree reaches the folded launch (#1023 resolves the transcript from it)
+    rec = _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-1023-abcd1234")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["worktree"] == "/tmp/wt/issue-1023-abcd1234"
+
+
+def test_fold_worktree_is_none_when_the_record_omits_it():
+    # axis: an older record folds to None, never a KeyError — the consumer alerts on None
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["worktree"] is None
