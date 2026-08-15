@@ -173,16 +173,17 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   `main` as bare words in the same segment stays silent (e.g. `git commit -m 'merge main into
   feature'`). **The `+` refspec form is a force spelling** (owner-ruled 2026-08-15): a refspec
   word beginning with `+` — `git push origin +feature`, `+main`, `+refs/heads/main`,
-  `+HEAD:main`, `+*:refs/review/*`, `+@{u}:refs/heads/x`, quoted or parenthesised, on any
-  refspec position — asks as `force-push`, exactly as `--force` does. The `+` must start a word
-  (never after `=`, `:`, `.`, `/`, `-` or a word character) and be followed by a refspec-source
-  character, so `--push-option=+x`, `a+b`, a bare `+`, `HEAD:refs/heads/+feature` (a
-  `+`-named branch), `./+repo` (a repository path) and `git pull origin +main` are not force.
-  **Accepted over-matches:** a redirection to a file whose name begins with `+`
-  (`git push origin feature 2>+log`) and the separate-argument push-option form
-  (`git push -o +x …`, `--push-option +x …`) ask — one prompt, never an unapproved run. A
-  quote-concatenated refspec (`+"feature"`) stays under the ratified quoting decline (known-open,
-  listed below).
+  `+HEAD:main`, `+*:refs/review/*`, `+@{u}:refs/heads/x`, `++feature` (a branch literally named
+  `+feature`), quoted or parenthesised, on any refspec position — asks as `force-push`, exactly
+  as `--force` does. The `+` must start a word (never after `=`, `:`, `.`, `/`, `-` or a word
+  character) and be followed by anything that is not whitespace or a separator, so
+  `--push-option=+x`, `a+b`, a bare `+`, `HEAD:refs/heads/+feature` (a `+`-named branch),
+  `./+repo` (a repository path) and `git pull origin +main` are not force. **Accepted
+  over-matches — they ask, one prompt, never an unapproved run:** a redirection to a file whose
+  name begins with `+` (`2>+log`), the separate-argument push option (`-o +x`, `--push-option
+  +x`), a repository operand named `+…` (`git push +repo feature`), and a quoted inline option
+  value (`--push-option="+x"`) — telling those apart from a refspec would need option parsing,
+  which the ratified posture declines.
   **Known-open specimens still silent today:** a **quote-concatenated command word**
   (`g''h pr merge 123`, `gi''t push --force origin f`), a **separator inside a quoted value**
   (`git -c user.name="x;y" push --force`, `git -c user.name="x|y" push --force`), a

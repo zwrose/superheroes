@@ -194,11 +194,15 @@ def _short_flag(letter):
 # remote ref exactly as `--force` does. The `+` must START a word — whitespace, quote, backtick,
 # `(` or a redirection operator before it; never `=`, `:`, `.`, `/`, `-`, `+` or a word char, so
 # `--push-option=+x`, `a+b`, `HEAD:refs/heads/+x` and `./+repo` are not force — and be followed
-# by a refspec-source character (word, `.`, `/`, `:`, `*`, `@`). Accepted over-matches, documented
-# in the reference: a redirection to a `+`-named file (`2>+log`) and the separate-argument push
-# option (`-o +x`, `--push-option +x`) ask — a prompt, never an unapproved run. Quote-concatenated
-# forms (`+"feature"`) stay in the ratified quoting decline. Owner-ruled 2026-08-15 (@116-3, a).
-_PLUS_REFSPEC = r"(?<![\w.=:+/-])\+(?=[\w./:*@])"
+# by ANY non-space, non-separator character (git allows almost any punctuation to start a ref —
+# `++feature` and `+!feature` are legal force refspecs — so the follower class is deliberately
+# broad rather than an enumeration of "ref characters"; a bare `+` before whitespace or a
+# separator is not a refspec). Accepted over-matches, documented in the reference: a redirection
+# to a `+`-named file (`2>+log`), the separate-argument push option (`-o +x`, `--push-option +x`),
+# a repository operand named `+…` (`git push +repo feature`), and a quoted inline option value
+# (`--push-option="+x"`) ask — a prompt, never an unapproved run. Owner-ruled 2026-08-15
+# (@116-3, a).
+_PLUS_REFSPEC = r"(?<![\w.=:+/-])\+(?=[^\s;|&<>()])"
 
 
 def _force_push_flag_trailing():

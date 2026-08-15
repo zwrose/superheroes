@@ -415,7 +415,6 @@ _INTENDED_SHIFTS = [
 _KNOWN_OPEN_UNCLASSIFIED = [
     "g''h pr merge 123",                            # quote-concatenated command word
     "gi''t push --force origin f",                  # quote-concatenated command word
-    'git push origin +"feature"',                    # quote-concatenated refspec (ratified quoting decline)
     'git -c user.name="x;y" push --force',          # separator inside a quoted value
     'git -c user.name="x|y" push --force',          # separator inside a quoted value
     # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
@@ -531,6 +530,9 @@ _PLUS_REFSPEC_CENSUS = [
     ("git push origin +@{u}:refs/heads/feature", "force-push"),  # revision-expression source
     ("git push origin +@:refs/heads/feature", "force-push"),
     ("git push origin feature +other", "force-push"),          # `+` on the second refspec
+    ("git push origin ++feature", "force-push"),               # branch literally named `+feature`
+    ("git push origin '+!feature'", "force-push"),             # punctuation-led ref name (round 2)
+    ('git push origin +"feature"', "force-push"),              # `+` then a quote — still a `+` word
 ]
 
 # Accepted over-matches — pinned as such so a reader cannot mistake them for intent (they ask;
@@ -539,6 +541,9 @@ _PLUS_REFSPEC_ACCEPTED_OVERMATCH = [
     ("git push origin feature 2>+log", "force-push"),          # redirection to a `+`-named file
     ("git push -o +x origin feature", "force-push"),           # separate-argument push option
     ("git push --push-option +x origin feature", "force-push"),
+    ("git push +repo feature", "force-push"),                  # repository operand named `+…`
+    ("git push --repo +repo feature", "force-push"),
+    ('git push --push-option="+x" origin feature', "force-push"),  # quote sits before the `+`
 ]
 
 _PLUS_REFSPEC_NEGATIVE = [
