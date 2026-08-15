@@ -190,11 +190,15 @@ def _short_flag(letter):
 
 
 # git's OTHER force spelling: a refspec word beginning with `+` (`git push origin +feature`,
-# `+HEAD:main`, `+refs/heads/x`) force-updates the remote ref exactly as `--force` does. The `+`
-# must START a word (whitespace, quote, backtick or `(` before it — never `=`, `:`, `.`, `-` or a
-# word char, so `--push-option=+x`, `a+b`, `2>+f` are not force) and be followed by a ref
-# character. Owner-ruled 2026-08-15 (field report #5 triage @116-3, option a).
-_PLUS_REFSPEC = r"(?<![\w.=:+-])\+(?=[\w./:])"
+# `+HEAD:main`, `+refs/heads/x`, `+*:refs/review/*`, `+@{u}:refs/heads/x`) force-updates the
+# remote ref exactly as `--force` does. The `+` must START a word — whitespace, quote, backtick,
+# `(` or a redirection operator before it; never `=`, `:`, `.`, `/`, `-`, `+` or a word char, so
+# `--push-option=+x`, `a+b`, `HEAD:refs/heads/+x` and `./+repo` are not force — and be followed
+# by a refspec-source character (word, `.`, `/`, `:`, `*`, `@`). Accepted over-matches, documented
+# in the reference: a redirection to a `+`-named file (`2>+log`) and the separate-argument push
+# option (`-o +x`, `--push-option +x`) ask — a prompt, never an unapproved run. Quote-concatenated
+# forms (`+"feature"`) stay in the ratified quoting decline. Owner-ruled 2026-08-15 (@116-3, a).
+_PLUS_REFSPEC = r"(?<![\w.=:+/-])\+(?=[\w./:*@])"
 
 
 def _force_push_flag_trailing():

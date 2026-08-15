@@ -415,6 +415,7 @@ _INTENDED_SHIFTS = [
 _KNOWN_OPEN_UNCLASSIFIED = [
     "g''h pr merge 123",                            # quote-concatenated command word
     "gi''t push --force origin f",                  # quote-concatenated command word
+    'git push origin +"feature"',                    # quote-concatenated refspec (ratified quoting decline)
     'git -c user.name="x;y" push --force',          # separator inside a quoted value
     'git -c user.name="x|y" push --force',          # separator inside a quoted value
     # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
@@ -526,9 +527,23 @@ _PLUS_REFSPEC_CENSUS = [
     ('git push origin "+feature"', "force-push"),
     ("(git push origin +feature)", "force-push"),
     ("git push -u origin +feature", "force-push"),
+    ("git push origin +*:refs/review/*", "force-push"),        # glob source (review round 1)
+    ("git push origin +@{u}:refs/heads/feature", "force-push"),  # revision-expression source
+    ("git push origin +@:refs/heads/feature", "force-push"),
+    ("git push origin feature +other", "force-push"),          # `+` on the second refspec
+]
+
+# Accepted over-matches — pinned as such so a reader cannot mistake them for intent (they ask;
+# a prompt, never an unapproved run; documented in owner-authority-allowlist.md).
+_PLUS_REFSPEC_ACCEPTED_OVERMATCH = [
+    ("git push origin feature 2>+log", "force-push"),          # redirection to a `+`-named file
+    ("git push -o +x origin feature", "force-push"),           # separate-argument push option
+    ("git push --push-option +x origin feature", "force-push"),
 ]
 
 _PLUS_REFSPEC_NEGATIVE = [
+    ("git push origin HEAD:refs/heads/+feature", None),      # `/` before `+` — a `+`-named branch
+    ("git push ./+repo feature", None),                       # repository operand, `/` before `+`
     ("git push origin feature", None),
     ("git push --push-option=+x origin feature", None),      # `+` after `=` is not a refspec
     ("git push origin a+b", None),                            # mid-word `+`
@@ -546,6 +561,11 @@ def test_owner_authority_action_plus_refspec_is_force(command, action):
 
 @pytest.mark.parametrize("command,action", _PLUS_REFSPEC_NEGATIVE)
 def test_owner_authority_action_plus_refspec_negatives(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _PLUS_REFSPEC_ACCEPTED_OVERMATCH)
+def test_owner_authority_action_plus_refspec_accepted_overmatch(command, action):
     assert oa.owner_authority_action(command) == action
 
 
