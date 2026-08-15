@@ -778,10 +778,8 @@ def run(
                         return _event_result(EVENT_TIMER, batch_id, degraded)
                     break
 
-                builder = _EVENT_PAYLOAD_BUILDERS.get(event)
-                if builder is None:
-                    continue
-                payload = builder(event_ctx)
+                # Every non-timer member of EVENT_PRECEDENCE has a builder.
+                payload = _EVENT_PAYLOAD_BUILDERS[event](event_ctx)
                 if payload is not None:
                     return _event_result(event, batch_id, degraded, **payload)
 
