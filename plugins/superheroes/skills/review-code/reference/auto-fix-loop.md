@@ -352,9 +352,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
 > panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
 > probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
-> model and effort from the seat map. A seat whose registry config is **effort-less** — cursor's
-> `("composer-2.5", None)` — is expressed by **omitting `--effort`** (#963), never by an effort
-> string: `probe`'s `--effort` is optional and defaults to `None`, which is the registry's own value.
+> model and effort from the seat map. A seat whose registry config is **effort-less** — one the model
+> registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
+> effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
 > Passing an empty `--effort ""` is not the same thing and still refuses at
 > `engine-config:invalid-model-effort`, so the loop omits the flag rather than passing an empty one.
 >
