@@ -195,10 +195,16 @@ def test_owner_authority_commands_structural_census():
     assert oa._SHORT_FLAG_REGISTRY
     for action, _tool, sub, trailing in oa.OWNER_AUTHORITY_COMMANDS:
         assert id(sub) in oa._GATED_REGISTRY, action
+        # Shape, not only provenance: every gated pattern ENDS with one of the two shared anchors.
+        # Provenance alone proved a row came from _gated; this proves the row ends correctly, so
+        # a custom `ending` cannot re-open the word-terminator class with the census green.
+        assert sub.pattern.endswith(oa._ALLOWED_ENDINGS), action
         if trailing is not None:
             trailing_id = id(trailing)
             assert (trailing_id in oa._GATED_REGISTRY
                     or trailing_id in oa._SHORT_FLAG_REGISTRY), action
+            if trailing_id in oa._GATED_REGISTRY:
+                assert trailing.pattern.endswith(oa._ALLOWED_ENDINGS), action
 
 
 _GATED_CLEAN_BODIES = [
@@ -227,6 +233,46 @@ def test_gated_clean_body_builds(body):
 def test_gated_rejects_body_with_end_anchor(body):
     with pytest.raises(ValueError, match="end-anchor"):
         oa._gated(body)
+
+
+@pytest.mark.parametrize("ending", [
+    r"(?!\S)",        # the pre-#1000 per-row anchor — the exact shape that re-opened backticks
+    r"(?:\s|$)",
+    r"\b",
+    r"[)\s]",
+    "",
+])
+def test_gated_rejects_custom_ending(ending):
+    # The `ending` argument is a closed selector: only _WORD_END / _TOKEN_END build. Anything else
+    # is refused by name (round-4 confirmation finding: an unvalidated ending let a future row
+    # re-open the word-terminator class with the structural census green).
+    with pytest.raises(ValueError, match="gated ending must be"):
+        oa._gated(r"pr\s+merge", ending=ending)
+
+
+@pytest.mark.parametrize("ending", [oa._WORD_END, oa._TOKEN_END])
+def test_gated_accepts_the_two_shared_endings(ending):
+    assert oa._gated(r"pr\s+merge", ending=ending).pattern.endswith(ending)
+
+
+# Terminator sweep — spelling-independent: every minimal gated form, followed IMMEDIATELY by every
+# shell word-terminator the anchor promises, still classifies. Crosses the forms with a fixed
+# alphabet, so it does not depend on which anchor spellings _FORBIDDEN_BODY_ANCHORS happens to
+# blacklist (round-4 finding 4).
+_TERMINATOR_ALPHABET = [")", "`", '"', "'", ";", " | cat", " && true", " x", ""]
+
+
+@pytest.mark.parametrize("terminator", _TERMINATOR_ALPHABET)
+@pytest.mark.parametrize("form,action", [
+    ("gh pr merge", "merge-pr"),
+    ("gh api repos/o/r/pulls/42/merge", "merge-api"),
+    ("gh release create", "release"),
+    ("gh workflow run", "run-workflow"),
+    ("git push --force", "force-push"),
+    ("git push origin main", "push-to-default"),
+])
+def test_owner_authority_action_terminator_sweep(form, action, terminator):
+    assert oa.owner_authority_action(form + terminator) == action, repr(form + terminator)
 
 
 # --- class-level behavioral census: gated-word terminators in wrappers (#1000) ---

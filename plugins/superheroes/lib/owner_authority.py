@@ -135,12 +135,22 @@ _FORBIDDEN_BODY_ANCHORS = (
 )
 
 
+# The ONLY end anchors a gated row may carry — a closed selector, not an open regex string. A row
+# that passes any other `ending` re-opens the word-terminator class with every test green (PR #1022
+# round-4 confirmation finding, three seats), so the builder refuses it by name rather than
+# trusting the author.
+_ALLOWED_ENDINGS = (_WORD_END, _TOKEN_END)
+
+
 def _gated(body, leading=r"(?<!\S)", ending=_WORD_END):
     for token in _FORBIDDEN_BODY_ANCHORS:
         if token in body:
             raise ValueError(
                 "gated body must not contain end-anchor %r — use _WORD_END or _TOKEN_END"
                 % token)
+    if ending not in _ALLOWED_ENDINGS:
+        raise ValueError(
+            "gated ending must be _WORD_END or _TOKEN_END, not %r" % (ending,))
     compiled = re.compile(leading + body + ending, re.I)
     _GATED_REGISTRY.add(id(compiled))
     return compiled
