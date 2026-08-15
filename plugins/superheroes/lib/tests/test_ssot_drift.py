@@ -373,6 +373,49 @@ def test_sanitized_view_diff_refusal_tokens_in_auto_fix_loop_doc():
     )
 
 
+# --- Cluster: mode refusal tokens (engine_dispatch → auto-fix-loop.md) ---
+
+
+def _mode_refusal_tokens_from_home():
+    import engine_dispatch
+
+    return {v for k, v in vars(engine_dispatch).items() if k.startswith("MODE_REFUSAL_")}
+
+
+def _mode_refusal_tokens_from_auto_fix_loop_doc(doc):
+    """The mode-refusal table in auto-fix-loop.md — scoped to that block only."""
+    m = re.search(
+        r"\*\*Mode refusals\*\*.*?\n>\n> \| token \| when \|\n> \|---\|---\|\n(.*?)\n>\n",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "auto-fix-loop.md: mode refusal table not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r">\s*\|\s*`([^`]+)`\s*\|", m.group(1)))
+    assert tokens, (
+        "auto-fix-loop.md: mode refusal table parsed to zero tokens "
+        "(regex drift or empty table?)"
+    )
+    return tokens
+
+
+def test_mode_refusal_tokens_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates engine_dispatch.py mode refusal literals."""
+    home = _mode_refusal_tokens_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    doc_tokens = _mode_refusal_tokens_from_auto_fix_loop_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "auto-fix-loop.md mode refusal vocabulary drift from "
+        "engine_dispatch.py — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
 # --- Cluster: wave-watch vocabulary (wave_watch → wave-watch.md) --------------
 
 

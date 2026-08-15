@@ -64,6 +64,10 @@ SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 
 REVIEW_DIFF_FILE_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
 REVIEW_DIFF_MAX_BYTES = 8 * 1024 * 1024
+
+MODE_REVIEW = "review"
+MODE_BRIEF_CHECK = "brief-check"
+REVIEW_MODES = (MODE_REVIEW, MODE_BRIEF_CHECK)
 _REVIEW_DIFF_ARGV_MAX_BYTES = 128 * 1024
 _REVIEW_DIFF_ARGV_MARGIN = 8 * 1024
 
@@ -246,7 +250,7 @@ def _canonical_names_from_stripped(stripped):
     return sorted(file_names), sorted(dir_names)
 
 
-def sanitized_view_notice(view):
+def sanitized_view_notice(view, *, mode="review"):
     """Plain-language notice appended to reviewer dispatch prompts (#684)."""
     stripped = view.get("stripped") or []
     head = view.get("headSha") or "unknown"
@@ -261,6 +265,13 @@ def sanitized_view_notice(view):
         "must not be attempted.\n"
         % head,
     ]
+    if mode == MODE_BRIEF_CHECK:
+        lines.append(
+            "There is no diff for this review. The review target is the text of this prompt — "
+            "a build brief written before the code exists. The working directory is the "
+            "repository the brief proposes to change, provided so findings can be grounded in "
+            "real code. Populate investigated with the bare repo-relative paths you read.\n"
+        )
     diff_path = view.get("diffPath")
     if diff_path:
         lines.append(

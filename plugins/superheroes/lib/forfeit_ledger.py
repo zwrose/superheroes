@@ -994,6 +994,7 @@ def build_row(
     engagement=None,
     evidence=None,
     ok=None,
+    mode=None,
 ):
     """Assemble one ledger row from runner inputs. Pure; no I/O."""
     if at is None:
@@ -1029,6 +1030,8 @@ def build_row(
         "salvage": None,
         "ok": ok if ok is not None else (reason is None),
     }
+    if mode is not None:
+        row["mode"] = mode
     if row["ok"]:
         row["attribution"] = None
     else:
