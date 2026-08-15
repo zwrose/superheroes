@@ -255,6 +255,18 @@ def test_gated_accepts_the_two_shared_endings(ending):
     assert oa._gated(r"pr\s+merge", ending=ending).pattern.endswith(ending)
 
 
+def test_gated_anchors_bind_the_whole_body_not_the_last_alternative():
+    # An ungrouped alternation body must not leave its first branch un-anchored: before the
+    # non-capturing wrap, `_gated(r"push|pull")` compiled to `(?<!\S)push|pull(?=…)`, so
+    # `pushXYZ` matched via the un-anchored `push` branch while the pattern still ended with the
+    # shared anchor and passed every structural check (micro review R-001).
+    p = oa._gated(r"push|pull")
+    assert p.search("pushXYZ") is None
+    assert p.search("pullXYZ") is None
+    # The leading anchor is untouched: a terminator AFTER the word is accepted for both branches.
+    assert p.search("push") and p.search("pull") and p.search("push)") and p.search("x pull`")
+
+
 # Terminator sweep — spelling-independent: every minimal gated form, followed IMMEDIATELY by every
 # shell word-terminator the anchor promises, still classifies. Crosses the forms with a fixed
 # alphabet, so it does not depend on which anchor spellings _FORBIDDEN_BODY_ANCHORS happens to

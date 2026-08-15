@@ -151,7 +151,10 @@ def _gated(body, leading=r"(?<!\S)", ending=_WORD_END):
     if ending not in _ALLOWED_ENDINGS:
         raise ValueError(
             "gated ending must be _WORD_END or _TOKEN_END, not %r" % (ending,))
-    compiled = re.compile(leading + body + ending, re.I)
+    # The body is wrapped in a non-capturing group so the anchors bind the WHOLE body: an
+    # ungrouped alternation (`push|pull`) would otherwise leave every branch but the last
+    # un-anchored while the pattern still ends with the shared anchor (micro review, R-001).
+    compiled = re.compile(leading + "(?:" + body + ")" + ending, re.I)
     _GATED_REGISTRY.add(id(compiled))
     return compiled
 
