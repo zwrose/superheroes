@@ -2135,15 +2135,6 @@ def _grade_review_attempt(run_dir_real, state, attempt):
 
     kind = res["resultKind"]
     payload = res.get(kind)
-    expected_kind = opened.get("expectedResultKind")
-    if expected_kind in REVIEW_RESULT_KINDS and kind != expected_kind:
-        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
-        return {
-            "forfeit": True,
-            "reason": dispatch_outcome.REASON_FORFEITED,
-            "detail": RESULT_KIND_MISMATCH_DETAIL,
-            "engagement": engagement,
-        }
 
     view_meta = opened.get("viewMeta")
     generated = ()
@@ -2156,6 +2147,28 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
+
+    if not payload and not accepted:
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
+        return {
+            "forfeit": True,
+            "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
+            "engagement": engagement,
+            "investigatedRejected": rejected_reasons,
+            "investigatedRejectedRecords": rejected_records,
+        }
+
+    expected_kind = opened.get("expectedResultKind")
+    if expected_kind in REVIEW_RESULT_KINDS and kind != expected_kind:
+        engagement = _engagement_with_read(
+            engagement, result_kind=kind, items=payload or [])
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": RESULT_KIND_MISMATCH_DETAIL,
+            "engagement": engagement,
+        }
+
     if payload:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
@@ -2178,14 +2191,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             rejected_records=rejected_records,
             rejected_reasons=rejected_reasons,
         )
-    engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
-    return {
-        "forfeit": True,
-        "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
-        "engagement": engagement,
-        "investigatedRejected": rejected_reasons,
-        "investigatedRejectedRecords": rejected_records,
-    }
+    assert False, "unreachable: vacuous and mismatch paths handled above"
 
 
 def _grade_write_attempt(run_dir_real, state, attempt):

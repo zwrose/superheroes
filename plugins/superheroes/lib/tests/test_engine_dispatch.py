@@ -4707,6 +4707,21 @@ def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
     assert res["resultKind"] == "verdicts"
 
 
+def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
+    """Pin set to verdicts: empty findings with no investigated stays vacuous, not mismatch."""
+    repo_root = _repo(tmp_path)
+    empty = json.dumps({"findings": []})
+    fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
+
+
 def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
     repo_root = _repo(tmp_path)
     unreadable = _UNREADABLE_REVIEW_STDOUT
