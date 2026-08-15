@@ -43,8 +43,11 @@ def test_run_surfaces_coalesced_nudge(name):
 
 @pytest.mark.parametrize("name", ROOTDIR_SKILLS)
 def test_nudge_skill_defines_root_dir(name):
-    assert "ROOT_DIR=" in _skill(name), \
-        f"{name} must define ROOT_DIR before the nudge snippet uses $ROOT_DIR"
+    assert re.search(
+        r"^[ \t]*ROOT_DIR=",
+        _skill(name),
+        re.MULTILINE,
+    ), f"{name} must assign ROOT_DIR before the nudge snippet uses $ROOT_DIR"
 
 
 def test_review_code_declared_setup_variables_are_assigned():
