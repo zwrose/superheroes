@@ -595,9 +595,9 @@ above).
    sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it never
    resumes anything on its own; **you** act on what it reports. Ground this in the field evidence:
    six lanes, zero handbacks by morning on harness 2.1.219, recovered only by an advisor sweep.
-   **Wave watch (wave orchestration duty).** Arm `wave_watch` instead of hand-rolling a per-session
-   watch loop — the re-arm is the loop, so single-shot means nothing to orphan. The arming pattern
-   lives one hop away in
+   **Wave watch (wave orchestration duty).** Arm one harness **background task per batch** — a
+   `loop` invocation that re-arms internally — instead of hand-rolling a per-session watch loop.
+   There is no daemon to orphan. The arming pattern lives one hop away in
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` — read it at
    arming time.
    **Wave-preflight live canary (strengthens `engine-auth`, not a ninth check).** A wave preflight
