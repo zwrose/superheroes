@@ -497,27 +497,7 @@ above).
    the one reviewer and per-change owner authorization stand in its place), CI green, branch current.
    **The gate is a backstop, not an authorization boundary** — delegation stands on advisor
    discipline with the gate behind it, never the reverse; **approval stays per-PR** ("approve once,
-   execute five" was considered and **not adopted**).
-   **A merge train's "green" includes post-merge `main` CI.** Per-lane green on the original parallel
-   heads does not test their union — two per-lane-green PRs went red on the union at typecheck.
-   Keeping each remaining lane **branch-current** exposes much of that before its merge (its own CI
-   then builds current `main` plus its change), and is still not a substitute: a tree that is green
-   pre-merge can go red post-merge on the identical content, as the next line's field case shows. The
-   train is green when **`main`'s own post-merge run** is green on the merged head — watched the way
-   the vet watches any run, selected by **workflow name plus head sha**, never `--limit 1`.
-   **Union fixes ride the last *open* PR, disclosed.** While a lane is still open, the fix lands on
-   **that** branch as a disclosed integration commit — never a silent push to `main`, never a merged
-   lane re-opened. That absorber exists only while a lane is open, and an earlier merged head's `main`
-   run can still be pending when the last one merges — so once the last lane has merged there is
-   nothing left to absorb into, and a red `main`
-   takes a **disclosed follow-up PR** from the failing head through the same preconditions. Typing it
-   is advisor **build** work, so it stays inside the boundary above: the owner authorizes **that
-   edit**, it stays the size of an integration fix — anything larger routes to a builder like any
-   other change — and it carries micro's review floor on the final head (one cross-vendor reviewer
-   plus an **engaged** control probe). What it does **not** do is reclassify the PR: the containing
-   lane keeps its own route, its DoD, and its advisor vet. Field case: a test green on the identical tree pre-merge went **deterministically** red
-   post-merge in CI only (coverage-instrumented runners lose an assertion race); a disclosed
-   integration commit on the last open PR's branch is what closed it.
+   execute five" was considered and **not adopted**). **A merge train's "green" includes post-merge `main` CI**; **union fixes ride the last *open* PR, disclosed** — the recipe and its field cases: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/merge-train.md`.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat
