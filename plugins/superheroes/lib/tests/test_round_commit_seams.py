@@ -61,6 +61,14 @@ class FakeAdapters(object):
   def missing_policy(self, phase):
     return self.policies.get(phase, "seat-status")
 
+  def is_orchestrator_fulfilled(self, phase):
+    return phase in (RD.P_VERIFY,)
+
+  def orchestrator_payload_fault(self, phase, payload):
+    if phase == RD.P_VERIFY:
+      return RD.verify_result_fault(payload)
+    return "orchestrator-payload-unknown-phase:%s" % phase
+
   def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
                session_dir=None):
     self.assembled.append({"phase": phase, "envelopes": envelopes,
