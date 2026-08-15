@@ -507,7 +507,10 @@ above).
    the vet watches any run, selected by **workflow name plus head sha**, never `--limit 1`.
    **Union fixes ride the last *open* PR, disclosed.** While a lane is still open, the fix lands on
    **that** branch as a disclosed integration commit — never a silent push to `main`, never a merged
-   lane re-opened. Once the last lane has merged there is no branch left to absorb it, so a red `main`
+   lane re-opened. That absorber only exists if you leave it open: **hold the last lane until every
+   preceding merged head's `main` run has reported green**, because merging it while an earlier
+   post-merge run is still pending is what strands a union break with no branch left to take it. Once
+   the last lane has merged there is nothing left to absorb into, so a red `main`
    takes a **disclosed follow-up PR** from the failing head through the same preconditions. Typing it
    is advisor **build** work and stays inside the boundary above: either the owner authorizes it as
    **micro** and it holds every micro bound, or it routes to a builder like any other change — and it
