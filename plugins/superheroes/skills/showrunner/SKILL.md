@@ -512,10 +512,11 @@ above).
    post-merge run is still pending is what strands a union break with no branch left to take it. Once
    the last lane has merged there is nothing left to absorb into, so a red `main`
    takes a **disclosed follow-up PR** from the failing head through the same preconditions. Typing it
-   is advisor **build** work and stays inside the boundary above: either the owner authorizes it as
-   **micro** and it holds every micro bound, or it routes to a builder like any other change — and it
-   carries micro's review floor (one cross-vendor reviewer plus an **engaged** control probe) either
-   way. Field case: a test green on the identical tree pre-merge went **deterministically** red
+   is advisor **build** work, so it stays inside the boundary above: the owner authorizes **that
+   edit**, it stays the size of an integration fix — anything larger routes to a builder like any
+   other change — and it carries micro's review floor on the final head (one cross-vendor reviewer
+   plus an **engaged** control probe). What it does **not** do is reclassify the PR: the containing
+   lane keeps its own route, its DoD, and its advisor vet. Field case: a test green on the identical tree pre-merge went **deterministically** red
    post-merge in CI only (coverage-instrumented runners lose an assertion race); a disclosed
    integration commit on the last open PR's branch is what closed it.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
