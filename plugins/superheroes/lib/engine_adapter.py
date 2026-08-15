@@ -543,19 +543,15 @@ def _scrub(text):
 # new field name can silently reopen the leak this boundary exists to close.
 _FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "id", "dimension", "confidence"}
 _FINDING_SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
-_FINDING_SUBSTANCE_KEYS_TOLERATED = frozenset({"summary", "message"})
+# Tolerated aliases for substance fields — description is named in the scrub boundary
+# comment above _FINDING_STRUCTURAL_KEYS as untrusted free text.
+_FINDING_SUBSTANCE_KEYS_TOLERATED = frozenset({"summary", "message", "description"})
 FINDING_REJECT_NO_SUBSTANCE = "no-substantive-fields"
 
 
 def _substance_value_is_substantive(val):
-    """True when a substance-field value carries review content, not an empty placeholder."""
-    if val is None:
-        return False
-    if isinstance(val, str) and not val.strip():
-        return False
-    if isinstance(val, (list, dict, tuple)) and len(val) == 0:
-        return False
-    return True
+    """True when a substance-field value carries human-readable review prose."""
+    return isinstance(val, str) and val.strip() != ""
 
 
 def _finding_is_substantive(obj):
