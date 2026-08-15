@@ -115,9 +115,9 @@ does not dedupe suppressed pairs across invocations by itself.
 
 A stale lane whose transcript is **fresh** is the **benign long-dispatch shape** — a builder alive
 inside a long engine dispatch whose heartbeat promise lapsed between stamps. **The watcher now reads
-that pair for you.** Before emitting `lane-stale` it resolves the lane's session transcript from the
-worktree the launcher recorded on the ledger, and a transcript written **inside that lane's own
-`staleAfterSeconds` window** suppresses the event.
+that pair for you.** Before emitting `lane-stale` it resolves the lane's session transcript from
+the **session id the launcher recorded on the launch record**, and a transcript written **inside
+that lane's own `staleAfterSeconds` window** suppresses the event.
 
 So `lane-stale` now means three things at once: the heartbeat outran the promise, the pid is
 positively live, **and** the transcript is cold. That is the wedge.
@@ -129,41 +129,20 @@ including `timer`, which is what puts it in the `--log` line, so a long quiet ar
 lanes it judged to be working.
 
 **The check fails toward the alert, never toward silence.** Every way the transcript read can fail to
-prove work — no worktree on the lane's ledger record, no transcript on disk, an unreadable projects
-directory, a transcript dated into the future by any amount — leaves the lane stale and the event
-fires.
+prove work — no session id on the lane's ledger record, no transcript on disk, two-or-more
+transcripts with the same id, an unreadable projects directory, a transcript dated into the future
+by any amount — leaves the lane stale and the event fires. Ambiguity additionally records
+`transcript-ambiguous`.
 
-**Only the lane's own transcript may vouch for it.** Beyond the recorded-cwd check below, three
-bounds enforce that: exactly one config root is searched (`CLAUDE_CONFIG_DIR` outright when set,
-otherwise `~/.claude` — never both, because a same-named bucket under the other root belongs to a
-different session); a symlinked entry is never followed; and a transcript last written **before the
-lane's recorded start** is ignored, so a session that ran in that directory earlier cannot vouch for
-this launch.
+**Only the lane's own transcript may vouch for it.** The launch record's session id names exactly one
+file: `<sessionId>.jsonl` under the host config root's `projects` tree. Exactly one config root is
+searched (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude` — never both, because a
+same-named file under the other root belongs to a different session); a symlinked entry is never
+followed; and the watcher **stat's only** — it never reads transcript contents.
 
-**A transcript is attributed by its own recorded cwd, never by its filename.** The host names the
-per-project bucket by folding non-alphanumeric characters in the builder's cwd to `-`. That folding
-is **many-to-one**, so a name can never be un-mangled: `/tmp/a_b/wt` and `/tmp/a-b/wt` can both
-produce `-tmp-a-b-wt`. Trusting the name would let a *different* live worktree's transcript vouch for
-this lane — suppressing a genuinely wedged builder, the one direction this check must never fail in.
-
-So bucket discovery is deliberately generous (both the ledger's spelling of the worktree and its
-physical, symlink-resolved one, compared permissively), and the decision is made per file: **a
-transcript counts only when the cwd recorded inside it is this lane's worktree.** A transcript that
-records a different cwd, records none at all, or cannot be read does not count — and a lane with no
-counting transcript alerts.
-
-That also means the watcher **reads a bounded prefix of a transcript** rather than only `stat`-ing
-it. It remains strictly read-only over both the store and the transcripts.
-
-One case is still **left as an alert rather than a guess**: a cwd long enough that the host truncates
-or hashes its bucket key is not discovered at all, so that lane resolves to nothing and still fires
-`lane-stale` — the old false-positive behavior for those installs, never a false silence.
-
-**One residual is accepted and not closed:** binding is by worktree and start time, not by session
-identity, because nothing records which session id belongs to a launch. A *different* session running
-**concurrently in the same build worktree** — an operator opening the wedged lane's directory to look
-at it — records that same cwd, so it passes every check above and can keep a genuinely wedged lane
-suppressed. Closing it needs the launch record to carry the session id.
+Launches without a recorded session id get **no second chance** — pre-change ledger records still
+alert. The concurrent-foreign-session-in-the-same-worktree residual is **closed** by recorded
+identity: a different session carries a different id and cannot vouch for this lane.
 
 A transcript-suppressed lane is **not** the same as an `--ignore-event` suppression: `--ignore-event`
 silences an event the watcher still believes, so the lane keeps showing up under `alsoObserved`; a

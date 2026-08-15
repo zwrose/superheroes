@@ -14,6 +14,7 @@ import secrets
 import subprocess
 import sys
 import time
+import uuid
 from datetime import datetime, timedelta, timezone
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -835,12 +836,18 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
 
     token = model_result["token"]
     resolution = model_result["resolution"]
-    argv = ["claude", "--model", token, "-p", prompt]
+    session_id = str(uuid.uuid4())
+    # The same argv is reused if launch_build retries, so the session id is reused
+    # too. That is safe because the only retrying path is spawn-oserror, where
+    # Popen raised and no child ever started — every other failure is terminal
+    # with no re-spawn.
+    argv = ["claude", "--model", token, "--session-id", session_id, "-p", prompt]
     return {
         "ok": True,
         "reason": None,
         "prompt": prompt,
         "argv": argv,
+        "sessionId": session_id,
         "model": token,
         "modelResolution": {
             "tier": resolution["tier"],
@@ -1172,6 +1179,7 @@ def launch_build(
         "modelSource": resolution["source"],
         "modelReason": model_reason if model_reason is not None else "",
         "worktree": worktree_path,
+        "sessionId": compose_result["sessionId"],
     }
     if slot is not None:
         reserved["slot"] = slot

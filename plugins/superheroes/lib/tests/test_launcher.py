@@ -563,7 +563,34 @@ def test_compose_argv_shape(tmp_path):
     premise = _valid_premise(repo)
     result = L.compose_launch(repo, 656, premise, model="sonnet")
     assert result["ok"] is True
-    assert result["argv"] == ["claude", "--model", "sonnet", "-p", result["prompt"]]
+    assert result["argv"] == [
+        "claude", "--model", "sonnet", "--session-id", result["sessionId"],
+        "-p", result["prompt"],
+    ]
+
+
+def test_compose_argv_carries_session_id(tmp_path):
+  # axis: --session-id precedes -p and matches the returned sessionId
+    import uuid as _uuid
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    result = L.compose_launch(repo, 656, premise)
+    assert result["ok"] is True
+    argv = result["argv"]
+    sid_index = argv.index("--session-id")
+    assert argv[sid_index + 1] == result["sessionId"]
+    _uuid.UUID(result["sessionId"])
+    assert argv.index("-p") == sid_index + 2
+
+
+def test_compose_launch_mints_distinct_session_ids(tmp_path):
+  # axis: each compose_launch call gets its own session id
+    repo = _init_repo(tmp_path / "repo")
+    premise = _valid_premise(repo)
+    first = L.compose_launch(repo, 656, premise)
+    second = L.compose_launch(repo, 656, premise)
+    assert first["ok"] is True and second["ok"] is True
+    assert first["sessionId"] != second["sessionId"]
 
 
 def _write_core_with_builder_tier(repo, prefs):

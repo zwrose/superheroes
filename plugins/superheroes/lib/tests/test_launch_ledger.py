@@ -3868,3 +3868,40 @@ def test_fold_worktree_is_none_when_the_record_omits_it():
     result = ll.fold([rec])
     assert result["ok"] is True
     assert result["launches"]["l1"]["worktree"] is None
+
+
+@pytest.mark.parametrize("session_id", ["", "   ", "not-a-uuid", 7, None])
+def test_reserved_session_id_must_be_a_well_formed_uuid(session_id):
+    rec = _reserved("l1", "b", ["a"], "/tmp", sessionId=session_id)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:sessionId"
+
+
+def test_reserved_session_id_well_formed_uuid_folds():
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        sessionId="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+
+
+def test_fold_exposes_the_recorded_session_id(tmp_path):
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        sessionId="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert (
+        result["launches"]["l1"]["sessionId"]
+        == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    )
+
+
+def test_fold_session_id_is_none_when_the_record_omits_it():
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["sessionId"] is None

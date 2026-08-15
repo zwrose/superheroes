@@ -2497,23 +2497,28 @@ def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
 # --- transcript second chance before lane-stale (#1023) -----------------------
 
 _UNSET = object()   # "caller said nothing", distinct from an explicit None
+_TEST_SESSION_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+_OTHER_SESSION_ID = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 
 
 def _stale_lane_with_worktree(
-    repo, tmp_path, monkeypatch, *, worktree, launch_id="lane-a",
-    batch_id="batch-982", stale_after_seconds=1800, age_seconds=1835,
+    repo, tmp_path, monkeypatch, *, worktree, session_id=_TEST_SESSION_ID,
+    launch_id="lane-a", batch_id="batch-982", stale_after_seconds=1800,
+    age_seconds=1835,
 ):
-    """A pid-live lane past its own promise, with the worktree on the ledger record."""
+    """A pid-live lane past its own promise, with session id on the ledger record."""
     store_root = _ledger_env(tmp_path, monkeypatch)
     _precreate_repo_store_dir(repo, store_root)
     ll.declare_batch(repo, batch_id, 1)
-    extra = {} if worktree is None else {"worktree": worktree}
+    extra = {}
+    if worktree is not None:
+        extra["worktree"] = worktree
+    if session_id is not None:
+        extra["sessionId"] = session_id
     ll.append(
         repo,
         _reserved(launch_id, batch_id, ["plugins/superheroes/lib"], repo, **extra),
     )
-    # The lane starts BEFORE its transcript exists, as it does in production — the
-    # ownership bound rejects a transcript older than the launch.
     ll.append(
         repo,
         dict(_started(launch_id, pid=os.getpid()), ts=time.time() - age_seconds - 600),
@@ -2538,37 +2543,19 @@ def _point_config_dir_at(tmp_path, monkeypatch):
     return config_dir
 
 
-def _write_transcript(
-    config_dir, worktree, *, age_seconds, name="session-abc.jsonl", cwd=_UNSET,
+def _write_session_transcript(
+    config_dir, session_id, *, age_seconds, bucket="bucket-a", name=None,
 ):
-    """A transcript in this worktree's bucket, recording a cwd like the host does.
-
-    `cwd` defaults to the worktree itself (the honest case); pass another path to
-    build a foreign transcript, or None to build one that records no cwd at all.
-    """
-    project_dir = os.path.join(
-        str(config_dir), "projects", ww._project_dir_name(worktree),
-    )
+    """A transcript file named <session_id>.jsonl under an arbitrary projects bucket."""
+    project_dir = os.path.join(str(config_dir), "projects", bucket)
     os.makedirs(project_dir, exist_ok=True)
-    path = os.path.join(project_dir, name)
-    declared = worktree if cwd is _UNSET else cwd
+    filename = (session_id + ".jsonl") if name is None else name
+    path = os.path.join(project_dir, filename)
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write('{"type": "summary"}\n')   # leading records carry no cwd, as on the host
-        if declared is None:
-            fh.write('{"type": "user"}\n')
-        else:
-            fh.write(json.dumps({"type": "user", "cwd": declared}) + "\n")
+        fh.write('{"type": "summary"}\n')
     stamp_at = time.time() - age_seconds
     os.utime(path, (stamp_at, stamp_at))
     return path
-
-
-def test_project_dir_name_mangles_slashes_and_dots():
-    # The host's convention: every "/" and "." in the absolute cwd becomes "-".
-    assert ww._project_dir_name(
-        "/Users/zwrose/.superheroes-worktrees/superheroes/issue-1023-abc"
-    ) == "-Users-zwrose--superheroes-worktrees-superheroes-issue-1023-abc"
-    assert ww._project_dir_name("/a/b/") == "-a-b"
 
 
 def test_transcript_config_dirs_is_exactly_one_root(monkeypatch):
@@ -2592,7 +2579,7 @@ def test_lane_stale_suppressed_when_transcript_fresh(tmp_path, monkeypatch):
     worktree = str(tmp_path / "build-wt")
     _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=150)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=150)
 
     result = ww.run(
         repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
@@ -2609,63 +2596,80 @@ def test_lane_stale_suppressed_when_transcript_fresh(tmp_path, monkeypatch):
     assert 140 <= suppressed[0]["transcriptAgeSeconds"] <= 400
 
 
-def test_newest_transcript_mtime_takes_the_freshest_of_several(tmp_path, monkeypatch):
-    worktree = str(tmp_path / "build-wt")
+def test_session_transcript_mtime_resolves_exactly_one_match(tmp_path, monkeypatch):
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=9000, name="old.jsonl")
-    _write_transcript(config_dir, worktree, age_seconds=30, name="new.jsonl")
-    mtime = ww._newest_transcript_mtime(worktree, os.environ)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="a")
+    _write_session_transcript(
+        config_dir, _OTHER_SESSION_ID, age_seconds=9000, bucket="b",
+    )
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert ambiguous is False
     assert mtime is not None
     assert time.time() - mtime < 120
 
 
-# Census: every way the transcript read can fail to prove work must still ALERT.
-# Fail toward the alert, never toward silence.
-_UNRESOLVABLE_SHAPES = (
-    "no-worktree-on-record",
-    "worktree-relative-path",
+# Census: every I2 failure shape must leave the lane still-stale (fail toward alert).
+_I2_STILL_STALE_SHAPES = (
+    "no-session-id-on-record",
+    "zero-matches",
+    "two-or-more-matches",
+    "session-id-with-path-separator",
     "no-projects-dir",
     "empty-project-dir",
     "non-transcript-file-only",
     "transcript-colder-than-promise",
     "transcript-dated-in-the-future",
     "transcript-is-a-directory",
+    "symlink-at-exact-filename",
 )
 
 
-@pytest.mark.parametrize("shape", _UNRESOLVABLE_SHAPES)
-def test_unresolvable_transcript_still_emits_lane_stale(tmp_path, monkeypatch, shape):
+@pytest.mark.parametrize("shape", _I2_STILL_STALE_SHAPES)
+def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
     repo = _init_repo(tmp_path / "repo")
     worktree = str(tmp_path / "build-wt")
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    session_id = _TEST_SESSION_ID
 
-    if shape == "no-worktree-on-record":
-        _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=None)
-    elif shape == "worktree-relative-path":
+    if shape == "no-session-id-on-record":
         _stale_lane_with_worktree(
-            repo, tmp_path, monkeypatch, worktree=None,
+            repo, tmp_path, monkeypatch, worktree=worktree, session_id=None,
         )
-        # A relative worktree never reaches the ledger (fold rejects it), so drive
-        # the resolver directly: it must refuse rather than resolve against cwd.
-        assert ww._newest_transcript_mtime("relative/build-wt", os.environ) is None
+        _write_session_transcript(config_dir, _OTHER_SESSION_ID, age_seconds=60)
+    elif shape == "session-id-with-path-separator":
+        mtime, ambiguous = ww._session_transcript_mtime("../evil", os.environ)
+        assert mtime is None and ambiguous is False
+        return
     else:
         _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
 
-    project_dir = os.path.join(
-        str(config_dir), "projects", ww._project_dir_name(worktree),
-    )
-    if shape == "empty-project-dir":
-        os.makedirs(project_dir, exist_ok=True)
+    bucket_dir = os.path.join(str(config_dir), "projects", "bucket-a")
+    if shape == "no-projects-dir":
+        pass
+    elif shape == "empty-project-dir":
+        os.makedirs(bucket_dir, exist_ok=True)
     elif shape == "non-transcript-file-only":
-        os.makedirs(project_dir, exist_ok=True)
-        with open(os.path.join(project_dir, "notes.txt"), "w", encoding="utf-8") as fh:
+        os.makedirs(bucket_dir, exist_ok=True)
+        with open(os.path.join(bucket_dir, "notes.txt"), "w", encoding="utf-8") as fh:
             fh.write("not a transcript\n")
+    elif shape == "zero-matches":
+        pass
+    elif shape == "two-or-more-matches":
+        _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="a")
+        _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="b")
     elif shape == "transcript-colder-than-promise":
-        _write_transcript(config_dir, worktree, age_seconds=5400)
+        _write_session_transcript(config_dir, session_id, age_seconds=5400)
     elif shape == "transcript-dated-in-the-future":
-        _write_transcript(config_dir, worktree, age_seconds=-3600)
+        _write_session_transcript(config_dir, session_id, age_seconds=-3600)
     elif shape == "transcript-is-a-directory":
-        os.makedirs(os.path.join(project_dir, "session-abc.jsonl"), exist_ok=True)
+        os.makedirs(os.path.join(bucket_dir, session_id + ".jsonl"), exist_ok=True)
+    elif shape == "symlink-at-exact-filename":
+        os.makedirs(bucket_dir, exist_ok=True)
+        target = tmp_path / "elsewhere.jsonl"
+        target.write_text("{}\n")
+        os.symlink(str(target), os.path.join(bucket_dir, session_id + ".jsonl"))
+    else:
+        _write_session_transcript(config_dir, session_id, age_seconds=60)
 
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
@@ -2676,11 +2680,13 @@ def test_unresolvable_transcript_still_emits_lane_stale(tmp_path, monkeypatch, s
     )
     assert result["launchId"] == "lane-a"
     assert "staleSuppressed" not in result
+    if shape == "two-or-more-matches":
+        assert ww.DEGRADATION_TRANSCRIPT_AMBIGUOUS in result["degraded"]
 
 
 def test_transcript_fresh_but_promise_unusable_still_alerts(tmp_path, monkeypatch):
     """A stale entry carrying no usable promise cannot be second-chanced."""
-    live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
+    live_lanes = {"lane-a": {"sessionId": _TEST_SESSION_ID}}
     stale_live = [{
         "launchId": "lane-a",
         "state": "working",
@@ -2689,14 +2695,15 @@ def test_transcript_fresh_but_promise_unusable_still_alerts(tmp_path, monkeypatc
     }]
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
-        now=1000.0, transcript_mtime=lambda wt, env, since=None: 999.0,
+        now=1000.0,
+        session_transcript_mtime=lambda sid, env: (999.0, False),
     )
     assert still == stale_live
     assert suppressed == []
 
 
 def test_second_chance_boundary_is_inclusive_at_the_promise():
-    live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
+    live_lanes = {"lane-a": {"sessionId": _TEST_SESSION_ID}}
 
     def entry():
         return [{
@@ -2707,14 +2714,16 @@ def test_second_chance_boundary_is_inclusive_at_the_promise():
     # Exactly at the promise: still inside the window, so suppressed.
     still, suppressed = ww._stale_second_chance(
         entry(), live_lanes, os.environ,
-        now=10000.0, transcript_mtime=lambda wt, env, since=None: 10000.0 - 1800,
+        now=10000.0,
+        session_transcript_mtime=lambda sid, env: (10000.0 - 1800, False),
     )
     assert still == [] and len(suppressed) == 1
 
     # One second past it: outside the window, so it alerts.
     still, suppressed = ww._stale_second_chance(
         entry(), live_lanes, os.environ,
-        now=10000.0, transcript_mtime=lambda wt, env, since=None: 10000.0 - 1801,
+        now=10000.0,
+        session_transcript_mtime=lambda sid, env: (10000.0 - 1801, False),
     )
     assert len(still) == 1 and suppressed == []
 
@@ -2723,7 +2732,7 @@ def test_second_chance_boundary_is_inclusive_at_the_promise():
 def test_any_future_dated_transcript_alerts(ahead_seconds):
     """No skew tolerance: the watcher and the transcript share one host clock, so a
     future mtime is a wrong clock, and the fail-toward-alert invariant is absolute."""
-    live_lanes = {"lane-a": {"worktree": "/abs/wt"}}
+    live_lanes = {"lane-a": {"sessionId": _TEST_SESSION_ID}}
     stale_live = [{
         "launchId": "lane-a", "state": "working",
         "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
@@ -2731,7 +2740,7 @@ def test_any_future_dated_transcript_alerts(ahead_seconds):
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
         now=10000.0,
-        transcript_mtime=lambda wt, env, since=None: 10000.0 + ahead_seconds,
+        session_transcript_mtime=lambda sid, env: (10000.0 + ahead_seconds, False),
     )
     assert len(still) == 1 and suppressed == []
 
@@ -2739,40 +2748,24 @@ def test_any_future_dated_transcript_alerts(ahead_seconds):
 def test_config_dir_override_is_searched_alone(tmp_path, monkeypatch):
     """A same-named transcript under the DEFAULT root belongs to another session and
     must never vouch for this lane when the override is set."""
-    worktree = str(tmp_path / "build-wt")
     override = tmp_path / "override-config"
     decoy = tmp_path / "decoy-home" / ".claude"
     monkeypatch.setenv("HOME", str(tmp_path / "decoy-home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(override))
-    # Only the decoy (default-root) transcript exists, and it is fresh.
-    _write_transcript(decoy, worktree, age_seconds=5)
+    _write_session_transcript(decoy, _TEST_SESSION_ID, age_seconds=5)
 
     assert ww._transcript_config_dirs(os.environ) == [str(override)]
-    assert ww._newest_transcript_mtime(worktree, os.environ) is None, (
-        "the default root must not be searched when the override is set"
-    )
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False
 
-    # With no override, the default root IS the one searched — via the supplied HOME.
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     assert ww._transcript_config_dirs(os.environ) == [str(decoy)]
-    assert ww._newest_transcript_mtime(worktree, os.environ) is not None
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is not None and ambiguous is False
 
 
-def test_transcript_predating_the_launch_does_not_vouch(tmp_path, monkeypatch):
-    """A session that ran in this directory before the lane started is not this lane."""
-    worktree = str(tmp_path / "build-wt")
-    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=100)
-    now = time.time()
-
-    assert ww._newest_transcript_mtime(worktree, os.environ, now - 500) is not None
-    assert ww._newest_transcript_mtime(worktree, os.environ, now - 10) is None
-
-
-def test_ownership_bound_is_wired_from_the_ledger_end_to_end(tmp_path, monkeypatch):
-    """Drives run(): the ONLY thing making this lane alert is startedTs reaching the
-    resolver. Deleting the fold in launch_ledger or the pass-through in wave_watch
-    turns this red — the direct-helper test above cannot see either wiring line."""
+def test_folded_session_id_wires_end_to_end_to_suppressed_lane(tmp_path, monkeypatch):
+    """A real folded ledger record's sessionId reaches the suppression path."""
     repo = _init_repo(tmp_path / "repo")
     worktree = str(tmp_path / "build-wt")
     store_root = _ledger_env(tmp_path, monkeypatch)
@@ -2780,96 +2773,23 @@ def test_ownership_bound_is_wired_from_the_ledger_end_to_end(tmp_path, monkeypat
     ll.declare_batch(repo, "batch-982", 1)
     ll.append(
         repo,
-        _reserved("lane-a", "batch-982", ["lib"], repo, worktree=worktree),
+        _reserved(
+            "lane-a", "batch-982", ["lib"], repo,
+            worktree=worktree, sessionId=_TEST_SESSION_ID,
+        ),
     )
-    # The lane started AFTER the transcript was last written, so that transcript
-    # belongs to some earlier session and must not vouch for this launch.
-    ll.append(repo, dict(_started("lane-a", pid=os.getpid()), ts=time.time() - 60))
+    ll.append(repo, dict(_started("lane-a", pid=os.getpid()), ts=time.time() - 4000))
     hb.stamp(repo, state="working", phase="watch", launch_id="lane-a",
              stale_after_seconds=1800, now=time.time() - 1835)
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=300)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=120)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
     )
 
-    assert result["event"] == "lane-stale"
-    assert "staleSuppressed" not in result
-
-    # Same lane, same transcript, started EARLIER than the transcript: suppressed.
-    # Isolates startedTs as the single variable.
-    repo2 = _init_repo(tmp_path / "repo2")
-    _precreate_repo_store_dir(repo2, store_root)
-    ll.declare_batch(repo2, "batch-982", 1)
-    ll.append(
-        repo2,
-        _reserved("lane-a", "batch-982", ["lib"], repo2, worktree=worktree),
-    )
-    ll.append(repo2, dict(_started("lane-a", pid=os.getpid()), ts=time.time() - 900))
-    hb.stamp(repo2, state="working", phase="watch", launch_id="lane-a",
-             stale_after_seconds=1800, now=time.time() - 1835)
-
-    result2 = ww.run(
-        repo2, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
-    )
-
-    assert result2["event"] == "timer"
-    assert [e["launchId"] for e in result2["staleSuppressed"]] == ["lane-a"]
-
-
-def test_bucket_discovery_holds_under_either_host_mangling_rule(tmp_path, monkeypatch):
-    """Discovery is deliberately generous — it only has to FIND the bucket; the
-    transcript's own cwd is what attributes it."""
-    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    worktree = str(tmp_path / "a_b" / "build wt")
-    os.makedirs(worktree, exist_ok=True)
-    projects = os.path.join(str(config_dir), "projects")
-
-    # Rule A — only "/" and "." folded, so "_" and " " survive in the bucket name.
-    rule_a = os.path.join(projects, ww._project_dir_name(worktree))
-    os.makedirs(rule_a, exist_ok=True)
-    assert ww._candidate_project_dirs(str(config_dir), worktree) == [rule_a]
-
-    # Rule B — every non-alphanumeric folded. Same worktree, other spelling.
-    os.rename(rule_a, os.path.join(projects, "tmp-holding"))
-    rule_b = os.path.join(projects, ww._normalize_bucket(ww._project_dir_name(worktree)))
-    os.rename(os.path.join(projects, "tmp-holding"), rule_b)
-    assert ww._candidate_project_dirs(str(config_dir), worktree) == [rule_b]
-
-
-def test_foreign_transcript_sharing_a_bucket_never_vouches(tmp_path, monkeypatch):
-    """The bucket naming is many-to-one, so a DIFFERENT worktree's transcript can
-    land in the bucket this lane discovers. Its recorded cwd is what refuses it —
-    accepting it would suppress a genuinely wedged builder."""
-    worktree = str(tmp_path / "build-wt")
-    other = str(tmp_path / "some-other-worktree")
-    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    # Fresh, in this lane's own bucket, but written by another worktree's session.
-    _write_transcript(config_dir, worktree, age_seconds=30, cwd=other)
-
-    assert ww._newest_transcript_mtime(worktree, os.environ) is None
-
-
-def test_transcript_without_a_recorded_cwd_never_vouches(tmp_path, monkeypatch):
-    worktree = str(tmp_path / "build-wt")
-    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=30, cwd=None)
-
-    assert ww._newest_transcript_mtime(worktree, os.environ) is None
-
-
-def test_transcript_recording_the_physical_cwd_is_attributed(tmp_path, monkeypatch):
-    """The builder's cwd is the physical path while the ledger holds the launcher's
-    spelling — the transcript is still this lane's."""
-    physical = tmp_path / "physical" / "build-wt"
-    os.makedirs(str(physical), exist_ok=True)
-    os.symlink(str(tmp_path / "physical"), str(tmp_path / "linked"))
-    lexical = str(tmp_path / "linked" / "build-wt")
-    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, lexical, age_seconds=30, cwd=str(physical))
-
-    assert ww._newest_transcript_mtime(lexical, os.environ) is not None
+    assert result["event"] == "timer"
+    assert [e["launchId"] for e in result["staleSuppressed"]] == ["lane-a"]
 
 
 def test_one_fresh_lane_cannot_hide_a_different_wedged_lane(tmp_path, monkeypatch):
@@ -2882,14 +2802,19 @@ def test_one_fresh_lane_cannot_hide_a_different_wedged_lane(tmp_path, monkeypatc
     store_root = _ledger_env(tmp_path, monkeypatch)
     _precreate_repo_store_dir(repo, store_root)
     ll.declare_batch(repo, "batch-982", 2)
-    for lane, wt in (("lane-fresh", fresh_wt), ("lane-cold", cold_wt)):
-        ll.append(repo, _reserved(lane, "batch-982", ["lib"], repo, worktree=wt))
+    for lane, wt, sid in (
+        ("lane-fresh", fresh_wt, _TEST_SESSION_ID),
+        ("lane-cold", cold_wt, _OTHER_SESSION_ID),
+    ):
+        ll.append(repo, _reserved(
+            lane, "batch-982", ["lib"], repo, worktree=wt, sessionId=sid,
+        ))
         ll.append(repo, dict(_started(lane, pid=os.getpid()), ts=time.time() - 4000))
         hb.stamp(repo, state="working", phase="watch", launch_id=lane,
                  stale_after_seconds=1800, now=time.time() - 1835)
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, fresh_wt, age_seconds=120)
-    _write_transcript(config_dir, cold_wt, age_seconds=3600)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=120)
+    _write_session_transcript(config_dir, _OTHER_SESSION_ID, age_seconds=3600)
 
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
@@ -2900,42 +2825,50 @@ def test_one_fresh_lane_cannot_hide_a_different_wedged_lane(tmp_path, monkeypatc
     assert [e["launchId"] for e in result["staleSuppressed"]] == ["lane-fresh"]
 
 
-
 def test_unreadable_matched_bucket_still_alerts(tmp_path, monkeypatch):
-    """The bucket is found, but scanning INSIDE it fails — the census must cover the
-    inner failure, not only failure to scan the projects directory."""
-    worktree = str(tmp_path / "build-wt")
+    """stat on the transcript file fails — still alerts."""
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=60)
-    real_scandir = ww.os.scandir
-    bucket = os.path.join(
-        str(config_dir), "projects", ww._project_dir_name(worktree),
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=60)
+    real_stat = ww.os.stat
+    target = os.path.join(
+        str(config_dir), "projects", "bucket-a", _TEST_SESSION_ID + ".jsonl",
     )
 
-    def refuse_inside(path, *a, **kw):
-        if str(path) == bucket:
+    def refuse_stat(path, *a, **kw):
+        if str(path) == target:
             raise PermissionError("refused")
-        return real_scandir(path, *a, **kw)
+        return real_stat(path, *a, **kw)
 
-    monkeypatch.setattr(ww.os, "scandir", refuse_inside)
-    assert ww._newest_transcript_mtime(worktree, os.environ) is None
-
-
+    monkeypatch.setattr(ww.os, "stat", refuse_stat)
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False
 
 
 def test_symlinked_transcript_is_never_followed(tmp_path, monkeypatch):
-    """A link in the bucket would let an unrelated file's mtime stand in for the lane."""
-    worktree = str(tmp_path / "build-wt")
+    """A link named <sessionId>.jsonl never suppresses."""
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    project_dir = os.path.join(
-        str(config_dir), "projects", ww._project_dir_name(worktree),
-    )
-    os.makedirs(project_dir, exist_ok=True)
+    bucket_dir = os.path.join(str(config_dir), "projects", "bucket-a")
+    os.makedirs(bucket_dir, exist_ok=True)
     target = tmp_path / "elsewhere.jsonl"
     target.write_text("{}\n")
-    os.symlink(str(target), os.path.join(project_dir, "session-link.jsonl"))
+    os.symlink(str(target), os.path.join(bucket_dir, _TEST_SESSION_ID + ".jsonl"))
 
-    assert ww._newest_transcript_mtime(worktree, os.environ) is None
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False
+
+
+def test_directory_named_session_id_never_suppresses(tmp_path, monkeypatch):
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    bucket_dir = os.path.join(str(config_dir), "projects", "bucket-a")
+    os.makedirs(os.path.join(bucket_dir, _TEST_SESSION_ID + ".jsonl"), exist_ok=True)
+
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False
+
+
+def test_session_id_with_path_separator_resolves_to_nothing():
+    mtime, ambiguous = ww._session_transcript_mtime("../evil", os.environ)
+    assert mtime is None and ambiguous is False
 
 
 def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
@@ -2950,16 +2883,19 @@ def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
     hb.stamp(repo, state="blocked", phase="watch", launch_id="lane-a",
              stale_after_seconds=3600)
     ll.append(
-        repo, _reserved("lane-b", "batch-982", ["lib"], repo, worktree=worktree),
+        repo,
+        _reserved(
+            "lane-b", "batch-982", ["lib"], repo,
+            worktree=worktree, sessionId=_TEST_SESSION_ID,
+        ),
     )
-    # lane-b starts before its transcript exists, as in production.
     ll.append(
         repo, dict(_started("lane-b", pid=os.getpid()), ts=time.time() - 2000),
     )
     hb.stamp(repo, state="working", phase="watch", launch_id="lane-b",
              stale_after_seconds=1800, now=time.time() - 1835)
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=120)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=120)
 
     result = ww.run(
         repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
@@ -2981,12 +2917,14 @@ def test_later_tick_finding_lane_still_stale_clears_its_suppression(
 
     calls = [0]
 
-    def fading_transcript(_worktree, _env, _since=None):
+    def fading_transcript(session_id, _env):
         calls[0] += 1
         # Fresh on the first tick, long cold on every tick after it.
-        return time.time() - (60 if calls[0] == 1 else 100000)
+        if calls[0] == 1:
+            return time.time() - 60, False
+        return time.time() - 100000, False
 
-    monkeypatch.setattr(ww, "_newest_transcript_mtime", fading_transcript)
+    monkeypatch.setattr(ww, "_session_transcript_mtime", fading_transcript)
 
     result = ww.run(
         repo, "batch-982", max_seconds=4, interval_seconds=1, gh_run=_noop_gh_run,
@@ -3003,7 +2941,7 @@ def test_loop_log_line_carries_the_suppression_note(tmp_path, monkeypatch):
     worktree = str(tmp_path / "build-wt")
     _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_transcript(config_dir, worktree, age_seconds=90)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=90)
     log_path = str(tmp_path / "watch.log")
 
     ww.loop(

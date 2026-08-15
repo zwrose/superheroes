@@ -20,6 +20,7 @@ import fcntl
 import hashlib
 import json
 import os
+import uuid
 import posixpath
 import signal
 import stat
@@ -861,6 +862,15 @@ def _validate_reserved_optional_fields(rec):
         if not os.path.isabs(worktree):
             return "fold-bad-field:reserved:worktree"
 
+    if "sessionId" in rec:
+        session_id = rec["sessionId"]
+        if not isinstance(session_id, str) or not session_id.strip():
+            return "fold-bad-field:reserved:sessionId"
+        try:
+            uuid.UUID(session_id)
+        except (ValueError, AttributeError, TypeError):
+            return "fold-bad-field:reserved:sessionId"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1035,10 +1045,12 @@ def fold(records):
                 "slot": rec.get("slot"),
                 "generation": rec.get("generation"),
                 "boundary": rec.get("boundary"),
-                # The launcher records the build worktree on the reserved record
-                # (launcher.py). Folding it through is what lets a consumer resolve
-                # the lane's session transcript from its worktree (#1023).
+                # The launcher records the build worktree and session id on the
+                # reserved record (launcher.py). Folding them through is what lets
+                # a consumer resolve the lane's session transcript by identity
+                # (#1023).
                 "worktree": rec.get("worktree"),
+                "sessionId": rec.get("sessionId"),
             }
             continue
 

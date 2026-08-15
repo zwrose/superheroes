@@ -32,22 +32,21 @@ Contract:
   promise window — a wedged builder alive but frozen past its own
   staleAfterSeconds promise.
 - Transcript second chance (#1023): before emitting lane-stale, the lane's session
-  transcript is resolved from the worktree the ledger recorded, and a transcript
-  written within staleAfterSeconds suppresses the event — that lane is working
-  through a long step, not wedged. The suppression is recorded on the arm's result
-  under staleSuppressed (note stale-suppressed-transcript-fresh), so the loop stays
-  honest about what it saw instead of going quiet. Every unresolvable read — no
-  worktree on the ledger record, no transcript on disk, an unreadable projects
-  directory, a future-dated mtime — leaves the lane STALE: the check fails toward
-  the alert, never toward silence.
-- Transcript ownership: a transcript vouches for a lane only when its OWN recorded
-  cwd is that lane's worktree. Bucket discovery is generous (the host's cwd mangling
-  is many-to-one and cannot be un-mangled), so attribution is by content, not by
-  filename. Three further bounds apply: exactly ONE config root is searched (the
-  CLAUDE_CONFIG_DIR override outright, else ~/.claude), a symlinked entry is never
-  followed, and a transcript last written before the lane's recorded start is
-  ignored. The residual none of them close (a concurrent foreign session running in
-  the same build worktree) is recorded at _stale_second_chance.
+  transcript is resolved from the session id the launcher recorded on the launch
+  record, and a transcript written within staleAfterSeconds suppresses the event —
+  that lane is working through a long step, not wedged. The suppression is recorded
+  on the arm's result under staleSuppressed (note stale-suppressed-transcript-fresh),
+  so the loop stays honest about what it saw instead of going quiet. Every
+  unresolvable read — no session id on the ledger record, no transcript on disk,
+  two-or-more transcripts with the same id, an unreadable projects directory, a
+  future-dated mtime — leaves the lane STALE: the check fails toward the alert,
+  never toward silence. Ambiguity additionally records transcript-ambiguous.
+- Transcript identity: a transcript vouches for a lane only when the launch record
+  carries that lane's session id and exactly one regular file named
+  <sessionId>.jsonl resolves under the host config root's projects tree. The
+  watcher stat's only — it never reads transcript contents. Exactly one config root
+  is searched (the CLAUDE_CONFIG_DIR override outright, else ~/.claude), and a
+  symlinked entry is never followed.
 - staleSuppressed: accumulated across an arm's ticks, keyed by launchId, and cleared
   for a lane the moment a later tick finds it still stale. It rides EVERY result of
   that arm including timer, which is what puts it in loop's --log line.
@@ -92,7 +91,6 @@ import argparse
 import json
 import math
 import os
-import re
 import stat
 import subprocess
 import sys
@@ -114,22 +112,15 @@ _MIN_PR_POLL_SECONDS = 1.0
 # --- session-transcript liveness oracle (#1023) -------------------------------
 #
 # The host writes one append-only JSONL transcript per session under
-# <config-dir>/projects/<mangled-cwd>/<session-id>.jsonl, where the mangling
-# replaces every "/" and "." in the absolute cwd with "-". The launcher spawns each
-# builder with cwd set to its build worktree, and records that worktree on the
-# lane's reserved ledger record — so worktree -> transcript is resolvable without
-# the builder cooperating. Transcript mtime is the only liveness oracle that held
-# on both measured hosts.
+# <config-dir>/projects/<bucket>/<session-id>.jsonl. The launcher mints the
+# builder's session id, passes it on the claude argv, and records it on the lane's
+# reserved ledger record — so the watcher resolves the transcript by identity,
+# never by bucket mangling or transcript contents. Transcript mtime is the only
+# liveness oracle that held on both measured hosts.
 _TRANSCRIPT_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 _TRANSCRIPT_DEFAULT_CONFIG_DIR = "~/.claude"
 _PROJECTS_DIR_NAME = "projects"
 _TRANSCRIPT_SUFFIX = ".jsonl"
-_PROJECT_DIR_TRANSLATION = str.maketrans({"/": "-", ".": "-"})
-_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
-# A transcript records the cwd its session ran in within the first few records; read a
-# bounded prefix rather than the whole file (these grow to hundreds of KB).
-_TRANSCRIPT_CWD_SCAN_LINES = 50
-_TRANSCRIPT_CWD_SCAN_BYTES = 262144
 
 NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 # The result key is part of the same wire contract as the note token, so it gets the
@@ -215,6 +206,7 @@ DEGRADATION_PR_SIGNAL_UNAVAILABLE = "pr-signal-unavailable"
 DEGRADATION_LANE_NEVER_STAMPED = "lane-never-stamped"
 DEGRADATION_PR_SIGNAL_NEVER_SAMPLED = "pr-signal-never-sampled"
 DEGRADATION_LOG_UNWRITABLE = "log-unwritable"
+DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
 
 DEGRADATIONS = frozenset({
     DEGRADATION_LEDGER_TORN_TAIL,
@@ -225,6 +217,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_LANE_NEVER_STAMPED,
     DEGRADATION_PR_SIGNAL_NEVER_SAMPLED,
     DEGRADATION_LOG_UNWRITABLE,
+    DEGRADATION_TRANSCRIPT_AMBIGUOUS,
 })
 
 EVENT_PRECEDENCE = (
@@ -510,135 +503,46 @@ def _transcript_config_dirs(env):
     return [_expand_home(_TRANSCRIPT_DEFAULT_CONFIG_DIR, env)]
 
 
-def _project_dir_name(worktree):
-    """The host's projects-dir name for an absolute cwd: "/" and "." both become "-"."""
-    return os.path.normpath(worktree).translate(_PROJECT_DIR_TRANSLATION)
+def _session_transcript_mtime(session_id, env):
+    """(mtime, ambiguous) for the lane's own transcript, by recorded session id."""
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None, False
+    if os.sep in session_id or "/" in session_id or ".." in session_id:
+        return None, False
 
-
-def _normalize_bucket(name):
-    """Fold every non-alphanumeric run-member to "-" so two spellings compare equal."""
-    return _NON_ALNUM_RE.sub("-", name)
-
-
-def _candidate_project_dirs(root, worktree):
-    """Buckets under <root>/projects that MIGHT hold this worktree's transcripts.
-
-    Discovery only, deliberately generous: the host's cwd mangling is a convention
-    we do not control, so both spellings of the worktree (the ledger's and the
-    physical one) are compared to each bucket name with every non-alphanumeric
-    folded. Being generous is safe here because a candidate proves nothing on its
-    own — every transcript is attributed individually by its own recorded cwd.
-    """
-    projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
-    wanted = {
-        _normalize_bucket(_project_dir_name(worktree)),
-        _normalize_bucket(_project_dir_name(os.path.realpath(worktree))),
-    }
-    try:
-        entries = list(os.scandir(projects_root))
-    except OSError:
-        return []
-    found = []
-    for entry in entries:
-        try:
-            if not entry.is_dir(follow_symlinks=False):
-                continue
-        except OSError:
-            continue
-        if _normalize_bucket(entry.name) in wanted:
-            found.append(entry.path)
-    return found
-
-
-def _transcript_is_this_worktrees(path, wanted_cwds):
-    """True only when the transcript's OWN recorded cwd is this worktree's.
-
-    Attribution by content, not by filename. The host's bucket naming folds
-    characters to "-" and is many-to-one, so "/tmp/a_b/wt" and "/tmp/a-b/wt" can
-    share a bucket and a name can never be un-mangled — a name-based match would let
-    a DIFFERENT live worktree's transcript vouch for this lane, suppressing a
-    genuinely wedged builder. The transcript records the cwd the session actually
-    ran in, which settles it regardless of how the bucket was named.
-
-    Reads a bounded prefix (the cwd appears within the first few records) and takes
-    the FIRST record that carries one — a transcript belongs to a single session and
-    a single cwd. Unreadable, unparseable, or cwd-less transcripts are NOT attributed,
-    so they cannot suppress anything.
-    """
-    try:
-        with open(path, "rb") as fh:
-            head = fh.read(_TRANSCRIPT_CWD_SCAN_BYTES)
-    except OSError:
-        return False
-    for raw in head.splitlines()[:_TRANSCRIPT_CWD_SCAN_LINES]:
-        try:
-            record = json.loads(raw)
-        except (ValueError, UnicodeDecodeError):
-            continue
-        if not isinstance(record, dict):
-            continue
-        cwd = record.get("cwd")
-        if isinstance(cwd, str) and cwd:
-            # bite-axis: ATTRIBUTION — the transcript's own cwd must BE this
-            # worktree; a foreign session sharing the bucket is refused here.
-            return os.path.normpath(cwd) in wanted_cwds
-    return False
-
-
-def _newest_transcript_mtime(worktree, env, since=None):
-    """Newest session-transcript mtime for this worktree, or None when unresolvable.
-
-    None is the honest answer for every failure — no worktree recorded, no projects
-    directory, an unreadable directory, no transcript files, a non-regular entry —
-    and the caller turns None into "emit the alert anyway".
-
-    Two ownership bounds keep a transcript that is not this builder's from vouching
-    for it. *since* (the lane's recorded start) discards any transcript that cannot
-    belong to this launch — a session that ran in this directory before the lane
-    started. And a symlink is never followed: a link planted in the bucket would
-    otherwise let an unrelated file's mtime stand in for the builder's.
-
-    The residual this cannot close is stated at the call site.
-    """
-    if not isinstance(worktree, str) or not worktree.strip():
-        return None
-    if not os.path.isabs(worktree):
-        return None
-    wanted_cwds = {
-        os.path.normpath(worktree),
-        os.path.normpath(os.path.realpath(worktree)),
-    }
-    newest = None
+    filename = session_id + _TRANSCRIPT_SUFFIX
+    matches = []
     for root in _transcript_config_dirs(env):
-        for project_dir in _candidate_project_dirs(root, worktree):
+        projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
+        try:
+            bucket_entries = list(os.scandir(projects_root))
+        except OSError:
+            return None, False
+        for bucket_entry in bucket_entries:
             try:
-                entries = list(os.scandir(project_dir))
+                if not bucket_entry.is_dir(follow_symlinks=False):
+                    continue
             except OSError:
                 continue
-            for entry in entries:
-                if not entry.name.endswith(_TRANSCRIPT_SUFFIX):
-                    continue
-                try:
-                    # follow_symlinks=False: a symlinked entry is not this builder's
-                    # transcript, and S_ISREG then rejects it.
-                    st = entry.stat(follow_symlinks=False)
-                except OSError:
-                    continue
-                if not stat.S_ISREG(st.st_mode):
-                    continue
-                # bite-axis: OWNERSHIP — a transcript last written before this lane
-                # started cannot be this lane's, so it may not vouch for it.
-                if since is not None and st.st_mtime < since:
-                    continue
-                if not _transcript_is_this_worktrees(entry.path, wanted_cwds):
-                    continue
-                if newest is None or st.st_mtime > newest:
-                    newest = st.st_mtime
-    return newest
+            candidate = os.path.join(bucket_entry.path, filename)
+            try:
+                st = os.stat(candidate, follow_symlinks=False)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            matches.append(st.st_mtime)
+
+    if len(matches) == 0:
+        return None, False
+    if len(matches) >= 2:
+        return None, True
+    return matches[0], False
 
 
 def _stale_second_chance(
-    stale_live, live_lanes, env, *, now=None, transcript_mtime=None,
+    stale_live, live_lanes, env, *, now=None, degraded=None,
+    session_transcript_mtime=None,
 ):
     """Split pid-live stale lanes into (still stale, suppressed as transcript-fresh).
 
@@ -646,31 +550,25 @@ def _stale_second_chance(
     through a long step, not wedged (#1023) — a pid-live lane already passed the
     liveness half of the pair, and a fresh transcript is the semantic half.
 
-    Fail-toward-alert is the invariant: an unresolvable transcript, an unusable
-    promise, a stale transcript, or a future-dated transcript all leave the lane
-    in the still-stale list. Only a positively fresh transcript suppresses.
-
-    ACCEPTED RESIDUAL: the transcript is bound to the lane by directory and by the
-    lane's start time, not by session identity — nothing records which session id
-    belongs to a launch. A DIFFERENT session running concurrently in the same build
-    worktree (an operator opening the wedged lane's directory to look at it) writes
-    into the same bucket and can keep a genuinely wedged lane suppressed. The
-    launcher gives every launch its own worktree path, so the recycled-directory
-    case is closed by the start-time bound; the concurrent-foreign-session case is
-    not, and closing it needs the launch record to carry the session id.
+    Fail-toward-alert is the invariant: no session id, an unresolvable transcript,
+    ambiguity, an unusable promise, a stale transcript, or a future-dated transcript
+    all leave the lane in the still-stale list. Only a positively fresh transcript
+    suppresses.
     """
     if now is None:
         now = time.time()
-    if transcript_mtime is None:
-        transcript_mtime = _newest_transcript_mtime
+    if session_transcript_mtime is None:
+        session_transcript_mtime = _session_transcript_mtime
     still_stale = []
     suppressed = []
     for entry in stale_live:
         promise = entry.get("staleAfterSeconds")
         lane_info = live_lanes.get(entry["launchId"]) or {}
-        mtime = transcript_mtime(
-            lane_info.get("worktree"), env, lane_info.get("startedTs"),
+        mtime, ambiguous = session_transcript_mtime(
+            lane_info.get("sessionId"), env,
         )
+        if ambiguous and degraded is not None:
+            degraded.add(DEGRADATION_TRANSCRIPT_AMBIGUOUS)
         # bite-axis: DIRECTION of failure — an unresolvable transcript or an unusable
         # promise alerts, never suppresses.
         if not _valid_positive_int(promise) or mtime is None:
@@ -1032,7 +930,7 @@ def run(
                 live_lanes, stale_launches, degraded,
             )
             stale_live_launches, tick_suppressed = _stale_second_chance(
-                stale_live_launches, live_lanes, env,
+                stale_live_launches, live_lanes, env, degraded=degraded,
             )
             for entry in tick_suppressed:
                 arm_suppressed[entry["launchId"]] = entry
