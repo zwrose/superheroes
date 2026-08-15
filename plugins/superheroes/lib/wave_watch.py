@@ -390,13 +390,11 @@ def _evaluate_pr_set_changed(
     repo_root, deadline, monotonic, gh_run, pr_state, degraded, env,
 ):
     remaining = deadline - monotonic()
-    if remaining <= 0:
-        return None
+    # Skip polls we cannot give a viable window — a sub-second timeout would
+    # manufacture pr-signal-unavailable (R7). No baseline from a doomed poll
+    # either; R6 discloses unsampled signal when pr_state is still None.
     if remaining < _MIN_PR_POLL_SECONDS:
-        if pr_state[0] is None and remaining > 0:
-            pass
-        else:
-            return None
+        return None
     timeout = min(30.0, remaining)
     try:
         proc = gh_run(

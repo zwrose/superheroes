@@ -1747,7 +1747,8 @@ def test_terminal_before_pr_arm_no_pr_signal_unavailable(tmp_path, monkeypatch):
     assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE not in result["degraded"]
 
 
-def test_pr_skip_subsecond_no_failure_token(tmp_path, monkeypatch):
+def test_pr_skip_at_deadline_zero_remaining(tmp_path, monkeypatch):
+    """remaining == 0.0 at PR arm: skip poll, R6 discloses unsampled signal."""
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     calls = []
@@ -1757,6 +1758,37 @@ def test_pr_skip_subsecond_no_failure_token(tmp_path, monkeypatch):
         mono_calls[0] += 1
         if mono_calls[0] == 1:
             return 0.0
+        return 1.0  # remaining = deadline(1.0) - 1.0 == 0.0
+
+    def gh_run(argv, **kwargs):
+        calls.append(kwargs.get("timeout"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=60,
+        monotonic=_bounded_monotonic(mono), sleep=_bounded_sleep_discard(), gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert calls == []
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE in result["degraded"]
+
+
+def test_pr_skip_subsecond_no_failure_token(tmp_path, monkeypatch):
+    """0 < remaining < 1.0 at PR arm: skip poll without manufacturing failure."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    calls = []
+    mono_calls = [0]
+    # deadline = start(0.0) + max_seconds(1) = 1.0; call 2 returns 0.6 so
+    # remaining == 0.4 — inside (0, _MIN_PR_POLL_SECONDS), not the <= 0 branch.
+    _PR_ARM_REMAINING = 0.4
+
+    def mono():
+        mono_calls[0] += 1
+        if mono_calls[0] == 1:
+            return 0.0
+        if mono_calls[0] == 2:
+            return 1.0 - _PR_ARM_REMAINING
         return 1.0
 
     def gh_run(argv, **kwargs):
