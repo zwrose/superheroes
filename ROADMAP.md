@@ -17,21 +17,22 @@ never merges.
 
 **Why this roadmap looks the way it does:** [PHILOSOPHY.md](PHILOSOPHY.md) — the promises and
 bets this train exists to deliver. Issue-level status lives on the
-[GitHub Project](https://github.com/users/zwrose/projects/1); an area's constituents live in
-that area's **milestone**. This file carries only the coarse train: the cut rules, the cut
-record, and the areas of focus.
+[GitHub Project](https://github.com/users/zwrose/projects/1); a milestone's constituents live
+in that **milestone**. This file carries only the coarse train: the cut rules, the cut record,
+and the milestones in priority order.
 
 ## When we cut a release
 
 1. **Receipts decide, not calendars.** A release cuts when its headline claims each have a
    receipt or a loud, stated deferral. No date-driven releases; no claim-free waiting either —
    a bundle that's ready, ships.
-2. **Small and frequent beats big and rare.** Every release's first real run must surface zero
-   fidelity-class surprises (PHILOSOPHY B5); small bundles keep that test cheap and its
-   failures attributable.
-3. **The first real run is part of the release.** A release isn't "good" until one real
-   work-item run on it is diagnosed clean (the first-run-clean protocol). The next bundle
-   doesn't build on an undiagnosed release.
+2. **Small and frequent beats big and rare.** Small bundles keep a release's first real run
+   cheap to diagnose and its failures attributable (PHILOSOPHY B5).
+3. **The first real run still counts — but nobody stamps it.** A release's first real run is
+   diagnosed in the ordinary course of vetting the next wave: what it surfaces is filed,
+   disclosed, and fixed in the hotfix lane. The formal *first-run-clean* stamp is **retired**
+   (owner ruling 2026-08-15 — at this velocity the stamp was ceremony that lapsed after
+   0.20.0; the diagnosis never did).
 4. **The hotfix lane is always open.** A guardrail or honesty defect ships alone as a patch,
    immediately.
 5. **Repo-root work cuts no release** — docs, ledgers, board changes land ahead of and between
@@ -40,7 +41,8 @@ record, and the areas of focus.
 ## The cut record
 
 Releases already cut, with what each proved. Historical receipts — rows are append-only.
-Status vocabulary: *cut → first-run-clean*.
+Status vocabulary: *cut* (the *first-run-clean* stamp on the older rows is historical — retired
+2026-08-15 with cut rule 3).
 
 | Release | Theme | Epic | Core scope | Must prove before cut | Status |
 |---|---|---|---|---|---|
@@ -61,72 +63,101 @@ Status vocabulary: *cut → first-run-clean*.
 | **0.27.0** | Field fixes + the watcher (the wave the field report ordered) | — | Weekly-eats field report #4 turned into an eight-lane wave plus a release arc, all advisor-vetted end to end. The engine cert-path wedge fixed at its entry point — a record-vs-submit refusal can no longer wedge a session (#977 via PR #983). Grant-scoped `allows_refs` for the owner-authority workflow allowlist (#978 via PR #987). Engine result-contract hardening — the six-case parse matrix, malformed findings fall closed, `investigated` preserved (#949 via PR #984). The launcher gives every build its own worktree (#974 via PR #979). The validator hygiene batch (#754 via PR #981) and the nine-item worktree/lease hygiene batch (#764 via PR #986). The doctrine/prose family — machine-channel rulings restored byte-identical to their ratified text, PHILOSOPHY untouched (#753/#703 via PRs #980/#985). `wave_watch` — the ledger-driven single-shot lane watcher with env-scrubbed `gh` probes (#982 via PR #988) — armed for real use by the doctrine batch (#996 via PR #999: arming reference + charter pointer, LEDGERS §1 row, the §10.7 enumerated-triple sentence, the naming gloss, and the gated-strings as-data ruling restored with an anti-evasion clause). Security: the owner-authority gate now classifies `gh`/`git` commands carrying inherited repo flags — the never-merge floor's flag-form side door closed, segment-scoped and census-pinned, with over-matching accepted as an owner-ratified trade (#989 via PR #997). The agent-facing language pass — ~66 surfaces audited against writing-for-agents principles, 47 files shrunk with meaning preserved and pins honored, activation re-recorded clean at 94 phrases × 3 runs (PR #998, owner-built). CI: pytest-xdist adopted on measured parity (owner PR #992, the #993 race fix; #897 closed on the receipt); the release-please parser drop remediated by the ratified two-PR pattern (#994/#995). | (cut on receipts — wave FR4R ran 8 lanes across 13 sessions with 4 honest tripwire parks and 0 refusals; every PR advisor-vetted with biting reverted probes, vet ordinals 92–105; the release PR regenerated green after the parser-drop remediation, and the changelog was verified to carry all three final merges before the click) | **cut 2026-08-14** (superheroes-v0.27.0) |
 
 
-## Areas of focus
 
-The active work organizes into a few **areas of focus**, each carried by a **milestone** — an
-issue's milestone is its area, and the milestone's progress is the area's state. This file
-names each area and what it is about — nothing finer. If you want to know what's in an area
-right now, read its milestone, not this file. A few one-off issues deliberately float with no
-milestone; a milestone is a grouping, not a mandate.
 
-- **Review quality** — the review layer: the code-review loop and the doc/spec review leg —
-  loop mechanics, panel composition, durable receipts, reviewer-seat reliability, eval growth.
-  *Status:* active — tranches cut in 0.17.0 through 0.19.0.
-- **Front-half depth** — Architect + Test-Pilot depth: test plans derive from the spec; a
-  documented-command surface so CLI/library projects get exercised too. *Status:* queued.
-- **Maintainability guardian** — the Guardian hero: read-only repo-health sweeps that turn
-  drift into plain-language consequences with receipts. *Status:* **build-complete
-  2026-07-22; standing commitment discharged 2026-07-23** — the hero shipped in 0.18.0 (the
-  inaugural sweep was the cut's qualifying receipt, catching a real fidelity bug pre-cut —
-  cut rule 2 doing its job), then swept a real calibrated project beyond this repo
-  (weekly-eats, 2026-07-22: drift mechanics proven on a second same-SHA sweep, five of six
-  lenses live, the docs lens caught two real findings on day one), and the owner ruled the
-  full-loop leg satisfied by the census-fidelity cycle (sweep finding → issue → build →
-  merge). Field-hardening items keep landing in the milestone.
-- **Autonomous orchestration** — advisor-orchestrated build batches as a first-class, safe,
-  cheap operation: who launches and watches builder sessions, what makes an unattended
-  dispatch safe, and how little owner attention a correct batch should cost. *Status:*
-  active — opened 2026-07-27; supersedes **Build dispatch & orchestration** now that
-  build-dispatch discovery is ratified and its doctrine is landing.
-- **Growth** — the post-stabilization backlog; see Unscheduled below.
+## The milestones, in priority order
 
-Areas are **largely seam-independent** and interleave freely where their builders don't
-collide. This is deliberately **not a step ladder**: per cut rule 1, receipts decide the
-actual cut order, not the order the areas are listed in. **Version numbers float free of the
-areas** — a release cuts whenever merged receipts justify one (the 0.16.0 cut on hardening
-smalls is the standing precedent), and an area's work lands in whatever minor is next when its
-receipts arrive. An area closes when its work runs dry — an owner judgment, not a formal gate.
+The open work organizes into **outcome-scoped, completable milestones** — each named for the
+state of the world it delivers, with its exit condition stated in the milestone's own
+description on GitHub — plus one permanent **Backlog**. (The area-shaped milestones were
+retired 2026-08-15 at the August board review; areas live on as `area:*` labels.) An issue's
+milestone is its home; a milestone's progress is that outcome's state. This file names each
+milestone, what it is about, and where it sits in the order — nothing finer. If you want to
+know what's in a milestone right now, read the milestone, not this file.
+
+**The order is a draw priority, not a step ladder.** When a wave forms it draws from the top;
+work lower down interleaves freely wherever its builders don't collide with work above it
+(seam-independent items from a lower milestone routinely ride the same wave). Per cut rule 1,
+receipts decide the actual cut order. The owner set this order 2026-08-15 with one stated
+reason: the hardening milestones (review panels, engine dispatch, unattended waves) protect
+machinery that is working well enough today, so they defer behind the two lingering features
+the owner is the direct consumer of.
+
+1. **Front-half doctrine shipped** — the owner-approved front-half SDLC core lands in the
+   charters (the issue contract, the anchor invariant, four-route intake, discovery, spec
+   content, decomposition + the epic contract, spec closure, the exact-text checker), and the
+   detective — the observe-only diagnosis hero — goes live. *The owner is the consumer.*
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+   harnesses that actually deliver the click, plans derived from the spec, CLI-project
+   coverage; the parallel authenticated-pilot epic closes.
+3. **Review panels can't silently degrade** — a full-lane review either runs the promised
+   cross-vendor panel or discloses loudly; certification is reachable when the loop
+   converges; a stale liveness verdict can never quietly collapse a panel to one vendor.
+4. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
+   re-verification: the result contract is test-bound, the run-dir failure class is deleted,
+   the dispatch guard is hard-wired, seat bundles travel intact.
+5. **Unattended waves run themselves** — an overnight multi-build wave launches, runs, and
+   hands back with zero human unsticks: launcher, auth canaries, the posture probe, workspace
+   garbage collection, the owner-authority gate's remaining side doors.
+6. **The machine runs lean** — skill-body ceilings measured in the unit we pay in, with the
+   two largest charters finally under one; the activation record bound to what it certifies;
+   the harness tripwire leaving a durable result.
+7. **Cross-session messaging** — a discovery starter: where the host's cross-session
+   messaging primitive replaces the deaf-session workarounds, per surface.
+8. **Mission control** — a discovery starter: what an at-a-glance readalong for live waves
+   actually is, for the owner first. Low priority.
+9. **Guardian earns its keep** — the integration ruling executed (sweeps consumed or the hero
+   trimmed) and the two live security-grade bugs fixed. Owner-ruled lower priority; revisit.
+10. **Plumbing fails closed** — the named config/ledger seams refuse instead of guessing.
+    Owner-ruled lower priority; revisit.
+
+**Backlog** (permanent by design, unranked) — real someday-work only: debt with a reopen
+condition, parked options with a tripwire, parking citations, the eval story, doc hygiene,
+the ledger re-walks, and standing machinery with a standing note. Anything that doesn't earn
+a place there closes with a tripwire instead.
+
+**Version numbers float free of the milestones** — a release cuts whenever merged receipts
+justify one (the 0.16.0 cut on hardening smalls is the standing precedent), and a milestone's
+work lands in whatever minor is next when its receipts arrive. A milestone closes when its exit
+condition is met — an owner judgment on the receipts, not a formal gate.
 
 ## How work is tracked
 
-- **Milestones carry the areas:** each area of focus is a GitHub milestone, and an issue's
-  milestone is its area. One-off issues may float with no milestone.
+- **Milestones carry outcomes:** each entry above is a GitHub milestone with its exit
+  condition in the description; an issue's milestone is its home. **Milestone-absence is a
+  forgot-to-wire signal**, with one named exception: the vet-proposals collector (#695) is
+  standing infrastructure — it carries no milestone and sits off the Project by owner ruling.
 - **Epics decompose big pieces:** an epic is an ordinary issue that breaks one sizable piece
   of work into GitHub **native sub-issues** — short-lived, closing when its piece ships. An
-  epic and its sub-issues live in the same milestone. Epics are never area containers.
-  (The guardian build arc is the house example of the shape; the retired area epics each
-  closed with a conversion receipt, 2026-07-22.)
+  epic and its sub-issues live in the same milestone. Epics are never containers for a
+  milestone's constituents. (The guardian build arc is the house example of the shape.)
 - **Dependencies:** real technical dependencies between work items carry GitHub's native
-  blocked-by/blocking links — nothing else is serialized. (The v2 reframe was mechanically
-  serialized behind 0.15.0's release epic until it closed clean; that boundary is history.)
+  blocked-by/blocking links — nothing else is serialized.
 - **Discovery first where it's earned:** fuzzy items file as discovery issues (problem +
   evidence + open questions, no prescribed solution) and build only after an owner-approved
   spec. Discovery runs in parallel with build work and takes no dependency wiring. Live
   discoveries sit on the Project board, marked as such.
+- **Board reviews are periodic and owner-driven:** the advisor prepares a per-issue read
+  (what it is, provenance, cost of declining, near-term consumer, verdict) with an instruction
+  slot per entry; the owner rules in the slots; nothing touches the board until the rulings
+  are collected and discussed. The August 2026 review (2026-08-07 → 2026-08-15) is the house
+  example: 109 → 122 open issues read, 19 closed with receipts, the milestone model reset.
 
 ## Unscheduled (deliberately)
 
-The growth backlog — the greenfield and productionize-a-prototype onramps — waits behind the
-stability gate: **two consecutive releases whose first real runs diagnose clean.** The train
-above is engineered to produce exactly that. PHILOSOPHY B7 governs: evidence before machinery.
-*(The maintainability guardian left this list 2026-07-20, pulled forward by owner call into its
-own area; the backlog/TPM-hero cluster and queue controller left 2026-07-21, superseded by
-owner ruling — the advisor absorbed the TPM role, and the launcher question became the
-build-dispatch discovery.)*
+The growth onramps — greenfield and productionize-a-prototype — sit in the Backlog until the
+owner judges the loop stable enough to open them; that call is made on the field record (the
+next wave's diagnosis of the last release), not on a formal stamp — the two-consecutive-clean
+gate retired with cut rule 3's stamp on 2026-08-15. PHILOSOPHY B7 governs: evidence before
+machinery. *(The maintainability guardian left this list 2026-07-20, pulled forward by owner
+call into its own area; the backlog/TPM-hero cluster and queue controller left 2026-07-21,
+superseded by owner ruling — the advisor absorbed the TPM role, and the launcher question
+became the build-dispatch discovery.)*
 
 ## Keeping this file honest
 
-Update this file when — and only when — a release cuts, an area of focus opens or closes, or
-a cut rule changes. Issue-level status never lives here (that's the Project and the
-milestones), and **no individual work item is ever named in an area entry** — the moment one
-appears, this file has drifted into being a status board; stop and fix the process instead.
+Update this file when — and only when — a release cuts, a milestone opens, closes, or moves
+in the order, or a cut rule changes. Issue-level status never lives here (that's the Project
+and the milestones), and **no individual work item is ever named in a milestone entry** — the
+moment one appears, this file has drifted into being a status board; stop and fix the process
+instead.
