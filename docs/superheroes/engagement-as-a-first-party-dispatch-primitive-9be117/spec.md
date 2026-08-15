@@ -88,7 +88,7 @@ the migration set must not depend on anyone's recall:
 | 4 | `seat_canary.run_canary` | the probe's own verdict, outcome-token-first [cite: plugins/superheroes/lib/seat_canary.py § Fail-closed: artifact engaged but delivery failed] |
 | 5 | `engine_adapter.review_artifact_shape` | an independent resemblance score whose own contract admits an error dump can pass [cite: plugins/superheroes/lib/engine_adapter.py § a long engine error dump] |
 | 6 | `round_driver.canary_liveness` | per-vendor proven/dead/unproven, from probe flags plus its own payload check |
-| 7 | `forfeit_ledger` attribution | engaged-but-not-delivered, from the delivery stage plus exit code and stdout size |
+| 7 | `forfeit_ledger` attribution | transport-vs-other blame, from the **delivery** stage plus exit code and stdout size — it reads `stages.delivered` and **never** the engaged stage, so it is a **gradeable** consumer, not an action one |
 | 8 | the disclosure emitters | `engine_dispatch._review_terminal_forfeit` and the receipt summary each render a never-ran claim in owner-facing text |
 | 9 | `engine_dispatch._maybe_upgrade_review_terminal_forfeit` | mints the engaged-artifact token from the residue scan — the **producer** of the token sites 1, 4 and 8 then read |
 | 10 | `dispatch_outcome.counts_as_run` | derives ran-vs-not-ran from the not-run token set; currently **uncalled** |
@@ -152,6 +152,13 @@ is scoped as its own deliverable below rather than folded in.
 
 ## Functional requirements
 
+**Wire-name note (round-3 correction).** Every short word for this verdict is taken somewhere in this
+repo — `engagement`, `unproven`, `activity`, and now `action`, which is the round driver's own name for
+the control action `next` returns. The design therefore fixes a **namespaced wire path**,
+`attestation.actionVerdict`, rather than a bare key; the prose below says "action verdict" for
+readability, and any implementation that spells it as a bare top-level `action` has reintroduced a
+collision inside the very consumer domain the contingent step 5 targets.
+
 Vocabulary note: this design uses **action** (not "engagement") for the verdict, **observation** (not
 "evidence") for its entries, and **gradeable** (not "delivered") for the second axis, because each of
 the obvious words is already taken by something else in this repo — see the Glossary.
@@ -183,8 +190,10 @@ or change the verdict.
   - *Acceptance (rule):* no magnitude is an observation. Magnitudes ride alongside for diagnosis. A
     tool-call *observation* is an entry; its *count* is a magnitude reported beside it.
 
-**FR-6.** The system shall carry a **gradeable** answer beside the action verdict, defined by the
-following exhaustive truth table for review dispatches, and never inferred from the outcome token.
+**FR-6.** The system shall carry a **gradeable** answer beside the action verdict on every **terminal**
+review-dispatch result, defined by the following truth table — exhaustive over terminal cases — and
+never inferred from the outcome token. A **provisional** (non-terminal) attestation carries no
+gradeable answer at all; see FR-7.
 
 | Terminal case | `gradeable` |
 | --- | --- |
@@ -228,11 +237,15 @@ applicable vendor probe ruling.
 probe invocation, and a consumer shall bind a ruling to seats by **vendor and engine model**.
   - *Acceptance (rule):* a ruling a consumer cannot bind resolves to the **strict** side, not the
     permissive one — because the permissive branch today is what an unbindable probe would fall into.
-  - *Acceptance (rule):* **model binding requires trusted model provenance the round driver does not
-    have today** — the out-of-band manifest projects vendor only, and a seat envelope's model is
-    claimant-controlled. So this FR carries a prerequisite: a trusted `(vendor, model)` projection and
-    pair-keyed probe storage, or the binding is vendor-only and says so. It is not satisfiable by
-    reading a model the claimant supplied.
+  - *Acceptance (rule):* **model binding is a versioned deferral, not part of this design's
+    completion.** The out-of-band manifest projects vendor only; a seat envelope's model is
+    claimant-controlled; the probe store has one vendor-keyed slot; and the seat map permits per-seat
+    model pins. So a genuine `(vendor, model)` binding would need either **an extra probe per model**
+    — breaking this design's "no added dispatch cost" — or it would leave other models unbound on the
+    strict side, **withholding certification that vendor-only binding grants today**. Neither is
+    acceptable as a silent consequence. **Vendor-only binding ships and preserves current behaviour**;
+    model binding is recorded as deferred, with its cost and credit trade named, and is the owner's
+    call if and when it is proposed.
 
 **FR-12.** The system shall keep audit-collection provenance as a separate authorization axis,
 unchanged.
@@ -244,10 +257,19 @@ two inside the dispatch result and receipt summary, not only the panel fold.
 **FR-14.** The system shall read results produced before this contract through a normalizer, whose
 precondition is a **terminal** result.
   - *Acceptance (Given-When-Then):* Given a stored result carrying a legacy scalar verdict and no
-    observation list — the dominant stored shape — when a consumer reads it, then the normalizer
-    synthesizes one entry naming the legacy scalar and its source, so the recorded and recomputed
-    verdicts agree by construction, the entry is marked reconstructed, and a legacy `observed` is
-    never silently downgraded.
+    observation list — the dominant stored shape — when a consumer reads it, then the normalizer maps
+    it as follows, and the recorded and recomputed verdicts agree by construction:
+
+| Legacy scalar | Normalized observations | Normalized verdict |
+| --- | --- | --- |
+| the legacy positive value | one entry naming the legacy scalar and its source, marked **reconstructed** | `observed` |
+| the legacy negative value, or absent | **empty** | `not-observed` |
+
+  - *Acceptance (rule):* the negative legacy value must **not** synthesize an entry — doing so would
+    upgrade a stored negative to `observed` under FR-4, which is the opposite of what the stored data
+    says. A reconstructed entry counts toward the verdict (so FR-4 holds) but is never counted as an
+    **observed** attestation in accounting (so UFR-5 holds); those are two different questions and the
+    marker is what separates them.
 
 ## When things go wrong (significant unhappy paths)
 
@@ -441,10 +463,18 @@ the contract in stages that each have an acting consumer.
    as not-run. That is the producer-first shape this design rejects *as a permanent state*, and it is
    unavoidable as a *transitional* one unless producers and readers land in a single commit. The
    window is therefore **explicitly versioned**: the attestation carries a contract version, a
-   consumer states which version it honours, and the window is closed by step 3 rather than left to
-   drift. A build that cannot close it in the same release should merge steps 2 and 3.
+   consumer states which version it honours, and the window is bounded rather than left to drift. A
+   build that cannot close it in the same release should merge steps 2 and 3. *(The version field's
+   own wire contract is an Open question below — this design names the requirement, not the schema.)*
+
+   **Which readers step 3 actually closes it for — a round-3 correction.** Step 3 closes the window for
+   the readers that receive dispatch results. It does **not** close it for the round driver, which
+   moves only in the contingent step 5. So **stopping after step 4 leaves a bounded, named residual
+   disagreement**: the result says one thing and the panel fold still infers another. That is the
+   honest price of making step 5 contingent, and it is stated here rather than discovered later. A
+   release that wants to claim the disagreement is fully gone must include step 5.
 3. **The dispatch-result readers (part of FR-10).** The three consumers that genuinely receive dispatch
-   results — the ledger stages, the probe's own computation, and forfeit attribution — read the
+   results — the ledger stages and the probe's own computation — read the
    attestation, and the ledger's single overloaded stage field is **split**: an action-facing value
    derived from observations, and a separately named salvage-tracking value that keeps the residue
    scan's answer. The round driver is **not** in this issue.
@@ -461,14 +491,17 @@ the contract in stages that each have an acting consumer.
 6. **Retire the fallbacks and the dead names.** Remove the token archaeology once nothing reads it for
    this question — gated on FR-9's artifact-recovered fact being read, not merely on the token being
    unread. Wire or delete the unreferenced stage constants and uncalled helpers (D4).
-7. **Doctrine.** The seven enumerated prose surfaces, with the clause-presence test kept green. Last,
+7. **Doctrine.** The **eight** enumerated prose surfaces in Assumptions — including root
+   `CONVENTIONS.md`, the one a smaller scoping would have left stale — with the clause-presence test
+   kept green. Last,
    because doctrine describing a shape the code lacks is the drift this repo already pays for.
 
 **Ordering:** 1 is independent and ships first. 2 precedes 3, 4, 5, 6. 5 is contingent. 7 is last.
 **The owner-gate dead end** is an eighth, wholly independent issue.
 
 **Rollback:** every step must be revertible against records written under the following step. That is
-why 5 carries an accept-both window and why 2 preserves precedence rather than inheriting it.
+why 5 carries an accept-both window, why 2 owes legacy normalization, and why 3 owes accept-both
+ledger fields if it must be reverted after rows are written.
 
 ## Open questions
 
@@ -483,6 +516,14 @@ why 5 carries an accept-both window and why 2 preserves precedence rather than i
   deliberately contingent, and a decision to stop after step 4 is a legitimate outcome.
 - **The control probe's future trigger.** Recorded as visible and deliberately unspent: loosening a
   fail-closed posture is the owner's decision, not a consequence of better plumbing.
+- **The contract-version wire shape.** The mixed-mode window is bounded by a version a consumer can
+  honour, but this design states the *requirement* and not the *schema* — the field's name, location,
+  allowed values, and the behaviour on an unknown or missing version are unspecified. Step 2 is not
+  acceptance-testable on that point until they are. Deliberately left open rather than guessed at, and
+  it is the first thing step 2's build issue must settle.
+- **Whether model-bound probe rulings are worth their cost.** See FR-11: a real `(vendor, model)`
+  binding costs either an extra probe per model or certification that vendor-only binding grants
+  today. Vendor-only ships; the trade is named for the owner if anyone proposes closing it.
 
 ## Glossary
 
@@ -535,6 +576,25 @@ Every obvious word for these concepts is already taken in this repo; the renames
   instead.
 
 ## Amendments
+
+**A3 (2026-08-14, round-3 convergence check — and the stopping point).** Round 3 found **no Critical**
+and nine further defects. The factual errors are corrected here: `action` collided with the round
+driver's own control-action field, so the wire path is namespaced `attestation.actionVerdict`; forfeit
+attribution reads the delivery stage and never the engaged one, so it is a gradeable consumer and
+leaves the action-migration list; step 3 was claimed to close the mixed-mode window when the round
+driver moves only in contingent step 5, so the residual disagreement is now stated; the legacy
+normalizer's mapping is spelled out so a stored negative cannot be upgraded; FR-6 is scoped to
+terminal results; FR-11's model binding becomes an explicit versioned deferral with its cost and
+credit trade named; and the doctrine step, the rollback sentence, and the prose-surface count are
+corrected.
+
+**Three requests were deliberately NOT answered by a further patch**, and are recorded as Open
+questions instead: the contract-version wire schema, the model-binding trade, and the remaining
+specification depth a build issue will settle. **This is the third rework of this surface, so the
+charter's third-rework tripwire has fired and no fourth patch will be made.** The Critical bar
+converged (4 → 0 → 0); the Important bar did not, which is the expected behaviour of an unterminating
+re-review bar on a prose contract — and the bound for that bar is the advisor's to set at vet, not the
+builder's to declare.
 
 **A2 (2026-08-14, round-2 confirmation).** The confirmation round found no Critical, and eight further
 defects — six of them in A1's own corrections, which is what a confirmation round is for. The ledger
