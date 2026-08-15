@@ -417,6 +417,7 @@ _KNOWN_OPEN_UNCLASSIFIED = [
     "gi''t push --force origin f",                  # quote-concatenated command word
     "git push origin '+(feature):refs/heads/x'",   # quoted separator inside a ref name (ratified quoting decline)
     "git -c remote.origin.push=+HEAD:refs/heads/main push origin",  # config-driven force push — a separate class (collector, 2026-08-15)
+    r"git push origin \+feature",                   # backslash-escaped `+` — escape handling is ratified-declined
     'git -c user.name="x;y" push --force',          # separator inside a quoted value
     'git -c user.name="x|y" push --force',          # separator inside a quoted value
     # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
@@ -546,6 +547,7 @@ _PLUS_REFSPEC_ACCEPTED_OVERMATCH = [
     ("git push +repo feature", "force-push"),                  # repository operand named `+…`
     ("git push --repo +repo feature", "force-push"),
     ('git push --push-option="+x" origin feature', "force-push"),  # quote sits before the `+`
+    ("git push --receive-pack +helper origin feature", "force-push"),  # value-taking option (round 4)
 ]
 
 _PLUS_REFSPEC_NEGATIVE = [
