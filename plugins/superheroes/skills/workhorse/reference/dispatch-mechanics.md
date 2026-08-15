@@ -111,15 +111,13 @@ reads.
 
 **If you did not record the PID, identify the process by something your own run owns** — the **cwd**
 of the worktree you dispatched into, or the **port** your own server bound — and kill *that* PID.
-Both recoveries read **kernel-reported ownership**, never the command line. For a port, select the
-**listener only** — `lsof -nP -t -iTCP:<port> -sTCP:LISTEN` — because a bare `lsof -ti :<port>` also
-returns every *client* holding a connection on that port, and piping that into a kill recreates the
-failure this section exists to prevent. For cwd you need candidates before you can check one, and the
-enumeration itself must not filter on command text: list **every** process's kernel-reported cwd and
-keep only those whose cwd is **exactly** your worktree path. `lsof -a -d cwd -Fpn` emits a
-`p<pid>` / `n<cwd>` pair per process and is the enumeration this recovery means (verified on macOS;
-any host equivalent reading the same kernel field is fine). A worktree path matched inside a process's
-*command line* is command-text matching wearing a different hat, and is not this. **Zero verified candidates,
+Two properties make that safe, and establishing both is on you. **Read kernel-reported process
+metadata, never the command line** — a process's *actual* working directory is ownership evidence,
+while a worktree path matched inside its *command line* is command-text matching wearing a different
+hat. And **ownership has to still hold now**: a port is evidence only while your process is the one
+holding it, since a sibling can rebind it the moment yours exits, and a port query not restricted to
+the **listener** also returns every client connected to it — so corroborate a port candidate against
+the run's own cwd or launch record before killing anything. **Zero verified candidates,
 or more than one, means you have no kill target** — stop there and say so rather than widening the
 match (charter §7).
 
