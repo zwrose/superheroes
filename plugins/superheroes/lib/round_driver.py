@@ -272,7 +272,7 @@ FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 # that round-records.json deliberately never stores (review_memory's persist-skeleton contract), and
 # `seatStatus` / `missingSeats` are the panel's own coverage bookkeeping, owned by the round that
 # actually ran its seats (`seatStatus` is emitted unconditionally, not as a disclosure).
-UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "compileDrops", "unverified", "missingSeats")
+UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats")
 
 # `canaryVerified` is the one channel whose EMPTY value still belongs in the receipt (a control probe
 # that ran and carried an empty evidence object is still a probe that ran), so it emits on PRESENCE.
@@ -1662,6 +1662,12 @@ def _fold_panel(state, config, artifact):
             "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
             for f in _blocking(compiled)]
     _record_round(state, "seatStatus", seat_status)
+    _panel_dims = _panel_dimensions(config)
+    _expected = len(_panel_dims)
+    if _expected > 0:
+        _ran = sum(1 for d in _panel_dims if seat_status.get(d) == "run")
+        _record_round(state, "lensCoverage",
+                      {"ran": _ran, "expected": _expected, "floor": incomplete})
     # #563 DoD1 — loud fall-open by MACHINERY, not builder discipline: compare the trusted ranManifest
     # against the #510 seat map's configured vendors and record a per-round dispatch-provenance row for
     # any `run` seat that fell open to a different vendor; disclose an omitted manifest too (below).
@@ -2851,6 +2857,8 @@ def build_receipt(state, session_dir=None):
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
+        if rec.get("lensCoverage") is not None:
+            rd["lensCoverage"] = rec.get("lensCoverage")
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
@@ -3094,6 +3102,63 @@ def _validate_attested_receipt(receipt):
     return True, None
 
 
+def _validate_rounds_lens_coverage(receipt):
+    """Per-round lensCoverage shape/consistency and convergence-anchor guard (#960).
+
+    Returns (ok, reason). Legacy receipts with no lensCoverage on any round pass."""
+    rounds = receipt.get("rounds")
+    if not isinstance(rounds, list):
+        return True, None
+    for idx, rd in enumerate(rounds):
+        if not isinstance(rd, dict):
+            continue
+        lc = rd.get("lensCoverage")
+        if lc is None:
+            continue
+        rnd = rd.get("round", idx)
+        if not isinstance(lc, dict):
+            return False, "round %s lensCoverage must be an object" % rnd
+        for key in ("ran", "expected", "floor"):
+            if key not in lc:
+                return False, "round %s lensCoverage missing key %r" % (rnd, key)
+        ran, expected, floor = lc["ran"], lc["expected"], lc["floor"]
+        if not isinstance(ran, int) or not isinstance(expected, int):
+            return False, "round %s lensCoverage ran and expected must be integers" % rnd
+        if not isinstance(floor, bool):
+            return False, "round %s lensCoverage floor must be a boolean" % rnd
+        if expected <= 0:
+            return False, "round %s lensCoverage expected must be positive" % rnd
+        if ran < 0 or ran > expected:
+            return False, ("round %s lensCoverage ran (%d) must satisfy 0 <= ran <= expected (%d)"
+                           % (rnd, ran, expected))
+        if ran < expected and not floor:
+            return False, ("round %s lensCoverage claims floor:false with partial coverage "
+                           "(ran %d < expected %d)" % (rnd, ran, expected))
+    if receipt.get("verdict") != "converged":
+        return True, None
+    cert = receipt.get("certification") if isinstance(receipt.get("certification"), dict) else {}
+    shape = receipt.get("certificationShape") or cert.get("shape")
+    full_panel_anchor = bool(cert.get("fullPanel")) or (
+        isinstance(shape, str) and shape.startswith("full-panel-confirmed"))
+    if not full_panel_anchor:
+        return True, None
+    panel_rounds = [rd for rd in rounds
+                    if isinstance(rd, dict) and rd.get("lensCoverage") is not None]
+    if not panel_rounds:
+        return True, None
+
+    def _round_num(rd):
+        r = rd.get("round")
+        return int(r) if isinstance(r, int) or (isinstance(r, str) and str(r).isdigit()) else 0
+
+    anchor = max(panel_rounds, key=_round_num)
+    anchor_lc = anchor.get("lensCoverage")
+    if isinstance(anchor_lc, dict) and anchor_lc.get("floor"):
+        return False, ("converged certification cannot anchor on floor-marked round %s"
+                       % anchor.get("round"))
+    return True, None
+
+
 def _validate_certified_receipt(receipt):
     """Validate a driver receipt's SHAPE (NOT grafted onto panel_tally._valid_final_receipt — that
     is the reviewer-seat receipt; this is the loop's terminal receipt). Fail-closed: a receipt
@@ -3140,6 +3205,9 @@ def _validate_certified_receipt(receipt):
             return False, "receipt %s must be a list" % key
     if not receipt.get("verdict"):
         return False, "receipt verdict is empty"
+    ok, reason = _validate_rounds_lens_coverage(receipt)
+    if not ok:
+        return ok, reason
     return True, None
 
 
