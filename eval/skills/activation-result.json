@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-14",
+  "recordedAt": "2026-08-15",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -1971,6 +1971,195 @@
     {
       "skill": "superheroes/review-spec",
       "phrase": "review the tasks doc before the build runs",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "sweep open parks and pending items, filter to what only I can decide, and pause for my rulings",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "sweep open parks and pending items, filter to what only I can decide, and pause for my rulings",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "sweep open parks and pending items, filter to what only I can decide, and pause for my rulings",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "vet this PR from its artifacts against its issue and build brief",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "build this approved issue and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "review the code changes on this branch for bugs before merging",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/discuss-open-decisions",
+      "phrase": "freshen live state and give me the /compact command to paste",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
