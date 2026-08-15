@@ -254,8 +254,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `unreadable`. The pin is journaled when the run is **opened**; a continuation call on an existing
 > `--run-dir` keeps the journaled value rather than adopting a pin supplied later — a run's identity
 > is fixed at open. **Review panel** seats pass the **`findings`** pin; the **verify phase** passes the
-> **`verdicts`** pin. **`findings`** remains the default when no pin is set
-> (#687 findings-only posture for panel seats is unchanged). A **`verdicts`** payload now travels
+> **`verdicts`** pin. When no pin is set the transport accepts either kind, each graded by its own
+> engagement floor; #687's findings-only posture for panel seats is carried by the pin those seats
+> pass, not by a transport default. Any other `expected_result_kind` value is refused before dispatch
+> with `attempts: 0` and `detail: "expected-result-kind-invalid"`, the rejected value echoed under
+> `rejectedResultKind`. A **`verdicts`** payload now travels
 > through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
 > parses `unreadable` by construction. **Per-id audit rulings** (`dispatch-audits`) still do not
 > travel through this verb; encode those inside audit result objects or use the file-writing auditor
