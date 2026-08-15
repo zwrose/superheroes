@@ -307,6 +307,7 @@ def test_census_reads_contract_from_parser_not_hand_list():
     assert contracts[("dispatch-write",), "run_dir"] == "creatable-path"
     assert contracts[("dispatch-review",), "repo_root"] == "repo-root"
     assert contracts[("dispatch-review",), "model"] == "model-not-a-role"
+    assert contracts[("dispatch-review",), "mode"] == "choices:review,brief-check"
 
 
 def test_census_red_when_argument_lacks_contract():

@@ -2591,7 +2591,7 @@ def _attach_sanitized_view(result, view):
 
 def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
-                     progress_path, repo_root=None):
+                     progress_path, repo_root=None, mode="review"):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2617,6 +2617,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "engine": engine,
         "roleKind": RUN_KIND_REVIEW,
         "orderId": order_id,
+        "mode": mode,
         "argv": argv,
         "cwd": cwd,
         "timeout": timeout,
@@ -2641,31 +2642,41 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
-                    run_dir=None, max_wait=None, order_id=None, diff_base=None):
+                    run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to Claude."""
+    resolved = {"mode": None}
     try:
-        return _dispatch_review_impl(
+        result = _dispatch_review_impl(
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
             schema_path=schema_path, repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
-            diff_base=diff_base)
+            diff_base=diff_base, mode=mode, resolved_mode=resolved)
+        stamped = dict(result)
+        stamped["mode"] = resolved["mode"] or (mode or "review")
+        return stamped
     except Exception as exc:
-        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "internal-%s" % type(exc).__name__,
-                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": []}
+        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                "detail": "internal-%s" % type(exc).__name__,
+                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+                "mode": resolved["mode"] or (mode or "review")}
 
 
 def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
                           schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
-                          run_dir=None, max_wait=None, order_id=None, diff_base=None):
+                          run_dir=None, max_wait=None, order_id=None, diff_base=None,
+                          mode=None, resolved_mode=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
+    if resolved_mode is None:
+        resolved_mode = {"mode": None}
+    resolved_mode["mode"] = mode or "review"
 
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
@@ -2697,6 +2708,16 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "prompt-unreadable",
              "attempts": 0, "forfeited": False, "terminal": True},
             engine=engine,
+        )
+
+    if mode == "brief-check" and diff_base is not None:
+        resolved_mode["mode"] = "brief-check"
+        return _finish_preflight_terminal(
+            repo_detail,
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+             "detail": "mode-brief-check-with-diff-base",
+             "attempts": 0, "forfeited": False, "terminal": True},
+            run_dir=run_dir or "", engine=engine,
         )
 
     view = None
@@ -2738,6 +2759,16 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 argv = list(opened.get("argv") or [])
                 view = opened.get("viewMeta")
                 view_path = opened.get("viewPath")
+                journal_mode = opened.get("mode") or "review"
+                resolved_mode["mode"] = journal_mode
+                if mode is not None and mode != journal_mode:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "run-dir-mode-mismatch",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv, engine=engine,
+                    )
             elif _run_dir_nonempty(run_dir_real):
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -2748,6 +2779,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 )
 
         if not continuation:
+            resolved_mode["mode"] = mode or "review"
             if schema_path is not None:
                 ok_schema, schema_detail = _validate_review_schema_path(schema_path)
                 if not ok_schema:
@@ -2759,7 +2791,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                         run_dir=run_dir_real or "", engine=engine,
                     )
             try:
-                view = build_view(repo_detail, diff_base=diff_base)
+                view_diff_base = None if resolved_mode["mode"] == "brief-check" else diff_base
+                view = build_view(repo_detail, diff_base=view_diff_base)
             except sanitized_view.SanitizedViewError as exc:
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -2793,7 +2826,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 )
 
             argv = built["argv"]
-            notice = sanitized_view.sanitized_view_notice(view)
+            notice = sanitized_view.sanitized_view_notice(view, mode=resolved_mode["mode"])
             fed_prompt = ANTIHIJACK_PREAMBLE + notice + base_prompt
 
             if run_dir_real is None:
@@ -2804,7 +2837,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 prompt_path=prompt_path, view_path=view_path, view_meta=view,
                 fed_prompt=fed_prompt, order_id=order_id,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
-                repo_root=repo_detail,
+                repo_root=repo_detail, mode=resolved_mode["mode"],
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3463,6 +3496,8 @@ def build_parser():
                     help="pinned commit object id (40 hex, or 64 in a SHA-256 repository) "
                          "to stage the merge-base->head review patch against; a revision "
                          "expression, branch name or tag is refused")
+    cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
+                    choices=("review", "brief-check"))
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--engine", contract="choices:codex,cursor",
@@ -3505,7 +3540,7 @@ def main(argv):
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
                               max_wait=args.max_wait, order_id=args.order_id,
-                              diff_base=args.diff_base)
+                              diff_base=args.diff_base, mode=args.mode)
     elif args.cmd == "dispatch-write":
         res = dispatch_write(args.engine, model=args.model, effort=args.effort,
                              engine_model=args.engine_model, prompt_path=args.prompt_path,
