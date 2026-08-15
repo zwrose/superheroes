@@ -240,17 +240,6 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > names the engine. Encode the payload **inside `findings` objects** instead, or use the
 > file-writing subagent verifier path that `verification-pass.md` already describes.
 >
-> **`--schema-path` pre-spawn validation (#687).** Before spawn, the runner performs a **structural
-> spot-check** on the schema file: it refuses a schema that **positively forbids or displaces** a
-> top-level `findings` key (`detail` is one of `schema-missing`, `schema-unreadable`, or
-> `schema-not-findings-shaped`) with `attempts: 0` and no engine spawned. Refusals also carry
-> `canonicalSchemaPath` pointing at the shipped strict-mode schema
-> (`lib/schemas/review-findings.schema.json`; resolved by
-> `review_findings_schema.review_findings_schema_path()`). A bare `{"type": "object"}`
-> is accepted (it constrains nothing). This is not full JSON Schema validation — it does not require
-> every valid schema to declare `findings`. Previously `--schema-path` **forced** a shape the grader
-> then rejected.
->
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
 > `"engaged"` when the seat demonstrably acted: at least

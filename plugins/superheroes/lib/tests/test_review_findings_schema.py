@@ -12,14 +12,6 @@ _PLUGIN = os.path.join(_HERE, "..", "..")
 _RUBRIC = os.path.join(_PLUGIN, "rubric", "review-base.md")
 
 
-def _load_engine_dispatch():
-    spec = importlib.util.spec_from_file_location(
-        "engine_dispatch", os.path.join(_LIB, "engine_dispatch.py"))
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
 def _load_review_findings_schema():
     spec = importlib.util.spec_from_file_location(
         "review_findings_schema", os.path.join(_LIB, "review_findings_schema.py"))
@@ -28,7 +20,6 @@ def _load_review_findings_schema():
     return mod
 
 
-ED = _load_engine_dispatch()
 RFS = _load_review_findings_schema()
 
 
@@ -198,12 +189,6 @@ def test_schema_walker_rejects_non_strict_nested_fixture_per_keyword(keyword):
     assert "$.properties.wrapper.%s" % keyword in failures
 
 
-def test_canonical_schema_passes_validate_review_schema_path():
-    ok, detail = ED._validate_review_schema_path(RFS.review_findings_schema_path())
-    assert ok is True
-    assert detail is None
-
-
 def test_schema_enums_match_rubric_review_base():
     with open(_RUBRIC, encoding="utf-8") as fh:
         rubric = fh.read()
@@ -230,24 +215,6 @@ def test_resolver_returns_existing_shipped_schema_path():
     assert path == RFS.REVIEW_FINDINGS_SCHEMA_PATH
     assert os.path.isfile(path)
     assert path.endswith(RFS.REVIEW_FINDINGS_SCHEMA_REL)
-
-
-def test_validate_review_schema_path_refusal_tokens_unchanged(tmp_path):
-    missing_ok, missing_detail = ED._validate_review_schema_path(str(tmp_path / "absent.json"))
-    assert missing_ok is False
-    assert missing_detail == ED.SCHEMA_REFUSAL_MISSING
-
-    unreadable = tmp_path / "bad.json"
-    unreadable.write_text("{not json", encoding="utf-8")
-    unreadable_ok, unreadable_detail = ED._validate_review_schema_path(str(unreadable))
-    assert unreadable_ok is False
-    assert unreadable_detail == ED.SCHEMA_REFUSAL_UNREADABLE
-
-    not_shaped = tmp_path / "not-shaped.json"
-    not_shaped.write_text(json.dumps({"type": "object", "properties": {"verdicts": {}}}), encoding="utf-8")
-    shaped_ok, shaped_detail = ED._validate_review_schema_path(str(not_shaped))
-    assert shaped_ok is False
-    assert shaped_detail == ED.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
 
 
 def test_resolver_does_not_raise_when_path_missing(tmp_path, monkeypatch):

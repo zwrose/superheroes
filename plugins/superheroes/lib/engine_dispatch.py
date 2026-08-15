@@ -43,7 +43,6 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok â€
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
-import review_findings_schema  # noqa: E402  canonical review-findings schema path (#949)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 
@@ -104,10 +103,6 @@ MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdou
 # is at the TAIL (parse_result reads the tail), and an unbounded read would let a runaway engine OOM
 # the runner before it can return the structured forfeit that triggers the Claude fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
-
-SCHEMA_REFUSAL_MISSING = "schema-missing"
-SCHEMA_REFUSAL_UNREADABLE = "schema-unreadable"
-SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED = "schema-not-findings-shaped"
 
 MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
@@ -1959,36 +1954,6 @@ def _engagement_with_read(engagement, *, findings=None, investigated=None):
     return out
 
 
-def _validate_review_schema_path(schema_path):
-    """Spot-check that schema_path describes a findings-shaped object â€” not schema validation."""
-    if schema_path is None:
-        return True, None
-    if not isinstance(schema_path, str) or not schema_path.strip():
-        return False, SCHEMA_REFUSAL_MISSING
-    path = schema_path
-    if not os.path.isfile(path):
-        return False, SCHEMA_REFUSAL_MISSING
-    try:
-        with open(path, encoding="utf-8") as fh:
-            root = json.load(fh)
-    except Exception:
-        return False, SCHEMA_REFUSAL_UNREADABLE
-    if not isinstance(root, dict):
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    if root.get("type") != "object":
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    properties = root.get("properties")
-    if isinstance(properties, dict) and "findings" not in properties:
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    required = root.get("required")
-    if isinstance(required, list) and "findings" not in required:
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    if root.get("additionalProperties") is False:
-        if not isinstance(properties, dict) or "findings" not in properties:
-            return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    return True, None
-
-
 def _merge_investigated_rejections(parse_res, spot_rejected):
     """Combine parse-boundary and spot-check rejection diagnostics. Never raises."""
     records = list(parse_res.get("investigatedRejectedRecords") or [])
@@ -2667,7 +2632,7 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
 
 
 def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
-                    schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
+                    repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None):
@@ -2682,7 +2647,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                 return _mode_invalid_refusal(mode)
         result = _dispatch_review_impl(
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
-            schema_path=schema_path, repo_root=repo_root, timeout=timeout,
+            repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved)
@@ -2697,7 +2662,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
 
 
 def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
-                          schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
+                          repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, max_wait=None, order_id=None, diff_base=None,
@@ -2811,16 +2776,6 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
-            if schema_path is not None:
-                ok_schema, schema_detail = _validate_review_schema_path(schema_path)
-                if not ok_schema:
-                    return _finish_preflight_terminal(
-                        repo_detail,
-                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
-                         "canonicalSchemaPath": review_findings_schema.review_findings_schema_path(),
-                         "attempts": 0, "forfeited": False, "terminal": True},
-                        run_dir=run_dir_real or "", engine=engine,
-                    )
             try:
                 view = build_view(repo_detail, diff_base=diff_base)
             except sanitized_view.SanitizedViewError as exc:
@@ -2833,8 +2788,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
-            opts = {"model": model, "engine_model": engine_model,
-                    "schema_path": schema_path, "cwd": cwd}
+            opts = {"model": model, "engine_model": engine_model, "cwd": cwd}
             built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3513,7 +3467,6 @@ def build_parser():
     cc.add_argument(d, "--effort", contract="effort", required=True)
     cc.add_argument(d, "--engine-model", contract="free-text", default=None)
     cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
-    cc.add_argument(d, "--schema-path", contract="free-text", default=None)
     cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
     cc.add_argument(d, "--retry-timeout", contract="integer",
                     default=RETRY_MIN_TIMEOUT, type=int)
@@ -3566,7 +3519,7 @@ def main(argv):
     if args.cmd == "dispatch-review":
         res = dispatch_review(args.engine, model=args.model, effort=args.effort,
                               engine_model=args.engine_model, prompt_path=args.prompt_path,
-                              schema_path=args.schema_path, repo_root=args.repo_root,
+                              repo_root=args.repo_root,
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
                               max_wait=args.max_wait, order_id=args.order_id,
