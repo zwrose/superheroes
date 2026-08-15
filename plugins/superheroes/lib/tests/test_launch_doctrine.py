@@ -1,5 +1,6 @@
 import importlib.util
 import os
+import re
 import sys
 
 import pytest
@@ -22,6 +23,32 @@ def _load():
 
 
 LD = _load()
+
+_NUMBER_WORDS = {
+    "zero": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "eleven": 11,
+    "twelve": 12,
+}
+
+
+def _opening_ruling_count_word(text):
+    match = re.search(r"\bthe ([a-z]+) rulings\b", text, re.IGNORECASE)
+    if not match:
+        raise AssertionError(
+            "launch-doctrine.md opening must contain 'the <word> rulings' — "
+            "count word not found"
+        )
+    return match.group(1).lower()
 
 
 def _read_doctrine():
@@ -53,6 +80,21 @@ def test_load_happy_path():
         assert any(rid in line for line in result["rulingsBlock"].split("\n"))
     assert len(result["digest"]) == 64
     assert all(c in "0123456789abcdef" for c in result["digest"])
+
+
+def test_opening_ruling_count_word_matches_ruling_ids():
+    text = _read_doctrine()
+    count_word = _opening_ruling_count_word(text)
+    if count_word not in _NUMBER_WORDS:
+        raise AssertionError(
+            f"launch-doctrine.md opening uses unknown ruling-count word {count_word!r} — "
+            f"extend _NUMBER_WORDS or fix the doc"
+        )
+    assert _NUMBER_WORDS[count_word] == len(LD.RULING_IDS), (
+        "launch-doctrine.md opening ruling-count word no longer matches "
+        f"len(RULING_IDS): doc says {_NUMBER_WORDS[count_word]!r} ({count_word!r}), "
+        f"code has {len(LD.RULING_IDS)!r}"
+    )
 
 
 def test_doctrine_unreadable(tmp_path):

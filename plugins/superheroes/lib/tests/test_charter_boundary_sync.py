@@ -76,6 +76,17 @@ _MARKER = "**The boundary (both charters state it):**"
 _PRECEDENCE_MARKER = (
     "**When charter text and a newer owner ruling disagree in-session,"
 )
+_EXPECTED_PRECEDENCE_LINE = (
+    "**When charter text and a newer owner ruling disagree in-session, park the disputed "
+    "action with both sources cited — never resolve silently toward either.** This is an "
+    "interim rule pending the text catching up."
+)
+
+_FENCE_GUARDED_FILES = (
+    _HOME,
+    "skills/showrunner/SKILL.md",
+    "skills/workhorse/SKILL.md",
+)
 
 _EXPECTED_INVARIANT_NAMES = frozenset({
     "resolve-upward",
@@ -111,7 +122,7 @@ _EXPECTED_SHARED_CLAUSE_COUNTS = {
     "resolve-upward": 5,
     "not-engaged-never-passes": 5,
     "waiver-bounds": 3,
-    "bounded-acceptance": 3,
+    "bounded-acceptance": 4,
     "third-rework-stop": 3,
 }
 
@@ -145,6 +156,7 @@ _EXPECTED_HOME_SECTIONS = {
         "no new Critical or Important finding in a review round on the final head": (
             "### Bounded acceptance — prose-contract DoDs"
         ),
+        "after a stated number of rounds": "### Bounded acceptance — prose-contract DoDs",
         "with Minor residuals disclosed": "### Bounded acceptance — prose-contract DoDs",
         "unterminating bar can only be abandoned": (
             "### Bounded acceptance — prose-contract DoDs"
@@ -273,6 +285,10 @@ _INVARIANT_TABLE = [
                 "text": (
                     "no new Critical or Important finding in a review round on the final head"
                 ),
+                "home_section": "### Bounded acceptance — prose-contract DoDs",
+            },
+            {
+                "text": "after a stated number of rounds",
                 "home_section": "### Bounded acceptance — prose-contract DoDs",
             },
             {
@@ -622,6 +638,20 @@ def test_precedence_line_is_identical_in_both_charters():
         f"workhorse charters — re-sync them.\n  showrunner: {showrunner}\n  "
         f"workhorse:  {workhorse}"
     )
+    # No home carries this line — both charters are symmetric copies (§11.3).
+    assert showrunner == _EXPECTED_PRECEDENCE_LINE, (
+        "The charter-vs-ruling precedence line no longer matches the pinned content — "
+        f"re-sync both charters.\n  found:    {showrunner}\n  expected: "
+        f"{_EXPECTED_PRECEDENCE_LINE}"
+    )
+
+
+def test_no_fence_lines():
+    # The section reader is fence-blind; all guarded files must carry zero ``` lines so
+    # that premise stays true (see blind spot 7 in this module's docstring).
+    for rel in _FENCE_GUARDED_FILES:
+        count = _read_plugin(rel).count("```")
+        assert count == 0, f"{rel}: expected 0 triple-backtick lines, found {count}"
 
 
 def test_invariant_clauses_present_in_home():
@@ -1112,6 +1142,17 @@ def test_negative_third_rework_stop_out_of_section_match():
         "## 7. Delegate every implementation (lane-scoped — no size exception)"
     )
     real_text = _read_plugin(workhorse_rel)
+    tempted_heading = "## When you're tempted"
+    tempted_text = _file_section(workhorse_rel, tempted_heading)
+    for clause in (
+        "a third rework of the same surface is the tripwire",
+        "stopping and handing the design signal up satisfies it",
+        "a formal park binds when the lane has not converged",
+    ):
+        assert clause in tempted_text, (
+            f"third-rework clause must remain in {workhorse_rel} {tempted_heading!r} "
+            f"for this negative test to prove section scoping — re-sync: {clause!r}"
+        )
     lines = real_text.splitlines()
     start = next(
         i for i, line in enumerate(lines) if line.strip() == section_heading

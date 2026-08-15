@@ -28,9 +28,16 @@ _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 
 _SURFACES = (
     "rubric/launch-doctrine.md",
+    "skills/review-code/reference/auto-fix-loop.md",
     "skills/review-code/reference/round-driver.md",
     "skills/workhorse/SKILL.md",
 )
+
+_RULING_INVARIANT_LABELS = frozenset({
+    "invariant clause",
+    "independence test",
+    "turn-end sentence",
+})
 
 # Hard-coded oracle literals — §11 pattern-2 drift guards on RULING_INVARIANTS["await-dispatches"].
 # Used only in test_ruling_invariants_pins_all_three_literals; per-surface checks read the home.
@@ -45,13 +52,28 @@ _INDEPENDENCE_TEST = (
     "no result dependency, no shared writable worktree, and no shared output path"
 )
 
+_CHANNEL_OWNERSHIP_SENTENCE = (
+    "`await-dispatches` ruling governs the **channel** for dispatches the **builder itself** launches."
+)
+_CHANNEL_OWNERSHIP_SURFACES = (
+    "skills/review-code/reference/auto-fix-loop.md",
+    "skills/workhorse/SKILL.md",
+)
+_CHANNEL_OWNERSHIP_SURFACE_OVERRIDES = {
+    "skills/review-code/reference/auto-fix-loop.md": (
+        "`await-dispatches` ruling governs the **channel** for dispatches "
+        "**the builder itself launches**."
+    ),
+}
+
 _PHRASE_BY_LABEL = {
     "invariant clause": _INVARIANT_CLAUSE,
     "independence test": _INDEPENDENCE_TEST,
     "turn-end sentence": _TURN_END_SENTENCE,
+    "channel ownership": _CHANNEL_OWNERSHIP_SENTENCE,
 }
 
-_EXPECTED_PHRASE_COUNT = len(_PHRASE_BY_LABEL)
+_EXPECTED_RULING_INVARIANT_PHRASE_COUNT = len(_RULING_INVARIANT_LABELS)
 
 
 def _read_plugin(rel):
@@ -101,20 +123,21 @@ def _await_dispatches_phrases():
 
 
 def _assert_exact_await_dispatches_phrases(phrases):
-    if len(phrases) != _EXPECTED_PHRASE_COUNT:
+    if len(phrases) != _EXPECTED_RULING_INVARIANT_PHRASE_COUNT:
         raise AssertionError(
             'RULING_INVARIANTS["await-dispatches"] must have exactly '
-            f"{_EXPECTED_PHRASE_COUNT} phrases, found {len(phrases)}: {phrases!r}"
+            f"{_EXPECTED_RULING_INVARIANT_PHRASE_COUNT} phrases, found {len(phrases)}: {phrases!r}"
         )
     normalized_found = {_normalize_for_line_wrap(p) for p in phrases}
     normalized_expected = {
-        _normalize_for_line_wrap(literal) for literal in _PHRASE_BY_LABEL.values()
+        _normalize_for_line_wrap(_PHRASE_BY_LABEL[label])
+        for label in _RULING_INVARIANT_LABELS
     }
     if normalized_found != normalized_expected:
         found_not_expected = normalized_found - normalized_expected
         expected_not_found = normalized_expected - normalized_found
         raise AssertionError(
-            'RULING_INVARIANTS["await-dispatches"] must match the three expected '
+            'RULING_INVARIANTS["await-dispatches"] must match the ruling-invariant '
             f"phrases exactly — found-not-expected: {sorted(found_not_expected)!r}, "
             f"expected-not-found: {sorted(expected_not_found)!r}"
         )
@@ -123,6 +146,8 @@ def _assert_exact_await_dispatches_phrases(phrases):
 def _phrase_for_label(label):
     if label not in _PHRASE_BY_LABEL:
         raise AssertionError(f"unknown phrase label: {label!r}")
+    if label not in _RULING_INVARIANT_LABELS:
+        return _PHRASE_BY_LABEL[label]
     literal = _PHRASE_BY_LABEL[label]
     for phrase in _await_dispatches_phrases():
         if _phrase_equals_literal(phrase, literal):
@@ -134,11 +159,26 @@ def _phrase_for_label(label):
     )
 
 
-def _workhorse_section7_concurrency_region():
-    """§7 concurrency prose — not the whole file or the 'When you're tempted' table."""
+def _workhorse_section7_body():
+    """Full §7 body — channel-ownership prose sits above the concurrency anchor."""
     text = _read_plugin("skills/workhorse/SKILL.md")
     section = re.search(
-        r"\*\*Await every dispatch in-turn\*\*.*?(?=^## 8\. )",
+        r"^## 7\. Delegate every implementation.*?(?=^## 8\. )",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert section, (
+        "workhorse/SKILL.md §7 body not found — anchor "
+        "'## 7. Delegate every implementation' through before '## 8.' missing or moved?"
+    )
+    return section.group(0)
+
+
+def _workhorse_section7_concurrency_region():
+    """§7 concurrency prose — not the whole file or the 'When you're tempted' table."""
+    text = _workhorse_section7_body()
+    section = re.search(
+        r"\*\*Await every dispatch in-turn\*\*.*?(?=^## 8\. |\Z)",
         text,
         re.MULTILINE | re.DOTALL,
     )
@@ -149,8 +189,15 @@ def _workhorse_section7_concurrency_region():
     return section.group(0)
 
 
-def _surface_text(rel):
+def _literal_for_surface(rel, label):
+    literal = _PHRASE_BY_LABEL[label]
+    return _CHANNEL_OWNERSHIP_SURFACE_OVERRIDES.get(rel, literal)
+
+
+def _surface_text(rel, label=None):
     if rel == "skills/workhorse/SKILL.md":
+        if label == "channel ownership":
+            return _workhorse_section7_body()
         return _workhorse_section7_concurrency_region()
     return _read_plugin(rel)
 
@@ -164,9 +211,15 @@ def _assert_literal_on_surface(rel, text, literal, label):
 
 
 def _assert_literal_on_every_surface(literal, label):
-    for rel in _SURFACES:
-        text = _surface_text(rel)
-        _assert_literal_on_surface(rel, text, literal, label)
+    surfaces = (
+        _CHANNEL_OWNERSHIP_SURFACES
+        if label == "channel ownership"
+        else _SURFACES
+    )
+    for rel in surfaces:
+        surface_literal = _literal_for_surface(rel, label)
+        text = _surface_text(rel, label)
+        _assert_literal_on_surface(rel, text, surface_literal, label)
 
 
 @pytest.mark.parametrize("label", sorted(_PHRASE_BY_LABEL))
@@ -179,7 +232,8 @@ def test_ruling_invariants_pins_all_three_literals():
     # §11 pattern-2 drift guard: hand-typed literals must equal the machine home exactly.
     phrases = _await_dispatches_phrases()
     _assert_exact_await_dispatches_phrases(phrases)
-    for label, literal in _PHRASE_BY_LABEL.items():
+    for label in sorted(_RULING_INVARIANT_LABELS):
+        literal = _PHRASE_BY_LABEL[label]
         normalized = _normalize_for_line_wrap(literal)
         if not any(_phrase_equals_literal(phrase, literal) for phrase in phrases):
             raise AssertionError(
@@ -241,7 +295,9 @@ def test_phrase_equals_literal_rejects_appended_suffix():
 
 # Bite: grown tuple — _assert_exact_await_dispatches_phrases must reject an extra phrase
 def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
-    real_phrases = tuple(_PHRASE_BY_LABEL[label] for label in sorted(_PHRASE_BY_LABEL))
+    real_phrases = tuple(
+        _PHRASE_BY_LABEL[label] for label in sorted(_RULING_INVARIANT_LABELS)
+    )
     grown = real_phrases + (
         "An extra plausible sentence that is not part of the canonical trio.",
     )
@@ -251,7 +307,9 @@ def test_assert_exact_await_dispatches_phrases_rejects_grown_tuple():
 
 # Bite: duplicate-padded tuple — _assert_exact_await_dispatches_phrases must reject length mismatch
 def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
-    real_phrases = tuple(_PHRASE_BY_LABEL[label] for label in sorted(_PHRASE_BY_LABEL))
+    real_phrases = tuple(
+        _PHRASE_BY_LABEL[label] for label in sorted(_RULING_INVARIANT_LABELS)
+    )
     padded = real_phrases + (real_phrases[0],)
     with pytest.raises(AssertionError, match="must have exactly"):
         _assert_exact_await_dispatches_phrases(padded)
@@ -259,7 +317,9 @@ def test_assert_exact_await_dispatches_phrases_rejects_duplicate_padded_tuple():
 
 # Bite: mutated phrase — _assert_exact_await_dispatches_phrases must reject a changed word
 def test_assert_exact_await_dispatches_phrases_rejects_mutated_phrase():
-    phrases = list(_PHRASE_BY_LABEL[label] for label in sorted(_PHRASE_BY_LABEL))
+    phrases = list(
+        _PHRASE_BY_LABEL[label] for label in sorted(_RULING_INVARIANT_LABELS)
+    )
     for index, phrase in enumerate(phrases):
         if "unwatched" in phrase:
             phrases[index] = phrase.replace("unwatched", "watched")
