@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 import pilot_bounded_run
 import pilot_journal
 import pilot_lifecycle
+import pilot_paths
 import pilot_slot
 import store_core
 
@@ -168,19 +169,8 @@ def _validate_observer(observer):
             raise PilotBrowserError(REFUSAL_PIN_OBSERVER_INVALID)
 
 
-def _path_components(path):
-    parts = os.path.realpath(path).split(os.sep)
-    if parts and parts[-1] == "":
-        parts = parts[:-1]
-    return parts
-
-
 def _is_inside(path, root):
-    path_parts = _path_components(path)
-    root_parts = _path_components(root)
-    if len(path_parts) < len(root_parts):
-        return False
-    return path_parts[:len(root_parts)] == root_parts
+    return pilot_paths.is_inside(path, root)
 
 
 def _is_outside_all_reach_roots(path, reach_roots):
