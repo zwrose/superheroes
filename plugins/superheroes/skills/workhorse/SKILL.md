@@ -960,8 +960,8 @@ owner** — a consequential flag, an ambiguous route, a decision you cannot make
 receipts**: what is done, what is blocked, what you need. A truthful park beats a false ship.
 
 **When a park hands a decision back to the owner, give the blocked decision the per-item spine in
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`.** State only
-*what is blocked* and the owner gets a question; carry the spine and they get a decision they can make.
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`.** A park that
+states only *what is blocked* hands the owner a question; the spine hands them a decision they can make.
 
 ## Memory
 

@@ -315,10 +315,8 @@ above).
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** Canonical snippet and markers:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
-     `## The collector preamble — canonical snippet` — read that section for why placement matters.
-     A refresh replaces only the delimited preamble **without touching the items beneath the closing
-     marker**. If **both** markers are not present, do **not** guess a boundary — install a fresh
-     preamble above the items and say so, or report the malformed region, rather than deleting anything.
+     `## The collector preamble — canonical snippet` — read that section for why placement matters;
+     refresh per that section's replace-region and malformed-marker rules.
      When the collector pointer cannot be resolved, record the preamble duty as a **disclosed
      degradation** in the vet receipt, exactly like the existing pending-items rule in this bullet —
      never a silent skip, and **never** a second collector.

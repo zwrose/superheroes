@@ -42,9 +42,11 @@ Each delivered item **names why it is the owner's** — a **taste, trade, or com
 craft call a review lens already owns. The two tests that discriminate owner calls from craft calls
 are showrunner duty 5's; cite that duty rather than restating the tests here.
 
-**List filtered items with a one-line reason** — never swallow them. The recorded inverse failure is
-over-filtering — *"I'm a bit concerned that the collector is empty given that there seem to be
-unfiled followups"* — and a filter nobody can see is indistinguishable from a quiet week.
+**List filtered items with a one-line reason** — never swallow them. **Present filtered items in a
+separate short list before batch 1** — so the owner sees disposition rather than absence. The
+recorded inverse failure is over-filtering — *"I'm a bit concerned that the collector is empty given
+that there seem to be unfiled followups"* — and a filter nobody can see is indistinguishable from a
+quiet week.
 
 **State grounds per item, not once per batch.** A single preamble that says "these are all taste
 calls" does not substitute for naming the ground on each item.
@@ -72,8 +74,8 @@ omitted section is exactly what a reader cannot interpret.
 
 ## Follow-up economics
 
-Every proposed **filing** answers: *what breaks or is lost if we defer this long-term, or never file
-it at all?* An item that cannot answer that has not earned its keep — *"pressure test them for actual
+Every proposed **filing** answers the spine's **Cost of inaction** question. An item that cannot
+answer that has not earned its keep — *"pressure test them for actual
 impact... make sure they earn their keep"* is the floor, not decoration.
 
 **Decline-to-file is a first-class recommendation**, not a failure to find work. Recommend it by name
@@ -100,6 +102,9 @@ carry them forward unchanged.
 and **explicitly excludes new-issue filings, which are never blocking**. **Batch 2 is everything else.**
 Between them the advisor **executes what batch 1 unblocked** while the owner rules on batch 2 — that
 between-batch execution is the point of splitting at all, bounded by the section below.
+
+**State an empty batch plainly** — so the owner can tell "nothing is waiting on you" from "the sweep
+failed."
 
 ## Formatting — one block per spine section
 
@@ -157,15 +162,15 @@ or reports the malformed region, rather than deleting anything.
 never swallowed — failed items listed with a one-line reason; grounds per item, not per batch.
 
 **Spine per item:** (1) why it is yours, (2) context — rule without another artifact, (3) options with
-consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key — Recommendation: b — ….
-Empty sections stated empty, never dropped.
+consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
+the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
 **Follow-up economics:** filings earn their keep or get decline-to-file; declined owner-named risks
 ship with a mechanical tripwire (≥2× worst observed).
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
-(1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; execute
-what it unblocked; then batch 2.
+(1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; on
+batch-1 rulings, deliver batch 2 while executing what batch 1 unblocked.
 
 **Formatting:** one block per spine section — never one run-on paragraph.
 <!-- /superheroes:owner-decisions-contract -->
