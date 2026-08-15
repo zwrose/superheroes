@@ -3321,7 +3321,8 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return roster_refusal
         try:
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
-                                  journal_cmd="next", pending_payload=pending.get("payload"))
+                                  journal_cmd="next", pending_payload=pending.get("payload"),
+                                  seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
@@ -3959,10 +3960,32 @@ def _reviewer_engine_vendor(repo_root):
         return "claude"
 
 
-def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root):
+def _effective_seat_map(state):
+    """Seat map for order emission: the state copy wins; otherwise the seeded config (#723)."""
+    sm = state.get("seatMap")
+    if isinstance(sm, dict) and isinstance(sm.get("seats"), dict) and sm.get("seats"):
+        return sm
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict):
+        return cfg_sm
+    return sm if isinstance(sm, dict) else {}
+
+
+def _disclose_order_vendor_provenance_gaps(state, gaps):
+    if not gaps:
+        return
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    prior = rec.get("orderVendorProvenanceGaps")
+    merged = list(prior) if isinstance(prior, list) else []
+    merged.extend(gaps)
+    rec["orderVendorProvenanceGaps"] = merged
+
+
+def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root,
+                        seat_map=None):
     """{vendor, model, engine} for transport — one home keyed to the source that actually knows."""
     if phase == P_PANEL:
-        return _seat_dispatch_row(state, seat_key)
+        return _seat_dispatch_row(state, seat_key, seat_map=seat_map)
     cfg = config if isinstance(config, dict) else {}
     payload = pending_payload if isinstance(pending_payload, dict) else {}
     if phase == P_FIXER:
@@ -4406,10 +4429,12 @@ def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
     return None
 
 
-def _seat_dispatch_row(state, seat_key):
+def _seat_dispatch_row(state, seat_key, seat_map=None):
     """{vendor, model, engine} for a seat, off the #510 seat map in state. Absent values stay None —
     the manifest records what is KNOWN, never a guessed vendor."""
-    seats = (state.get("seatMap") or {}).get("seats")
+    if seat_map is None:
+        seat_map = _effective_seat_map(state)
+    seats = (seat_map or {}).get("seats")
     entry = seats.get(seat_key) if isinstance(seats, dict) else None
     if not isinstance(entry, dict):
         return {"vendor": None, "model": None, "engine": None}
@@ -4418,7 +4443,7 @@ def _seat_dispatch_row(state, seat_key):
 
 
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
-                          pending_payload=None):
+                          pending_payload=None, seat_map=None):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
 
     Every roster SLOT is rendered, hashed, and written inside the single `orders-emit` commit
@@ -4427,16 +4452,23 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
     order_hashes = {}
     rendered = []
+    vendor_gaps = []
     for seat_key, occurrence in round_records.roster_slots(roster):
         pending = pending_payload if isinstance(pending_payload, dict) else {}
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
                      or os.getcwd())
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root,
+                                  seat_map=seat_map)
         skey = round_records.storage_key(seat_key, occurrence)
+        if phase == P_PANEL and not _seat_is_engine(row):
+            vendor = row.get("vendor")
+            if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
+                vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload)
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
@@ -4470,6 +4502,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         }
         rendered.append((paths["order_path"], order_text.encode("utf-8"),
                          paths["envelope_stub_path"], order_sha, row, occurrence, seat_key))
+
+    if vendor_gaps:
+        _disclose_order_vendor_provenance_gaps(state, vendor_gaps)
 
     manifest = {"schema": ORDERS_MANIFEST_SCHEMA, "session": _meta_session_id(session_dir),
                 "round": rnd, "phase": phase, "attempt": attempt,
@@ -5434,6 +5469,56 @@ def _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, atte
     return response
 
 
+def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
+                                           git=None, broke=None):
+    """Fold an orchestrator-fulfilled phase from its host-seat bare payload — no orders manifest."""
+    roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
+    if refusal is not None:
+        return refusal
+    if not roster:
+        return _refuse_cmd(session_dir, "advance", "orchestrator-roster-empty", phase=phase,
+                           rnd=rnd, attempt=attempt)
+    seat_key = roster[0]
+    skey = round_records.storage_key(seat_key)
+    path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+    payload, perr = round_records.read_json(path)
+    if perr == "missing":
+        return _refuse_cmd(session_dir, "advance", "orchestrator-payload-missing", phase=phase,
+                           rnd=rnd, attempt=attempt, seat=seat_key, path=path,
+                           detail="expected host-seat payload at %s" % path)
+    if perr is not None:
+        return _refuse_cmd(session_dir, "advance", "orchestrator-payload-unreadable",
+                           phase=phase, rnd=rnd, attempt=attempt, seat=seat_key, path=path,
+                           detail=perr)
+    fault = _adapters().orchestrator_payload_fault(phase, payload)
+    if fault:
+        return _refuse_cmd(session_dir, "advance", fault, phase=phase, rnd=rnd, attempt=attempt,
+                           seat=seat_key)
+    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
+                        _via_advance=True)
+    if not folded.get("ok"):
+        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
+                           attempt=attempt, detail=folded.get("reason"))
+    _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
+    nxt = cmd_next(session_dir)
+    if not nxt.get("ok"):
+        return nxt
+    ok_after, after = load_state(session_dir)
+    if not ok_after or after is None:
+        reason, fault_code, detail = _state_load_fault(session_dir)
+        return _refuse_cmd(session_dir, "advance", reason, fault=fault_code, detail=detail)
+    response = {"ok": True, "folded": {"phase": phase, "round": rnd, "attempt": attempt},
+                "nextAction": nxt, "brokeLock": broke}
+    if after.get("terminal"):
+        side = _publish_sidecar(session_dir, after, git=git)
+        if side.get("reason"):
+            return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                               detail=side.get("detail"))
+        response["terminal"] = after.get("terminal")
+        response["sidecar"] = side.get("path")
+    return response
+
+
 def _advance_locked(session_dir, state, git=None, broke=None):
     config = state.get("config") or {}
     if state.get("terminal"):
@@ -5457,6 +5542,9 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     if phase == P_JUDGMENT or phase == P_STALL:
         return _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=git,
                                    broke=broke)
+    if _adapters().is_orchestrator_fulfilled(phase):
+        return _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt,
+                                                      config, git=git, broke=broke)
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal

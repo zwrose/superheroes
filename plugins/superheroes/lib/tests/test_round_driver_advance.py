@@ -45,6 +45,7 @@ def _load(name):
 
 RD = _load("round_driver")
 RR = _load("round_records")
+RP = _load("round_phases")
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
@@ -87,7 +88,8 @@ class FakeAdapters(object):
         self.rosters = {RD.P_PANEL: list(RD.DIMENSIONS),
                         RD.P_VERIFIERS: [],
                         RD.P_SYNTHESIS: ["synthesis"],
-                        RD.P_FIXER: ["dispatch-fixer"]}
+                        RD.P_FIXER: ["dispatch-fixer"],
+                        RD.P_VERIFY: ["verify"]}
         self.roster_reasons = {}
         self.faults = {}
         self.assemble_reason = None
@@ -104,6 +106,14 @@ class FakeAdapters(object):
 
     def missing_policy(self, phase):
         return self.policies.get(phase, "seat-status")
+
+    def is_orchestrator_fulfilled(self, phase):
+        return phase in (RD.P_VERIFY,)
+
+    def orchestrator_payload_fault(self, phase, payload):
+        if phase == RD.P_VERIFY:
+            return RD.verify_result_fault(payload)
+        return "orchestrator-payload-unknown-phase:%s" % phase
 
     def assemble(self, phase, envelopes, state, config, dispatch_manifest=None, canary=None,
                  session_dir=None):
@@ -976,6 +986,160 @@ def test_record_missing_refuses_an_attempt_that_is_not_pending(tmp_path, adapter
 
 def _advance(d, tmp_path, **kw):
     return RD.cmd_advance(d, git=_fake_git(_gitdir(tmp_path)), **kw)
+
+
+def _pending_at_run_verify(session_dir):
+    """Park a session on the advance path at run-verify with no orders manifest."""
+    state = _state(session_dir)
+    state["step"] = RD.P_VERIFY
+    state["_advanceUsed"] = True
+    state["pending"] = {"action": RD.P_VERIFY, "round": state["round"], "phase": RD.P_VERIFY,
+                        "attempt": 0, "payload": {"command": "none"}}
+    RD.save_state(session_dir, state)
+
+
+def _write_verify_payload(session_dir, payload, attempt=None):
+    pend = _pending(session_dir)
+    attempt = pend["attempt"] if attempt is None else attempt
+    skey = RR.storage_key("verify")
+    path = RR.bare_payload_path(session_dir, pend["round"], pend["phase"], skey, attempt)
+    RR.atomic_write_json(path, payload)
+    return path
+
+
+# --- orchestrator-fulfilled phases (#960) ------------------------------------
+
+
+def test_orchestrator_fulfilled_phase_census():
+    """Every ALL_PHASES member must be classified — new phases cannot fall through silently."""
+    import round_adapters as RA
+
+    seat_phases = {
+        RP.P_PANEL, RP.P_VERIFIERS, RP.P_SYNTHESIS, RP.P_AUDITS, RP.P_SCOPED, RP.P_GAPSWEEP,
+        RP.P_FIXER,
+    }
+    orchestrator_phases = {RP.P_VERIFY}
+    owner_gate_phases = {RP.P_JUDGMENT, RP.P_STALL}
+    terminal_phases = {RP.P_TERMINAL}
+    for phase in RP.ALL_PHASES:
+        if phase in owner_gate_phases:
+            assert not RA.is_orchestrator_fulfilled(phase)
+            continue
+        if phase in terminal_phases:
+            assert not RA.is_orchestrator_fulfilled(phase)
+            continue
+        if phase in orchestrator_phases:
+            assert RA.is_orchestrator_fulfilled(phase)
+            continue
+        if phase in seat_phases:
+            assert not RA.is_orchestrator_fulfilled(phase)
+            continue
+        raise AssertionError("unclassified phase %r — extend the census" % phase)
+    assert len(RP.ALL_PHASES) == (len(seat_phases) + len(orchestrator_phases)
+                                  + len(owner_gate_phases) + len(terminal_phases))
+
+
+def test_advance_folds_run_verify_from_host_payload_without_manifest(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    assert not os.path.exists(RD._orders_manifest_path(d, 1, RD.P_VERIFY, 0))
+    _write_verify_payload(d, {"result": "pass"})
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out["folded"] == {"phase": RD.P_VERIFY, "round": 1, "attempt": 0}
+    state = _state(d)
+    assert state["rounds"]["1"]["verifyResult"] == "pass"
+    assert state["pending"]["phase"] != RD.P_VERIFY
+
+
+def test_advance_refuses_missing_orchestrator_payload(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "orchestrator-payload-missing"
+    assert _pending(d)["phase"] == RD.P_VERIFY
+
+
+def test_advance_refuses_unreadable_orchestrator_payload(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    path = _write_verify_payload(d, {"result": "pass"})
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "orchestrator-payload-unreadable"
+    assert _pending(d)["phase"] == RD.P_VERIFY
+
+
+def test_advance_refuses_malformed_verify_payload_shape(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    _write_verify_payload(d, {"passed": True})
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False
+    assert "`passed`" in out["reason"]
+    assert _pending(d)["phase"] == RD.P_VERIFY
+
+
+def test_advance_does_not_fold_stale_attempt_orchestrator_payload(tmp_path, adapters):
+    d = _session(tmp_path)
+    _record_all_panel_seats(d)
+    assert _advance(d, tmp_path)["ok"] is True
+    _pending_at_run_verify(d)
+    _write_verify_payload(d, {"result": "pass"}, attempt=0)
+    state = _state(d)
+    state["pending"] = dict(state["pending"])
+    state["pending"]["attempt"] = 1
+    RD.save_state(d, state)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "orchestrator-payload-missing"
+    assert _pending(d)["attempt"] == 1
+
+
+def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):
+    """Thread the composed seat map through `next` so host-seat orders carry a vendor."""
+    partial = {"seats": {"architecture-reviewer": {"vendor": "claude", "model": "sonnet-5",
+                                                    "engine": "claude"}}}
+    d = _session(tmp_path, seatMap=partial)
+    pend = _pending(d)
+    manifest_path = RD._orders_manifest_path(d, pend["round"], pend["phase"], pend["attempt"])
+    manifest, err = RR.read_json(manifest_path)
+    assert err is None
+    skey = RR.storage_key("architecture-reviewer")
+    assert manifest["seats"][skey]["vendor"] == "claude"
+
+
+def test_emitted_order_discloses_vendor_gap_when_seat_map_absent(tmp_path, adapters):
+    d = _session(tmp_path, name="no-map", seatMap=None)
+    pend = _pending(d)
+    gaps = _state(d)["rounds"][str(pend["round"])]["orderVendorProvenanceGaps"]
+    assert isinstance(gaps, list) and gaps
+    assert all(g.get("seat") in RD.DIMENSIONS for g in gaps)
+
+
+def test_emitted_order_partial_seat_map_resolves_and_discloses(tmp_path, adapters):
+    partial = {"seats": {"code-reviewer": {"vendor": "codex", "model": "gpt-5", "engine": "codex"}}}
+    d = _session(tmp_path, seatMap=partial)
+    pend = _pending(d)
+    manifest_path = RD._orders_manifest_path(d, pend["round"], pend["phase"], pend["attempt"])
+    manifest, err = RR.read_json(manifest_path)
+    assert err is None
+    resolved = RR.storage_key("code-reviewer")
+    unresolved = RR.storage_key("architecture-reviewer")
+    assert manifest["seats"][resolved]["vendor"] == "codex"
+    assert manifest["seats"][unresolved]["vendor"] is None
+    gaps = _state(d)["rounds"][str(pend["round"])]["orderVendorProvenanceGaps"]
+    gap_seats = {g["seat"] for g in gaps}
+    assert "architecture-reviewer" in gap_seats
+    assert "code-reviewer" not in gap_seats
 
 
 def test_next_emits_orders_manifest_for_bootstrap_dispatch(tmp_path, adapters):
