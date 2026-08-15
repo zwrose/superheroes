@@ -16,9 +16,9 @@ This skill is deliberately **not** the only path. The showrunner advisor deliver
 
 | Form | Behavior |
 | --- | --- |
-| `/superheroes:discuss-open-decisions` | Read the owner-decisions contract from disk, sweep the three bounded sources, filter, deliver batch 1 as numbered chat prose, pause for rulings, execute what batch 1 unblocked, then deliver batch 2. Works in a showrunner charter or any session where the owner explicitly invokes it. Not routing, vetting, or building. |
+| `/superheroes:discuss-open-decisions` | Read the owner-decisions contract from disk, sweep the three bounded sources, filter, deliver batch 1 as numbered chat prose, pause for batch-1 rulings, deliver batch 2, execute what batch 1 unblocked alongside batch-2 rulings. Works in a showrunner charter or any session where the owner explicitly invokes it. Not routing, vetting, or building. |
 
-The seven steps below mirror the contract's delivery mechanics — they do not replace reading the file in Step 1.
+The seven steps below cite the contract by heading — they do not replace reading the file in Step 1.
 
 ## Step 1 — Read the contract
 
@@ -28,53 +28,45 @@ This skill does **not** restate the contract. The showrunner advisor reads the s
 
 ## Step 2 — Sweep
 
-Gather candidate items from the three sources the contract bounds in `## Where the items come from, and the bound on that sweep`:
+Gather candidate items per `## Where the items come from, and the bound on that sweep`:
 
-1. **The project's standing-proposals collector** — authoritative. Resolve its path the same way other advisor skills do (profile/decisions store); use the collector preamble from `## The collector preamble — canonical snippet` when the collector needs refreshing.
-2. **Open parks on issues and PRs** — best-effort, **not exhaustive** (parks carry no marker or index). Search issues and PRs the session already knows about; do not claim a complete park census.
+1. **The project's standing-proposals collector** — authoritative. Resolve its issue pointer from the advisor's durable memory (showrunner duty 4); when the pointer cannot be resolved, ask the owner for the issue number and never open a second collector; record the pointer once found. Use the collector preamble from `## The collector preamble — canonical snippet` when the collector needs refreshing.
+2. **Open parks on issues and PRs** — reach them from the advisor's own durable pointer and from open issues and PRs in the project (parks carry no marker or index). Apply the contract's bound disclosure in the delivered message — state what was searched and that the park sweep is not exhaustive; the collector is the only authoritative register. An unbounded promise reads as covered when it is not.
 3. **Anything pending in the current session** — decisions raised but not yet delivered, or delivered in a prior turn without a ruling.
 
-Read the collector before searching parks — the collector is authoritative and may already subsume an in-session duplicate. When the same decision appears in more than one source, keep one entry and note the sources — apply the contract's dedup rule from `## Delivery mechanics` before filtering.
-
-**State the bound to the owner in the delivered message**, not only in this skill: the collector is authoritative; parks and in-session items are gathered best-effort; no sweep is exhaustive. An owner returning from time away needs to hear that bound explicitly so they do not treat a short list as proof nothing else exists in the wild.
+Read the collector before searching parks — the collector is authoritative and may already subsume an in-session duplicate. When the same decision appears in more than one source, apply the dedup rule from `## Where the items come from, and the bound on that sweep`.
 
 ## Step 3 — Filter
 
-Apply the owner-needed filter from `## The filter — what is the owner's, and on what grounds`. Items that fail it are dispositioned by the advisor per the contract — **filtered, never swallowed**. List each filtered item with a one-line reason so nothing disappears silently. The owner sees what was considered and why it is not in batch 1 or batch 2.
-
-Routing choices, vet judgments, and build work belong to the advisor — they fail the filter and get a reason, not silence. A decision the advisor can make under standing delegation also fails — say so plainly rather than batching it as if it were the owner's call.
-
-Present filtered items in a separate short list before batch 1 — the contract's "filtered, never swallowed" rule means the owner sees disposition, not absence.
+Apply `## The filter — what is the owner's, and on what grounds`. Present filtered items in a separate short list before batch 1 — the contract's filtered-never-swallowed rule means the owner sees disposition, not absence.
 
 ## Step 4 — Deliver batch 1
 
-Deliver only what **blocks the advisor's next action** — per `## Delivery mechanics` and batch-1 rules. **Never** batch-1 new-issue filings; those are follow-ups the advisor proposes after rulings, not decisions blocking the next beat.
+Deliver per `## Delivery mechanics` — batch 1 only, never new-issue filings. Present as numbered chat prose using `## The per-item spine` and `## Formatting — one block per spine section`.
 
-Present as numbered chat prose using the full per-item spine from `## The per-item spine`, with formatting from `## Formatting — one block per spine section` — one block per spine section, stable numbers starting at 1. Do not use a structured-question widget in place of the spine; the contract's delivery shape is chat prose the owner can answer inline.
+Write the numbered batch-1 list to a durable artifact now — collector entry where the item has one, otherwise a durable note on the issue or PR it belongs to. Stable numbering survives only if it survives the session; resume from that record, not session memory.
 
 ## Step 5 — Pause for rulings
 
-**Stop here and wait.** This is the point of the skill: batch 1 is incomplete without the owner's rulings. Do not deliver batch 2 in the same turn and call it two batches — the pause is real. Do not execute batch-1 work before the owner rules unless the contract explicitly allows an exception (it does not for merge, release, publish, or force-push).
+**Stop here and wait.** This is the point of the skill: batch 1 is incomplete without the owner's rulings. Do not deliver batch 2 in the same turn and call it two batches — the pause is real.
 
-The owner may answer inline, defer an item, or ask for more context — record the ruling per item before moving on. Partial batch-1 answers still block Step 6 for the unanswered items.
+The owner may answer inline, defer an item, or ask for more context — **record each ruling to the durable artifact as it lands**, the same place as the numbered list from Step 4. When a ruling closes or declines a collector-backed item, strike it from the collector per showrunner duty 4 — do not renumber what remains. Partial batch-1 answers still block batch-1 execution for the unanswered items.
 
-If batch 1 is empty after filtering, say so plainly — filtered items still get their reasons — and skip to Step 7 when there is nothing blocking. Do not invent batch-1 filler to justify the invocation.
+If batch 1 is empty after filtering, say so plainly and skip to Step 6 when there is nothing blocking.
 
-## Step 6 — Execute what batch 1 unblocked
+## Step 6 — Deliver batch 2
 
-After the owner rules on batch 1, execute advisor-side work the rulings unblock — bounded exactly by `## What batch-1 execution may and may not do` in the contract: advisor-side work only; **never** merge, release, publish, or force-push — those are the owner's click, and this skill's job is to make it one click, not to take it.
+**As soon as batch-1 rulings land**, deliver batch 2 — do not wait for batch-1 execution to finish. `## Delivery mechanics` splits the batches so batch-1 execution and batch-2 rulings overlap; serializing execution ahead of batch 2 defeats the split.
 
-For merge-train and release coordination that batch-1 execution may include, follow **showrunner duty 6** rather than restating its conditions here. If a ruling only unblocks batch 2 items, skip execution and proceed to Step 7. Receipt what you executed in plain language so the owner sees batch-1 rulings landed before batch 2 opens.
+Deliver everything else that survived the filter — same per-item spine, same formatting, stable numbering carried forward from batch 1. Extend the durable numbered list with batch-2 items before presenting them.
 
-Owner clicks the merge button, the release merge, the publish action, and any force-push — batch-1 execution prepares those paths; it does not take them.
+Batch 2 may be long; that is fine. The owner asked for the full walkthrough.
 
-## Step 7 — Deliver batch 2
+## Step 7 — Execute and close
 
-Deliver everything else that survived the filter — same per-item spine, same formatting, stable numbering carried forward from batch 1 (do not renumber items between batches). Follow-up economics from `## Follow-up economics` govern what happens after batch 2 rulings — proposed follow-ups land in the collector, not as silent new issues filed by this skill.
+Execute what batch 1 unblocked — bounded by `## What batch-1 execution may and may not do` — **while the owner rules on batch 2**. For merge-train and release coordination that batch-1 execution may include, follow showrunner duty 6. Receipt what you executed in plain language.
 
-Batch 2 may be long; that is fine. The owner asked for the full walkthrough. Do not trim items to save tokens — the filter and batch split already scoped what belongs in each half.
-
-When batch 2 rulings propose follow-ups, append them to the standing-proposals collector per `## Follow-up economics` — the owner sees the proposal; the advisor files nothing silently from this skill.
+When batch-2 rulings propose follow-ups, apply showrunner duty 4's **attended** branch — this skill is owner-present by construction: propose follow-ups inline, discuss, and append to the standing-proposals collector only what genuinely cannot close in this session. Apply `## Follow-up economics` to each proposed filing — earns-its-keep, decline-to-file, tripwire on declined owner-named risks. Record each batch-2 ruling to the durable artifact as it lands; strike collector-backed items per showrunner duty 4.
 
 ## When you're tempted
 
@@ -87,4 +79,6 @@ These excuses show up most often when the owner is waiting or the list is long:
 | "That item isn't really the owner's — I'll skip it" | Filtered items get a one-line reason in the delivered message; swallowing them violates the contract. |
 | "I'll renumber for clarity in batch 2" | Stable numbering across batches is part of the spine — renumbering breaks follow-up economics. |
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every time; memory drift is how undelivered calls pile up in the first place. |
-| "Batch 2 can wait until the next session" | The owner invoked this skill for the full walkthrough — deliver batch 2 in the same charter turn once batch 1 execution completes. |
+| "I'll deliver batch 2 after execution finishes" | `## Delivery mechanics` — deliver batch 2 as soon as batch-1 rulings land; execution runs alongside batch-2 rulings. |
+| "The numbers live in the chat — I'll remember" | Write the numbered list and each ruling to durable artifacts as they land; resume from the record, not session memory. |
+| "I'll append follow-ups to the collector — the owner can review them later" | Showrunner duty 4's attended branch — propose inline, discuss, append only what genuinely cannot close in this session. |
