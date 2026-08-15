@@ -11,12 +11,16 @@
 
 ## What it is
 
-`lib/wave_watch.py` is a ledger-driven **single-shot** watcher over one launch batch: it watches
-until the first thing worth knowing about, prints one JSON line, and exits. **The advisor's re-arm
-is the loop** — there is no daemon, so there is nothing to orphan. It replaces hand-rolled
-per-session watch loops that kept failing quietly: a double-backgrounded loop that orphaned, a
-hand-typed PID list that went stale the moment an unpark launched a new builder, a ten-hour
-dead-watcher hole — and each failure looked like a calm wave.
+`lib/wave_watch.py` is a ledger-driven watcher over one launch batch: it watches until the first
+thing worth knowing about, prints one JSON line, and exits. **`loop`** is the arming shape — one
+harness background task per batch, armed at wave launch, re-arms internally until the first
+actionable event or a refusal, and the harness re-invokes the advisor when it exits so the advisor
+is never blind between turns. **`run`** is the single-shot one-off check for a foreground spot
+read; it does not re-arm. There is no daemon to orphan — the loop lives inside a tool whose
+lifecycle the harness owns, not a hand-rolled background watcher the advisor must re-arm by hand.
+It replaces hand-rolled per-session watch loops that kept failing quietly: a double-backgrounded
+loop that orphaned, a hand-typed PID list that went stale the moment an unpark launched a new
+builder, a ten-hour dead-watcher hole — and each failure looked like a calm wave.
 
 ## The arming pattern
 
