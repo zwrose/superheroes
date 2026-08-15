@@ -110,6 +110,7 @@ MAX_STDERR_CAPTURE = 64 * 1024
 MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
+RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 
 _REJECTED_MODE_MAX_LEN = 120
 
@@ -131,6 +132,14 @@ def _mode_invalid_refusal(rejected_mode):
             "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": sanitized_view.MODE_REVIEW,
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
+
+
+def _expected_result_kind_invalid_refusal(rejected_kind):
+    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+            "detail": RESULT_KIND_REFUSAL_INVALID,
+            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+            "mode": sanitized_view.MODE_REVIEW,
+            "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
 
 
 def _scrub_env(env=None):
@@ -2766,6 +2775,9 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
         if mode is not None:
             if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
                 return _mode_invalid_refusal(mode)
+        if expected_result_kind is not None:
+            if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
+                return _expected_result_kind_invalid_refusal(expected_result_kind)
         result = _dispatch_review_impl(
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
             repo_root=repo_root, timeout=timeout,

@@ -4683,6 +4683,47 @@ def test_grade_review_attempt_error_envelope_gate_survives_second_parse(tmp_path
     assert grade.get("forfeit") is True
 
 
+def test_dispatch_review_expected_result_kind_invalid_refused_at_library_boundary(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, expected_result_kind="rulings",
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+    assert res["rejectedResultKind"] == "'rulings'"
+
+
+def test_dispatch_review_expected_result_kind_non_string_refused_at_library_boundary(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, expected_result_kind=0,
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["rejectedResultKind"] == "0"
+
+
+def test_dispatch_review_expected_result_kind_none_not_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind=None,
+    )
+    assert res.get("detail") != ED.RESULT_KIND_REFUSAL_INVALID
+    assert len(fake.calls) == 1
+
+
 def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, ""), (_VALID_VERDICTS_STDOUT, False, 0, "")])
