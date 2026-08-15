@@ -348,7 +348,7 @@ def test_write_returns_false_when_dir_blocked(tmp_path):
 def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
     needed = {
         "codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]],
-        "cursor": [["cursor-grok-4.5", "high"]],
+        "cursor": [["cursor-grok-4.6", "xhigh"]],
     }
     liveness = {
         "codex": {
@@ -360,7 +360,7 @@ def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
         },
         "cursor": {
             "live": False,
-            "models": {"cursor-grok-4.5": {"ok": False, "detail": "down"}},
+            "models": {"cursor-grok-4.6": {"ok": False, "detail": "down"}},
         },
         "claude": {"live": True, "models": {}},
     }

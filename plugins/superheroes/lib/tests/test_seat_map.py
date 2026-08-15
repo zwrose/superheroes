@@ -250,8 +250,8 @@ def _full_seats_template(**overrides):
         },
         "code-reviewer": {
             "vendor": "cursor",
-            "model": "cursor-grok-4.5",
-            "effort": "high",
+            "model": "cursor-grok-4.6",
+            "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": "xai",
             "source": "rotated",
@@ -266,24 +266,24 @@ def _full_seats_template(**overrides):
         },
         "test-reviewer": {
             "vendor": "cursor",
-            "model": "cursor-grok-4.5",
-            "effort": "high",
+            "model": "cursor-grok-4.6",
+            "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": "xai",
             "source": "rotated",
         },
         "premortem-reviewer": {
             "vendor": "cursor",
-            "model": "cursor-grok-4.5",
-            "effort": "high",
+            "model": "cursor-grok-4.6",
+            "effort": "xhigh",
             "tier": "reviewer-deep",
             "family": "xai",
             "source": "rotated",
         },
         "grounding-seat": {
             "vendor": "cursor",
-            "model": "cursor-grok-4.5",
-            "effort": "high",
+            "model": "cursor-grok-4.6",
+            "effort": "xhigh",
             "tier": "reviewer",
             "family": "xai",
             "source": "rotated",
@@ -781,8 +781,8 @@ def test_verify_pin_scoped_liveness_is_a_violation():
     author = MRG.family_for("code-fixer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
-        "model": "cursor-grok-4.5",
-        "effort": "high",
+        "model": "cursor-grok-4.6",
+        "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": author,
         "source": "rotated",
@@ -830,8 +830,8 @@ def test_to_receipt_carries_liveness_pin_scoped_provenance():
     author = MRG.family_for("code-fixer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
-        "model": "cursor-grok-4.5",
-        "effort": "high",
+        "model": "cursor-grok-4.6",
+        "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": author,
         "source": "rotated",
@@ -1082,8 +1082,8 @@ def test_absent_liveness_pin_scoped_is_unknown_and_fails_closed():
     author = MRG.family_for("code-fixer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
-        "model": "cursor-grok-4.5",
-        "effort": "high",
+        "model": "cursor-grok-4.6",
+        "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": author,
         "source": "rotated",
@@ -1112,8 +1112,8 @@ def test_verify_mixed_valid_and_unknown_liveness_is_a_violation():
     author = MRG.family_for("code-fixer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
-        "model": "cursor-grok-4.5",
-        "effort": "high",
+        "model": "cursor-grok-4.6",
+        "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": author,
         "source": "rotated",
@@ -1143,8 +1143,8 @@ def test_to_receipt_records_the_author_family_it_verified():
     author = MRG.family_for("code-fixer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
-        "model": "cursor-grok-4.5",
-        "effort": "high",
+        "model": "cursor-grok-4.6",
+        "effort": "xhigh",
         "tier": "reviewer-deep",
         "family": author,
         "source": "rotated",
@@ -1177,8 +1177,8 @@ def test_verify_unresolvable_tier_is_a_violation():
     author = MRG.family_for("code-fixer", "cursor")
     seat_cfg = {
         "vendor": "cursor",
-        "model": "cursor-grok-4.5",
-        "effort": "high",
+        "model": "cursor-grok-4.6",
+        "effort": "xhigh",
         "tier": "not-a-tier",
         "family": author,
         "source": "rotated",
