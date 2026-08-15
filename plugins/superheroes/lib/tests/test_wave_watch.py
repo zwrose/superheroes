@@ -331,6 +331,58 @@ def test_event_e3_builder_exited(tmp_path, monkeypatch):
     assert result["launches"] == [{"launchId": "lane-a", "pid": dead_pid}]
 
 
+def test_lane_terminal_makes_zero_gh_run_calls(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
+    gh_calls = [0]
+
+    def counting_gh_run(argv, **kwargs):
+        gh_calls[0] += 1
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60,
+        gh_run=counting_gh_run,
+    )
+    assert result["event"] == "lane-terminal"
+    assert gh_calls[0] == 0
+
+
+def test_lane_blocked_makes_zero_gh_run_calls(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="blocked")
+    gh_calls = [0]
+
+    def counting_gh_run(argv, **kwargs):
+        gh_calls[0] += 1
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60,
+        gh_run=counting_gh_run,
+    )
+    assert result["event"] == "lane-blocked"
+    assert gh_calls[0] == 0
+
+
+def test_builder_exited_makes_zero_gh_run_calls(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    dead_pid = 999999999
+    _setup_live_lane(repo, tmp_path, monkeypatch, pid=dead_pid)
+    gh_calls = [0]
+
+    def counting_gh_run(argv, **kwargs):
+        gh_calls[0] += 1
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60,
+        gh_run=counting_gh_run,
+    )
+    assert result["event"] == "builder-exited"
+    assert gh_calls[0] == 0
+
+
 def test_event_e4_pr_set_changed(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -757,7 +809,7 @@ def test_dead_pid_stale_heartbeat_not_in_stale_live(monkeypatch):
     assert exited_launches == [{"launchId": "lane-a", "pid": 999999999}]
 
 
-def test_stale_heartbeat_never_started_no_lane_stale(tmp_path, monkeypatch):
+def test_lane_never_stamped_emits_timer_not_lane_stale(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     store_root = _ledger_env(tmp_path, monkeypatch)
     _precreate_repo_store_dir(repo, store_root)
@@ -770,6 +822,41 @@ def test_stale_heartbeat_never_started_no_lane_stale(tmp_path, monkeypatch):
     assert result["event"] == "timer"
     assert result["event"] != "lane-stale"
     assert ww.DEGRADATION_LANE_NEVER_STAMPED in result["degraded"]
+
+
+def test_stale_heartbeat_not_started_no_lane_stale(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id="lane-a",
+        stale_after_seconds=1,
+        now=time.time() - 60,
+    )
+    hb_result = hb.read_heartbeat(repo, "lane-a")
+    assert hb_result["class"] == "stale"
+    original_derive = ww._derive_live_lanes
+
+    def derive_with_unstarted_pid(*args, **kwargs):
+        live, readable = original_derive(*args, **kwargs)
+        if "lane-a" in live:
+            live = dict(live)
+            live["lane-a"] = dict(live["lane-a"])
+            live["lane-a"]["pid"] = os.getpid()
+            assert not live["lane-a"].get("started")
+        return live, readable
+
+    monkeypatch.setattr(ww, "_derive_live_lanes", derive_with_unstarted_pid)
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "timer"
+    assert result["event"] != "lane-stale"
 
 
 def test_lane_never_stamped_not_latched_when_stamp_arrives_on_tick_two(
@@ -1534,6 +1621,37 @@ def test_gh_timeout_never_exceeds_remaining(tmp_path, monkeypatch):
         remaining_at_call = 3.0 - (idx * 1.0)
         assert timeout <= remaining_at_call
         assert timeout <= 30
+
+
+def test_gh_poll_budget_computed_after_scans(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    scan_cost = 1.5
+    timeouts = []
+    original_derive = ww._derive_live_lanes
+
+    def slow_derive(*args, **kwargs):
+        clock[0] += scan_cost
+        return original_derive(*args, **kwargs)
+
+    monkeypatch.setattr(ww, "_derive_live_lanes", slow_derive)
+
+    def mono():
+        return clock[0]
+
+    def gh_run(argv, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=3, interval_seconds=60,
+        monotonic=mono, sleep=lambda d: None, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert len(timeouts) >= 1
+    assert timeouts[0] <= 3.0 - scan_cost + 0.01
+    assert timeouts[0] < 3.0
 
 
 def test_gh_timeout_ceiling_thirty_when_remaining_large(tmp_path, monkeypatch):

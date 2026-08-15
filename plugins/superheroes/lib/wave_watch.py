@@ -628,11 +628,8 @@ def run(
         pr_poll_ever_succeeded = [False]
 
         while True:
-            poll_remaining = deadline - monotonic()
-            if first_tick:
-                ideal_remaining = float(max_seconds)
-                if ideal_remaining - poll_remaining < 0.01:
-                    poll_remaining = ideal_remaining
+            is_first_loop = first_tick
+            loop_start_remaining = deadline - monotonic()
 
             live_lanes, ledger_readable = _derive_live_lanes(
                 repo_root, batch_id, env, degraded, ignore_launch_ids,
@@ -653,18 +650,13 @@ def run(
             )
             exited_launches = exited[1] if exited is not None else []
 
-            pr_change, pr_baseline = _evaluate_pr_set_changed(
-                repo_root, poll_remaining, gh_run, pr_baseline, degraded,
-                env, pr_poll_ever_succeeded,
-            )
-
             event_ctx = {
                 "terminal_launches": terminal_launches,
                 "blocked_launches": blocked_launches,
                 "exited": exited,
                 "exited_launches": exited_launches,
                 "stale_live_launches": stale_live_launches,
-                "pr_change": pr_change,
+                "pr_change": None,
                 "batch_id": batch_id,
                 "degraded": degraded,
             }
@@ -688,6 +680,21 @@ def run(
                             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
                         return _event_result(EVENT_TIMER, batch_id, degraded)
                     break
+
+                if event == EVENT_PR_SET_CHANGED:
+                    poll_remaining = deadline - monotonic()
+                    if is_first_loop:
+                        ideal_remaining = float(max_seconds)
+                        if ideal_remaining - loop_start_remaining < 0.01:
+                            if poll_remaining < _MIN_PR_POLL_SECONDS:
+                                poll_remaining = ideal_remaining
+                            elif ideal_remaining - poll_remaining < 0.01:
+                                poll_remaining = ideal_remaining
+                    pr_change, pr_baseline = _evaluate_pr_set_changed(
+                        repo_root, poll_remaining, gh_run, pr_baseline,
+                        degraded, env, pr_poll_ever_succeeded,
+                    )
+                    event_ctx["pr_change"] = pr_change
 
                 handler = _EVENT_TRY_HANDLERS.get(event)
                 if handler is None:
