@@ -131,8 +131,9 @@ the at-dispatch-time summary only.
 
 Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
 `runDir`, and `argv`; on a failure, `reason` (and usually `detail`). On success: **`resultKind`**
-(one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name
-and `investigated`. **Outcome-dependent:** `engagement` and `sanitizedView` — do **not** read an
+(one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name.
+**`investigated`** is present only when at least one claimed path survives spot-checking; a normal
+`{"verdicts": [...]}` reply omits it. **Outcome-dependent:** `engagement` and `sanitizedView` — do **not** read an
 absent `findings` as "zero findings"; an absent `findings` may mean a `verdicts`-kind result
 instead. An object carrying **both** `findings` and `verdicts` is refused as `unreadable`. An item
 whose `id` is exactly `<agent-name>-001` or whose `severity` is exactly
@@ -159,8 +160,10 @@ invocation also asserts `--mode brief-check` explicitly, which refuses
 withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
 The runner accepts **two** result kinds on stdout. Every `ok: true` review result carries
 **`resultKind`** — exactly `"findings"` or `"verdicts"` — plus **exactly one** payload key of that
-name and an `investigated` list; every other top-level key the seat emits is dropped. **`findings`**
-is the default for panel seats; **`verdicts`** travels for verifier seats. Per-id audit rulings still
+name; **`investigated`** is attached only when at least one claimed path survives spot-checking.
+Callers may pin the expected kind via **`--expected-result-kind {findings,verdicts}`**; a mismatch
+refuses with `detail: result-kind-mismatch`. **Panel** seats pass the **`findings`** pin; the
+**verify phase** passes the **`verdicts`** pin. When unset, both kinds are accepted. Per-id audit rulings still
 do not travel through this verb. A non-terminal `{"reason": "running", "terminal": false}` is **not**
 a forfeit. It carries a **`graded`** list describing each attempt that has already ended — each entry
 names `resultKind` and its payload when that attempt graded `ok`. Re-invoke **`dispatch-review`**

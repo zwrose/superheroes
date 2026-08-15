@@ -226,8 +226,10 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
 > **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
 > carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
-> (one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name
-> and **`investigated`**. Outcome-dependent keys also include **`engagement`** and
+> (one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name.
+> **`investigated`** is present only when at least one claimed path survives the runner's spot-check
+> (resolves inside the sanitized review view and exists on disk); a normal `{"verdicts": [...]}`
+> reply omits it. Outcome-dependent keys also include **`engagement`** and
 > **`sanitizedView`**. A consumer must **not** read an absent `findings` as "zero findings" — an
 > absent `findings` may mean a `verdicts`-kind result instead; that is the fail-open reading this
 > subsystem exists to prevent. An object carrying **both** `findings` and `verdicts` is refused as
@@ -243,8 +245,13 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **Review payload transport (#687).** The runner accepts **two** result kinds on stdout. Every
 > `ok: true` review result carries **`resultKind`** — exactly `"findings"` or `"verdicts"` — plus
-> **exactly one** payload key of that name and an `investigated` list; every other top-level key the
-> seat emits is dropped. **`findings`** remains the default and the pin for **review panel** seats
+> **exactly one** payload key of that name; **`investigated`** is attached only when at least one
+> claimed path survives spot-checking. Every other top-level key the
+> seat emits is dropped. Callers may pin the expected kind mechanically via
+> `dispatch-review --expected-result-kind {findings,verdicts}` (library:
+> `expected_result_kind=`); a mismatched kind is refused with `detail: result-kind-mismatch`, not
+> `unreadable`. **Review panel** seats pass the **`findings`** pin; the **verify phase** passes the
+> **`verdicts`** pin. **`findings`** remains the default when no pin is set
 > (#687 findings-only posture for panel seats is unchanged). A **`verdicts`** payload now travels
 > through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
 > parses `unreadable` by construction. **Per-id audit rulings** (`dispatch-audits`) still do not

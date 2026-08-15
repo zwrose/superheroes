@@ -239,47 +239,70 @@ def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
     )
 
 
-# --- Cluster: review resultKind enum (engine_dispatch → auto-fix-loop.md) ---
+# --- Cluster: review resultKind enum (engine_adapter → doc copies) ---
 
 
 def _review_result_kind_enum_from_home():
-    import engine_dispatch
+    import engine_adapter
 
-    return set(engine_dispatch.REVIEW_RESULT_KINDS)
+    return set(engine_adapter.REVIEW_RESULT_KINDS)
 
 
-def _review_result_kind_enum_from_auto_fix_loop_doc(doc):
-    """The resultKind enumeration in auto-fix-loop.md — scoped to that block only."""
-    m = re.search(
-        r"\*\*Result shape — top-level, no wrapper.*?`resultKind`.*?\(one of\s*(.*?)\)\s*naming the payload",
-        doc,
-        re.DOTALL,
+def _review_result_kind_tokens_from_doc_block(block):
+    tokens = set(re.findall(r"`([^`]+)`", block))
+    return {t for t in tokens if t in _review_result_kind_enum_from_home()}
+
+
+def _review_result_kind_enum_copies_from_doc(doc):
+    """Every resultKind enumeration copy in a doc file."""
+    patterns = [
+        r"\(one of\s*(.*?)\)\s*naming the payload",
+        r"\(`([^`]+)` or `([^`]+)`\) naming which payload",
+        r'exactly "`([^`]+)`" or "`([^`]+)`"',
+    ]
+    copies = []
+    for pat in patterns:
+        for m in re.finditer(pat, doc, re.DOTALL):
+            if m.lastindex == 2:
+                copies.append({m.group(1), m.group(2)})
+            else:
+                tokens = _review_result_kind_tokens_from_doc_block(m.group(1))
+                if tokens:
+                    copies.append(tokens)
+    assert copies, (
+        "doc: no resultKind enumeration copies found (moved or reworded?)"
     )
-    assert m, (
-        "auto-fix-loop.md: resultKind enumeration not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
-    assert tokens, (
-        "auto-fix-loop.md: resultKind enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
+    return copies
 
 
 def test_review_result_kind_enum_in_auto_fix_loop_doc():
-    """§11: auto-fix-loop.md restates the resultKind enum from engine_dispatch."""
+    """§11: every resultKind enum copy in auto-fix-loop.md matches engine_adapter."""
     home = _review_result_kind_enum_from_home()
     doc = _read("skills/review-code/reference/auto-fix-loop.md")
-    doc_tokens = _review_result_kind_enum_from_auto_fix_loop_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "auto-fix-loop.md resultKind enum drift from "
-        "engine_dispatch.REVIEW_RESULT_KINDS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
+    for i, doc_tokens in enumerate(_review_result_kind_enum_copies_from_doc(doc)):
+        missing_from_doc = sorted(home - doc_tokens)
+        extra_in_doc = sorted(doc_tokens - home)
+        assert not missing_from_doc and not extra_in_doc, (
+            "auto-fix-loop.md resultKind enum copy %d drift from "
+            "engine_adapter.REVIEW_RESULT_KINDS — "
+            "missing from doc: %r; present in doc but not in home: %r"
+            % (i, missing_from_doc, extra_in_doc)
+        )
+
+
+def test_review_result_kind_enum_in_dispatch_mechanics_doc():
+    """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
+    home = _review_result_kind_enum_from_home()
+    doc = _read("skills/workhorse/reference/dispatch-mechanics.md")
+    for i, doc_tokens in enumerate(_review_result_kind_enum_copies_from_doc(doc)):
+        missing_from_doc = sorted(home - doc_tokens)
+        extra_in_doc = sorted(doc_tokens - home)
+        assert not missing_from_doc and not extra_in_doc, (
+            "dispatch-mechanics.md resultKind enum copy %d drift from "
+            "engine_adapter.REVIEW_RESULT_KINDS — "
+            "missing from doc: %r; present in doc but not in home: %r"
+            % (i, missing_from_doc, extra_in_doc)
+        )
 
 
 # --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---

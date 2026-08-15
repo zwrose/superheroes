@@ -119,7 +119,9 @@ def _fed_prompt(base_prompt, view_meta=None):
 
 
 _VALID_FINDINGS_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
-_VALID_VERDICTS_STDOUT = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED"}]})
+_VALID_VERDICTS_STDOUT = json.dumps({
+    "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test"}],
+})
 _UNREADABLE_REVIEW_STDOUT = json.dumps({"error": "crashed", "status": "fail"})
 
 
@@ -2587,7 +2589,9 @@ def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
     )
     assert res["ok"] is True
     assert res["resultKind"] == "verdicts"
-    assert res["verdicts"] == [{"id": "v1", "verdict": "CONFIRMED"}]
+    assert res["verdicts"] == [{
+        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
+    }]
     assert "findings" not in res
 
 
@@ -2617,7 +2621,9 @@ def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
     grade = ED._grade_review_attempt(run_dir, state, 1)
     assert grade.get("ok") is True
     assert grade["resultKind"] == "verdicts"
-    assert grade["verdicts"] == [{"id": "v1", "verdict": "CONFIRMED"}]
+    assert grade["verdicts"] == [{
+        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
+    }]
     assert "findings" not in grade
 
 
@@ -4489,7 +4495,7 @@ def _dispatch_review_key_matrix_rows():
             "label": "clean-payload-%s" % kind,
             "kind": kind,
             "present": terminal_clean_present + (kind,),
-            "absent": terminal_clean_absent + (other,),
+            "absent": terminal_clean_absent + (other, "investigated"),
             "responses": [(_matrix_clean_payload_stdout(kind), False, 0, "")],
             "setup": "standard",
         })
@@ -4637,4 +4643,80 @@ def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
             assert res.get("reason") == expect_reason
 
     _assert_dispatch_review_key_contract(res, present, absent, label)
+
+
+# --- #763-G: envelope gate, kind pin, investigated matrix ---
+
+
+def test_grade_review_attempt_error_envelope_gate_survives_second_parse(tmp_path):
+    def _envelope(inner_text, **extra):
+        ev = {"type": "result", "subtype": "success", "is_error": False,
+              "duration_ms": 12345, "session_id": "0aae943d", "result": inner_text}
+        ev.update(extra)
+        return json.dumps(ev)
+
+    run_dir = str(tmp_path / "run")
+    repo_root = _matrix_repo_with_good_py(tmp_path)
+    inner = json.dumps({"findings": [], "investigated": ["good.py"]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stream)
+    state = {
+        "opened": {
+            "engine": "cursor",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stream), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is not True
+    assert grade.get("forfeit") is True
+
+
+def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, ""), (_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
+    )
+    assert res["ok"] is False
+    assert res.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
+
+
+def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+
+
+def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
+    repo_root = _repo(tmp_path)
+    unreadable = _UNREADABLE_REVIEW_STDOUT
+    fake = FakeRunner([(unreadable, False, 0, ""), (unreadable, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
+    )
+    assert res["ok"] is False
+    assert res.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
+    assert res.get("payloadShape") is not None
 

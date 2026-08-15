@@ -33,6 +33,13 @@ import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import 
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
+# Re-export result-kind enum for consumers (CONVENTIONS §11 Pattern 1). Producers emit these
+# literals; engine_dispatch and drift tests import this name, never restate the tuple.
+REVIEW_RESULT_KINDS = ("findings", "verdicts")
+
+# Rubric severity tiers — structural pin for verdicts[].severity (G-4); findings path unchanged.
+REVIEW_SEVERITY_TIERS = frozenset({"Critical", "Important", "Minor", "Nit"})
+
 # Bounds for the payload-shape diagnostic. These strings come from ENGINE-CONTROLLED JSON and
 # cross the same trust boundary as any other external free text.
 PAYLOAD_SHAPE_MAX_KEYS = 12
@@ -585,7 +592,7 @@ def _findings_list_has_hollow_member(findings):
 
 
 def _verdict_is_valid(obj):
-    """True when a verdict dict carries a non-empty id and an enum verdict value."""
+    """True when a verdict dict carries id, enum verdict, and non-empty reason."""
     if not isinstance(obj, dict):
         return False
     vid = obj.get("id")
@@ -594,7 +601,10 @@ def _verdict_is_valid(obj):
     verdict = obj.get("verdict")
     if not isinstance(verdict, str) or not verdict.strip():
         return False
-    return verdict in VERDICTS
+    if verdict not in VERDICTS:
+        return False
+    reason = obj.get("reason")
+    return isinstance(reason, str) and bool(reason.strip())
 
 
 def _verdicts_list_has_hollow_member(verdicts):
@@ -622,7 +632,7 @@ def _review_items_have_placeholder_literal(items):
     return any(_item_has_placeholder_literal(x) for x in items)
 
 
-_VERDICT_STRUCTURAL_KEYS = {"id", "verdict", "severity"}
+_VERDICT_STRUCTURAL_KEYS = {"id", "verdict"}
 
 
 def _scrub_verdicts(verdicts):
@@ -636,6 +646,8 @@ def _scrub_verdicts(verdicts):
         g = dict(v)
         for key, val in g.items():
             if key in _VERDICT_STRUCTURAL_KEYS:
+                continue
+            if key == "severity" and val in REVIEW_SEVERITY_TIERS:
                 continue
             g[key] = _scrub_finding_value(val)
         accepted.append(g)
@@ -923,6 +935,9 @@ def review_payload_shape(stdout, fed_prompt=None):
             arr = _last_json_array(stdout)
             if isinstance(arr, list):
                 if all(isinstance(x, dict) for x in arr):
+                    if _review_items_have_placeholder_literal(arr):
+                        return {"parsed": SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
+                                "topLevelKeys": [], "keysTruncated": False}
                     if _findings_list_has_hollow_member(arr):
                         return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
                                 "topLevelKeys": [], "keysTruncated": False}
@@ -1366,18 +1381,21 @@ def spot_check_investigated(investigated, repo_root, *, generated_artifacts=()):
     return len(accepted) >= 1, accepted, rejected
 
 
-def parse_result(engine, role_kind, stdout):
+def parse_result(engine, role_kind, stdout, *, raw_envelope_error=None):
     """Parse an external engine's stdout into the native result shape. review → scrubbed
     findings (from the canonical {"findings": [...]} object OR, tolerated, a bare top-level
     array of finding objects — #196); build|fix → {ok,signal,evidence{testFailed,testPassed}}
     honoring the leaf's OWN ok/signal (an honest {"ok":false,"signal":"plan_wrong"} refusal stays
     ok:false so it parks — never coerced to ok:true and committed, #288).
     Unparseable/empty → {ok:false, reason:'unreadable'}. External free-text is
-    scrubbed HERE (Secret-hygiene). Never raises."""
+    scrubbed HERE (Secret-hygiene). When `raw_envelope_error` is supplied it is used verbatim
+    for the #949 gate — never re-derived from already-normalized text. Never raises."""
     try:
         if role_kind == "review":
             norm = normalize_review_stdout(stdout)
-            outer_envelope_error = norm["rawEnvelopeError"]
+            outer_envelope_error = (
+                norm["rawEnvelopeError"] if raw_envelope_error is None else raw_envelope_error
+            )
             stdout = norm["text"]
             obj = _last_json_object(stdout)
             if obj is None:
