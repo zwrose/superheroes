@@ -51,6 +51,7 @@ Contract:
 import argparse
 import json
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -608,8 +609,8 @@ def run(
             }
 
             for event in PRECEDENCE:
-                if event == EVENT_TIMER:
-                    break
+                if event not in candidates:
+                    continue
                 payload = candidates[event]()
                 if payload is not None:
                     _apply_pr_signal_degradation(degraded, pr_arm_reached, pr_state)
@@ -638,6 +639,34 @@ def run(
         return _refusal(
             REFUSAL_INTERNAL_ERROR, batch_for_refusal, detail=type(exc).__name__,
         )
+
+
+def _append_watch_log(log_path, entry):
+    """Append one JSON line; refuse symlinks, FIFOs, and other non-regular files."""
+    line = json.dumps(entry, sort_keys=True) + "\n"
+    encoded = line.encode("utf-8")
+    fd = None
+    try:
+        fd = os.open(
+            log_path,
+            os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK,
+            0o600,
+        )
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            return False
+        offset = 0
+        while offset < len(encoded):
+            written = os.write(fd, encoded[offset:])
+            if written == 0:
+                return False
+            offset += written
+        return True
+    except OSError:
+        return False
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def loop(
@@ -681,6 +710,15 @@ def loop(
             result["arms"] = 0
             return result
 
+        if not _valid_positive_int(interval_seconds):
+            result = _refusal(REFUSAL_INTERVAL_INVALID, batch_id)
+            result["arms"] = 0
+            return result
+        if not _valid_positive_int(max_seconds):
+            result = _refusal(REFUSAL_MAX_SECONDS_INVALID, batch_id)
+            result["arms"] = 0
+            return result
+
         ledger_observed = [False]
         pr_state = [None]
         loop_degraded = set()
@@ -712,6 +750,9 @@ def loop(
                 pr_state=pr_state,
             )
 
+            if result.get("ok"):
+                loop_degraded.update(result.get("degraded", []))
+
             if not result.get("ok"):
                 result["arms"] = arm_count
                 result["degraded"] = sorted(
@@ -728,15 +769,11 @@ def loop(
 
             last_result = result
             if log_path is not None:
-                try:
-                    with open(log_path, "a", encoding="utf-8") as log_file:
-                        log_file.write(json.dumps({
-                            "arm": arm_count,
-                            "elapsedSeconds": round(monotonic() - start, 3),
-                            "result": result,
-                        }) + "\n")
-                        log_file.flush()
-                except Exception:
+                if not _append_watch_log(log_path, {
+                    "arm": arm_count,
+                    "elapsedSeconds": round(monotonic() - start, 3),
+                    "result": result,
+                }):
                     loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
 
             if max_total_seconds is None:

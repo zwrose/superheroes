@@ -129,6 +129,52 @@ _SLEEP_CALL_CEILING = 200
 _WW_SOURCE = os.path.join(_LIB, "wave_watch.py")
 
 
+def _wave_watch_event_constants_from_ast(tree):
+    consts = {}
+    for node in tree.body:
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (
+                isinstance(target, ast.Name)
+                and target.id.startswith("EVENT_")
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)
+            ):
+                consts[target.id] = node.value.value
+    return consts
+
+
+def _run_candidates_keys_from_source():
+    source = open(_WW_SOURCE, encoding="utf-8").read()
+    tree = ast.parse(source)
+    event_consts = _wave_watch_event_constants_from_ast(tree)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or node.name != "run":
+            continue
+        for child in ast.walk(node):
+            if not isinstance(child, ast.Assign):
+                continue
+            if (
+                len(child.targets) != 1
+                or not isinstance(child.targets[0], ast.Name)
+                or child.targets[0].id != "candidates"
+                or not isinstance(child.value, ast.Dict)
+            ):
+                continue
+            keys = []
+            for key in child.value.keys:
+                if isinstance(key, ast.Name) and key.id in event_consts:
+                    keys.append(event_consts[key.id])
+                elif (
+                    isinstance(key, ast.Constant)
+                    and isinstance(key.value, str)
+                ):
+                    keys.append(key.value)
+            return set(keys)
+    raise AssertionError("run()'s candidates dict not found in wave_watch.py source")
+
+
 class LoopArmCeilingExceeded(RuntimeError):
     """Distinctive failure when loop() fails to terminate within the arm bound."""
 
@@ -1915,6 +1961,72 @@ def test_loop_refuses_max_total_seconds_invalid(tmp_path, monkeypatch, bad_value
     assert result["arms"] == 0
 
 
+@pytest.mark.parametrize("bad_value", [0, -1, True, 1.5])
+def test_loop_refuses_invalid_max_seconds_with_total_bound(
+    tmp_path, monkeypatch, bad_value,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.loop(
+        repo, "batch-982", max_seconds=bad_value, max_total_seconds=5,
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_MAX_SECONDS_INVALID
+    assert result["arms"] == 0
+
+
+def test_run_candidates_keys_match_events_registry():
+    """run()'s candidates dict must cover every EVENTS token except timer.
+
+    A missing key becomes KeyError inside run()'s scan and surfaces as
+    internal-error; an extra handler with no PRECEDENCE token is silently
+    never dispatched.
+    """
+    candidate_keys = _run_candidates_keys_from_source()
+    expected = set(ww.EVENTS) - {ww.EVENT_TIMER}
+    assert candidate_keys == expected, (
+        "run()'s candidates dict keys drift from wave_watch.EVENTS — "
+        f"candidates {sorted(candidate_keys)!r}; "
+        f"EVENTS \\ {{timer}} {sorted(expected)!r}; "
+        "missing keys become KeyError → internal-error; "
+        "extra keys are silently never dispatched"
+    )
+
+
+def test_loop_accumulates_degraded_across_timer_arms(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    sequence = [
+        {
+            "ok": True,
+            "event": "timer",
+            "batchId": "batch-982",
+            "degraded": [ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE],
+        },
+        {
+            "ok": True,
+            "event": "lane-terminal",
+            "batchId": "batch-982",
+            "degraded": [],
+            "launchId": "lane-a",
+            "launches": [],
+        },
+    ]
+    idx = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=_arm_bounded_run_fn(run_fn),
+    )
+    assert result["event"] == "lane-terminal"
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE in result["degraded"]
+
+
 def test_loop_max_total_emits_last_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -2067,18 +2179,72 @@ def test_loop_log_unwritable_survives_to_final_result(tmp_path, monkeypatch):
     assert ww.DEGRADATION_LOG_UNWRITABLE in result["degraded"]
 
 
-def test_cli_loop_event_exit_zero(tmp_path, monkeypatch):
+def test_loop_log_symlink_degrades_and_completes(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
+    real_log = tmp_path / "real.log"
+    real_log.write_text("")
+    symlink = tmp_path / "watch.log"
+    symlink.symlink_to(real_log)
+    sequence = [
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "lane-terminal", "batchId": "batch-982",
+         "degraded": [], "launchId": "lane-a", "launches": []},
+    ]
+    idx = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", log_path=str(symlink),
+        run_fn=_arm_bounded_run_fn(run_fn),
+    )
+    assert result["event"] == "lane-terminal"
+    assert ww.DEGRADATION_LOG_UNWRITABLE in result["degraded"]
+
+
+def test_loop_log_directory_degrades_and_completes(tmp_path, monkeypatch):
+    """Directory stand-in for non-regular log targets (FIFOs are environment-fragile)."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = tmp_path / "logdir"
+    log_dir.mkdir()
+    sequence = [
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "lane-terminal", "batchId": "batch-982",
+         "degraded": [], "launchId": "lane-a", "launches": []},
+    ]
+    idx = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", log_path=str(log_dir),
+        run_fn=_arm_bounded_run_fn(run_fn),
+    )
+    assert result["event"] == "lane-terminal"
+    assert ww.DEGRADATION_LOG_UNWRITABLE in result["degraded"]
+
+
+def test_cli_loop_event_exit_zero(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    env, _record_file = _cli_env_with_stub_gh(tmp_path, monkeypatch)
     proc = _run_cli([
         "loop", "--repo-root", repo, "--batch", "batch-982",
         "--max-seconds", "1", "--interval-seconds", "1",
-        "--max-total-seconds", "1",
-    ])
+        "--max-total-seconds", "10",
+    ], env=env)
     assert proc.returncode == 0
     out = json.loads(proc.stdout.strip())
     assert out["ok"] is True
     assert out["event"] == "timer"
+    assert out["arms"] > 1
 
 
 def test_cli_loop_refusal_exit_one(tmp_path):
