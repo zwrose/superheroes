@@ -191,9 +191,10 @@ The runner accepts **two** result kinds on stdout. Every `ok: true` review resul
 **`resultKind`** — exactly `"findings"` or `"verdicts"` — plus **exactly one** payload key of that
 name; **`investigated`** is attached only when at least one claimed path survives spot-checking.
 Callers may pin the expected kind via **`--expected-result-kind {findings,verdicts}`**; a mismatch
-refuses with `detail: result-kind-mismatch`. The pin is journaled when the run is **opened**; a
-continuation call on an existing `--run-dir` keeps the journaled value rather than adopting a pin
-supplied later — a run's identity is fixed at open. **Panel** seats pass the **`findings`** pin; the
+refuses with `detail: result-kind-mismatch`. The pin is journaled when the run is **opened**; on a
+continuation an omitted pin inherits the journaled value, while a supplied pin that disagrees —
+including on a run opened without one — refuses `run-dir-result-kind-mismatch` (`attempts: 0`, no
+spawn); a run's identity is fixed at open. **Panel** seats pass the **`findings`** pin; the
 **verify phase** passes the **`verdicts`** pin. When unset, both kinds are accepted. Per-id audit rulings still
 do not travel through this verb. A non-terminal `{"reason": "running", "terminal": false}` is **not**
 a forfeit. It carries a **`graded`** list describing each attempt that has already ended — each entry
