@@ -154,14 +154,10 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   gate. Known silent-bypass shapes are **closed as they are found**; **over-matching is an
   accepted cost**. **Redirection is handled** — operator and operand, for operators that carry a
   separator character (`2>&1`, `&>`) and those that do not (`>`, `>>`, `<`), in any position
-  (`gh 2>&1 pr merge 123` asks; `git push origin main>/dev/null` asks). **Paren- and
-  subshell-wrapped commands are handled** — `(cd sub && git push origin main)` and `$(gh pr merge)`
-  classify `push-to-default` and `merge-pr` respectively (#1000 follow-up; both classified `None`
-  before).
-- **Known open, outside #1000's ratified scope:** the **`+` refspec force form** — `git push
-  origin +main` classifies `None` today (same for `+feature` and `+refs/heads/main`); pre-existing,
-  verified identical on the base branch; a force-push spelling deliberately deferred because
-  widening the force-push row needs an owner scope call. The **quoting class** remains
-  **unclassified** — quote-concatenated command word (`g''h`) and a **separator inside a quoted
-  value** (`git -c user.name="x;y" push --force`); both pre-existing. **Consequence:** an
-  over-match costs an extra prompt, never an unapproved run.
+  (`gh 2>&1 pr merge 123` asks; `git push origin main>/dev/null` asks). **Shell word terminators
+  on gated words are handled** — a gated word ends at any shell word-terminator (whitespace, `)`,
+  `(`, backtick, `"`, `'`, redirection characters, end-of-string) in subshell, command-substitution,
+  paren, and `bash -c` wrappers (`\`gh pr merge\``, `bash -c "git push origin main"`, and
+  `(gh release create)` classify correctly; #1000). **Still open by ratified decline:** a real shell
+  lexer, quote **pairing**, and escape handling; and the **`+` refspec force form** (`git push
+  origin +main` classifies `None` today) — a separate follow-up.

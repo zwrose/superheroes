@@ -45,6 +45,9 @@ import sys
 # quoted text would choose fail-open in a security gate. Known silent-bypass shapes are closed as
 # they are found; over-matching is an accepted cost.
 #
+# End-of-word is stated once in `_WORD_END`; every matcher row is built through `_gated` and must
+# not carry its own end anchor — so a row added later is boundary-aware by construction.
+#
 # Shell segment boundaries. Splitting first, then searching within a segment, replaces the old
 # tool-to-subcommand span: it removes BOTH the length cap (which fell through to None past 256
 # chars — an approval bypass) and the unbounded `.*` wildcards (quadratic in a PreToolUse hook:
@@ -104,6 +107,27 @@ def _segments(command):
 _GH = re.compile(r"\bgh\b", re.I)
 _GIT = re.compile(r"\bgit\b", re.I)
 
+# End-of-word: the next character is not a word-continuation character, or end-of-string.
+# `.` and `-` deliberately continue a word (`git config push.default main`, `main-feature`).
+_WORD_END = r"(?=[^\w.-]|$)"
+
+# Leading boundary for push-to-default's ref operand only — treats quote, backtick, `(`, `/` as
+# boundaries before `main`/`master`. Subcommand rows keep `(?<!\S)`; widening those would admit
+# `gh pr create -t "pr merge"` as a false merge-pr, and every real wrapped shape has a space before
+# the gated word with only its end quoted.
+_WORD_START = r"(?<![\w.-])"
+
+# Identity registries — structural census proves rows were built here, not by string-shape guessing.
+_GATED_REGISTRY = set()
+_SHORT_FLAG_REGISTRY = set()
+
+
+def _gated(body, leading=r"(?<!\S)"):
+    compiled = re.compile(leading + body + _WORD_END, re.I)
+    _GATED_REGISTRY.add(id(compiled))
+    return compiled
+
+
 # A short-option flag can arrive standalone (`-f`) or CLUSTERED (`-qf`, `-fq`, `-uvf`, `-4f`).
 # `_short_flag(letter)` is the builder every row's short-flag requirement must be composed from,
 # so a row added later is cluster-aware by construction rather than by the author remembering.
@@ -116,26 +140,31 @@ _GIT = re.compile(r"\bgit\b", re.I)
 def _short_flag(letter):
     return r"(?<![\w-])-(?!-)[A-Za-z0-9]*" + letter
 
+
+def _force_push_flag_trailing():
+    compiled = re.compile(r"(--force\b|-f\b|--force-with-lease|"
+                          + _short_flag("f") + r")", re.I)
+    _SHORT_FLAG_REGISTRY.add(id(compiled))
+    return compiled
+
+
 # (action, tool-word, subcommand-token, trailing-requirement-or-None)
 # The trailing requirement is searched AFTER the subcommand match, within the same segment.
 OWNER_AUTHORITY_COMMANDS = [
-    # `)` ends a shell word (#1000 round-2 panel) — trailing boundary accepts it like whitespace/EOS.
-    ("merge-pr",        _GH,  re.compile(r"(?<!\S)pr\s+merge(?=\s|$|\))", re.I), None),
-    ("merge-api",       _GH,  re.compile(r"(?<!\S)api(?!\S)", re.I),
-                              re.compile(r"\bpulls/[^/\s]+/merge\b", re.I)),
-    ("merge-graphql",   None, re.compile(r"\bmergePullRequest\b", re.I), None),
-    ("release",         _GH,  re.compile(r"(?<!\S)release\s+create(?!\S)", re.I), None),
-    ("run-workflow",    _GH,  re.compile(r"(?<!\S)workflow\s+(run|enable|disable)(?!\S)", re.I), None),
-    ("force-push",      _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
+    ("merge-pr",        _GH,  _gated(r"pr\s+merge"), None),
+    ("merge-api",       _GH,  _gated(r"api"),
+                              _gated(r"pulls/[^/\s]+/merge", leading=r"\b")),
+    ("merge-graphql",   None, _gated(r"mergePullRequest", leading=r"\b"), None),
+    ("release",         _GH,  _gated(r"release\s+create"), None),
+    ("run-workflow",    _GH,  _gated(r"workflow\s+(run|enable|disable)"), None),
+    ("force-push",      _GIT, _gated(r"push"),
                               # `-f\b` is retained deliberately: no `(?<![\w-])` lookbehind, so it
                               # still matches a trailing `-f` in `git push origin my-f` that the
                               # builder deliberately refuses — removing it would narrow a security
-                              # matcher.
-                              re.compile(r"(--force\b|-f\b|--force-with-lease|"
-                                         + _short_flag("f") + r")", re.I)),
-    ("push-to-default", _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
-                              # `)` ends a shell word (#1000 round-2 panel).
-                              re.compile(r"(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$|\))", re.I)),
+                              # matcher. Built from `_short_flag`, not `_gated` — flags, not words.
+                              _force_push_flag_trailing()),
+    ("push-to-default", _GIT, _gated(r"push"),
+                              _gated(r"(?:refs/heads/)?(main|master)", leading=_WORD_START)),
 ]
 
 ALLOW_FILENAME = "owner-authority-allow.json"

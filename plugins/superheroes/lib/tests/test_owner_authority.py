@@ -72,7 +72,7 @@ _REDIRECTION_CENSUS = [
     ("gh 2>pr merge 1", "merge-pr"),
     ("gh >&pr merge 1", "merge-pr"),
     ("git >push --force origin f", "force-push"),
-    # `)` ends a shell word — trailing anchors accept it like whitespace/EOS (#1000 round-2).
+    # Shell word terminators on gated words — paren/subshell wrappers (#1000).
     ("(cd sub && git push origin main)", "push-to-default"),
     ("(git push origin main)", "push-to-default"),
     ("git push origin main)", "push-to-default"),
@@ -169,6 +169,98 @@ def test_owner_authority_action_no_regression_census():
         assert oa.owner_authority_action(command) == action
     for command in _NONE_FOR_ORDINARY:
         assert oa.owner_authority_action(command) is None
+
+
+# --- structural census: every row built through _gated or _short_flag (#1000) ---
+
+_OWNER_AUTHORITY_ROW_COUNT = 7
+
+
+def test_owner_authority_commands_structural_census():
+    assert len(oa.OWNER_AUTHORITY_COMMANDS) == _OWNER_AUTHORITY_ROW_COUNT
+    assert oa._GATED_REGISTRY
+    assert oa._SHORT_FLAG_REGISTRY
+    for action, _tool, sub, trailing in oa.OWNER_AUTHORITY_COMMANDS:
+        assert id(sub) in oa._GATED_REGISTRY, action
+        if trailing is not None:
+            trailing_id = id(trailing)
+            assert (trailing_id in oa._GATED_REGISTRY
+                    or trailing_id in oa._SHORT_FLAG_REGISTRY), action
+
+
+# --- class-level behavioral census: gated-word terminators in wrappers (#1000) ---
+
+_MINIMAL_GATED_FORMS = [
+    ("gh pr merge", "merge-pr"),
+    ("gh api repos/o/r/pulls/42/merge", "merge-api"),
+    ("gh api graphql -f query='{mergePullRequest}'", "merge-graphql"),
+    ("gh release create", "release"),
+    ("gh workflow run", "run-workflow"),
+    ("git push --force", "force-push"),
+    ("git push origin main", "push-to-default"),
+]
+
+_WRAPPER_FORMS = [
+    ("$(%s)", lambda s: '"' not in s),
+    ("`%s`", lambda _s: True),
+    ("(%s)", lambda _s: True),
+    ('bash -c "%s"', lambda s: '"' not in s),
+    ("bash -c '%s'", lambda s: "'" not in s),
+]
+
+_QUOTED_OPERAND_ROWS = [
+    ('git push origin "main"', "push-to-default"),
+    ("git push origin 'main'", "push-to-default"),
+    ("git push origin `main`", "push-to-default"),
+]
+
+_NEGATIVE_WRAPPED_NONE = [
+    "`git status`",
+    'bash -c "echo hello"',
+    "$(gh pr view 123)",
+    "(git config push.default main)",
+    "`git push origin feature`",
+    'bash -c "git push origin main-feature"',
+    "$(npm run build)",
+    "`gh pr checks 42`",
+]
+
+
+def _wrapper_corpus():
+    base_shapes = list(_BASE_SHAPES) + list(_MINIMAL_GATED_FORMS)
+    corpus = []
+    per_wrapper = {i: [] for i in range(len(_WRAPPER_FORMS))}
+    for shape, action in base_shapes:
+        for i, (fmt, skip) in enumerate(_WRAPPER_FORMS):
+            if not skip(shape):
+                continue
+            cmd = fmt % shape
+            corpus.append((cmd, action))
+            per_wrapper[i].append((cmd, action))
+    return corpus, per_wrapper
+
+
+def test_owner_authority_action_wrapper_corpus_nonempty():
+    _corpus, per_wrapper = _wrapper_corpus()
+    for i, entries in per_wrapper.items():
+        assert entries, "wrapper %d produced empty corpus" % i
+    actions_seen = {action for _cmd, action in _corpus}
+    assert actions_seen == {action for _a, action in _MINIMAL_GATED_FORMS}
+
+
+@pytest.mark.parametrize("command,action", _wrapper_corpus()[0])
+def test_owner_authority_action_wrapper_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _QUOTED_OPERAND_ROWS)
+def test_owner_authority_action_quoted_operand_push_to_default(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command", _NEGATIVE_WRAPPED_NONE)
+def test_owner_authority_action_negative_wrapped_none(command):
+    assert oa.owner_authority_action(command) is None
 
 
 # Intended cross-row shifts — pinned so reviewers see the before/after (#1000).
