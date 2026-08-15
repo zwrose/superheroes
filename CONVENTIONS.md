@@ -632,7 +632,7 @@ charter's "dispatch provenance" section), not a separate journal.
 **Cursor is the token-efficiency engine** (owner-ratified 2026-07-09): Cursor is a
 **gateway CLI, not a single vendor** — the same `cursor-agent` account can also reach
 Anthropic/OpenAI models. But its **two first-party models — the token-efficient
-`composer-2.5` and `cursor-grok-4.5` — are ONE family, `xai`** (owner-ratified
+`composer-2.5` and `cursor-grok-4.6` — are ONE family, `xai`** (owner-ratified
 2026-07-26, #651: cursor and xAI sit under one corporate roof, correlated errors from
 one roof get harder to detect over time, and claude/codex are at least as likely to
 catch what grok catches). So **independence is never satisfied between two cursor
@@ -659,7 +659,7 @@ well-formed, registry-resolvable receipt authorizes the degradation branch. When
 narrative nor maker can seat the grounding seat independently, **maker exclusion outranks
 narrative independence**: the fallback prefers the narrative family over the maker's own.
 The cursor CLI's only sanctioned use is the models Cursor bills as **first-party** — today
-`composer-2.5` and `cursor-grok-4.5`, and nothing else, ever. Claude, GPT, or any
+`composer-2.5` and `cursor-grok-4.6`, and nothing else, ever. Claude, GPT, or any
 other third-party model is **never** routed through cursor. The registry
 (`lib/model_registry.py`) is the **enforcing surface**: it admits only those two cursor
 models, so this is doctrine backed by a gate rather than a convention on trust. This
@@ -753,9 +753,9 @@ with `sanitized-view-diff-opaque`, `sanitized-view-diff-unaccounted`, or (for gi
 **Dispatch vocabulary contract.** Three token shapes stay distinct:
 
 1. **Registry ids + a separate effort** — what the registry APIs and `engine_model` accept
-   (e.g. `cursor-grok-4.5` with `high`).
+   (e.g. `cursor-grok-4.6` with `xhigh`).
 2. **Composed dispatch tokens** — what `dispatch_token` emits and the engine CLI argv carries
-   (e.g. `cursor-grok-4.5-high`).
+   (e.g. `cursor-grok-4.6-xhigh`).
 3. **Family keys** — independence accounting only (`anthropic` / `openai` / `xai`);
    not a dispatch input.
 

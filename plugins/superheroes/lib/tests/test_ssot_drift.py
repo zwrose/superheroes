@@ -599,6 +599,7 @@ _CONCRETE_MODEL_TOKENS = (
     "composer-2.5",
     "composer-2.5-fast",
     "cursor-grok-4.5",
+    "cursor-grok-4.6",
     "haiku-4.5",
     "sonnet-5",
     "opus-4.8",
@@ -613,6 +614,7 @@ _RETIRED_MODEL_TOKENS = (
     "composer-2.5-fast",
     "claude-fable-5-thinking",
     "opus-4.8",
+    "cursor-grok-4.5",
 )
 
 
@@ -679,6 +681,26 @@ def _scan_retired_tokens(rel_paths):
             if token in text:
                 hits.append((rel, token))
     return hits
+
+
+def test_retired_model_tokens_disjoint_from_registry():
+    """Retired ids must not re-register in model_registry.py — the authoritative home."""
+    import model_registry
+
+    registered_ids = {
+        m for v in model_registry.vendors() for m in model_registry._MODELS[v]
+    }
+    registered_dispatch = {
+        rec["dispatch"]
+        for v in model_registry.vendors()
+        for rec in model_registry._MODELS[v].values()
+    }
+    overlap_ids = set(_RETIRED_MODEL_TOKENS) & registered_ids
+    overlap_dispatch = set(_RETIRED_MODEL_TOKENS) & registered_dispatch
+    assert not overlap_ids, "retired token re-registered as model id: %r" % sorted(overlap_ids)
+    assert not overlap_dispatch, (
+        "retired token re-registered as dispatch value: %r" % sorted(overlap_dispatch)
+    )
 
 
 def test_retired_model_tokens_absent_from_lib():

@@ -113,7 +113,7 @@ def test_model_family():
     assert MR.model_family("claude", "opus-5") == "anthropic"
     assert MR.model_family("codex", "gpt-5.6-sol") == "openai"
     assert MR.model_family("cursor", "composer-2.5") == "xai"
-    assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
+    assert MR.model_family("cursor", "cursor-grok-4.6") == "xai"
     assert MR.model_family("cursor", "nope") is None
 
 
@@ -172,7 +172,19 @@ def test_validate_config_cases():
     ok, reason = MR.validate_config("cursor", "composer-2.5", "high")
     assert ok is False and reason
     assert MR.validate_config("cursor", "composer-2.5", None) == (True, None)
-    assert MR.validate_config("cursor", "cursor-grok-4.5", "high") == (True, None)
+    assert MR.validate_config("cursor", "cursor-grok-4.6", "xhigh") == (True, None)
+    assert MR.validate_config("cursor", "cursor-grok-4.6", "low") == (
+        False,
+        "effort 'low' is not valid for model 'cursor-grok-4.6'",
+    )
+    assert MR.validate_config("cursor", "cursor-grok-4.6", "medium") == (
+        False,
+        "effort 'medium' is not valid for model 'cursor-grok-4.6'",
+    )
+    assert MR.validate_config("cursor", "cursor-grok-4.6", "high") == (
+        False,
+        "effort 'high' is not valid for model 'cursor-grok-4.6'",
+    )
     ok, reason = MR.validate_config("claude", "fable-5", "high", allow_override_only=False)
     assert ok is False and "override" in reason.lower()
     assert MR.validate_config("claude", "fable-5", "high", allow_override_only=True) == (True, None)
@@ -184,7 +196,10 @@ def test_dispatch_token():
     assert MR.dispatch_token("claude", "sonnet-5") == "sonnet"
     assert MR.dispatch_token("codex", "gpt-5.6-sol") == "gpt-5.6-sol"
     assert MR.dispatch_token("cursor", "composer-2.5") == "composer-2.5"
-    assert MR.dispatch_token("cursor", "cursor-grok-4.5", "high") == "cursor-grok-4.5-high"
+    assert MR.dispatch_token("cursor", "cursor-grok-4.6", "xhigh") == "cursor-grok-4.6-xhigh"
+    assert MR.dispatch_token("cursor", "cursor-grok-4.6", None) is None
+    assert MR.dispatch_token("cursor", "cursor-grok-4.6", "fast") is None
+    assert MR.dispatch_token("cursor", "cursor-grok-4.6", "high") is None
     for vendor in MR.vendors():
         for model_id in MR._MODELS.get(vendor, {}):
             tok = MR.dispatch_token(vendor, model_id, "high" if vendor != "cursor" else None)
@@ -194,7 +209,7 @@ def test_dispatch_token():
 
 def test_escalate():
     assert MR.escalate("claude", "sonnet-5", "high") == ("claude", "opus-5", "high")
-    assert MR.escalate("cursor", "cursor-grok-4.5", "high") == ("claude", "haiku-4.5", "medium")
+    assert MR.escalate("cursor", "cursor-grok-4.6", "xhigh") == ("claude", "haiku-4.5", "medium")
     assert MR.escalate("claude", "fable-5", "high") is None
 
 
@@ -230,10 +245,10 @@ def test_family_for_review_roles():
 
 
 def test_allowlist():
-    assert MR.allowlist("reviewer-deep", "cursor") == (("cursor-grok-4.5", "high"),)
+    assert MR.allowlist("reviewer-deep", "cursor") == (("cursor-grok-4.6", "xhigh"),)
     assert MR.allowlist("implementer", "cursor") == (
         ("composer-2.5", None),
-        ("cursor-grok-4.5", "high"),
+        ("cursor-grok-4.6", "xhigh"),
     )
     impl_claude = MR.allowlist("implementer", "claude")
     assert impl_claude[0] == ("sonnet-5", "high")
@@ -242,15 +257,17 @@ def test_allowlist():
 
 
 def test_is_allowed():
-    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", "high") is True
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.6", "xhigh") is True
     assert MR.is_allowed("reviewer-deep", "cursor", "composer-2.5", None) is False
     assert MR.is_allowed("implementer", "cursor", "composer-2.5", None) is True
     assert MR.is_allowed("reviewer-deep", "cursor", "gpt-5.3-codex", "high") is False
-    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", "low") is False
-    assert MR.is_allowed(None, "cursor", "cursor-grok-4.5", "high") is False
-    assert MR.is_allowed("reviewer-deep", None, "cursor-grok-4.5", "high") is False
-    assert MR.is_allowed("reviewer-deep", "cursor", None, "high") is False
-    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.5", None) is False
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.6", "low") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.6", "medium") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.6", "high") is False
+    assert MR.is_allowed(None, "cursor", "cursor-grok-4.6", "xhigh") is False
+    assert MR.is_allowed("reviewer-deep", None, "cursor-grok-4.6", "xhigh") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", None, "xhigh") is False
+    assert MR.is_allowed("reviewer-deep", "cursor", "cursor-grok-4.6", None) is False
 
 
 def test_parse_dispatch_token_vendors():
@@ -258,12 +275,16 @@ def test_parse_dispatch_token_vendors():
     assert MR.parse_dispatch_token("claude", "fable") == ("fable-5", None)
     assert MR.parse_dispatch_token("codex", "gpt-5.6-sol") == ("gpt-5.6-sol", None)
     assert MR.parse_dispatch_token("cursor", "composer-2.5") == ("composer-2.5", None)
-    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.5-high") == (
-        "cursor-grok-4.5",
-        "high",
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-xhigh") == (
+        "cursor-grok-4.6",
+        "xhigh",
     )
-    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.5") is None
-    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.5-max") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-max") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-fast") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-low") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-medium") is None
+    assert MR.parse_dispatch_token("cursor", "cursor-grok-4.6-high") is None
     assert MR.parse_dispatch_token("nope", "opus") is None
     assert MR.parse_dispatch_token("claude", 42) is None
     assert MR.parse_dispatch_token(None, "opus") is None
@@ -319,12 +340,12 @@ def test_resolve_dispatch_seat_default():
 
 
 def test_resolve_dispatch_reviewer_deep_cursor_registry_id():
-    r = MR.resolve_dispatch("reviewer-deep", "cursor", "cursor-grok-4.5")
+    r = MR.resolve_dispatch("reviewer-deep", "cursor", "cursor-grok-4.6")
     assert r["ok"] is True
     assert (r["model_id"], r["effort"], r["dispatch_token"]) == (
-        "cursor-grok-4.5",
-        "high",
-        "cursor-grok-4.5-high",
+        "cursor-grok-4.6",
+        "xhigh",
+        "cursor-grok-4.6-xhigh",
     )
 
 
@@ -364,12 +385,12 @@ def test_resolve_dispatch_fail_closed_edges():
     assert r["ok"] is False and "allowlist" in r["reason"]
 
     r = MR.resolve_dispatch(
-        "reviewer-deep", "cursor", "cursor-grok-4.5", "low"
+        "reviewer-deep", "cursor", "cursor-grok-4.6", "low"
     )
     assert r["ok"] is False and "allowlist" in r["reason"]
 
     r = MR.resolve_dispatch(
-        "reviewer-deep", "cursor", "cursor-grok-4.5-high", "low"
+        "reviewer-deep", "cursor", "cursor-grok-4.6-xhigh", "low"
     )
     assert r["ok"] is False and "conflicts" in r["reason"]
 
@@ -383,7 +404,7 @@ def test_resolve_dispatch_fail_closed_edges():
     assert r["ok"] is False and r["reason"]
     assert r["candidates"] == list(MR.allowlist("reviewer", "cursor"))
 
-    r = MR.resolve_dispatch("reviewer", "cursor", "cursor-grok-4.5", 99)
+    r = MR.resolve_dispatch("reviewer", "cursor", "cursor-grok-4.6", 99)
     assert r["ok"] is False and r["reason"]
 
 
@@ -424,7 +445,7 @@ def test_verifier_and_code_fixer_families_match_per_vendor():
         )
 
 
-_CURSOR_FIRST_PARTY_REGISTRY_IDS = frozenset({"composer-2.5", "cursor-grok-4.5"})
+_CURSOR_FIRST_PARTY_REGISTRY_IDS = frozenset({"composer-2.5", "cursor-grok-4.6"})
 
 
 def test_cursor_registered_models_are_exactly_first_party_pair():
@@ -438,7 +459,7 @@ def test_cursor_first_party_models_are_one_family():
     first-party models. Both carry `xai`, so no role pairing can present one as independent of the
     other — this is exactly the condition round_driver._auditor_vendor keys on."""
     assert MR.model_family("cursor", "composer-2.5") == "xai"
-    assert MR.model_family("cursor", "cursor-grok-4.5") == "xai"
+    assert MR.model_family("cursor", "cursor-grok-4.6") == "xai"
     assert len({MR.model_family("cursor", m) for m in MR.cursor_models()}) == 1
     assert MR.family_for("code-fixer", "cursor") == "xai"
     assert MR.family_for("verifier", "cursor") == "xai"
