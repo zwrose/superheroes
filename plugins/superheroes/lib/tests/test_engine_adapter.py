@@ -83,19 +83,18 @@ def test_vacuous_drift_guard_catches_historical_fold_line_shape():
 
 
 def test_build_argv_codex_review_read_only():
-    argv = EA.build_argv("codex", "review", "high",
-                         {"cwd": "/wt", "schema_path": "/tmp/s.json"})
+    argv = EA.build_argv("codex", "review", "high", {"cwd": "/wt"})
     assert argv[0] == "codex" and "exec" in argv
     assert "--sandbox" in argv and argv[argv.index("--sandbox") + 1] == "read-only"
     assert "model_reasoning_effort=high" in argv
-    assert "--output-schema" in argv and argv[argv.index("--output-schema") + 1] == "/tmp/s.json"
+    assert "--output-schema" not in argv
     assert "-m" in argv  # explicit model, never ambient default
     assert argv[argv.index("-m") + 1] == "gpt-5.6-sol"  # capable default when no tier fact is supplied
     assert argv[-1] == "-"  # codex reads the prompt from stdin (fed by the Task-10 JS runner)
 
 
 def test_build_argv_codex_review_with_cwd_pins_repo():
-    argv = EA.build_argv("codex", "review", "high", {"cwd": "/repo", "schema_path": "/s.json"})
+    argv = EA.build_argv("codex", "review", "high", {"cwd": "/repo"})
     i = argv.index("-C")
     assert argv[i + 1] == "/repo"
 
@@ -223,7 +222,7 @@ def test_parse_result_review_bare_empty_array_is_clean_zero_findings():
     # An empty bare array is a clean review with nothing to flag — it must NOT be unreadable
     # (that would forfeit the slot to a needless UFR-7 re-run), it is ok:true with no findings.
     assert EA.parse_result("codex", "review", "[]") == {
-        "ok": True, "findings": [], "investigated": [],
+        "ok": True, "resultKind": "findings", "findings": [], "investigated": [],
     }
 
 
@@ -1592,7 +1591,8 @@ def test_parse_result_review_empty_findings_with_valid_investigated_stays_clean(
 def test_parse_result_review_near_miss_investigated_only_is_clean():
     stdout = json.dumps({"investigated": ["src/main.py"]})
     res = EA.parse_result("codex", "review", stdout)
-    assert res == {"ok": True, "findings": [], "investigated": ["src/main.py"]}
+    assert res == {"ok": True, "resultKind": "findings",
+                  "findings": [], "investigated": ["src/main.py"]}
 
 
 def test_parse_result_review_error_object_with_investigated_stays_unreadable(tmp_path):
@@ -1663,7 +1663,8 @@ def test_parse_result_clean_envelope_empty_findings_with_investigated_readable(t
 def test_parse_result_cursor_clean_envelope_near_miss_still_readable():
     inner = json.dumps({"investigated": ["src/main.py"]})
     res = EA.parse_result("cursor", "review", _envelope(inner))
-    assert res == {"ok": True, "findings": [], "investigated": ["src/main.py"]}
+    assert res == {"ok": True, "resultKind": "findings",
+                  "findings": [], "investigated": ["src/main.py"]}
 
 
 def test_parse_result_cursor_envelope_real_findings_unchanged():
@@ -1775,7 +1776,8 @@ def test_parse_result_review_edge7_empty_findings_with_investigated_stays_clean(
 def test_parse_result_review_edge8_near_miss_no_findings_stays_clean():
     stdout = json.dumps({"investigated": ["a.py"]})
     res = EA.parse_result("codex", "review", stdout)
-    assert res == {"ok": True, "findings": [], "investigated": ["a.py"]}
+    assert res == {"ok": True, "resultKind": "findings",
+                  "findings": [], "investigated": ["a.py"]}
 
 
 def test_parse_result_review_edge13_common_corpus_shape_stays_ok():
@@ -1891,7 +1893,7 @@ def test_parse_result_review_rejected_investigated_path_scrubs_secret():
 def test_parse_result_review_never_raises_on_fail_closed_edges():
     shapes = [
         (json.dumps({"findings": [], "investigated": None}),
-         {"ok": True, "findings": [], "investigated": [],
+         {"ok": True, "resultKind": "findings", "findings": [], "investigated": [],
           "investigatedRejected": ["not-a-list"]}),
         (json.dumps({"findings": None, "investigated": ["a.py"]}),
          {"ok": False, "reason": "unreadable"}),
@@ -2295,6 +2297,9 @@ def test_review_payload_shape_keys_not_truncated_when_within_bounds():
 def test_review_payload_shape_internal_error_returns_none(monkeypatch):
     def _boom(_stdout):
         raise RuntimeError("internal")
+    monkeypatch.setattr(EA, "normalize_review_stdout", lambda stdout, fed_prompt=None: {
+        "text": '{"error": true}', "rawEnvelopeError": False, "echoOnly": False,
+    })
     monkeypatch.setattr(EA, "_last_json_object", _boom)
     assert EA.review_payload_shape('{"error": true}') is None
 
@@ -2762,3 +2767,170 @@ def test_sanitized_view_receipt_binds_producer_diff_keys(tmp_path):
         tf.gettempdir = orig_gettempdir
         if "view" in locals():
             sv.destroy_sanitized_view(view["path"])
+
+
+# ---------------------------------------------------------------------------
+# #763: review parse layer — verdicts result kind + normalize_review_stdout
+
+
+def _load_verification_verdicts():
+    spec = importlib.util.spec_from_file_location(
+        "verification", os.path.join(_HERE, "..", "verification.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod.VERDICTS
+
+
+def test_verdicts_constant_matches_verification_module():
+    assert EA.VERDICTS == _load_verification_verdicts()
+
+
+def _review_base_template_literals():
+    path = os.path.join(_HERE, "..", "..", "rubric", "review-base.md")
+    text = open(path, encoding="utf-8").read()
+    id_literal = None
+    severity_literal = None
+    for line in text.splitlines():
+        if '"id":' in line and id_literal is None:
+            id_literal = line.split(":", 1)[1].strip().rstrip(",").strip('"')
+        if '"severity":' in line and severity_literal is None:
+            severity_literal = line.split(":", 1)[1].strip().rstrip(",").strip('"')
+    return id_literal, severity_literal
+
+
+def test_review_base_template_literals_match_rubric():
+    id_lit, sev_lit = _review_base_template_literals()
+    assert EA.REVIEW_BASE_TEMPLATE_ID == id_lit
+    assert EA.REVIEW_BASE_TEMPLATE_SEVERITY == sev_lit
+
+
+def test_parse_result_review_verdicts_acceptance():
+    stdout = json.dumps({
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+        "investigated": ["a.py"],
+    })
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {
+        "ok": True,
+        "resultKind": "verdicts",
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+    }
+
+
+def test_parse_result_review_verdict_item_predicate_is_kind_specific():
+    stdout = json.dumps({"verdicts": [{"id": "v1", "verdict": "PLAUSIBLE"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+    assert res["verdicts"][0]["verdict"] == "PLAUSIBLE"
+
+
+def test_parse_result_review_verdicts_empty_list_is_clean():
+    stdout = json.dumps({"verdicts": []})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {"ok": True, "resultKind": "verdicts", "verdicts": []}
+
+
+def test_parse_result_review_placeholder_literal_refused():
+    stdout = json.dumps({"verdicts": [
+        {"id": EA.REVIEW_BASE_TEMPLATE_ID, "verdict": "CONFIRMED"}]})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+    stdout2 = json.dumps({"findings": [
+        {"id": "real-1", "severity": EA.REVIEW_BASE_TEMPLATE_SEVERITY,
+         "title": "t", "body": "b"}]})
+    assert EA.parse_result("codex", "review", stdout2) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_placeholder_in_body_survives():
+    stdout = json.dumps({"findings": [
+        {"id": "real-1", "severity": "Minor", "title": "t",
+         "body": EA.REVIEW_BASE_TEMPLATE_ID}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["resultKind"] == "findings"
+
+
+def test_parse_result_review_both_keys_ambiguity_unreadable():
+    stdout = json.dumps({"findings": [], "verdicts": []})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_verdicts_not_a_list_unreadable():
+    stdout = json.dumps({"verdicts": {}})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_verdicts_hollow_member_unreadable():
+    stdout = json.dumps({"verdicts": [{"id": "v1", "verdict": "NOT_A_VERDICT"}]})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_verdicts_with_reason_scrubbed():
+    stdout = json.dumps({"verdicts": [
+        {"id": "v1", "verdict": "CONFIRMED",
+         "reason": "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert "sk-EXAMPLEfakenotarealsecret0" not in res["verdicts"][0]["reason"]
+    assert "[REDACTED]" in res["verdicts"][0]["reason"]
+
+
+def test_parse_result_cursor_error_envelope_real_verdicts_still_readable():
+    inner = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED"}]})
+    res = EA.parse_result("cursor", "review", _envelope(inner, subtype="error", is_error=True))
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+
+
+def test_normalize_review_stdout_echo_only_diagnosed():
+    prompt = _review_prompt_with_shape_contract()
+    raw = _envelope(prompt)
+    norm = EA.normalize_review_stdout(raw, prompt)
+    assert norm["echoOnly"] is True
+    assert norm["text"] == ""
+    shape = EA.review_payload_shape(raw, prompt)
+    assert shape == {
+        "parsed": EA.SHAPE_PROMPT_ECHO_ONLY, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_valid_verdicts_returns_none():
+    assert EA.review_payload_shape(json.dumps({"verdicts": [
+        {"id": "v1", "verdict": "CONFIRMED"}]})) is None
+    assert EA.review_payload_shape(json.dumps({"verdicts": []})) is None
+
+
+def test_review_payload_shape_verdicts_not_a_list():
+    res = EA.review_payload_shape(json.dumps({"verdicts": "oops"}))
+    assert res == {
+        "parsed": EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_verdicts_hollow_member():
+    res = EA.review_payload_shape(json.dumps({"verdicts": [{"id": "", "verdict": "CONFIRMED"}]}))
+    assert res == {
+        "parsed": EA.SHAPE_VERDICTS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_placeholder_literal_refusal():
+    res = EA.review_payload_shape(json.dumps({"verdicts": [
+        {"id": EA.REVIEW_BASE_TEMPLATE_ID, "verdict": "CONFIRMED"}]}))
+    assert res == {
+        "parsed": EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shapes_includes_verdict_tokens():
+    for token in (EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
+                  EA.SHAPE_VERDICTS_HOLLOW_MEMBER,
+                  EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL):
+        assert token in EA.REVIEW_PAYLOAD_SHAPES
+
+
+def test_parse_result_review_findings_carry_result_kind():
+    stdout = json.dumps({"findings": [
+        {"severity": "Minor", "title": "t", "body": "b"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["resultKind"] == "findings"
