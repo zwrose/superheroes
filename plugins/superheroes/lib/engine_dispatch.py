@@ -113,6 +113,27 @@ MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
 
+_REJECTED_MODE_MAX_LEN = 120
+
+
+def _coerce_rejected_mode(mode):
+    """Safely coerce a rejected mode value to a short string for rejectedMode."""
+    try:
+        text = repr(mode)
+    except Exception:
+        text = "<unrepresentable>"
+    if len(text) > _REJECTED_MODE_MAX_LEN:
+        return text[:_REJECTED_MODE_MAX_LEN - 3] + "..."
+    return text
+
+
+def _mode_invalid_refusal(rejected_mode):
+    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+            "detail": MODE_REFUSAL_INVALID,
+            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+            "mode": sanitized_view.MODE_REVIEW,
+            "rejectedMode": _coerce_rejected_mode(rejected_mode)}
+
 
 def _scrub_env(env=None):
     """Remove git routing vars and the journal root from a spawn environment."""
@@ -2654,13 +2675,11 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to Claude."""
-    if mode is not None and mode not in sanitized_view.REVIEW_MODES:
-        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                "detail": MODE_REFUSAL_INVALID,
-                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-                "mode": mode}
     resolved = {"mode": None}
     try:
+        if mode is not None:
+            if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
+                return _mode_invalid_refusal(mode)
         result = _dispatch_review_impl(
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
             schema_path=schema_path, repo_root=repo_root, timeout=timeout,

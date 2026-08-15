@@ -379,10 +379,7 @@ def test_sanitized_view_diff_refusal_tokens_in_auto_fix_loop_doc():
 def _mode_refusal_tokens_from_home():
     import engine_dispatch
 
-    return set((
-        engine_dispatch.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE,
-        engine_dispatch.MODE_REFUSAL_RUN_DIR_MISMATCH,
-    ))
+    return {v for k, v in vars(engine_dispatch).items() if k.startswith("MODE_REFUSAL_")}
 
 
 def _mode_refusal_tokens_from_auto_fix_loop_doc(doc):

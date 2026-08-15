@@ -126,7 +126,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > that patch, that it is a **generated artifact rather than repository source**, and that the seat
 > must not review it, must not list it in `investigated`, and should exclude it from repo-wide
 > searches. On a **continuation** (`--run-dir` naming an existing run), `--diff-base` is accepted but
-> ignored — the live run's view is not rebuilt.
+> ignored — the live run's view is not rebuilt — except when this invocation also asserts
+> `--mode brief-check` explicitly, which refuses `mode-brief-check-with-diff-base` before the
+> journal is read.
 >
 > The staged patch is **rejected from the #666 investigation floor**: a seat whose `investigated` array
 > cites only the patch fails the floor and forfeits vacuously, exactly as if it had cited nothing.
@@ -177,6 +179,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > | token | when |
 > |---|---|
+> | `mode-invalid` | `--mode` is not a string in `{review,brief-check}` — top-level `mode` stays canonical (`review`); the rejected value is in `rejectedMode` |
 > | `mode-brief-check-with-diff-base` | `--mode brief-check` and `--diff-base` were both explicitly supplied |
 > | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
 >
