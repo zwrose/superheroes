@@ -483,14 +483,15 @@ def _wave_watch_verbs_from_doc(doc):
 
 
 def _wave_watch_exit_contract_from_home():
-    """Exit semantics from main() — ok→0, refusal→1, one JSON line on stdout."""
+    """Exit semantics from main() — ok→N, refusal→M, one JSON line on stdout."""
     text = _read("lib/wave_watch.py")
     main_text = text[text.index("def main(argv):"):]
-    assert re.search(
-        r'return 0 if result\.get\("ok"\) else 1',
+    m = re.search(
+        r'return\s+(\d+)\s+if\s+result\.get\("ok"\)\s+else\s+(\d+)',
         main_text,
-    ), (
-        "wave_watch.py: main() exit contract (ok→0, refusal→1) not found "
+    )
+    assert m, (
+        "wave_watch.py: main() exit contract (ok→N, refusal→M) not found "
         "(moved or reworded?)"
     )
     assert "_emit(result)" in main_text, (
@@ -505,21 +506,48 @@ def _wave_watch_exit_contract_from_home():
         "wave_watch.py: main() loop subcommand path not found "
         "(moved or reworded?)"
     )
-    return {True: 0, False: 1}
+    return {True: int(m.group(1)), False: int(m.group(2))}
 
 
 def _wave_watch_exit_contract_from_doc(doc):
     """Exit semantics from wave-watch.md — scoped to the What-it-tells-you sentence."""
     m = re.search(
         r"The watcher prints \*\*one JSON line on stdout\*\*; "
-        r"\*\*exit 0 on an event, exit 1 on a refusal\*\*\.",
+        r"\*\*exit (\d+) on an event, exit (\d+) on a refusal\*\*\.",
         doc,
     )
     assert m, (
         "wave-watch.md: exit contract sentence not found "
         "(moved or reworded?)"
     )
-    return {True: 0, False: 1}
+    return {True: int(m.group(1)), False: int(m.group(2))}
+
+
+def _wave_watch_suppressible_events_from_home():
+    """Suppressible event tokens from wave_watch._SUPPRESSIBLE_EVENTS."""
+    import wave_watch
+
+    return set(wave_watch._SUPPRESSIBLE_EVENTS)
+
+
+def _wave_watch_suppressible_events_from_doc(doc):
+    """Suppressible-event list from wave-watch.md — scoped to the lane-keyed sentence."""
+    m = re.search(
+        r"Only the four \*\*lane-keyed\*\* events are suppressible:\s*"
+        r"(.*?)\.\s*\n`pr-set-changed`",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "wave-watch.md: suppressible-events list not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
+    assert tokens, (
+        "wave-watch.md: suppressible-events list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
 
 
 def _wave_watch_exit_contract_verbs_from_doc(doc):
@@ -747,6 +775,21 @@ def test_wave_watch_exit_contract_in_wave_watch_doc():
         "wave-watch.md exit contract missing one-JSON-line statement for verbs — "
         "home verbs without doc intro coverage: %r"
         % missing_json_line
+    )
+
+
+def test_wave_watch_suppressible_events_in_wave_watch_doc():
+    """§11: wave-watch.md restates wave_watch._SUPPRESSIBLE_EVENTS for --ignore-event."""
+    home = _wave_watch_suppressible_events_from_home()
+    doc = _read("skills/showrunner/reference/wave-watch.md")
+    doc_tokens = _wave_watch_suppressible_events_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "wave-watch.md suppressible-events vocabulary drift from "
+        "wave_watch._SUPPRESSIBLE_EVENTS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
     )
 
 

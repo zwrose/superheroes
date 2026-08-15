@@ -1853,27 +1853,39 @@ def _timer_arm_result(batch_id="batch-982", degraded=None):
 
 def _scripted_run_fn(sequence):
     calls = [0]
+    violations = []
 
     def run_fn(*_args, **_kwargs):
         if calls[0] >= len(sequence):
-            raise AssertionError(
+            violations.append(
                 f"run_fn called {calls[0]} times but only {len(sequence)} scripted"
             )
+            return {
+                "ok": False,
+                "reason": "test-violation",
+                "batchId": "batch-982",
+            }
         result = sequence[calls[0]]
         calls[0] += 1
         return result
 
-    return run_fn, calls
+    return run_fn, calls, violations
 
 
 def _never_run_fn():
     calls = [0]
+    violations = []
 
     def run_fn(*_args, **_kwargs):
         calls[0] += 1
-        raise AssertionError("run_fn must not be called")
+        violations.append("run_fn must not be called")
+        return {
+            "ok": False,
+            "reason": "test-violation",
+            "batchId": "batch-982",
+        }
 
-    return run_fn, calls
+    return run_fn, calls, violations
 
 
 def test_loop_timer_rearms_until_non_timer_event(tmp_path):
@@ -1886,7 +1898,7 @@ def test_loop_timer_rearms_until_non_timer_event(tmp_path):
         "launchId": "lane-a",
         "launches": [{"launchId": "lane-a", "state": "handback"}],
     }
-    run_fn, calls = _scripted_run_fn([
+    run_fn, calls, violations = _scripted_run_fn([
         _timer_arm_result(),
         _timer_arm_result(),
         terminal,
@@ -1897,6 +1909,7 @@ def test_loop_timer_rearms_until_non_timer_event(tmp_path):
     assert result["event"] == "lane-terminal"
     assert result["arms"] == 3
     assert calls[0] == 3
+    assert violations == []
 
 
 def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path):
@@ -1909,7 +1922,7 @@ def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path):
         "pids": [42],
         "launches": [{"launchId": "lane-a", "pid": 42}],
     }
-    run_fn, calls = _scripted_run_fn([exited])
+    run_fn, calls, violations = _scripted_run_fn([exited])
     result = ww.loop(
         repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
     )
@@ -1917,6 +1930,7 @@ def test_loop_first_non_timer_ok_terminates_with_arms(tmp_path):
     assert result["pids"] == [42]
     assert result["arms"] == 1
     assert calls[0] == 1
+    assert violations == []
 
 
 def test_loop_refusal_terminates_immediately_with_arms(tmp_path):
@@ -1926,7 +1940,7 @@ def test_loop_refusal_terminates_immediately_with_arms(tmp_path):
         "reason": ww.REFUSAL_LEDGER_UNREADABLE,
         "batchId": "batch-982",
     }
-    run_fn, calls = _scripted_run_fn([refusal])
+    run_fn, calls, violations = _scripted_run_fn([refusal])
     result = ww.loop(
         repo, "batch-982", max_seconds=1, interval_seconds=1, run_fn=run_fn,
     )
@@ -1934,6 +1948,7 @@ def test_loop_refusal_terminates_immediately_with_arms(tmp_path):
     assert result["reason"] == ww.REFUSAL_LEDGER_UNREADABLE
     assert result["arms"] == 1
     assert calls[0] == 1
+    assert violations == []
 
 
 @pytest.mark.parametrize("kwargs,expected_reason", [
@@ -1950,13 +1965,14 @@ def test_loop_validation_refusal_never_calls_run_fn(
     tmp_path, kwargs, expected_reason,
 ):
     repo = _valid_repo_for_loop(tmp_path)
-    run_fn, calls = _never_run_fn()
+    run_fn, calls, violations = _never_run_fn()
     batch_id = kwargs.pop("batch_id", "batch-982")
     result = ww.loop(repo, batch_id, run_fn=run_fn, **kwargs)
     assert result["ok"] is False
     assert result["reason"] == expected_reason
     assert result["arms"] == 0
     assert calls[0] == 0
+    assert violations == []
 
 
 def test_loop_max_total_seconds_emits_last_timer_not_refusal(tmp_path):
@@ -1998,7 +2014,7 @@ def test_loop_accumulates_degraded_from_discarded_timer_arms(tmp_path):
         "launchId": "lane-a",
         "launches": [],
     }
-    run_fn, _calls = _scripted_run_fn([
+    run_fn, _calls, violations = _scripted_run_fn([
         _timer_arm_result(degraded=[ww.DEGRADATION_LEDGER_TORN_TAIL]),
         terminal,
     ])
@@ -2007,6 +2023,7 @@ def test_loop_accumulates_degraded_from_discarded_timer_arms(tmp_path):
     )
     assert result["event"] == "lane-terminal"
     assert ww.DEGRADATION_LEDGER_TORN_TAIL in result["degraded"]
+    assert violations == []
 
 
 def test_loop_threads_ledger_observed_across_arms(tmp_path, monkeypatch):
@@ -2087,11 +2104,16 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
     arm = [0]
     real_run = ww.run
     clock = [0.0]
+    original_derive = ww._derive_live_lanes
+    gh_calls = [0]
+    # Sub-floor scan cost: remaining after derive is 0.95s, below _MIN_PR_POLL_SECONDS.
+    sub_floor_scan_cost = 0.05
 
     def mono():
         return clock[0]
 
     def gh_once(argv, **kwargs):
+        gh_calls[0] += 1
         return _noop_gh_run(argv, **kwargs)
 
     def run_fn(repo_root, batch_id, **kwargs):
@@ -2102,12 +2124,20 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
         call_kwargs["sleep"] = lambda d: clock.__setitem__(0, clock[0] + d)
         if arm[0] == 1:
             call_kwargs["max_seconds"] = 1
-            call_kwargs["interval_seconds"] = 1
+            call_kwargs["interval_seconds"] = 60
+            monkeypatch.setattr(ww, "_derive_live_lanes", original_derive)
         else:
             call_kwargs["max_seconds"] = 1
             call_kwargs["interval_seconds"] = 60
+
+            def slow_derive(*args, **kw):
+                clock[0] += sub_floor_scan_cost
+                return original_derive(*args, **kw)
+
+            monkeypatch.setattr(ww, "_derive_live_lanes", slow_derive)
         return real_run(repo_root, batch_id, **call_kwargs)
 
+    gh_calls[0] = 0
     result = ww.loop(
         repo, "batch-982",
         max_seconds=1, interval_seconds=1,
@@ -2118,22 +2148,25 @@ def test_loop_threads_pr_sampled_so_timer_not_never_sampled(tmp_path, monkeypatc
     )
     assert result["ok"] is True
     assert result["event"] == "timer"
+    assert gh_calls[0] == 1
     assert ww.DEGRADATION_PR_SIGNAL_NEVER_SAMPLED not in result["degraded"]
 
 
-def test_run_default_cells_match_explicit_none(tmp_path, monkeypatch):
+def test_run_explicit_none_cells_start_fresh_each_call(tmp_path, monkeypatch):
+    """Explicit None must allocate fresh cells per call, same as omitting them."""
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    common = dict(
-        max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
-    )
-    implicit = ww.run(repo, "batch-982", **common)
-    explicit = ww.run(
+    common = dict(max_seconds=3, interval_seconds=1, gh_run=_noop_gh_run)
+    ww.run(repo, "batch-982", **common)
+    omitted = ww.run(repo, "batch-982", **common)
+    explicit_none = ww.run(
         repo, "batch-982",
         ledger_observed=None, pr_state=None, pr_sampled=None,
         **common,
     )
-    assert implicit == explicit
+    assert omitted == explicit_none
+    assert omitted["event"] == "timer"
+    assert "prsAdded" not in omitted
 
 
 # --- ignore-events (B3) -------------------------------------------------------
@@ -2187,6 +2220,37 @@ def test_ignore_event_same_event_different_lane_still_fires(tmp_path, monkeypatc
     )
     assert result["event"] == "lane-stale"
     assert result["launchId"] == "lane-b"
+
+
+def test_ignore_event_suppressed_builder_exited_filters_pids_and_launches(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    dead_suppressed = 888888888
+    dead_unsuppressed = 777777777
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 2)
+    ll.append(
+        repo,
+        _reserved("lane-suppressed", "batch-982", ["plugins/superheroes/lib"], repo),
+    )
+    ll.append(repo, _started("lane-suppressed", pid=dead_suppressed))
+    ll.append(
+        repo,
+        _reserved("lane-live", "batch-982", ["plugins/superheroes/lib"], repo),
+    )
+    ll.append(repo, _started("lane-live", pid=dead_unsuppressed))
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60,
+        ignore_events=(("lane-suppressed", ww.EVENT_BUILDER_EXITED),),
+        gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "builder-exited"
+    assert result["pids"] == [dead_unsuppressed]
+    assert result["launches"] == [
+        {"launchId": "lane-live", "pid": dead_unsuppressed},
+    ]
 
 
 def test_ignore_event_suppressed_lane_still_in_also_observed(tmp_path, monkeypatch):
@@ -2305,7 +2369,7 @@ def test_loop_log_one_json_line_per_timer_arm(tmp_path, monkeypatch):
     assert result["ok"] is True
     assert result["event"] == "timer"
     lines = log_path and open(log_path).read().strip().splitlines()
-    assert len(lines) >= 1
+    assert len(lines) == result["arms"]
     for line in lines:
         entry = json.loads(line)
         assert "arm" in entry
@@ -2361,6 +2425,7 @@ def test_loop_log_write_failure_adds_degradation_and_continues(tmp_path, monkeyp
     )
     assert result["ok"] is True
     assert result["event"] == "timer"
+    assert result["arms"] == 2
     assert ww.DEGRADATION_LOG_UNWRITABLE in result["degraded"]
 
 
@@ -2393,7 +2458,7 @@ def test_loop_log_non_regular_file_refuses_write(tmp_path, monkeypatch):
 
 def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path):
     repo = _valid_repo_for_loop(tmp_path)
-    run_fn, calls = _never_run_fn()
+    run_fn, calls, violations = _never_run_fn()
     result = ww.loop(
         repo, "batch-982", interval_seconds=0, run_fn=run_fn,
     )
@@ -2401,6 +2466,7 @@ def test_loop_refusal_interval_invalid_has_arms_zero(tmp_path):
     assert result["reason"] == ww.REFUSAL_INTERVAL_INVALID
     assert result["arms"] == 0
     assert calls[0] == 0
+    assert violations == []
 
 
 def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
