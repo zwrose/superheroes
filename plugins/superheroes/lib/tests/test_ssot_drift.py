@@ -721,9 +721,14 @@ def test_retired_model_tokens_absent_from_lib():
     assert not hits, "retired model token reappeared: %r" % hits
 
 
-# --- Cluster: cursor-grok-4.5 literal census (post #1008 registry retirement) ------------
+# --- Cluster: retired cursor judge id literal census (post #1008 registry retirement) ---
 
-_RETIRED_GROK_LITERAL = "cursor-grok-4.5"
+
+def _retired_grok_literal():
+    """Retired cursor judge id — composed at runtime so this census file can scan itself."""
+    # Deliberate self-reference avoidance: a single-string literal of the token here
+    # would false-positive when this file is included in the scan paths.
+    return "-".join(("cursor", "grok", "4.5"))
 
 # I1: only these two tuple entries may mention the retired id anywhere in the repo.
 _INTENTIONAL_RETIRED_GROK_SITES = (
@@ -741,7 +746,7 @@ def _retired_grok_literal_lines_in_tuple(rel_path, const_name):
     lines = []
     for lineno, line in enumerate(text[m.end():].splitlines(), start=text[:m.end()].count("\n") + 1):
         depth += line.count("(") - line.count(")")
-        if _RETIRED_GROK_LITERAL in line:
+        if _retired_grok_literal() in line:
             lines.append(lineno)
         if depth <= 0:
             break
@@ -755,7 +760,7 @@ def _allowed_retired_grok_literal_sites():
             allowed.add((rel_path, lineno))
     assert len(allowed) == 2, (
         "expected exactly two intentional %r declaration lines, found %r"
-        % (_RETIRED_GROK_LITERAL, sorted(allowed))
+        % (_retired_grok_literal(), sorted(allowed))
     )
     return allowed
 
@@ -768,13 +773,13 @@ def _scan_paths_for_retired_grok_literal(paths):
         rel = os.path.relpath(path, PLUGIN)
         with open(path, encoding="utf-8", errors="replace") as fh:
             for lineno, line in enumerate(fh, start=1):
-                if _RETIRED_GROK_LITERAL in line:
+                if _retired_grok_literal() in line:
                     hits.append((rel, lineno))
     return hits
 
 
 def test_retired_cursor_grok_4_5_literal_census():
-    """I4: `cursor-grok-4.5` may appear only in the two drift-guard tuple declarations (I1)."""
+    """I4: the retired cursor judge id may appear only in the two drift-guard tuple declarations (I1)."""
     allowed = _allowed_retired_grok_literal_sites()
     paths = [os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")]
     for dirpath, _dirs, files in os.walk(PLUGIN):
@@ -784,7 +789,7 @@ def test_retired_cursor_grok_4_5_literal_census():
     unexpected = sorted(set(hits) - allowed)
     assert not unexpected, (
         "retired literal %r outside intentional declaration sites %r — stale hits: %r"
-        % (_RETIRED_GROK_LITERAL, sorted(allowed), unexpected)
+        % (_retired_grok_literal(), sorted(allowed), unexpected)
     )
 
 
