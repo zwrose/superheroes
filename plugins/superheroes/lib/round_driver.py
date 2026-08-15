@@ -247,7 +247,13 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryFailed": _canary_failed_shape,
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
+    "recordOrphansIgnored": _str_list,
 }
+
+# Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
+# must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
+# one home.
+SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
@@ -2957,6 +2963,12 @@ def build_receipt(state, session_dir=None):
                 "canary-failed (round %s): the control probe showed no engagement (%s) — "
                 "cross-vendor seat(s) %s downgraded to never-ran" % (
                     rkey, detail_str, ", ".join(seats_down or [])))
+        roi = rrec.get("recordOrphansIgnored")
+        if roi:
+            degraded.append(
+                "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
+                "%s still at this slot — records ignored (session already on hand-submit path)"
+                % (rkey, ", ".join(roi)))
         prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
@@ -3406,11 +3418,28 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                                      "artifactHash": art_hash}
             journal_entry = _journal_entry_for_commit(session_dir, "submit", "accepted",
                                                       phase=phase, round=round_no, attempt=attempt)
+            orphan_journal = None
+            rrec = (state.get("rounds") or {}).get(str(round_no))
+            if isinstance(rrec, dict):
+                orphan_seats = rrec.get("recordOrphansIgnored")
+                if isinstance(orphan_seats, list) and orphan_seats:
+                    orphan_journal = {
+                        "cmd": "submit",
+                        "outcome": "record-orphans-ignored",
+                        "session": _meta_session_id(session_dir),
+                        "fault": FAULT_CALLER,
+                        "phase": phase,
+                        "round": round_no,
+                        "attempt": attempt,
+                        "seats": orphan_seats,
+                    }
             try:
                 c = round_commit.begin(session_dir, "submit-accept")
                 c.add_replace_file(os.path.join(session_dir, STATE_FILE),
                                    _canonical(state).encode("utf-8"))
                 c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+                if orphan_journal is not None:
+                    c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), orphan_journal)
                 c.run()
             except round_commit.CommitRefused as exc:
                 return _commit_refused_response(session_dir, "submit", exc, phase=phase,
@@ -3568,8 +3597,8 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                         # Session latch is authoritative — the fence defers. Orphan records at this
                         # slot are legacy-only (pre-latch sessions); record-result / record-missing
                         # latches prevent new records in hand-path sessions going forward.
-                        _journal_event(session_dir, "submit", "record-orphans-ignored",
-                                       phase=phase, round=rnd, attempt=attempt, seats=found)
+                        state.setdefault("rounds", {}).setdefault(str(rnd), {})[
+                            "recordOrphansIgnored"] = list(found)
                     else:
                         detail = ("durable seat record(s) at attempt %s for slot(s) %s — the durable-record "
                                   "path folds through `advance`; a hand submit ignores them. A slot recorded "
@@ -5362,8 +5391,7 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
 def _read_dispatch_manifest(path):
     """``read_json`` for the dispatch manifest at ``advance`` — never raises.
 
-    ``round_records.read_json`` maps every ``OSError`` to ``"missing"`` and lets ``UnicodeDecodeError``
-    escape; this wrapper keeps the advance path on the disclosure surface instead."""
+    ``read_json`` handles invalid UTF-8 at the chokepoint; this wrapper is defence-in-depth."""
     try:
         return round_records.read_json(path)
     except UnicodeDecodeError:

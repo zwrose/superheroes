@@ -596,6 +596,50 @@ def test_legacy_hand_path_session_can_still_fold(tmp_path):
     assert orphan_rows[0].get("seats") == expected_seats, orphan_rows[0]
 
 
+def test_record_orphans_ignored_on_receipt_degraded(tmp_path):
+    """Hand submit with durable orphans discloses on the terminal receipt degraded channel."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+    state = _state(session_dir)
+    state["_submitUsed"] = True
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    out = round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                  round_driver.state_hash(state), _panel_hand_artifact(session_dir))
+    assert out["ok"] is True, out
+    receipt = round_driver.build_receipt(_state(session_dir), session_dir)
+    degraded = "\n".join(receipt["degraded"])
+    assert "record-orphans-ignored (round" in degraded
+    round_entry = next(r for r in receipt["rounds"] if r["round"] == pend["round"])
+    assert round_entry.get("recordOrphansIgnored")
+
+
+def test_record_orphans_ignored_atomic_when_fold_aborts(tmp_path, monkeypatch):
+    """Orphan disclosure and state key land together — neither without a successful submit-accept."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+    state = _state(session_dir)
+    state["_submitUsed"] = True
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    before_journal = len(round_driver.read_journal(session_dir))
+
+    def _abort_fold(state, config, phase, artifact):
+        raise RuntimeError("fold-aborted-for-test")
+
+    monkeypatch.setattr(round_driver, "_fold", _abort_fold)
+    with pytest.raises(RuntimeError, match="fold-aborted-for-test"):
+        round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                round_driver.state_hash(state),
+                                _panel_hand_artifact(session_dir))
+    disk_state = _state(session_dir)
+    assert not (disk_state.get("rounds") or {}).get(str(pend["round"]), {}).get(
+        "recordOrphansIgnored")
+    orphan_rows = [e for e in round_driver.read_journal(session_dir)[before_journal:]
+                   if e.get("outcome") == "record-orphans-ignored"]
+    assert not orphan_rows
+
+
 # Owner-gate phases park by design — outside the no-dead-end fold-path guarantee
 # (reference/round-driver.md § record-submit interleave / no dead ends).
 _OWNER_GATE_PHASES = frozenset({round_driver.P_JUDGMENT, round_driver.P_STALL})
