@@ -39,6 +39,7 @@ PAYLOAD_SHAPE_MAX_KEYS = 12
 PAYLOAD_SHAPE_MAX_KEY_LEN = 60
 
 SHAPE_OBJECT_WITHOUT_FINDINGS = "object-without-findings"
+SHAPE_OBJECT_BOTH_PAYLOAD_KEYS = "object-both-payload-keys"
 SHAPE_OBJECT_FINDINGS_NOT_A_LIST = "object-findings-not-a-list"
 SHAPE_OBJECT_VERDICTS_NOT_A_LIST = "object-verdicts-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
@@ -51,6 +52,7 @@ SHAPE_PROMPT_ECHO_ONLY = "prompt-echo-only"
 
 REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_WITHOUT_FINDINGS,      # a JSON object parsed, but it carries no recognized payload key
+    SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,     # a JSON object parsed with both `findings` and `verdicts` keys
     SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
     SHAPE_OBJECT_VERDICTS_NOT_A_LIST,   # a JSON object parsed with a `verdicts` key that is not a list
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
@@ -620,6 +622,9 @@ def _review_items_have_placeholder_literal(items):
     return any(_item_has_placeholder_literal(x) for x in items)
 
 
+_VERDICT_STRUCTURAL_KEYS = {"id", "verdict", "severity"}
+
+
 def _scrub_verdicts(verdicts):
     """Return scrubbed verdict dicts. Caller must reject hollow members first. Never raises."""
     if not isinstance(verdicts, list):
@@ -629,9 +634,10 @@ def _scrub_verdicts(verdicts):
         if not isinstance(v, dict):
             continue
         g = dict(v)
-        for key in ("reason", "evidence"):
-            if key in g and isinstance(g[key], str):
-                g[key] = _scrub(g[key])
+        for key, val in g.items():
+            if key in _VERDICT_STRUCTURAL_KEYS:
+                continue
+            g[key] = _scrub_finding_value(val)
         accepted.append(g)
     return accepted
 
@@ -823,7 +829,13 @@ def _parse_review_verdicts_object(obj, outer_envelope_error):
     verdicts_list = _scrub_verdicts(verdicts)
     if _outer_envelope_error_makes_unreadable(outer_envelope_error, verdicts_list):
         return {"ok": False, "reason": "unreadable"}
-    return {"ok": True, "resultKind": "verdicts", "verdicts": verdicts_list}
+    investigated = []
+    inv_rejected = []
+    if "investigated" in obj:
+        investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+    result = {"ok": True, "resultKind": "verdicts",
+              "verdicts": verdicts_list, "investigated": investigated}
+    return _attach_investigated_parse_rejections(result, inv_rejected)
 
 
 def _attach_investigated_parse_rejections(result, rejected):
@@ -860,7 +872,8 @@ def review_payload_shape(stdout, fed_prompt=None):
     """Diagnose WHY a review stdout failed the findings parse.
 
     Returns {"parsed": <one of REVIEW_PAYLOAD_SHAPES>,
-             "topLevelKeys": [str, ...],      # [] unless `parsed` == "object-without-findings"
+             "topLevelKeys": [str, ...],      # [] unless `parsed` is object-without-findings
+                                               # or object-both-payload-keys
              "keysTruncated": bool}
     Returns None when `stdout` DOES parse as a valid review payload — there is nothing to diagnose.
     Never raises."""
@@ -877,7 +890,7 @@ def review_payload_shape(stdout, fed_prompt=None):
             has_verdicts = "verdicts" in obj
             if has_findings and has_verdicts:
                 top_keys, keys_truncated = _bound_top_level_keys(obj)
-                return {"parsed": SHAPE_OBJECT_WITHOUT_FINDINGS,
+                return {"parsed": SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
                         "topLevelKeys": top_keys, "keysTruncated": keys_truncated}
             if has_verdicts:
                 verdicts = obj.get("verdicts")
@@ -1230,6 +1243,9 @@ def engagement_read(result):
             return "unknown"
         findings = result.get("findings")
         if isinstance(findings, list) and findings:
+            return "engaged"
+        verdicts = result.get("verdicts")
+        if isinstance(verdicts, list) and verdicts:
             return "engaged"
         investigated = result.get("investigated")
         if isinstance(investigated, list) and investigated:

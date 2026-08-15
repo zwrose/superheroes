@@ -2814,6 +2814,7 @@ def test_parse_result_review_verdicts_acceptance():
         "ok": True,
         "resultKind": "verdicts",
         "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced"}],
+        "investigated": ["a.py"],
     }
 
 
@@ -2828,7 +2829,7 @@ def test_parse_result_review_verdict_item_predicate_is_kind_specific():
 def test_parse_result_review_verdicts_empty_list_is_clean():
     stdout = json.dumps({"verdicts": []})
     res = EA.parse_result("codex", "review", stdout)
-    assert res == {"ok": True, "resultKind": "verdicts", "verdicts": []}
+    assert res == {"ok": True, "resultKind": "verdicts", "verdicts": [], "investigated": []}
 
 
 def test_parse_result_review_placeholder_literal_refused():
@@ -2923,10 +2924,86 @@ def test_review_payload_shape_placeholder_literal_refusal():
 
 
 def test_review_payload_shapes_includes_verdict_tokens():
-    for token in (EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
+    for token in (EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
+                  EA.SHAPE_OBJECT_VERDICTS_NOT_A_LIST,
                   EA.SHAPE_VERDICTS_HOLLOW_MEMBER,
                   EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL):
         assert token in EA.REVIEW_PAYLOAD_SHAPES
+
+
+def test_parse_result_review_verdicts_missing_investigated_yields_empty_list():
+    stdout = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["investigated"] == []
+
+
+def test_parse_result_review_verdicts_investigated_not_a_list_rejected():
+    stdout = json.dumps({
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED"}],
+        "investigated": "not-a-list",
+    })
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["investigated"] == []
+    assert res["investigatedRejected"] == ["not-a-list"]
+
+
+def test_parse_result_review_verdicts_investigated_all_rejected_stays_ok():
+    stdout = json.dumps({
+        "verdicts": [],
+        "investigated": ["", {"no": "path"}],
+    })
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["investigated"] == []
+    assert "empty-path" in res["investigatedRejected"]
+    assert "object-without-path" in res["investigatedRejected"]
+
+
+def test_parse_result_review_verdicts_scrubs_unlisted_free_text_field():
+    secret = "sk-EXAMPLEfakenotarealsecret0"
+    stdout = json.dumps({"verdicts": [
+        {"id": "v1", "verdict": "CONFIRMED",
+         "note": "log shows Authorization: Bearer %s" % secret}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert secret not in res["verdicts"][0]["note"]
+    assert "[REDACTED]" in res["verdicts"][0]["note"]
+
+
+def test_parse_result_review_verdicts_scrubs_nested_string_in_object():
+    secret = "sk-EXAMPLEfakenotarealsecret0"
+    stdout = json.dumps({"verdicts": [
+        {"id": "v1", "verdict": "CONFIRMED",
+         "detail": {"nested": "log shows Authorization: Bearer %s" % secret}}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert secret not in json.dumps(res["verdicts"][0])
+    assert "[REDACTED]" in res["verdicts"][0]["detail"]["nested"]
+
+
+def test_review_payload_shape_both_keys_ambiguous():
+    res = EA.review_payload_shape(json.dumps({"findings": [], "verdicts": []}))
+    assert res == {
+        "parsed": EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS,
+        "topLevelKeys": ["findings", "verdicts"],
+        "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_both_keys_malformed_verdicts_still_ambiguous():
+    res = EA.review_payload_shape(json.dumps({"findings": [], "verdicts": "oops"}))
+    assert res["parsed"] == EA.SHAPE_OBJECT_BOTH_PAYLOAD_KEYS
+
+
+def test_engagement_read_verdicts_engaged():
+    assert EA.engagement_read({
+        "resultKind": "verdicts",
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED"}],
+    }) == "engaged"
+
+
+def test_engagement_read_non_list_verdicts_not_engaged():
+    assert EA.engagement_read({"verdicts": "oops"}) == "unknown"
 
 
 def test_parse_result_review_findings_carry_result_kind():
