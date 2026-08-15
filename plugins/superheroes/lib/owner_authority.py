@@ -51,12 +51,21 @@ import sys
 # 26.1s on a 35KB input, vs 0.002s here). Re-derived under owner ratification 2026-08-13 (#989).
 _SEGMENT_SPLIT = re.compile(r"[;&|\n]+")
 
-# Shell redirection operators that CONTAIN a segment-boundary character. `2>&1` is one operator,
-# not a `&` separator — splitting there tore `gh 2>&1 pr merge 123` into `gh 2>` and `1 pr merge 123`,
-# so neither fragment carried both the tool word and the subcommand and the command classified None
-# (silent). Covers `N>&M`, `N>>&M`, `>&-`, `N<&M`, `<&-`, `&>`, `&>>`, and the noclobber-override
-# `N>|`. `&&`, `||`, `|&` and a bare background `&` are NOT matched here and stay separators.
-_REDIRECTION_OPERATOR = re.compile(r"\d*(?:>>?|<)&|&>>?|\d*>\|")
+# A shell redirection is not part of the command's word structure — NEITHER the operator NOR its
+# operand. Two distinct failures motivated each half. (a) Operators that CONTAIN a `;&|` character
+# (`2>&1`, `&>`, `>|`, `<&`) were split as separators, tearing `gh 2>&1 pr merge 123` into `gh 2>`
+# and `1 pr merge 123`. (b) Operators WITHOUT one (`>`, `>>`, `<`, `<<`) never split anything, but
+# glued to a token they defeat the rows' OWN anchors: `gh pr merge>/dev/null` failed
+# `(?<!\S)pr\s+merge(?!\S)` and classified None — a silent merge. And the operand matters on its
+# own: substituting only the operator leaves `gh pr 2>&1 merge 123` as `gh pr  1 merge 123`, whose
+# surviving `1` still breaks `pr`/`merge` adjacency.
+# `&&`, `||`, `|&` and a bare background `&` match NOTHING here and stay separators.
+# The fd is bounded (`\d{0,9}`, and shell fds are small): an unbounded `\d*` before a tail that
+# fails on digit input backtracks quadratically — measured 46.64s end-to-end on a 100,000-digit
+# run, in a gate that runs on EVERY Bash call. This is the same hazard `_short_flag` documents.
+_REDIRECTION_OP_SRC = r"(?:&>>?|\d{0,9}(?:>>?|<<?)[&|]?)"
+_REDIRECTION_OPERATOR = re.compile(_REDIRECTION_OP_SRC)
+_REDIRECTION_WITH_OPERAND = re.compile(_REDIRECTION_OP_SRC + r"\s*[^\s;&|]*")
 
 # The shell removes a backslash-newline before parsing, so it is not a segment boundary.
 _LINE_CONTINUATION = re.compile(r"\\\r?\n")
@@ -65,16 +74,25 @@ _LINE_CONTINUATION = re.compile(r"\\\r?\n")
 def _segments(command):
     """Every segment the row matcher searches, line-continuations already removed.
 
-    Returns the raw split PLUS the split of a redirection-neutralized copy, and is therefore
-    strictly ADDITIVE: every segment the matcher saw before this helper existed is still in the
-    list, so no classification can be LOST here — only gained. (An in-place strip would risk the
-    opposite: an over-matching pattern could merge two genuine segments and drop a live hit.)"""
+    Returns the raw split PLUS splits of operator-only and operator-and-operand neutralizations,
+    and is therefore strictly ADDITIVE: every segment the matcher saw before this helper existed is
+    still in the list, so no classification can be LOST here — only gained. (An in-place strip would
+    risk the opposite: an over-matching pattern could merge two genuine segments and drop a live
+    hit.)
+
+    Operand-consuming neutralization is what closes `gh pr 2>&1 merge 123`, but it can also swallow
+    a gated word (`gh 2>&pr merge 1` → `gh  merge 1`), which the operator-only copy still catches.
+    Keeping both neutralizations, on top of the raw split, is the fail-closed choice: more segments
+    can only mean more matching, never less."""
     command_nc = _LINE_CONTINUATION.sub("", command)
-    raw = _SEGMENT_SPLIT.split(command_nc)
-    neutral = _REDIRECTION_OPERATOR.sub(" ", command_nc)
-    if neutral == command_nc:
-        return raw
-    return raw + _SEGMENT_SPLIT.split(neutral)
+    out = list(_SEGMENT_SPLIT.split(command_nc))
+    seen = {command_nc}
+    for pattern in (_REDIRECTION_OPERATOR, _REDIRECTION_WITH_OPERAND):
+        neutral = pattern.sub(" ", command_nc)
+        if neutral not in seen:
+            seen.add(neutral)
+            out.extend(_SEGMENT_SPLIT.split(neutral))
+    return out
 
 
 # Subcommand words are matched as WHITESPACE-DELIMITED TOKENS, not with \b: `\bpush\b` also matches
@@ -105,6 +123,10 @@ OWNER_AUTHORITY_COMMANDS = [
     ("release",         _GH,  re.compile(r"(?<!\S)release\s+create(?!\S)", re.I), None),
     ("run-workflow",    _GH,  re.compile(r"(?<!\S)workflow\s+(run|enable|disable)(?!\S)", re.I), None),
     ("force-push",      _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
+                              # `-f\b` is retained deliberately: no `(?<![\w-])` lookbehind, so it
+                              # still matches a trailing `-f` in `git push origin my-f` that the
+                              # builder deliberately refuses — removing it would narrow a security
+                              # matcher.
                               re.compile(r"(--force\b|-f\b|--force-with-lease|"
                                          + _short_flag("f") + r")", re.I)),
     ("push-to-default", _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),

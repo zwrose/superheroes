@@ -151,10 +151,13 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
 - **Shell quoting:** owner ratification 2026-08-14 (#1000): the gate is a **best-effort text
   matcher over shell syntax** that **errs closed**; **no shell lexer will be built** and quoting
   semantics are **declined**, because skipping quoted text would choose fail-open in a security
-  gate. Known silent-bypass shapes are **closed as they are found** — redirection operators no
-  longer split a command (`gh 2>&1 pr merge 123` asks) and clustered short options no longer hide
-  the force flag (`git push -qf origin feature` asks); **over-matching is an accepted cost**. What
-  the matcher still does not resolve is shell quoting — a quote-concatenated command word (`g''h`)
-  and a **separator inside a quoted value** (`git -c user.name="x;y" push --force`) go
-  unclassified; both are pre-existing. **Consequence:** an over-match costs an extra prompt,
-  never an unapproved run.
+  gate. Known silent-bypass shapes are **closed as they are found**; **over-matching is an
+  accepted cost**. **Redirection is handled** — operator and operand, for operators that carry a
+  separator character (`2>&1`, `&>`) and those that do not (`>`, `>>`, `<`), in any position
+  (`gh 2>&1 pr merge 123` asks; `git push origin main>/dev/null` asks). What remains
+  **unclassified** is shell quoting only — a quote-concatenated command word (`g''h`) and a
+  **separator inside a quoted value** (`git -c user.name="x;y" push --force`); both are
+  pre-existing. **Consequence:** an over-match costs an extra prompt, never an unapproved run.
+- **Known open, outside #1000's ratified scope:** the `+` refspec force form — `git push origin
+  +main` classifies `None` today (same for `+feature` and `+refs/heads/main`); pre-existing,
+  verified identical on the base branch. Do not assume every force-push spelling is covered.
