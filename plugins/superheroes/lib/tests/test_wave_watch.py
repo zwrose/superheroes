@@ -2496,6 +2496,8 @@ def test_cli_loop_uses_injected_gh_stub_not_real_gh(tmp_path, monkeypatch):
 
 # --- transcript second chance before lane-stale (#1023) -----------------------
 
+_UNSET = object()   # "caller said nothing", distinct from an explicit None
+
 
 def _stale_lane_with_worktree(
     repo, tmp_path, monkeypatch, *, worktree, launch_id="lane-a",
@@ -2536,14 +2538,26 @@ def _point_config_dir_at(tmp_path, monkeypatch):
     return config_dir
 
 
-def _write_transcript(config_dir, worktree, *, age_seconds, name="session-abc.jsonl"):
+def _write_transcript(
+    config_dir, worktree, *, age_seconds, name="session-abc.jsonl", cwd=_UNSET,
+):
+    """A transcript in this worktree's bucket, recording a cwd like the host does.
+
+    `cwd` defaults to the worktree itself (the honest case); pass another path to
+    build a foreign transcript, or None to build one that records no cwd at all.
+    """
     project_dir = os.path.join(
         str(config_dir), "projects", ww._project_dir_name(worktree),
     )
     os.makedirs(project_dir, exist_ok=True)
     path = os.path.join(project_dir, name)
+    declared = worktree if cwd is _UNSET else cwd
     with open(path, "w", encoding="utf-8") as fh:
-        fh.write("{}\n")
+        fh.write('{"type": "summary"}\n')   # leading records carry no cwd, as on the host
+        if declared is None:
+            fh.write('{"type": "user"}\n')
+        else:
+            fh.write(json.dumps({"type": "user", "cwd": declared}) + "\n")
     stamp_at = time.time() - age_seconds
     os.utime(path, (stamp_at, stamp_at))
     return path
@@ -2804,9 +2818,9 @@ def test_ownership_bound_is_wired_from_the_ledger_end_to_end(tmp_path, monkeypat
     assert [e["launchId"] for e in result2["staleSuppressed"]] == ["lane-a"]
 
 
-def test_bucket_matches_under_either_host_mangling_rule(tmp_path, monkeypatch):
-    """The host's exact cwd mangling is not ours to control, so the match must hold
-    whether it maps only "/" and "." or every non-alphanumeric character."""
+def test_bucket_discovery_holds_under_either_host_mangling_rule(tmp_path, monkeypatch):
+    """Discovery is deliberately generous — it only has to FIND the bucket; the
+    transcript's own cwd is what attributes it."""
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
     worktree = str(tmp_path / "a_b" / "build wt")
     os.makedirs(worktree, exist_ok=True)
@@ -2815,44 +2829,98 @@ def test_bucket_matches_under_either_host_mangling_rule(tmp_path, monkeypatch):
     # Rule A — only "/" and "." folded, so "_" and " " survive in the bucket name.
     rule_a = os.path.join(projects, ww._project_dir_name(worktree))
     os.makedirs(rule_a, exist_ok=True)
-    assert ww._resolve_project_dir(str(config_dir), worktree) == rule_a
+    assert ww._candidate_project_dirs(str(config_dir), worktree) == [rule_a]
 
-    # Rule B — every non-alphanumeric folded. Same worktree, different spelling.
-    for entry in os.scandir(projects):
-        os.rename(entry.path, os.path.join(projects, "renamed-away"))
+    # Rule B — every non-alphanumeric folded. Same worktree, other spelling.
+    os.rename(rule_a, os.path.join(projects, "tmp-holding"))
     rule_b = os.path.join(projects, ww._normalize_bucket(ww._project_dir_name(worktree)))
-    os.makedirs(rule_b, exist_ok=True)
-    assert ww._resolve_project_dir(str(config_dir), worktree) == rule_b
+    os.rename(os.path.join(projects, "tmp-holding"), rule_b)
+    assert ww._candidate_project_dirs(str(config_dir), worktree) == [rule_b]
 
 
-def test_ambiguous_bucket_match_resolves_to_none(tmp_path, monkeypatch):
-    """Two buckets that normalize alike must not be guessed between — alert instead."""
+def test_foreign_transcript_sharing_a_bucket_never_vouches(tmp_path, monkeypatch):
+    """The bucket naming is many-to-one, so a DIFFERENT worktree's transcript can
+    land in the bucket this lane discovers. Its recorded cwd is what refuses it —
+    accepting it would suppress a genuinely wedged builder."""
+    worktree = str(tmp_path / "build-wt")
+    other = str(tmp_path / "some-other-worktree")
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    worktree = str(tmp_path / "a_b" / "wt")
-    projects = os.path.join(str(config_dir), "projects")
-    os.makedirs(os.path.join(projects, ww._project_dir_name(worktree)), exist_ok=True)
-    os.makedirs(
-        os.path.join(projects, ww._normalize_bucket(ww._project_dir_name(worktree))),
-        exist_ok=True,
-    )
-    assert ww._resolve_project_dir(str(config_dir), worktree) is None
+    # Fresh, in this lane's own bucket, but written by another worktree's session.
+    _write_transcript(config_dir, worktree, age_seconds=30, cwd=other)
+
+    assert ww._newest_transcript_mtime(worktree, os.environ) is None
 
 
-def test_bucket_matches_through_a_symlinked_worktree(tmp_path, monkeypatch):
-    """The child's cwd is the PHYSICAL path; the ledger records the launcher's
-    spelling. A symlinked worktree root must still find its own bucket."""
+def test_transcript_without_a_recorded_cwd_never_vouches(tmp_path, monkeypatch):
+    worktree = str(tmp_path / "build-wt")
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=30, cwd=None)
+
+    assert ww._newest_transcript_mtime(worktree, os.environ) is None
+
+
+def test_transcript_recording_the_physical_cwd_is_attributed(tmp_path, monkeypatch):
+    """The builder's cwd is the physical path while the ledger holds the launcher's
+    spelling — the transcript is still this lane's."""
     physical = tmp_path / "physical" / "build-wt"
     os.makedirs(str(physical), exist_ok=True)
     os.symlink(str(tmp_path / "physical"), str(tmp_path / "linked"))
     lexical = str(tmp_path / "linked" / "build-wt")
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, lexical, age_seconds=30, cwd=str(physical))
 
-    # Only the PHYSICAL spelling has a bucket, as the host would have written it.
-    bucket = os.path.join(
-        str(config_dir), "projects", ww._project_dir_name(str(physical)),
+    assert ww._newest_transcript_mtime(lexical, os.environ) is not None
+
+
+def test_one_fresh_lane_cannot_hide_a_different_wedged_lane(tmp_path, monkeypatch):
+    """The suppression is PER LANE. A regression clearing the whole stale list when
+    any transcript is fresh would let a working builder mask a wedged sibling —
+    the normal shape of a parallel wave."""
+    repo = _init_repo(tmp_path / "repo")
+    fresh_wt = str(tmp_path / "fresh-wt")
+    cold_wt = str(tmp_path / "cold-wt")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 2)
+    for lane, wt in (("lane-fresh", fresh_wt), ("lane-cold", cold_wt)):
+        ll.append(repo, _reserved(lane, "batch-982", ["lib"], repo, worktree=wt))
+        ll.append(repo, dict(_started(lane, pid=os.getpid()), ts=time.time() - 4000))
+        hb.stamp(repo, state="working", phase="watch", launch_id=lane,
+                 stale_after_seconds=1800, now=time.time() - 1835)
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, fresh_wt, age_seconds=120)
+    _write_transcript(config_dir, cold_wt, age_seconds=3600)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
-    os.makedirs(bucket, exist_ok=True)
-    assert ww._resolve_project_dir(str(config_dir), lexical) == bucket
+
+    assert result["event"] == "lane-stale"
+    assert [e["launchId"] for e in result["launches"]] == ["lane-cold"]
+    assert [e["launchId"] for e in result["staleSuppressed"]] == ["lane-fresh"]
+
+
+
+def test_unreadable_matched_bucket_still_alerts(tmp_path, monkeypatch):
+    """The bucket is found, but scanning INSIDE it fails — the census must cover the
+    inner failure, not only failure to scan the projects directory."""
+    worktree = str(tmp_path / "build-wt")
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=60)
+    real_scandir = ww.os.scandir
+    bucket = os.path.join(
+        str(config_dir), "projects", ww._project_dir_name(worktree),
+    )
+
+    def refuse_inside(path, *a, **kw):
+        if str(path) == bucket:
+            raise PermissionError("refused")
+        return real_scandir(path, *a, **kw)
+
+    monkeypatch.setattr(ww.os, "scandir", refuse_inside)
+    assert ww._newest_transcript_mtime(worktree, os.environ) is None
+
+
 
 
 def test_symlinked_transcript_is_never_followed(tmp_path, monkeypatch):

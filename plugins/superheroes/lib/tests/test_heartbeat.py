@@ -854,10 +854,12 @@ def test_cli_stamp_accepts_iso_last_dispatch_started_at(tmp_path, monkeypatch, c
 
 
 def test_default_stale_after_clears_twice_the_worst_measured_benign_gap():
-    # The floor is derived, not chosen: 2x the worst BENIGN inter-stamp gap
-    # measured across 10 builder lanes / 45 gaps (worst benign = 11960 s).
-    assert hb.DEFAULT_STALE_AFTER_SECONDS >= 2 * 11960
+    # The floor is DERIVED from the measurement's authoritative home, never restated
+    # here — a second hardcoded copy is the cross-boundary drift this avoids.
+    m = hb.STALE_AFTER_MEASUREMENT
+    assert hb.DEFAULT_STALE_AFTER_SECONDS >= m["multiplier"] * m["worstBenignGapSeconds"]
     assert hb.DEFAULT_STALE_AFTER_SECONDS <= hb._STALE_AFTER_MAX
+    assert m["benignGaps"] <= m["gaps"]
 
 
 def test_stamp_without_a_promise_uses_the_floored_default(tmp_path, monkeypatch):

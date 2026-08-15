@@ -51,17 +51,30 @@ def test_conventions_section_15_matches_heartbeat_constants():
 
 
 def test_conventions_and_wave_watch_pin_the_default_promise():
-    # bite-axis: the DEFAULT PROMISE NUMBER in prose tracks the module constant.
-    # Both docs state it; neither may drift from heartbeat.DEFAULT_STALE_AFTER_SECONDS.
+    # bite-axis: the DEFAULT PROMISE NUMBER *and its derivation* in prose track the
+    # module. Both docs state them; neither may drift from heartbeat's constants.
     default = str(hb.DEFAULT_STALE_AFTER_SECONDS)
+    measured = str(hb.STALE_AFTER_MEASUREMENT["worstBenignGapSeconds"])
     _assert_tokens_present(
         _conventions_section_15(), "CONVENTIONS.md §15",
-        ["DEFAULT_STALE_AFTER_SECONDS", default],
+        ["DEFAULT_STALE_AFTER_SECONDS", default, measured],
     )
     _assert_tokens_present(
         _read_plugin("skills/showrunner/reference/wave-watch.md"),
         "reference/wave-watch.md",
-        ["DEFAULT_STALE_AFTER_SECONDS", default],
+        ["DEFAULT_STALE_AFTER_SECONDS", default, measured],
+    )
+
+
+def test_wave_watch_doc_states_the_full_measurement_corpus():
+    # bite-axis: the CORPUS COUNTS behind the floor track their authoritative home,
+    # so correcting the measurement cannot leave the documented derivation stale.
+    m = hb.STALE_AFTER_MEASUREMENT
+    _assert_tokens_present(
+        _read_plugin("skills/showrunner/reference/wave-watch.md"),
+        "reference/wave-watch.md",
+        [str(m["lanes"]), str(m["gaps"]), str(m["benignGaps"]),
+         str(m["coldThresholdSeconds"])],
     )
 
 
@@ -73,10 +86,13 @@ def test_wave_watch_doc_pins_the_suppression_wire_contract():
 
     # Both sides read the RUNTIME constants — a hardcoded literal here would keep
     # passing after a runtime rename, which is the drift this is supposed to catch.
+    # Require the BACKTICKED form so an incidental prose occurrence of a common word
+    # (`lane-stale` appears all over this document) cannot satisfy the check.
+    doc = _read_plugin("skills/showrunner/reference/wave-watch.md")
     _assert_tokens_present(
-        _read_plugin("skills/showrunner/reference/wave-watch.md"),
-        "reference/wave-watch.md",
-        [ww.RESULT_KEY_STALE_SUPPRESSED, ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH],
+        doc, "reference/wave-watch.md",
+        ["`%s`" % ww.RESULT_KEY_STALE_SUPPRESSED,
+         "`%s`" % ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH],
     )
 
 

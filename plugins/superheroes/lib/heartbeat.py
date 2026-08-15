@@ -49,18 +49,32 @@ _LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _STALE_AFTER_MIN = 1
 _STALE_AFTER_MAX = 86400
 
-# The promise a caller gets when it does not state one (#1023). Floored at 2x the
-# worst BENIGN inter-stamp gap measured on this host: 11960 s, on a lane whose
-# transcript never went colder than 600 s (the host's foreground-Bash ceiling)
-# across the whole gap, so it was demonstrably working the entire time. Measured
-# over 10 builder lanes / 45 inter-stamp gaps, 44 of them benign.
+# The measurement the default promise is derived from (#1023) — the authoritative
+# home for these numbers. Every prose copy (CONVENTIONS §15, reference/wave-watch.md)
+# and the contract test read or drift-check THIS, so correcting the measurement in one
+# place cannot leave the others silently disagreeing.
 #
-# The old default was 300 s, which no real build has ever met — an omitting caller
-# was guaranteed to classify `stale` within five minutes. A builder that states its
-# own `--stale-after` is unaffected; this only moves the fallback.
+# Read from 10 builder-lane session transcripts on the reference host: 45 inter-stamp
+# gaps, 44 of them benign, where benign means the transcript never went colder than
+# 600 s (the host's foreground-Bash ceiling) anywhere inside the gap — so the lane was
+# demonstrably working the whole way through.
+STALE_AFTER_MEASUREMENT = {
+    "worstBenignGapSeconds": 11960,
+    "lanes": 10,
+    "gaps": 45,
+    "benignGaps": 44,
+    "coldThresholdSeconds": 600,
+    "multiplier": 2,
+}
+
+# The promise a caller gets when it does not state one. The old default was 300 s,
+# which no real build has ever met — an omitting caller was guaranteed to classify
+# `stale` within five minutes. A builder that states its own `--stale-after` is
+# unaffected; this only moves the fallback.
 #
-# bite-axis: the default promise CLEARS 2x the measured worst benign gap — lowering
-# it below that reddens test_default_stale_after_clears_twice_the_worst_measured_benign_gap.
+# bite-axis: the default promise CLEARS the multiplier times the measured worst benign
+# gap — lowering it below that reddens
+# test_default_stale_after_clears_twice_the_worst_measured_benign_gap.
 DEFAULT_STALE_AFTER_SECONDS = 24000
 _NOTE_MAX_LEN = 500
 _PHASE_MIN_LEN = 1

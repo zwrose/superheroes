@@ -40,12 +40,14 @@ Contract:
   worktree on the ledger record, no transcript on disk, an unreadable projects
   directory, a future-dated mtime — leaves the lane STALE: the check fails toward
   the alert, never toward silence.
-- Transcript ownership: exactly ONE config root is searched (the CLAUDE_CONFIG_DIR
-  override outright, else ~/.claude), a symlinked entry is never followed, and a
-  transcript last written before the lane's recorded start is ignored — three bounds
-  that stop a transcript belonging to some other session from vouching for this
-  lane. The residual they do not close (a concurrent foreign session in the same
-  build worktree) is recorded at _stale_second_chance.
+- Transcript ownership: a transcript vouches for a lane only when its OWN recorded
+  cwd is that lane's worktree. Bucket discovery is generous (the host's cwd mangling
+  is many-to-one and cannot be un-mangled), so attribution is by content, not by
+  filename. Three further bounds apply: exactly ONE config root is searched (the
+  CLAUDE_CONFIG_DIR override outright, else ~/.claude), a symlinked entry is never
+  followed, and a transcript last written before the lane's recorded start is
+  ignored. The residual none of them close (a concurrent foreign session running in
+  the same build worktree) is recorded at _stale_second_chance.
 - staleSuppressed: accumulated across an arm's ticks, keyed by launchId, and cleared
   for a lane the moment a later tick finds it still stale. It rides EVERY result of
   that arm including timer, which is what puts it in loop's --log line.
@@ -124,6 +126,10 @@ _PROJECTS_DIR_NAME = "projects"
 _TRANSCRIPT_SUFFIX = ".jsonl"
 _PROJECT_DIR_TRANSLATION = str.maketrans({"/": "-", ".": "-"})
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
+# A transcript records the cwd its session ran in within the first few records; read a
+# bounded prefix rather than the whole file (these grow to hundreds of KB).
+_TRANSCRIPT_CWD_SCAN_LINES = 50
+_TRANSCRIPT_CWD_SCAN_BYTES = 262144
 
 NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 # The result key is part of the same wire contract as the note token, so it gets the
@@ -514,24 +520,14 @@ def _normalize_bucket(name):
     return _NON_ALNUM_RE.sub("-", name)
 
 
-def _resolve_project_dir(root, worktree):
-    """The one bucket under <root>/projects that belongs to this worktree, or None.
+def _candidate_project_dirs(root, worktree):
+    """Buckets under <root>/projects that MIGHT hold this worktree's transcripts.
 
-    The exact mangling the host applies to a cwd is a host convention we do not
-    control, and this repo has no path on disk that would tell a "/ and . become -"
-    rule apart from an "every non-alphanumeric becomes -" rule. So do not guess:
-    normalize BOTH sides to the most permissive rule and compare. The comparison is
-    correct under either rule, and it also absorbs the physical-vs-lexical spelling
-    of a worktree reached through a symlink (the child's cwd is the physical path,
-    while the ledger records the spelling the launcher used).
-
-    Fails toward the alert in both directions: no match returns None, and an
-    AMBIGUOUS match — two buckets that normalize alike — also returns None rather
-    than picking one, because the wrong pick could vouch for the wrong lane.
-
-    Known limitation, deliberately left as an alert: a host that truncates or hashes
-    an over-long cwd produces a bucket name that cannot normalize-match, so that
-    lane resolves to None and still alerts.
+    Discovery only, deliberately generous: the host's cwd mangling is a convention
+    we do not control, so both spellings of the worktree (the ledger's and the
+    physical one) are compared to each bucket name with every non-alphanumeric
+    folded. Being generous is safe here because a candidate proves nothing on its
+    own — every transcript is attributed individually by its own recorded cwd.
     """
     projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
     wanted = {
@@ -541,8 +537,8 @@ def _resolve_project_dir(root, worktree):
     try:
         entries = list(os.scandir(projects_root))
     except OSError:
-        return None
-    matches = []
+        return []
+    found = []
     for entry in entries:
         try:
             if not entry.is_dir(follow_symlinks=False):
@@ -550,10 +546,43 @@ def _resolve_project_dir(root, worktree):
         except OSError:
             continue
         if _normalize_bucket(entry.name) in wanted:
-            matches.append(entry.path)
-    if len(matches) != 1:
-        return None
-    return matches[0]
+            found.append(entry.path)
+    return found
+
+
+def _transcript_is_this_worktrees(path, wanted_cwds):
+    """True only when the transcript's OWN recorded cwd is this worktree's.
+
+    Attribution by content, not by filename. The host's bucket naming folds
+    characters to "-" and is many-to-one, so "/tmp/a_b/wt" and "/tmp/a-b/wt" can
+    share a bucket and a name can never be un-mangled — a name-based match would let
+    a DIFFERENT live worktree's transcript vouch for this lane, suppressing a
+    genuinely wedged builder. The transcript records the cwd the session actually
+    ran in, which settles it regardless of how the bucket was named.
+
+    Reads a bounded prefix (the cwd appears within the first few records) and takes
+    the FIRST record that carries one — a transcript belongs to a single session and
+    a single cwd. Unreadable, unparseable, or cwd-less transcripts are NOT attributed,
+    so they cannot suppress anything.
+    """
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(_TRANSCRIPT_CWD_SCAN_BYTES)
+    except OSError:
+        return False
+    for raw in head.splitlines()[:_TRANSCRIPT_CWD_SCAN_LINES]:
+        try:
+            record = json.loads(raw)
+        except (ValueError, UnicodeDecodeError):
+            continue
+        if not isinstance(record, dict):
+            continue
+        cwd = record.get("cwd")
+        if isinstance(cwd, str) and cwd:
+            # bite-axis: ATTRIBUTION — the transcript's own cwd must BE this
+            # worktree; a foreign session sharing the bucket is refused here.
+            return os.path.normpath(cwd) in wanted_cwds
+    return False
 
 
 def _newest_transcript_mtime(worktree, env, since=None):
@@ -575,32 +604,36 @@ def _newest_transcript_mtime(worktree, env, since=None):
         return None
     if not os.path.isabs(worktree):
         return None
+    wanted_cwds = {
+        os.path.normpath(worktree),
+        os.path.normpath(os.path.realpath(worktree)),
+    }
     newest = None
     for root in _transcript_config_dirs(env):
-        project_dir = _resolve_project_dir(root, worktree)
-        if project_dir is None:
-            continue
-        try:
-            entries = list(os.scandir(project_dir))
-        except OSError:
-            continue
-        for entry in entries:
-            if not entry.name.endswith(_TRANSCRIPT_SUFFIX):
-                continue
+        for project_dir in _candidate_project_dirs(root, worktree):
             try:
-                # follow_symlinks=False: a symlinked entry is not this builder's
-                # transcript, and S_ISREG then rejects it.
-                st = entry.stat(follow_symlinks=False)
+                entries = list(os.scandir(project_dir))
             except OSError:
                 continue
-            if not stat.S_ISREG(st.st_mode):
-                continue
-            # bite-axis: OWNERSHIP — a transcript last written before this lane
-            # started cannot be this lane's, so it may not vouch for it.
-            if since is not None and st.st_mtime < since:
-                continue
-            if newest is None or st.st_mtime > newest:
-                newest = st.st_mtime
+            for entry in entries:
+                if not entry.name.endswith(_TRANSCRIPT_SUFFIX):
+                    continue
+                try:
+                    # follow_symlinks=False: a symlinked entry is not this builder's
+                    # transcript, and S_ISREG then rejects it.
+                    st = entry.stat(follow_symlinks=False)
+                except OSError:
+                    continue
+                if not stat.S_ISREG(st.st_mode):
+                    continue
+                # bite-axis: OWNERSHIP — a transcript last written before this lane
+                # started cannot be this lane's, so it may not vouch for it.
+                if since is not None and st.st_mtime < since:
+                    continue
+                if not _transcript_is_this_worktrees(entry.path, wanted_cwds):
+                    continue
+                if newest is None or st.st_mtime > newest:
+                    newest = st.st_mtime
     return newest
 
 

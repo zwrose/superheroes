@@ -133,27 +133,37 @@ prove work — no worktree on the lane's ledger record, no transcript on disk, a
 directory, a transcript dated into the future by any amount — leaves the lane stale and the event
 fires.
 
-**Only the lane's own transcript may vouch for it.** Three bounds enforce that: exactly one config
-root is searched (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude` — never both, because
-a same-named bucket under the other root belongs to a different session); a symlinked entry is never
-followed; and a transcript last written **before the lane's recorded start** is ignored, so a session
-that ran in that directory earlier cannot vouch for this launch.
+**Only the lane's own transcript may vouch for it.** Beyond the recorded-cwd check below, three
+bounds enforce that: exactly one config root is searched (`CLAUDE_CONFIG_DIR` outright when set,
+otherwise `~/.claude` — never both, because a same-named bucket under the other root belongs to a
+different session); a symlinked entry is never followed; and a transcript last written **before the
+lane's recorded start** is ignored, so a session that ran in that directory earlier cannot vouch for
+this launch.
 
-**Finding the lane's bucket does not depend on guessing the host's mangling.** The host derives the
-bucket name from the builder's cwd by folding non-alphanumeric characters to `-`, but exactly which
-ones is a host convention, not an API. Rather than reproduce it, the watcher normalizes **both** the
-recorded worktree path and each existing bucket name to the most permissive form and matches on that
-— correct whether the host folds only `/` and `.` or every non-alphanumeric character, and it also
-absorbs the physical-vs-symlinked spelling of a worktree (the builder's cwd is the physical path,
-while the ledger records the spelling the launcher used). **An ambiguous match — two buckets that
-normalize alike — resolves to nothing and alerts**, rather than picking one. A host that truncates or
-hashes an over-long cwd produces a name that cannot match; that lane alerts too.
+**A transcript is attributed by its own recorded cwd, never by its filename.** The host names the
+per-project bucket by folding non-alphanumeric characters in the builder's cwd to `-`. That folding
+is **many-to-one**, so a name can never be un-mangled: `/tmp/a_b/wt` and `/tmp/a-b/wt` can both
+produce `-tmp-a-b-wt`. Trusting the name would let a *different* live worktree's transcript vouch for
+this lane — suppressing a genuinely wedged builder, the one direction this check must never fail in.
 
-**One residual is accepted and not closed:** binding is by directory and start time, not by session
+So bucket discovery is deliberately generous (both the ledger's spelling of the worktree and its
+physical, symlink-resolved one, compared permissively), and the decision is made per file: **a
+transcript counts only when the cwd recorded inside it is this lane's worktree.** A transcript that
+records a different cwd, records none at all, or cannot be read does not count — and a lane with no
+counting transcript alerts.
+
+That also means the watcher **reads a bounded prefix of a transcript** rather than only `stat`-ing
+it. It remains strictly read-only over both the store and the transcripts.
+
+One case is still **left as an alert rather than a guess**: a cwd long enough that the host truncates
+or hashes its bucket key is not discovered at all, so that lane resolves to nothing and still fires
+`lane-stale` — the old false-positive behavior for those installs, never a false silence.
+
+**One residual is accepted and not closed:** binding is by worktree and start time, not by session
 identity, because nothing records which session id belongs to a launch. A *different* session running
-**concurrently** in the same build worktree — an operator opening the wedged lane's directory to look
-at it — writes into the same bucket and can keep a genuinely wedged lane suppressed. Closing it needs
-the launch record to carry the session id.
+**concurrently in the same build worktree** — an operator opening the wedged lane's directory to look
+at it — records that same cwd, so it passes every check above and can keep a genuinely wedged lane
+suppressed. Closing it needs the launch record to carry the session id.
 
 A transcript-suppressed lane is **not** the same as an `--ignore-event` suppression: `--ignore-event`
 silences an event the watcher still believes, so the lane keeps showing up under `alsoObserved`; a
@@ -171,10 +181,14 @@ what `lane-stale` measures against. A caller that states **no** promise gets the
 `lib/heartbeat.py` — `DEFAULT_STALE_AFTER_SECONDS`, **24000 s** (6 h 40 m).
 
 That floor is derived, not chosen: it is **2× the worst benign inter-stamp gap measured on this
-host, 11960 s**. The measurement pooled **45 inter-stamp gaps across 10 builder lanes**, read from
-the session transcripts, and counted a gap as *benign* only when the transcript never went colder
-than 600 s anywhere inside it — 600 s being the host's foreground-Bash ceiling — so the lane was
-demonstrably working the whole way through. **44 of the 45** gaps were benign.
+host, 11960 s**. The measurement pooled **45** inter-stamp gaps across **10** builder lanes, read
+from the session transcripts, and counted a gap as *benign* only when the transcript never went
+colder than **600** s anywhere inside it — 600 s being the host's foreground-Bash ceiling — so the
+lane was demonstrably working the whole way through. **44** of the 45 gaps were benign.
+
+Those numbers live in one place, `heartbeat.STALE_AFTER_MEASUREMENT`; this paragraph and
+CONVENTIONS §15 are drift-checked against it, so correcting the measurement cannot leave a stale
+derivation behind.
 
 The previous default was 300 s, which no real build has ever met: a caller that omitted the flag was
 guaranteed to read `stale` within five minutes. The floor moves only that fallback — a builder that
