@@ -366,15 +366,13 @@ the orchestrator's own surface at authoring time:
   ceremony.
 
 - **A detector-adding order names the recorded red→green failure-proof it expects.** An order that
-  adds or changes a **detector** — anything whose job is to fail when something is wrong — names not
-  merely the proof but the **record**: the guarded element, the neutralization to apply, the detector
-  expected to go **red** with the detector itself unedited, and the **green** after the
-  neutralization is reverted. Point at the doctrine home rather than restating it —
-  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md`. The implementer's validity rule 6
-  is the backstop for an order that omits it; what this clause adds on the authoring side is the
-  **recorded** half — a green run alone is equally consistent with a detector that cannot fail.
-  Failure prevented: guards shipped without proofs. Specimen: PR #1012's build returned the same
-  finding-shape every round.
+  adds or changes a **detector** — anything whose job is to fail when something is wrong — names the
+  **recorded red→green failure-proof** it expects, and **what that record must contain is whatever
+  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md` defines** — cite the home for the
+  contents instead of listing them. The implementer's validity rule 6 is the backstop for an order
+  that omits it; what this clause adds on the authoring side is the **recorded** half — a green run
+  alone is equally consistent with a detector that cannot fail. Failure prevented: guards shipped
+  without proofs. Specimen: PR #1012's build returned the same finding-shape every round.
 
 - **An implementer order names a per-order test-command budget.** The order states how many command
   invocations the implementer may spend and what they are, scoped to the order's own surface. The
@@ -384,8 +382,9 @@ the orchestrator's own surface at authoring time:
   list; and the budget names a **scoped** command, never a project-wide suite — the implementer's
   existing rule to scope a full-suite gate to the order's surface is the same instinct one step
   earlier. An order whose own named commands cannot fit its own budget is **under-specified**, and
-  the implementer reports it under the stop-and-report rule it already carries; no new rule is
-  added. Failure prevented: orders that named a long suite forfeited **after** landing good work.
+  the implementer reports it under the **per-order test-command budget** rule in
+  `agents/implementer.md` — stop and report rather than silently overrunning or truncating.
+  Failure prevented: orders that named a long suite forfeited **after** landing good work.
   Specimens: PR #1013's WO-B and WO-D, and three 900-second cap-kills on PR #1011.
 
 ## 7. Delegate every implementation (lane-scoped — no size exception)

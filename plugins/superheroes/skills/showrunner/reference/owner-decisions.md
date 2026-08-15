@@ -141,7 +141,10 @@ observability (`skills/showrunner/reference/vet-receipt.md`), and this is the an
 surface with no artifact to stamp.
 
 Copy the snippet below verbatim into the collector issue body. Refresh it when this file changes —
-the HTML comment marker lets a later pass find and replace without disturbing the items beneath.
+the region to replace is **everything from the opening marker through the closing marker, inclusive**;
+nothing below the closing marker is touched. If **both** markers are not present in the collector body,
+the refresh does **not** guess a boundary — it installs a fresh preamble above the items and says so,
+or reports the malformed region, rather than deleting anything.
 
 ```markdown
 <!-- superheroes:owner-decisions-contract -->
@@ -162,4 +165,5 @@ ship with a mechanical tripwire (≥2× worst observed).
 advisor next action (never new-issue filings), alone first; execute what it unblocked; then batch 2.
 
 **Formatting:** one block per spine section — never one run-on paragraph.
+<!-- /superheroes:owner-decisions-contract -->
 ```

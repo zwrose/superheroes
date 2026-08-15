@@ -315,8 +315,11 @@ above).
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** The canonical snippet lives in
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` under
-     `## The collector preamble — canonical snippet`, delimited by the HTML comment marker that its own
-     section documents, so a refresh replaces the preamble **without touching the items beneath it**. Nothing mechanical fires on a chat message, so the contract
+     `## The collector preamble — canonical snippet`, bounded by the **paired opening and closing markers**
+     that section documents, so a refresh replaces only that delimited preamble **without touching the
+     items beneath the closing marker**; if **both** markers are not present, do **not** guess a boundary —
+     install a fresh preamble above the items and say so, or report the malformed region, rather than
+     deleting anything. Nothing mechanical fires on a chat message, so the contract
      cannot be gated where it is used — collector reconciliation is **already a mandatory vet-time
      step**, so a copy at the top of the collector rides a read path that already exists: the advisor
      cannot enumerate the items without the contract in front of them. Data-path placement is standing in
