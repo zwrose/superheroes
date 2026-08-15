@@ -2300,6 +2300,7 @@ _ALL_CHANNELS = {
     "canaryVerified": {"codex": {"probe": "engaged"}},
     "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
                                                   "manifest": "codex"}]},
+    "recordOrphansIgnored": ["code-reviewer"],
 }
 
 
@@ -2351,6 +2352,11 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
                      "engaged probe recorded for vendor(s) codex",
                      "canary-failed (round 1): the control probe showed no engagement"):
         assert marker in prose, marker
+    assert (
+        "record-orphans-ignored (round 1): hand submit folded with durable seat record(s) "
+        "code-reviewer still at this slot"
+        in "\n".join(_round_disclosures(receipt, 1))
+    )
     # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
     degraded_all = "\n".join(receipt["degraded"])
     assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
@@ -2538,19 +2544,23 @@ def test_panel_round_channels_are_all_accounted_for():
     assert len(recorded) >= 9, "the census enumerated %d keys — the parse looks inert" % len(recorded)
 
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
+    submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
         "fold provenance channels must be restorable: %s"
         % sorted(fold_provenance - restorable))
+    assert submit_disclosure <= restorable, (
+        "submit disclosure channels must be restorable: %s"
+        % sorted(submit_disclosure - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    assert recorded | fold_provenance == accounted, (
+    assert recorded | fold_provenance | submit_disclosure == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
-        % (sorted((recorded | fold_provenance) - accounted),
-           sorted(accounted - (recorded | fold_provenance))))
+        % (sorted((recorded | fold_provenance | submit_disclosure) - accounted),
+           sorted(accounted - (recorded | fold_provenance | submit_disclosure))))
 
 
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():

@@ -83,6 +83,10 @@ def _iter_object_schemas(node, path="$"):
         branch = node.get(keyword)
         if isinstance(branch, dict):
             yield from _iter_object_schemas(branch, "%s.%s" % (path, keyword))
+    for keyword in ("not", "additionalItems", "contains", "propertyNames"):
+        branch = node.get(keyword)
+        if isinstance(branch, dict):
+            yield from _iter_object_schemas(branch, "%s.%s" % (path, keyword))
     ap = node.get("additionalProperties")
     if isinstance(ap, dict):
         yield from _iter_object_schemas(ap, "%s.additionalProperties" % path)
@@ -159,6 +163,39 @@ def test_schema_walker_rejects_non_strict_nested_fixture():
         except AssertionError:
             failures.append(obj_path)
     assert "$.properties.findings.items" in failures
+
+
+def _non_strict_nested_fixture(keyword):
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["wrapper"],
+        "properties": {
+            "wrapper": {
+                keyword: {
+                    "type": "object",
+                    "properties": {"id": {"type": "string"}},
+                    "required": ["id"],
+                },
+            },
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    "keyword",
+    ["not", "additionalItems", "contains", "propertyNames"],
+    ids=["not", "additionalItems", "contains", "propertyNames"],
+)
+def test_schema_walker_rejects_non_strict_nested_fixture_per_keyword(keyword):
+    non_strict = _non_strict_nested_fixture(keyword)
+    failures = []
+    for obj_path, obj_schema in _iter_object_schemas(non_strict):
+        try:
+            _assert_object_schema_strict(obj_path, obj_schema)
+        except AssertionError:
+            failures.append(obj_path)
+    assert "$.properties.wrapper.%s" % keyword in failures
 
 
 def test_canonical_schema_passes_validate_review_schema_path():

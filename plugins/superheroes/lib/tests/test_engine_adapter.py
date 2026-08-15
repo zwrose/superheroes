@@ -1713,6 +1713,166 @@ def test_parse_result_review_rejected_findings_path_scrubs_secret():
     assert "[REDACTED]" in blob
 
 
+# ---------------------------------------------------------------------------
+# #1003: hollow finding members are not findings
+
+
+_HOLLOW_MEMBER_MALFORMED = {"ok": False, "reason": "unreadable"}
+
+
+@pytest.mark.parametrize("stdout", [
+    json.dumps({"findings": [{}]}),
+    json.dumps({"findings": [{}, {}]}),
+    json.dumps({"findings": [{}, {"severity": "Minor", "title": "t", "body": "b"}]}),
+    json.dumps({"findings": [{}, 42]}),
+    json.dumps([{}]),
+    json.dumps([{}, {"severity": "Minor", "title": "t", "body": "b"}]),
+    json.dumps({"findings": [{"title": "   "}]}),
+    json.dumps({"findings": [{"title": False}]}),
+    json.dumps({"findings": [{"title": 0}]}),
+    json.dumps({"findings": [{"body": []}]}),
+    json.dumps({"findings": [{"body": [{}]}]}),
+    json.dumps({"findings": [{"line": 3, "severity": "Critical"}]}),
+    json.dumps({"findings": [{"tradeoff": False}]}),
+])
+def test_parse_result_review_hollow_member_classifies_malformed(stdout):
+    assert EA.parse_result("codex", "review", stdout) == _HOLLOW_MEMBER_MALFORMED
+
+
+def _substance_value_quality_cases():
+    keys = sorted(EA._FINDING_SUBSTANCE_KEYS_CANONICAL | EA._FINDING_SUBSTANCE_KEYS_TOLERATED)
+    cases = []
+    for key in keys:
+        for value in (None, "", "   ", [], {}, (), 0, False, True):
+            cases.append((key, value, False))
+        cases.append((key, "x", True))
+    return cases
+
+
+@pytest.mark.parametrize("key,value,substantive", _substance_value_quality_cases())
+def test_finding_is_substantive_value_quality_matrix(key, value, substantive):
+    finding = {key: value}
+    assert EA._finding_is_substantive(finding) is substantive
+
+
+def test_parse_result_review_edge6_non_dict_plus_survivor_stays_ok():
+    stdout = json.dumps({"findings": [42, {"id": "f1", "title": "ok"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["id"] == "f1"
+    assert res["findingsRejected"] == ["not-a-dict"]
+
+
+def test_parse_result_review_edge7_empty_findings_with_investigated_stays_clean():
+    stdout = json.dumps({"findings": [], "investigated": ["a.py"]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["findings"] == []
+    assert res["investigated"] == ["a.py"]
+
+
+def test_parse_result_review_edge8_near_miss_no_findings_stays_clean():
+    stdout = json.dumps({"investigated": ["a.py"]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {"ok": True, "findings": [], "investigated": ["a.py"]}
+
+
+def test_parse_result_review_edge13_common_corpus_shape_stays_ok():
+    stdout = json.dumps({"findings": [{"body": "b", "severity": "Minor", "title": "t"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["title"] == "t"
+
+
+def test_parse_result_review_edge14_error_envelope_hollow_inner():
+    inner = json.dumps({"findings": [{}], "investigated": ["real.py"]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    assert EA.parse_result("cursor", "review", stream) == _HOLLOW_MEMBER_MALFORMED
+
+
+def test_parse_result_review_tolerated_summary_alias_parses():
+    stdout = json.dumps({"findings": [{"summary": "issue summary"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["summary"] == "issue summary"
+
+
+def test_parse_result_review_tolerated_message_alias_parses():
+    stdout = json.dumps({"findings": [{"message": "issue found"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["message"] == "issue found"
+
+
+def test_parse_result_review_tolerated_description_alias_parses():
+    stdout = json.dumps({"findings": [{"description": "a real problem"}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert len(res["findings"]) == 1
+    assert res["findings"][0]["description"] == "a real problem"
+
+
+def test_finding_reject_no_substance_constant_matches_wire_value():
+    assert EA.FINDING_REJECT_NO_SUBSTANCE == "no-substantive-fields"
+
+
+def test_scrub_findings_rejects_hollow_with_named_reason():
+    accepted, rejected = EA._scrub_findings([{}])
+    assert accepted == []
+    assert len(rejected) == 1
+    assert rejected[0]["reason"] == "no-substantive-fields"
+
+
+def test_finding_substance_keys_canonical_membership():
+    assert EA._FINDING_SUBSTANCE_KEYS_CANONICAL == frozenset(
+        {"title", "body", "evidence", "suggestion"}
+    )
+
+
+def test_finding_substance_keys_tolerated_membership():
+    assert EA._FINDING_SUBSTANCE_KEYS_TOLERATED == frozenset(
+        {"summary", "message", "description"}
+    )
+
+
+def test_finding_substance_keys_canonical_subset_of_schema():
+    schema_path = os.path.join(_HERE, "..", "schemas", "review-findings.schema.json")
+    with open(schema_path, encoding="utf-8") as fh:
+        schema = json.load(fh)
+    schema_props = set(schema["properties"]["findings"]["items"]["properties"].keys())
+    missing = EA._FINDING_SUBSTANCE_KEYS_CANONICAL - schema_props
+    assert not missing, "canonical substance keys drifted from schema: %s" % sorted(missing)
+
+
+@pytest.mark.parametrize("stdout", [
+    json.dumps({"findings": [{}]}),
+])
+def test_review_payload_shape_hollow_object_branch(stdout):
+    res = EA.review_payload_shape(stdout)
+    assert res == {
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_review_payload_shape_hollow_bare_array():
+    res = EA.review_payload_shape(json.dumps([{}]))
+    assert res == {
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
+    }
+
+
+def test_salvage_from_artifact_hollow_findings_requires_manual_read():
+    stdout = json.dumps({"findings": [{}]})
+    salvage = EA.salvage_from_artifact(stdout, "")
+    assert salvage["structured"] is False
+    assert salvage["requiresManualRead"] is True
+    assert salvage["findings"] == []
+
+
 def test_parse_result_review_rejected_investigated_path_scrubs_secret():
     secret = "ghp_EXAMPLEfakenotarealtoken000000000"
     stdout = json.dumps({

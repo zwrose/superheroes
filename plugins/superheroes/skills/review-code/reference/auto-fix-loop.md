@@ -173,7 +173,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
 > returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside post-argparse
 > refusals such as `sanitized-view-tempbase-inside-repo`, `sanitized-view-head-unresolved`,
-> `sanitized-view-export-failed`, and `sanitized-view-init-failed` (also `attempts: 0`). There is
+> `sanitized-view-export-failed`, `sanitized-view-export-timeout`, and `sanitized-view-init-failed`
+> (also `attempts: 0`). There is
 > **no fallback to the raw repo and no opt-out**.
 >
 > **Argparse vs JSON refusals.** `--repo-root` is **required** and validated by argparse before
@@ -257,7 +258,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
 > `object-without-findings`, `object-findings-not-a-list`, `array-not-all-objects`,
-> `no-parseable-json`, `empty-stdout`, or `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> `findings-hollow-member`, `no-parseable-json`, `empty-stdout`, or `prompt-echo-only`), `topLevelKeys` (a list of strings,
 > populated only when
 > `parsed` is `object-without-findings`), and `keysTruncated` (bool; signals the key list was
 > capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a

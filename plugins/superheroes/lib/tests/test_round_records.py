@@ -258,6 +258,42 @@ def test_atomic_write_json_replaces_in_place(tmp_path):
     assert not os.path.exists(path + ".tmp")
 
 
+def test_read_json_never_raises_census(tmp_path):
+    """read_json returns a 2-tuple for every input class and never raises."""
+    missing = str(tmp_path / "missing.json")
+    directory = str(tmp_path / "adir")
+    os.makedirs(directory)
+    valid = str(tmp_path / "valid.json")
+    with open(valid, "w", encoding="utf-8") as fh:
+        fh.write('{"a":1}')
+    malformed = str(tmp_path / "malformed.json")
+    with open(malformed, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    invalid_utf8 = str(tmp_path / "bad_utf8.json")
+    with open(invalid_utf8, "wb") as fh:
+        fh.write(b"\xff\xfe")
+    cases = (
+        (missing, None, "missing"),
+        (directory, None, "missing"),
+        (valid, {"a": 1}, None),
+        (malformed, None, "unparseable"),
+        (invalid_utf8, None, "not-utf-8"),
+    )
+    for path, expected_obj, expected_err in cases:
+        obj, err = RR.read_json(path)
+        assert (obj, err) == (expected_obj, expected_err)
+
+
+def test_mint_session_id_refuses_not_utf8_meta(tmp_path):
+    sd = str(tmp_path / "session")
+    os.makedirs(sd)
+    meta_path = os.path.join(sd, "meta.json")
+    with open(meta_path, "wb") as fh:
+        fh.write(b"\xff\xfe")
+    sid, reason = RR.mint_session_id(sd)
+    assert sid is None and reason == "meta-unparseable"
+
+
 # --- ingestion: the happy path ----------------------------------------------------------------
 
 def test_ingest_stores_the_envelope_and_reports_the_payload_hash(tmp_path):

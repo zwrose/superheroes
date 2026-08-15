@@ -472,7 +472,7 @@ def test_malformed_lease_reclaim(tmp_path):
     records, _ = ED._journal_read(str(tmp_path / "run"))
     reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
     assert len(reclaimed) == 1
-    assert reclaimed[0].get("reason") == "malformed-holder"
+    assert reclaimed[0].get("reason") == _file_lock.REASON_MALFORMED_HOLDER
 
 
 def test_boot_id_mismatch_lease_reclaim_journal_reason(tmp_path, monkeypatch):
@@ -493,7 +493,7 @@ def test_boot_id_mismatch_lease_reclaim_journal_reason(tmp_path, monkeypatch):
     records, _ = ED._journal_read(str(tmp_path / "run"))
     reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
     assert len(reclaimed) == 1
-    assert reclaimed[0].get("reason") == "boot-id-mismatch"
+    assert reclaimed[0].get("reason") == _file_lock.REASON_BOOT_ID_MISMATCH
 
 
 def test_expired_dead_holder_lease_reclaim_journal_reason(tmp_path):
@@ -513,7 +513,43 @@ def test_expired_dead_holder_lease_reclaim_journal_reason(tmp_path):
     records, _ = ED._journal_read(str(tmp_path / "run"))
     reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
     assert len(reclaimed) == 1
-    assert reclaimed[0].get("reason") == "expired-dead-holder"
+    assert reclaimed[0].get("reason") == _file_lock.REASON_EXPIRED_DEAD_HOLDER
+
+
+def test_clean_lease_acquire_journals_no_reclaim(tmp_path):
+    wt, _main = _linked_worktree(tmp_path)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
+    assert len(reclaimed) == 0
+
+
+_FOREIGN_HOST = "foreign-host-ttl-expired.example"
+
+
+def test_foreign_host_ttl_expired_lease_reclaim_journal_reason(tmp_path, monkeypatch):
+    assert _FOREIGN_HOST != socket.gethostname()
+    wt, _main = _linked_worktree(tmp_path)
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    monkeypatch.setattr(_file_lock.hostinfo, "boot_id", lambda: "boottime:sec:2000000000")
+    with open(lease_path, "w", encoding="utf-8") as fh:
+        json.dump({
+            "pid": 99999999,
+            "host": _FOREIGN_HOST,
+            "acquiredAt": "1970-01-01T00:00:00Z",
+            "bootId": "boottime:sec:1786231679",
+        }, fh)
+    fake = FakeRunner([(_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=wt)
+    assert res["ok"] is True
+    records, _ = ED._journal_read(str(tmp_path / "run"))
+    reclaimed = [r for r in records if r.get("kind") == "lease-reclaimed"]
+    assert len(reclaimed) == 1
+    assert reclaimed[0].get("reason") == _file_lock.REASON_FOREIGN_HOST_TTL_EXPIRED
+    assert reclaimed[0].get("reason") != _file_lock.REASON_EXPIRED_DEAD_HOLDER
 
 
 def test_worktree_dirtied_refuses_retry(tmp_path):

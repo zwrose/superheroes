@@ -836,6 +836,8 @@ def test_expired_foreign_holder_reclaims_on_the_ttl_alone(tmp_path, monkeypatch)
     _rewrite_holder(p, pid=99999999, host=_OTHER_HOST,          # a pid absent on this machine
                     acquiredAt="1970-01-01T00:00:00Z", bootId="boottime:sec:1786231679")
     assert lock.is_stale(p) is True
+    assert lock.stale_reason(p) == lock.REASON_FOREIGN_HOST_TTL_EXPIRED
+    assert lock.stale_reason(p) != lock.REASON_EXPIRED_DEAD_HOLDER
 
 
 def test_cross_host_boot_id_mismatch_alone_is_not_stale(tmp_path, monkeypatch):

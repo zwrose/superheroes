@@ -4,6 +4,7 @@ import stat
 import time
 
 import pilot_bounded_run
+import pilot_paths
 import pilot_policy
 import pilot_slot
 
@@ -438,19 +439,8 @@ def _parse_origin_or_none(value):
     return "%s://%s:%d" % (scheme.lower(), host.lower(), port)
 
 
-def _path_components(path):
-    parts = os.path.realpath(path).split(os.sep)
-    if parts and parts[-1] == "":
-        parts = parts[:-1]
-    return parts
-
-
 def _is_inside(path, root):
-    path_parts = _path_components(path)
-    root_parts = _path_components(root)
-    if len(path_parts) < len(root_parts):
-        return False
-    return path_parts[:len(root_parts)] == root_parts
+    return pilot_paths.is_inside(path, root)
 
 
 def _is_outside_all_reach_roots(path, reach_roots):
