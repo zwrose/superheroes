@@ -51,7 +51,7 @@ def test_we511_shape_parks():
     assert result["ok"] is False
     assert "gpt-5.3-codex-high" in result["reason"]
     assert "composer-2.5" in result["allowlist"]
-    assert "cursor-grok-4.5-high" in result["allowlist"]
+    assert "cursor-grok-4.6-xhigh" in result["allowlist"]
     assert result["resolved_model"] is None
 
 
@@ -60,9 +60,9 @@ def test_listed_models_pass():
     assert r1["ok"] is True
     assert r1["resolved_model"] == "composer-2.5"
 
-    r2 = DG.validate("implementer", "cursor", "cursor-grok-4.5-high")
+    r2 = DG.validate("implementer", "cursor", "cursor-grok-4.6-xhigh")
     assert r2["ok"] is True
-    assert r2["resolved_model"] == "cursor-grok-4.5-high"
+    assert r2["resolved_model"] == "cursor-grok-4.6-xhigh"
 
     r3 = DG.validate("implementer", "codex", "gpt-5.6-terra")
     assert r3["ok"] is True
@@ -70,9 +70,9 @@ def test_listed_models_pass():
 
 
 def test_registry_model_id_form_passes():
-    result = DG.validate("implementer", "cursor", "cursor-grok-4.5", "high")
+    result = DG.validate("implementer", "cursor", "cursor-grok-4.6", "xhigh")
     assert result["ok"] is True
-    assert result["resolved_model"] == "cursor-grok-4.5-high"
+    assert result["resolved_model"] == "cursor-grok-4.6-xhigh"
 
 
 def test_defaulted_resolves_to_listed():
@@ -110,9 +110,9 @@ def test_unknown_vendor_parks():
 
 
 def test_off_allowlist_effort_parks():
-    result = DG.validate("implementer", "cursor", "cursor-grok-4.5", "low")
+    result = DG.validate("implementer", "cursor", "cursor-grok-4.6", "low")
     assert result["ok"] is False
-    assert "cursor-grok-4.5" in result["reason"]
+    assert "cursor-grok-4.6" in result["reason"]
     assert result["allowlist"]
 
 
@@ -204,20 +204,20 @@ def _assert_success_triple(payload):
 
 
 def test_issue_636_reviewer_deep_cursor_bare_registry_id():
-    result = DG.validate("reviewer-deep", "cursor", "cursor-grok-4.5")
+    result = DG.validate("reviewer-deep", "cursor", "cursor-grok-4.6")
     assert result["ok"] is True
-    assert result["model_id"] == "cursor-grok-4.5"
-    assert result["effort"] == "high"
-    assert result["dispatch_token"] == "cursor-grok-4.5-high"
-    assert result["resolved_model"] == "cursor-grok-4.5-high"
+    assert result["model_id"] == "cursor-grok-4.6"
+    assert result["effort"] == "xhigh"
+    assert result["dispatch_token"] == "cursor-grok-4.6-xhigh"
+    assert result["resolved_model"] == "cursor-grok-4.6-xhigh"
     assert result["effort_source"] == "resolved-unique"
     _assert_success_triple(result)
 
 
 def test_structured_triple_success_all_vendors():
-    r_cursor = DG.validate("reviewer-deep", "cursor", "cursor-grok-4.5")
+    r_cursor = DG.validate("reviewer-deep", "cursor", "cursor-grok-4.6")
     _assert_success_triple(r_cursor)
-    assert r_cursor["model_id"] == "cursor-grok-4.5"
+    assert r_cursor["model_id"] == "cursor-grok-4.6"
 
     r_codex = DG.validate("brief-check", "codex", None)
     _assert_success_triple(r_codex)
@@ -242,13 +242,13 @@ def test_opus_resolves_lowest_rung():
 
 
 def test_effort_source_given():
-    result = DG.validate("implementer", "cursor", "cursor-grok-4.5", "high")
+    result = DG.validate("implementer", "cursor", "cursor-grok-4.6", "xhigh")
     assert result["ok"] is True
     assert result["effort_source"] == "given"
 
 
 def test_effort_source_token_encoded():
-    result = DG.validate("implementer", "cursor", "cursor-grok-4.5-high")
+    result = DG.validate("implementer", "cursor", "cursor-grok-4.6-xhigh")
     assert result["ok"] is True
     assert result["effort_source"] == "token-encoded"
 
@@ -336,7 +336,7 @@ def test_fail_closed_edge_7_wrong_seat_allowlist():
 
 
 def test_fail_closed_edge_8_effort_not_on_pair():
-    result = DG.validate("implementer", "cursor", "cursor-grok-4.5", "low")
+    result = DG.validate("implementer", "cursor", "cursor-grok-4.6", "low")
     assert result["ok"] is False
     assert _PARK_TAIL in result["reason"]
     assert "at effort 'low'" in result["reason"]
@@ -344,7 +344,7 @@ def test_fail_closed_edge_8_effort_not_on_pair():
 
 def test_fail_closed_edge_9_token_effort_conflict():
     result = DG.validate(
-        "implementer", "cursor", "cursor-grok-4.5-high", "low"
+        "implementer", "cursor", "cursor-grok-4.6-xhigh", "low"
     )
     assert result["ok"] is False
     assert _PARK_TAIL in result["reason"]

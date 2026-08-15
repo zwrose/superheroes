@@ -598,6 +598,7 @@ _CONCRETE_MODEL_TOKENS = (
     "composer-2.5",
     "composer-2.5-fast",
     "cursor-grok-4.5",
+    "cursor-grok-4.6",
     "haiku-4.5",
     "sonnet-5",
     "opus-4.8",
@@ -612,6 +613,7 @@ _RETIRED_MODEL_TOKENS = (
     "composer-2.5-fast",
     "claude-fable-5-thinking",
     "opus-4.8",
+    "cursor-grok-4.5",
 )
 
 
@@ -680,6 +682,26 @@ def _scan_retired_tokens(rel_paths):
     return hits
 
 
+def test_retired_model_tokens_disjoint_from_registry():
+    """Retired ids must not re-register in model_registry.py — the authoritative home."""
+    import model_registry
+
+    registered_ids = {
+        m for v in model_registry.vendors() for m in model_registry._MODELS[v]
+    }
+    registered_dispatch = {
+        rec["dispatch"]
+        for v in model_registry.vendors()
+        for rec in model_registry._MODELS[v].values()
+    }
+    overlap_ids = set(_RETIRED_MODEL_TOKENS) & registered_ids
+    overlap_dispatch = set(_RETIRED_MODEL_TOKENS) & registered_dispatch
+    assert not overlap_ids, "retired token re-registered as model id: %r" % sorted(overlap_ids)
+    assert not overlap_dispatch, (
+        "retired token re-registered as dispatch value: %r" % sorted(overlap_dispatch)
+    )
+
+
 def test_retired_model_tokens_absent_from_lib():
     """Retired model tokens must not reappear as literals outside model_registry.py."""
     lib_dir = os.path.join(PLUGIN, "lib")
@@ -696,6 +718,140 @@ def test_retired_model_tokens_absent_from_lib():
     ]
     hits = _scan_retired_tokens(py_paths + doc_paths)
     assert not hits, "retired model token reappeared: %r" % hits
+
+
+# --- Cluster: retired cursor judge id literal census (post #1008 registry retirement) ---
+
+
+def _retired_grok_literal():
+    """Retired cursor judge id — composed at runtime so this census file can scan itself."""
+    # Deliberate self-reference avoidance: a single-string literal of the token here
+    # would false-positive when this file is included in the scan paths.
+    return "-".join(("cursor", "grok", "4.5"))
+
+# I1: only these two tuple entries may mention the retired id anywhere in the repo.
+_INTENTIONAL_RETIRED_GROK_SITES = (
+    (os.path.join("lib", "tests", "test_ssot_drift.py"), "_CONCRETE_MODEL_TOKENS"),
+    (os.path.join("lib", "tests", "test_ssot_drift.py"), "_RETIRED_MODEL_TOKENS"),
+)
+
+
+def _retired_grok_literal_lines_in_tuple(rel_path, const_name):
+    """Line numbers inside `const_name = (...)` that carry the retired literal."""
+    text = _read(rel_path)
+    m = re.search(r"%s\s*=\s*\(" % re.escape(const_name), text)
+    assert m, "%s: %s tuple not found" % (rel_path, const_name)
+    depth = 1
+    lines = []
+    for lineno, line in enumerate(text[m.end():].splitlines(), start=text[:m.end()].count("\n") + 1):
+        depth += line.count("(") - line.count(")")
+        if _retired_grok_literal() in line:
+            lines.append(lineno)
+        if depth <= 0:
+            break
+    return lines
+
+
+def _allowed_retired_grok_literal_sites():
+    allowed = set()
+    for rel_path, const_name in _INTENTIONAL_RETIRED_GROK_SITES:
+        for lineno in _retired_grok_literal_lines_in_tuple(rel_path, const_name):
+            allowed.add((rel_path, lineno))
+    assert len(allowed) == 2, (
+        "expected exactly two intentional %r declaration lines, found %r"
+        % (_retired_grok_literal(), sorted(allowed))
+    )
+    return allowed
+
+
+def _scan_paths_for_retired_grok_literal(paths):
+    hits = []
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        rel = os.path.relpath(path, PLUGIN)
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if _retired_grok_literal() in line:
+                    hits.append((rel, lineno))
+    return hits
+
+
+_BINARY_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_binary_build_artifact_filename(name):
+    return name.endswith(_BINARY_SUFFIXES)
+
+
+def _looks_like_binary_file(path):
+    """True when the file is not source text (null-byte probe)."""
+    try:
+        with open(path, "rb") as fh:
+            chunk = fh.read(8192)
+    except OSError:
+        return True
+    return b"\x00" in chunk
+
+
+def _collect_plugin_source_paths(root):
+    """Repository source paths under root — build artifacts are pruned, never decoded."""
+    paths = []
+    for dirpath, _dirs, files in os.walk(root):
+        _dirs[:] = [d for d in _dirs if d != "__pycache__"]
+        for name in files:
+            if _is_binary_build_artifact_filename(name):
+                continue
+            path = os.path.join(dirpath, name)
+            if _looks_like_binary_file(path):
+                continue
+            paths.append(path)
+    return paths
+
+
+def _retired_grok_census_paths():
+    conventions = os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md"))
+    return [conventions] + _collect_plugin_source_paths(PLUGIN)
+
+
+def test_census_excludes_pycache_but_catches_source_literal(tmp_path):
+    """I4: __pycache__ carrying the literal is excluded; equivalent .py source is reported."""
+    literal = _retired_grok_literal()
+    root = tmp_path / "plugin"
+    pycache = root / "lib" / "tests" / "__pycache__"
+    pycache.mkdir(parents=True)
+    stale_pyc = pycache / "fixture.cpython-314.pyc"
+    stale_pyc.write_bytes(b"prefix " + literal.encode() + b" suffix")
+
+    stale_py = root / "lib" / "stale_hit.py"
+    stale_py.parent.mkdir(parents=True, exist_ok=True)
+    stale_py.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert not any("__pycache__" in p for p in paths)
+    assert not any(p.endswith(".pyc") for p in paths)
+    assert str(stale_pyc) not in paths
+    assert str(stale_py) in paths
+
+    scanned = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    scanned.append((path, lineno))
+    assert scanned == [(str(stale_py), 1)]
+
+
+def test_retired_cursor_grok_4_5_literal_census():
+    """I4: the retired cursor judge id may appear only in the two drift-guard tuple declarations (I1)."""
+    allowed = _allowed_retired_grok_literal_sites()
+    paths = _retired_grok_census_paths()
+    hits = _scan_paths_for_retired_grok_literal(paths)
+    unexpected = sorted(set(hits) - allowed)
+    assert not unexpected, (
+        "retired literal %r outside intentional declaration sites %r — stale hits: %r"
+        % (_retired_grok_literal(), sorted(allowed), unexpected)
+    )
 
 
 # --- Cluster: omission floor (CONVENTIONS §10.7 authoritative home) ----------
