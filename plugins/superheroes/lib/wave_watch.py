@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ledger-driven single-shot wave watcher (#982).
+"""Ledger-driven wave watcher — run is single-shot; loop re-arms internally (#982).
 
 Watch one launch batch until the first qualifying event. stdlib only.
 
