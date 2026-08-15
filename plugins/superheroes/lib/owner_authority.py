@@ -202,7 +202,11 @@ def _short_flag(letter):
 # a repository operand named `+…` (`git push +repo feature`), and a quoted inline option value
 # (`--push-option="+x"`) ask — a prompt, never an unapproved run. Owner-ruled 2026-08-15
 # (@116-3, a).
-_PLUS_REFSPEC = r"(?<![\w.=:+/-])\+(?=[^\s;|&<>()])"
+# Left boundary is a CLOSED inclusion set — the `+` starts a shell word: start-of-segment,
+# whitespace, a quote, a backtick, `(`, or a redirection operator before it. (An exclusion class
+# let a comma-named branch `feature,+other` and an inline value `ci:list,+x` read as force —
+# round-3 Minor.) Python's lookbehind must be fixed-width, hence the alternation.
+_PLUS_REFSPEC = r"(?:(?<=^)|(?<=\s)|(?<=[\"'`(>]))\+(?=[^\s;|&<>()])"
 
 
 def _force_push_flag_trailing():

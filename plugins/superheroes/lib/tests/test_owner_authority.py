@@ -415,6 +415,8 @@ _INTENDED_SHIFTS = [
 _KNOWN_OPEN_UNCLASSIFIED = [
     "g''h pr merge 123",                            # quote-concatenated command word
     "gi''t push --force origin f",                  # quote-concatenated command word
+    "git push origin '+(feature):refs/heads/x'",   # quoted separator inside a ref name (ratified quoting decline)
+    "git -c remote.origin.push=+HEAD:refs/heads/main push origin",  # config-driven force push — a separate class (collector, 2026-08-15)
     'git -c user.name="x;y" push --force',          # separator inside a quoted value
     'git -c user.name="x|y" push --force',          # separator inside a quoted value
     # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
@@ -549,6 +551,8 @@ _PLUS_REFSPEC_ACCEPTED_OVERMATCH = [
 _PLUS_REFSPEC_NEGATIVE = [
     ("git push origin HEAD:refs/heads/+feature", None),      # `/` before `+` — a `+`-named branch
     ("git push ./+repo feature", None),                       # repository operand, `/` before `+`
+    ("git push origin feature,+other", None),                 # comma-named branch (round 3)
+    ("git push --push-option=ci:list,+x origin feature", None),  # inline value, comma before `+`
     ("git push origin feature", None),
     ("git push --push-option=+x origin feature", None),      # `+` after `=` is not a refspec
     ("git push origin a+b", None),                            # mid-word `+`

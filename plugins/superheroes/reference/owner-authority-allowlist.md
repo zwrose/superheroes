@@ -177,13 +177,18 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   `+feature`), quoted or parenthesised, on any refspec position — asks as `force-push`, exactly
   as `--force` does. The `+` must start a word (never after `=`, `:`, `.`, `/`, `-` or a word
   character) and be followed by anything that is not whitespace or a separator, so
-  `--push-option=+x`, `a+b`, a bare `+`, `HEAD:refs/heads/+feature` (a `+`-named branch),
-  `./+repo` (a repository path) and `git pull origin +main` are not force. **Accepted
+  `--push-option=+x`, `a+b`, `feature,+other` (a comma-named branch), a bare `+`,
+  `HEAD:refs/heads/+feature` (a `+`-named branch), `./+repo` (a repository path) and
+  `git pull origin +main` are not force. **Accepted
   over-matches — they ask, one prompt, never an unapproved run:** a redirection to a file whose
   name begins with `+` (`2>+log`), the separate-argument push option (`-o +x`, `--push-option
   +x`), a repository operand named `+…` (`git push +repo feature`), and a quoted inline option
   value (`--push-option="+x"`) — telling those apart from a refspec would need option parsing,
-  which the ratified posture declines.
+  which the ratified posture declines. **Outside this rule, known-open:** a **config-driven**
+  force push (`git -c remote.origin.push=+HEAD:refs/heads/main push origin`, `remote.*.mirror`,
+  `push.default`) is a different mechanism the gate does not model — recorded 2026-08-15 for the
+  owner's word; and a quoted separator character inside a ref name (`'+(feature):refs/heads/x'`)
+  stays under the ratified quoting decline.
   **Known-open specimens still silent today:** a **quote-concatenated command word**
   (`g''h pr merge 123`, `gi''t push --force origin f`), a **separator inside a quoted value**
   (`git -c user.name="x;y" push --force`, `git -c user.name="x|y" push --force`), a
