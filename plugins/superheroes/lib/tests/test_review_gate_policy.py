@@ -224,6 +224,19 @@ def test_fail_closed_overlay_only_other_gate_rules():
     assert result["reason"] == "gate-policy-unmatched-class:%s" % cls
 
 
+def test_fail_closed_stall_retired_choice_refused_at_load():
+    overlay = _overlay(
+        {
+            "schema": RGP.GATE_POLICY_SCHEMA,
+            "default": "park",
+            "rules": [_stall_rule(RGP.STALL_CLASS_ELIGIBLE, "ship-smaller")],
+        }
+    )
+    loaded = RGP.parse_overlay(overlay)
+    assert loaded["ok"] is False
+    assert loaded["reason"] == "stall-choice-retired:ship-smaller"
+
+
 def test_fail_closed_stall_accept_risk_on_ineligible_class():
     overlay = _overlay(
         {

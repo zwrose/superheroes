@@ -172,6 +172,12 @@ P_STALL = round_phases.P_STALL
 P_TERMINAL = round_phases.P_TERMINAL
 
 STALL_CHOICES = round_phases.STALL_CHOICES
+ONE_MORE_ROUND_CHOICE = round_phases.ONE_MORE_ROUND_CHOICE
+ACCEPT_RISK_CHOICE = round_phases.ACCEPT_RISK_CHOICE
+HOLD_CHOICE = round_phases.HOLD_CHOICE
+RETIRED_STALL_CHOICES = round_phases.RETIRED_STALL_CHOICES
+RETIRED_STALL_CHOICE_PREFIX = round_phases.RETIRED_STALL_CHOICE_PREFIX
+STALL_CHOICE_NOT_OFFERED_PREFIX = "stall-choice-not-offered:"
 JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
@@ -2401,6 +2407,8 @@ def _audit_targets(state, config, audit_targets_map):
             "fixerVendor": fixer_vendor,
             "auditorVendor": auditor_vendor,
             "independence": independence,
+            "verdict": f.get("verdict"),
+            "evidence": f.get("evidence"),
         })
     return targets
 
@@ -2705,41 +2713,52 @@ def _handle_stall(state, config, breaker):
         state["step"] = P_FIXER
         return
     # already self-recovered and still stalled → present the stall menu (never judge the dispute).
-    accept_eligible = _accept_risk_eligible(state)
+    accept_eligible = _accept_risk_eligible(state, breaker)
+    stall_targets = [dict(t) for t in _stalled_open_targets(state, breaker)]
+    state["_stallTargets"] = stall_targets
     choices = list(STALL_CHOICES) if accept_eligible else \
-        [c for c in STALL_CHOICES if c != "accept-the-disclosed-risk"]
+        [c for c in STALL_CHOICES if c != ACCEPT_RISK_CHOICE]
+    if state.get("_oneMoreRoundUsed"):
+        choices = [c for c in choices if c != ONE_MORE_ROUND_CHOICE]
     state["_stallChoices"] = choices
     state["_acceptRiskEligible"] = accept_eligible
     _decision(state, "stall-menu", "audit-stall persists after self-recovery — owner choice")
     state["step"] = P_STALL
 
 
-def _accept_risk_eligible(state):
-    """accept-the-disclosed-risk is offerable ONLY when the stalled finding is CONFIRMED with a
+def _accept_risk_eligible(state, breaker):
+    """accept-the-disclosed-risk is offerable ONLY when a stalled audit target is CONFIRMED with a
     receipt (an owner may knowingly accept a proven, disclosed risk — never an unproven one)."""
-    for f in state.get("findings") or []:
-        if isinstance(f, dict) and f.get("verdict") == "CONFIRMED" and f.get("evidence"):
+    for t in _stalled_open_targets(state, breaker):
+        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
             return True
     return False
 
 
 def _fold_stall(state, config, artifact):
-    """Fold the owner's stall choice; journal it. hold → park; the others record the disposition and
-    terminate accordingly."""
+    """Fold the owner's stall choice; journal it. hold → park; accept-the-disclosed-risk → certify
+    when eligible; one-more-round → re-enter the fix leg from the persisted stall-target snapshot."""
     choice = artifact.get("choice")
     _record_round(state, "stallChoice", choice)
     _decision(state, "stall-choice", choice)
-    if choice == "hold":
+    if choice == HOLD_CHOICE:
         state["terminal"] = "held"
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
-    elif choice == "accept-the-disclosed-risk" and state.get("_acceptRiskEligible"):
+    elif choice == ACCEPT_RISK_CHOICE and state.get("_acceptRiskEligible"):
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
         return
-    elif choice in ("ship-smaller", "spend-more"):
-        state["terminal"] = "stalled"
-        state["certification"] = {"shape": None,
-                                  "reason": "owner chose %s — certification withheld" % choice}
+    elif choice == ONE_MORE_ROUND_CHOICE:
+        targets = state.get("_stallTargets") or []
+        if not targets:
+            _park_cannot_certify(
+                state, "one-more-round requested but stalled targets could not be resolved")
+            state["step"] = P_TERMINAL
+            return
+        state["_oneMoreRoundUsed"] = True
+        state["_fixBatch"] = [dict(t) for t in targets]
+        state["step"] = P_FIXER
+        return
     else:
         # an ineligible accept-the-risk or an unknown choice fails closed to a park.
         state["terminal"] = "stalled"
@@ -3571,6 +3590,27 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "verifier-results-shape"})
             return {"ok": False, "reason": fault}
+    if phase == P_STALL:
+        choice = artifact.get("choice") if isinstance(artifact, dict) else None
+        if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:
+            reason = "%s%s" % (RETIRED_STALL_CHOICE_PREFIX, choice)
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "stall-choice-retired"})
+            return {"ok": False, "reason": reason}
+        offered = state.get("_stallChoices")
+        if offered is None:
+            # Legacy persisted stall without a recorded menu — fail closed: only hold (and accept-risk
+            # when the session recorded eligibility) were ever safe terminals.
+            offered = [HOLD_CHOICE]
+            if state.get("_acceptRiskEligible"):
+                offered.insert(0, ACCEPT_RISK_CHOICE)
+        if isinstance(choice, str) and choice not in offered:
+            reason = "%s%s" % (STALL_CHOICE_NOT_OFFERED_PREFIX, choice)
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "stall-choice-not-offered"})
+            return {"ok": False, "reason": reason}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
