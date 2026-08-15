@@ -102,8 +102,9 @@ _DIFF_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + (
     "diff.relative=false",
 )
 
-# Belt-and-braces for census paths; -z already suppresses quoting. Patch-presentation
-# keys from _DIFF_CONFIG_OVERRIDES deliberately do not appear here.
+# Belt-and-braces for _git_ls_tree_export and _git_tree_entries; -z already suppresses
+# quoting. Patch-presentation keys from _DIFF_CONFIG_OVERRIDES deliberately do not
+# appear here.
 _CENSUS_CONFIG_OVERRIDES = _COMMIT_GRAPH_OFF + ("-c", "core.quotePath=false")
 
 _DIFF_PATCH_FLAGS = (
