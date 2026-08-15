@@ -90,6 +90,7 @@ import argparse
 import json
 import math
 import os
+import re
 import stat
 import subprocess
 import sys
@@ -122,6 +123,7 @@ _TRANSCRIPT_DEFAULT_CONFIG_DIR = "~/.claude"
 _PROJECTS_DIR_NAME = "projects"
 _TRANSCRIPT_SUFFIX = ".jsonl"
 _PROJECT_DIR_TRANSLATION = str.maketrans({"/": "-", ".": "-"})
+_NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
 NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
 
@@ -503,6 +505,53 @@ def _project_dir_name(worktree):
     return os.path.normpath(worktree).translate(_PROJECT_DIR_TRANSLATION)
 
 
+def _normalize_bucket(name):
+    """Fold every non-alphanumeric run-member to "-" so two spellings compare equal."""
+    return _NON_ALNUM_RE.sub("-", name)
+
+
+def _resolve_project_dir(root, worktree):
+    """The one bucket under <root>/projects that belongs to this worktree, or None.
+
+    The exact mangling the host applies to a cwd is a host convention we do not
+    control, and this repo has no path on disk that would tell a "/ and . become -"
+    rule apart from an "every non-alphanumeric becomes -" rule. So do not guess:
+    normalize BOTH sides to the most permissive rule and compare. The comparison is
+    correct under either rule, and it also absorbs the physical-vs-lexical spelling
+    of a worktree reached through a symlink (the child's cwd is the physical path,
+    while the ledger records the spelling the launcher used).
+
+    Fails toward the alert in both directions: no match returns None, and an
+    AMBIGUOUS match — two buckets that normalize alike — also returns None rather
+    than picking one, because the wrong pick could vouch for the wrong lane.
+
+    Known limitation, deliberately left as an alert: a host that truncates or hashes
+    an over-long cwd produces a bucket name that cannot normalize-match, so that
+    lane resolves to None and still alerts.
+    """
+    projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
+    wanted = {
+        _normalize_bucket(_project_dir_name(worktree)),
+        _normalize_bucket(_project_dir_name(os.path.realpath(worktree))),
+    }
+    try:
+        entries = list(os.scandir(projects_root))
+    except OSError:
+        return None
+    matches = []
+    for entry in entries:
+        try:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+        except OSError:
+            continue
+        if _normalize_bucket(entry.name) in wanted:
+            matches.append(entry.path)
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
 def _newest_transcript_mtime(worktree, env, since=None):
     """Newest session-transcript mtime for this worktree, or None when unresolvable.
 
@@ -522,10 +571,11 @@ def _newest_transcript_mtime(worktree, env, since=None):
         return None
     if not os.path.isabs(worktree):
         return None
-    project_dir_name = _project_dir_name(worktree)
     newest = None
     for root in _transcript_config_dirs(env):
-        project_dir = os.path.join(root, _PROJECTS_DIR_NAME, project_dir_name)
+        project_dir = _resolve_project_dir(root, worktree)
+        if project_dir is None:
+            continue
         try:
             entries = list(os.scandir(project_dir))
         except OSError:

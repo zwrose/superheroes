@@ -65,6 +65,19 @@ def test_conventions_and_wave_watch_pin_the_default_promise():
     )
 
 
+def test_wave_watch_doc_pins_the_suppression_wire_contract():
+    # bite-axis: the WIRE NAMES in prose track the module. `staleSuppressed` and the
+    # note token are a JSON contract an operator reads out of wave-watch.md; a rename
+    # on one side without the other is the silent drift this pins.
+    import wave_watch as ww
+
+    _assert_tokens_present(
+        _read_plugin("skills/showrunner/reference/wave-watch.md"),
+        "reference/wave-watch.md",
+        ["staleSuppressed", ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH],
+    )
+
+
 def test_workhorse_charter_matches_heartbeat_constants():
     text = _read_plugin("skills/workhorse/SKILL.md")
     tokens = [

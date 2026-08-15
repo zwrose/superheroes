@@ -2755,6 +2755,106 @@ def test_transcript_predating_the_launch_does_not_vouch(tmp_path, monkeypatch):
     assert ww._newest_transcript_mtime(worktree, os.environ, now - 10) is None
 
 
+def test_ownership_bound_is_wired_from_the_ledger_end_to_end(tmp_path, monkeypatch):
+    """Drives run(): the ONLY thing making this lane alert is startedTs reaching the
+    resolver. Deleting the fold in launch_ledger or the pass-through in wave_watch
+    turns this red — the direct-helper test above cannot see either wiring line."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(
+        repo,
+        _reserved("lane-a", "batch-982", ["lib"], repo, worktree=worktree),
+    )
+    # The lane started AFTER the transcript was last written, so that transcript
+    # belongs to some earlier session and must not vouch for this launch.
+    ll.append(repo, dict(_started("lane-a", pid=os.getpid()), ts=time.time() - 60))
+    hb.stamp(repo, state="working", phase="watch", launch_id="lane-a",
+             stale_after_seconds=1800, now=time.time() - 1835)
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_transcript(config_dir, worktree, age_seconds=300)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "lane-stale"
+    assert "staleSuppressed" not in result
+
+    # Same lane, same transcript, started EARLIER than the transcript: suppressed.
+    # Isolates startedTs as the single variable.
+    repo2 = _init_repo(tmp_path / "repo2")
+    _precreate_repo_store_dir(repo2, store_root)
+    ll.declare_batch(repo2, "batch-982", 1)
+    ll.append(
+        repo2,
+        _reserved("lane-a", "batch-982", ["lib"], repo2, worktree=worktree),
+    )
+    ll.append(repo2, dict(_started("lane-a", pid=os.getpid()), ts=time.time() - 900))
+    hb.stamp(repo2, state="working", phase="watch", launch_id="lane-a",
+             stale_after_seconds=1800, now=time.time() - 1835)
+
+    result2 = ww.run(
+        repo2, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+
+    assert result2["event"] == "timer"
+    assert [e["launchId"] for e in result2["staleSuppressed"]] == ["lane-a"]
+
+
+def test_bucket_matches_under_either_host_mangling_rule(tmp_path, monkeypatch):
+    """The host's exact cwd mangling is not ours to control, so the match must hold
+    whether it maps only "/" and "." or every non-alphanumeric character."""
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    worktree = str(tmp_path / "a_b" / "build wt")
+    os.makedirs(worktree, exist_ok=True)
+    projects = os.path.join(str(config_dir), "projects")
+
+    # Rule A — only "/" and "." folded, so "_" and " " survive in the bucket name.
+    rule_a = os.path.join(projects, ww._project_dir_name(worktree))
+    os.makedirs(rule_a, exist_ok=True)
+    assert ww._resolve_project_dir(str(config_dir), worktree) == rule_a
+
+    # Rule B — every non-alphanumeric folded. Same worktree, different spelling.
+    for entry in os.scandir(projects):
+        os.rename(entry.path, os.path.join(projects, "renamed-away"))
+    rule_b = os.path.join(projects, ww._normalize_bucket(ww._project_dir_name(worktree)))
+    os.makedirs(rule_b, exist_ok=True)
+    assert ww._resolve_project_dir(str(config_dir), worktree) == rule_b
+
+
+def test_ambiguous_bucket_match_resolves_to_none(tmp_path, monkeypatch):
+    """Two buckets that normalize alike must not be guessed between — alert instead."""
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    worktree = str(tmp_path / "a_b" / "wt")
+    projects = os.path.join(str(config_dir), "projects")
+    os.makedirs(os.path.join(projects, ww._project_dir_name(worktree)), exist_ok=True)
+    os.makedirs(
+        os.path.join(projects, ww._normalize_bucket(ww._project_dir_name(worktree))),
+        exist_ok=True,
+    )
+    assert ww._resolve_project_dir(str(config_dir), worktree) is None
+
+
+def test_bucket_matches_through_a_symlinked_worktree(tmp_path, monkeypatch):
+    """The child's cwd is the PHYSICAL path; the ledger records the launcher's
+    spelling. A symlinked worktree root must still find its own bucket."""
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    physical = tmp_path / "physical" / "build-wt"
+    os.makedirs(str(physical), exist_ok=True)
+    os.symlink(str(tmp_path / "physical"), str(tmp_path / "linked"))
+    lexical = str(tmp_path / "linked" / "build-wt")
+
+    # Only the PHYSICAL spelling has a bucket, as the host would have written it.
+    bucket = os.path.join(
+        str(config_dir), "projects", ww._project_dir_name(str(physical)),
+    )
+    os.makedirs(bucket, exist_ok=True)
+    assert ww._resolve_project_dir(str(config_dir), lexical) == bucket
+
+
 def test_symlinked_transcript_is_never_followed(tmp_path, monkeypatch):
     """A link in the bucket would let an unrelated file's mtime stand in for the lane."""
     worktree = str(tmp_path / "build-wt")

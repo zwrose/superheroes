@@ -139,6 +139,16 @@ a same-named bucket under the other root belongs to a different session); a syml
 followed; and a transcript last written **before the lane's recorded start** is ignored, so a session
 that ran in that directory earlier cannot vouch for this launch.
 
+**Finding the lane's bucket does not depend on guessing the host's mangling.** The host derives the
+bucket name from the builder's cwd by folding non-alphanumeric characters to `-`, but exactly which
+ones is a host convention, not an API. Rather than reproduce it, the watcher normalizes **both** the
+recorded worktree path and each existing bucket name to the most permissive form and matches on that
+— correct whether the host folds only `/` and `.` or every non-alphanumeric character, and it also
+absorbs the physical-vs-symlinked spelling of a worktree (the builder's cwd is the physical path,
+while the ledger records the spelling the launcher used). **An ambiguous match — two buckets that
+normalize alike — resolves to nothing and alerts**, rather than picking one. A host that truncates or
+hashes an over-long cwd produces a name that cannot match; that lane alerts too.
+
 **One residual is accepted and not closed:** binding is by directory and start time, not by session
 identity, because nothing records which session id belongs to a launch. A *different* session running
 **concurrently** in the same build worktree — an operator opening the wedged lane's directory to look
