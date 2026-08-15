@@ -3849,6 +3849,19 @@ def test_fold_exposes_the_recorded_worktree(tmp_path):
     assert result["launches"]["l1"]["worktree"] == "/tmp/wt/issue-1023-abcd1234"
 
 
+def test_fold_startedts_tracks_the_latest_attempt(tmp_path):
+    # axis: RETRY — a lane that retried must expose the LATEST attempt's start, or a
+    # transcript written between attempts could vouch for the attempt after it (#1023).
+    recs = [
+        _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-1023-abcd1234"),
+        dict(_started("l1", attempt=1), ts=1000.0),
+        dict(_started("l1", attempt=2), ts=2000.0),
+    ]
+    result = ll.fold(recs)
+    assert result["ok"] is True, result.get("reason")
+    assert result["launches"]["l1"]["startedTs"] == 2000.0
+
+
 def test_fold_worktree_is_none_when_the_record_omits_it():
     # axis: an older record folds to None, never a KeyError — the consumer alerts on None
     rec = _reserved("l1", "b", ["a"], "/tmp")

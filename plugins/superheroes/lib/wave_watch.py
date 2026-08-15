@@ -126,6 +126,10 @@ _PROJECT_DIR_TRANSLATION = str.maketrans({"/": "-", ".": "-"})
 _NON_ALNUM_RE = re.compile(r"[^A-Za-z0-9]")
 
 NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
+# The result key is part of the same wire contract as the note token, so it gets the
+# same authoritative definition — a doc-drift guard that compared two hardcoded
+# literals would still pass if the runtime key were renamed underneath it.
+RESULT_KEY_STALE_SUPPRESSED = "staleSuppressed"
 
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
@@ -333,7 +337,7 @@ def _event_result(event, batch_id, degraded, stale_suppressed=None, **payload):
     }
     result.update(payload)
     if stale_suppressed:
-        result["staleSuppressed"] = sorted(
+        result[RESULT_KEY_STALE_SUPPRESSED] = sorted(
             stale_suppressed, key=lambda entry: entry["launchId"],
         )
     return result

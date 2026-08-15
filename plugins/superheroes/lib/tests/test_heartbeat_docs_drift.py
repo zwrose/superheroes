@@ -71,10 +71,12 @@ def test_wave_watch_doc_pins_the_suppression_wire_contract():
     # on one side without the other is the silent drift this pins.
     import wave_watch as ww
 
+    # Both sides read the RUNTIME constants — a hardcoded literal here would keep
+    # passing after a runtime rename, which is the drift this is supposed to catch.
     _assert_tokens_present(
         _read_plugin("skills/showrunner/reference/wave-watch.md"),
         "reference/wave-watch.md",
-        ["staleSuppressed", ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH],
+        [ww.RESULT_KEY_STALE_SUPPRESSED, ww.NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH],
     )
 
 
