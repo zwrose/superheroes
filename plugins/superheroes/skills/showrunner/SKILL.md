@@ -498,6 +498,19 @@ above).
    **The gate is a backstop, not an authorization boundary** — delegation stands on advisor
    discipline with the gate behind it, never the reverse; **approval stays per-PR** ("approve once,
    execute five" was considered and **not adopted**).
+   **A merge train's "green" includes post-merge `main` CI.** Per-lane green is green on each PR's
+   own head, and a union of individually-green branches can still be red: two per-lane-green PRs went
+   red on the union at typecheck — a break **no per-PR run could have caught**, because no per-PR run
+   ever builds the union. So the train is not green when its last lane is; it is green when `main`'s
+   own post-merge run is green on the merged head. Watch that run the way the vet watches any other:
+   selected by **workflow name plus head sha**, never `--limit 1`.
+   **The last PR in a train absorbs the union fixes, disclosed.** When the union breaks, the fix
+   rides the **last** PR's branch as a disclosed advisor integration commit — not a silent push to
+   `main`, not a re-opened earlier lane — and it carries the review floor any advisor-typed change
+   carries (micro-style reviewer plus an **engaged** control probe). Field case: a test green on the
+   identical tree pre-merge went **deterministically** red post-merge in CI only (coverage-instrumented
+   runners lose an assertion race), so no pre-merge lane could have shown it; a disclosed integration
+   commit on the last PR's branch is what closed it.
    When you hand mechanical duties to a cheap in-session subagent, three conditions make that safe:
    (1) **Recipes are durable versioned artifacts, not session context** — a fresh subagent has none of
    your context; what it executes must be self-contained and written down. (2) **The delegated seat

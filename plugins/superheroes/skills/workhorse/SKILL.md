@@ -548,7 +548,10 @@ without a tool call.
   run matched on a path and killed another session's live child. This is the same discipline as the
   liveness rule you already carry — act only on direct observation of processes **you own**. If you
   did not record the PID, you do not have a kill target, and going hunting for one is precisely how
-  you end up holding someone else's.
+  you end up holding someone else's. The one sanctioned way to recover a target you failed to record
+  — by your own run's cwd or port, never by command text — and the field record behind this rule are
+  in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/workhorse/reference/dispatch-mechanics.md`
+  § Process cleanup.
 - **Gated strings as data, never inline in Bash.** A permission-gated literal that is being **written
   or matched as data** — a probe's test string, a memory or ledger append, any carrier that is not
   the command you intend to run — is never embedded inline in Bash text; a probe reads its test
