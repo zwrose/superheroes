@@ -86,6 +86,7 @@ a mechanical per-merge checkpoint exists.
 | --- | --- |
 | `/superheroes:showrunner` | Run the advisor session for this project — route work, vet PRs, coordinate releases. |
 | `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
+| `/superheroes:discuss-open-decisions` | Walk the owner through open decisions that are theirs — standing proposals, open parks, anything pending — filtered to what is genuinely theirs, in two batches with the blocking ones first. |
 
 ## Workhorse — the builder session
 
