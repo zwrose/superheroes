@@ -82,6 +82,9 @@ def _segments(command):
 
     Operand-consuming neutralization is what closes `gh pr 2>&1 merge 123`, but it can also swallow
     a gated word (`gh 2>&pr merge 1` → `gh  merge 1`), which the operator-only copy still catches.
+    On shapes like `gh >pr merge 1` (stdout redirected to a file named `pr`, then `gh merge 1`),
+    the operator-only copy's contribution is over-matching — an extra prompt on a command that is
+    not actually the gated one — which is the accepted direction under the ratified posture.
     Keeping both neutralizations, on top of the raw split, is the fail-closed choice: more segments
     can only mean more matching, never less."""
     command_nc = _LINE_CONTINUATION.sub("", command)
@@ -116,7 +119,8 @@ def _short_flag(letter):
 # (action, tool-word, subcommand-token, trailing-requirement-or-None)
 # The trailing requirement is searched AFTER the subcommand match, within the same segment.
 OWNER_AUTHORITY_COMMANDS = [
-    ("merge-pr",        _GH,  re.compile(r"(?<!\S)pr\s+merge(?!\S)", re.I), None),
+    # `)` ends a shell word (#1000 round-2 panel) — trailing boundary accepts it like whitespace/EOS.
+    ("merge-pr",        _GH,  re.compile(r"(?<!\S)pr\s+merge(?=\s|$|\))", re.I), None),
     ("merge-api",       _GH,  re.compile(r"(?<!\S)api(?!\S)", re.I),
                               re.compile(r"\bpulls/[^/\s]+/merge\b", re.I)),
     ("merge-graphql",   None, re.compile(r"\bmergePullRequest\b", re.I), None),
@@ -130,7 +134,8 @@ OWNER_AUTHORITY_COMMANDS = [
                               re.compile(r"(--force\b|-f\b|--force-with-lease|"
                                          + _short_flag("f") + r")", re.I)),
     ("push-to-default", _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
-                              re.compile(r"(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
+                              # `)` ends a shell word (#1000 round-2 panel).
+                              re.compile(r"(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$|\))", re.I)),
 ]
 
 ALLOW_FILENAME = "owner-authority-allow.json"

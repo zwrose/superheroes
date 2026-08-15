@@ -67,6 +67,17 @@ _REDIRECTION_CENSUS = [
     ("gh pr &>out merge 123", "merge-pr"),
     ("gh pr >out merge 123", "merge-pr"),
     ("gh pr 1>out merge 123", "merge-pr"),
+    # Operator-only neutralization branch — load-bearing on runnable shapes (#1000 round-2).
+    ("gh >pr merge 1", "merge-pr"),
+    ("gh 2>pr merge 1", "merge-pr"),
+    ("gh >&pr merge 1", "merge-pr"),
+    ("git >push --force origin f", "force-push"),
+    # `)` ends a shell word — trailing anchors accept it like whitespace/EOS (#1000 round-2).
+    ("(cd sub && git push origin main)", "push-to-default"),
+    ("(git push origin main)", "push-to-default"),
+    ("git push origin main)", "push-to-default"),
+    ("$(gh pr merge)", "merge-pr"),
+    ("(gh pr merge)", "merge-pr"),
 ]
 
 # Invariant B — short-option clusters (#1000).
