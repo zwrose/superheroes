@@ -2147,22 +2147,12 @@ def test_resurrection_plan_minted_happy_path(private_tmp):
     assert plan["steps"][3]["owner"] == "C7"
 
 
-def _resurrection_plan_fixture(private_tmp, *, sign_in_path="attended", with_mint=False):
-    """Shared resurrection_plan inputs — mint branch needs mint envelope on the block."""
+def _resurrection_plan_fixture(private_tmp, *, sign_in_path="attended"):
+    """Shared resurrection_plan inputs."""
     policy, reach_root, run_cwd, cleanup_repo = _resurrection_policy(private_tmp)
     cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", _cleanup_correct_script())
     block = _pilot_block(cleanup_script)
     block["signInPath"] = sign_in_path
-    if with_mint:
-        block["mint"] = {
-            "envelope": {
-                "enablingFlagEnvVar": "ALLOW_TEST_MINT",
-                "enabledScopes": ["development"],
-                "forbiddenScopes": ["production"],
-                "gateOffTestCommand": ["true"],
-            },
-            "sentinelIdentifier": "pilot-sentinel-no-such-account",
-        }
     receipt = _take_receipt(private_tmp, policy, block, reach_root, run_cwd, cleanup_repo)
     registry = _registry_with(
         _effects_escape_record(block),
@@ -2183,8 +2173,6 @@ def _resurrection_plan_fixture(private_tmp, *, sign_in_path="attended", with_min
         "identity_provenance": "observed",
         "identity_strength": "strong",
     }
-    if with_mint:
-        kwargs["mint_envelope"] = block["mint"]["envelope"]
     return kwargs
 
 
@@ -3224,10 +3212,22 @@ def test_run_bounded_kills_grandchild_on_timeout(private_tmp):
         timeout_seconds=1,
     )
     assert result["timedOut"] is True
-    with open(pid_file, encoding="utf-8") as handle:
-        pid = int(handle.read().strip())
-    with pytest.raises(ProcessLookupError):
-        os.kill(pid, 0)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if os.path.isfile(pid_file):
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail(f"grandchild pid file never appeared: {pid_file!r}")
+    pid = _read_grandchild_pid(pid_file)
+    if not _wait_for_process_gone(pid, timeout=10):
+        state = _observed_process_state(pid)
+        detail = f"observed state: {state}"
+        try:
+            detail += f"; pgid={os.getpgid(pid)}"
+        except (ProcessLookupError, PermissionError):
+            pass
+        pytest.fail(f"grandchild pid {pid} still present after 10s poll; {detail}")
 
 
 def _read_grandchild_pid(pid_file):

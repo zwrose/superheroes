@@ -469,6 +469,7 @@ def _make_core_unreadable(repo, store):
     return core_p
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="chmod(0) does not make files unreadable under root")
 def test_load_engine_prefs_unreadable_preserves_brief_check_claude_opt_out(tmp_path):
     """#752 regression: unreadable config must not escalate briefCheck to codex."""
     import stat
@@ -489,6 +490,7 @@ def test_load_engine_prefs_absent_greenfield_no_read_error(tmp_path):
     assert "readError" not in got
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="chmod(0) does not make files unreadable under root")
 def test_load_engine_prefs_unreadable_all_roles_claude_with_read_error(tmp_path):
     import stat
     repo = str(tmp_path / "unreadable")

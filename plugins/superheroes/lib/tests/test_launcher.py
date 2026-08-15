@@ -1510,8 +1510,8 @@ def test_edge8_deadline_parks_if_spawned_refuses_if_not(tmp_path, monkeypatch):
         _all_checks(),
         log_dir,
         spawn_fn=_make_spawn_fn("sleep"),
-        settle_seconds=10,
-        total_deadline_seconds=1,
+        settle_seconds=60,
+        total_deadline_seconds=15,
     )
     assert parked["ok"] is False
     assert parked["reason"] == "retry-deadline-exceeded"

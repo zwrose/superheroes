@@ -98,6 +98,8 @@ neither `ledger-unreadable` on the deadline path nor `internal-error` is guarant
 - `heartbeat-unreadable`
 - `pid-probe-uncertain`
 - `pr-signal-unavailable`
+- `lane-never-stamped`
+- `pr-signal-never-sampled`
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
@@ -110,9 +112,9 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
   rebuilt on each arm.
 - **A mistyped batch id is indistinguishable from a quiet batch** — it produces a calm `timer`, not
   a refusal.
-- **A started lane that has never stamped a heartbeat is invisible to the heartbeat-derived signal
-  classes** (`lane-terminal`, `lane-blocked`, `lane-stale`) — but `builder-exited` still surfaces
-  it when its recorded pid dies.
+- **A started lane that has never stamped a heartbeat across the full watch window
+  is reported as a `lane-never-stamped` degradation at the deadline** — but
+  `builder-exited` still surfaces it when its recorded pid dies.
 
 ## How it relates to the heartbeat sweep
 

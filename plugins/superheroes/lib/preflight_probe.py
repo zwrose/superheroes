@@ -16,6 +16,7 @@ ok=False with a detail string, never an uncaught exception)."""
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -182,14 +183,81 @@ def aggregate(results):
     return {"go": go, "blocking": blocking, "checked": checked, "na": na}
 
 
-def _dispatch_calibration_read_error_marker(reason, detail):
+_REDACTED_ABS_PATH = "<redacted-path>"
+_GIT_STDERR_AT_PREFIXES = (
+    "git could not be run at ",
+    "git declined rev-parse --show-toplevel at ",
+    "git rev-parse --show-toplevel at ",
+)
+_ABS_PATH_RE = re.compile(r"/(?:[^\s:/]+(?:/|(?=\s|$|:)))+")
+
+
+def _workspace_relative_or_redacted(path, cwd=None):
+    if not path:
+        return path
+    try:
+        path_real = os.path.realpath(path)
+    except (OSError, ValueError):
+        return _REDACTED_ABS_PATH
+    if not os.path.isabs(path_real):
+        return path
+    if cwd is not None:
+        try:
+            cwd_real = os.path.realpath(cwd)
+            if path_real == cwd_real:
+                return "."
+            if path_real.startswith(cwd_real + os.sep):
+                return os.path.relpath(path_real, cwd_real)
+        except (OSError, ValueError):
+            pass
+    return _REDACTED_ABS_PATH
+
+
+def _redact_absolute_paths_in_text(text, cwd=None):
+    def repl(match):
+        raw = match.group(0)
+        path = raw.rstrip(".,;)")
+        suffix = raw[len(path):]
+        return _workspace_relative_or_redacted(path, cwd) + suffix
+
+    return _ABS_PATH_RE.sub(repl, text)
+
+
+def _redact_read_error_detail(detail, cwd=None):
+    for prefix in _GIT_STDERR_AT_PREFIXES:
+        if detail.startswith(prefix):
+            rest = detail[len(prefix):]
+            if ": " in rest:
+                path_part, _stderr = rest.split(": ", 1)
+                return prefix + _workspace_relative_or_redacted(path_part.strip(), cwd)
+            return prefix + _workspace_relative_or_redacted(rest.strip(), cwd)
+    return _redact_absolute_paths_in_text(detail, cwd=cwd)
+
+
+def _redact_read_error_payload_line(line, cwd=None):
+    """Owner-safe readError for CLI payloads — reason token survives; paths are relative or redacted."""
+    if line is None:
+        return None
+    if not isinstance(line, str):
+        line = str(line)
+    line = line.strip()
+    if not line:
+        return line
+    if ": " not in line:
+        return line
+    reason, detail = line.split(": ", 1)
+    return "%s: %s" % (reason, _redact_read_error_detail(detail, cwd=cwd))
+
+
+def _dispatch_calibration_read_error_marker(reason, detail, cwd=None):
+    line = core_md.gate_refusal_line(core_md.gate_refusal(reason, detail))
     return [{"role": "*", "engine": None, "model": None,
-             "readError": core_md.gate_refusal_line(
-                 core_md.gate_refusal(reason, detail))}]
+             "readError": _redact_read_error_payload_line(line, cwd=cwd)}]
 
 
-def _dispatch_calibration_read_error_marker_from_line(read_error_line):
-    return [{"role": "*", "engine": None, "model": None, "readError": read_error_line}]
+def _dispatch_calibration_read_error_marker_from_line(read_error_line, cwd=None):
+    return [{"role": "*", "engine": None, "model": None,
+             "readError": _redact_read_error_payload_line(read_error_line, cwd=cwd)}]
 
 
 def _eval_failed_line(exc):
@@ -204,9 +272,13 @@ def _eval_failed_line(exc):
 CONFIG_READ_FIELDS = ("status", "reason", "readError")
 
 
-def config_read_payload(snapshot):
+def config_read_payload(snapshot, cwd=None):
     """The CLI-visible `configRead` projection of a `readout_config` snapshot."""
-    return {field: snapshot[field] for field in CONFIG_READ_FIELDS}
+    payload = {field: snapshot[field] for field in CONFIG_READ_FIELDS}
+    if payload.get("readError") is not None:
+        payload = dict(payload)
+        payload["readError"] = _redact_read_error_payload_line(payload["readError"], cwd=cwd)
+    return payload
 
 
 def readout_config(cwd=None, root=None):
@@ -270,7 +342,8 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
     failure returns that marker, not an empty list."""
     try:
         if snapshot is not None and snapshot.get("readError") is not None:
-            return _dispatch_calibration_read_error_marker_from_line(snapshot["readError"])
+            return _dispatch_calibration_read_error_marker_from_line(
+                snapshot["readError"], cwd=cwd)
         if prefs is None:
             if snapshot is not None:
                 prefs = snapshot.get("prefs")
@@ -280,7 +353,7 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
                 refusal = core_md.gate_config_refusal(cfg)
                 if refusal is not None:
                     return _dispatch_calibration_read_error_marker(
-                        refusal["reason"], refusal["detail"])
+                        refusal["reason"], refusal["detail"], cwd=cwd)
                 prefs = core_md.gate_config_usable_prefs(cfg)
                 prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
@@ -289,7 +362,8 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
     except Exception as exc:
         return _dispatch_calibration_read_error_marker(
-            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc))
+            core_md.GATE_REASON_EVALUATION_FAILED, core_md.gate_refusal_detail(exc),
+            cwd=cwd)
 
 
 def _dispatch_selftest_config(cwd=None, root=None, snapshot=None):
@@ -492,14 +566,14 @@ def main(argv):
         if snap["readError"] is not None:
             notes.append({
                 "constraint": snap["reason"],
-                "reason": snap["readError"],
+                "reason": _redact_read_error_payload_line(snap["readError"], cwd=args.cwd),
             })
         sys.stdout.write(json.dumps({
             "live": live,
             "cachePath": cache_path,
             "crossVendorEngines": configured,
             "notes": notes,
-            "configRead": config_read_payload(snap),
+            "configRead": config_read_payload(snap, cwd=args.cwd),
         }) + "\n")
         return 0
 
@@ -524,7 +598,7 @@ def main(argv):
             "aggregate": aggregate(probes),
             "browserNote": _BROWSER_NOTE,
             "crossVendorEngines": cross_vendor_engines,
-            "configRead": config_read_payload(snap),
+            "configRead": config_read_payload(snap, cwd=args.cwd),
         }
         sys.stdout.write(json.dumps(out) + "\n")
         return 0
