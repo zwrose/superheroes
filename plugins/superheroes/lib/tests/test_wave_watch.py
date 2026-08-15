@@ -440,7 +440,7 @@ def test_event_e5_timer(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=60, gh_run=_noop_gh_run,
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
     )
     assert result["ok"] is True
     assert result["event"] == "timer"
@@ -1473,7 +1473,7 @@ def test_gh_child_receives_supplied_env(tmp_path, monkeypatch):
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1522,7 +1522,7 @@ def test_gh_child_env_scrubs_routing_var(tmp_path, monkeypatch, var):
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1544,7 +1544,7 @@ def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
-        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
         env=custom_env, gh_run=gh_run,
     )
     assert result["event"] == "timer"
@@ -1642,7 +1642,7 @@ def test_cli_event_exit_zero(tmp_path, monkeypatch):
     env, record_file = _cli_env_with_stub_gh(tmp_path, monkeypatch)
     proc = _run_cli([
         "run", "--repo-root", repo, "--batch", "batch-982",
-        "--max-seconds", "1", "--interval-seconds", "1",
+        "--max-seconds", "2", "--interval-seconds", "1",
     ], env=env)
     assert proc.returncode == 0
     out = json.loads(proc.stdout.strip())
@@ -1694,14 +1694,17 @@ def test_precedence_reorder_bite_proof(tmp_path, monkeypatch):
 
 
 def test_missed_interval_replay_spacing(tmp_path, monkeypatch):
+    """After a tick overruns interval boundaries, evaluations land on future boundaries."""
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
-    eval_count = [0]
+    eval_times = []
     clock, mono, fake_sleep = _bounded_fake_clock(start=0.0)
+    stall_at_eval = 2
 
     def gh_run(argv, **kwargs):
-        eval_count[0] += 1
-        clock[0] += 3.5
+        eval_times.append(clock[0])
+        if len(eval_times) == stall_at_eval:
+            clock[0] += 5.0
         return _noop_gh_run(argv, **kwargs)
 
     result = ww.run(
@@ -1709,7 +1712,18 @@ def test_missed_interval_replay_spacing(tmp_path, monkeypatch):
         monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
     )
     assert result["event"] == "timer"
-    assert eval_count[0] <= 3
+    assert len(eval_times) >= 2, f"expected multiple evaluations, got {eval_times!r}"
+    for idx in range(1, len(eval_times)):
+        prev_t, cur_t = eval_times[idx - 1], eval_times[idx]
+        assert cur_t != prev_t, (
+            f"evaluations replayed at the same instant (t={cur_t}); "
+            f"all evaluation timestamps: {eval_times!r}"
+        )
+        gap = cur_t - prev_t
+        assert gap >= 1.0, (
+            f"evaluations only {gap}s apart at t={prev_t} and t={cur_t}; "
+            f"replayed timestamps: {eval_times!r}"
+        )
 
 
 def test_internal_error_detail_class_only(tmp_path, monkeypatch):
