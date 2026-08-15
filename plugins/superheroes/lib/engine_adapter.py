@@ -41,6 +41,7 @@ PAYLOAD_SHAPE_MAX_KEY_LEN = 60
 SHAPE_OBJECT_WITHOUT_FINDINGS = "object-without-findings"
 SHAPE_OBJECT_FINDINGS_NOT_A_LIST = "object-findings-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
+SHAPE_FINDINGS_ALL_HOLLOW = "findings-all-hollow"
 SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
 SHAPE_EMPTY_STDOUT = "empty-stdout"
 SHAPE_PROMPT_ECHO_ONLY = "prompt-echo-only"
@@ -49,6 +50,7 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_WITHOUT_FINDINGS,      # a JSON object parsed, but it carries no `findings` key
     SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
+    SHAPE_FINDINGS_ALL_HOLLOW,          # a findings array parsed with at least one hollow object member
     SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
     SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
     SHAPE_PROMPT_ECHO_ONLY,             # the seat emitted only an echo of its prompt — graded text empty after strip
@@ -540,6 +542,42 @@ def _scrub(text):
 # (body/suggestion/evidence/title/description/message/etc.) and is scrubbed unconditionally so no
 # new field name can silently reopen the leak this boundary exists to close.
 _FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "id", "dimension", "confidence"}
+_FINDING_SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
+_FINDING_SUBSTANCE_KEYS_TOLERATED = frozenset({"summary", "message"})
+
+
+def _substance_value_is_substantive(val):
+    """True when a substance-field value carries review content, not an empty placeholder."""
+    if val is None:
+        return False
+    if isinstance(val, str) and not val.strip():
+        return False
+    if isinstance(val, (list, dict, tuple)) and len(val) == 0:
+        return False
+    return True
+
+
+def _finding_is_substantive(obj):
+    """True when a finding dict carries at least one substantive substance-field value."""
+    if not isinstance(obj, dict):
+        return False
+    substance_keys = _FINDING_SUBSTANCE_KEYS_CANONICAL | _FINDING_SUBSTANCE_KEYS_TOLERATED
+    for key in substance_keys:
+        if key in obj and _substance_value_is_substantive(obj[key]):
+            return True
+    return False
+
+
+def _findings_list_has_hollow_member(findings):
+    """True when a findings array contains at least one hollow object member."""
+    if not isinstance(findings, list):
+        return False
+    return any(isinstance(x, dict) and not _finding_is_substantive(x) for x in findings)
+
+
+def _findings_reply_has_hollow_member(rejected):
+    """True when any scrub rejection was for a hollow finding member."""
+    return any(r.get("reason") == "no-substantive-fields" for r in rejected)
 
 
 def _scrub_finding_value(val):
@@ -574,6 +612,9 @@ def _scrub_findings(findings):
     for f in findings:
         if not isinstance(f, dict):
             rejected.append({"entry": _render_rejection_entry(f), "reason": "not-a-dict"})
+            continue
+        if not _finding_is_substantive(f):
+            rejected.append({"entry": _render_rejection_entry(f), "reason": "no-substantive-fields"})
             continue
         g = dict(f)
         for key, val in g.items():
@@ -738,11 +779,17 @@ def review_payload_shape(stdout):
             if not isinstance(findings, list):
                 return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
                         "topLevelKeys": [], "keysTruncated": False}
+            if _findings_list_has_hollow_member(findings):
+                return {"parsed": SHAPE_FINDINGS_ALL_HOLLOW,
+                        "topLevelKeys": [], "keysTruncated": False}
             return None
         if obj is None:
             arr = _last_json_array(stdout)
             if isinstance(arr, list):
                 if all(isinstance(x, dict) for x in arr):
+                    if _findings_list_has_hollow_member(arr):
+                        return {"parsed": SHAPE_FINDINGS_ALL_HOLLOW,
+                                "topLevelKeys": [], "keysTruncated": False}
                     return None
                 return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
                         "topLevelKeys": [], "keysTruncated": False}
@@ -1215,6 +1262,8 @@ def parse_result(engine, role_kind, stdout):
                 arr = _last_json_array(stdout)
                 if isinstance(arr, list) and all(isinstance(x, dict) for x in arr):
                     findings_list, findings_rejected = _scrub_findings(arr)
+                    if _findings_reply_has_hollow_member(findings_rejected):
+                        return {"ok": False, "reason": "unreadable"}
                     if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
                         return {"ok": False, "reason": "unreadable"}
                     if arr and not findings_list:
@@ -1239,6 +1288,8 @@ def parse_result(engine, role_kind, stdout):
             if not isinstance(findings, list):
                 return {"ok": False, "reason": "unreadable"}
             findings_list, findings_rejected = _scrub_findings(findings)
+            if _findings_reply_has_hollow_member(findings_rejected):
+                return {"ok": False, "reason": "unreadable"}
             if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
                 return {"ok": False, "reason": "unreadable"}
             if findings and not findings_list:
