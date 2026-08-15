@@ -35,14 +35,16 @@ Contract:
 - When a lane's heartbeat is unreadable its higher-precedence E1/E2 state is
   UNKNOWN, so a lower-precedence event may be reported for it and the
   heartbeat-unreadable degradation token discloses that uncertainty.
-- alsoObserved: when an event fires, co-occurring lower-precedence lane signals
-  from the same interval are included under alsoObserved (launchIds only).
+- alsoObserved: on a result that carries a payload, co-occurring lower-precedence
+  lane signals from the same interval are included under alsoObserved (launchIds
+  only). A timer result carries no payload and no alsoObserved, so a lane whose
+  only signal is suppressed is not visible in that arm's output.
 - ignore-launch: caller-supplied launch ids excluded from lane enumeration so
   an already-handled lane that cannot be terminalized does not re-fire.
 - ignore-events: caller-supplied (launchId, event) pairs suppress that event
   for that lane only — lane-terminal, lane-blocked, builder-exited, and
   lane-stale are suppressible; pr-set-changed and timer are not. Suppression
-  affects actionability only; suppressed lanes still appear in alsoObserved.
+  affects actionability only.
 - Pid liveness: probes ONLY the recorded leader pid (never the process group).
   launch_ledger._child_group_is_live biases uncertain toward ALIVE because a
   false dead there causes a wrong kill/outcome record; this watcher biases
@@ -55,6 +57,10 @@ Contract:
   not start a new arm once the total is reached; the final arm's window is
   max(1, min(max_seconds, int(remaining))). The loop may therefore overrun the
   total by the final arm's rounding plus one evaluation pass.
+- arms (loop only): count of run arms actually started in this loop call; rides
+  loop results only (ok and refusal), never run results.
+- One-second arms (including loop's final truncated arm) never poll gh: the
+  poll guard is timeout < _MIN_PR_POLL_SECONDS with both equal to 1.0.
 - Standing guarantees: the watcher is read-only over the store (it never
   writes, never mutates ledger or heartbeat state) and it never signals any
   process (pid liveness is os.kill(pid, 0) probing only).
@@ -620,6 +626,18 @@ _EVENT_PAYLOAD_BUILDERS = {
     EVENT_LANE_STALE: _payload_lane_stale,
 }
 
+for _event in EVENT_PRECEDENCE:
+    if _event != EVENT_TIMER:
+        assert _event in _EVENT_PAYLOAD_BUILDERS
+
+
+def _close_log_silent(log_file):
+    if log_file is not None:
+        try:
+            log_file.close()
+        except OSError:
+            pass
+
 
 def _open_log_append(log_path):
     """Open log_path for append-only writes; return (file, degradation_or_none)."""
@@ -689,11 +707,11 @@ def run(
         if not _valid_batch_id(batch_id):
             return _refusal(REFUSAL_BATCH_INVALID, batch_for_refusal)
 
-        ignore_refusal = _validate_ignore_events(ignore_events, batch_for_refusal)
+        batch_id = batch_id.strip()
+
+        ignore_refusal = _validate_ignore_events(ignore_events, batch_id)
         if ignore_refusal is not None:
             return ignore_refusal
-
-        batch_id = batch_id.strip()
 
         if not _valid_positive_int(interval_seconds):
             return _refusal(REFUSAL_INTERVAL_INVALID, batch_id)
@@ -815,6 +833,9 @@ def loop(
 ):
     """Re-arm run until a refusal or non-timer event. Returns the result dict; never raises."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
+    arms = 0
+    loop_degraded = set()
+    log_file = None
     try:
         if env is None:
             env = os.environ
@@ -830,13 +851,13 @@ def loop(
         if not _valid_batch_id(batch_id):
             return _refusal(REFUSAL_BATCH_INVALID, batch_for_refusal, arms=0)
 
+        batch_id = batch_id.strip()
+
         ignore_refusal = _validate_ignore_events(
-            ignore_events, batch_for_refusal, arms=0,
+            ignore_events, batch_id, arms=0,
         )
         if ignore_refusal is not None:
             return ignore_refusal
-
-        batch_id = batch_id.strip()
 
         if (
             max_total_seconds is not None
@@ -855,8 +876,6 @@ def loop(
         ledger_observed = [False]
         pr_state = [None]
         pr_sampled = [False]
-        loop_degraded = set()
-        arms = 0
         total_start = monotonic()
         total_deadline = (
             total_start + max_total_seconds
@@ -864,7 +883,6 @@ def loop(
             else None
         )
         last_timer_result = None
-        log_file = None
         log_degradation = None
         if log_path is not None:
             log_file, log_degradation = _open_log_append(log_path)
@@ -876,19 +894,14 @@ def loop(
             if total_deadline is not None:
                 remaining = total_deadline - monotonic()
                 if remaining <= 0:
-                    if last_timer_result is not None:
-                        final = dict(last_timer_result)
-                        final["arms"] = arms
-                        final_degraded = set(final.get("degraded", []))
-                        final_degraded.update(loop_degraded)
-                        final["degraded"] = sorted(final_degraded)
-                        return final
-                    degraded = set(loop_degraded)
-                    if not pr_sampled[0]:
-                        degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
-                    return _event_result(
-                        EVENT_TIMER, batch_id, degraded, arms=arms,
-                    )
+                    # Fail-closed: only reachable after a timer arm set last_timer_result.
+                    final = dict(last_timer_result)
+                    final["arms"] = arms
+                    final_degraded = set(final.get("degraded", []))
+                    final_degraded.update(loop_degraded)
+                    final["degraded"] = sorted(final_degraded)
+                    _close_log_silent(log_file)
+                    return final
 
             if total_deadline is not None:
                 remaining = total_deadline - monotonic()
@@ -896,7 +909,6 @@ def loop(
             else:
                 arm_max_seconds = max_seconds
 
-            arm_start = monotonic()
             arms += 1
             result = run_fn(
                 repo_root,
@@ -939,6 +951,18 @@ def loop(
                     if log_degradation is not None:
                         loop_degraded.add(log_degradation)
                         log_file = None
+                    elif log_file is not None:
+                        try:
+                            _append_log_line(
+                                log_file,
+                                arms,
+                                monotonic() - total_start,
+                                result,
+                            )
+                        except OSError:
+                            loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
+                            _close_log_silent(log_file)
+                            log_file = None
 
                 if total_deadline is not None:
                     remaining = total_deadline - monotonic()
@@ -948,6 +972,7 @@ def loop(
                         final_degraded = set(final.get("degraded", []))
                         final_degraded.update(loop_degraded)
                         final["degraded"] = sorted(final_degraded)
+                        _close_log_silent(log_file)
                         return final
                 continue
 
@@ -956,10 +981,14 @@ def loop(
             final_degraded = set(final.get("degraded", []))
             final_degraded.update(loop_degraded)
             final["degraded"] = sorted(final_degraded)
+            _close_log_silent(log_file)
             return final
     except Exception as exc:
-        result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal, arms=0)
+        _close_log_silent(log_file)
+        result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal, arms=arms)
         result["detail"] = type(exc).__name__
+        if loop_degraded:
+            result["degraded"] = sorted(loop_degraded)
         return result
 
 
