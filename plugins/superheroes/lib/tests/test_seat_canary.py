@@ -454,6 +454,65 @@ def test_engaged_from_dispatch_equivalent_to_engagement_read():
         assert SC._engaged_from_dispatch(res) == (EA.engagement_read(res) == "engaged")
 
 
+def _run_main(monkeypatch, argv):
+    """Drive the probe CLI with run_canary stubbed; return the kwargs it was called with."""
+    seen = {}
+
+    def fake_run_canary(engine, **kwargs):
+        seen["engine"] = engine
+        seen.update(kwargs)
+        return {"engine": engine, "engaged": False}
+
+    monkeypatch.setattr(SC, "run_canary", fake_run_canary)
+    assert SC.main(argv) == 0
+    return seen
+
+
+def test_cli_effort_omitted_passes_none(monkeypatch):
+    # #963: cursor's implementer/code-fixer registry config is effort-LESS — ("composer-2.5", None).
+    # Omitting --effort must reach the seat path as None, not as any effort string.
+    seen = _run_main(monkeypatch, [
+        "probe", "--engine", "cursor", "--engine-model", "composer-2.5", "--repo-root", "/r",
+    ])
+    assert seen["effort"] is None
+    assert seen["engine"] == "cursor"
+    assert seen["engine_model"] == "composer-2.5"
+
+
+def test_cli_effort_supplied_passes_through(monkeypatch):
+    # The other direction: an explicit effort is still carried verbatim, unchanged by #963.
+    seen = _run_main(monkeypatch, [
+        "probe", "--engine", "codex", "--engine-model", "gpt-5.6-terra",
+        "--effort", "high", "--repo-root", "/r",
+    ])
+    assert seen["effort"] == "high"
+    assert seen["engine"] == "codex"
+    assert seen["engine_model"] == "gpt-5.6-terra"
+
+
+def test_effort_none_builds_cursor_argv_and_still_refuses_where_effort_required():
+    """End of the chain the CLI feeds: effort=None is what makes cursor's effort-less seat runnable.
+
+    Grounds the #963 DoD — the probe reaches the engine — without dispatching one, and pins that
+    the relaxation is CLI-side only: a model that requires an effort still refuses without one.
+    """
+    runnable = EA.build_argv_result("cursor", "review", None, {"engine_model": "composer-2.5"})
+    assert runnable["reason"] is None
+    assert runnable["argv"]
+
+    # Unchanged fail-closed edges: an effort string on the effort-less model, and a missing effort
+    # on models that require one.
+    assert EA.build_argv_result(
+        "cursor", "review", "high", {"engine_model": "composer-2.5"},
+    )["reason"] == "invalid-model-effort"
+    assert EA.build_argv_result(
+        "cursor", "review", None, {"engine_model": "cursor-grok-4.6"},
+    )["reason"] == "invalid-model-effort"
+    assert EA.build_argv_result(
+        "codex", "review", None, {"engine_model": "gpt-5.6-terra"},
+    )["reason"] == "invalid-model-effort"
+
+
 def test_map_outcome_engaged_artifact_not_unrunnable():
     """axis: dispatched-and-engaged vs not-dispatched — honest member, not unrunnable fall-through."""
     res = {
