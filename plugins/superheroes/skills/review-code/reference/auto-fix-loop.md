@@ -257,8 +257,10 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **`verdicts`** pin. When no pin is set the transport accepts either kind, each graded by its own
 > engagement floor; #687's findings-only posture for panel seats is carried by the pin those seats
 > pass, not by a transport default. Any other `expected_result_kind` value is refused before dispatch
-> with `attempts: 0` and `detail: "expected-result-kind-invalid"`, the rejected value echoed under
-> `rejectedResultKind`. A **`verdicts`** payload now travels
+> on either route — neither silently ignores it. The **library** API (`expected_result_kind=`)
+> returns a structured refusal with `attempts: 0`, `detail: "expected-result-kind-invalid"`, and the
+> rejected value under `rejectedResultKind`; the **CLI** (`--expected-result-kind`) is rejected by
+> argparse before dispatch with a usage error, a non-zero exit, and no result object. A **`verdicts`** payload now travels
 > through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
 > parses `unreadable` by construction. **Per-id audit rulings** (`dispatch-audits`) still do not
 > travel through this verb; encode those inside audit result objects or use the file-writing auditor
