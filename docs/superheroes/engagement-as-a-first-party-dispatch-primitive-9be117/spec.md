@@ -11,7 +11,7 @@ approved: null
 gates: {review: pending}
 producedBy: "workhorse@0.27.0"
 created: "2026-08-14"
-updated: "2026-08-14"
+updated: "2026-08-15"
 ---
 # Engagement as a first-party dispatch primitive
 
@@ -443,6 +443,20 @@ enumerated as migration targets in D3 read the attestation instead of deriving t
 
 ## Decomposition into build issues
 
+**Owner ruling at ratification (2026-08-15): step 1 is built now; steps 2–8 are parked behind a
+tripwire, not filed as builds.** Only the disclosure correction has owner-visible value today, and one
+review lens argued the contract train ran ahead of demonstrated need. Two issues carry this:
+
+- **#1014** — step 1, the disclosure correction (FR-13), **build-ready now**.
+- **#1015** — steps 2–8 and the two open questions, **parked**; its body names the tripwire
+  conditions (the fix proving insufficient; a defect attributed to payload archaeology again; probe
+  cost becoming the binding constraint; the owner-gate dead end recurring in the field; write-side
+  work being proposed). A fired tripwire reopens scope as an owner decision — step 2 alone, 2+3, or
+  the full train — never as an automatic build.
+
+The step list below is the ratified sequence for **when** that happens; the ordering, contingency, and
+rollback constraints hold unchanged.
+
 **Restructured on review evidence.** The first draft put a six-step contract train ahead of the one
 change with immediate owner-visible value, and one lens argued the whole contract was over-built for a
 defect whose only visible symptom is a disclosure string. That argument is partly right, and the
@@ -576,6 +590,12 @@ Every obvious word for these concepts is already taken in this repo; the renames
   instead.
 
 ## Amendments
+
+**A4 (2026-08-15, owner ratification ruling — advisor-applied).** At ratification the owner ruled the
+decomposition's scope: **build step 1 now, park steps 2–8 behind a tripwire.** Two issues filed to
+carry it — #1014 (step 1, build-ready) and #1015 (the parked train, with its reopen conditions) — and
+the Decomposition section's preamble records the ruling. No requirement, constraint, or step changed;
+this amendment changes *when* the steps are built, not *what* they are.
 
 **A3 (2026-08-14, round-3 convergence check — and the stopping point).** Round 3 found **no Critical**
 and nine further defects. The factual errors are corrected here: `action` collided with the round
