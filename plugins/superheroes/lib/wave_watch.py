@@ -1,16 +1,26 @@
 #!/usr/bin/env python3
-"""Ledger-driven single-shot wave watcher (#982).
+"""Ledger-driven wave watcher (#982).
 
 Watch one launch batch until the first qualifying event. stdlib only.
 
+Verbs:
+- run: single-shot watch — one arm, one result.
+- loop: re-arms run internally until a refusal or a non-timer event; the arming
+  shape for a background advisor call per batch. loop owns one set of state
+  cells (ledger_observed, pr_state, pr_sampled) threaded through every arm so
+  store loss across an arm boundary is not mistaken for benign pre-arm silence,
+  PR deltas across an arm boundary are not absorbed into a fresh baseline, and
+  a prior arm's successful PR poll is not forgotten on the next arm's timer.
+
 Contract:
-- Refusals (ok=False): batch-invalid, interval-invalid, max-seconds-invalid,
-  repo-root-invalid, store-unresolvable, ledger-unreadable, internal-error.
+- Refusals (ok=False): batch-invalid, max-total-seconds-invalid,
+  ignore-event-invalid, interval-invalid, max-seconds-invalid, repo-root-invalid,
+  store-unresolvable, ledger-unreadable, internal-error.
 - Events (ok=True): lane-terminal, lane-blocked, builder-exited, pr-set-changed,
   lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
-  lane-never-stamped, pr-signal-never-sampled.
+  lane-never-stamped, pr-signal-never-sampled, log-unwritable.
 - gh child env-scrubbing: ambient git/GH routing variables in _GIT_SCRUB_VARS
   are stripped via _scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below
@@ -29,6 +39,10 @@ Contract:
   from the same interval are included under alsoObserved (launchIds only).
 - ignore-launch: caller-supplied launch ids excluded from lane enumeration so
   an already-handled lane that cannot be terminalized does not re-fire.
+- ignore-events: caller-supplied (launchId, event) pairs suppress that event
+  for that lane only — lane-terminal, lane-blocked, builder-exited, and
+  lane-stale are suppressible; pr-set-changed and timer are not. Suppression
+  affects actionability only; suppressed lanes still appear in alsoObserved.
 - Pid liveness: probes ONLY the recorded leader pid (never the process group).
   launch_ledger._child_group_is_live biases uncertain toward ALIVE because a
   false dead there causes a wrong kill/outcome record; this watcher biases
@@ -37,11 +51,19 @@ Contract:
   is a real and intended builder-exited wake. Only info['pid'] (latest attempt)
   is probed; info['pids'] history is ignored because prior attempt pids are dead
   by construction on a retried lane.
+- max_total_seconds (loop only): a re-arm bound, not a hard kill — the loop will
+  not start a new arm once the total is reached; the final arm's window is
+  max(1, min(max_seconds, int(remaining))). The loop may therefore overrun the
+  total by the final arm's rounding plus one evaluation pass.
+- Standing guarantees: the watcher is read-only over the store (it never
+  writes, never mutates ledger or heartbeat state) and it never signals any
+  process (pid liveness is os.kill(pid, 0) probing only).
 """
 import argparse
 import json
 import math
 import os
+import stat
 import subprocess
 import sys
 import time
@@ -92,6 +114,8 @@ def _scrub_env(env):
 # --- wave_watch vocabulary (authoritative for this module) --------------------
 
 REFUSAL_BATCH_INVALID = "batch-invalid"
+REFUSAL_MAX_TOTAL_SECONDS_INVALID = "max-total-seconds-invalid"
+REFUSAL_IGNORE_EVENT_INVALID = "ignore-event-invalid"
 REFUSAL_INTERVAL_INVALID = "interval-invalid"
 REFUSAL_MAX_SECONDS_INVALID = "max-seconds-invalid"
 REFUSAL_REPO_ROOT_INVALID = "repo-root-invalid"
@@ -101,6 +125,8 @@ REFUSAL_INTERNAL_ERROR = "internal-error"
 
 REFUSALS = frozenset({
     REFUSAL_BATCH_INVALID,
+    REFUSAL_MAX_TOTAL_SECONDS_INVALID,
+    REFUSAL_IGNORE_EVENT_INVALID,
     REFUSAL_INTERVAL_INVALID,
     REFUSAL_MAX_SECONDS_INVALID,
     REFUSAL_REPO_ROOT_INVALID,
@@ -132,6 +158,7 @@ DEGRADATION_PID_PROBE_UNCERTAIN = "pid-probe-uncertain"
 DEGRADATION_PR_SIGNAL_UNAVAILABLE = "pr-signal-unavailable"
 DEGRADATION_LANE_NEVER_STAMPED = "lane-never-stamped"
 DEGRADATION_PR_SIGNAL_NEVER_SAMPLED = "pr-signal-never-sampled"
+DEGRADATION_LOG_UNWRITABLE = "log-unwritable"
 
 DEGRADATIONS = frozenset({
     DEGRADATION_LEDGER_TORN_TAIL,
@@ -141,6 +168,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_PR_SIGNAL_UNAVAILABLE,
     DEGRADATION_LANE_NEVER_STAMPED,
     DEGRADATION_PR_SIGNAL_NEVER_SAMPLED,
+    DEGRADATION_LOG_UNWRITABLE,
 })
 
 EVENT_PRECEDENCE = (
@@ -151,6 +179,13 @@ EVENT_PRECEDENCE = (
     EVENT_LANE_STALE,
     EVENT_TIMER,
 )
+
+_SUPPRESSIBLE_EVENTS = frozenset({
+    EVENT_LANE_TERMINAL,
+    EVENT_LANE_BLOCKED,
+    EVENT_BUILDER_EXITED,
+    EVENT_LANE_STALE,
+})
 
 # --- heartbeat cross-boundary tokens (home: heartbeat.py) ---------------------
 
@@ -193,8 +228,11 @@ def _pid_is_live(pid):
         return None
 
 
-def _refusal(reason, batch_id):
-    return {"ok": False, "reason": reason, "batchId": batch_id}
+def _refusal(reason, batch_id, *, arms=None):
+    result = {"ok": False, "reason": reason, "batchId": batch_id}
+    if arms is not None:
+        result["arms"] = arms
+    return result
 
 
 def _valid_positive_int(value):
@@ -211,6 +249,33 @@ def _valid_repo_root(repo_root):
     if not isinstance(repo_root, str) or not repo_root:
         return False
     return os.path.isdir(repo_root)
+
+
+def _validate_ignore_events(ignore_events, batch_id, *, arms=None):
+    for item in ignore_events:
+        if not isinstance(item, (tuple, list)) or len(item) != 2:
+            return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
+        launch_id, event = item[0], item[1]
+        if not isinstance(launch_id, str) or not launch_id:
+            return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
+        if not isinstance(event, str) or not event:
+            return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
+        if event not in _SUPPRESSIBLE_EVENTS:
+            return _refusal(REFUSAL_IGNORE_EVENT_INVALID, batch_id, arms=arms)
+    return None
+
+
+def _ignore_events_set(ignore_events):
+    return frozenset((item[0], item[1]) for item in ignore_events)
+
+
+def _filter_suppressed_launches(launches, event, ignore_set):
+    if not ignore_set:
+        return launches
+    return [
+        entry for entry in launches
+        if (entry["launchId"], event) not in ignore_set
+    ]
 
 
 def _event_result(event, batch_id, degraded, **payload):
@@ -378,14 +443,15 @@ def _parse_pr_numbers(stdout):
 
 
 def _evaluate_pr_set_changed(
-    repo_root, poll_remaining, gh_run, pr_baseline, degraded, env,
-    pr_poll_ever_succeeded=None,
+    repo_root, deadline, monotonic, gh_run, pr_state, degraded, env,
+    pr_sampled=None,
 ):
-    if poll_remaining <= 0:
-        return None, pr_baseline
-    timeout = min(30.0, poll_remaining)
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return None
+    timeout = min(30.0, remaining)
     if timeout < _MIN_PR_POLL_SECONDS:
-        return None, pr_baseline
+        return None
     try:
         proc = gh_run(
             _GH_PR_LIST_ARGV,
@@ -397,186 +463,199 @@ def _evaluate_pr_set_changed(
         )
     except Exception:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
-        return None, pr_baseline
+        return None
 
     if proc.returncode != 0:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
-        return None, pr_baseline
+        return None
 
     numbers = _parse_pr_numbers(proc.stdout)
     if numbers is None:
         degraded.add(DEGRADATION_PR_SIGNAL_UNAVAILABLE)
-        return None, pr_baseline
+        return None
 
-    if pr_poll_ever_succeeded is not None:
-        pr_poll_ever_succeeded[0] = True
+    if pr_sampled is not None:
+        pr_sampled[0] = True
 
     pr_set = set(numbers)
+    pr_baseline = pr_state[0]
     if pr_baseline is None:
-        return None, pr_set
+        pr_state[0] = pr_set
+        return None
     if pr_set == pr_baseline:
-        return None, pr_baseline
+        return None
     added = sorted(pr_set - pr_baseline)
     removed = sorted(pr_baseline - pr_set)
     return {
         "prs": sorted(pr_set),
         "prsAdded": added,
         "prsRemoved": removed,
-    }, pr_baseline
+    }
 
 
-def _try_event_lane_terminal(
-    terminal_launches, blocked_launches, exited_launches, stale_live_launches,
-    batch_id, degraded,
-):
-    if not terminal_launches:
+def _payload_lane_terminal(ctx):
+    launches = _filter_suppressed_launches(
+        ctx["terminal_launches"], EVENT_LANE_TERMINAL, ctx["ignore_set"],
+    )
+    if not launches:
         return None
     payload = {
-        "launchId": terminal_launches[0]["launchId"],
-        "launches": terminal_launches,
+        "launchId": launches[0]["launchId"],
+        "launches": launches,
     }
     also = _build_also_observed(
         EVENT_LANE_TERMINAL,
-        terminal_launches,
-        blocked_launches,
-        exited_launches,
-        stale_live_launches,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
     )
     if also is not None:
         payload["alsoObserved"] = also
-    return _event_result(EVENT_LANE_TERMINAL, batch_id, degraded, **payload)
+    return payload
 
 
-def _try_event_lane_blocked(
-    terminal_launches, blocked_launches, exited_launches, stale_live_launches,
-    batch_id, degraded,
-):
-    if not blocked_launches:
+def _payload_lane_blocked(ctx):
+    launches = _filter_suppressed_launches(
+        ctx["blocked_launches"], EVENT_LANE_BLOCKED, ctx["ignore_set"],
+    )
+    if not launches:
         return None
     payload = {
-        "launchId": blocked_launches[0]["launchId"],
-        "launches": blocked_launches,
+        "launchId": launches[0]["launchId"],
+        "launches": launches,
     }
     also = _build_also_observed(
         EVENT_LANE_BLOCKED,
-        terminal_launches,
-        blocked_launches,
-        exited_launches,
-        stale_live_launches,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
     )
     if also is not None:
         payload["alsoObserved"] = also
-    return _event_result(EVENT_LANE_BLOCKED, batch_id, degraded, **payload)
+    return payload
 
 
-def _try_event_builder_exited(
-    terminal_launches, blocked_launches, exited, exited_launches,
-    stale_live_launches, batch_id, degraded,
-):
+def _payload_builder_exited(ctx):
+    exited = ctx["exited"]
     if exited is None:
         return None
     pids, exited_launches = exited
+    launches = _filter_suppressed_launches(
+        exited_launches, EVENT_BUILDER_EXITED, ctx["ignore_set"],
+    )
+    if not launches:
+        return None
+    filtered_pids = [entry["pid"] for entry in launches]
     payload = {
-        "pids": pids,
-        "launches": exited_launches,
+        "pids": filtered_pids,
+        "launches": launches,
     }
     also = _build_also_observed(
         EVENT_BUILDER_EXITED,
-        terminal_launches,
-        blocked_launches,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
         exited_launches,
-        stale_live_launches,
+        ctx["stale_live_launches"],
     )
     if also is not None:
         payload["alsoObserved"] = also
-    return _event_result(EVENT_BUILDER_EXITED, batch_id, degraded, **payload)
+    return payload
 
 
-def _try_event_pr_set_changed(
-    pr_change, terminal_launches, blocked_launches, exited_launches,
-    stale_live_launches, batch_id, degraded,
-):
+def _payload_pr_set_changed(ctx):
+    pr_change = _evaluate_pr_set_changed(
+        ctx["repo_root"],
+        ctx["deadline"],
+        ctx["monotonic"],
+        ctx["gh_run"],
+        ctx["pr_state"],
+        ctx["degraded"],
+        ctx["env"],
+        ctx["pr_sampled"],
+    )
     if pr_change is None:
         return None
     payload = dict(pr_change)
     also = _build_also_observed(
         EVENT_PR_SET_CHANGED,
-        terminal_launches,
-        blocked_launches,
-        exited_launches,
-        stale_live_launches,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
     )
     if also is not None:
         payload["alsoObserved"] = also
-    return _event_result(EVENT_PR_SET_CHANGED, batch_id, degraded, **payload)
+    return payload
 
 
-def _try_event_lane_stale(
-    terminal_launches, blocked_launches, exited_launches, stale_live_launches,
-    batch_id, degraded,
-):
-    if not stale_live_launches:
+def _payload_lane_stale(ctx):
+    launches = _filter_suppressed_launches(
+        ctx["stale_live_launches"], EVENT_LANE_STALE, ctx["ignore_set"],
+    )
+    if not launches:
         return None
     payload = {
-        "launchId": stale_live_launches[0]["launchId"],
-        "launches": stale_live_launches,
+        "launchId": launches[0]["launchId"],
+        "launches": launches,
     }
     also = _build_also_observed(
         EVENT_LANE_STALE,
-        terminal_launches,
-        blocked_launches,
-        exited_launches,
-        stale_live_launches,
+        ctx["terminal_launches"],
+        ctx["blocked_launches"],
+        ctx["exited_launches"],
+        ctx["stale_live_launches"],
     )
     if also is not None:
         payload["alsoObserved"] = also
-    return _event_result(EVENT_LANE_STALE, batch_id, degraded, **payload)
+    return payload
 
 
-_EVENT_TRY_HANDLERS = {
-    EVENT_LANE_TERMINAL: lambda ctx: _try_event_lane_terminal(
-        ctx["terminal_launches"],
-        ctx["blocked_launches"],
-        ctx["exited_launches"],
-        ctx["stale_live_launches"],
-        ctx["batch_id"],
-        ctx["degraded"],
-    ),
-    EVENT_LANE_BLOCKED: lambda ctx: _try_event_lane_blocked(
-        ctx["terminal_launches"],
-        ctx["blocked_launches"],
-        ctx["exited_launches"],
-        ctx["stale_live_launches"],
-        ctx["batch_id"],
-        ctx["degraded"],
-    ),
-    EVENT_BUILDER_EXITED: lambda ctx: _try_event_builder_exited(
-        ctx["terminal_launches"],
-        ctx["blocked_launches"],
-        ctx["exited"],
-        ctx["exited_launches"],
-        ctx["stale_live_launches"],
-        ctx["batch_id"],
-        ctx["degraded"],
-    ),
-    EVENT_PR_SET_CHANGED: lambda ctx: _try_event_pr_set_changed(
-        ctx["pr_change"],
-        ctx["terminal_launches"],
-        ctx["blocked_launches"],
-        ctx["exited_launches"],
-        ctx["stale_live_launches"],
-        ctx["batch_id"],
-        ctx["degraded"],
-    ),
-    EVENT_LANE_STALE: lambda ctx: _try_event_lane_stale(
-        ctx["terminal_launches"],
-        ctx["blocked_launches"],
-        ctx["exited_launches"],
-        ctx["stale_live_launches"],
-        ctx["batch_id"],
-        ctx["degraded"],
-    ),
+_EVENT_PAYLOAD_BUILDERS = {
+    EVENT_LANE_TERMINAL: _payload_lane_terminal,
+    EVENT_LANE_BLOCKED: _payload_lane_blocked,
+    EVENT_BUILDER_EXITED: _payload_builder_exited,
+    EVENT_PR_SET_CHANGED: _payload_pr_set_changed,
+    EVENT_LANE_STALE: _payload_lane_stale,
 }
+
+
+def _open_log_append(log_path):
+    """Open log_path for append-only writes; return (file, degradation_or_none)."""
+    if os.path.lexists(log_path):
+        try:
+            st = os.lstat(log_path)
+            if not stat.S_ISREG(st.st_mode):
+                return None, DEGRADATION_LOG_UNWRITABLE
+        except OSError:
+            return None, DEGRADATION_LOG_UNWRITABLE
+    flags = os.O_APPEND | os.O_WRONLY | os.O_CREAT
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(log_path, flags, 0o644)
+    except OSError:
+        return None, DEGRADATION_LOG_UNWRITABLE
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            os.close(fd)
+            return None, DEGRADATION_LOG_UNWRITABLE
+        return os.fdopen(fd, "a"), None
+    except OSError:
+        os.close(fd)
+        return None, DEGRADATION_LOG_UNWRITABLE
+
+
+def _append_log_line(log_file, arm, elapsed_seconds, result):
+    line = json.dumps({
+        "arm": arm,
+        "elapsedSeconds": round(elapsed_seconds, 3),
+        "result": result,
+    }, sort_keys=True)
+    log_file.write(line + "\n")
+    log_file.flush()
 
 
 def run(
@@ -590,6 +669,10 @@ def run(
     monotonic=None,
     sleep=None,
     ignore_launch_ids=(),
+    ignore_events=(),
+    ledger_observed=None,
+    pr_state=None,
+    pr_sampled=None,
 ):
     """Watch one batch until the first event. Returns the result dict; never raises."""
     batch_for_refusal = batch_id if isinstance(batch_id, str) else None
@@ -605,6 +688,11 @@ def run(
 
         if not _valid_batch_id(batch_id):
             return _refusal(REFUSAL_BATCH_INVALID, batch_for_refusal)
+
+        ignore_refusal = _validate_ignore_events(ignore_events, batch_for_refusal)
+        if ignore_refusal is not None:
+            return ignore_refusal
+
         batch_id = batch_id.strip()
 
         if not _valid_positive_int(interval_seconds):
@@ -618,19 +706,21 @@ def run(
         if not ledger_path_result["ok"]:
             return _refusal(REFUSAL_STORE_UNRESOLVABLE, batch_id)
 
+        if ledger_observed is None:
+            ledger_observed = [False]
+        if pr_state is None:
+            pr_state = [None]
+        if pr_sampled is None:
+            pr_sampled = [False]
+
         start = monotonic()
         deadline = start + max_seconds
         tick = 0
-        pr_baseline = None
         degraded = set()
         first_tick = True
-        ledger_observed = [False]
-        pr_poll_ever_succeeded = [False]
+        ignore_set = _ignore_events_set(ignore_events)
 
         while True:
-            is_first_loop = first_tick
-            loop_start_remaining = deadline - monotonic()
-
             live_lanes, ledger_readable = _derive_live_lanes(
                 repo_root, batch_id, env, degraded, ignore_launch_ids,
                 ledger_observed,
@@ -656,9 +746,16 @@ def run(
                 "exited": exited,
                 "exited_launches": exited_launches,
                 "stale_live_launches": stale_live_launches,
-                "pr_change": None,
                 "batch_id": batch_id,
                 "degraded": degraded,
+                "ignore_set": ignore_set,
+                "repo_root": repo_root,
+                "deadline": deadline,
+                "monotonic": monotonic,
+                "gh_run": gh_run,
+                "pr_state": pr_state,
+                "pr_sampled": pr_sampled,
+                "env": env,
             }
 
             for event in EVENT_PRECEDENCE:
@@ -676,32 +773,17 @@ def run(
                             repo_root, live_lanes, env,
                         ):
                             degraded.add(DEGRADATION_LANE_NEVER_STAMPED)
-                        if not pr_poll_ever_succeeded[0]:
+                        if not pr_sampled[0]:
                             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
                         return _event_result(EVENT_TIMER, batch_id, degraded)
                     break
 
-                if event == EVENT_PR_SET_CHANGED:
-                    poll_remaining = deadline - monotonic()
-                    if is_first_loop:
-                        ideal_remaining = float(max_seconds)
-                        if (
-                            ideal_remaining - loop_start_remaining < 0.01
-                            and ideal_remaining - poll_remaining < 0.01
-                        ):
-                            poll_remaining = ideal_remaining
-                    pr_change, pr_baseline = _evaluate_pr_set_changed(
-                        repo_root, poll_remaining, gh_run, pr_baseline,
-                        degraded, env, pr_poll_ever_succeeded,
-                    )
-                    event_ctx["pr_change"] = pr_change
-
-                handler = _EVENT_TRY_HANDLERS.get(event)
-                if handler is None:
+                builder = _EVENT_PAYLOAD_BUILDERS.get(event)
+                if builder is None:
                     continue
-                result = handler(event_ctx)
-                if result is not None:
-                    return result
+                payload = builder(event_ctx)
+                if payload is not None:
+                    return _event_result(event, batch_id, degraded, **payload)
 
             tick = max(
                 tick + 1,
@@ -717,6 +799,183 @@ def run(
         return result
 
 
+def loop(
+    repo_root,
+    batch_id,
+    *,
+    max_seconds=2400,
+    interval_seconds=60,
+    max_total_seconds=None,
+    log_path=None,
+    env=None,
+    gh_run=None,
+    monotonic=None,
+    sleep=None,
+    ignore_launch_ids=(),
+    ignore_events=(),
+    run_fn=None,
+):
+    """Re-arm run until a refusal or non-timer event. Returns the result dict; never raises."""
+    batch_for_refusal = batch_id if isinstance(batch_id, str) else None
+    try:
+        if env is None:
+            env = os.environ
+        if gh_run is None:
+            gh_run = subprocess.run
+        if monotonic is None:
+            monotonic = time.monotonic
+        if sleep is None:
+            sleep = time.sleep
+        if run_fn is None:
+            run_fn = run
+
+        if not _valid_batch_id(batch_id):
+            return _refusal(REFUSAL_BATCH_INVALID, batch_for_refusal, arms=0)
+
+        ignore_refusal = _validate_ignore_events(
+            ignore_events, batch_for_refusal, arms=0,
+        )
+        if ignore_refusal is not None:
+            return ignore_refusal
+
+        batch_id = batch_id.strip()
+
+        if (
+            max_total_seconds is not None
+            and not _valid_positive_int(max_total_seconds)
+        ):
+            return _refusal(
+                REFUSAL_MAX_TOTAL_SECONDS_INVALID, batch_id, arms=0,
+            )
+        if not _valid_positive_int(interval_seconds):
+            return _refusal(REFUSAL_INTERVAL_INVALID, batch_id, arms=0)
+        if not _valid_positive_int(max_seconds):
+            return _refusal(REFUSAL_MAX_SECONDS_INVALID, batch_id, arms=0)
+        if not _valid_repo_root(repo_root):
+            return _refusal(REFUSAL_REPO_ROOT_INVALID, batch_id, arms=0)
+
+        ledger_observed = [False]
+        pr_state = [None]
+        pr_sampled = [False]
+        loop_degraded = set()
+        arms = 0
+        total_start = monotonic()
+        total_deadline = (
+            total_start + max_total_seconds
+            if max_total_seconds is not None
+            else None
+        )
+        last_timer_result = None
+        log_file = None
+        log_degradation = None
+        if log_path is not None:
+            log_file, log_degradation = _open_log_append(log_path)
+            if log_degradation is not None:
+                loop_degraded.add(log_degradation)
+                log_file = None
+
+        while True:
+            if total_deadline is not None:
+                remaining = total_deadline - monotonic()
+                if remaining <= 0:
+                    if last_timer_result is not None:
+                        final = dict(last_timer_result)
+                        final["arms"] = arms
+                        final_degraded = set(final.get("degraded", []))
+                        final_degraded.update(loop_degraded)
+                        final["degraded"] = sorted(final_degraded)
+                        return final
+                    degraded = set(loop_degraded)
+                    if not pr_sampled[0]:
+                        degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
+                    return _event_result(
+                        EVENT_TIMER, batch_id, degraded, arms=arms,
+                    )
+
+            if total_deadline is not None:
+                remaining = total_deadline - monotonic()
+                arm_max_seconds = max(1, min(max_seconds, int(remaining)))
+            else:
+                arm_max_seconds = max_seconds
+
+            arm_start = monotonic()
+            arms += 1
+            result = run_fn(
+                repo_root,
+                batch_id,
+                max_seconds=arm_max_seconds,
+                interval_seconds=interval_seconds,
+                env=env,
+                gh_run=gh_run,
+                monotonic=monotonic,
+                sleep=sleep,
+                ignore_launch_ids=ignore_launch_ids,
+                ignore_events=ignore_events,
+                ledger_observed=ledger_observed,
+                pr_state=pr_state,
+                pr_sampled=pr_sampled,
+            )
+
+            result_degraded = set(result.get("degraded", []))
+            loop_degraded.update(result_degraded)
+
+            if result.get("ok") and result.get("event") == EVENT_TIMER:
+                last_timer_result = result
+                if log_file is not None:
+                    try:
+                        _append_log_line(
+                            log_file,
+                            arms,
+                            monotonic() - total_start,
+                            result,
+                        )
+                    except OSError:
+                        loop_degraded.add(DEGRADATION_LOG_UNWRITABLE)
+                        try:
+                            log_file.close()
+                        except OSError:
+                            pass
+                        log_file = None
+                elif log_path is not None and log_degradation is None:
+                    log_file, log_degradation = _open_log_append(log_path)
+                    if log_degradation is not None:
+                        loop_degraded.add(log_degradation)
+                        log_file = None
+
+                if total_deadline is not None:
+                    remaining = total_deadline - monotonic()
+                    if remaining <= 0:
+                        final = dict(result)
+                        final["arms"] = arms
+                        final_degraded = set(final.get("degraded", []))
+                        final_degraded.update(loop_degraded)
+                        final["degraded"] = sorted(final_degraded)
+                        return final
+                continue
+
+            final = dict(result)
+            final["arms"] = arms
+            final_degraded = set(final.get("degraded", []))
+            final_degraded.update(loop_degraded)
+            final["degraded"] = sorted(final_degraded)
+            return final
+    except Exception as exc:
+        result = _refusal(REFUSAL_INTERNAL_ERROR, batch_for_refusal, arms=0)
+        result["detail"] = type(exc).__name__
+        return result
+
+
+def _parse_ignore_event_cli(value):
+    if ":" not in value:
+        return None
+    launch_id, event = value.rsplit(":", 1)
+    if not launch_id or not event:
+        return None
+    if event not in _SUPPRESSIBLE_EVENTS:
+        return None
+    return (launch_id, event)
+
+
 def _emit(result):
     sys.stdout.write(json.dumps(result, sort_keys=True) + "\n")
 
@@ -724,6 +983,7 @@ def _emit(result):
 def main(argv):
     ap = argparse.ArgumentParser(description="wave watcher")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
     run_parser = sub.add_parser("run")
     run_parser.add_argument("--repo-root", required=True)
     run_parser.add_argument("--batch", required=True)
@@ -737,16 +997,72 @@ def main(argv):
         metavar="launchId",
         help="exclude launch id from lane enumeration (repeatable)",
     )
-    args = ap.parse_args(argv[1:])
-    if args.cmd != "run":
-        return 1
-    result = run(
-        args.repo_root,
-        args.batch,
-        max_seconds=args.max_seconds,
-        interval_seconds=args.interval_seconds,
-        ignore_launch_ids=tuple(args.ignore_launch_ids),
+    run_parser.add_argument(
+        "--ignore-event",
+        action="append",
+        default=[],
+        dest="ignore_event_raw",
+        metavar="LAUNCHID:EVENT",
+        help="suppress one event for one lane (repeatable)",
     )
+
+    loop_parser = sub.add_parser("loop")
+    loop_parser.add_argument("--repo-root", required=True)
+    loop_parser.add_argument("--batch", required=True)
+    loop_parser.add_argument("--max-seconds", type=int, default=2400)
+    loop_parser.add_argument("--interval-seconds", type=int, default=60)
+    loop_parser.add_argument("--max-total-seconds", type=int, default=None)
+    loop_parser.add_argument("--log", dest="log_path", default=None)
+    loop_parser.add_argument(
+        "--ignore-launch",
+        action="append",
+        default=[],
+        dest="ignore_launch_ids",
+        metavar="launchId",
+        help="exclude launch id from lane enumeration (repeatable)",
+    )
+    loop_parser.add_argument(
+        "--ignore-event",
+        action="append",
+        default=[],
+        dest="ignore_event_raw",
+        metavar="LAUNCHID:EVENT",
+        help="suppress one event for one lane (repeatable)",
+    )
+
+    args = ap.parse_args(argv[1:])
+
+    ignore_events = []
+    for raw in args.ignore_event_raw:
+        parsed = _parse_ignore_event_cli(raw)
+        if parsed is None:
+            ignore_events.append((None, None))
+        else:
+            ignore_events.append(parsed)
+
+    if args.cmd == "run":
+        result = run(
+            args.repo_root,
+            args.batch,
+            max_seconds=args.max_seconds,
+            interval_seconds=args.interval_seconds,
+            ignore_launch_ids=tuple(args.ignore_launch_ids),
+            ignore_events=tuple(ignore_events),
+        )
+    elif args.cmd == "loop":
+        result = loop(
+            args.repo_root,
+            args.batch,
+            max_seconds=args.max_seconds,
+            interval_seconds=args.interval_seconds,
+            max_total_seconds=args.max_total_seconds,
+            log_path=args.log_path,
+            ignore_launch_ids=tuple(args.ignore_launch_ids),
+            ignore_events=tuple(ignore_events),
+        )
+    else:
+        return 1
+
     _emit(result)
     return 0 if result.get("ok") else 1
 
