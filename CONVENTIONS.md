@@ -633,11 +633,15 @@ charter's "dispatch provenance" section), not a separate journal.
 **gateway CLI, not a single vendor** — the same `cursor-agent` account can also reach
 Anthropic/OpenAI models. But its **two first-party models — the token-efficient
 `composer-2.5` and `cursor-grok-4.6` — are ONE family, `xai`** (owner-ratified
-2026-07-26, #651: cursor and xAI sit under one corporate roof, correlated errors from
-one roof get harder to detect over time, and claude/codex are at least as likely to
-catch what grok catches). So **independence is never satisfied between two cursor
-first-party models** — a cursor-grok reviewer is NOT independent of a cursor-composer
-fix, and the composer→grok audit lane is closed. Because a gateway CLI still spans
+2026-07-26, #651; **post-acquisition, Cursor was acquired by SpaceX/xAI, closing
+2026-08-14** — cursor and xAI now sit under one corporate roof as fact, not merely
+proximity; correlated errors from one roof get harder to detect over time, and
+claude/codex are at least as likely to catch what grok catches). The `xai` key is an
+**independence-accounting label**, not a dispatch input and not vendor-attribution
+machinery — **panel behaviour is unchanged** by this affiliation update. So
+**independence is never satisfied between two cursor first-party models** — a
+cursor-grok reviewer is NOT independent of a cursor-composer fix, and the
+composer→grok audit lane is closed. Because a gateway CLI still spans
 families, **panel independence keys on a model's family, not on
 the dispatch CLI** (consumed by the seat map, `lib/seat_map.py`, #510; owners supply
 per-seat pins via `enginePreferences.seatPins`, which the seat map reads). The seat map
@@ -662,9 +666,12 @@ The cursor CLI's only sanctioned use is the models Cursor bills as **first-party
 `composer-2.5` and `cursor-grok-4.6`, and nothing else, ever. Claude, GPT, or any
 other third-party model is **never** routed through cursor. The registry
 (`lib/model_registry.py`) is the **enforcing surface**: it admits only those two cursor
-models, so this is doctrine backed by a gate rather than a convention on trust. This
-codifies standing owner policy — the cursor fable channel is retired in code and
-fable-via-cursor is dead. The default cursor dispatch stays `composer-2.5`. Each
+models, so this is doctrine backed by a gate rather than a convention on trust. The
+registry also pins the judge model to a single sanctioned effort (`xhigh`); an
+off-calibration or `-fast` variant is **refused at the dispatch boundary**
+(`validate_config`, `dispatch_token`, `parse_dispatch_token`) rather than merely
+absent from the ladder. This codifies standing owner policy — the cursor fable channel
+is retired in code and fable-via-cursor is dead. The default cursor dispatch stays `composer-2.5`. Each
 dispatch carries a role-appropriate timeout
 ceiling and idle-stall watchdog (`engine_pref.resolve_timeout` / `resolve_idle`)
 so a stalled external CLI is killed well before the ceiling; the ceiling is never
