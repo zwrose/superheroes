@@ -102,14 +102,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `sanitized-view-diff-empty`, `attempts: 0`. `--mode brief-check` → the sanitized view is built
 > **diff-less**; all four `sanitizedView` diff keys below are `null`. Supplying **both**
 > `--mode brief-check` and `--diff-base` is a terminal refusal `mode-brief-check-with-diff-base`,
-> `attempts: 0`, no spawn. On continuation, an explicitly disagreeing `--mode` is
+> `attempts: 0`, no spawn — **including on continuation**, because the check runs before the journal
+> read. On continuation, an explicitly disagreeing `--mode` is
 > `run-dir-mode-mismatch`, `attempts: 0`; omitted `--mode` inherits the mode the run was opened with
 > (a journal written before this change, with no `mode` key, normalizes to `review`); when inherited
-> mode is `brief-check`, `--diff-base` stays accepted-and-ignored as the existing continuation
-> contract says. Every `dispatch-review` result carries a top-level **`mode`** string — success,
-> forfeit, and every pre-spawn refusal alike. Registry/model gate, sanitized-view export and config
-> strip, the #666 investigation floor, engagement read, and vacuous-forfeit accounting are unchanged
-> in both modes.
+> mode is `brief-check` and `--mode` is omitted, `--diff-base` stays accepted-and-ignored. Every
+> `dispatch-review` result carries a top-level **`mode`** string — success, forfeit, and every
+> pre-spawn refusal alike. Registry/model gate, sanitized-view export and config strip, the #666
+> investigation floor, engagement read, and vacuous-forfeit accounting are unchanged in both modes.
 >
 > **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the four receipt keys
 > below are `null` (this has always been true — `--diff-base` was never required). Supplied → the value must be a **pinned commit object id**

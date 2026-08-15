@@ -298,15 +298,10 @@ high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Clau
 reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
-**How it is dispatched.** Sanctioned channel: `dispatch-review --mode brief-check` — mechanics in
-`reference/dispatch-mechanics.md`. Compact recipe: (1) gate the seat —
-`dispatch_guard.py check --role brief-check --vendor <engine> --model <model>`; thread
-`model_id`/`effort`. (2) `dispatch-review --mode brief-check`, **no `--diff-base`**, fresh
-`--run-dir` **outside** the repo, brief as `--prompt-path`. (3) Await in-turn with `--max-wait`
-slices; re-invoke on the same `--run-dir` until terminal. (4) The journaled result — `attempts ≥ 1`,
-engagement read, `sanitizedView` receipt, `mode: brief-check` — is the receipt. A hand-rolled
-`codex exec` is permitted **only when the runner itself is unavailable** — disclosed degradation in
-the PR body, never the normal path.
+**How it is dispatched.** Sanctioned channel: `dispatch-review --mode brief-check` — mechanics and
+recipe in `reference/dispatch-mechanics.md` (gate, `RUN_DIR` preamble, `--order-id`, continuation).
+A hand-rolled `codex exec` is permitted **only when the runner itself is unavailable** — disclosed
+degradation in the PR body, never the normal path.
 
 **Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
 cross-vendor dispatch **terminally forfeits** — per `rubric/review-discipline.md`'s definition, which

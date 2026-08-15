@@ -136,17 +136,9 @@ as "zero findings". An `unrunnable` refusal carries no `findings` / `investigate
 carries `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
 (`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
 forfeit carries no `findings`/`investigated`. There is no `result` wrapper; `result.findings` reads
-nothing. Optional **`--mode {review,brief-check}`** (default `review`). `--mode review` or omitted —
-behaviour identical to today, including `--diff-base` resolving to an empty patch →
-`sanitized-view-diff-empty`, `attempts: 0`. `--mode brief-check` builds the sanitized view
-**diff-less**; all four `sanitizedView` diff keys (`diffBase`, `diffPath`, `diffBytes`,
-`diffWithheldCount`) are `null`. Supplying **both** `--mode brief-check` and `--diff-base` is a
-terminal refusal `mode-brief-check-with-diff-base`, `attempts: 0`, no spawn. On continuation, an
-explicitly disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`; omitted `--mode` inherits
-the mode the run was opened with (a journal written before this change, with no `mode` key,
-normalizes to `review`); when inherited mode is `brief-check`, `--diff-base` stays
-accepted-and-ignored as the existing continuation contract says. Every `dispatch-review` result
-carries a top-level **`mode`** string — success, forfeit, and every pre-spawn refusal alike.
+nothing. Optional **`--mode {review,brief-check}`** (default `review`) — full contract in
+`auto-fix-loop.md` (mode refusals, continuation rules, top-level `mode` on every result). On
+continuation, `--diff-base` is accepted but ignored — the live run's view is not rebuilt.
 
 Optional **`--diff-base <commit-oid>`** stages the reviewed change as
 `SUPERHEROES_REVIEW_DIFF.patch` inside the gitless sanitized view — the machinery external seats need
@@ -236,6 +228,18 @@ in the PR body, never the normal path).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# RUN_DIR — create once per seat before first dispatch-review (continuation reuses the same path)
+if [ -z "$RUN_DIR" ]; then echo "RUN_DIR required (run-dir-absent)" >&2; exit 1; fi
+mkdir -p "$(dirname "$RUN_DIR")" || { echo "cannot create RUN_DIR parent" >&2; exit 1; }
+RUN_DIR="$(cd -P "$(dirname "$RUN_DIR")" && pwd -P)/$(basename "$RUN_DIR")"
+if [ -L "$RUN_DIR" ]; then echo "RUN_DIR must be physical (run-dir-is-symlink)" >&2; exit 1; fi
+if [ -d "$RUN_DIR" ]; then
+  if [ -n "$(ls -A "$RUN_DIR" 2>/dev/null)" ]; then echo "RUN_DIR must be empty on first launch (run-dir-not-empty-unopened)" >&2; exit 1; fi
+else
+  mkdir "$RUN_DIR" || { echo "cannot create RUN_DIR" >&2; exit 1; fi
+fi
+RUN_DIR="$(cd -P "$RUN_DIR" && pwd -P)"
+# Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 # Gate first — thread model_id / effort from the JSON
 python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
   --role brief-check --vendor "$BRIEF_ENGINE" --model "$BRIEF_MODEL"
@@ -244,22 +248,26 @@ python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
   --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
-  --run-dir "$RUN_DIR" --max-wait 12
+  --order-id "$ORDER_ID" \
+  --run-dir "$RUN_DIR" --max-wait 12 \
+  --progress-file "$BRIEF_PROGRESS"
 # CONTINUATION — re-invoke while .terminal is false
 python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
   --mode brief-check \
   --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
   --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
-  --run-dir "$RUN_DIR" --max-wait 540
+  --order-id "$ORDER_ID" \
+  --run-dir "$RUN_DIR" --max-wait 540 \
+  --progress-file "$BRIEF_PROGRESS"
 ```
 
-Continuation rules match the `--mode` contract above: omitting `--mode` inherits the opened mode;
-supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`; under inherited
-`brief-check`, `--diff-base` is accepted-and-ignored. The terminal journaled result — `mode:
+Continuation rules — full contract in `auto-fix-loop.md`: omitting `--mode` inherits the opened mode;
+supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Explicit
+`--mode brief-check` together with `--diff-base` always refuses `mode-brief-check-with-diff-base`
+(continuation included); `--diff-base` is accepted-and-ignored only when brief-check mode is
+inherited from the journal and `--mode` is omitted. The terminal journaled result — `mode:
 brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all four diff keys `null` — is
-the receipt that the brief check happened. Registry/model gate, sanitized-view export and config strip,
-the #666 investigation floor, engagement read, and vacuous-forfeit accounting are unchanged in both
-modes.
+the receipt that the brief check happened.
 
 ## Supervised write dispatch
 

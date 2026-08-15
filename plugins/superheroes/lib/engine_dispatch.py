@@ -109,6 +109,10 @@ SCHEMA_REFUSAL_MISSING = "schema-missing"
 SCHEMA_REFUSAL_UNREADABLE = "schema-unreadable"
 SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED = "schema-not-findings-shaped"
 
+MODE_REFUSAL_INVALID = "mode-invalid"
+MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
+MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
+
 
 def _scrub_env(env=None):
     """Remove git routing vars and the journal root from a spawn environment."""
@@ -1245,7 +1249,7 @@ def _build_ledger_row(run_dir_real, state, result):
     stages = _ledger_stages(result, state, run_dir_real, opened)
     evidence = _ledger_evidence(run_dir_real, state, opened)
     detail = result.get("detail") or result.get("disclosure")
-    row = forfeit_ledger.build_row(
+    ledger_kwargs = dict(
         run_dir=run_dir_real,
         order_id=opened.get("orderId"),
         engine=opened.get("engine"),
@@ -1260,6 +1264,9 @@ def _build_ledger_row(run_dir_real, state, result):
         evidence=evidence,
         ok=ok,
     )
+    if opened.get("runKind") == RUN_KIND_REVIEW:
+        ledger_kwargs["mode"] = opened.get("mode") or result.get("mode")
+    row = forfeit_ledger.build_row(**ledger_kwargs)
     salvage = result.get("salvage")
     if isinstance(salvage, dict):
         ledger_salvage = engine_adapter.scrub_salvage_block(dict(salvage))
@@ -2647,6 +2654,11 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
     caller always sees JSON and can fall open to Claude."""
+    if mode is not None and mode not in sanitized_view.REVIEW_MODES:
+        return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                "detail": MODE_REFUSAL_INVALID,
+                "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+                "mode": mode}
     resolved = {"mode": None}
     try:
         result = _dispatch_review_impl(
@@ -2656,13 +2668,13 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved)
         stamped = dict(result)
-        stamped["mode"] = resolved["mode"] or (mode or "review")
+        stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
     except Exception as exc:
         return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                 "detail": "internal-%s" % type(exc).__name__,
                 "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
-                "mode": resolved["mode"] or (mode or "review")}
+                "mode": resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)}
 
 
 def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
@@ -2676,7 +2688,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
     role_kind = RUN_KIND_REVIEW
     if resolved_mode is None:
         resolved_mode = {"mode": None}
-    resolved_mode["mode"] = mode or "review"
+    resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
 
     ok, wait_detail = _validate_max_wait(max_wait)
     if not ok:
@@ -2710,12 +2722,12 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
             engine=engine,
         )
 
-    if mode == "brief-check" and diff_base is not None:
-        resolved_mode["mode"] = "brief-check"
+    if mode == sanitized_view.MODE_BRIEF_CHECK and diff_base is not None:
+        resolved_mode["mode"] = sanitized_view.MODE_BRIEF_CHECK
         return _finish_preflight_terminal(
             repo_detail,
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-             "detail": "mode-brief-check-with-diff-base",
+             "detail": MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE,
              "attempts": 0, "forfeited": False, "terminal": True},
             run_dir=run_dir or "", engine=engine,
         )
@@ -2759,13 +2771,13 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 argv = list(opened.get("argv") or [])
                 view = opened.get("viewMeta")
                 view_path = opened.get("viewPath")
-                journal_mode = opened.get("mode") or "review"
+                journal_mode = opened.get("mode") or sanitized_view.MODE_REVIEW
                 resolved_mode["mode"] = journal_mode
                 if mode is not None and mode != journal_mode:
                     return _finish_preflight_terminal(
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                         "detail": "run-dir-mode-mismatch",
+                         "detail": MODE_REFUSAL_RUN_DIR_MISMATCH,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
@@ -2779,7 +2791,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 )
 
         if not continuation:
-            resolved_mode["mode"] = mode or "review"
+            resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             if schema_path is not None:
                 ok_schema, schema_detail = _validate_review_schema_path(schema_path)
                 if not ok_schema:
@@ -2791,8 +2803,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                         run_dir=run_dir_real or "", engine=engine,
                     )
             try:
-                view_diff_base = None if resolved_mode["mode"] == "brief-check" else diff_base
-                view = build_view(repo_detail, diff_base=view_diff_base)
+                view = build_view(repo_detail, diff_base=diff_base)
             except sanitized_view.SanitizedViewError as exc:
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -3497,7 +3508,7 @@ def build_parser():
                          "to stage the merge-base->head review patch against; a revision "
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
-                    choices=("review", "brief-check"))
+                    choices=sanitized_view.REVIEW_MODES)
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--engine", contract="choices:codex,cursor",
