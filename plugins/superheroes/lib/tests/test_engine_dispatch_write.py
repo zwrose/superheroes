@@ -821,7 +821,7 @@ def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
     fake = FakeRunner([])
     res = _dispatch_write(
         tmp_path, fake, cwd=wt, engine="cursor",
-        engine_model="cursor-grok-4.5", effort=None, model=None,
+        engine_model="cursor-grok-4.6", effort=None, model=None,
     )
     assert res["ok"] is False
     assert res["terminal"] is True
@@ -830,7 +830,7 @@ def test_dispatch_write_cursor_grok_effort_none_refuses(tmp_path):
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
     built = EA.build_argv_result(
-        "cursor", "build", None, {"engine_model": "cursor-grok-4.5", "cwd": os.path.realpath(wt)},
+        "cursor", "build", None, {"engine_model": "cursor-grok-4.6", "cwd": os.path.realpath(wt)},
     )
     assert built["reason"] == "invalid-model-effort"
 
