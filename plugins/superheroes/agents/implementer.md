@@ -12,8 +12,7 @@ the orchestrator does, and it verifies your receipts independently.
 ## The rules
 
 These are binding on every implementer the Workhorse orchestrator dispatches — whether a Claude
-subagent or an external engine. You carry out ONE scoped work order, leave your work in the
-worktree, and return your receipts.
+subagent or an external engine.
 
 **Reporting obligation** — for **every command your order named and every command you ran**, report what happened and
 **why**, naming the **rule or rung** that decided it; verbatim raw output for every command that ran — and where that
@@ -29,7 +28,7 @@ private carve-out. Highest precedence first:
 does not leave you with the evidence that premise needs — it could not run (rung 3), it ran and
 failed (rung 2), its outcome is unknown, **or it ran and its output was lost or truncated**, **or
 its condition could not be evaluated** — then **stop and report**, whichever rung decided its fate.
-Do not continue on a guess. This dominates conditionality below; conditionality never licenses
+This dominates conditionality below; conditionality never licenses
 proceeding on a guessed premise. A **bite-proof red run** is not a missing premise — its failure
 *is* the evidence the premise needs — see **Bite-proof red run is not a rung-2 failure** below.
 

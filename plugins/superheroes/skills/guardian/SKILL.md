@@ -1,6 +1,6 @@
 ---
 name: guardian
-description: Use to run the Guardian sweep — a periodic read-only sweep of repo health (duplication, complexity, coupling, dependency and doc freshness, dead code) that surfaces maintainability drift as plain-language consequences with receipts. Deterministic tools detect; one model pass validates each candidate against the project's own conventions and drafts the consequence. Drift-over-baseline means it reports only what changed since the last sweep, never re-raising settled trades. It never edits code, never commits or pushes, and never files issues or runs enforcement — it recommends; the advisor triages and consults the owner. Not code review of a change (that is review-code).
+description: Use to run the Guardian sweep — a periodic read-only sweep of repo health (duplication, complexity, coupling, dependency and doc freshness, dead code) that surfaces maintainability drift as plain-language consequences with receipts, reporting only what changed since the last sweep. It never edits code, never commits or pushes, and never files issues — it recommends; the advisor triages and consults the owner. Not code review of a change (that is review-code).
 user-invocable: true
 ---
 
@@ -57,7 +57,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/guardian_sweep.py" verify-config --cwd . | jq .
 ```
 
-The bundle carries: `surfaced` (candidates needing validation), `funnel`, `factVerdicts`, `ledgerStatus`, `redLines`, `lensMeta` (per-lens validation guidance and consequence templates for surfaced lenses), and `nextSnapshot` (the staged baseline). Read `ledgerStatus` first — filed/tracked items are already dispositioned; do not re-litigate them.
+The bundle carries: `surfaced` (candidates needing validation), `funnel`, `factVerdicts`, `ledgerStatus`, `redLines`, `lensMeta` (per-lens validation guidance and consequence templates for surfaced lenses), and `nextSnapshot` (the staged baseline). Read `ledgerStatus` first — filed/tracked items are already dispositioned.
 
 ### 2. Validate (the one model pass)
 
@@ -102,10 +102,11 @@ write `ledger.md`**. The report shows **proposed** closures (the advisor commits
 the next step). If the ledger is unreadable, finalize marks closures **deferred** rather
 than implying none; the baseline still advances.
 
-**Refusal outcomes (surface honestly, do not retry blindly):**
+**Refusal outcomes (surface honestly; follow each outcome's remedy):**
 
 - `invalid-dispositions` — a surfaced id is missing, duplicated, or a `validated` entry lacks required fields. Fix the dispositions and re-run finalize with the same bundle.
 - `raced` — a concurrent sweep advanced the snapshot since collect. Re-run from step 1; the prior baseline stays intact.
+- `durable-write-failed` — the vitals append failed after `report.md` landed; the baseline does not advance — retry finalize with the same bundle.
 
 ### 4. Commit the ledger (advisor, at consult/triage)
 
@@ -127,12 +128,13 @@ surrounding prose, which the never-clobber re-splice preserves byte-for-byte.
 
 If `commit-ledger` is skipped or fails, closures simply defer to the next consult — the records keep their prior state and the next sweep re-proposes the same closure, so **no closure or owner content is lost**. One benign caveat: because `finalize` already appended this sweep's `vitals.jsonl` line, a skipped commit can leave the vitals trend one entry ahead of the ledger's sweep roster until the next successful commit — a fail-closed parity drift (the benching floor simply counts one fewer sweep), not data loss.
 
-**Refusal outcomes (surface honestly, do not retry blindly):**
+**Refusal outcomes (surface honestly; follow each outcome's remedy):**
 
 - `invalid-dispositions` — same shape as finalize; fix the dispositions and re-run.
+- `raced` — the sweep lock is held by another run; re-run after it settles, the prior state stays intact.
 - `stale-bundle` — a newer sweep advanced `latest.json` since this bundle; re-run from step 1 or use a fresh bundle from the current sweep.
 - `roster-read-failed` — transient roster read error; **retryable**.
-- opaque-ledger skip — ledger content is unreadable; on-disk bytes stay untouched; closures defer.
+- opaque-ledger skip — ledger content is unreadable; on-disk bytes stay untouched; closures defer to the next consult — restore the ledger's readability before then.
 - `raced-out` — the never-clobber loop exhausted its bounded retries; on-disk bytes stay untouched; retry after the concurrent edit settles.
 
 ## The report + storage

@@ -20,8 +20,8 @@ callee.
 
 **Neither standalone `review-code` nor the native code panel runs this fold.** As of #506 the
 code auto-fix loop's keep/drop realness check — standalone `review-code` **and** the native
-eval/convergence panel driven by `round_driver.run_loop` — moved to **per-finding verification**
-(`verification.apply_verdicts` + `merge_and_rank`); that path's contract is `verification-pass.md`,
+eval/convergence panel driven by `round_driver.run_loop` — moved to **per-finding verification**;
+that path's contract is `verification-pass.md`,
 and this document does not govern it. Do not wire `loop_synthesis` into the round-driver path.
 
 The **fail-closed rules live only in `lib/loop_synthesis.py`** — do not judge keep/drop

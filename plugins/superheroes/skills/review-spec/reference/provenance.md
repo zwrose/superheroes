@@ -17,7 +17,7 @@ that mirrors the repo, it reports nothing. It does not manufacture findings.
 
 ## Two legs, split cleanly
 
-The pincer has two legs, and they must not blur:
+The pincer has two legs that must stay distinct:
 
 - **(a) The deterministic leg — `lib/citation_validator.py`.** Existence only: does the
   cited path (or `path § anchor`) resolve? It is **fail-closed on a dangling citation**
@@ -42,8 +42,8 @@ Not every sentence needs a citation. The test:
 ## Noise budget
 
 Citations are **rare** by design — only load-bearing mirror-facts carry one. Most spec
-sentences are definitions and correctly carry none. Do not push for citations on
-definitional requirements; an over-cited spec is its own failure mode.
+sentences are definitions and correctly carry none; reserve citation requests for
+mirror-facts — an over-cited spec is its own failure mode.
 
 ## The mirror-claim verification rule
 

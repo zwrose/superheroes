@@ -53,7 +53,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 RUBRIC="$ROOT_DIR/rubric/review-base.md"   # absolute; embed the expanded value in subagent prompts
 ```
 
-**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt — do not treat the project as uncalibrated.
+**Resolve calibration paths.** `calibration_resolve.py` returns `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`. If resolve exits non-zero, halt rather than assuming uncalibrated.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -89,7 +89,7 @@ if [ "$EXISTS" = "true" ]; then
 fi
 ```
 
-Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's end). Do NOT act on `drift` here — it is informational only.
+Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile unreadable — re-run `/superheroes:configure`" and **continue** (do not crash, do not block). Otherwise retain `message`, `signal_hash`, and `nudge_acked` for the **end-of-run staleness nudge** (see §5's end). Treat `drift` here as informational only.
 
 **Profile bootstrap (run before generating artifacts or dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 
@@ -111,7 +111,7 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Do not run any staleness, reconcile, or learning-loop step here — out of scope.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
 **Detect the ecosystem.** Mirror review-init's detection: read the profile's `signals` (`dep-set`, `default-branch`, `forge`) and `## Verify` block if present, and detect the manifest/lockfile the same way review-init Step 1 does. The ecosystem drives the dependency audit, the source-dir census, and the dependency-churn pass below.
 
@@ -295,7 +295,7 @@ Per-agent substitutions:
 | security-reviewer            | security                      | Security      |
 | test-reviewer                | test                          | Test          |
 
-After dispatch, wait for all four agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator does not read agent transcripts — only the JSON files.
+After dispatch, wait for all four agents to return. Each writes its findings file to `$SESSION_DIR/`. The orchestrator reads only the JSON files, never agent transcripts.
 
 ### 4. Orchestrator-Driven Dimensions (main context, in parallel with §3)
 
@@ -430,7 +430,7 @@ Pass the profile's current `nudge-ack` map keys (read from the resolved profile 
 - **Edit then apply** — open a free-text edit, then apply the edited version.
 - **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
 
-**NEVER auto-apply.** A proposal is applied ONLY on the user's explicit **Apply** / **Edit then apply** choice. If `proposal` is null, do nothing.
+**Apply ONLY on explicit choice** (**Apply** / **Edit then apply**) — never automatically. If `proposal` is null, do nothing.
 
 ### Provisional-profile confirmation (interactive only, end of run)
 

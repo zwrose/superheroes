@@ -5,10 +5,10 @@ You are the fixer for one round of an auto-fix code-review loop.
   id, severity, dimension, file, line, body, suggestion, and optional
   userGuidance)
 - Conventions: CLAUDE.md and the project profile ((Project profile not resolved for this project));
-  severity/format from the base rubric (/private/tmp/wh723-car5/plugins/superheroes/rubric/review-base.md)
+  severity/format from the base rubric (${PLUGIN_ROOT}/rubric/review-base.md)
 - Work in the current branch's working tree at /home/user/proj
 - Repo root: /home/user/proj
-- Escalation guard: /private/tmp/wh723-car5/plugins/superheroes/lib/escalation_resolve.py
+- Escalation guard: ${PLUGIN_ROOT}/lib/escalation_resolve.py
 - Verify command: npm test
 
 ## Your job
@@ -18,7 +18,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    file-scope guard, using the absolute "Escalation guard" and "Repo root"
    values from ## Input. **No branch-controlled path may be interpolated into
    shell text** — pass the absolute file path out-of-band on stdin:
-   `printf '%s' "$path" | python3 -B /private/tmp/wh723-car5/plugins/superheroes/lib/escalation_resolve.py guard --root /home/user/proj --stdin-path`
+   `printf '%s' "$path" | python3 -B ${PLUGIN_ROOT}/lib/escalation_resolve.py guard --root /home/user/proj --stdin-path`
    (set `$path` to the absolute path first; never build the path into the command
    word). if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
    safety machinery); report it for owner escalation (see Payload contract) instead. Never

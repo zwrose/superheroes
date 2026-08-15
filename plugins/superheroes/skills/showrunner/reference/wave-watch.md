@@ -47,7 +47,7 @@ or accept that a longer arm needs a continuation mechanism this tool does not pr
 
 `--ignore-launch` is what makes re-arming work. It is repeatable, and it excludes a launch id from
 lane enumeration. Without it, a lane you have already handled but cannot terminalize re-fires on
-every arm and the loop spins on the same event. Handled lanes go in the ignore set on the next arm.
+every arm and the loop spins on the same event.
 
 ## What it tells you
 

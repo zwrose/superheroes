@@ -29,9 +29,8 @@ its verdict actually turns on, it runs itself.
   and compares that line against that command. Below that line, record output
   **unabridged up to the byte ceiling your order names** — never filter, summarize, re-order, or
   tidy what a command printed. If your order names no output path for a command, **stop and
-  report**; never invent one. You never filter — **and** you never treat a capture as publishable;
-  redacting it before it reaches a durable record is the orchestrator's job, done at the moment it
-  quotes the capture.
+  report**; never invent one. You never treat a capture as publishable; redacting it before it
+  reaches a durable record is the orchestrator's job, done at the moment it quotes the capture.
 - **Honour the byte ceiling — per command and order-wide.** If a command's output would exceed the
   ceiling your order names, **stop that command, keep what you captured, and report the overrun as a
   finding** — never silently truncate, and never let an unbounded run fill the volume. If your order
@@ -63,10 +62,9 @@ its verdict actually turns on, it runs itself.
 
 ## Why the review seats are not you
 
-A review seat is **obliged** never to change the repository and never to claim a run it did not
-make — the base rubric's verification rule **"A review seat never changes the repository, and never
-claims a run it did not make."** (`rubric/review-base.md`) is the authoritative statement, and it is
-an obligation rather than something its tool grant enforces. So proof that requires *changing* code —
+The base rubric's verification rule **"A review seat never changes the repository, and never
+claims a run it did not make."** (`rubric/review-base.md`) is the authoritative statement, and it
+is an obligation rather than something its tool grant enforces. So proof that requires *changing* code —
 a throwaway probe file, a planted defect, a mutation — cannot come from a review seat at all; that
 proof routes to the orchestrator or an implementer instead, as the Workhorse charter already
 mechanizes. You exist for the other half of the gap: a bulky run nobody wants in a reviewer's context.

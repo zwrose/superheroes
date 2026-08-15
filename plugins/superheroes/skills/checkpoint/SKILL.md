@@ -55,8 +55,7 @@ not one. Stop — no error traceback, no partial `/compact` output.
 
 **If** this session keeps a resume point at the top of its ledger, bring it up to date and
 confirm it reflects current reality. **If** it does not keep one, say so plainly and
-continue. Do not invent a storage format, path, or filename for the resume point, and do
-not fail when there is none.
+continue. Do not invent a storage format, path, or filename for the resume point.
 
 ## Step 3 — Verify live state (per charter)
 

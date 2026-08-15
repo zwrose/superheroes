@@ -3,8 +3,8 @@
 The guardian hero layer (`guardian.md`) holds a single machine-readable fence that tunes sweep
 behavior. Write it through `core_md.py write-layer --hero guardian` (the same hero-layer machinery
 `configure` uses for every optional hero). The top-level parser of record is
-`guardian_sweep.read_config` — downstream modules consume its resolved output; do not add a second
-parser (CONVENTIONS §11).
+`guardian_sweep.read_config` — downstream modules consume its resolved output; extend that single
+parser for new parsing needs, never a second parser (CONVENTIONS §11).
 
 ## Where the fence lives
 
@@ -28,11 +28,10 @@ propagates. **Malformed JSON** or a fence whose parsed value is **not an object*
 still govern thresholds and cadence on those paths). A **`reportCard` value that is present but not
 an object** also sets `configStatus: "degraded"` and returns **before** `_resolve_cadence` runs, so
 owner cadence is not resolved on that path (thresholds and other keys parsed earlier in
-`read_config` still apply from the block); a degraded config must not silently mute a lens via the
-report card — see `guardian_ledger._resolve_thresholds`.
+`read_config` still apply from the block) — see `guardian_ledger._resolve_thresholds`.
 
-`cadenceTuned` is a **derived output** of `read_config` (which cadence keys the owner positively
-set). It is not a settable key.
+`cadenceTuned` is a **derived, read-only output** of `read_config` (which cadence keys the owner
+positively set).
 
 ## Worked example
 
@@ -91,6 +90,5 @@ must not become a silent mute button after a config typo.
 **Vitals off.** Setting `vitals: false` **or** `collectVitals: false` disables vitals collection;
 if both keys appear with different values, **either** being `false` wins (collection off).
 
-**Per-role dispatch effort is elsewhere.** This fence does not set how a v2 dispatch runs. Dispatch
-effort comes from the registry or per-seat pins, resolved through `dispatch_guard` / `seat_map` —
-not from `guardian-config`.
+**Per-role dispatch effort is elsewhere.** v2 dispatch effort comes from the registry or per-seat
+pins, resolved through `dispatch_guard` / `seat_map` — not from `guardian-config`.

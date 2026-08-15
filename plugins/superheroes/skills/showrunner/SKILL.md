@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "run the showrunner", "vet this PR", "route this issue", "what should we build next", and sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro skips advisor vet), and coordinates releases. Not the builder (that is workhorse). Micro lane only advisor typing; not spec elicitation (discovery); not code review (review-code).
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "vet this PR", "route this issue", "what should we build next". It sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro — advisor-typed only — skips advisor vet), and coordinates releases. Not the builder (that is workhorse); not spec elicitation (discovery); not code review (review-code).
 user-invocable: true
 ---
 
@@ -116,9 +116,10 @@ above).
    composes its prompt from the byte-pinned rulings block, so the new rule never reached a launched
    builder, which kept receiving the superseded wording — the rule was "shipped" and its actual
    audience never saw it. PR #853's second segment closed that machine channel. When there is no such
-   exclusion, do not invent a ritual line — state consequences only when a real audience or channel
-   remains on old behavior. Enumerate audiences and channels rather than trusting recall; obviousness
-   is exactly what produced #846. If it matters to the build it is an issue line anyone can
+   exclusion, write no consequence line — state consequences only when a real audience or channel
+   remains on old behavior.
+   Enumerate audiences and channels rather than trusting recall; obviousness is exactly what
+   produced #846. If it matters to the build it is an issue line anyone can
    read, never a launch line that evaporates with the session. (A mis-routed "ready" issue that turns out unclear is
    caught by the builder's stop-and-report safeguard — see the **workhorse** charter; you own the
    route, the builder owns that safeguard.) The premises of an order you send — the base commit,
@@ -277,10 +278,7 @@ above).
      still fires on time.
      Each entry carries **what it is**, **your recommendation**, and **the proposing vet's ordinal
      stamped on it immutably**, and is **struck when the owner rules** — closing or declining an
-     item **removes it from the collector**; nothing re-numbers what remains. Appending stamps the
-     **proposing vet's ordinal** on it **immutably** — the current vet's in the normal case, the
-     earlier recorded one when the append was deferred — carrying an item forward **never
-     re-stamps** it. A
+     item **removes it from the collector**; nothing re-numbers what remains. A
      vet receipt states only **completed dispositions and live proposals — never the future tense**.
      **The collector is a fallback, not the path** — *"the next vet will pick it up"* is the failure
      this prevents, not a workflow it licenses — and an owner-absent append is the collector doing its
@@ -465,7 +463,7 @@ above).
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.
-6. **Coordinate releases and drive the merge train.** Drive release readiness. The covenant's
+6. **Coordinate releases and drive the merge train.** The covenant's
    promise 1 governs — approval never delegates; merge-command **execution** is delegable only where
    a mechanical per-merge approval checkpoint exists on that host or path; release PRs and
    force-pushes never delegate — and this duty carries its operational half: **the plugin ships its
@@ -555,7 +553,7 @@ above).
    already watches for. **Grant scope is always enumerated, never a fuzzy noun** — state scope as
    **enumerated PRs, a time box, or a count** (not an undefined phrase like "everything in these
    batches"). Standing exclusions: **release PRs are excluded, and force-push is never granted.**
-   **Owner involvement sorts three ways** (do not conflate them): **Owner capability** — what an
+   **Owner involvement sorts three distinct ways:** **Owner capability** — what an
    agent structurally cannot do regardless of authority (sign-in so a browser pilot is not blocked,
    account actions, anything needing credentials the product forbids an agent from handling). **No
    substitute exists.** **Owner authority** — a commitment or trade that binds the owner; you can hold
@@ -626,7 +624,7 @@ above).
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Wave runtime — deadline and
    teardown) for the margin rule and **do not restate the comparison here**.
    **Wave teardown is a sequence, and it is #827's.** Teardown is two-phase; an absent handler is
-   not a skipped step — it is a failure that must surface. Read
+   a failure that must surface, not a skipped step. Read
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/pilot-contract.md` (Wave runtime — deadline and
    teardown) for the step contract and stop.
    **The partial-failure report goes to the owner, not around them.** A failed slot may already have

@@ -40,8 +40,8 @@ Minor and Nit findings never change the verdict regardless of strictness.
 2. **Diff-scope rule** (diff modes only): flag only code on `+`/`-` lines. Context
    lines and unchanged code are pre-existing → SKIP. (Audit/sweep mode reviews the
    whole repo; this rule does not apply there.)
-3. **Grep-before-flag.** Before flagging "missing X", search the codebase for X
-   under variant names. A thing that exists under another name is not missing.
+3. **Grep-before-flag.** Search the codebase for X under variant names before flagging
+   "missing X". A thing that exists under another name is not missing.
 4. **Reachability check on Important findings.** Read the caller(s); if the only
    caller already guards the case, downgrade or drop. (Critical findings are also
    checked for reachability, but under the strict posture, flag when in doubt.)
@@ -166,8 +166,8 @@ tier and **never** `mechanical` — a false "the claims check out" is a silence 
 downstream re-checks, so it must not go to the tier whose failure mode is confident wrong
 fills. On the **spec leg** this seat is already live — it is the `Grounding` label in the
 Dimensions enumeration line above, dispatched by `/superheroes:review-spec` (as of
-#515/#517). Its **code-leg (review-code) live dispatch is owned by #510** (panel
-composition v2); until then the review-code orchestrator performs the same self-claims /
+#515/#517). Its **code-leg (review-code) live dispatch is owned by #609** (the seat map
+itself shipped under #510); until then the review-code orchestrator performs the same self-claims /
 PR-body-honesty check inline (the interim mechanism). As a code-leg lens it is not yet
 part of review-code's dispatched dimensions, and no code-leg drift test should read it as
 one.
@@ -198,7 +198,7 @@ candidate finding that is only:
 - **Pedantic nit** — take-it-or-leave-it style/naming the author has no real decision to
   make on. Governed by the **Nit** severity tier (table, above) and the **Nit caps**
   (Severity caps, above: ≤5 reported, rest summarized as a count). When in doubt whether a
-  style point clears the bar, it does not — summarize it in the count, don't flag it.
+  style point clears the bar, it does not — summarize it in the count instead.
 
 An agent brief may cite this section as "the base rubric's global 'Do NOT Flag' /
 high-signal bar"; it is the shared home those citations resolve to.

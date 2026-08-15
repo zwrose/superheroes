@@ -32,7 +32,7 @@ If you flag a "missing ownership filter" on a resource, first confirm it is user
 Assert: is the filter scoped to the right principal?
 
 - For owner-only access: the filter includes the owner field set to the **server-verified session principal** — matching the project's ownership model.
-- For shared resources: the filter must include the principal's id AND verify that any other-principal access comes from an explicit accepted invitation/grant recorded by the project (the project's canonical sharing pattern). Do not "fix" this by removing the filter.
+- For shared resources: the filter must include the principal's id AND verify that any other-principal access comes from an explicit accepted invitation/grant recorded by the project (the project's canonical sharing pattern). Keep the filter in place, and layer the grant check on top of it.
 - For global resources: use the project's canonical "global OR owned-by-me" filter shape.
 
 ### For every changed mutation (update/delete)
@@ -126,7 +126,7 @@ _Read side — excessive data exposure:_
 
 - A hardcoded secret/credential **introduced in the diff** — API key, token, password, private key, connection string with embedded credentials committed to source. Flag it and propose moving it to the project's secret-management mechanism (env/secret store). **Critical** if it is a live credential reaching a trust boundary; **Important** otherwise. Diff-scoped: a pre-existing secret outside the diff is `/superheroes:audit-debt`'s job.
 - A **newly-added dependency in the diff** that warrants a trust look — an unfamiliar/low-reputation package, a typosquat-shaped name, a non-canonical source/registry, or a postinstall-script package. Flag it for a trust check and name the specific concern. **Important** (or **Minor** if it's only a "worth a glance" signal).
-- **Explicitly DEFER the full dependency CVE/advisory sweep to `/superheroes:audit-debt`.** Do NOT attempt a vulnerability/version-advisory audit of the dependency tree here — that is a debt-audit responsibility and overlapping it inflates findings. In branch/PR mode, limit to secrets and dependencies *added by this diff*.
+- **Explicitly DEFER the full dependency CVE/advisory sweep to `/superheroes:audit-debt`.** That full sweep is a debt-audit responsibility, and overlapping it here inflates findings. In branch/PR mode, limit to secrets and dependencies *added by this diff*.
 
 ## Do NOT Flag
 

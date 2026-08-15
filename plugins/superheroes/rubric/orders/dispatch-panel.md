@@ -38,8 +38,7 @@ positives.
 - `file:line` citation required. No citation → drop your own finding
   before writing it out.
 - Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
-  for X under different names. Don't flag a missing helper that exists
-  under a slightly different name.
+  for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
   If the only caller already guards the edge case, downgrade or drop.
 - For docs/spec changes, spot-check factual claims (function signatures,

@@ -1,6 +1,6 @@
 ---
 name: configure
-description: "Use to set up, fix, view, or tune a project's superheroes calibration — the single front door for superheroes configuration. It senses what a project needs and either sets it up, repairs it, or lets you see the whole project's calibration on one screen and change a setting. Also use to move a project between in-repo and out-of-repo storage. Not for code review, technical planning, or running the build loop."
+description: "Use to set up, fix, view, or tune a project's superheroes calibration — the single front door for superheroes configuration. It senses what a project needs, lets you see the whole project's calibration on one screen and change a setting, and can move a project between in-repo and out-of-repo storage. Not for code review, technical planning, or running the build loop."
 user-invocable: true
 ---
 
@@ -52,9 +52,8 @@ posture and never switch storage unattended (FR-14/FR-17). Then run the matching
 - **`fix`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/fix.md`.
 - **`view`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/view-and-tune.md`.
 
-A run that only views an up-to-date project changes nothing (FR-12). Viewing never confirms a
-provisional calibration (FR-18) — that only happens when the owner explicitly confirms it on the
-fix path.
+A run that only views an up-to-date project changes nothing (FR-12). A provisional calibration
+is confirmed only when the owner explicitly confirms it on the fix path (FR-18) — never by viewing.
 
 Engine onboarding (Codex/Cursor per role — reviewer, implementer, brief-check reviewer, pilot;
 availability, preference, show-authorization, test-dispatch) lives in `set-up.md` §4.5 and is

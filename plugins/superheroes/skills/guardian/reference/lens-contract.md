@@ -44,7 +44,7 @@ no vitals. Extractors must be total and non-raising on malformed digests.
 
 ## collector
 
-The lens runs a **standard OSS tool** (or equivalent deterministic probe) plus a **thin normalization** layer that emits stable candidate records and a JSON digest the sweep can store. No model calls in collect — it must be reproducible from the repo state and declared config. Declare `collector_version` when the normalization shape changes.
+The lens runs a **standard OSS tool** (or equivalent deterministic probe) plus a **thin normalization** layer that emits stable candidate records and a JSON digest the sweep can store. Collection must be reproducible from the repo state and declared config — no model calls. Declare `collector_version` when the normalization shape changes.
 
 ## baseline-diff
 
@@ -52,7 +52,7 @@ The lens owns **stable candidate identity** (`id` strings that survive across sw
 
 ## validation
 
-Candidates reach the model only after deterministic surfacing. The model checks each against `CLAUDE.md`, `CONVENTIONS`, calibration, and spec'd designs using the lens's `validation_guidance`. Unactionable candidates are rejected before anyone sees a consequence. The lens does not run validation — it supplies guidance; the sweep's one model pass executes it.
+Candidates reach the model only after deterministic surfacing. The model checks each against `CLAUDE.md`, `CONVENTIONS`, calibration, and spec'd designs using the lens's `validation_guidance`. Unactionable candidates are rejected before anyone sees a consequence. The lens supplies guidance; the sweep's one model pass executes validation — never the lens itself.
 
 ## consequence
 

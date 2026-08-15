@@ -4,7 +4,7 @@ concerns.
 
 ## Input
 - Full diff (read in bounded chunks): /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, panel output format): /private/tmp/wh723-car5/plugins/superheroes/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): ${PLUGIN_ROOT}/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - Verification root (read cited files here ONLY): /home/user/proj

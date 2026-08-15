@@ -55,8 +55,8 @@ action that owns it, leaving the rest of the calibration untouched:
   ```
 
   This is the mandatory/optional split: a missing **review-crew** layer is an incomplete set-up the
-  route already sends to `fix`; optional heroes (test-pilot, guardian) never force a repair — they
-  surface here as an offer. A hero the owner declines (here or at set-up) is recorded so it is not
+  route already sends to `fix`; optional heroes (test-pilot, guardian) surface here as an offer
+  rather than forcing a repair. A hero the owner declines (here or at set-up) is recorded so it is not
   re-offered. The combined view renders each hero layer — including guardian — under
   `## Layer: <hero>`.
 - **Sweep orphaned per-project stores** → when the view's `storage health` line reports orphaned
@@ -153,7 +153,7 @@ action that owns it, leaving the rest of the calibration untouched:
   effective model first, merge only the requested role into the existing object, and preserve every
   sibling key. Before writing, validate the selected model/effort with
   `engine_pref.valid_codex_model_effort`; reject an invalid (model, effort) pair and leave the prior
-  valid config unchanged. `max` is never proposed as a default — it is owner opt-in only.
+  valid config unchanged. `max` is owner opt-in only — never proposed as a default.
 
   ```json
   {

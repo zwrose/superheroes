@@ -8,7 +8,7 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 # Review Code
 
-Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches five specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies fixes via a fixer subagent, and re-reviews — looping until no Critical/Important findings remain or a circuit breaker halts. It never loads the full diff or any agent's raw output into its own conversation; subagents do all heavy reading and write structured results to disk.
+Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches five specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies fixes via a fixer subagent, and re-reviews — looping until no Critical/Important findings remain or a circuit breaker halts. Subagents do all heavy reading and write structured results to disk; it never loads the full diff or any agent's raw output into its own conversation.
 
 The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the full set of specialists (architecture, code, security, test, premortem) so coverage is uniform across reviews, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — by default — drives an auto-fix loop that commits fixes locally (never pushes). Two read-only behaviors are preserved as flags.
 
@@ -30,8 +30,6 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 | `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
 | `/superheroes:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
 | `/superheroes:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
-
-The three top-level paths: `--post` → read-only GitHub posting; `--review-only` → read-only terminal presentation; otherwise → auto-fix loop.
 
 **Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
 
@@ -164,7 +162,7 @@ Size the round-1 diff for the dispatch summary (after writing it to `round-1/dif
 DIFF_LINES=$(wc -l < "$SESSION_DIR/round-1/diff.txt")
 ```
 
-**CRITICAL:** Do not `cat`, `head`, `tail`, or otherwise read any `diff.txt` from the main context. The line count is the only thing the orchestrator needs to know about its contents.
+**CRITICAL:** The line count is the only thing the orchestrator needs to know about `diff.txt`'s contents — do not `cat`, `head`, `tail`, or otherwise read it from the main context.
 
 ### 2. Dispatch Summary
 
@@ -219,7 +217,7 @@ Launch the round's scheduled specialists (round 1: all five) **by channel** — 
 | premortem-reviewer           | premortem                     | Failure-Mode  |
 
 After dispatch, wait for all five agents to return. **Codex/cursor seats** run the native `dispatch-review` `--run-dir` + `--max-wait 540` continuation loop until terminal; **claude seats** are native subagents with their own lifecycle (the `await-dispatches` ruling's native-subagent exemption — the runner cannot dispatch them). The in-place fixer stays foreground by design (not an oversight). The **hand-rolled engine fallback** (`auto-fix-loop.md`) does not follow that native shape and still owes the limitation disclosure when used. No native-shape limitation disclosure is owed for seats dispatched through the runner or as claude native subagents under this skill. This skill owns the **bounds** of its own dispatches; the builder's `await-dispatches` rule owns the **channel** for what the builder launches. Full contract: `reference/auto-fix-loop.md` (Settled dispatch contract).
-A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the terminal `dispatch-review` result, which the orchestrator folds. The orchestrator does not read agent transcripts — only those structured outputs.
+A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/findings-<agent>.json`; a stdout-channel seat's findings come from the terminal `dispatch-review` result, which the orchestrator folds. The orchestrator reads only those structured outputs, never agent transcripts.
 
 ### 4. Compile + Dedupe (main context)
 
@@ -374,7 +372,7 @@ Build the review JSON, run `resolve_diff_lines.py` to validate anchors, post via
 The orchestrator's verify gate (loop step 12) and the fixer (prompt step 3) both run the project's own verify command, read from the resolved profile (`$PROFILE`)'s `## Verify` section during Setup. There are three branches:
 
 - **`command: <cmd>` →** `VERIFY_CMD="<cmd>"`. Both the orchestrator's gate and the fixer run `VERIFY_CMD` from the user's own working tree (never the PR head), non-interactively, with a timeout. A non-zero exit is a **HALT / `CHECK_FAILED`** — the orchestrator surfaces the failing output and does not re-review on a broken tree.
-- **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer not to run checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
+- **`mode: unverified` →** there is no verify command. SKIP the verify gate (step 12); tell the fixer to skip checks (verify command `"none"`); commits proceed ungated. State "unverified" in the dispatch summary and the End-of-Loop summary.
 - **`mode: review-only` →** the project opted out of auto-fix. The default path degrades to a single review pass + the `--review-only` presentation (no triage, no fixer, no commits, no loop). Note this in the dispatch summary.
 
 `meta.json` records the verify story (`verify`: the command string, or `"unverified"` / `"review-only"`) so a cold-resumed orchestrator recovers it without re-reading the profile.

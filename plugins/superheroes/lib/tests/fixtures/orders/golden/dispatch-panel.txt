@@ -13,7 +13,7 @@ conventions. Apply the diff-scope rule: only flag code in `+` or
 
 ## Context files
 - Diff: /tmp/superheroes-session-wo4-golden/round-2/diff.txt
-- Base rubric (severity, verification rules, panel output format): /private/tmp/wh723-car5/plugins/superheroes/rubric/review-base.md
+- Base rubric (severity, verification rules, panel output format): ${PLUGIN_ROOT}/rubric/review-base.md
 - Core calibration (threat model, canonical patterns): (Core calibration not resolved for this project)
 - Review-crew layer (scope exclusions, focus hints, conventions): (Review-crew layer calibration not resolved for this project)
 - CLAUDE.md (project conventions): CLAUDE.md
@@ -38,8 +38,7 @@ positives.
 - `file:line` citation required. No citation → drop your own finding
   before writing it out.
 - Before flagging "missing X", grep the codebase (PR checkout, in PR mode)
-  for X under different names. Don't flag a missing helper that exists
-  under a slightly different name.
+  for X under different names.
 - For Important-severity issues, check callers / reachability before asserting.
   If the only caller already guards the edge case, downgrade or drop.
 - For docs/spec changes, spot-check factual claims (function signatures,

@@ -15,7 +15,7 @@
 
 # Coupling lens
 
-The coupling lens is a **pure data-gatherer with a high findings bar** — deliberately demoted from centerpiece. Both hands-on boundary candidates in this project's history died in adjudication as conventionally-sanctioned code. Loud-but-sanctioned edges are **data, not findings**: they land in the digest and can never reach `candidates`. The lens never runs or enforces a project's checks; it collects matrix, counters, collapse tripwires, and flat-repo honesty — and surfaces nothing while declared-vocabulary reading is deferred.
+The coupling lens is a **pure data-gatherer with a high findings bar** — deliberately demoted from centerpiece. Both hands-on boundary candidates in this project's history died in adjudication as conventionally-sanctioned code. Loud-but-sanctioned edges are **data, not findings**: they land in the digest and can never reach `candidates`. It collects matrix, counters, collapse tripwires, and flat-repo honesty, and surfaces nothing while declared-vocabulary reading is deferred — the lens never runs or enforces a project's checks.
 
 Implementation lives in `guardian_lens_coupling.py` (lens logic, eligibility, census, collapse tripwires, digest) and `guardian_coupling_adapters.py` (depcruise argv construction + JSON parsers + closed outcome table). The single lens object exports through `guardian_lens_coupling.LENSES = (LENS,)` and registers via `guardian_lens.load_production_lenses()` under the name `coupling`.
 

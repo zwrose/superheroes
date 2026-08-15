@@ -90,7 +90,7 @@ Only `confirmed`/`noop` means done — surface anything else to the owner instea
 store/lock busy, retry; `deferred` with `reason: core-md-unreadable` = not retryable, surface `detail`; `absent` = nothing to confirm. A non-confirmed core leaves the layers
 untouched (no split state), so the whole calibration stays provisional until it genuinely confirms.
 
-Merely viewing the profile never confirms it (FR-18); only this explicit owner-confirm does.
+Only this explicit owner-confirm confirms the profile; merely viewing it never does (FR-18).
 
 ## Headless posture (FR-17)
 
