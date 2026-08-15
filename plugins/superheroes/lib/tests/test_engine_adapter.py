@@ -1854,6 +1854,10 @@ def test_parse_result_review_tolerated_message_alias_parses():
     assert res["findings"][0]["message"] == "issue found"
 
 
+def test_finding_reject_no_substance_constant_matches_wire_value():
+    assert EA.FINDING_REJECT_NO_SUBSTANCE == "no-substantive-fields"
+
+
 def test_scrub_findings_rejects_hollow_with_named_reason():
     accepted, rejected = EA._scrub_findings([{}])
     assert accepted == []
@@ -1877,14 +1881,14 @@ def test_finding_substance_keys_canonical_subset_of_schema():
 def test_review_payload_shape_hollow_object_branch(stdout):
     res = EA.review_payload_shape(stdout)
     assert res == {
-        "parsed": EA.SHAPE_FINDINGS_ALL_HOLLOW, "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
     }
 
 
 def test_review_payload_shape_hollow_bare_array():
     res = EA.review_payload_shape(json.dumps([{}]))
     assert res == {
-        "parsed": EA.SHAPE_FINDINGS_ALL_HOLLOW, "topLevelKeys": [], "keysTruncated": False,
+        "parsed": EA.SHAPE_FINDINGS_HOLLOW_MEMBER, "topLevelKeys": [], "keysTruncated": False,
     }
 
 

@@ -41,7 +41,7 @@ PAYLOAD_SHAPE_MAX_KEY_LEN = 60
 SHAPE_OBJECT_WITHOUT_FINDINGS = "object-without-findings"
 SHAPE_OBJECT_FINDINGS_NOT_A_LIST = "object-findings-not-a-list"
 SHAPE_ARRAY_NOT_ALL_OBJECTS = "array-not-all-objects"
-SHAPE_FINDINGS_ALL_HOLLOW = "findings-all-hollow"
+SHAPE_FINDINGS_HOLLOW_MEMBER = "findings-hollow-member"
 SHAPE_NO_PARSEABLE_JSON = "no-parseable-json"
 SHAPE_EMPTY_STDOUT = "empty-stdout"
 SHAPE_PROMPT_ECHO_ONLY = "prompt-echo-only"
@@ -50,7 +50,7 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_OBJECT_WITHOUT_FINDINGS,      # a JSON object parsed, but it carries no `findings` key
     SHAPE_OBJECT_FINDINGS_NOT_A_LIST,   # a JSON object parsed with a `findings` key that is not a list
     SHAPE_ARRAY_NOT_ALL_OBJECTS,        # a bare top-level array parsed, but not every element is an object
-    SHAPE_FINDINGS_ALL_HOLLOW,          # a findings array parsed with at least one hollow object member
+    SHAPE_FINDINGS_HOLLOW_MEMBER,       # a findings array parsed with at least one hollow object member
     SHAPE_NO_PARSEABLE_JSON,            # stdout was non-empty but held no parseable top-level JSON value
     SHAPE_EMPTY_STDOUT,                 # stdout was empty or whitespace only
     SHAPE_PROMPT_ECHO_ONLY,             # the seat emitted only an echo of its prompt — graded text empty after strip
@@ -544,6 +544,7 @@ def _scrub(text):
 _FINDING_STRUCTURAL_KEYS = {"file", "line", "severity", "id", "dimension", "confidence"}
 _FINDING_SUBSTANCE_KEYS_CANONICAL = frozenset({"title", "body", "evidence", "suggestion"})
 _FINDING_SUBSTANCE_KEYS_TOLERATED = frozenset({"summary", "message"})
+FINDING_REJECT_NO_SUBSTANCE = "no-substantive-fields"
 
 
 def _substance_value_is_substantive(val):
@@ -577,7 +578,7 @@ def _findings_list_has_hollow_member(findings):
 
 def _findings_reply_has_hollow_member(rejected):
     """True when any scrub rejection was for a hollow finding member."""
-    return any(r.get("reason") == "no-substantive-fields" for r in rejected)
+    return any(r.get("reason") == FINDING_REJECT_NO_SUBSTANCE for r in rejected)
 
 
 def _scrub_finding_value(val):
@@ -614,7 +615,7 @@ def _scrub_findings(findings):
             rejected.append({"entry": _render_rejection_entry(f), "reason": "not-a-dict"})
             continue
         if not _finding_is_substantive(f):
-            rejected.append({"entry": _render_rejection_entry(f), "reason": "no-substantive-fields"})
+            rejected.append({"entry": _render_rejection_entry(f), "reason": FINDING_REJECT_NO_SUBSTANCE})
             continue
         g = dict(f)
         for key, val in g.items():
@@ -780,7 +781,7 @@ def review_payload_shape(stdout):
                 return {"parsed": SHAPE_OBJECT_FINDINGS_NOT_A_LIST,
                         "topLevelKeys": [], "keysTruncated": False}
             if _findings_list_has_hollow_member(findings):
-                return {"parsed": SHAPE_FINDINGS_ALL_HOLLOW,
+                return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
                         "topLevelKeys": [], "keysTruncated": False}
             return None
         if obj is None:
@@ -788,7 +789,7 @@ def review_payload_shape(stdout):
             if isinstance(arr, list):
                 if all(isinstance(x, dict) for x in arr):
                     if _findings_list_has_hollow_member(arr):
-                        return {"parsed": SHAPE_FINDINGS_ALL_HOLLOW,
+                        return {"parsed": SHAPE_FINDINGS_HOLLOW_MEMBER,
                                 "topLevelKeys": [], "keysTruncated": False}
                     return None
                 return {"parsed": SHAPE_ARRAY_NOT_ALL_OBJECTS,
