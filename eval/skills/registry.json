@@ -67,6 +67,12 @@
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
     ],
+    "superheroes/discuss-open-decisions": [
+      "Use when the owner needs to rule on open decisions",
+      "Sweeps the standing-proposals collector, open parks, and in-session pending items",
+      "delivers batch 1 (decisions blocking the advisor, never new-issue filings)",
+      "Not routing, vetting, or building."
+    ],
     "superheroes/guardian": [
       "read-only sweep of repo health",
       "never edits code",

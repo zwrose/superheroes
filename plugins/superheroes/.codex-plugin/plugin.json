@@ -12,6 +12,7 @@
     "audit-debt",
     "configure",
     "checkpoint",
+    "discuss-open-decisions",
     "guardian",
     "review-code",
     "review-init",

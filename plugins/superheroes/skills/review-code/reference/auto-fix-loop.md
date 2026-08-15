@@ -378,7 +378,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
 > panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
 > probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
-> model and effort from the seat map.
+> model and effort from the seat map. A seat whose registry config is **effort-less** — one the model
+> registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
+> effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
+> Passing an empty `--effort ""` is not the same thing and still refuses at
+> `engine-config:invalid-model-effort`, so the loop omits the flag rather than passing an empty one.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -386,9 +390,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
 >   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
 >   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+>   EFFORT_ARGS=()
+>   if [ -n "${SEAT_EFFORT}" ]; then EFFORT_ARGS=(--effort "${SEAT_EFFORT}"); fi
 >   CANARY_RESULTS+=("$(
 >     python3 -B "${ROOT_DIR}/lib/seat_canary.py" probe \
->       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" --effort "${SEAT_EFFORT}" \
+>       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
 >       --repo-root "${REPO_ROOT}"
 >   )")
 > done

@@ -29,6 +29,7 @@ _HOME = "rubric/bite-proof.md"
 
 # Copy-holder disposition (§11.2 — extend roster when adding a pointer; bump expected_count when
 # a section gains a deliberate second pointer):
+# workhorse §6 Decompose — order-template doctrine points at bite-proof home (count=1)
 # workhorse §8 Verify — orchestrator re-reads doctrine when build adds detector (count=1)
 # workhorse § When you're tempted — temptation table row on vacuous bite-proofs (count=1)
 # implementer § The rules — disclosure shapes and doctrine reference in short-return rule (count=1)
@@ -36,6 +37,7 @@ _HOME = "rubric/bite-proof.md"
 # test-reviewer § Named test-smell taxonomy — axis-line smell cites doctrine home (count=1)
 # CONVENTIONS §12 — verification contracts pointer to vacuity-trap home (count=2)
 _CONSUMER_ROSTER = [
+    ("skills/workhorse/SKILL.md", "## 6. Decompose into work orders", 1),
     ("skills/workhorse/SKILL.md", "## 8. Verify — re-run every receipt yourself", 1),
     ("skills/workhorse/SKILL.md", "## When you're tempted", 1),
     ("agents/implementer.md", "## The rules", 1),
