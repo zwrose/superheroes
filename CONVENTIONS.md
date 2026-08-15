@@ -1187,7 +1187,11 @@ behavioral tests instead — **Test 1** (perceivability without reading the diff
 / **say it** / **nothing to see** levels, and the presentation standard the charter sets — judged by
 zero reconstruction, show the after-state — live in the **Showrunner charter**
 (`skills/showrunner/SKILL.md`); the default perceivability list lives in
-`skills/showrunner/reference/perceivability.md` — cite those homes, do not restate them here. The shape in which open owner decisions are delivered — the owner-needed filter with stated grounds, the per-item spine, follow-up economics, and the two-batch delivery mechanics — lives in `skills/showrunner/reference/owner-decisions.md`; this section cites that home rather than restating it.
+`skills/showrunner/reference/perceivability.md` — cite those homes, do not restate them here.
+The shape in which open owner decisions are delivered — the owner-needed filter with stated
+grounds, the per-item spine, follow-up economics, and the two-batch delivery mechanics — lives in
+`skills/showrunner/reference/owner-decisions.md`; this section cites that home rather than
+restating it.
 
 **Why one test is not enough.** Test 1's net is deliberately wide; alone it would catch a large
 share of any project's work and spend *more* owner attention, not less. Test 2 discriminates craft

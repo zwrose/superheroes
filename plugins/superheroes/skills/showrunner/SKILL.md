@@ -315,12 +315,11 @@ above).
      **Install the contract's distilled preamble at the top of the collector issue body, above the
      items, and refresh it when it has drifted or is missing.** The canonical snippet lives in
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` under
-     `## The collector preamble — canonical snippet`, delimited by the marker
-     `<!-- superheroes:owner-decisions-contract -->` so a refresh replaces the preamble **without
-     touching the items beneath it**. Nothing mechanical fires on a chat message, so the contract
+     `## The collector preamble — canonical snippet`, delimited by the HTML comment marker that its own
+     section documents, so a refresh replaces the preamble **without touching the items beneath it**. Nothing mechanical fires on a chat message, so the contract
      cannot be gated where it is used — collector reconciliation is **already a mandatory vet-time
      step**, so a copy at the top of the collector rides a read path that already exists: the advisor
-     cannot enumerate the items without the contract in front of them. Data-path placement standing in
+     cannot enumerate the items without the contract in front of them. Data-path placement is standing in
      for enforcement, and it is the **strongest available check**, not a strong one. The vet-receipt
      contract drifted until it gained mechanical observability; this is the analogous move for a
      surface with no artifact to stamp. When the collector pointer cannot be resolved, the preamble
@@ -478,7 +477,7 @@ above).
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.
    **Owner-decisions delivery — read before you open the thread.** About to deliver open decisions to
-   the owner, read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
+   the owner → read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
    **first**, and do not reconstruct the shape from memory. That file carries the owner-needed filter
    with stated grounds, the per-item spine, follow-up economics, and the delivery mechanics — chat
    prose, stable numbering, two batches — without this charter restating them. This duty needs a shape
