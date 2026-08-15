@@ -61,6 +61,17 @@ attempt must never be globbed and honored.
    shipped template at `rubric/orders/dispatch-verifiers.md` only as reference for what the emitted
    order contains — or dispatch the driver-emitted file when you have run `next` through the driver.
 
+   **Delivery channel — file vs stdout.** The emitted order's `## Output` / channel block names
+   which path this seat uses:
+   - **File channel** (native subagent or `claude` host seat): write
+     `$SESSION_DIR/round-<N>/verdicts-<cluster-index>.json` — a JSON array of verdict objects, one
+     per cluster issue. This is the workflow the glob in "Applying the verdicts" below merges.
+   - **Stdout channel** (`codex`/`cursor` engine seat): emit `{"verdicts": [...]}` as final stdout
+     through `dispatch-review` — the seat writes **no** `verdicts-*.json` file. Fold the terminal
+     `dispatch-review` result's `verdicts` array into the phase artifact the same way you would
+     have read the per-cluster file. Do not follow the file workflow on a read-only engine dispatch
+     or the verdicts are lost.
+
 ## Applying the verdicts
 
 Concatenate **every** per-cluster verdict file into one list — **sorted by cluster index** so

@@ -47,9 +47,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 
 > **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
-> instead of a named subagent, and it returns its findings on **stdout** rather than writing the
-> findings file. The required stdout shape is `{"findings": [...], "investigated": [...]}` — a seat
-> that omits `investigated` forfeits vacuously. The contract shape also lives in the base rubric's
+> instead of a named subagent, and it returns its payload on **stdout** rather than writing a
+> findings file. Panel seats emit `{"findings": [...], "investigated": [...]}`; verifier seats emit
+> `{"verdicts": [...], "investigated": [...]}`. The graded result carries **`resultKind`**
+> (`findings` or `verdicts`) naming which payload key survived. A seat that omits `investigated`
+> forfeits vacuously. The contract shape also lives in the base rubric's
 > "Findings output format" section; the
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
@@ -223,22 +225,31 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
 > **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
-> carries **`reason`** (and usually **`detail`**). Outcome-dependent keys include **`findings`**,
-> **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
-> absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
-> prevent. An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
+> carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
+> (one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name
+> and **`investigated`**. Outcome-dependent keys also include **`engagement`** and
+> **`sanitizedView`**. A consumer must **not** read an absent `findings` as "zero findings" — an
+> absent `findings` may mean a `verdicts`-kind result instead; that is the fail-open reading this
+> subsystem exists to prevent. An object carrying **both** `findings` and `verdicts` is refused as
+> `unreadable`. An item whose `id` is exactly `<agent-name>-001` or whose `severity` is exactly
+> `Critical | Important | Minor | Nit` — the `review-base.md` template literals — is refused as
+> `unreadable` (field-exact; an honest finding that *quotes* those literals in its prose survives).
+> An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
 > `sanitizedView` **only when raised after the sanitized view was built** — early refusals
 > (`prompt-*`, `run-dir-is-symlink`, `run-dir-not-writable`, `schema-*`, and argparse failures for
 > `--repo-root` / `--run-dir`) precede the view and carry none. A terminal
 > forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
 > `result.findings` reads nothing.
 >
-> **`findings`-only transport (#687).** The runner forwards **only** `findings` and `investigated`
-> from the seat's stdout. Every other key the seat emits is dropped. A caller that needs a different
-> payload shape — verdicts, per-id audit rulings — **cannot** get it through this verb: the result
-> parses as `unreadable`, retries once at full token cost, and returns a forfeit whose disclosure
-> names the engine. Encode the payload **inside `findings` objects** instead, or use the
-> file-writing subagent verifier path that `verification-pass.md` already describes.
+> **Review payload transport (#687).** The runner accepts **two** result kinds on stdout. Every
+> `ok: true` review result carries **`resultKind`** — exactly `"findings"` or `"verdicts"` — plus
+> **exactly one** payload key of that name and an `investigated` list; every other top-level key the
+> seat emits is dropped. **`findings`** remains the default and the pin for **review panel** seats
+> (#687 findings-only posture for panel seats is unchanged). A **`verdicts`** payload now travels
+> through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
+> parses `unreadable` by construction. **Per-id audit rulings** (`dispatch-audits`) still do not
+> travel through this verb; encode those inside audit result objects or use the file-writing auditor
+> path. For verifier delivery channels, see `verification-pass.md`.
 >
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is

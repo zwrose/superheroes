@@ -239,6 +239,49 @@ def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
     )
 
 
+# --- Cluster: review resultKind enum (engine_dispatch → auto-fix-loop.md) ---
+
+
+def _review_result_kind_enum_from_home():
+    import engine_dispatch
+
+    return set(engine_dispatch.REVIEW_RESULT_KINDS)
+
+
+def _review_result_kind_enum_from_auto_fix_loop_doc(doc):
+    """The resultKind enumeration in auto-fix-loop.md — scoped to that block only."""
+    m = re.search(
+        r"\*\*Result shape — top-level, no wrapper.*?`resultKind`.*?\(one of\s*(.*?)\)\s*naming the payload",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "auto-fix-loop.md: resultKind enumeration not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
+    assert tokens, (
+        "auto-fix-loop.md: resultKind enumeration parsed to zero tokens "
+        "(regex drift or empty enumeration?)"
+    )
+    return tokens
+
+
+def test_review_result_kind_enum_in_auto_fix_loop_doc():
+    """§11: auto-fix-loop.md restates the resultKind enum from engine_dispatch."""
+    home = _review_result_kind_enum_from_home()
+    doc = _read("skills/review-code/reference/auto-fix-loop.md")
+    doc_tokens = _review_result_kind_enum_from_auto_fix_loop_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "auto-fix-loop.md resultKind enum drift from "
+        "engine_dispatch.REVIEW_RESULT_KINDS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
 # --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---
 
 
