@@ -409,7 +409,14 @@ def _wave_watch_string_constants_by_prefix(prefix):
 
 
 def _wave_watch_precedence_from_home():
-    """Precedence order from wave_watch.py's module docstring — no named data structure."""
+    """Precedence order from wave_watch.EVENT_PRECEDENCE — the tuple run() consumes."""
+    import wave_watch
+
+    return list(wave_watch.EVENT_PRECEDENCE)
+
+
+def _wave_watch_precedence_from_module_docstring():
+    """Precedence prose from wave_watch.py's module docstring — checked against EVENT_PRECEDENCE."""
     text = _read("lib/wave_watch.py")
     m = re.search(
         r"- Precedence:\s*(.*?)\.",
@@ -426,6 +433,147 @@ def _wave_watch_precedence_from_home():
         order.append(token)
     assert order, "wave_watch.py: precedence sentence parsed to zero tokens"
     return order
+
+
+def _assert_wave_watch_precedence_order_equal(label_a, order_a, label_b, order_b):
+    assert len(order_a) == len(order_b), (
+        "wave-watch precedence length mismatch — %s: %d tokens %r; %s: %d tokens %r"
+        % (label_a, len(order_a), order_a, label_b, len(order_b), order_b)
+    )
+    for index, (left, right) in enumerate(zip(order_a, order_b)):
+        assert left == right, (
+            "wave-watch precedence order disagreement at position %d — "
+            "%s has %r, %s has %r"
+            % (index, label_a, left, label_b, right)
+        )
+
+
+def _wave_watch_verbs_from_home():
+    """CLI subcommand names from argparse registration in wave_watch.py.
+
+    Parsed from ``sub.add_parser("…")`` call sites — the parser is the executable
+    source of truth and this avoids invoking ``main()`` during import.
+    """
+    text = _read("lib/wave_watch.py")
+    verbs = re.findall(r'sub\.add_parser\("([^"]+)"\)', text)
+    assert verbs, (
+        "wave_watch.py: no sub.add_parser(...) registrations found "
+        "(moved or reworded?)"
+    )
+    return set(verbs)
+
+
+def _wave_watch_verbs_from_doc(doc):
+    """Documented verbs from the wave-watch.md intro bullet list — scoped to that block."""
+    m = re.search(
+        r"It has two verbs:\n\n(.*?)\n\n\*\*The re-arm",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "wave-watch.md: verb intro bullet list not found "
+        "(moved or reworded?)"
+    )
+    verbs = set(re.findall(r"- \*\*`([^`]+)`\*\*", m.group(1)))
+    assert verbs, (
+        "wave-watch.md: verb intro bullet list parsed to zero verbs "
+        "(regex drift or empty list?)"
+    )
+    return verbs
+
+
+def _wave_watch_exit_contract_from_home():
+    """Exit semantics from main() — ok→N, refusal→M, one JSON line on stdout."""
+    text = _read("lib/wave_watch.py")
+    main_text = text[text.index("def main(argv):"):]
+    m = re.search(
+        r'return\s+(\d+)\s+if\s+result\.get\("ok"\)\s+else\s+(\d+)',
+        main_text,
+    )
+    assert m, (
+        "wave_watch.py: main() exit contract (ok→N, refusal→M) not found "
+        "(moved or reworded?)"
+    )
+    assert "_emit(result)" in main_text, (
+        "wave_watch.py: main() must emit one JSON line via _emit(result) "
+        "(moved or reworded?)"
+    )
+    assert 'if args.cmd == "run"' in main_text, (
+        "wave_watch.py: main() run subcommand path not found "
+        "(moved or reworded?)"
+    )
+    assert 'elif args.cmd == "loop"' in main_text, (
+        "wave_watch.py: main() loop subcommand path not found "
+        "(moved or reworded?)"
+    )
+    return {True: int(m.group(1)), False: int(m.group(2))}
+
+
+def _wave_watch_exit_contract_from_doc(doc):
+    """Exit semantics from wave-watch.md — scoped to the What-it-tells-you sentence."""
+    m = re.search(
+        r"The watcher prints \*\*one JSON line on stdout\*\*; "
+        r"\*\*exit (\d+) on an event, exit (\d+) on a refusal\*\*\.",
+        doc,
+    )
+    assert m, (
+        "wave-watch.md: exit contract sentence not found "
+        "(moved or reworded?)"
+    )
+    return {True: int(m.group(1)), False: int(m.group(2))}
+
+
+def _wave_watch_suppressible_events_from_home():
+    """Suppressible event tokens from wave_watch._SUPPRESSIBLE_EVENTS."""
+    import wave_watch
+
+    return set(wave_watch._SUPPRESSIBLE_EVENTS)
+
+
+def _wave_watch_suppressible_events_from_doc(doc):
+    """Suppressible-event list from wave-watch.md — scoped to the lane-keyed sentence."""
+    m = re.search(
+        r"Only the four \*\*lane-keyed\*\* events are suppressible:\s*"
+        r"(.*?)\.\s*\n`pr-set-changed`",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "wave-watch.md: suppressible-events list not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
+    assert tokens, (
+        "wave-watch.md: suppressible-events list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
+
+
+def _wave_watch_exit_contract_verbs_from_doc(doc):
+    """Verbs whose intro bullets state the one-JSON-line stdout contract."""
+    m = re.search(
+        r"It has two verbs:\n\n(.*?)\n\n\*\*The re-arm",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "wave-watch.md: verb intro bullet list not found "
+        "(moved or reworded?)"
+    )
+    covered = set()
+    for verb, body in re.findall(
+        r"- \*\*`([^`]+)`\*\* — (.*?)(?=\n- \*\*|\n\n\*\*|\Z)",
+        m.group(1),
+        re.DOTALL,
+    ):
+        if re.search(r"prints one JSON line", body):
+            covered.add(verb)
+    assert covered, (
+        "wave-watch.md: verb intro bullets parsed to zero JSON-line contracts "
+        "(regex drift or reworded?)"
+    )
+    return covered
 
 
 def _wave_watch_events_from_doc(doc):
@@ -504,14 +652,13 @@ def _wave_watch_precedence_from_doc(doc):
 
 
 def test_wave_watch_vocabulary_in_wave_watch_doc():
-    """§11: wave-watch.md restates wave_watch.py vocabulary on three registry axes and one partial axis.
+    """§11: wave-watch.md restates wave_watch.py vocabulary on three registry axes and precedence.
 
     Axis notes:
     - Events, refusals, degradations: the doc's bullet lists must match the module's EVENTS,
       REFUSALS, and DEGRADATIONS frozensets (token registries).
-    - Precedence: the doc precedence line must match the module docstring's precedence sentence;
-      return-arm order is bound separately by ``EVENT_PRECEDENCE`` and
-      ``test_event_precedence_matches_docstring`` in ``test_wave_watch.py``.
+    - Precedence: the doc precedence line and the module docstring's precedence sentence must
+      both match ``EVENT_PRECEDENCE``, the tuple ``run()`` consumes.
     """
     import wave_watch
 
@@ -519,6 +666,7 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
     home_refusals = _wave_watch_refusals_from_home()
     home_degradations = _wave_watch_degradations_from_home()
     home_precedence = _wave_watch_precedence_from_home()
+    module_docstring_precedence = _wave_watch_precedence_from_module_docstring()
     derived_events = _wave_watch_string_constants_by_prefix("EVENT_")
     derived_refusals = _wave_watch_string_constants_by_prefix("REFUSAL_")
     derived_degradations = _wave_watch_string_constants_by_prefix("DEGRADATION_")
@@ -563,15 +711,23 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
         % (missing_degradations, extra_degradations)
     )
     doc_precedence = _wave_watch_precedence_from_doc(doc)
-    assert doc_precedence == home_precedence, (
-        "wave-watch.md precedence line drift from wave_watch.py module docstring — "
-        "doc: %r; home: %r"
-        % (doc_precedence, home_precedence)
+    _assert_wave_watch_precedence_order_equal(
+        "wave-watch.md",
+        doc_precedence,
+        "wave_watch.EVENT_PRECEDENCE",
+        home_precedence,
+    )
+    _assert_wave_watch_precedence_order_equal(
+        "wave_watch.py module docstring",
+        module_docstring_precedence,
+        "wave_watch.EVENT_PRECEDENCE",
+        home_precedence,
     )
     events_registry = set(wave_watch.EVENTS)
     for label, precedence in (
-        ("wave_watch.py module docstring", home_precedence),
+        ("wave_watch.py module docstring", module_docstring_precedence),
         ("wave-watch.md", doc_precedence),
+        ("wave_watch.EVENT_PRECEDENCE", home_precedence),
     ):
         prec_set = set(precedence)
         assert prec_set == events_registry and len(precedence) == len(events_registry), (
@@ -586,6 +742,55 @@ def test_wave_watch_vocabulary_in_wave_watch_doc():
                 len(events_registry),
             )
         )
+
+
+def test_wave_watch_verbs_in_wave_watch_doc():
+    """§11: wave-watch.md documents exactly the CLI subcommands wave_watch.py accepts."""
+    home_verbs = _wave_watch_verbs_from_home()
+    doc = _read("skills/showrunner/reference/wave-watch.md")
+    doc_verbs = _wave_watch_verbs_from_doc(doc)
+    missing_from_doc = sorted(home_verbs - doc_verbs)
+    extra_in_doc = sorted(doc_verbs - home_verbs)
+    assert not missing_from_doc and not extra_in_doc, (
+        "wave-watch.md verb vocabulary drift from wave_watch CLI — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_wave_watch_exit_contract_in_wave_watch_doc():
+    """§11: wave-watch.md restates main()'s exit semantics for both CLI verbs."""
+    home_contract = _wave_watch_exit_contract_from_home()
+    doc = _read("skills/showrunner/reference/wave-watch.md")
+    doc_contract = _wave_watch_exit_contract_from_doc(doc)
+    assert doc_contract == home_contract, (
+        "wave-watch.md exit contract drift from wave_watch.main() — "
+        "doc: %r; home: %r"
+        % (doc_contract, home_contract)
+    )
+    home_verbs = _wave_watch_verbs_from_home()
+    doc_verbs_with_json_line = _wave_watch_exit_contract_verbs_from_doc(doc)
+    missing_json_line = sorted(home_verbs - doc_verbs_with_json_line)
+    assert not missing_json_line, (
+        "wave-watch.md exit contract missing one-JSON-line statement for verbs — "
+        "home verbs without doc intro coverage: %r"
+        % missing_json_line
+    )
+
+
+def test_wave_watch_suppressible_events_in_wave_watch_doc():
+    """§11: wave-watch.md restates wave_watch._SUPPRESSIBLE_EVENTS for --ignore-event."""
+    home = _wave_watch_suppressible_events_from_home()
+    doc = _read("skills/showrunner/reference/wave-watch.md")
+    doc_tokens = _wave_watch_suppressible_events_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "wave-watch.md suppressible-events vocabulary drift from "
+        "wave_watch._SUPPRESSIBLE_EVENTS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
 
 
 # --- Cluster 4: negative drift scans (concrete model ids must not leak) ------
