@@ -58,6 +58,9 @@ _STALE_AFTER_MAX = 86400
 # The old default was 300 s, which no real build has ever met — an omitting caller
 # was guaranteed to classify `stale` within five minutes. A builder that states its
 # own `--stale-after` is unaffected; this only moves the fallback.
+#
+# bite-axis: the default promise CLEARS 2x the measured worst benign gap — lowering
+# it below that reddens test_default_stale_after_clears_twice_the_worst_measured_benign_gap.
 DEFAULT_STALE_AFTER_SECONDS = 24000
 _NOTE_MAX_LEN = 500
 _PHASE_MIN_LEN = 1

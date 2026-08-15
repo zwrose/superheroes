@@ -549,13 +549,18 @@ def _stale_second_chance(
         promise = entry.get("staleAfterSeconds")
         lane_info = live_lanes.get(entry["launchId"]) or {}
         mtime = transcript_mtime(lane_info.get("worktree"), env)
+        # bite-axis: DIRECTION of failure — an unresolvable transcript or an unusable
+        # promise alerts, never suppresses.
         if not _valid_positive_int(promise) or mtime is None:
             still_stale.append(entry)
             continue
         transcript_age = now - mtime
+        # bite-axis: a FUTURE-dated transcript is a skewed clock, not evidence of work.
         if transcript_age < -_CLOCK_SKEW_TOLERANCE_SECONDS:
             still_stale.append(entry)
             continue
+        # bite-axis: FRESHNESS of the transcript against the lane's own promise —
+        # written inside the window is working, outside it is wedged.
         if transcript_age > promise:
             still_stale.append(entry)
             continue
@@ -906,6 +911,8 @@ def run(
             )
             for entry in tick_suppressed:
                 arm_suppressed[entry["launchId"]] = entry
+            # bite-axis: CONSISTENCY — a lane found still stale on a later tick loses
+            # its earlier suppression, so the note can never contradict the event.
             for entry in stale_live_launches:
                 arm_suppressed.pop(entry["launchId"], None)
             exited_launches = exited[1] if exited is not None else []
