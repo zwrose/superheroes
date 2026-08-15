@@ -97,8 +97,22 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > even when the diff under review touches them — the dispatch prompt should name stripped paths so the
 > seat knows why a read failed.
 >
-> **`--diff-base <commit-oid>` (optional).** Omitted → behaviour is exactly as today: nothing is staged
-> and the four receipt keys below are `null`. Supplied → the value must be a **pinned commit object id**
+> **`--mode {review,brief-check}` (optional, default `review`).** `--mode review` or omitted →
+> behaviour identical to today, including `--diff-base` resolving to an empty patch →
+> `sanitized-view-diff-empty`, `attempts: 0`. `--mode brief-check` → the sanitized view is built
+> **diff-less**; all four `sanitizedView` diff keys below are `null`. Supplying **both**
+> `--mode brief-check` and `--diff-base` is a terminal refusal `mode-brief-check-with-diff-base`,
+> `attempts: 0`, no spawn — **including on continuation**, because the check runs before the journal
+> read. On continuation, an explicitly disagreeing `--mode` is
+> `run-dir-mode-mismatch`, `attempts: 0`; omitted `--mode` inherits the mode the run was opened with
+> (a journal written before this change, with no `mode` key, normalizes to `review`); when inherited
+> mode is `brief-check` and `--mode` is omitted, `--diff-base` stays accepted-and-ignored. Every
+> `dispatch-review` result carries a top-level **`mode`** string — success, forfeit, and every
+> pre-spawn refusal alike. Registry/model gate, sanitized-view export and config strip, the #666
+> investigation floor, engagement read, and vacuous-forfeit accounting are unchanged in both modes.
+>
+> **`--diff-base <commit-oid>` (optional).** Omitted → nothing is staged and the four receipt keys
+> below are `null` (this has always been true — `--diff-base` was never required). Supplied → the value must be a **pinned commit object id**
 > (40 hex characters, or 64 in a SHA-256 repository); a revision expression, branch name or tag is
 > refused as `sanitized-view-diff-base-unresolved` **before any repository-local git command runs**.
 > The runner verifies that commit **in the source repository** (which has git), resolves the **merge
@@ -112,7 +126,9 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > that patch, that it is a **generated artifact rather than repository source**, and that the seat
 > must not review it, must not list it in `investigated`, and should exclude it from repo-wide
 > searches. On a **continuation** (`--run-dir` naming an existing run), `--diff-base` is accepted but
-> ignored — the live run's view is not rebuilt.
+> ignored — the live run's view is not rebuilt — except when this invocation also asserts
+> `--mode brief-check` explicitly, which refuses `mode-brief-check-with-diff-base` before the
+> journal is read.
 >
 > The staged patch is **rejected from the #666 investigation floor**: a seat whose `investigated` array
 > cites only the patch fails the floor and forfeits vacuously, exactly as if it had cited nothing.
@@ -158,6 +174,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > | `sanitized-view-diff-unaccounted` | an unrecognized non-`diff --git` span, a duplicate path within one census tree, a changed census entry that survived the stripped policy but has no rendered section, a rendered section for a path the census does not contain, or a duplicate rendered section for the same path |
 > | `sanitized-view-diff-opaque` | a rendered section whose content is opaque — `Binary files … differ` (or `GIT binary patch`) instead of hunks |
 >
+> **Mode refusals** (all `attempts: 0`, no spawn — not members of the `sanitized-view-*`
+> diff-refusal family above):
+>
+> | token | when |
+> |---|---|
+> | `mode-invalid` | `--mode` is not a string in `{review,brief-check}` — top-level `mode` stays canonical (`review`); the rejected value is in `rejectedMode` |
+> | `mode-brief-check-with-diff-base` | `--mode brief-check` and `--diff-base` were both explicitly supplied |
+> | `run-dir-mode-mismatch` | continuation with an explicitly disagreeing `--mode` |
+>
 > **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
 > the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
 > false clean.
@@ -193,10 +218,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > one was written. The view is the **committed** tree at `headSha`; `sourceDirty: true` flags modified
 > tracked files in the source repo
 > so a caller reviewing uncommitted work is disclosed rather than silently given the pre-change tree.
-> Every result also carries **`terminal`**, **`argv`** (the exact spawned command), and **`runDir`**.
+> Every result also carries **`terminal`**, **`argv`** (the exact spawned command), **`runDir`**, and
+> top-level **`mode`** (`review` or `brief-check`).
 >
 > **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
-> **`ok`**, **`terminal`**, **`runDir`**, and **`argv`** at the top level. On a failure it also
+> **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
 > carries **`reason`** (and usually **`detail`**). Outcome-dependent keys include **`findings`**,
 > **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
 > absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
@@ -352,7 +378,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
 > panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
 > probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
-> model and effort from the seat map.
+> model and effort from the seat map. A seat whose registry config is **effort-less** — one the model
+> registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
+> effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
+> Passing an empty `--effort ""` is not the same thing and still refuses at
+> `engine-config:invalid-model-effort`, so the loop omits the flag rather than passing an empty one.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -360,9 +390,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
 >   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
 >   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+>   EFFORT_ARGS=()
+>   if [ -n "${SEAT_EFFORT}" ]; then EFFORT_ARGS=(--effort "${SEAT_EFFORT}"); fi
 >   CANARY_RESULTS+=("$(
 >     python3 -B "${ROOT_DIR}/lib/seat_canary.py" probe \
->       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" --effort "${SEAT_EFFORT}" \
+>       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
 >       --repo-root "${REPO_ROOT}"
 >   )")
 > done

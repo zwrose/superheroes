@@ -4,9 +4,10 @@
 2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
 3. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
 4. [Supervised review dispatch](#supervised-review-dispatch)
-5. [Supervised write dispatch](#supervised-write-dispatch)
-6. [Declared items](#declared-items)
-7. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+5. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
+6. [Supervised write dispatch](#supervised-write-dispatch)
+7. [Declared items](#declared-items)
+8. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -135,13 +136,21 @@ as "zero findings". An `unrunnable` refusal carries no `findings` / `investigate
 carries `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
 (`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
 forfeit carries no `findings`/`investigated`. There is no `result` wrapper; `result.findings` reads
-nothing. Optional **`--diff-base <commit-oid>`** stages the reviewed change as
+nothing. Optional **`--mode {review,brief-check}`** (default `review`) — full contract in
+`auto-fix-loop.md` (mode refusals, continuation rules, top-level `mode` on every result). On
+continuation, `--diff-base` is accepted but ignored — the live run's view is not rebuilt — except
+when this invocation also asserts `--mode brief-check` explicitly, which refuses
+`mode-brief-check-with-diff-base` before the journal is read.
+
+Optional **`--diff-base <commit-oid>`** stages the reviewed change as
 `SUPERHEROES_REVIEW_DIFF.patch` inside the gitless sanitized view — the machinery external seats need
 because `git diff <ref>` and `git log` cannot work there; the `sanitizedView` receipt then also
 carries `diffBase`, `diffPath`, `diffBytes`, and `diffWithheldCount` (all `null` when the flag is
-omitted). On a continuation (`--run-dir` naming an existing run), `--diff-base` is accepted but
-ignored — the live run's view is not rebuilt. Full contract — refusals, withheld stripped-config
-paths, investigation-floor rejection — is in `auto-fix-loop.md`.
+omitted, or under `--mode brief-check`). On a continuation (`--run-dir` naming an existing run),
+`--diff-base` is accepted but ignored — the live run's view is not rebuilt — except when this
+invocation also asserts `--mode brief-check` explicitly, which refuses
+`mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
+withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
 The runner's transport carries **only** `findings` and `investigated` from the seat's stdout — every
 other key the seat emits is dropped, so verdict-shaped or other alternate payloads parse `unreadable`,
 retry once, and forfeit.
@@ -213,6 +222,56 @@ decide what a dispatch does. Read standing accounting via
 separately on every row. A seat can burn hundreds of thousands of tokens, reach real findings in its
 stdout, and deliver nothing gradeable through our transport (`stages.engaged: true`,
 `stages.delivered: false`). Other terminal reasons: `forfeited`, `vacuous`, `unrunnable`.
+
+### Brief-check dispatch (`--mode brief-check`)
+
+The workhorse charter §5 names *who* reviews the brief; this subsection is the mechanics for *how* it
+is dispatched. The sanctioned channel is `dispatch-review --mode brief-check` — not a hand-rolled
+`codex exec`, which is permitted **only when the runner itself is unavailable** (disclosed degradation
+in the PR body, never the normal path).
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# RUN_DIR — create once per seat before first dispatch-review (continuation reuses the same path)
+if [ -z "$RUN_DIR" ]; then echo "RUN_DIR required (run-dir-absent)" >&2; exit 1; fi
+mkdir -p "$(dirname "$RUN_DIR")" || { echo "cannot create RUN_DIR parent" >&2; exit 1; }
+RUN_DIR="$(cd -P "$(dirname "$RUN_DIR")" && pwd -P)/$(basename "$RUN_DIR")"
+if [ -L "$RUN_DIR" ]; then echo "RUN_DIR must be physical (run-dir-is-symlink)" >&2; exit 1; fi
+if [ -d "$RUN_DIR" ]; then
+  if [ -n "$(ls -A "$RUN_DIR" 2>/dev/null)" ]; then echo "RUN_DIR must be empty on first launch (run-dir-not-empty-unopened)" >&2; exit 1; fi
+else
+  mkdir "$RUN_DIR" || { echo "cannot create RUN_DIR" >&2; exit 1; fi
+fi
+RUN_DIR="$(cd -P "$RUN_DIR" && pwd -P)"
+# Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
+# Gate first — thread model_id / effort from the JSON
+python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
+  --role brief-check --vendor "$BRIEF_ENGINE" --model "$BRIEF_MODEL"
+# LAUNCH — fresh --run-dir outside the repo; no --diff-base
+python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
+  --mode brief-check \
+  --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
+  --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
+  --order-id "$ORDER_ID" \
+  --run-dir "$RUN_DIR" --max-wait 12 \
+  --progress-file "$BRIEF_PROGRESS"
+# CONTINUATION — re-invoke while .terminal is false
+python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
+  --mode brief-check \
+  --engine "$BRIEF_ENGINE" --engine-model "$BRIEF_ENGINE_MODEL" --effort "$BRIEF_EFFORT" \
+  --prompt-path "$BRIEF_PATH" --repo-root "$REPO_ROOT" \
+  --order-id "$ORDER_ID" \
+  --run-dir "$RUN_DIR" --max-wait 540 \
+  --progress-file "$BRIEF_PROGRESS"
+```
+
+Continuation rules — full contract in `auto-fix-loop.md`: omitting `--mode` inherits the opened mode;
+supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Explicit
+`--mode brief-check` together with `--diff-base` always refuses `mode-brief-check-with-diff-base`
+(continuation included); `--diff-base` is accepted-and-ignored only when brief-check mode is
+inherited from the journal and `--mode` is omitted. The terminal journaled result — `mode:
+brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all four diff keys `null` — is
+the receipt that the brief check happened.
 
 ## Supervised write dispatch
 

@@ -1,0 +1,15 @@
+{
+  "should_fire": [
+    "what decisions are waiting on me right now — sweep everything and give me batch 1",
+    "I was away for a week — walk me through the open decisions that need my ruling",
+    "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+    "sweep open parks and pending items, filter to what only I can decide, and pause for my rulings",
+    "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only"
+  ],
+  "should_not_fire": [
+    "vet this PR from its artifacts against its issue and build brief",
+    "build this approved issue and take it to a ready PR",
+    "review the code changes on this branch for bugs before merging",
+    "freshen live state and give me the /compact command to paste"
+  ]
+}

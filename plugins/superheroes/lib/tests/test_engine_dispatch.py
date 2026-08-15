@@ -1,3 +1,4 @@
+import argparse
 import ast
 import importlib.util
 import json
@@ -45,7 +46,7 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     yield
 
 
-def _never_build_view(_repo):
+def _never_build_view(_repo, *, diff_base=None):
     raise AssertionError("build_view should not be called")
 
 
@@ -178,6 +179,7 @@ def test_dispatch_review_repo_root_absent_no_spawn(tmp_path):
     assert res == {
         "ok": False, "reason": "unrunnable", "detail": "repo-root-absent",
         "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+        "mode": "review",
     }
     assert "sanitizedView" not in res
     assert len(fake.calls) == 0
@@ -4156,4 +4158,374 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
     assert sibling_real in delta_paths
     for d in sw["deltas"]:
         assert "accus" not in json.dumps(d).lower()
+
+
+# --- #1017: dispatch-review --mode brief-check ---------------------------------
+
+
+def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False):
+    """Journal run-opened with optional mode key — for continuation tests."""
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    cwd = os.path.realpath(view["path"])
+    built = EA.build_argv_result(
+        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    )
+    argv = built["argv"]
+    prompt_path = _valid_prompt(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view, mode=mode) + base
+    os.makedirs(run_dir, exist_ok=True)
+    journal_root = os.environ.get(ED.JOURNAL_ROOT_ENV, "")
+    with open(os.path.join(run_dir, "journal-root.txt"), "w", encoding="utf-8") as fh:
+        fh.write(journal_root + "\n")
+    record = {
+        "kind": "run-opened",
+        "runKind": ED.RUN_KIND_REVIEW,
+        "engine": "codex",
+        "roleKind": ED.RUN_KIND_REVIEW,
+        "orderId": "test-order",
+        "argv": argv,
+        "cwd": cwd,
+        "timeout": ED.RETRY_MIN_TIMEOUT,
+        "retryTimeout": ED.RETRY_MIN_TIMEOUT,
+        "promptPath": os.path.join(run_dir, ED.PROMPT_NAME),
+        "progressPath": os.path.join(run_dir, "progress.jsonl"),
+        "viewPath": view["path"],
+        "viewMeta": view,
+        "baseSha": view.get("headSha"),
+        "fedPrompt": fed,
+        "repoRoot": os.path.realpath(repo_root),
+        "supervisorPid": os.getpid(),
+        "at": time.time(),
+    }
+    if not omit_mode:
+        record["mode"] = mode
+    ED._journal_append(run_dir, record)
+    with open(record["promptPath"], "w", encoding="utf-8") as fh:
+        fh.write(fed)
+    return repo_root, view
+
+
+def test_mode_brief_check_with_diff_base_refused_before_view_build(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, mode="brief-check", diff_base="a" * 40,
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_mode_invalid_refused_at_library_boundary(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, mode="bogus",
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+    assert res["rejectedMode"] == "'bogus'"
+
+
+class _ModeEqRaises:
+    def __eq__(self, other):
+        raise RuntimeError("mode-eq-boom")
+
+
+def test_mode_invalid_non_string_with_eq_raises_returns_structured_refusal(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, mode=_ModeEqRaises(),
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+    assert "ModeEqRaises" in res["rejectedMode"]
+
+
+def test_continuation_legacy_journal_mode_normalizes_to_review(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, omit_mode=True)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
+    )
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+
+
+def test_continuation_legacy_journal_with_explicit_review_mode_proceeds(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, omit_mode=True)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        mode="review", max_wait=0,
+    )
+    assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_MISMATCH
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+
+
+def test_run_dir_mode_mismatch_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        mode="review", max_wait=0,
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_continuation_omitted_mode_inherits_journal(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
+    )
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_continuation_agreeing_brief_check_mode_proceeds(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        mode="brief-check", max_wait=0,
+    )
+    assert res.get("detail") != ED.MODE_REFUSAL_RUN_DIR_MISMATCH
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_continuation_inherited_brief_check_accepts_diff_base(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        diff_base="a" * 40, max_wait=0,
+    )
+    assert res.get("detail") != ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_continuation_explicit_brief_check_with_diff_base_still_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        mode="brief-check", diff_base="a" * 40, max_wait=0,
+    )
+    assert res["detail"] == ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE
+    assert res["attempts"] == 0
+
+
+def test_dispatch_review_brief_check_end_to_end(tmp_path):
+    repo_root = _repo(tmp_path)
+    build_view = _capture_build_view(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view, mode="brief-check",
+    )
+    assert res["ok"] is True
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+    assert res["attempts"] >= 1
+    assert res["sanitizedView"]["diffBase"] is None
+    assert res["sanitizedView"]["diffPath"] is None
+    assert res["sanitizedView"]["diffBytes"] is None
+    assert res["sanitizedView"]["diffWithheldCount"] is None
+    # diff_base stays None because brief-check + explicit diff_base refuses at engine_dispatch.py:2725
+    assert build_view.captured["kwargs"][0]["diff_base"] is None
+    prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    assert "no diff for this review" in prompt_text
+    assert "build brief written before the code exists" in prompt_text
+    assert EA.engagement_read(res) == "engaged"
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert opened["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+    assert "no diff for this review" in opened["fedPrompt"]
+    assert "build brief written before the code exists" in opened["fedPrompt"]
+
+
+def test_brief_check_notice_absent_from_default_review_fed_prompt(tmp_path):
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=build_view,
+    )
+    records, _ = ED._journal_read(res["runDir"])
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    assert "no diff for this review" not in opened["fedPrompt"]
+    prompt_text = fake.calls[0]["prompt_bytes"].decode("utf-8")
+    assert "no diff for this review" not in prompt_text
+
+
+def test_review_mode_argparse_choices_match_review_modes():
+    parser = ED.build_parser()
+    dispatch_review = None
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            dispatch_review = action.choices["dispatch-review"]
+            break
+    assert dispatch_review is not None
+    mode_action = next(
+        action for action in dispatch_review._actions if action.dest == "mode"
+    )
+    assert tuple(mode_action.choices) == _SV_MOD.REVIEW_MODES
+
+
+@pytest.mark.parametrize("label,kwargs,setup,expected_mode,expected_detail,expected_ok,expected_terminal", [
+    ("max-wait-out-of-range", {"max_wait": 99999}, None, "review",
+     "max-wait-out-of-range:99999:allowed=0..%d" % ED.MAX_SYNC_WAIT, False, True),
+    ("repo-root-absent", {"repo_root": None}, None, "review", "repo-root-absent", False, True),
+    ("prompt-missing", {"prompt_path": None}, None, "review", "prompt-missing", False, True),
+    ("schema-missing", {"schema_path": "   "}, None, "review", "schema-missing", False, True),
+    ("run-dir-inside-repo", {"run_dir": "INSIDE"}, "inside_repo", "review",
+     "run-dir-inside-repo-root", False, True),
+    ("run-dir-reused", {"order_id": "wrong"}, "opened", "review", "run-dir-reused", False, True),
+    ("run-dir-not-empty-unopened", {}, "stale", "review", "run-dir-not-empty-unopened", False, True),
+    ("mode-brief-check-with-diff-base",
+     {"mode": "brief-check", "diff_base": "a" * 40}, None, "brief-check",
+     ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE, False, True),
+    ("run-dir-mode-mismatch", {"mode": "review"}, "brief_opened", "brief-check",
+     ED.MODE_REFUSAL_RUN_DIR_MISMATCH, False, True),
+    ("engine-config", {"engine": "cursor", "model": "fable", "effort": "composer"},
+     "engine_config", "review", "engine-config:fable-unrunnable", False, True),
+    ("sanitized-view-error", {}, "view_error", "review", "sanitized-view-export-failed", False, True),
+    ("success-review", {}, "success", "review", None, True, True),
+    ("success-brief-check", {"mode": "brief-check"}, "success", "brief-check", None, True, True),
+    ("running-non-terminal", {"max_wait": 1}, "running", "review", None, False, False),
+    ("outer-exception", {}, "outer_exc", "review", "internal-RuntimeError", False, True),
+])
+def test_dispatch_review_every_outcome_carries_mode(
+    tmp_path, monkeypatch, label, kwargs, setup, expected_mode, expected_detail,
+    expected_ok, expected_terminal,
+):
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    base_kwargs = {
+        "model": "sonnet",
+        "effort": "high",
+        "prompt_path": prompt_path,
+        "repo_root": repo_root,
+        "run_engine": _never_call,
+        "build_view": _never_build_view,
+    }
+    if "prompt_path" in kwargs and kwargs["prompt_path"] is None:
+        base_kwargs["prompt_path"] = str(tmp_path / "missing-prompt.txt")
+    for key, value in kwargs.items():
+        if key == "engine":
+            continue
+        if key == "prompt_path" and value is None:
+            continue
+        base_kwargs[key] = value
+
+    run_suffix = "run-%s" % label
+    if setup == "inside_repo":
+        run_dir = os.path.join(repo_root, "dispatch-run")
+        os.makedirs(run_dir)
+        base_kwargs["run_dir"] = run_dir
+    elif setup == "opened":
+        run_dir = str(tmp_path / run_suffix)
+        _manual_open_review_run(tmp_path, run_dir)
+        base_kwargs["run_dir"] = run_dir
+    elif setup == "brief_opened":
+        run_dir = str(tmp_path / run_suffix)
+        journal_repo, _ = _manual_open_review_run_with_mode(tmp_path, run_dir, mode="brief-check")
+        base_kwargs["repo_root"] = journal_repo
+        base_kwargs["prompt_path"] = _valid_prompt(tmp_path)
+        base_kwargs["run_dir"] = run_dir
+        base_kwargs.setdefault("order_id", "test-order")
+        base_kwargs["max_wait"] = 0
+    elif setup == "stale":
+        run_dir = tmp_path / run_suffix
+        run_dir.mkdir()
+        (run_dir / "stale.txt").write_text("x\n", encoding="utf-8")
+        base_kwargs["run_dir"] = str(run_dir)
+    elif setup == "engine_config":
+        base_kwargs["build_view"] = _fake_build_view(tmp_path)
+    elif setup == "view_error":
+        def fail_build(_repo, *, diff_base=None):
+            raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
+        base_kwargs["build_view"] = fail_build
+        base_kwargs["run_engine"] = FakeRunner([])
+    elif setup == "success":
+        base_kwargs["run_engine"] = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+        base_kwargs["build_view"] = _fake_build_view(tmp_path)
+    elif setup == "running":
+        run_dir = str(tmp_path / run_suffix)
+        _manual_open_review_run(tmp_path, run_dir)
+        base_kwargs["run_dir"] = run_dir
+        base_kwargs["order_id"] = "test-order"
+        proc = subprocess.Popen(
+            [sys.executable, "-c", "import time; time.sleep(120)"],
+            start_new_session=True,
+        )
+        ED._journal_append(run_dir, {
+            "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
+        })
+        ED._journal_append(run_dir, {
+            "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
+        })
+        try:
+            res = ED.dispatch_review("codex", **base_kwargs)
+            assert "mode" in res
+            assert isinstance(res["mode"], str)
+            assert res["mode"] == expected_mode
+            assert res["ok"] is expected_ok
+            assert res["terminal"] is expected_terminal
+        finally:
+            ED._terminate_process_group(proc.pid)
+            proc.wait(timeout=2)
+        return
+    elif setup == "outer_exc":
+        def boom(*_a, **_k):
+            raise RuntimeError("wrapper-boom")
+        monkeypatch.setattr(ED, "_dispatch_review_impl", boom)
+        res = ED.dispatch_review("codex", **base_kwargs)
+        assert "mode" in res
+        assert isinstance(res["mode"], str)
+        assert res["mode"] == expected_mode
+        assert res["detail"] == "internal-RuntimeError"
+        assert res["ok"] is expected_ok
+        assert res["terminal"] is expected_terminal
+        return
+
+    engine = kwargs.get("engine", "codex")
+    res = ED.dispatch_review(engine, **base_kwargs)
+    assert "mode" in res, label
+    assert isinstance(res["mode"], str), label
+    assert res["mode"] == expected_mode, label
+    assert res["ok"] is expected_ok, label
+    assert res["terminal"] is expected_terminal, label
+    if expected_detail is not None:
+        assert res.get("detail") == expected_detail, label
 

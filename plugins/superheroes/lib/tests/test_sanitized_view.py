@@ -3072,6 +3072,19 @@ def test_notice_explicit_no_git_prohibition_without_diff(tmp_path):
         sv.destroy_sanitized_view(view["path"])
 
 
+def test_notice_brief_check_mode_emits_no_diff_paragraph(tmp_path):
+    repo = _init_repo(tmp_path / "notice-brief", files={"keep.txt": "k\n"})
+    view = _build(repo)
+    try:
+        brief = sv.sanitized_view_notice(view, mode="brief-check")
+        assert "no diff for this review" in brief
+        assert "build brief written before the code exists" in brief
+        default = sv.sanitized_view_notice(view)
+        assert "no diff for this review" not in default
+    finally:
+        sv.destroy_sanitized_view(view["path"])
+
+
 def test_notice_with_diff_artifact_sentences(tmp_path):
     repo = _init_repo(tmp_path / "notice-diff", files={"keep.txt": "k\n"})
     base_sha = _git(repo, "rev-parse", "HEAD").stdout.strip()

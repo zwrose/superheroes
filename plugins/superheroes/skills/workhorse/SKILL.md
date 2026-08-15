@@ -290,10 +290,18 @@ anti-opportunities ledger (`LEDGERS.md` §2).
 
 **Full lane only** — the light lane skips this section (Build lanes).
 
+**Who reviews and how it is dispatched are orthogonal** — the next paragraph names *who*; the block
+after it names *how*.
+
 Dispatch **one fresh-context reviewer** over the brief. Because you (the orchestrator) are already
 high-tier, the default is a **cross-vendor reviewer at comparable tier**; a Claude fresh-context
 reviewer is the fallback **only with disclosed degradation** (never a silent downgrade). One pass:
 fold its findings in, or dispute each with a reason. Post the dispositions.
+
+**How it is dispatched.** Sanctioned channel: `dispatch-review --mode brief-check` — mechanics and
+recipe in `reference/dispatch-mechanics.md` (gate, `RUN_DIR` preamble, `--order-id`, continuation).
+A hand-rolled `codex exec` is permitted **only when the runner itself is unavailable** — disclosed
+degradation in the PR body, never the normal path.
 
 **Only a terminal forfeit licenses that Claude fallback.** The substitution is earned when the
 cross-vendor dispatch **terminally forfeits** — per `rubric/review-discipline.md`'s definition, which
@@ -349,6 +357,43 @@ introduced by the fixes — and one invariant-plus-chokepoint order closed it wi
 bypasses in the confirmation round. This is how you satisfy the existing rules — especially rule 3,
 complete target enumeration — when authoring; this adds no seventh validity rule and leaves the
 six validity rules unchanged.
+
+**Order-template doctrine — obligations on the order at authoring time, not a seventh rule.** Like
+the paragraph above, this **adds no seventh validity rule** and leaves the six validity rules
+unchanged. Three recorded specimens from the 2026-08-14/15 build wave attach to the **order** on
+the orchestrator's own surface at authoring time:
+
+- **A prose-contract review order carries its bounded-acceptance round count.** When an order
+  dispatches a review whose contract is **prose**, the general re-review bar does not terminate by
+  construction — so the order **states the round bound and names its source**: the **owner's**, set
+  before review begins, or the **advisor's**, set at routing. **The order carries the bound; it never
+  sets it** — a builder-chosen number is not an authority, and where no bound has been set the order
+  says so explicitly and advisor-at-vet remains the setter, exactly as `rubric/review-discipline.md`
+  § *Bounded acceptance — prose-contract DoDs* already rules. Failure prevented: an order dispatched
+  with no bound leaves the stopping point to be improvised mid-review. Specimen: PR #1009's tripwire
+  ceremony.
+
+- **A detector-adding order names the recorded red→green failure-proof it expects.** An order that
+  adds or changes a **detector** — anything whose job is to fail when something is wrong — names the
+  **recorded red→green failure-proof** it expects, and **what that record must contain is whatever
+  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/rubric/bite-proof.md` defines** — cite the home for the
+  contents instead of listing them. The implementer's validity rule 6 is the backstop for an order
+  that omits it; what this clause adds on the authoring side is the **recorded** half — a green run
+  alone is equally consistent with a detector that cannot fail. Failure prevented: guards shipped
+  without proofs. Specimen: PR #1012's build returned the same finding-shape every round.
+
+- **An implementer order names a per-order test-command budget.** The order states how many command
+  invocations the implementer may spend and what they are, scoped to the order's own surface. The
+  budget counts **the commands the order names**, run under the implementer's existing
+  command-precedence ladder; the **bite-proof red and green runs from the clause above are named
+  separately and sit inside the budget**, so they can never be squeezed out by a long verification
+  list; and the budget names a **scoped** command, never a project-wide suite — the implementer's
+  existing rule to scope a full-suite gate to the order's surface is the same instinct one step
+  earlier. An order whose own named commands cannot fit its own budget is **under-specified**, and
+  the implementer reports it under the **per-order test-command budget** rule in
+  `agents/implementer.md` — stop and report rather than silently overrunning or truncating.
+  Failure prevented: orders that named a long suite forfeited **after** landing good work.
+  Specimens: PR #1013's WO-B and WO-D, and three 900-second cap-kills on PR #1011.
 
 ## 7. Delegate every implementation (lane-scoped — no size exception)
 
@@ -921,6 +966,9 @@ Keep the PR body correct as you go. Every body edit in this post-handback loop i
 preserve-verbatim rule for the advisor's vet write already applies. When you are **blocked on the
 owner** — a consequential flag, an ambiguous route, a decision you cannot make — **park honestly with
 receipts**: what is done, what is blocked, what you need. A truthful park beats a false ship.
+
+**When a park hands a decision back to the owner, read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` and give the blocked decision the per-item spine that file defines.** A park that
+states only *what is blocked* hands the owner a question; the spine hands them a decision they can make.
 
 ## Memory
 

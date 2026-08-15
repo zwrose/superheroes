@@ -117,6 +117,34 @@ def test_dispatch_review_run_dir_symlink_refused_through_cli(tmp_path, capsys):
     assert result["detail"] == "run-dir-is-symlink"
 
 
+def test_dispatch_review_main_forwards_mode_kwarg(tmp_path, monkeypatch, capsys):
+    captured = {}
+
+    def fake_dispatch_review(engine, **kwargs):
+        captured.update(kwargs)
+        return {
+            "ok": False, "terminal": True, "reason": "unrunnable", "detail": "test",
+            "attempts": 0, "forfeited": False, "runDir": "", "argv": [],
+            "mode": "brief-check",
+        }
+
+    monkeypatch.setattr(ED, "dispatch_review", fake_dispatch_review)
+    repo = _git_repo(tmp_path)
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("review this", encoding="utf-8")
+    rc = ED.main([
+        "dispatch-review",
+        "--engine", "codex",
+        "--effort", "high",
+        "--prompt-path", str(prompt),
+        "--repo-root", str(repo),
+        "--mode", "brief-check",
+    ])
+    assert rc == 0
+    assert captured.get("mode") == "brief-check"
+    capsys.readouterr()
+
+
 def test_role_rejects_valid_vendor_name():
     with pytest.raises(SystemExit):
         DG.build_parser().parse_args(
@@ -307,6 +335,7 @@ def test_census_reads_contract_from_parser_not_hand_list():
     assert contracts[("dispatch-write",), "run_dir"] == "creatable-path"
     assert contracts[("dispatch-review",), "repo_root"] == "repo-root"
     assert contracts[("dispatch-review",), "model"] == "model-not-a-role"
+    assert contracts[("dispatch-review",), "mode"] == "choices:review,brief-check"
 
 
 def test_census_red_when_argument_lacks_contract():

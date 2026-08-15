@@ -312,6 +312,14 @@ above).
      bodies for the **Follow-ups for the advisor** heading (the workhorse charter standardizes it;
      `<!-- superheroes:build-record -->` is the grep anchor it never had) and reconcile against the
      board. Standing duty, no machinery.
+     **Install the contract's distilled preamble at the top of the collector issue body, above the
+     items, and refresh it when it has drifted or is missing.** Canonical snippet and markers:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
+     `## The collector preamble — canonical snippet` — read that section for why placement matters;
+     refresh per that section's replace-region and malformed-marker rules.
+     When the collector pointer cannot be resolved, record the preamble duty as a **disclosed
+     degradation** in the vet receipt, exactly like the existing pending-items rule in this bullet —
+     never a silent skip, and **never** a second collector.
    - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
      ratified precondition that unlocks it and the evidence it is met — **a missing citation is a
      finding in its own right**; any project must carry that rule. When the project being vetted is
@@ -463,6 +471,15 @@ above).
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.
+   **About to deliver open decisions to the owner → read
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` first** —
+   the full contract lives there. This duty needs a shape at all because the full-rigor format was
+   **requested by the owner ~10+ times** across advisor sessions 2026-07 → 2026-08 rather than
+   delivered by default, and the inverse failure — over-filtering — appeared too: the owner became the
+   backstop for delivery quality on exactly the surface the covenant says they must never backstop.
+   Apply this duty's two tests per item as the filter's *why it is yours* ground, **written down**,
+   not re-derived silently. `/superheroes:discuss-open-decisions` is the owner's keystroke for the
+   same contract on demand; it does not replace this standing duty.
 6. **Coordinate releases and drive the merge train.** The covenant's
    promise 1 governs — approval never delegates; merge-command **execution** is delegable only where
    a mechanical per-merge approval checkpoint exists on that host or path; release PRs and
@@ -595,9 +612,9 @@ above).
    sweep **reports; it never asserts a lane is dead** — a heartbeat cannot prove death — and it never
    resumes anything on its own; **you** act on what it reports. Ground this in the field evidence:
    six lanes, zero handbacks by morning on harness 2.1.219, recovered only by an advisor sweep.
-   **Wave watch (wave orchestration duty).** Arm `wave_watch` instead of hand-rolling a per-session
-   watch loop — the re-arm is the loop, so single-shot means nothing to orphan. The arming pattern
-   lives one hop away in
+   **Wave watch (wave orchestration duty).** Arm one harness **background task per batch** — a
+   `loop` invocation that re-arms internally — instead of hand-rolling a per-session watch loop.
+   There is no daemon to orphan. The arming pattern lives one hop away in
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/wave-watch.md` — read it at
    arming time.
    **Wave-preflight live canary (strengthens `engine-auth`, not a ninth check).** A wave preflight
