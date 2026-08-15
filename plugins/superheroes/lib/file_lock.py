@@ -205,10 +205,8 @@ def stale_reason(lock_path, ttl=DEFAULT_TTL, now=None, reclaim_dead_holder=False
     # foreign holder can lose an expired lock. Accepted and disclosed rather than hidden;
     # reachable only where a lock path is shared between machines or pid namespaces, which
     # neither caller's path is today (a local run dir; a lease under the local tempdir).
-    if not same_host:
-        return REASON_FOREIGN_HOST_TTL_EXPIRED
     if _pid_dead_on_this_host(h, zombie_is_dead=reclaim_dead_holder):
-        return REASON_EXPIRED_DEAD_HOLDER
+        return REASON_EXPIRED_DEAD_HOLDER if same_host else REASON_FOREIGN_HOST_TTL_EXPIRED
     return None
 
 
