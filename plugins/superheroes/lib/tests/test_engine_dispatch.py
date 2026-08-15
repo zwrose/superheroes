@@ -4683,7 +4683,22 @@ def test_grade_review_attempt_error_envelope_gate_survives_second_parse(tmp_path
     assert grade.get("forfeit") is True
 
 
-def test_dispatch_review_expected_result_kind_invalid_refused_at_library_boundary(tmp_path):
+def test_dispatch_review_expected_result_kind_invalid_reports_effective_mode(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, mode="brief-check", expected_result_kind="rulings",
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+    assert res["rejectedResultKind"] == "'rulings'"
+
+
+def test_dispatch_review_expected_result_kind_invalid_default_mode_when_none(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
@@ -4696,6 +4711,27 @@ def test_dispatch_review_expected_result_kind_invalid_refused_at_library_boundar
     assert res["terminal"] is True
     assert res["mode"] == _SV_MOD.MODE_REVIEW
     assert res["rejectedResultKind"] == "'rulings'"
+
+
+def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tmp_path):
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-review",
+            "--engine", "codex",
+            "--effort", "high",
+            "--prompt-path", prompt_path,
+            "--repo-root", repo_root,
+            "--expected-result-kind", "rulings",
+        ],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode != 0
+    assert "invalid choice" in proc.stderr.lower()
+    assert proc.stdout.strip() == ""
 
 
 def test_dispatch_review_expected_result_kind_non_string_refused_at_library_boundary(tmp_path):
