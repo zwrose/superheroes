@@ -199,12 +199,14 @@ def test_owner_authority_commands_structural_census():
         # Provenance alone proved a row came from _gated; this proves the row ends correctly, so
         # a custom `ending` cannot re-open the word-terminator class with the census green.
         assert sub.pattern.endswith(oa._ALLOWED_ENDINGS), action
+        assert sub.pattern.startswith(oa._ALLOWED_LEADINGS), action
         if trailing is not None:
             trailing_id = id(trailing)
             assert (trailing_id in oa._GATED_REGISTRY
                     or trailing_id in oa._SHORT_FLAG_REGISTRY), action
             if trailing_id in oa._GATED_REGISTRY:
                 assert trailing.pattern.endswith(oa._ALLOWED_ENDINGS), action
+                assert trailing.pattern.startswith(oa._ALLOWED_LEADINGS), action
 
 
 _GATED_CLEAN_BODIES = [
@@ -255,6 +257,35 @@ def test_gated_accepts_the_two_shared_endings(ending):
     assert oa._gated(r"pr\s+merge", ending=ending).pattern.endswith(ending)
 
 
+@pytest.mark.parametrize("leading", [
+    r"(?=push(?![^\s]))(?<!\S)",   # round-2 R-001: a leading lookahead re-imposing whitespace-only
+    r"\B",
+    r"^",
+    "",
+])
+def test_gated_rejects_custom_leading(leading):
+    with pytest.raises(ValueError, match="gated leading must be"):
+        oa._gated(r"push", leading=leading)
+
+
+@pytest.mark.parametrize("leading", list(oa._ALLOWED_LEADINGS))
+def test_gated_accepts_the_shared_leadings(leading):
+    assert oa._gated(r"push", leading=leading).pattern.startswith(leading)
+
+
+@pytest.mark.parametrize("body", [
+    r"pr\s+merge(?![^\s])",     # round-2 R-002: whitespace-only terminator the blacklist misses
+    r"pr\s+merge(?=[ \t])",
+    r"(?<=gh )pr\s+merge",
+    r"(?<!x)push",
+])
+def test_gated_rejects_body_with_lookaround(body):
+    # A body is a plain match; anchors — every assertion — belong to the builder. Refused by
+    # construct (`(?=`, `(?!`, `(?<=`, `(?<!`), not by spelling.
+    with pytest.raises(ValueError, match="lookaround"):
+        oa._gated(body)
+
+
 def test_gated_anchors_bind_the_whole_body_not_the_last_alternative():
     # An ungrouped alternation body must not leave its first branch un-anchored: before the
     # non-capturing wrap, `_gated(r"push|pull")` compiled to `(?<!\S)push|pull(?=…)`, so
@@ -265,26 +296,6 @@ def test_gated_anchors_bind_the_whole_body_not_the_last_alternative():
     assert p.search("pullXYZ") is None
     # The leading anchor is untouched: a terminator AFTER the word is accepted for both branches.
     assert p.search("push") and p.search("pull") and p.search("push)") and p.search("x pull`")
-
-
-# Terminator sweep — spelling-independent: every minimal gated form, followed IMMEDIATELY by every
-# shell word-terminator the anchor promises, still classifies. Crosses the forms with a fixed
-# alphabet, so it does not depend on which anchor spellings _FORBIDDEN_BODY_ANCHORS happens to
-# blacklist (round-4 finding 4).
-_TERMINATOR_ALPHABET = [")", "`", '"', "'", ";", " | cat", " && true", " x", ""]
-
-
-@pytest.mark.parametrize("terminator", _TERMINATOR_ALPHABET)
-@pytest.mark.parametrize("form,action", [
-    ("gh pr merge", "merge-pr"),
-    ("gh api repos/o/r/pulls/42/merge", "merge-api"),
-    ("gh release create", "release"),
-    ("gh workflow run", "run-workflow"),
-    ("git push --force", "force-push"),
-    ("git push origin main", "push-to-default"),
-])
-def test_owner_authority_action_terminator_sweep(form, action, terminator):
-    assert oa.owner_authority_action(form + terminator) == action, repr(form + terminator)
 
 
 # --- class-level behavioral census: gated-word terminators in wrappers (#1000) ---
@@ -324,6 +335,24 @@ _NEGATIVE_WRAPPED_NONE = [
     "`gh pr checks 42`",
 ]
 
+
+# Terminator sweep — spelling-independent: every minimal gated form, followed IMMEDIATELY by every
+# shell word-terminator the anchor promises, still classifies. Crosses the forms with a fixed
+# alphabet, so it does not depend on which anchor spellings _FORBIDDEN_BODY_ANCHORS happens to
+# blacklist (round-4 finding 4).
+_TERMINATOR_ALPHABET = [")", "`", '"', "'", ";", " | cat", " && true", " x", ""]
+
+
+def test_minimal_gated_forms_cover_every_gate_action():
+    # The sweep below derives from _MINIMAL_GATED_FORMS; this pins that the list covers every
+    # action in OWNER_AUTHORITY_COMMANDS, so a row added later cannot escape the sweep by omission.
+    assert {a for _f, a in _MINIMAL_GATED_FORMS} == {a for a, *_ in oa.OWNER_AUTHORITY_COMMANDS}
+
+
+@pytest.mark.parametrize("terminator", _TERMINATOR_ALPHABET)
+@pytest.mark.parametrize("form,action", _MINIMAL_GATED_FORMS)
+def test_owner_authority_action_terminator_sweep(form, action, terminator):
+    assert oa.owner_authority_action(form + terminator) == action, repr(form + terminator)
 
 def _wrapper_corpus():
     base_shapes = list(_BASE_SHAPES) + list(_MINIMAL_GATED_FORMS)

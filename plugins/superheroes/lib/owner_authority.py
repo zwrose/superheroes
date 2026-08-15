@@ -140,14 +140,31 @@ _FORBIDDEN_BODY_ANCHORS = (
 # round-4 confirmation finding, three seats), so the builder refuses it by name rather than
 # trusting the author.
 _ALLOWED_ENDINGS = (_WORD_END, _TOKEN_END)
+# The ONLY leading anchors — shell-word start, token boundary, or the push-to-default ref start.
+# Same closed-selector rule as the endings: an open `leading` regex could smuggle a lookahead
+# that re-imposes a whitespace-only terminator (micro review round 2, R-001).
+_SHELL_WORD_START = r"(?<!\S)"
+_ALLOWED_LEADINGS = (_SHELL_WORD_START, r"\b", _WORD_START)
+# A gated body is a plain match — never an assertion. Any lookaround in the body could re-state
+# an end condition the shared anchors are supposed to own, in a spelling the blacklist above does
+# not name (`(?![^\s])`, micro review round 2, R-002). Refused structurally, not by spelling.
+_LOOKAROUND_OPENERS = ("(?=", "(?!", "(?<=", "(?<!")
 
 
-def _gated(body, leading=r"(?<!\S)", ending=_WORD_END):
+def _gated(body, leading=_SHELL_WORD_START, ending=_WORD_END):
     for token in _FORBIDDEN_BODY_ANCHORS:
         if token in body:
             raise ValueError(
                 "gated body must not contain end-anchor %r — use _WORD_END or _TOKEN_END"
                 % token)
+    for opener in _LOOKAROUND_OPENERS:
+        if opener in body:
+            raise ValueError(
+                "gated body must not contain a lookaround %r — anchors are the builder's, "
+                "not the body's" % opener)
+    if leading not in _ALLOWED_LEADINGS:
+        raise ValueError(
+            "gated leading must be one of the shared start anchors, not %r" % (leading,))
     if ending not in _ALLOWED_ENDINGS:
         raise ValueError(
             "gated ending must be _WORD_END or _TOKEN_END, not %r" % (ending,))
