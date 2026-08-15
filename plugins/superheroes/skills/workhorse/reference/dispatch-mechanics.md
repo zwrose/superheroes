@@ -111,10 +111,14 @@ reads.
 
 **If you did not record the PID, identify the process by something your own run owns** — the **cwd**
 of the worktree you dispatched into, or the **port** your own server bound — and kill *that* PID.
-A port lookup (`lsof -ti :<port>`) or a process listing keyed to your worktree path are the sanctioned
-recoveries because both are properties of your run rather than of the command line; the command text
-is not one, however precise the fragment looks. If neither cwd nor port ties a live process to **your**
-run, you have no kill target: stop there and say so rather than widening the match (charter §7).
+Both recoveries read **kernel-reported ownership**, never the command line. For a port, select the
+**listener only** — `lsof -nP -t -iTCP:<port> -sTCP:LISTEN` — because a bare `lsof -ti :<port>` also
+returns every *client* holding a connection on that port, and piping that into a kill recreates the
+failure this section exists to prevent. For cwd, read each candidate's **actual working directory**
+(`lsof -a -d cwd -p <pid>`, or your host's equivalent `ps` field): a worktree path matched inside a
+process's *command line* is command-text matching wearing a different hat. **Zero verified candidates,
+or more than one, means you have no kill target** — stop there and say so rather than widening the
+match (charter §7).
 
 ## Launch slice vs continuation slice
 
