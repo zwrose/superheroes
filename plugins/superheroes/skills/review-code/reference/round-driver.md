@@ -126,7 +126,13 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
 ```
 
 No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not pass
-`--state-hash`.
+`--state-hash`. **Orchestrator-fulfilled phases** (`run-verify` — see
+`round_adapters.ORCHESTRATOR_FULFILLED_PHASES` / `is_orchestrator_fulfilled`) also fold through
+`advance` from the host-seat **bare payload** at
+`$SESSION_DIR/round-N/landing/<phase>/<skey>.a<K>.payload.json` — no orders manifest, no anchor,
+validated through the phase's existing submit-shape guard. Named refusals:
+`orchestrator-payload-missing`, `orchestrator-payload-unreadable`, and the shape guard's own fault.
+`manifest-anchor-unanchored` stays reserved for seat phases.
 
 **Refusal tokens when paths interleave.** One token can be returned by more than one command — the
 token names the seam, not the direction.
@@ -154,7 +160,7 @@ with the slot label(s) — the records are deliberately ignored, not silently dr
 
 | Artifact | Path | Producer / what absence does |
 | --- | --- | --- |
-| Dispatch manifest | `$SESSION_DIR/round-N/landing/P/_dispatch.aK.json` | **Orchestrator** — never written by the driver; read only by `advance`. Top-level JSON keyed by the **exact roster seat key**; each value requires non-empty `vendor` (`model` / `engine` are optional, descriptive, neither validated nor trusted — `round_adapters._trusted_vendors` reads only `vendor`). **Absence:** the manifest key is omitted, the adapter discloses `dispatchManifestUnavailable`, and on `dispatch-audits` a clearing ruling (`discharged` / `discharged-but-new-issue`) is **not authenticated** — fails closed to `not-discharged` + `unauthenticated`, which can drive the audit stall and `advance-stall-park`. Check this file first on an unexplained fix-audit stall. |
+| Dispatch manifest | `$SESSION_DIR/round-N/landing/P/_dispatch.aK.json` | **Orchestrator** — never written by the driver; read only by `advance` on **seat** phases. Top-level JSON keyed by the **exact roster seat key**; each value requires non-empty `vendor` (`model` / `engine` are optional, descriptive, neither validated nor trusted — `round_adapters._trusted_vendors` reads only `vendor`). **Orchestrator-fulfilled phases** (`run-verify`) emit no manifest — `advance` folds from the host bare payload instead. **Absence on a seat phase:** the manifest key is omitted, the adapter discloses `dispatchManifestUnavailable`, and on `dispatch-audits` a clearing ruling (`discharged` / `discharged-but-new-issue`) is **not authenticated** — fails closed to `not-discharged` + `unauthenticated`, which can drive the audit stall and `advance-stall-park`. Check this file first on an unexplained fix-audit stall. |
 | Canary probe | `$SESSION_DIR/round-N/landing/dispatch-panel/_canary/vendor.aK.json` | **Orchestrator** (`seat_canary.py probe`) — panel phase only. Carries the cross-vendor control-probe result `advance` folds as `canaryResult`. **Absence:** no canary evidence; when every cross-vendor seat that ran returned zero findings, the round records `canaryUnverified` instead of `canaryVerified`. |
 | Seat store | `$SESSION_DIR/round-N/seats/P/skey.aK.json` | **`record-result`** / **`record-missing`** / `advance`'s sweep — the durable `seat-result/1` or `seat-missing/1` envelope for one roster slot. **Absence:** the slot is incomplete; `advance` refuses **`incomplete-roster`** until every slot has a store record or a missing envelope. |
 | Head-diff store | `$SESSION_DIR/round-N/seats/P/skey.aK.headdiff` | **`record-result`** on the fixer phase — the driver-owned post-fix diff blob referenced by the stored envelope's `headDiffStorePath`. **Absence:** fixer fold treats the changed surface as unknown (full panel on the next round), never a silent scoped skip. |
@@ -345,7 +351,12 @@ parking: the shipped default in `rubric/review-gate-policy.json` (`gate-policy/1
 rules are evaluated **before** the shipped layer; the first matching rule wins. **Judgment is
 all-or-nothing** — `resolve_judgment` must find a rule for **every** finding row or the whole gate
 parks (`gate-policy-unmatched-class:<class>`). Stall resolution is per stall class
-(`stall:accept-risk-eligible` vs `stall:accept-risk-ineligible`).
+(`stall:accept-risk-eligible` vs `stall:accept-risk-ineligible`). Stall-menu `submit` refuses a
+**retired** choice or a choice **not in the menu the session offered** at the chokepoint (before
+the fold, so pending survives and the same attempt/state-hash stays resubmittable):
+`stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`. Retired names are refused by
+name — never mapped to a live choice. An unknown or ineligible `accept-the-disclosed-risk` still
+folds fail-closed to terminal `stalled`.
 
 When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). The refusal
 carries a `detail` cause distinct from the top-level reason so operators can tell *why* it parked.
@@ -401,10 +412,10 @@ cannot is an overclaim.
 | `dispatch-gap-sweep` | Big-diff only: one full-diff finder pass. Submit `{findings: [...]}`. |
 | `dispatch-audits` | Delta round: one auditor per target in `payload.targets` — **never the fixer's vendor**; single-vendor runs stamp `independence: "degraded"`. Each target carries **two** id-shaped fields: `id` (per-location — the dispatch/result/manifest key) and `identity` (line-less, driver-internal stall alias). Submit `{results: [...], collectionManifest: {<result-id>: <vendor>}}`. **Every transport key is `payload.targets[].id`:** each `results[].id` and **every** `collectionManifest` key must be the per-location `id` — never `targets[].identity` (driver-internal; must not be used as a transport key). **Provenance rests on the orchestrator's dispatch manifest, not the result's echo:** you (the dispatching orchestrator) are the trusted collector — build `collectionManifest` from your OWN dispatch records (which vendor you seated per target, keyed by `targets[].id`, out-of-band from the results you got back), never copied from a result's `auditorVendor`. A clearing ruling (`discharged` / `discharged-but-new-issue`) is authenticated **iff `collectionManifest[id]` exists AND equals the driver-recorded selected auditor** (where `id` is the per-location target id); a missing manifest entry or a manifest vendor ≠ the selection → **not-discharged + `unauthenticated`**. The in-result `auditorVendor` is **advisory only** (a claimant-controlled echo authenticates nothing — a fixer can echo the expected value); an echo that disagrees with the manifest is disclosed as `echoMismatch` but the manifest governs and the discharge stands. Recorded per round as `auditProvenance: "collection-manifest"`. The driver **cannot cryptographically verify engine identity and does not pretend to** — the guarantee is exactly as strong as your dispatch manifest. **`payload.targets` is an independent batch — dispatch its auditors concurrently, per § Batch concurrency above; submit the phase once, with every result in the one artifact.** |
 | `dispatch-scoped-finder` | Delta round: scoped scan over `payload.hunks` (the split's computed new surface — file → hunk ranges + text) at `reviewer-deep`. Submit `{findings: [...]}`. Emitted **only when the computed new surface is non-empty**; a genuinely empty new surface (the split returned `unknown: False` with no new hunks) skips this dispatch and records `scopedFinder: skipped-empty-surface` on the round (receipt-visible) — never a vacuous scan over nothing. |
-| `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). Submit `{result: "pass" \| "fail" \| "timeout" \| "skipped" \| "none" \| "unverified"}`. Fail → terminal halt, certification withheld. |
+| `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). Hand path: submit `{result: "pass" \| "fail" \| "timeout" \| "skipped" \| "none" \| "unverified"}`. Durable-record path: orchestrator-fulfilled — `advance` folds from the host bare payload at `$SESSION_DIR/round-N/landing/run-verify/verify.a<K>.payload.json` (no orders manifest, no anchor). Fail → terminal halt, certification withheld. |
 | `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff \| headDiffPath, escalated?, coverageDecisions?}` — `coverageDecisions` is a list of coverage-decision objects the driver accumulates into `state["_coverage"]`. The post-fix head diff comes from git via the **guarded per-round command in the SKILL's Setup** (`git diff "$BASE_REF"...HEAD` against the **pinned remote base commit** — never a local branch name, and never a bare copy without Setup's failed-diff and empty-diff halts; if `$BASE_REF` is not in this shell, restore and re-validate it first, #637), never the fixer's self-report. Provide it **inline** (`headDiff`) or, since a real head diff can be hundreds of KB and cannot reasonably inline into a JSON submit artifact, as an **absolute** file path (`headDiffPath`) the driver reads itself (**inline wins if both are present**). A missing / non-absolute / unreadable `headDiffPath` or empty content is treated as an **unknown surface** → the next round runs a full reviewer-deep panel (the unknown→run-everything rule), never an empty diff and never a silent scoped skip; the source used is recorded on the round as `headDiffSource: inline\|path\|unknown`. The changed policy subjects the #174 confirmation re-arm consumes are **derived by the driver itself** from the reviewed-vs-head diff through the accumulated findings (the injectable `changed_subjects` seam — library default + CLI wire the real git derivation, #157/#158); a self-reported `changedSubjects` is ignored on the live path. |
 | `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here — an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?}, ...]}` — `skip` needs a citable `reason`. Fixes fold into the round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` — a judgment blocker is never silently skipped. Never judge the dispute yourself. |
-| `present-stall-menu` | The **audit-stall terminal** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (four-choice menu; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a CONFIRMED finding with receipt). Submit `{choice}`. |
+| `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). Submit `{choice}`. **`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). **`accept-the-disclosed-risk`** → certifies when eligible. **`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → `dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |
 | `terminal` | Stop looping; read `payload.verdict` and `payload.certification`; surface honestly in the End-of-Loop Summary. |
 
 ## Journal and receipt
@@ -435,13 +446,13 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
 - `schemaVersion` (2)
-- `verdict` — `converged`, `halted`, `held`, `stalled`, `capped-with-open-critical`, …
+- `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted channel names that
   fired for the certification shape (`independence`, `base`, `same-family`, `seat-map-violation`,
   `unproven-liveness`, `seat-pin`))
-- `rounds` — per-round `kind`, `seatStatus`, `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true` and cannot ground a `converged` claim), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure).
@@ -495,14 +506,14 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
 | `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, or the seat map disclosed same-family self-review. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
-| `null` / withheld | Verify fail, stall unresolved, capped-with-open-Critical park, owner `hold`, or `ship-smaller`/`spend-more`. |
+| `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 
 **Terminals the orchestrator must surface honestly:**
 
 - **Scoped certifying finish** (`audited-chain` / `audited-chain-degraded`) — delta rounds verified the fix chain; say so.
 - **Judgment gate is an intervention, not a terminal** — a tradeoff blocker routes to `present-judgment` (fix-as-suggested / fix-with-guidance / skip-with-reason) and folds back into the fix leg; a skipped blocker rides the exit disclosure. It never dead-ends in the stall menu.
 - **One invisible self-recovery** — audit-stall triggers a single fixer escalation (journaled); never offered as an owner menu item.
-- **Four-choice stall menu** — `ship-smaller`, `spend-more`, `accept-the-disclosed-risk` (CONFIRMED-only), `hold`. Reached only from the audit-stall path.
+- **Three-choice stall menu** — `one-more-round` (offerable once per session; not a terminal — re-enters the fix leg), `accept-the-disclosed-risk` (stalled CONFIRMED-with-evidence audit target only), `hold` (terminal `held`). Reached only from the audit-stall path after self-recovery.
 - **Capped-with-open-Critical park** — confirmation budget exhausted with a Critical still owed.
 
 ## Invariants
@@ -515,6 +526,8 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   the cap → `capped-with-open-critical` park.
 - Audit-keyed stall breaker (`circuit_breaker.check_audit_breaker`) — not the old per-finding
   `circuit_breaker.py "$SESSION_DIR" 7` call inside the loop; the driver owns stall/self-recovery.
+  Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
+  clean round resets the window; criterion 1 (round cap with an open finding) is unchanged.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.
 - Fail-closed everywhere: junk in → conservative out; never certify on silence.
 - Base guard on every CLI `next`: pinned resolvable base, matching checkout/repo (PR mode), and a
