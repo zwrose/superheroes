@@ -4060,7 +4060,7 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
 # --- #1017: dispatch-review --mode brief-check ---------------------------------
 
 
-def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False):
+def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None):
     """Journal run-opened with optional mode key — for continuation tests."""
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
@@ -4100,6 +4100,8 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     }
     if not omit_mode:
         record["mode"] = mode
+    if expected_result_kind is not None:
+        record["expectedResultKind"] = expected_result_kind
     ED._journal_append(run_dir, record)
     with open(record["promptPath"], "w", encoding="utf-8") as fh:
         fh.write(fed)
@@ -4199,6 +4201,65 @@ def test_continuation_omitted_mode_inherits_journal(tmp_path):
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
     )
     assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_continuation_result_kind_pin_on_unpinned_run_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        expected_result_kind="verdicts", max_wait=0,
+    )
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+
+
+def test_continuation_result_kind_pin_disagreeing_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(
+        tmp_path, run_dir, expected_result_kind="findings",
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        expected_result_kind="verdicts", max_wait=0,
+    )
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+
+
+def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(
+        tmp_path, run_dir, expected_result_kind="verdicts",
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        expected_result_kind="verdicts", max_wait=0,
+    )
+    assert res.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+
+
+def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(
+        tmp_path, run_dir, expected_result_kind="verdicts",
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
+    )
+    assert res.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
 
 
 def test_continuation_agreeing_brief_check_mode_proceeds(tmp_path):

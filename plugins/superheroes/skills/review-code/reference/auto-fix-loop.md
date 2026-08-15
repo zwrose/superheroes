@@ -251,9 +251,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > seat emits is dropped. Callers may pin the expected kind mechanically via
 > `dispatch-review --expected-result-kind {findings,verdicts}` (library:
 > `expected_result_kind=`); a mismatched kind is refused with `detail: result-kind-mismatch`, not
-> `unreadable`. The pin is journaled when the run is **opened**; a continuation call on an existing
-> `--run-dir` keeps the journaled value rather than adopting a pin supplied later — a run's identity
-> is fixed at open. **Review panel** seats pass the **`findings`** pin; the **verify phase** passes the
+> `unreadable`. The pin is journaled when the run is **opened**; on a continuation an **omitted** pin
+> inherits the journaled value, while a **supplied** pin that disagrees with the journaled one —
+> including supplying a pin on a run opened without one — refuses `run-dir-result-kind-mismatch`,
+> `attempts: 0`, no spawn — a run's identity is fixed at open. **Review panel** seats pass the
+> **`findings`** pin; the **verify phase** passes the
 > **`verdicts`** pin. When no pin is set the transport accepts either kind, each graded by its own
 > engagement floor; #687's findings-only posture for panel seats is carried by the pin those seats
 > pass, not by a transport default. Any other `expected_result_kind` value is refused before dispatch

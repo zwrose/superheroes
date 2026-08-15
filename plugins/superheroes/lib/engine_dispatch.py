@@ -111,6 +111,7 @@ MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
+RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
 
 _REJECTED_MODE_MAX_LEN = 120
 
@@ -2897,6 +2898,15 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                         repo_detail,
                         {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
                          "detail": MODE_REFUSAL_RUN_DIR_MISMATCH,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv, engine=engine,
+                    )
+                journal_result_kind = opened.get("expectedResultKind")
+                if expected_result_kind is not None and expected_result_kind != journal_result_kind:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH,
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
