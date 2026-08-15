@@ -646,15 +646,23 @@ def test_run_engine_timeout_kills_descendants(tmp_path):
         ["python3", "-c", code], b"", 2, lambda e, n: None, str(tmp_path),
     )
     assert timed_out is True
-    import time as _t
-    _t.sleep(1)
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if marker.is_file():
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail(f"grandchild pid marker never appeared: {marker!r}")
     gc = int(marker.read_text())
-    dead = False
-    try:
-        os.kill(gc, 0)
-    except OSError:
-        dead = True
-    assert dead, "descendant survived the group kill"
+    poll_deadline = time.monotonic() + 5
+    while time.monotonic() < poll_deadline:
+        try:
+            os.kill(gc, 0)
+        except OSError:
+            break
+        time.sleep(0.1)
+    else:
+        pytest.fail("descendant survived the group kill")
 
 
 def test_reviewer_only_no_write_dispatch_reachable(tmp_path):
@@ -1529,21 +1537,25 @@ def test_subprocess_popen_census():
     assert run_engine_files_has_cwd
 
 
-def _linked_worktree(tmp_path):
-    main = str(tmp_path / "main")
-    os.makedirs(main, exist_ok=True)
-    subprocess.run(["git", "-C", main, "init", "-q"], check=True)
-    readme = os.path.join(main, "README.md")
+def _git_init(path):
+    os.makedirs(path, exist_ok=True)
+    subprocess.run(["git", "-C", path, "init", "-q"], check=True)
+    readme = os.path.join(path, "README.md")
     with open(readme, "w", encoding="utf-8") as fh:
         fh.write("hello\n")
-    subprocess.run(["git", "-C", main, "add", "README.md"], check=True)
+    subprocess.run(["git", "-C", path, "add", "README.md"], check=True)
     subprocess.run(
-        ["git", "-C", main, "-c", "user.email=t@t.local", "-c", "user.name=t",
-         "commit", "-qm", "init"],
+        ["git", "-C", path, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init"],
         check=True,
     )
+    return path
+
+
+def _linked_worktree(tmp_path):
+    repo = str(tmp_path / "main")
+    _git_init(repo)
     wt = str(tmp_path / "wt")
-    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt], check=True)
+    subprocess.run(["git", "-C", repo, "worktree", "add", "-q", wt], check=True)
     return wt
 
 
@@ -2029,28 +2041,6 @@ def _assert_no_cleanup_before_terminal_append(events):
         elif event == "cleanup":
             assert first_terminal is not None, "cleanup before any terminal append"
             assert i > first_terminal
-
-
-def _linked_worktree(tmp_path):
-    repo = str(tmp_path / "main")
-    _git_init(repo)
-    wt = str(tmp_path / "wt")
-    subprocess.run(["git", "-C", repo, "worktree", "add", "-q", wt], check=True)
-    return wt
-
-
-def _git_init(path):
-    os.makedirs(path, exist_ok=True)
-    subprocess.run(["git", "-C", path, "init", "-q"], check=True)
-    readme = os.path.join(path, "README.md")
-    with open(readme, "w", encoding="utf-8") as fh:
-        fh.write("hello\n")
-    subprocess.run(["git", "-C", path, "add", "README.md"], check=True)
-    subprocess.run(
-        ["git", "-C", path, "-c", "user.email=t@t.local", "-c", "user.name=t", "commit", "-qm", "init"],
-        check=True,
-    )
-    return path
 
 
 @pytest.mark.parametrize("scenario", [
