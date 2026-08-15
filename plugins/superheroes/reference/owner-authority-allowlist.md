@@ -159,5 +159,17 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   `(`, backtick, `"`, `'`, redirection characters, end-of-string) in subshell, command-substitution,
   paren, and `bash -c` wrappers (`\`gh pr merge\``, `bash -c "git push origin main"`, and
   `(gh release create)` classify correctly; #1000). **Still open by ratified decline:** a real shell
-  lexer, quote **pairing**, and escape handling; and the **`+` refspec force form** (`git push
-  origin +main` classifies `None` today) — a separate follow-up.
+  lexer, quote **pairing**, and escape handling. **Over-match costs an extra prompt, never an
+  unapproved run** — the fail direction is unchanged. **Accepted over-match (ratified 2026-08-14):**
+  a command that merely **quotes or mentions** a gated phrase now asks — for example
+  `git commit -m "fix the push to main"`, `echo "git push origin main"`, and
+  `grep -r 'git push origin main' docs/`. That is the accepted cost of declining quote semantics.
+  A commit message that does not put `push` and `main` as bare words in the same segment stays
+  silent (e.g. `git commit -m 'merge main into feature'`). **The `+` refspec form is partly
+  closed:** `git push origin +main` and `git push origin +refs/heads/main` now ask as
+  `push-to-default` (via widened ref boundary), but `+` is **still not recognised as a force
+  spelling** — `git push origin +feature` force-updates a non-default ref and stays **silent**;
+  that gap is a separate follow-up. **Known-open specimens still silent today:** a
+  **quote-concatenated command word** (`g''h pr merge 123`, `gi''t push --force origin f`) and a
+  **separator inside a quoted value** (`git -c user.name="x;y" push --force`,
+  `git -c user.name="x|y" push --force`).

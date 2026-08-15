@@ -177,6 +177,8 @@ _OWNER_AUTHORITY_ROW_COUNT = 7
 
 
 def test_owner_authority_commands_structural_census():
+    # _gated's products are all retained in OWNER_AUTHORITY_COMMANDS, so their id()s cannot
+    # be recycled while the module is loaded.
     assert len(oa.OWNER_AUTHORITY_COMMANDS) == _OWNER_AUTHORITY_ROW_COUNT
     assert oa._GATED_REGISTRY
     assert oa._SHORT_FLAG_REGISTRY
@@ -269,6 +271,24 @@ _INTENDED_SHIFTS = [
     ("git push -qf origin main", "push-to-default", "force-push"),
     # merge-pr row precedes run-workflow once redirection exposes the merge segment.
     ("gh 2>&1 pr merge 123 && gh workflow run deploy.yml", "run-workflow", "merge-pr"),
+    # ref-boundary widening (_WORD_START) — `+` refspec on default branch now asks.
+    ("git push origin +main", None, "push-to-default"),
+    ("git push origin +refs/heads/main", None, "push-to-default"),
+    # ratified quoted-mention over-match (_WORD_END) — gated words in quotes/mentions now ask.
+    ('git commit -m "fix the push to main"', None, "push-to-default"),
+    ('git commit -m "do not push to main"', None, "push-to-default"),
+    ('echo "git push origin main"', None, "push-to-default"),
+    ("grep -r 'git push origin main' docs/", None, "push-to-default"),
+]
+
+# Documented known-open bypasses — pinned so the reference doc and classifier cannot drift.
+# A change that closes one should update owner-authority-allowlist.md and move the row, not delete it.
+_KNOWN_OPEN_UNCLASSIFIED = [
+    "g''h pr merge 123",                            # quote-concatenated command word
+    "gi''t push --force origin f",                  # quote-concatenated command word
+    'git -c user.name="x;y" push --force',          # separator inside a quoted value
+    'git -c user.name="x|y" push --force',          # separator inside a quoted value
+    "git push origin +feature",                     # `+` as force spelling, non-default ref
 ]
 
 
@@ -278,6 +298,11 @@ def test_owner_authority_action_intended_shift(command, before, after):
     # that claims a shift but records the same value on both sides fails.
     assert before != after
     assert oa.owner_authority_action(command) == after
+
+
+@pytest.mark.parametrize("command", _KNOWN_OPEN_UNCLASSIFIED)
+def test_owner_authority_action_known_open_unclassified(command):
+    assert oa.owner_authority_action(command) is None
 
 
 @pytest.mark.parametrize("command", [
