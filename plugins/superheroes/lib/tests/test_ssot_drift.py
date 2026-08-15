@@ -778,13 +778,75 @@ def _scan_paths_for_retired_grok_literal(paths):
     return hits
 
 
+_BINARY_SUFFIXES = (".pyc", ".pyo")
+
+
+def _is_binary_build_artifact_filename(name):
+    return name.endswith(_BINARY_SUFFIXES)
+
+
+def _looks_like_binary_file(path):
+    """True when the file is not source text (null-byte probe)."""
+    try:
+        with open(path, "rb") as fh:
+            chunk = fh.read(8192)
+    except OSError:
+        return True
+    return b"\x00" in chunk
+
+
+def _collect_plugin_source_paths(root):
+    """Repository source paths under root — build artifacts are pruned, never decoded."""
+    paths = []
+    for dirpath, _dirs, files in os.walk(root):
+        _dirs[:] = [d for d in _dirs if d != "__pycache__"]
+        for name in files:
+            if _is_binary_build_artifact_filename(name):
+                continue
+            path = os.path.join(dirpath, name)
+            if _looks_like_binary_file(path):
+                continue
+            paths.append(path)
+    return paths
+
+
+def _retired_grok_census_paths():
+    conventions = os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md"))
+    return [conventions] + _collect_plugin_source_paths(PLUGIN)
+
+
+def test_census_excludes_pycache_but_catches_source_literal(tmp_path):
+    """I4: __pycache__ carrying the literal is excluded; equivalent .py source is reported."""
+    literal = _retired_grok_literal()
+    root = tmp_path / "plugin"
+    pycache = root / "lib" / "tests" / "__pycache__"
+    pycache.mkdir(parents=True)
+    stale_pyc = pycache / "fixture.cpython-314.pyc"
+    stale_pyc.write_bytes(b"prefix " + literal.encode() + b" suffix")
+
+    stale_py = root / "lib" / "stale_hit.py"
+    stale_py.parent.mkdir(parents=True, exist_ok=True)
+    stale_py.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert not any("__pycache__" in p for p in paths)
+    assert not any(p.endswith(".pyc") for p in paths)
+    assert str(stale_pyc) not in paths
+    assert str(stale_py) in paths
+
+    scanned = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    scanned.append((path, lineno))
+    assert scanned == [(str(stale_py), 1)]
+
+
 def test_retired_cursor_grok_4_5_literal_census():
     """I4: the retired cursor judge id may appear only in the two drift-guard tuple declarations (I1)."""
     allowed = _allowed_retired_grok_literal_sites()
-    paths = [os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")]
-    for dirpath, _dirs, files in os.walk(PLUGIN):
-        for name in files:
-            paths.append(os.path.join(dirpath, name))
+    paths = _retired_grok_census_paths()
     hits = _scan_paths_for_retired_grok_literal(paths)
     unexpected = sorted(set(hits) - allowed)
     assert not unexpected, (
