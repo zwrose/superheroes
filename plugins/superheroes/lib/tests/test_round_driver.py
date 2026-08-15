@@ -1249,7 +1249,8 @@ def test_second_stall_menu_omits_one_more_round_after_latch():
     assert state["_stallChoices"] == ["hold"]
 
 
-def test_retired_stall_choice_ship_smaller_refused_at_submit(tmp_path):
+@pytest.mark.parametrize("choice", ["ship-smaller", "spend-more"])
+def test_retired_stall_choice_refused_at_submit(tmp_path, choice):
     d = str(tmp_path)
     state = RD.new_state(_cfg())
     state["selfRecovered"] = True
@@ -1258,11 +1259,150 @@ def test_retired_stall_choice_ship_smaller_refused_at_submit(tmp_path):
     n = RD.cmd_next(d)
     assert n["ok"]
     out = RD.cmd_submit(
-        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "ship-smaller"})
+        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": choice})
     assert out["ok"] is False
-    assert out["reason"] == "stall-choice-retired:ship-smaller"
+    assert out["reason"] == "stall-choice-retired:%s" % choice
     ok, reloaded = RD.load_state(d)
     assert ok and reloaded["step"] == RD.P_STALL
+
+
+def test_stall_choice_not_offered_refused_at_submit(tmp_path):
+    """A choice absent from the presented menu is refused before fold — pending survives."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_oneMoreRoundUsed"] = True
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert "one-more-round" not in state["_stallChoices"]
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
+    assert out["ok"] is False
+    assert out["reason"] == "stall-choice-not-offered:one-more-round"
+    ok, reloaded = RD.load_state(d)
+    assert ok and reloaded["step"] == RD.P_STALL
+
+
+def test_unknown_stall_choice_fails_closed_to_stalled_terminal():
+    """An unknown stall choice still parks as `stalled` — fail-closed, not converged."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = False
+    state["_stallChoices"] = ["one-more-round", "hold"]
+    RD._fold_stall(state, state["config"], {"choice": "ship-whenever"})
+    assert state["terminal"] == "stalled"
+    assert state["step"] == RD.P_TERMINAL
+    assert state["certification"]["shape"] is None
+
+
+def _stall_then_clean_auditor_seams(io=None, clean_after=2):
+    """Auditor that not-discharges through `clean_after` audit calls, then discharges."""
+    audit_calls = {"n": 0}
+    counter = {"n": 0}
+
+    def auditor(targets, rnd):
+        audit_calls["n"] += 1
+        ruling = "not-discharged" if audit_calls["n"] <= clean_after else "discharged"
+        return [{"id": t["id"], "ruling": ruling,
+                 "reason": "broken" if ruling == "not-discharged" else "fixed",
+                 "evidence": "tests pass" if ruling == "discharged" else None,
+                 "auditorVendor": t.get("auditorVendor")}
+                for t in (targets or [])]
+
+    def fix_step(batch, rnd, payload):
+        counter["n"] += 1
+        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
+
+    def plaus_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+
+    seams = _seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        verifier=plaus_verifier,
+        auditor=auditor,
+        fix_step=fix_step,
+        io=io or {})
+    seams["_audit_calls"] = audit_calls
+    seams["_fix_calls"] = counter
+    return seams
+
+
+def test_audit_stall_clears_on_clean_round_then_certifies_converged():
+    """#960: stall on audit round 2, clean fold on round 3, converged certification on round 4.
+
+    Historical stall pairs must not permanently block certification once a later audit round
+  folds clean."""
+    seams = _stall_then_clean_auditor_seams(clean_after=2)
+    receipt = RD.run_loop(seams, _cfg(maxRounds=20))
+    assert receipt["verdict"] == "converged"
+    assert receipt.get("certificationShape") is not None
+    audit_rounds = [r for r in receipt["rounds"] if r.get("audits")]
+    assert len(audit_rounds) >= 3
+    assert any(r["round"] == 4 and r.get("audits") for r in receipt["rounds"])
+    kinds = [d["kind"] for d in receipt["decisions"]]
+    assert kinds.count("self-recovery") == 1
+
+
+def test_one_more_round_reenters_fixer_then_certifies_converged():
+    """#960: one-more-round re-enters dispatch-fixer, re-audits, discharges, and certifies."""
+    fix_after_menu = {"n": 0}
+    stall_menus = []
+
+    def stall_menu(payload):
+        stall_menus.append(dict(payload))
+        return "one-more-round"
+
+    base = _stall_then_clean_auditor_seams(io={"stall_menu": stall_menu}, clean_after=3)
+    orig_fix = base["fix_step"]
+
+    def fix_step(batch, rnd, payload):
+        if stall_menus:
+            fix_after_menu["n"] += 1
+        return orig_fix(batch, rnd, payload)
+
+    base["fix_step"] = fix_step
+    receipt = RD.run_loop(base, _cfg(maxRounds=20))
+    assert receipt["verdict"] == "converged"
+    assert receipt.get("certificationShape") is not None
+    assert len(stall_menus) == 1
+    assert "one-more-round" in stall_menus[0]["choices"]
+    assert fix_after_menu["n"] >= 1
+    assert base["_audit_calls"]["n"] >= 4
+
+
+def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
+    """#960: after one-more-round is spent, a second stall menu offers exactly two choices."""
+    stall_menus = []
+
+    def stall_menu(payload):
+        stall_menus.append(dict(payload))
+        return "one-more-round" if len(stall_menus) == 1 else "hold"
+
+    counter = {"n": 0}
+
+    def fix_step(batch, rnd, payload):
+        counter["n"] += 1
+        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
+
+    seams = _seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
+                                      for t in (targets or [])],
+        fix_step=fix_step,
+        io={"stall_menu": stall_menu})
+    receipt = RD.run_loop(seams, _cfg(maxRounds=20))
+    assert len(stall_menus) == 2
+    assert "one-more-round" in stall_menus[0]["choices"]
+    assert "one-more-round" not in stall_menus[1]["choices"]
+    assert stall_menus[1]["choices"] == ["accept-the-disclosed-risk", "hold"]
+    assert len(stall_menus[1]["choices"]) == 2
+    assert receipt["verdict"] == "held"
 
 
 def test_one_more_round_empty_stall_targets_parks_cannot_certify():
