@@ -959,11 +959,9 @@ preserve-verbatim rule for the advisor's vet write already applies. When you are
 owner** — a consequential flag, an ambiguous route, a decision you cannot make — **park honestly with
 receipts**: what is done, what is blocked, what you need. A truthful park beats a false ship.
 
-A park that hands a decision back to the owner is a **delivery of an open decision** — read
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` and give the
-blocked decision the per-item spine it defines: why it is the owner's, the context, the real options
-with their consequences, and a recommendation with its cost named. A park that states only *what is
-blocked* hands the owner a question; the spine hands them a decision they can make.
+**When a park hands a decision back to the owner, give the blocked decision the per-item spine in
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`.** State only
+*what is blocked* and the owner gets a question; carry the spine and they get a decision they can make.
 
 ## Memory
 
