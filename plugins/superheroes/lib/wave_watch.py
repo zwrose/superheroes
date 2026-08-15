@@ -59,8 +59,10 @@ Contract:
   total by the final arm's rounding plus one evaluation pass.
 - arms (loop only): count of run arms actually started in this loop call; rides
   loop results only (ok and refusal), never run results.
-- One-second arms (including loop's final truncated arm) never poll gh: the
-  poll guard is timeout < _MIN_PR_POLL_SECONDS with both equal to 1.0.
+- Sub-second windows never poll gh: the poll guard is timeout < _MIN_PR_POLL_SECONDS
+  (1.0), strict — so a window of exactly one second DOES poll (with timeout=1.0), and
+  only a window shorter than one second is skipped. (Loop's final truncated arm polls
+  when at least one full second remains.)
 - Standing guarantees: the watcher is read-only over the store (it never
   writes, never mutates ledger or heartbeat state) and it never signals any
   process (pid liveness is os.kill(pid, 0) probing only).
