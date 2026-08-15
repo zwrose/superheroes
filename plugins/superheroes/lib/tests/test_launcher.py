@@ -1011,9 +1011,11 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     log_dir = str(tmp_path / "logs")
     calls = {"n": 0}
+    spawn_argv = []
 
     def oserror_then_sleep(argv, repo_root, out_fh, err_fh, child_env):
         calls["n"] += 1
+        spawn_argv.append(list(argv))
         if calls["n"] == 1:
             raise OSError("spawn failed")
         return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
@@ -1030,11 +1032,55 @@ def test_spawn_oserror_retries_then_succeeds(tmp_path, monkeypatch):
     )
     assert result["ok"] is True
     assert calls["n"] == 2
+    assert len(spawn_argv) == 2
+    sid_index = spawn_argv[0].index("--session-id")
+    session_id = spawn_argv[0][sid_index + 1]
+    assert spawn_argv[1][sid_index + 1] == session_id
     records = ll.read(repo)["records"]
+    reserved = [r for r in records if r.get("event") == "reserved"][0]
+    assert reserved["sessionId"] == session_id
+    reserved_sid_index = reserved["argv"].index("--session-id")
+    assert reserved["argv"][reserved_sid_index + 1] == session_id
     retries = [r for r in records if r.get("event") == "retry"]
     assert len(retries) == 1
     assert retries[0]["attempt"] == 1
     assert retries[0]["reason"] == "spawn-oserror"
+
+
+def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypatch):
+  # axis: reserved record sessionId matches spawned --session-id and stored argv
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    spawn_argv = []
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        spawn_argv.append(list(argv))
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=capture_spawn,
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    assert len(spawn_argv) == 1
+    sid_index = spawn_argv[0].index("--session-id")
+    session_id = spawn_argv[0][sid_index + 1]
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["sessionId"] == session_id
+    reserved_sid_index = reserved["argv"].index("--session-id")
+    assert reserved["argv"][reserved_sid_index + 1] == session_id
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
 
 
 def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):

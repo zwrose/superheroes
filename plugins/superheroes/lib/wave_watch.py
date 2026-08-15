@@ -522,13 +522,17 @@ def _session_transcript_mtime(session_id, env):
             try:
                 if not bucket_entry.is_dir(follow_symlinks=False):
                     continue
-            except OSError:
+            except (FileNotFoundError, NotADirectoryError):
                 continue
+            except OSError:
+                return None, False
             candidate = os.path.join(bucket_entry.path, filename)
             try:
                 st = os.stat(candidate, follow_symlinks=False)
-            except OSError:
+            except (FileNotFoundError, NotADirectoryError):
                 continue
+            except OSError:
+                return None, False
             if not stat.S_ISREG(st.st_mode):
                 continue
             matches.append(st.st_mtime)
@@ -555,8 +559,7 @@ def _stale_second_chance(
     all leave the lane in the still-stale list. Only a positively fresh transcript
     suppresses.
     """
-    if now is None:
-        now = time.time()
+    injected_now = now is not None
     if session_transcript_mtime is None:
         session_transcript_mtime = _session_transcript_mtime
     still_stale = []
@@ -567,6 +570,7 @@ def _stale_second_chance(
         mtime, ambiguous = session_transcript_mtime(
             lane_info.get("sessionId"), env,
         )
+        lane_now = now if injected_now else time.time()
         if ambiguous and degraded is not None:
             degraded.add(DEGRADATION_TRANSCRIPT_AMBIGUOUS)
         # bite-axis: DIRECTION of failure — an unresolvable transcript or an unusable
@@ -574,7 +578,7 @@ def _stale_second_chance(
         if not _valid_positive_int(promise) or mtime is None:
             still_stale.append(entry)
             continue
-        transcript_age = now - mtime
+        transcript_age = lane_now - mtime
         # bite-axis: a FUTURE-dated transcript is a skewed or wrong clock, not evidence
         # of work. The watcher and the transcript share one host clock, so there is no
         # skew to tolerate here, and tolerating any would contradict the documented

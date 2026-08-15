@@ -2622,6 +2622,7 @@ _I2_STILL_STALE_SHAPES = (
     "transcript-dated-in-the-future",
     "transcript-is-a-directory",
     "symlink-at-exact-filename",
+    "unreadable-bucket-with-fresh-match",
 )
 
 
@@ -2686,6 +2687,10 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
         target = tmp_path / "elsewhere.jsonl"
         target.write_text("{}\n")
         os.symlink(str(target), os.path.join(bucket_dir, session_id + ".jsonl"))
+    elif shape == "unreadable-bucket-with-fresh-match":
+        _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="readable")
+        unreadable = os.path.join(str(config_dir), "projects", "unreadable")
+        os.makedirs(unreadable, mode=0o000)
     else:
         _write_session_transcript(config_dir, session_id, age_seconds=60)
 
@@ -2744,6 +2749,47 @@ def test_second_chance_boundary_is_inclusive_at_the_promise():
         session_transcript_mtime=lambda sid, env: (10000.0 - 1801, False),
     )
     assert len(still) == 1 and suppressed == []
+
+
+def test_transcript_mtime_after_call_beginning_suppresses_lane():
+    """Regression for TOCTOU: a resolver that returns time.time() when invoked must
+    not misread an actively-written transcript as future-dated."""
+    live_lanes = {"lane-a": {"sessionId": _TEST_SESSION_ID}}
+    stale_live = [{
+        "launchId": "lane-a", "state": "working",
+        "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
+    }]
+    still, suppressed = ww._stale_second_chance(
+        stale_live, live_lanes, os.environ,
+        session_transcript_mtime=lambda sid, env: (time.time(), False),
+    )
+    assert still == [] and len(suppressed) == 1
+
+
+def test_session_transcript_mtime_unreadable_bucket_is_unresolved(tmp_path, monkeypatch):
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="readable")
+    unreadable = os.path.join(str(config_dir), "projects", "unreadable")
+    os.makedirs(unreadable, mode=0o000)
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False
+
+
+def test_absent_bucket_with_fresh_match_suppresses_lane(tmp_path, monkeypatch):
+    """A genuinely absent candidate in another bucket must not block suppression."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=60, bucket="present")
+    os.makedirs(os.path.join(str(config_dir), "projects", "absent"), exist_ok=True)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "timer"
+    assert [e["launchId"] for e in result["staleSuppressed"]] == ["lane-a"]
 
 
 @pytest.mark.parametrize("ahead_seconds", [1, 30, 3600])

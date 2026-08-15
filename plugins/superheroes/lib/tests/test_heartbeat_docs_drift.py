@@ -35,6 +35,10 @@ def _assert_tokens_present(text, label, tokens):
     assert not missing, "%s missing token(s): %r" % (label, missing)
 
 
+def _assert_bound_fragment(text, label, fragment):
+    assert fragment in text, "%s missing bound fragment: %r" % (label, fragment)
+
+
 def _launch_id_grammar_token():
     return "`%s`" % hb._LAUNCH_ID_RE.pattern
 
@@ -70,11 +74,20 @@ def test_wave_watch_doc_states_the_full_measurement_corpus():
     # bite-axis: the CORPUS COUNTS behind the floor track their authoritative home,
     # so correcting the measurement cannot leave the documented derivation stale.
     m = hb.STALE_AFTER_MEASUREMENT
-    _assert_tokens_present(
-        _read_plugin("skills/showrunner/reference/wave-watch.md"),
-        "reference/wave-watch.md",
-        [str(m["lanes"]), str(m["gaps"]), str(m["benignGaps"]),
-         str(m["coldThresholdSeconds"])],
+    doc = _read_plugin("skills/showrunner/reference/wave-watch.md")
+    _assert_bound_fragment(
+        doc, "lanes", "across **%d** builder lanes" % m["lanes"],
+    )
+    _assert_bound_fragment(
+        doc, "gaps", "pooled **%d** inter-stamp gaps" % m["gaps"],
+    )
+    _assert_bound_fragment(
+        doc, "benignGaps",
+        "**%d** of the %d gaps were benign" % (m["benignGaps"], m["gaps"]),
+    )
+    _assert_bound_fragment(
+        doc, "coldThresholdSeconds",
+        "colder than **%d** s anywhere inside it" % m["coldThresholdSeconds"],
     )
 
 

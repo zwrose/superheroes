@@ -261,6 +261,8 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `lane-never-stamped`
 - `pr-signal-never-sampled`
 - `log-unwritable`
+- `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is
+  ambiguous and the lane alerts rather than being suppressed
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
