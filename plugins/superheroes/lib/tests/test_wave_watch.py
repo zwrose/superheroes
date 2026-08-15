@@ -2612,6 +2612,7 @@ def test_session_transcript_mtime_resolves_exactly_one_match(tmp_path, monkeypat
 _I2_STILL_STALE_SHAPES = (
     "no-session-id-on-record",
     "zero-matches",
+    "only-a-foreign-fresh-transcript",
     "two-or-more-matches",
     "session-id-with-path-separator",
     "no-projects-dir",
@@ -2637,8 +2638,21 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
         )
         _write_session_transcript(config_dir, _OTHER_SESSION_ID, age_seconds=60)
     elif shape == "session-id-with-path-separator":
-        mtime, ambiguous = ww._session_transcript_mtime("../evil", os.environ)
-        assert mtime is None and ambiguous is False
+        # Ledger validation requires a UUID sessionId, so exercise the census
+        # invariant through _stale_second_chance instead of a written ledger.
+        evil_session_id = "../evil"
+        _write_session_transcript(config_dir, _OTHER_SESSION_ID, age_seconds=60)
+        stale_live = [{
+            "launchId": "lane-a",
+            "state": "working",
+            "ageSeconds": 1835.0,
+            "staleAfterSeconds": 1800,
+        }]
+        live_lanes = {"lane-a": {"sessionId": evil_session_id}}
+        still, suppressed = ww._stale_second_chance(
+            stale_live, live_lanes, os.environ,
+        )
+        assert len(still) == 1 and suppressed == []
         return
     else:
         _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
@@ -2654,6 +2668,10 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
             fh.write("not a transcript\n")
     elif shape == "zero-matches":
         pass
+    elif shape == "only-a-foreign-fresh-transcript":
+        # Regression for #1023: a fresh transcript for another session must never
+        # vouch for this lane when its own transcript is absent.
+        _write_session_transcript(config_dir, _OTHER_SESSION_ID, age_seconds=60)
     elif shape == "two-or-more-matches":
         _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="a")
         _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="b")
