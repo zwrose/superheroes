@@ -45,6 +45,17 @@ python3 -B "$ROOT_DIR/lib/wave_watch.py" loop \
 `--ignore-launch` for each launch id already handled on that arm, and add `--ignore-event` pairs for
 any benign events you want suppressed (see below).
 
+**Before arming**, run a one-off foreground `run` with the same `--repo-root` and `--batch`. It
+returns immediately and shows whether the batch resolves to any lanes at all — the cheap way to catch
+a mistyped batch id before you go blind in a long `loop`.
+
+The arming snippet above omits two flags you should **include on every arm**: `--max-total-seconds`
+(the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a
+message) and `--log PATH` (each timer arm is recorded, so you can see the loop is alive and which
+batch it is watching). Without them, a mistyped or quiet batch under `loop` produces **no stdout at
+all** until something actionable happens — indistinguishable from a healthy quiet wave for as long as
+you leave it running.
+
 In an **interactive** session, a harness background task survives across turns and re-invokes the
 advisor when it exits — that is what keeps you from going blind between turns while `loop` runs.
 In a **headless** session (`claude -p`), the session exits when its turn ends, so a background task
@@ -85,8 +96,11 @@ that lane's terminal signal.
 
 A suppressed `(launchId, event)` pair is **never actionable**, while **every other event for that
 lane still fires** and **that same event for every other lane still fires**. Suppression affects
-actionability only — a suppressed lane still appears under `alsoObserved`. Only the four **lane-keyed**
-events are suppressible: `lane-terminal`, `lane-blocked`, `builder-exited`, `lane-stale`.
+actionability only. A suppressed lane appears under `alsoObserved` **when some other event fires on
+that result** — but a `timer` result carries no `alsoObserved` at all, so a lane whose only signal is
+suppressed is invisible in that arm's output. Use `--log` to keep sight of a suppressed lane across
+a long arm chain. Only the four **lane-keyed** events are suppressible: `lane-terminal`,
+`lane-blocked`, `builder-exited`, `lane-stale`.
 `pr-set-changed` and `timer` are not lane-keyed; naming them is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
@@ -141,7 +155,10 @@ The watcher prints **one JSON line on stdout**; **exit 0 on an event, exit 1 on 
 
 When an event fires, co-occurring lower-precedence lane signals from the same interval ride along
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
-siblings.
+siblings. A `timer` result has no `alsoObserved`.
+
+`loop` results — both ok and refusal — carry `arms`, the number of internal arms run in that
+invocation. `run` results never carry `arms`.
 
 `lane-stale` is a **wedged builder**: alive but frozen past its own `staleAfterSeconds` promise. It
 fires only when the builder's pid is positively alive — an uncertain probe is not a wedge, and a
@@ -191,8 +208,11 @@ whose heartbeat is unreadable can be reported by a lower-precedence event than i
 - **PR-set baseline:** within one `loop` invocation, the PR baseline threads across internal arms,
   so a PR change landing between timer arms **is** reported. The gap remains **open between separate
   invocations** and for bare `run`, where the baseline is rebuilt per call.
-- **A mistyped batch id is indistinguishable from a quiet batch** — it produces a calm `timer`, not
-  a refusal.
+- **A mistyped batch id is indistinguishable from a quiet batch** — but the verb matters. Bare
+  `run` produces a calm `timer`, not a refusal. `loop` treats every `timer` as non-terminal and
+  re-arms; with no `--max-total-seconds` bound it produces **nothing on stdout** until something
+  actionable happens, so a mistyped batch id under `loop` looks exactly like a healthy quiet wave for
+  as long as you leave it running.
 - **A started lane that has never stamped a heartbeat across the full watch window
   is reported as a `lane-never-stamped` degradation at the deadline** — but
   `builder-exited` still surfaces it when its recorded pid dies.
