@@ -77,6 +77,7 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 RUN_KIND_REVIEW = "review"
+REVIEW_RESULT_KINDS = ("findings", "verdicts")
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
@@ -1236,10 +1237,14 @@ def _ledger_stages(result, state, run_dir_real, opened):
         elif result.get("engagement"):
             stages["engaged"] = engine_adapter.engagement_read(result) == "engaged"
         delivered = False
-        if result.get("ok") and isinstance(result.get("findings"), list):
-            delivered = True
-        elif result.get("ok") and result.get("investigated"):
-            delivered = True
+        if result.get("ok"):
+            kind = result.get("resultKind")
+            if kind in REVIEW_RESULT_KINDS:
+                payload = result.get(kind)
+                if isinstance(payload, list) and payload:
+                    delivered = True
+            if not delivered and result.get("investigated"):
+                delivered = True
         stages["delivered"] = delivered
     else:
         if result.get("ok"):
@@ -1943,11 +1948,11 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _engagement_with_read(engagement, *, findings=None, investigated=None):
+def _engagement_with_read(engagement, *, items=None, investigated=None):
     """Attach engagement.read from observed attempt evidence. Never raises."""
     out = dict(engagement)
     out["read"] = engine_adapter.engagement_read({
-        "findings": findings,
+        "findings": items,
         "investigated": investigated,
         "engagement": engagement,
     })
@@ -1976,6 +1981,69 @@ def _attach_review_rejection_fields(result, rejected_records=(), rejected_reason
     if findings_rejected_reasons:
         result["findingsRejected"] = findings_rejected_reasons
     return result
+
+
+def _parse_review_has_payload(res):
+    """True when a review parse result carries a non-empty findings or verdicts payload."""
+    if not res.get("ok"):
+        return False
+    kind = res.get("resultKind")
+    if kind not in REVIEW_RESULT_KINDS:
+        return False
+    payload = res.get(kind)
+    return isinstance(payload, list) and bool(payload)
+
+
+def _review_parse_kind_invalid(res):
+    """True when parse claims ok but resultKind is missing or outside the two-name enum."""
+    return res.get("ok") and res.get("resultKind") not in REVIEW_RESULT_KINDS
+
+
+def _build_running_graded(run_dir_real, state):
+    """Grade every ended attempt for a non-terminal running projection. Never raises."""
+    graded = []
+    try:
+        opened = state.get("opened") or {}
+        run_kind = opened.get("runKind")
+        for att in sorted(state.get("attempts") or {}):
+            slot = state["attempts"][att]
+            if slot.get("ended") is None:
+                continue
+            if run_kind == RUN_KIND_WRITE:
+                grade = _grade_write_attempt(run_dir_real, state, att)
+            elif run_kind == RUN_KIND_REVIEW:
+                grade = _grade_review_attempt(run_dir_real, state, att)
+            else:
+                continue
+            entry = {"attempt": att}
+            if grade.get("ok"):
+                kind = grade.get("resultKind")
+                if kind in REVIEW_RESULT_KINDS:
+                    entry["resultKind"] = kind
+                    payload = grade.get(kind)
+                    if isinstance(payload, list):
+                        entry[kind] = payload
+                elif run_kind == RUN_KIND_WRITE:
+                    entry["signal"] = grade.get("signal", "ok")
+                    entry["evidence"] = grade.get("evidence", {})
+            elif grade.get("forfeit") or grade.get("reason"):
+                entry["reason"] = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
+            else:
+                entry["reason"] = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
+            if grade.get("investigated") is not None:
+                entry["investigated"] = grade["investigated"]
+            graded.append(entry)
+    except Exception:
+        return []
+    return graded
+
+
+def _non_terminal_running_result(result, run_dir_real, state):
+    """Attach graded to every non-terminal running return. Never raises."""
+    out = dict(result)
+    if out.get("terminal") is False and out.get("reason") == dispatch_outcome.REASON_RUNNING:
+        out["graded"] = _build_running_graded(run_dir_real, state)
+    return out
 
 
 def _grade_review_attempt(run_dir_real, state, attempt):
@@ -2025,18 +2093,16 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         "source": source,
     }
 
+    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+    prompt_echo_only = norm_strip["echoOnly"]
+    diagnose_stdout = norm_strip["text"]
+
     res = engine_adapter.parse_result(engine, role_kind, stdout)
-    diagnose_stdout = stdout
-    prompt_echo_only = False
-    if not (res.get("ok") and res.get("findings")):
-        stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
-        if stripped and stripped.strip():
-            diagnose_stdout = stripped
-        elif stdout and stdout.strip():
-            prompt_echo_only = True
-        else:
-            diagnose_stdout = stripped
-        res = engine_adapter.parse_result(engine, role_kind, stripped)
+    if not _parse_review_has_payload(res):
+        stripped_text = norm_strip["text"]
+        if stripped_text and stripped_text.strip():
+            diagnose_stdout = stripped_text
+        res = engine_adapter.parse_result(engine, role_kind, stripped_text)
     if not res.get("ok"):
         engagement = _engagement_with_read(engagement)
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
@@ -2047,12 +2113,29 @@ def _grade_review_attempt(run_dir_real, state, attempt):
                 "keysTruncated": False,
             }
         else:
-            shape = engine_adapter.review_payload_shape(diagnose_stdout)
+            shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
             if shape is not None:
                 result["payloadShape"] = shape
         return result
 
-    findings = res.get("findings") or []
+    if _review_parse_kind_invalid(res):
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
+        shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
+        if shape is not None:
+            result["payloadShape"] = shape
+        return result
+
+    kind = res["resultKind"]
+    payload = res.get(kind)
+    if not isinstance(payload, list):
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
+        shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
+        if shape is not None:
+            result["payloadShape"] = shape
+        return result
+
     view_meta = opened.get("viewMeta")
     generated = ()
     if isinstance(view_meta, dict):
@@ -2064,9 +2147,9 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
-    if findings:
-        engagement = _engagement_with_read(engagement, findings=findings)
-        result = {"ok": True, "findings": findings, "engagement": engagement}
+    if payload:
+        engagement = _engagement_with_read(engagement, items=payload)
+        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(
@@ -2078,14 +2161,14 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
-        result = {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+        engagement = _engagement_with_read(engagement, items=[], investigated=accepted)
+        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": engagement}
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
             rejected_reasons=rejected_reasons,
         )
-    engagement = _engagement_with_read(engagement, findings=[], investigated=None)
+    engagement = _engagement_with_read(engagement, items=[], investigated=None)
     return {
         "forfeit": True,
         "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -2216,8 +2299,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
         state = _journal_state(records)
         opened = state.get("opened") or {}
         return _with_run_fields(
-            {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING, "detail": "run-locked",
-             "attempts": _highest_attempt(state), "forfeited": False},
+            _non_terminal_running_result(
+                {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING, "detail": "run-locked",
+                 "attempts": _highest_attempt(state), "forfeited": False},
+                run_dir_real, state,
+            ),
             run_dir=run_dir_real, argv=opened.get("argv") or [],
         )
 
@@ -2261,8 +2347,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
             if time.monotonic() >= deadline:
                 return _with_run_fields(
-                    {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
-                     "attempts": _highest_attempt(state), "forfeited": False},
+                    _non_terminal_running_result(
+                        {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
+                         "attempts": _highest_attempt(state), "forfeited": False},
+                        run_dir_real, state,
+                    ),
                     run_dir=run_dir_real, argv=argv,
                 )
 
@@ -2388,9 +2477,18 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             )
                             result["itemCheck"] = item_check
                     else:
+                        terminal_ok = {
+                            "ok": True, "terminal": True,
+                            "attempts": latest, "engagement": grade["engagement"],
+                        }
+                        kind = grade.get("resultKind")
+                        if kind in REVIEW_RESULT_KINDS:
+                            terminal_ok["resultKind"] = kind
+                            payload = grade.get(kind)
+                            if isinstance(payload, list):
+                                terminal_ok[kind] = payload
                         result = _with_run_fields(
-                            {"ok": True, "terminal": True, "findings": grade.get("findings", []),
-                             "attempts": latest, "engagement": grade["engagement"]},
+                            terminal_ok,
                             run_dir=run_dir_real, argv=argv,
                         )
                         if grade.get("investigated") is not None:
@@ -3317,10 +3415,19 @@ def dispatch_poll(run_dir):
                  "poll": projection},
                 run_dir=detail, argv=argv,
             )
+        poll_terminal = projection.get("terminal", False)
+        poll_reason = (
+            dispatch_outcome.REASON_RUNNING
+            if poll_state in ("running", "idle", "abandon-requested")
+            else poll_state
+        )
+        poll_result = {
+            "ok": False, "terminal": poll_terminal,
+            "reason": poll_reason,
+            "attempts": highest, "forfeited": False, "poll": projection,
+        }
         return _with_run_fields(
-            {"ok": False, "terminal": projection.get("terminal", False),
-             "reason": dispatch_outcome.REASON_RUNNING if poll_state in ("running", "idle", "abandon-requested") else poll_state,
-             "attempts": highest, "forfeited": False, "poll": projection},
+            _non_terminal_running_result(poll_result, detail, state),
             run_dir=detail, argv=argv,
         )
     except Exception as exc:
@@ -3423,9 +3530,12 @@ def dispatch_abandon(run_dir):
             file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL, reclaim_dead_holder=True)
         except file_lock.LockHeld:
             return _with_run_fields(
-                {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
-                 "detail": "run-locked",
-                 "attempts": _highest_attempt(state), "forfeited": False},
+                _non_terminal_running_result(
+                    {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
+                     "detail": "run-locked",
+                     "attempts": _highest_attempt(state), "forfeited": False},
+                    run_dir_real, state,
+                ),
                 run_dir=run_dir_real, argv=argv,
             )
 

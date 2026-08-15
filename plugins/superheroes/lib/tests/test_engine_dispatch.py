@@ -119,6 +119,8 @@ def _fed_prompt(base_prompt, view_meta=None):
 
 
 _VALID_FINDINGS_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
+_VALID_VERDICTS_STDOUT = json.dumps({"verdicts": [{"id": "v1", "verdict": "CONFIRMED"}]})
+_UNREADABLE_REVIEW_STDOUT = json.dumps({"error": "crashed", "status": "fail"})
 
 
 def _valid_prompt(tmp_path, content="Review this code.\n"):
@@ -2413,8 +2415,8 @@ def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
 def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([
-        ('{"verdicts":[]}', False, 0, ""),
-        ('{"verdicts":[]}', False, 0, ""),
+        (_UNREADABLE_REVIEW_STDOUT, False, 0, ""),
+        (_UNREADABLE_REVIEW_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
@@ -2425,7 +2427,7 @@ def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
     assert res["reason"] == "forfeited"
     shape = res["payloadShape"]
     assert shape["parsed"] == ED.engine_adapter.SHAPE_OBJECT_WITHOUT_FINDINGS
-    assert shape["topLevelKeys"] == ["verdicts"]
+    assert "error" in shape["topLevelKeys"]
 
 
 def test_dispatch_review_payload_shape_absent_on_vacuous_forfeit(tmp_path):
@@ -2570,6 +2572,84 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+
+
+# --- #763: kind-neutral review grading + running graded tail ---
+
+
+def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+    assert res["verdicts"] == [{"id": "v1", "verdict": "CONFIRMED"}]
+    assert "findings" not in res
+
+
+def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
+    run_dir = str(tmp_path / "run-verdicts")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_VERDICTS_STDOUT)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(_VALID_VERDICTS_STDOUT), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["resultKind"] == "verdicts"
+    assert grade["verdicts"] == [{"id": "v1", "verdict": "CONFIRMED"}]
+    assert "findings" not in grade
+
+
+def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
+    """Attempt 1 ended with clean findings; attempt 2 started but not ended."""
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 2, "childPid": 99999, "at": time.time(),
+    })
+    return repo_root, view
+
+
+def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
+    run_dir = str(tmp_path / "run-graded")
+    _manual_two_attempt_review_poll_fixture(tmp_path, run_dir)
+    res = ED.dispatch_poll(run_dir)
+    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+    assert res["terminal"] is False
+    graded = res["graded"]
+    assert len(graded) == 1
+    assert graded[0]["attempt"] == 1
+    assert graded[0]["resultKind"] == "findings"
+    assert graded[0]["findings"] == [{"id": "f1", "message": "issue found"}]
 
 
 # --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
