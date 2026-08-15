@@ -1247,6 +1247,12 @@ canonical ruling record is `LEDGERS.md` §4.
 
 **Verbs:** `stamp`, `read`, `sweep`.
 
+**Default promise.** A caller that states no `staleAfterSeconds` gets
+`heartbeat.DEFAULT_STALE_AFTER_SECONDS` = **24000** seconds — floored at 2× the worst *benign*
+inter-stamp gap measured on the reference host (11960 s, over 45 gaps across 10 builder lanes, 44 of
+them benign). The prior 300 s default was below every real build's stamping cadence, so an omitting
+caller read `stale` within five minutes. A builder that states its own promise is unaffected.
+
 **Semantic core.** The builder stamps `staleAfterSeconds` — its own promise about when it will next
 stamp. A lane is late only when it has outrun **the promise it made itself** — semantic liveness, not
 another mtime watchdog. A builder inside a nine-minute dispatch is not a false alarm. The corpus holds

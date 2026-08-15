@@ -50,6 +50,21 @@ def test_conventions_section_15_matches_heartbeat_constants():
     _assert_tokens_present(section, "CONVENTIONS.md §15", tokens)
 
 
+def test_conventions_and_wave_watch_pin_the_default_promise():
+    # bite-axis: the DEFAULT PROMISE NUMBER in prose tracks the module constant.
+    # Both docs state it; neither may drift from heartbeat.DEFAULT_STALE_AFTER_SECONDS.
+    default = str(hb.DEFAULT_STALE_AFTER_SECONDS)
+    _assert_tokens_present(
+        _conventions_section_15(), "CONVENTIONS.md §15",
+        ["DEFAULT_STALE_AFTER_SECONDS", default],
+    )
+    _assert_tokens_present(
+        _read_plugin("skills/showrunner/reference/wave-watch.md"),
+        "reference/wave-watch.md",
+        ["DEFAULT_STALE_AFTER_SECONDS", default],
+    )
+
+
 def test_workhorse_charter_matches_heartbeat_constants():
     text = _read_plugin("skills/workhorse/SKILL.md")
     tokens = [
