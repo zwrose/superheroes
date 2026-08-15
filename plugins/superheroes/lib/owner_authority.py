@@ -189,9 +189,29 @@ def _short_flag(letter):
     return r"(?<![\w-])-(?!-)[A-Za-z0-9]*" + letter
 
 
+# git's OTHER force spelling: a refspec word beginning with `+` (`git push origin +feature`,
+# `+HEAD:main`, `+refs/heads/x`, `+*:refs/review/*`, `+@{u}:refs/heads/x`) force-updates the
+# remote ref exactly as `--force` does. The `+` must START a word — whitespace, quote, backtick,
+# `(` or a redirection operator before it; never `=`, `:`, `.`, `/`, `-`, `+` or a word char, so
+# `--push-option=+x`, `a+b`, `HEAD:refs/heads/+x` and `./+repo` are not force — and be followed
+# by ANY non-space, non-separator character (git allows almost any punctuation to start a ref —
+# `++feature` and `+!feature` are legal force refspecs — so the follower class is deliberately
+# broad rather than an enumeration of "ref characters"; a bare `+` before whitespace or a
+# separator is not a refspec). Accepted over-matches, documented in the reference: a redirection
+# to a `+`-named file (`2>+log`), the separate-argument push option (`-o +x`, `--push-option +x`),
+# a repository operand named `+…` (`git push +repo feature`), and a quoted inline option value
+# (`--push-option="+x"`) ask — a prompt, never an unapproved run. Owner-ruled 2026-08-15
+# (@116-3, a).
+# Left boundary is a CLOSED inclusion set — the `+` starts a shell word: start-of-segment,
+# whitespace, a quote, a backtick, `(`, or a redirection operator before it. (An exclusion class
+# let a comma-named branch `feature,+other` and an inline value `ci:list,+x` read as force —
+# round-3 Minor.) Python's lookbehind must be fixed-width, hence the alternation.
+_PLUS_REFSPEC = r"(?:(?<=^)|(?<=\s)|(?<=[\"'`(>]))\+(?=[^\s;|&<>()])"
+
+
 def _force_push_flag_trailing():
     compiled = re.compile(r"(--force\b|-f\b|--force-with-lease|"
-                          + _short_flag("f") + r")", re.I)
+                          + _short_flag("f") + r"|" + _PLUS_REFSPEC + r")", re.I)
     _SHORT_FLAG_REGISTRY.add(id(compiled))
     return compiled
 
