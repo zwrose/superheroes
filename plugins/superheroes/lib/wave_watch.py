@@ -20,7 +20,8 @@ Contract:
   lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
-  lane-never-stamped, pr-signal-never-sampled, log-unwritable.
+  lane-never-stamped, pr-signal-never-sampled, log-unwritable,
+  transcript-ambiguous.
 - gh child env-scrubbing: ambient git/GH routing variables in _GIT_SCRUB_VARS
   are stripped via _scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below

@@ -2759,9 +2759,14 @@ def test_transcript_mtime_after_call_beginning_suppresses_lane():
         "launchId": "lane-a", "state": "working",
         "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
     }]
+    def _mtime_after_call_beginning(sid, env):
+        # Sleep so time.time() here is provably later than any clock read before lookup.
+        time.sleep(0.05)
+        return (time.time(), False)
+
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
-        session_transcript_mtime=lambda sid, env: (time.time(), False),
+        session_transcript_mtime=_mtime_after_call_beginning,
     )
     assert still == [] and len(suppressed) == 1
 
