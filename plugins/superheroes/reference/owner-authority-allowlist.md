@@ -148,9 +148,13 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
   you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
   `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them.
-- **Shell quoting:** the gate matches on the **text** of the command and does not lex shell
-  quoting. Flag-prefixed dispatches (including repo-flagged ones) are classified and **ask**, at
-  any flag length. What the gate still does not resolve is shell quoting — both a
-  quote-concatenated command word (`g''h`) and a **separator inside a quoted value**
-  (`git -c user.name="x;y" push --force`) go unclassified. Both are pre-existing and unchanged
-  by #989.
+- **Shell quoting:** owner ratification 2026-08-14 (#1000): the gate is a **best-effort text
+  matcher over shell syntax** that **errs closed**; **no shell lexer will be built** and quoting
+  semantics are **declined**, because skipping quoted text would choose fail-open in a security
+  gate. Known silent-bypass shapes are **closed as they are found** — redirection operators no
+  longer split a command (`gh 2>&1 pr merge 123` asks) and clustered short options no longer hide
+  the force flag (`git push -qf origin feature` asks); **over-matching is an accepted cost**. What
+  the matcher still does not resolve is shell quoting — a quote-concatenated command word (`g''h`)
+  and a **separator inside a quoted value** (`git -c user.name="x;y" push --force`) go
+  unclassified; both are pre-existing. **Consequence:** an over-match costs an extra prompt,
+  never an unapproved run.

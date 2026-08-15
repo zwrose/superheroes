@@ -39,20 +39,61 @@ import sys
 # LIFTED VERBATIM from the retired lib/enforcer.py GATED_COMMANDS (pre-#478). The tool-to-
 # subcommand junction was re-derived under owner ratification 2026-08-13 (issue #989) to close
 # a silent classification bypass. First hit wins (see owner_authority_action).
+#
+# Owner ratification 2026-08-14 (issue #1000): this gate is a best-effort text matcher over shell
+# syntax that errs closed. No shell lexer will be built; quoting semantics are declined — skipping
+# quoted text would choose fail-open in a security gate. Known silent-bypass shapes are closed as
+# they are found; over-matching is an accepted cost.
+#
 # Shell segment boundaries. Splitting first, then searching within a segment, replaces the old
 # tool-to-subcommand span: it removes BOTH the length cap (which fell through to None past 256
 # chars — an approval bypass) and the unbounded `.*` wildcards (quadratic in a PreToolUse hook:
 # 26.1s on a 35KB input, vs 0.002s here). Re-derived under owner ratification 2026-08-13 (#989).
 _SEGMENT_SPLIT = re.compile(r"[;&|\n]+")
 
+# Shell redirection operators that CONTAIN a segment-boundary character. `2>&1` is one operator,
+# not a `&` separator — splitting there tore `gh 2>&1 pr merge 123` into `gh 2>` and `1 pr merge 123`,
+# so neither fragment carried both the tool word and the subcommand and the command classified None
+# (silent). Covers `N>&M`, `N>>&M`, `>&-`, `N<&M`, `<&-`, `&>`, `&>>`, and the noclobber-override
+# `N>|`. `&&`, `||`, `|&` and a bare background `&` are NOT matched here and stay separators.
+_REDIRECTION_OPERATOR = re.compile(r"\d*(?:>>?|<)&|&>>?|\d*>\|")
+
 # The shell removes a backslash-newline before parsing, so it is not a segment boundary.
 _LINE_CONTINUATION = re.compile(r"\\\r?\n")
+
+
+def _segments(command):
+    """Every segment the row matcher searches, line-continuations already removed.
+
+    Returns the raw split PLUS the split of a redirection-neutralized copy, and is therefore
+    strictly ADDITIVE: every segment the matcher saw before this helper existed is still in the
+    list, so no classification can be LOST here — only gained. (An in-place strip would risk the
+    opposite: an over-matching pattern could merge two genuine segments and drop a live hit.)"""
+    command_nc = _LINE_CONTINUATION.sub("", command)
+    raw = _SEGMENT_SPLIT.split(command_nc)
+    neutral = _REDIRECTION_OPERATOR.sub(" ", command_nc)
+    if neutral == command_nc:
+        return raw
+    return raw + _SEGMENT_SPLIT.split(neutral)
+
 
 # Subcommand words are matched as WHITESPACE-DELIMITED TOKENS, not with \b: `\bpush\b` also matches
 # inside `push.default`, which classified `git config push.default main` as push-to-default.
 # Tool words keep \b so an absolute path (`/usr/bin/gh pr merge`) still classifies.
 _GH = re.compile(r"\bgh\b", re.I)
 _GIT = re.compile(r"\bgit\b", re.I)
+
+# A short-option flag can arrive standalone (`-f`) or CLUSTERED (`-qf`, `-fq`, `-uvf`, `-4f`).
+# `_short_flag(letter)` is the builder every row's short-flag requirement must be composed from,
+# so a row added later is cluster-aware by construction rather than by the author remembering.
+# The construction is deliberately LINEAR: one unbounded class then the literal letter. Do NOT
+# write `[A-Za-z0-9]*f[A-Za-z0-9]*` — two unbounded repetitions around the letter backtrack
+# quadratically (measured 5.97s on a 30,000-character token; this gate runs on EVERY Bash call).
+# `(?<![\w-])` — not `(?<!\S)` — keeps the shipped behaviour of matching a QUOTED flag
+# (`git push "-f" origin feature` classifies force-push today and must keep doing so) while still
+# refusing a match inside `--force` or inside a word like `feature-fast`.
+def _short_flag(letter):
+    return r"(?<![\w-])-(?!-)[A-Za-z0-9]*" + letter
 
 # (action, tool-word, subcommand-token, trailing-requirement-or-None)
 # The trailing requirement is searched AFTER the subcommand match, within the same segment.
@@ -64,7 +105,8 @@ OWNER_AUTHORITY_COMMANDS = [
     ("release",         _GH,  re.compile(r"(?<!\S)release\s+create(?!\S)", re.I), None),
     ("run-workflow",    _GH,  re.compile(r"(?<!\S)workflow\s+(run|enable|disable)(?!\S)", re.I), None),
     ("force-push",      _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
-                              re.compile(r"(--force\b|-f\b|--force-with-lease)", re.I)),
+                              re.compile(r"(--force\b|-f\b|--force-with-lease|"
+                                         + _short_flag("f") + r")", re.I)),
     ("push-to-default", _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
                               re.compile(r"(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
 ]
@@ -111,8 +153,7 @@ def owner_authority_action(command):
     the subcommand token must follow the tool word when a tool word is required."""
     if not isinstance(command, str):
         return None
-    command = _LINE_CONTINUATION.sub("", command)
-    segments = _SEGMENT_SPLIT.split(command)
+    segments = _segments(command)
     # Rows OUTER, segments INNER — this preserves the shipped first-hit-wins precedence across the
     # whole command. Iterating segments first would let a later row in an earlier segment win.
     for action, tool, sub, trailing in OWNER_AUTHORITY_COMMANDS:
@@ -401,9 +442,8 @@ def calibration_state(cwd):
 def _ask_reason(action, command, notes):
     reason = "owner-authority action '%s' needs your live approval" % action
     # Informational pointer only — segment-scoped gh/workflow-run shape, not workflow_run_dispatch.
-    command_nc = _LINE_CONTINUATION.sub("", command)
     pointer_hit = False
-    for segment in _SEGMENT_SPLIT.split(command_nc):
+    for segment in _segments(command):
         m_tool = _GH.search(segment)
         if m_tool and _WORKFLOW_RUN_POINTER.search(segment, m_tool.end()):
             pointer_hit = True

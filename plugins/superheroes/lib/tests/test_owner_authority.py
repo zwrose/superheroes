@@ -34,6 +34,27 @@ _RECOGNISES_EACH_SHAPE = [
     ("git push origin feature-branch:main", "push-to-default"),
     ("git push origin master", "push-to-default"),
     ("git push origin refs/heads/main", "push-to-default"),
+    # Invariant A — redirection operators are not segment boundaries (#1000).
+    ("gh 2>&1 pr merge 123", "merge-pr"),
+    ("gh 2>&1 release create v1.0.0", "release"),
+    ("gh 2>&1 workflow run deploy.yml", "run-workflow"),
+    ("gh 1>&2 api -X PUT repos/o/r/pulls/42/merge", "merge-api"),
+    ("git 2>&1 push --force origin feature", "force-push"),
+    ("git push 2>&1 --force origin feature", "force-push"),
+    ("git 2>&1 push origin main", "push-to-default"),
+    ("gh &>out pr merge 123", "merge-pr"),
+    ("gh &>>out pr merge 123", "merge-pr"),
+    ("gh >&out pr merge 123", "merge-pr"),
+    ("gh >|out pr merge 123", "merge-pr"),
+    ("gh 2>&- pr merge 123", "merge-pr"),
+    ("gh <&0 pr merge 123", "merge-pr"),
+    # Invariant B — short-option clusters (#1000).
+    ("git push -qf origin feature", "force-push"),
+    ("git push -fq origin feature", "force-push"),
+    ("git push -uvf origin feature", "force-push"),
+    ("git push -4f origin feature", "force-push"),
+    ("git push -f4 origin feature", "force-push"),
+    ("git push -6f origin feature", "force-push"),
 ]
 
 _NONE_FOR_ORDINARY = [
@@ -55,6 +76,8 @@ _NONE_FOR_ORDINARY = [
     "git config --global push.default simple",
     "git config push.default current",
     "gh api repos/o/r/pulls/42/merged",
+    "git push -q origin feature",
+    "gh pr list | grep 'pr merge'",
 ]
 
 
@@ -106,6 +129,63 @@ def test_owner_authority_action_no_regression_census():
         assert oa.owner_authority_action(command) is None
 
 
+# Invariant A — redirection operators are not segment boundaries (#1000).
+_REDIRECTION_CENSUS = [
+    ("gh 2>&1 pr merge 123", "merge-pr"),
+    ("gh 2>&1 release create v1.0.0", "release"),
+    ("gh 2>&1 workflow run deploy.yml", "run-workflow"),
+    ("gh 1>&2 api -X PUT repos/o/r/pulls/42/merge", "merge-api"),
+    ("git 2>&1 push --force origin feature", "force-push"),
+    ("git push 2>&1 --force origin feature", "force-push"),
+    ("git 2>&1 push origin main", "push-to-default"),
+    ("gh &>out pr merge 123", "merge-pr"),
+    ("gh &>>out pr merge 123", "merge-pr"),
+    ("gh >&out pr merge 123", "merge-pr"),
+    ("gh >|out pr merge 123", "merge-pr"),
+    ("gh 2>&- pr merge 123", "merge-pr"),
+    ("gh <&0 pr merge 123", "merge-pr"),
+]
+
+
+@pytest.mark.parametrize("command,action", _REDIRECTION_CENSUS)
+def test_owner_authority_action_redirection_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+# Invariant B — short-option clusters (#1000).
+_CLUSTER_CENSUS = [
+    ("git push -qf origin feature", "force-push"),
+    ("git push -fq origin feature", "force-push"),
+    ("git push -uvf origin feature", "force-push"),
+    ("git push -4f origin feature", "force-push"),
+    ("git push -f4 origin feature", "force-push"),
+    ("git push -6f origin feature", "force-push"),
+    # Quoted-flag preservation — must keep classifying after cluster builder (#1000).
+    ("git push \"-f\" origin feature", "force-push"),
+    ("git push '-f' origin feature", "force-push"),
+    ("git push \"-qf\" origin feature", "force-push"),
+]
+
+
+@pytest.mark.parametrize("command,action", _CLUSTER_CENSUS)
+def test_owner_authority_action_cluster_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+# Intended cross-row shifts — pinned so reviewers see the before/after (#1000).
+_INTENDED_SHIFTS = [
+    # force-push row precedes push-to-default; -qf on main is force-push, not push-to-default.
+    ("git push -qf origin main", "push-to-default", "force-push"),
+    # merge-pr row precedes run-workflow once redirection exposes the merge segment.
+    ("gh 2>&1 pr merge 123 && gh workflow run deploy.yml", "run-workflow", "merge-pr"),
+]
+
+
+@pytest.mark.parametrize("command,before,after", _INTENDED_SHIFTS)
+def test_owner_authority_action_intended_shift(command, before, after):
+    assert oa.owner_authority_action(command) == after
+
+
 @pytest.mark.parametrize("command", [
     "git push -u origin superheroes/x && git checkout main",
     "git push origin superheroes/x ; echo on main",
@@ -144,6 +224,24 @@ def test_owner_authority_action_bounded_runtime():
     command = "gh " + "api " * 30000
     start = time.monotonic()
     assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+def test_owner_authority_action_bounded_runtime_cluster_flag():
+    import time
+    command = "git push -" + "f" * 30000 + "1"
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) == "force-push"
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+def test_owner_authority_action_bounded_runtime_redirection():
+    import time
+    command = "gh " + "2>&1 " * 30000 + "pr merge 1"
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) == "merge-pr"
     elapsed = time.monotonic() - start
     assert elapsed < 2.0
 
