@@ -272,10 +272,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
-> `object-without-findings`, `object-findings-not-a-list`, `array-not-all-objects`,
-> `findings-hollow-member`, `no-parseable-json`, `empty-stdout`, or `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> `object-without-findings`, `object-both-payload-keys`, `object-findings-not-a-list`,
+> `object-verdicts-not-a-list`, `array-not-all-objects`, `findings-hollow-member`,
+> `verdicts-hollow-member`, `placeholder-literal-refusal`, `no-parseable-json`, `empty-stdout`, or
+> `prompt-echo-only`), `topLevelKeys` (a list of strings,
 > populated only when
-> `parsed` is `object-without-findings`), and `keysTruncated` (bool; signals the key list was
+> `parsed` is `object-without-findings` or `object-both-payload-keys`), and `keysTruncated` (bool; signals the key list was
 > capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
 > vacuous forfeit and on success.
 >
