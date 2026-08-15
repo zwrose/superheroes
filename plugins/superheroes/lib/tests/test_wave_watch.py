@@ -1369,7 +1369,7 @@ def test_gh_child_env_preserves_auth_vars(tmp_path, monkeypatch):
     assert seen[0].get("GH_CONFIG_DIR") == "/some/config/dir"
 
 
-def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
+def test_at_deadline_skips_gh_discloses_unsampled_pr_signal(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     calls = []
@@ -1391,7 +1391,7 @@ def test_at_deadline_skips_gh_no_degradation(tmp_path, monkeypatch):
     )
     assert result["event"] == "timer"
     assert calls == []
-    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE not in result["degraded"]
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE in result["degraded"]
 
 
 def test_pr_change_after_deadline_not_returned(tmp_path, monkeypatch):
@@ -1477,3 +1477,428 @@ def test_cli_event_exit_zero(tmp_path, monkeypatch):
     out = json.loads(proc.stdout.strip())
     assert out["ok"] is True
     assert out["event"] == "timer"
+
+
+# --- WO-A: precedence tuple, riders, loop ------------------------------------
+
+
+def test_precedence_reorder_bite_proof(tmp_path, monkeypatch):
+    """Reordering PRECEDENCE must change the emitted event when signals co-occur."""
+    repo = _init_repo(tmp_path / "repo")
+    dead_pid = 888888888
+    live_pid = os.getpid()
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 2)
+    ll.append(repo, _reserved("lane-dead", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-dead", pid=dead_pid))
+    ll.append(repo, _reserved("lane-stale", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-stale", pid=live_pid))
+    hb.stamp(
+        repo,
+        state="working",
+        phase="watch",
+        launch_id="lane-stale",
+        stale_after_seconds=1,
+        now=time.time() - 60,
+    )
+    assert hb.read_heartbeat(repo, "lane-stale")["class"] == "stale"
+
+    reordered = (
+        ww.EVENT_LANE_STALE,
+        ww.EVENT_LANE_TERMINAL,
+        ww.EVENT_LANE_BLOCKED,
+        ww.EVENT_BUILDER_EXITED,
+        ww.EVENT_PR_SET_CHANGED,
+        ww.EVENT_TIMER,
+    )
+    monkeypatch.setattr(ww, "PRECEDENCE", reordered)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+    assert result["event"] == "lane-stale"
+    assert result["event"] != "builder-exited"
+
+
+def test_missed_interval_replay_spacing(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    eval_count = [0]
+    sleep_calls = [0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        sleep_calls[0] += 1
+        if sleep_calls[0] > 200:
+            raise RuntimeError("sleep ceiling")
+        clock[0] += duration
+
+    def gh_run(argv, **kwargs):
+        eval_count[0] += 1
+        clock[0] += 3.5
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=10, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert eval_count[0] <= 3
+
+
+def test_internal_error_detail_class_only(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+
+    def raiser(repo_root, env=None):
+        raise RuntimeError("secret-path /tmp/boom")
+
+    monkeypatch.setattr(ww.ll, "read", raiser)
+    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1)
+    assert result["ok"] is False
+    assert result["reason"] == "internal-error"
+    assert result["detail"] == "RuntimeError"
+    assert "secret-path" not in json.dumps(result)
+
+
+def test_started_lane_never_stamped_degradation(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-a", pid=os.getpid()))
+    result = ww.run(repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run)
+    assert result["event"] == "timer"
+    assert ww.DEGRADATION_LANE_NEVER_STAMPED in result["degraded"]
+
+
+def test_terminal_before_pr_arm_no_pr_signal_unavailable(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _setup_live_lane(repo, tmp_path, monkeypatch, stamp_state="handback")
+    result = ww.run(repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run)
+    assert result["event"] == "lane-terminal"
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE not in result["degraded"]
+
+
+def test_pr_skip_subsecond_no_failure_token(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    calls = []
+    mono_calls = [0]
+
+    def mono():
+        mono_calls[0] += 1
+        if mono_calls[0] == 1:
+            return 0.0
+        return 1.0
+
+    def gh_run(argv, **kwargs):
+        calls.append(kwargs.get("timeout"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=60,
+        monotonic=mono, sleep=lambda d: None, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert calls == []
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE in result["degraded"]
+
+
+def test_pr_skip_after_baseline_stays_clean(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    calls = [0]
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_run(argv, **kwargs):
+        calls[0] += 1
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert ww.DEGRADATION_PR_SIGNAL_UNAVAILABLE not in result["degraded"]
+
+
+def test_gh_timeout_ceiling_when_remaining_large(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    timeouts = []
+
+    def mono():
+        return clock[0]
+
+    def fake_sleep(duration):
+        clock[0] += duration
+
+    def gh_run(argv, **kwargs):
+        timeouts.append(kwargs.get("timeout"))
+        return _noop_gh_run(argv, **kwargs)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=60, interval_seconds=1,
+        monotonic=mono, sleep=fake_sleep, gh_run=gh_run,
+    )
+    assert result["event"] == "timer"
+    assert len(timeouts) >= 1
+    assert timeouts[0] == 30.0
+
+
+def _bounded_sleep_ceiling():
+    calls = [0]
+
+    def sleep_fn(duration):
+        calls[0] += 1
+        if calls[0] > 200:
+            raise RuntimeError("loop sleep ceiling")
+
+    return sleep_fn
+
+
+def test_loop_continues_through_timers_then_exits(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    sequence = [
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "lane-terminal", "batchId": "batch-982",
+         "degraded": [], "launchId": "lane-a", "launches": []},
+    ]
+    idx = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        if idx[0] >= len(sequence):
+            raise RuntimeError("run_fn exhausted")
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["event"] == "lane-terminal"
+    assert result["arms"] == 3
+
+
+def test_loop_exits_on_refusal_mid_loop(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    sequence = [
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": False, "reason": "ledger-unreadable", "batchId": "batch-982"},
+    ]
+    idx = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-unreadable"
+    assert result["arms"] == 2
+
+
+@pytest.mark.parametrize("bad_value", [0, -1, True, 1.5])
+def test_loop_refuses_max_total_seconds_invalid(tmp_path, monkeypatch, bad_value):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ww.loop(
+        repo, "batch-982", max_total_seconds=bad_value,
+        sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == ww.REFUSAL_MAX_TOTAL_SECONDS_INVALID
+    assert result["arms"] == 0
+
+
+def test_loop_max_total_emits_last_timer(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    clock = [0.0]
+    arm_windows = []
+
+    def mono():
+        return clock[0]
+
+    def run_fn(repo_root, batch_id, *, max_seconds, **kwargs):
+        arm_windows.append(max_seconds)
+        clock[0] += max_seconds
+        return {
+            "ok": True,
+            "event": "timer",
+            "batchId": batch_id,
+            "degraded": [],
+        }
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=10, max_total_seconds=15,
+        monotonic=mono, run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["event"] == "timer"
+    assert result["arms"] == 2
+    assert arm_windows == [10, 5]
+
+
+def test_loop_ledger_latch_across_arms(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    store_root = _ledger_env(tmp_path, monkeypatch)
+    _precreate_repo_store_dir(repo, store_root)
+    ll.declare_batch(repo, "batch-982", 1)
+    ll.append(repo, _reserved("lane-a", "batch-982", ["plugins/superheroes/lib"], repo))
+    ll.append(repo, _started("lane-a", pid=os.getpid()))
+    hb.stamp(repo, state="working", phase="watch", launch_id="lane-a")
+    calls = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        calls[0] += 1
+        kwargs = dict(kwargs)
+        kwargs["gh_run"] = _noop_gh_run
+        kwargs["sleep"] = lambda d: None
+        if calls[0] == 1:
+            return ww.run(repo_root, batch_id, **kwargs)
+        import shutil
+        shutil.rmtree(store_root)
+        return ww.run(repo_root, batch_id, **kwargs)
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=1,
+        run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["ok"] is False
+    assert result["reason"] == "ledger-unreadable"
+    assert result["arms"] == 2
+
+
+def test_loop_pr_change_across_arm_boundary(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    calls = [0]
+
+    def gh_run(argv, **kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            body = [{"number": 1}]
+        else:
+            body = [{"number": 1}, {"number": 99}]
+        return subprocess.CompletedProcess(
+            argv, 0, stdout=json.dumps(body), stderr="",
+        )
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        kwargs = dict(kwargs)
+        kwargs["gh_run"] = gh_run
+        kwargs["sleep"] = lambda d: None
+        return ww.run(repo_root, batch_id, **kwargs)
+
+    result = ww.loop(
+        repo, "batch-982", max_seconds=1, interval_seconds=60,
+        run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["event"] == "pr-set-changed"
+    assert result["prsAdded"] == [99]
+    assert result["arms"] >= 2
+
+
+def test_loop_log_one_line_per_timer_arm(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_path = str(tmp_path / "watch.log")
+    clock = [0.0]
+    sequence = [
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "lane-terminal", "batchId": "batch-982",
+         "degraded": [], "launchId": "x", "launches": []},
+    ]
+    idx = [0]
+
+    def mono():
+        return clock[0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        clock[0] += 1.0
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", log_path=log_path, monotonic=mono,
+        run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["event"] == "lane-terminal"
+    lines = open(log_path, encoding="utf-8").read().strip().split("\n")
+    assert len(lines) == 2
+    entry0 = json.loads(lines[0])
+    assert entry0["arm"] == 1
+    assert entry0["elapsedSeconds"] == 1.0
+    assert entry0["result"]["event"] == "timer"
+    entry1 = json.loads(lines[1])
+    assert entry1["arm"] == 2
+    assert entry1["elapsedSeconds"] == 2.0
+
+
+def test_loop_log_unwritable_survives_to_final_result(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    sequence = [
+        {"ok": True, "event": "timer", "batchId": "batch-982", "degraded": []},
+        {"ok": True, "event": "builder-exited", "batchId": "batch-982",
+         "degraded": [], "pids": [1], "launches": [{"launchId": "a", "pid": 1}]},
+    ]
+    idx = [0]
+
+    def run_fn(repo_root, batch_id, **kwargs):
+        result = dict(sequence[idx[0]])
+        idx[0] += 1
+        return result
+
+    result = ww.loop(
+        repo, "batch-982", log_path="/nonexistent/dir/watch.log",
+        run_fn=run_fn, sleep=_bounded_sleep_ceiling(),
+    )
+    assert result["event"] == "builder-exited"
+    assert ww.DEGRADATION_LOG_UNWRITABLE in result["degraded"]
+
+
+def test_cli_loop_event_exit_zero(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    proc = _run_cli([
+        "loop", "--repo-root", repo, "--batch", "batch-982",
+        "--max-seconds", "1", "--interval-seconds", "1",
+        "--max-total-seconds", "1",
+    ])
+    assert proc.returncode == 0
+    out = json.loads(proc.stdout.strip())
+    assert out["ok"] is True
+    assert out["event"] == "timer"
+
+
+def test_cli_loop_refusal_exit_one(tmp_path):
+    proc = _run_cli([
+        "loop", "--repo-root", str(tmp_path / "missing"), "--batch", "b",
+        "--max-seconds", "1", "--interval-seconds", "1",
+    ])
+    assert proc.returncode == 1
+    out = json.loads(proc.stdout.strip())
+    assert out["ok"] is False
