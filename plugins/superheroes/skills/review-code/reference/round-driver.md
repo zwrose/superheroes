@@ -181,7 +181,7 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 
 | Seat kind | Landing path | What the seat writes |
 | --- | --- | --- |
-| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | Full `seat-result/1` envelope (stub header + payload) |
+| **Engine** (`codex`/`cursor`) | `.../landing/P/skey.aK.json` | **Orchestrator** writes the full `seat-result/1` envelope (stub header + payload) from the folded `dispatch-review` stdout result; the engine seat emits JSON on stdout only |
 | **Host** (`claude` native subagent) | `.../landing/P/skey.aK.payload.json` | Payload only; driver wraps with the stub at ingest |
 
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy

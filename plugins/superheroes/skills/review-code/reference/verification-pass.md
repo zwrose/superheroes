@@ -138,7 +138,7 @@ print(json.dumps(verification.merge_and_rank(survivors, grouping)))
 
 `verification.merge_and_rank(survivors, grouping)` applies the grouping under a **coverage
 guarantee**: every survivor's staged id appears exactly once in the output; invalid or missing
-grouping fails open to unmerged survivors; **synthesis drops nothing**. Merged groups combine
+grouping falls open to unmerged survivors; **synthesis drops nothing**. Merged groups combine
 bodies and take the highest severity; the merged `verdict` is **CONFIRMED only when a member at
 the merged (highest) severity is CONFIRMED-with-evidence** — computed **order-independently**, so
 model-supplied member order can't flip GATE-eligibility, and carrying that member's receipt (the
@@ -208,5 +208,5 @@ but it may never silently discard or quietly demote a blocker.
 
 `lib/verification.py` owns the standalone review-code compile path described here.
 `lib/loop_synthesis.py` remains the fold for the eval-only native JS panel and the doc-loop
-acceptance-only path. The staged-id / echo-verbatim discipline is shared: `stage_ids` assigns
+acceptance-only path (`skills/review-code/reference/synthesis-pass.md`). The staged-id / echo-verbatim discipline is shared: `stage_ids` assigns
 `v0..vN` here; every judge echoes ids verbatim; consumers match on exact string `id`.

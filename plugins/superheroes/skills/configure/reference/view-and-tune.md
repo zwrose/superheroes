@@ -81,7 +81,7 @@ action that owns it, leaving the rest of the calibration untouched:
   `$ROOT_DIR/rubric/review-discipline.md`), and on explicit confirm
   append it under a `## Review discipline` heading. Idempotent — if a `Review discipline`
   heading already exists in the project's `CLAUDE.md`, report that and change nothing.
-- **Switch the storage mode** → the confirmed switch below.
+- **Flip the storage mode** → the confirmed flip below.
 - **Change the per-role engine** (reviewer / implementer / brief-check / pilot) → the engine step in
   `skills/configure/reference/set-up.md` §4.5 (availability → preference → show-authorization → test-dispatch),
   writing `enginePreferences` through `core_md` (keys `reviewer`, `implementation`, `briefCheck`,
@@ -303,9 +303,9 @@ action that owns it, leaving the rest of the calibration untouched:
   `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command exits 0
   either way, so check `action`, not exit status.
 
-## 3 — Switch the storage mode (FR-10), always showing what will move
+## 3 — Flip the storage mode (FR-10), always showing what will move
 
-The switch is the only destructive action — always show **exactly what will move** and require an
+The flip is the only destructive action — always show **exactly what will move** and require an
 explicit confirm before doing anything. First preview, then (on confirm) execute:
 
 ```bash
@@ -317,18 +317,18 @@ python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|glo
 ```
 
 - **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns) and
-  **every definition document**. A switch into the repo newly publishes all of it to collaborators —
+  **every definition document**. A flip into the repo newly publishes all of it to collaborators —
   say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
   relocated.
 - **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath
   it), warn the owner — naming the work and what could break — and proceed only on an explicit
   confirm. v2 has no machine-readable in-flight signal (the spine's lease store was retired with the
   execution spine, #478), so `configure_route.work_in_flight('.')` always reports no known in-flight
-  work — rely on your own judgment about what's mid-flight before switching. This is a strong
+  work — rely on your own judgment about what's mid-flight before flipping. This is a strong
   warning, not a hard block.
 - **Switch to the mode already in effect (FR-11):** reported as already in that mode; no change.
 - **Destination unwritable (UFR-6):** an `execute` result of `blocked` means the destination could
   not be written — report exactly what it needs; the project stays in its prior mode with nothing
   removed from the source.
-- **Interrupted switch:** finished or backed out automatically by the Step-1 `recover` on the next
+- **Interrupted flip:** finished or backed out automatically by the Step-1 `recover` on the next
   run (UFR-1) — every file ends up in exactly one location.

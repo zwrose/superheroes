@@ -218,8 +218,9 @@ nudge (already surfaced in Step 2). See CONVENTIONS §2.1 (layout) and §2.2 (fo
 7. Write the profile; bump `updated:` and refresh `signals` + `rubric-version` +
    `plugin` (set `rubric-version` to the engine's current value, clearing any
    drift detected in step 4). **Preserve the `nudge-ack` map** (carry the existing
-   acks forward unchanged). Flip `status` `provisional → stable` if the profile is
-   now complete.
+   acks forward unchanged). Flip `status` `provisional → confirmed` when the reconcile
+   was completed interactively with a real verify story (the same predicate step 4b uses for
+   `confirmed` vs `provisional`).
 
 ## Common mistakes
 
