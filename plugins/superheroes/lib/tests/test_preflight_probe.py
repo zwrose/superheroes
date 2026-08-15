@@ -972,12 +972,12 @@ def test_preflight_run_includes_dispatch_vocab_probe(monkeypatch, capsys):
 
 def test_model_no_op_argv_cursor_grok_dispatch_token():
     import engine_adapter
-    argv = pp.model_no_op_argv("cursor", "cursor-grok-4.5", "high")
+    argv = pp.model_no_op_argv("cursor", "cursor-grok-4.6", "xhigh")
     expected = tuple(engine_adapter.build_argv(
-        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5"}))
+        "cursor", "review", "xhigh", {"engine_model": "cursor-grok-4.6"}))
     assert argv == expected
     assert argv == (
-        "cursor-agent", "--model", "cursor-grok-4.5-high", "-p", "--trust",
+        "cursor-agent", "--model", "cursor-grok-4.6-xhigh", "-p", "--trust",
         "--mode", "plan", "--output-format", "stream-json")
 
 
@@ -1014,7 +1014,7 @@ def test_needed_configs_for_review_tiers_omits_claude():
     configs = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex", "cursor"])
     assert "claude" not in configs
     assert configs["codex"] == [("gpt-5.6-sol", "xhigh"), ("gpt-5.6-terra", "high")]
-    assert configs["cursor"] == [("cursor-grok-4.5", "high")]
+    assert configs["cursor"] == [("cursor-grok-4.6", "xhigh")]
 
 
 def test_composition_liveness_cursor_both_models_ok_is_live():
@@ -1024,7 +1024,7 @@ def test_composition_liveness_cursor_both_models_ok_is_live():
         calls.append(list(argv))
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
-    needed = {"cursor": [("composer-2.5", None), ("cursor-grok-4.5", "high")]}
+    needed = {"cursor": [("composer-2.5", None), ("cursor-grok-4.6", "xhigh")]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["cursor"]["live"] is True
     assert all(m["ok"] for m in result["cursor"]["models"].values())
@@ -1038,11 +1038,11 @@ def test_composition_liveness_cursor_grok_fails_not_live():
             return SimpleNamespace(returncode=1, stdout="", stderr="grok unavailable")
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
-    needed = {"cursor": [("composer-2.5", None), ("cursor-grok-4.5", "high")]}
+    needed = {"cursor": [("composer-2.5", None), ("cursor-grok-4.6", "xhigh")]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["cursor"]["live"] is False
     assert result["cursor"]["models"]["composer-2.5"]["ok"] is True
-    assert result["cursor"]["models"]["cursor-grok-4.5"]["ok"] is False
+    assert result["cursor"]["models"]["cursor-grok-4.6"]["ok"] is False
 
 
 def test_composition_liveness_codex_both_ok_is_live():
@@ -1153,7 +1153,7 @@ def test_composition_liveness_hardened_dispatch_cursor():
             return SimpleNamespace(returncode=1, stdout="", stderr="positional prompt")
         return SimpleNamespace(returncode=0, stdout="READY", stderr="")
 
-    needed = {"cursor": [("cursor-grok-4.5", "high")]}
+    needed = {"cursor": [("cursor-grok-4.6", "xhigh")]}
     result = pp.composition_liveness(needed, run=_run)
     assert result["cursor"]["live"] is True
     assert "READY" in captured["input"]
@@ -1194,7 +1194,7 @@ def test_probe_argv_builders_contain_no_positional_prompt():
         ("cross_vendor", pp.cross_vendor_no_op_argv("codex")),
         ("cross_vendor", pp.cross_vendor_no_op_argv("cursor")),
         ("model_no_op", pp.model_no_op_argv("codex", "gpt-5.6-sol", "xhigh")),
-        ("model_no_op", pp.model_no_op_argv("cursor", "cursor-grok-4.5", "high")),
+        ("model_no_op", pp.model_no_op_argv("cursor", "cursor-grok-4.6", "xhigh")),
         ("model_no_op", pp.model_no_op_argv("codex", "gpt-5.6-terra", "high")),
         ("model_no_op", pp.model_no_op_argv("cursor", "composer-2.5", None)),
     ]

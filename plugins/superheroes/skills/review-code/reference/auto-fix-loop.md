@@ -352,7 +352,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Cross-vendor control probe (#668).** For each **distinct cross-vendor vendor** among the
 > panel's seats that ran with zero findings on that vendor's seat(s), run the planted-defect control
 > probe **once per such vendor** before treating those seats as clean. Use that vendor's own seat
-> model and effort from the seat map.
+> model and effort from the seat map. A seat whose registry config is **effort-less** — one the model
+> registry records with no effort at all — is expressed by **omitting `--effort`** (#963), never by an
+> effort string: `probe`'s `--effort` is optional and defaults to `None`, the registry's own value.
+> Passing an empty `--effort ""` is not the same thing and still refuses at
+> `engine-config:invalid-model-effort`, so the loop omits the flag rather than passing an empty one.
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -360,9 +364,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > for VENDOR in "${CROSS_VENDOR_VENDORS[@]}"; do
 >   SEAT_ENGINE_MODEL="${SEAT_MODEL_BY_VENDOR[${VENDOR}]}"
 >   SEAT_EFFORT="${SEAT_EFFORT_BY_VENDOR[${VENDOR}]}"
+>   EFFORT_ARGS=()
+>   if [ -n "${SEAT_EFFORT}" ]; then EFFORT_ARGS=(--effort "${SEAT_EFFORT}"); fi
 >   CANARY_RESULTS+=("$(
 >     python3 -B "${ROOT_DIR}/lib/seat_canary.py" probe \
->       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" --effort "${SEAT_EFFORT}" \
+>       --engine "${VENDOR}" --engine-model "${SEAT_ENGINE_MODEL}" "${EFFORT_ARGS[@]}" \
 >       --repo-root "${REPO_ROOT}"
 >   )")
 > done
@@ -729,8 +735,9 @@ carries `{vendor, model, effort, tier, family, source}`:
   standalone `agents/grounding-seat.md` seat on its assigned vendor is a follow-up that must first
   stage the PR body as an input the seat can Read.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
-  first-party models are ONE family**: composer and grok both carry the `xai` family (#651,
-  owner-ratified 2026-07-26). A `cursor` review seat is therefore NOT independent of a
+  first-party models are ONE family**: the token-efficient implementer and grok judge models both
+  carry the `xai` independence-accounting key (#651, owner-ratified 2026-07-26; post-acquisition
+  affiliation as of 2026-08-14 — **behaviour unchanged**). A `cursor` review seat is therefore NOT independent of a
   cursor/composer implementer — a composer-made diff stamps `authorFamily = xai`, so the seat map
   excludes the maker family from **rotation** onto every panel seat — all five lens seats
   (`architecture-reviewer`, `code-reviewer`, `security-reviewer`, `test-reviewer`,

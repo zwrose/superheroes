@@ -23,20 +23,31 @@ _MODELS: dict[str, dict[str, dict]] = {
     },
     # family is an independence-accounting key (panel maker exclusion), not vendor attribution.
     # Both cursor first-party models share ONE family so a ladder rung-up does not change the
-    # maker family (#651, owner-ratified 2026-07-26; CONVENTIONS §7.5). The string "xai" is a
-    # historical label for that family — not a claim that composer is an xAI model. A new cursor
-    # first-party model added here inherits this family by design; one that should be independent
-    # of composer needs an owner ruling — splitting the family changes panel-exclusion behaviour.
+    # maker family (#651, owner-ratified 2026-07-26; CONVENTIONS §7.5). Post-acquisition (2026-08-14)
+    # cursor and xAI sit under one corporate roof, so the `xai` key reflects that affiliation while
+    # remaining an accounting label, not a dispatch input. A new cursor first-party model added here
+    # inherits this family by design; one that should be independent of composer needs an owner
+    # ruling — splitting the family changes panel-exclusion behaviour.
     "cursor": {
-        "composer-2.5": {"family": "xai", "dispatch": "composer-2.5", "override_only": False},
-        "cursor-grok-4.5": {"family": "xai", "dispatch": "cursor-grok-4.5", "override_only": False},
+        "composer-2.5": {
+            "family": "xai",
+            "dispatch": "composer-2.5",
+            "override_only": False,
+            "efforts": (),
+        },
+        "cursor-grok-4.6": {
+            "family": "xai",
+            "dispatch": "cursor-grok-4.6",
+            "override_only": False,
+            "efforts": ("xhigh",),
+        },
     },
 }
 
 _EFFORT_ENUM: dict[str, tuple[str, ...]] = {
     "claude": ("low", "medium", "high", "xhigh"),
     "codex": ("none", "low", "medium", "high", "xhigh", "max"),
-    "cursor": ("low", "medium", "high"),
+    "cursor": ("low", "medium", "high", "xhigh"),
 }
 OVERRIDE_ONLY_EFFORTS: dict[str, tuple[str, ...]] = {"codex": ("max",)}
 
@@ -54,7 +65,7 @@ _LADDERS: dict[str, tuple[tuple[str, str | None], ...]] = {
     ),
     "cursor": (
         ("composer-2.5", None),
-        ("cursor-grok-4.5", "high"),
+        ("cursor-grok-4.6", "xhigh"),
     ),
 }
 
@@ -72,27 +83,27 @@ _MATRIX: dict[str, dict[str, tuple[str, str | None] | None]] = {
     "doc-reviser": {
         "claude": ("opus-5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
-        "cursor": ("cursor-grok-4.5", "high"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer": {
         "claude": ("sonnet-5", "high"),
         "codex": ("gpt-5.6-terra", "high"),
-        "cursor": ("cursor-grok-4.5", "high"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "reviewer-deep": {
         "claude": ("opus-5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
-        "cursor": ("cursor-grok-4.5", "high"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "verifier": {
         "claude": ("opus-5", "high"),
         "codex": ("gpt-5.6-sol", "high"),
-        "cursor": ("cursor-grok-4.5", "high"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "brief-check": {
         "claude": ("opus-5", "xhigh"),
         "codex": ("gpt-5.6-sol", "xhigh"),
-        "cursor": ("cursor-grok-4.5", "high"),
+        "cursor": ("cursor-grok-4.6", "xhigh"),
     },
     "synthesis": {
         "claude": ("opus-5", "high"),
@@ -249,7 +260,7 @@ _CODEX_PEER_BY_CLAUDE = {
 }
 
 _COMPOSER_MODEL = "composer-2.5"
-_GROK_MODEL = "cursor-grok-4.5"
+_GROK_MODEL = "cursor-grok-4.6"
 
 
 def vendors() -> tuple[str, ...]:
@@ -288,6 +299,16 @@ def effort_enum(vendor: str) -> tuple[str, ...]:
     return _EFFORT_ENUM.get(vendor, ())
 
 
+def _allowed_efforts(vendor: str, model_id: str) -> tuple[str, ...] | None:
+    """Per-model effort constraint when the row declares `efforts`; else vendor enum."""
+    rec = _MODELS.get(vendor, {}).get(model_id)
+    if rec is None:
+        return None
+    if "efforts" in rec:
+        return tuple(rec["efforts"])
+    return _EFFORT_ENUM.get(vendor, ())
+
+
 def dispatch_token(vendor: str, model_id: str, effort: str | None = None) -> str | None:
     if not is_registered(vendor, model_id):
         return None
@@ -296,12 +317,17 @@ def dispatch_token(vendor: str, model_id: str, effort: str | None = None) -> str
     if vendor == "codex":
         return model_id
     if vendor == "cursor":
-        if model_id == _COMPOSER_MODEL:
-            return _COMPOSER_MODEL
-        if model_id == _GROK_MODEL:
-            if effort is None:
+        rec = _MODELS[vendor][model_id]
+        allowed = _allowed_efforts(vendor, model_id)
+        if allowed is None:
+            return None
+        if not allowed:
+            if effort is not None:
                 return None
-            return f"{_GROK_MODEL}-{effort}"
+            return rec["dispatch"]
+        if effort is None or effort not in allowed:
+            return None
+        return f"{rec['dispatch']}-{effort}"
     return None
 
 
@@ -319,12 +345,18 @@ def validate_config(
     rec = vendor_models[model_id]
     if rec.get("override_only") and not allow_override_only:
         return False, f"model {model_id!r} is override-only"
-    if vendor == "cursor" and model_id == _COMPOSER_MODEL:
-        if effort is not None:
-            return False, f"model {model_id!r} does not take an effort level"
-        return True, None
-    enum = _EFFORT_ENUM.get(vendor, ())
-    if effort not in enum:
+    allowed = _allowed_efforts(vendor, model_id)
+    if allowed is None:
+        return False, f"model {model_id!r} is not registered for vendor {vendor!r}"
+    if "efforts" in rec:
+        if not allowed:
+            if effort is not None:
+                return False, f"model {model_id!r} does not take an effort level"
+        elif effort is None:
+            return False, f"effort is required for model {model_id!r}"
+        elif effort not in allowed:
+            return False, f"effort {effort!r} is not valid for model {model_id!r}"
+    elif effort not in allowed:
         return False, f"effort {effort!r} is not valid for vendor {vendor!r}"
     override_efforts = OVERRIDE_ONLY_EFFORTS.get(vendor, ())
     if effort in override_efforts and not allow_override_only:
@@ -548,15 +580,23 @@ def parse_dispatch_token(vendor: str, token: str) -> tuple[str, str | None] | No
             return (token, None)
         return None
     if vendor == "cursor":
-        if token == _COMPOSER_MODEL:
-            return (_COMPOSER_MODEL, None)
-        if token == _GROK_MODEL:
-            return None
-        prefix = f"{_GROK_MODEL}-"
-        if token.startswith(prefix):
-            effort = token[len(prefix) :]
-            if effort in _EFFORT_ENUM["cursor"]:
-                return (_GROK_MODEL, effort)
+        for model_id, rec in _MODELS["cursor"].items():
+            dispatch = rec["dispatch"]
+            if token == dispatch:
+                allowed = _allowed_efforts(vendor, model_id)
+                if allowed is None:
+                    return None
+                if not allowed:
+                    return (model_id, None)
+                return None
+            allowed = _allowed_efforts(vendor, model_id)
+            if not allowed:
+                continue
+            prefix = f"{dispatch}-"
+            if token.startswith(prefix):
+                effort = token[len(prefix) :]
+                if effort in allowed:
+                    return (model_id, effort)
         return None
     return None
 

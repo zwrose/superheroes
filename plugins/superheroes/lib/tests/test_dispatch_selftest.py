@@ -127,7 +127,7 @@ def _cursor_model_ids_from_registry():
 
 
 def test_cursor_sanctioned_model_ids_exactly():
-    assert _cursor_model_ids_from_registry() == {"composer-2.5", "cursor-grok-4.5"}
+    assert _cursor_model_ids_from_registry() == {"composer-2.5", "cursor-grok-4.6"}
 
 
 def test_cursor_build_argv_refuses_third_party_model_ids():

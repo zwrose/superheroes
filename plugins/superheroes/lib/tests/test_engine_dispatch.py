@@ -517,7 +517,7 @@ def test_unrunnable_engine_config_zero_attempts(tmp_path):
 def test_unrunnable_engine_config_unknown_claude_tier_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
-        "cursor", model="cursor-grok-4.5-high", effort="high",
+        "cursor", model="cursor-grok-4.6-xhigh", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )
@@ -532,7 +532,7 @@ def test_unrunnable_engine_config_effort_conflict_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     res = ED.dispatch_review(
         "cursor", model=None, effort="low",
-        engine_model="cursor-grok-4.5-high",
+        engine_model="cursor-grok-4.6-xhigh",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
         build_view=_fake_build_view(tmp_path),
     )

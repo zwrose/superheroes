@@ -396,7 +396,7 @@ def test_dispatch_calibration_rows_brief_check_reports_effective_provider_model(
     rows = EP.dispatch_calibration_rows({"briefCheck": "cursor"}, tiers)
     by_role = {r["role"]: r for r in rows}
     assert by_role["brief-check"]["engine"] == "cursor"
-    assert by_role["brief-check"]["model"] == "cursor-grok-4.5-high"
+    assert by_role["brief-check"]["model"] == "cursor-grok-4.6-xhigh"
 
     # {} -> brief-check fails open to its codex default (see _ROLE_DEFAULT_ENGINE)
     rows = EP.dispatch_calibration_rows({}, tiers)
@@ -720,10 +720,10 @@ def test_dispatch_calibration_rows_cursor_models_differ_per_role():
     rows = EP.dispatch_calibration_rows(_CURSOR_ALL_ROLES_PREFS, _CALIBRATION_TIERS)
     by_role = {r["role"]: r for r in rows}
     assert by_role["implementer"]["model"] == "composer-2.5"
-    assert by_role["brief-check"]["model"] == "cursor-grok-4.5-high"
+    assert by_role["brief-check"]["model"] == "cursor-grok-4.6-xhigh"
     parts = _parse_review_code_model_cell(by_role["review-code"]["model"])
-    assert parts["reviewer"] == "cursor-grok-4.5-high"
-    assert parts["reviewer-deep"] == "cursor-grok-4.5-high"
+    assert parts["reviewer"] == "cursor-grok-4.6-xhigh"
+    assert parts["reviewer-deep"] == "cursor-grok-4.6-xhigh"
     assert by_role["implementer"]["model"] != by_role["brief-check"]["model"]
 
 
@@ -991,9 +991,9 @@ def test_build_argv_result_cursor_accepts_first_party_engine_model_pin():
     assert res["reason"] is None
     assert res["argv"][res["argv"].index("--model") + 1] == "composer-2.5"
     grok = EA.build_argv_result(
-        "cursor", "review", "high", {"engine_model": "cursor-grok-4.5"})
+        "cursor", "review", "xhigh", {"engine_model": "cursor-grok-4.6"})
     assert grok["reason"] is None
-    assert grok["argv"][grok["argv"].index("--model") + 1] == "cursor-grok-4.5-high"
+    assert grok["argv"][grok["argv"].index("--model") + 1] == "cursor-grok-4.6-xhigh"
 
 
 def test_dispatch_calibration_rows_tolerates_non_dict_prefs_and_tiers():
