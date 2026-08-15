@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.27.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.26.0...superheroes-v0.27.0) (2026-08-15)
+
+
+### Features
+
+* **superheroes:** launcher pre-creates the build worktree and starts the session inside it ([#979](https://github.com/zwrose/superheroes/issues/979)) ([1432aa4](https://github.com/zwrose/superheroes/commit/1432aa480f979187ae5eb1726c6fe6a502fdb5ff))
+* **superheroes:** owner-authority allowlist — grantable ref shape for branch-preview workflow dispatches ([#987](https://github.com/zwrose/superheroes/issues/987)) ([879bdf7](https://github.com/zwrose/superheroes/commit/879bdf7a8ba1b8ffc23e02d32b87a22a6ce7c3e7))
+* **superheroes:** wave_watch — ledger-driven single-shot wave watcher ([#988](https://github.com/zwrose/superheroes/issues/988)) ([7357fe1](https://github.com/zwrose/superheroes/commit/7357fe175dffa5004a22c18f057429f04f8da90d))
+
+
+### Bug Fixes
+
+* **superheroes:** dispatch-review result contract — canonical schema, loud rejects, readable clean verdicts, and the demonstrated cause of empty investigated records ([#984](https://github.com/zwrose/superheroes/issues/984)) ([4cc0395](https://github.com/zwrose/superheroes/commit/4cc0395b2e62c2ae654af8e8013840eea553a73c))
+* **superheroes:** owner-authority gate classifies gh/git commands with inherited flags ([#997](https://github.com/zwrose/superheroes/issues/997)) ([3883d35](https://github.com/zwrose/superheroes/commit/3883d35cfae3a6f2c4911beef3e872427d356dfd))
+* **superheroes:** round-driver certification path — record/submit fence, manifest disclosure, durable-path docs (release re-statement of [#983](https://github.com/zwrose/superheroes/issues/983)) ([#994](https://github.com/zwrose/superheroes/issues/994)) ([404be8f](https://github.com/zwrose/superheroes/commit/404be8f139af0b7fa67f1b1220fcfa3363f0e37c))
+
+
+### Chores
+
+* **superheroes:** align agent-facing language with writing-for-agents principles ([#998](https://github.com/zwrose/superheroes/issues/998)) ([5beef05](https://github.com/zwrose/superheroes/commit/5beef050e40bb0f350c8582b8fc4f5e941d5d87a))
+* **superheroes:** doctrine/consumer batch for 0.27.0 — wave_watch arm-pointer + LEDGERS row, §10.7 sentence, naming gloss, gated-strings as-data restore ([#999](https://github.com/zwrose/superheroes/issues/999)) ([012d617](https://github.com/zwrose/superheroes/commit/012d617bd6ad03aa52cc96898199d0fda076436c))
+* **superheroes:** hygiene 9 — commit-graph pin split, four untested guards pinned, lock reason fidelity, de-timing ([#986](https://github.com/zwrose/superheroes/issues/986)) ([2fc0761](https://github.com/zwrose/superheroes/commit/2fc0761012d2a007111908d1f7df85c53aab9bd0))
+* **superheroes:** hygiene C — doctrine/prose family ([#753](https://github.com/zwrose/superheroes/issues/753)) ([#980](https://github.com/zwrose/superheroes/issues/980)) ([5ae50ab](https://github.com/zwrose/superheroes/commit/5ae50abe3918b1786dbf89d27f426e68785c0a23))
+* **superheroes:** hygiene D — guards-and-validators family, [#699](https://github.com/zwrose/superheroes/issues/699) riders 17, 19-21, 23, 29-31 ([#981](https://github.com/zwrose/superheroes/issues/981)) ([e95f662](https://github.com/zwrose/superheroes/commit/e95f662eb9033d618239fbee8cc1e02158c9cf69))
+* **superheroes:** relocate the perceivability list + dispatch-preflight checks to showrunner reference ([#703](https://github.com/zwrose/superheroes/issues/703)) ([#985](https://github.com/zwrose/superheroes/issues/985)) ([985a2b7](https://github.com/zwrose/superheroes/commit/985a2b7f1caeb87730b954f1e434be69fb07901e))
+
 ## [0.26.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.25.0...superheroes-v0.26.0) (2026-08-12)
 
 
