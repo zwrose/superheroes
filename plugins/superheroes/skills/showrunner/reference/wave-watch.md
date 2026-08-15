@@ -211,6 +211,12 @@ When an event fires, co-occurring lower-precedence lane signals from the same in
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
 siblings. A `timer` result has no `alsoObserved`.
 
+When **`pr-set-changed`** sends you to read a lane's CI, select the run by **workflow name and head
+sha** — never `gh run list --limit 1`. The newest run on a branch is whatever workflow happened to
+fire last, which is not necessarily the one whose green you are claiming: a watcher taking
+`--limit 1` read a preview-anchor sync and wrongly called CI green. The canonical statement lives in
+`skills/showrunner/reference/vet-receipt.md`.
+
 `loop` results — both ok and refusal — carry `arms`, the number of internal arms run in that
 invocation. `run` results never carry `arms`.
 

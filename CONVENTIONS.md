@@ -711,8 +711,7 @@ PRs excluded, force-push never). **The launcher also provisions the build worktr
 `launch` creates it before spawning — one per launch, detached at the premise's base commit,
 under `SUPERHEROES_WORKTREES_ROOT` when set and `~/.superheroes-worktrees` otherwise — records
 its path and the builder's session id on the `reserved` record, and starts the session with that
-worktree as its working
-directory, never the primary checkout. A target path that already exists on disk, or that git
+worktree as its working directory, never the primary checkout. A target path that already exists on disk, or that git
 still registers, is a **collision**: the launch refuses (`launch-worktree-collision`) rather than
 reuse a checkout another build may be holding. The `own-worktree` standing ruling stays in the
 composed prompt as defense in depth — a builder that never sees the primary checkout cannot
