@@ -10,6 +10,7 @@ import stat
 import time
 
 import pilot_contract
+import pilot_paths
 import pilot_slot
 
 POLICY_SCHEMA_VERSION = 1
@@ -536,18 +537,7 @@ def _paths_overlap(left, right):
 def _is_same_or_ancestor(ancestor, descendant):
     # bite-axis: path ancestry — descendant path components must share the ancestor prefix; used
     # to detect symlink escapes and policy-root overlap.
-    ancestor_parts = _path_parts(ancestor)
-    descendant_parts = _path_parts(descendant)
-    if len(ancestor_parts) > len(descendant_parts):
-        return False
-    return ancestor_parts == descendant_parts[: len(ancestor_parts)]
-
-
-def _path_parts(path):
-    parts = os.path.realpath(path).split(os.sep)
-    if parts and parts[-1] == "":
-        parts = parts[:-1]
-    return parts
+    return pilot_paths.is_inside(descendant, ancestor)
 
 
 def _ancestors_including_self(path):

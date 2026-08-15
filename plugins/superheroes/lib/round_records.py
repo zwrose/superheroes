@@ -385,12 +385,14 @@ def atomic_write_json(path, obj):
 
 
 def read_json(path):
-    """(obj, error) — `error` is `"missing"`, `"unparseable"`, or None. Never raises."""
+    """(obj, error) — `error` is `"missing"`, `"unparseable"`, `"not-utf-8"`, or None. Never raises."""
     try:
         with open(path, encoding="utf-8") as fh:
             raw = fh.read()
     except OSError:
         return None, "missing"
+    except UnicodeDecodeError:
+        return None, "not-utf-8"
     try:
         return json.loads(raw), None
     except ValueError:
@@ -964,7 +966,7 @@ def mint_session_id(session_dir):
     """
     path = os.path.join(session_dir, META_FILE)
     meta, err = read_json(path)
-    if err == "unparseable":
+    if err in ("unparseable", "not-utf-8"):
         return None, "meta-unparseable"
     if err is None and not isinstance(meta, dict):
         return None, "meta-unparseable"

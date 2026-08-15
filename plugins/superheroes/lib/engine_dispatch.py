@@ -756,9 +756,10 @@ def _acquire_worktree_lease(cwd_real, run_dir_real):
         file_lock.release(lease_path)
         return False, "lease-record-failed", None, lease_path
     if reclaimed:
+        # acquire_with_reason returns (True, reason) only when reclaim succeeded with a reason.
         _journal_append(run_dir_real, {
             "kind": "lease-reclaimed",
-            "reason": reclaim_reason or "unknown",
+            "reason": reclaim_reason,
             "at": time.time(),
         })
     if not _journal_append(run_dir_real, {

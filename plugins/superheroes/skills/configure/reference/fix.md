@@ -95,5 +95,5 @@ Only this explicit owner-confirm confirms the profile; merely viewing it never d
 ## Headless posture (FR-17)
 
 While running with no human to answer, do not perform any fix that needs an owner decision — a
-rebind conflict, an owner-choice migration, or a storage-mode switch. Record the situation as a
+rebind conflict, an owner-choice migration, or a storage-mode flip. Record the situation as a
 provisional, un-applied fix, apply only what is mechanical, and continue without blocking.

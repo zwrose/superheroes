@@ -7,8 +7,6 @@ headings.
 
 **Residual blind spots:**
 
-- clauses restated in ``skills/workhorse/SKILL.md`` and ``agents/test-reviewer.md`` are **not**
-  guarded;
 - the clause and pointer rosters are **hand-maintained**;
 - heading **order and position** in the home are unguarded — headings are matched as whole-document
   line membership — and that is deliberate, because no consumer cites relative order;
@@ -98,9 +96,44 @@ _CLAUSE_ROWS = [
         "copy_holder": "agents/implementer.md",
         "copy_holder_section": "## The rules",
     },
+    {
+        "clause": "names the bite-proof it expects",
+        "home_section": "## Who owes what",
+        "copy_holder": "skills/workhorse/SKILL.md",
+        "copy_holder_section": "## 6. Decompose into work orders",
+    },
+    {
+        "clause": "per guarded element",
+        "home_section": "## The record",
+        "copy_holder": "skills/workhorse/SKILL.md",
+        "copy_holder_section": "## 8. Verify — re-run every receipt yourself",
+    },
+    {
+        "clause": "A green run is equally consistent with",
+        "home_section": "## The obligation",
+        "copy_holder": "skills/workhorse/SKILL.md",
+        "copy_holder_section": "## When you're tempted",
+    },
+    {
+        "clause": "with the detector unedited",
+        "home_section": "## The record",
+        "copy_holder": "skills/workhorse/SKILL.md",
+        "copy_holder_section": "## When you're tempted",
+    },
+    {
+        "clause": "through the path the test uses",
+        "home_section": "## When the proof cannot be produced",
+        "copy_holder": "agents/test-reviewer.md",
+        "copy_holder_section": "## What to Flag",
+    },
+    {
+        "clause": "owed disclosure",
+        "home_section": "## Who owes what",
+        "copy_holder": "agents/test-reviewer.md",
+        "copy_holder_section": "## Named test-smell taxonomy",
+    },
 ]
 
-_POINTER_ROSTER_EXCLUDED = frozenset({_HOME})  # home prose names filename, not consumer pointer
 
 
 def _read(rel):
@@ -266,8 +299,10 @@ def _walk_pointer_carrying_sections():
         for name in files:
             if name.endswith(".md"):
                 rel = os.path.relpath(os.path.join(root, name), PLUGIN)
-                if rel not in _POINTER_ROSTER_EXCLUDED:
-                    found |= _sections_with_pointer(rel, _read(rel))
+                # CHANGELOG quotes historical doctrine paths; it is not a consumer surface.
+                if rel == "CHANGELOG.md":
+                    continue
+                found |= _sections_with_pointer(rel, _read(rel))
     with open(os.path.join(REPO_ROOT, "CONVENTIONS.md"), encoding="utf-8") as fh:
         text = fh.read()
         if _POINTER in text:

@@ -29,7 +29,7 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" recover --cwd .
 ```
 
-A `recovered` result means an interrupted switch was finished or backed out — note it for the
+A `recovered` result means an interrupted flip was finished or backed out — note it for the
 owner. While a migration is recovering, the passive drift nudge stays quiet (it is recovery in
 progress, not drift).
 
@@ -46,7 +46,7 @@ print(json.dumps(configure_route.route('.', interactive=True)))
 
 Read the `path` and surface the plain-language `reasons`. `INTERACTIVE` is `false` on a headless
 run (no human to answer) — pass it through so the libs take the provisional / out-of-repo / strict
-posture and never switch storage unattended (FR-14/FR-17). Then run the matching path:
+posture and never flip storage unattended (FR-14/FR-17). Then run the matching path:
 
 - **`set-up`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/set-up.md`.
 - **`fix`** → follow `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/configure/reference/fix.md`.
@@ -64,7 +64,7 @@ tunable via `view-and-tune.md` §2. Model-tier overrides (including explicit `fa
 
 | Mistake | Fix |
 | --- | --- |
-| Skipping the Step-1 recover | A crashed switch is invisible until recover runs first — run it every time. |
-| Re-deciding a recorded storage mode during set-up/fix | The mode is sticky (FR-11); only the explicit, confirmed switch on the tune menu changes it. |
-| Switching storage unattended | A headless run never switches (FR-14); it records the owner-choice fix un-applied and continues. |
+| Skipping the Step-1 recover | A crashed flip is invisible until recover runs first — run it every time. |
+| Re-deciding a recorded storage mode during set-up/fix | The mode is sticky (FR-11); only the explicit, confirmed flip on the tune menu changes it. |
+| Flipping storage unattended | A headless run never flips (FR-14); it records the owner-choice fix un-applied and continues. |
 | Editing the owner's build config to add a verify command | Propose it for the owner to add — `configure` never edits their build config (UFR-5). |

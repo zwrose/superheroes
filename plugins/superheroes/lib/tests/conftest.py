@@ -71,7 +71,8 @@ def _isolate_store_root(monkeypatch, tmp_path):
     own WORKHORSE_/SUPERHEROES_ env (or delenvs them) still wins — it applies after this fixture.
 
     Also pin the managed-worktree root: without this, any test (or node smoke inheriting os.environ)
-    that reaches buildtree does a real `git worktree add` into the developer's ~/.superheroes-worktrees
+    that reaches launcher.create_build_worktree does a real `git worktree add` into the developer's
+    ~/.superheroes-worktrees
     — one orphaned checkout per unique tmp-repo path, accumulating every run and never cleaned. Isolating
     it here (mirroring the store root) keeps every test's worktrees inside tmp_path. A test that sets its
     own SUPERHEROES_WORKTREES_ROOT still wins (applies after this fixture).

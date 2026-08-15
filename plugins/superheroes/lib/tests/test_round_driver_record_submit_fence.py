@@ -596,6 +596,97 @@ def test_legacy_hand_path_session_can_still_fold(tmp_path):
     assert orphan_rows[0].get("seats") == expected_seats, orphan_rows[0]
 
 
+def test_orphan_journal_not_repeated_on_later_hand_submit_same_round(tmp_path):
+    """Orphan disclosure journals once at the submit that found records — not every later hand fold."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+    state = _state(session_dir)
+    state["_submitUsed"] = True
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    before_orphan_journal = len(
+        [e for e in round_driver.read_journal(session_dir)
+         if e.get("outcome") == "record-orphans-ignored"])
+    panel_phase, panel_attempt = pend["phase"], pend["attempt"]
+    out = round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                  round_driver.state_hash(state), _panel_hand_artifact(session_dir))
+    assert out["ok"] is True, out
+    orphan_rows = [e for e in round_driver.read_journal(session_dir)
+                   if e.get("outcome") == "record-orphans-ignored"]
+    assert len(orphan_rows) == before_orphan_journal + 1, orphan_rows
+    first_row = orphan_rows[-1]
+    assert first_row["phase"] == panel_phase and first_row["attempt"] == panel_attempt, first_row
+    expected_seats = sorted(round_driver._slot_label(s, o) for s, o in slots)
+    assert first_row.get("seats") == expected_seats, first_row
+
+    assert round_driver.cmd_next(session_dir)["ok"] is True
+    state = _state(session_dir)
+    pend = state["pending"]
+    assert pend["phase"] == round_driver.P_VERIFIERS
+    out = round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                  round_driver.state_hash(state), _verifier_hand_artifact())
+    assert out["ok"] is True, out
+    orphan_rows = [e for e in round_driver.read_journal(session_dir)
+                   if e.get("outcome") == "record-orphans-ignored"]
+    assert len(orphan_rows) == before_orphan_journal + 1, orphan_rows
+    assert orphan_rows[-1]["phase"] == panel_phase
+    assert orphan_rows[-1]["attempt"] == panel_attempt
+
+
+def test_record_orphans_ignored_on_receipt_degraded(tmp_path):
+    """Hand submit with durable orphans discloses on the terminal receipt degraded channel."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+    state = _state(session_dir)
+    state["_submitUsed"] = True
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    out = round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                  round_driver.state_hash(state), _panel_hand_artifact(session_dir))
+    assert out["ok"] is True, out
+    receipt = round_driver.build_receipt(_state(session_dir), session_dir)
+    degraded = "\n".join(receipt["degraded"])
+    assert "record-orphans-ignored (round" in degraded
+    round_entry = next(r for r in receipt["rounds"] if r["round"] == pend["round"])
+    assert round_entry.get("recordOrphansIgnored")
+
+
+def test_record_orphans_ignored_atomic_when_fold_aborts(tmp_path, monkeypatch):
+    """Orphan disclosure and state key land together — neither without a successful submit-accept."""
+    session_dir, gitdir, head_path = _bootstrap(tmp_path)
+    pend, slots, _sweep = _land_panel_and_sweep(session_dir, gitdir, head_path)
+    state = _state(session_dir)
+    state["_submitUsed"] = True
+    round_driver.save_state(session_dir, state)
+    state = _state(session_dir)
+    before_journal = len(round_driver.read_journal(session_dir))
+
+    real_begin = round_driver.round_commit.begin
+
+    def _abort_submit_accept_commit(session_dir_arg, kind, **kwargs):
+        commit = real_begin(session_dir_arg, kind, **kwargs)
+        if kind == "submit-accept":
+            real_run = commit.run
+
+            def _abort_run():
+                raise RuntimeError("commit-aborted-for-test")
+
+            commit.run = _abort_run
+        return commit
+
+    monkeypatch.setattr(round_driver.round_commit, "begin", _abort_submit_accept_commit)
+    with pytest.raises(RuntimeError, match="commit-aborted-for-test"):
+        round_driver.cmd_submit(session_dir, pend["phase"], pend["attempt"],
+                                round_driver.state_hash(state),
+                                _panel_hand_artifact(session_dir))
+    disk_state = _state(session_dir)
+    assert not (disk_state.get("rounds") or {}).get(str(pend["round"]), {}).get(
+        "recordOrphansIgnored")
+    orphan_rows = [e for e in round_driver.read_journal(session_dir)[before_journal:]
+                   if e.get("outcome") == "record-orphans-ignored"]
+    assert not orphan_rows
+
+
 # Owner-gate phases park by design — outside the no-dead-end fold-path guarantee
 # (reference/round-driver.md § record-submit interleave / no dead ends).
 _OWNER_GATE_PHASES = frozenset({round_driver.P_JUDGMENT, round_driver.P_STALL})

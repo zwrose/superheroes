@@ -123,6 +123,11 @@ _HOLDER_CLAUSES = {
     ],
 }
 
+_EXPECTED_HOLDER_CLAUSE_COUNTS = {
+    "skills/showrunner/SKILL.md": 5,
+    "skills/workhorse/SKILL.md": 3,
+}
+
 _FENCE_GUARDED_FILES = (
     _HOME,
     "skills/showrunner/SKILL.md",
@@ -201,6 +206,16 @@ def _validate_copy_holder_key_sets():
                 f"charter {rel!r} has no clauses pinned in _HOLDER_CLAUSES "
                 f"or _SHARED_COPY_HOLDER_CLAUSES"
             )
+        expected_holder_count = _EXPECTED_HOLDER_CLAUSE_COUNTS.get(rel)
+        if expected_holder_count is None:
+            raise AssertionError(
+                f"charter {rel!r} missing from _EXPECTED_HOLDER_CLAUSE_COUNTS"
+            )
+        if holder_count != expected_holder_count:
+            raise AssertionError(
+                f"charter {rel!r}: holder-clause count drift — "
+                f"expected {expected_holder_count}, got {holder_count}"
+            )
 
 
 def _check_copy_holder_clauses(read_text=None):
@@ -244,6 +259,29 @@ def _synthetic_home_with_all_clauses_except(out_of_section_clause):
     return "\n".join(lines)
 
 
+def _synthetic_home_missing_shared_copy_holder_clause(entry):
+    """Build home text with every _HOME_CLAUSES pin but omit one shared copy-holder clause."""
+    clause = entry["text"]
+    home_section = entry["home_section"]
+    if clause in {c for clauses in _HOME_CLAUSES.values() for c in clauses}:
+        raise ValueError(
+            f"clause {clause!r} is also pinned in _HOME_CLAUSES — "
+            "use _synthetic_home_with_all_clauses_except for that probe"
+        )
+    lines = []
+    for subsection, clauses in _HOME_CLAUSES.items():
+        lines.append(subsection)
+        for pinned in clauses:
+            lines.append(f"Contains {pinned}.")
+    section_text = _file_section(_HOME, home_section)
+    if clause not in section_text:
+        raise AssertionError(
+            f"shared copy-holder probe clause no longer in real home section "
+            f"{home_section!r}: {clause!r}"
+        )
+    return "\n".join(lines)
+
+
 def _synthetic_showrunner_with_all_clauses_except(out_of_section_clause):
     """Build synthetic showrunner text with every pinned clause in-section except one."""
     section = _COPY_HOLDER_SECTIONS["skills/showrunner/SKILL.md"]
@@ -283,8 +321,10 @@ def test_recovery_clauses_present_in_copy_holders():
 
 def test_shared_copy_holder_clause_must_appear_in_home():
     """A clause declared shared must exist in the home — not only in copy-holders."""
-    missing_clause = _SHARED_COPY_HOLDER_CLAUSES["skills/workhorse/SKILL.md"][0]["text"]
-    synthetic_text = _synthetic_home_with_all_clauses_except(missing_clause)
+    # Use a showrunner-only shared clause: the _HOME_CLAUSES loop does not pin it, so
+    # this negative proves the shared binding loop rather than the older home loop.
+    entry = _SHARED_COPY_HOLDER_CLAUSES["skills/showrunner/SKILL.md"][0]
+    synthetic_text = _synthetic_home_missing_shared_copy_holder_clause(entry)
 
     def read_text(rel):
         if rel == _HOME:
@@ -293,7 +333,7 @@ def test_shared_copy_holder_clause_must_appear_in_home():
 
     with pytest.raises(
         AssertionError,
-        match=r"no longer appears in authoritative home",
+        match=r"shared copy-holder clause no longer appears in authoritative home",
     ):
         _check_home_clauses(read_text)
 
@@ -398,5 +438,22 @@ def test_negative_copy_holder_clause_missing_from_section():
     with pytest.raises(
         AssertionError,
         match=r"holder clause missing from .+ \(section ## Your duties\)",
+    ):
+        _check_copy_holder_clauses(read_text)
+
+
+def test_negative_shared_copy_holder_clause_missing_from_section():
+    out_of_section_clause = "both halves run, neither replaces the other"
+    synthetic_text = _synthetic_showrunner_with_all_clauses_except(out_of_section_clause)
+    showrunner_path = "skills/showrunner/SKILL.md"
+
+    def read_text(rel):
+        if rel == showrunner_path:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    with pytest.raises(
+        AssertionError,
+        match=r"shared clause missing from .+ \(section ## Your duties\)",
     ):
         _check_copy_holder_clauses(read_text)

@@ -4130,11 +4130,12 @@ def test_diff_stall_after_partial_write(tmp_path, monkeypatch):
     try:
         view_root = sv.tempfile.mkdtemp(prefix=sv.SANITIZED_VIEW_DIR_PREFIX)
         sv._materialize_from_tree(repo_real, head_sha, view_root, time.monotonic())
-        # Duration assertion removed: load-sensitive flake on heavily-loaded CI.
+        start = time.monotonic()
         with pytest.raises(sv.SanitizedViewError) as exc:
             sv._stage_review_diff(
                 repo_real, head_sha, view_root, base_sha, time.monotonic()
             )
+        assert time.monotonic() - start < 5.0
         assert exc.value.detail in (
             "sanitized-view-diff-failed",
             "sanitized-view-export-timeout",
@@ -4297,7 +4298,10 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
 
 
 def test_review_diff_ancestry_scratch_directory_is_removed(tmp_path, monkeypatch):
-    tmp_base = sv.tempfile.gettempdir()
+    fake_tmp = str(tmp_path / "tmpdir")
+    os.makedirs(fake_tmp)
+    monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
+    tmp_base = fake_tmp
     created = []
 
     real_mkdtemp = sv.tempfile.mkdtemp
@@ -4738,6 +4742,7 @@ def test_stage_review_diff_diff_base_verify_argv_pins_commit_graph_only(
     assert exc.value.detail == "sentinel-reached"
     assert len(recorded) == 1
     argv = recorded[0]
+    assert "rev-parse" in argv
     assert "core.commitGraph=false" in argv
     assert "diff.noprefix=false" not in argv
 
@@ -4745,7 +4750,19 @@ def test_stage_review_diff_diff_base_verify_argv_pins_commit_graph_only(
 def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
     repo, B, _H, _D = _graft_decoy_fixture(tmp_path / "graph-pin")
     recorded = []
+    ls_tree_export_calls = []
+    ls_tree_census_calls = []
     real_run, real_popen, real_ancestry = sv._git_run, sv._git_popen, sv._ancestry_run
+    real_ls_tree_export = sv._git_ls_tree_export
+    real_tree_entries = sv._git_tree_entries
+
+    def wrapping_ls_tree_export(repo_real, head_sha):
+        ls_tree_export_calls.append((repo_real, head_sha))
+        return real_ls_tree_export(repo_real, head_sha)
+
+    def wrapping_tree_entries(repo_real, sha, started):
+        ls_tree_census_calls.append((repo_real, sha, started))
+        return real_tree_entries(repo_real, sha, started)
 
     def classify(argv):
         if "merge-base" in argv:
@@ -4753,12 +4770,7 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
         if "diff" in argv and "--no-ext-diff" in argv:
             return "diff"
         if "ls-tree" in argv:
-            # Export and census enumerators share _CENSUS_CONFIG_OVERRIDES; first
-            # ls-tree during build is export, later ones are review-diff census.
-            if not hasattr(classify, "_ls_tree_n"):
-                classify._ls_tree_n = 0
-            classify._ls_tree_n += 1
-            return "ls-tree-export" if classify._ls_tree_n == 1 else "ls-tree-census"
+            return "ls-tree"
         if "rev-parse" in argv:
             if "--verify" in argv:
                 return "rev-parse-verify"
@@ -4772,14 +4784,18 @@ def test_commit_peeling_paths_pin_commit_graph_off(tmp_path, monkeypatch):
             for i in range(len(argv) - 1)
         )
 
+    monkeypatch.setattr(sv, "_git_ls_tree_export", wrapping_ls_tree_export)
+    monkeypatch.setattr(sv, "_git_tree_entries", wrapping_tree_entries)
     monkeypatch.setattr(sv, "_git_run", lambda *a, **k: (recorded.append(list(a[0])), real_run(*a, **k))[1])
     monkeypatch.setattr(sv, "_git_popen", lambda *a, **k: (recorded.append(list(a[0])), real_popen(*a, **k))[1])
     monkeypatch.setattr(sv, "_ancestry_run", lambda argv, s, cwd=None: (recorded.append(list(argv)), real_ancestry(argv, s, cwd=cwd))[1])
     view = sv.build_sanitized_view(repo, diff_base=B)
     try:
-        required = {"rev-parse-head", "ls-tree-export", "ls-tree-census", "rev-parse-verify", "merge-base", "diff"}
+        required = {"rev-parse-head", "rev-parse-verify", "merge-base", "diff", "ls-tree"}
         seen = {classify(a) for a in recorded}
         assert not required - {k for k in seen if k}
+        assert len(ls_tree_export_calls) >= 1
+        assert len(ls_tree_census_calls) >= 1
         for argv in recorded:
             if classify(argv):
                 assert has_pin(argv)

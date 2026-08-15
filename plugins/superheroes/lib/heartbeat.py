@@ -43,6 +43,7 @@ REASON_ROOT_UNRESOLVED = "heartbeat-root-unresolved"
 REASON_REPO_IDENTITY_UNAVAILABLE = "heartbeat-repo-identity-unavailable"
 REASON_WRITE_FAILED = "heartbeat-write-failed"
 REASON_LEDGER_UNREADABLE = "heartbeat-ledger-unreadable"
+REASON_HEARTBEAT_MISSING = "heartbeat-missing"
 
 _LAUNCH_ID_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _STALE_AFTER_MIN = 1
@@ -370,7 +371,7 @@ def _read_file_classification(repo_root, launch_id, *, env=None, now=None):
             ageSeconds=None,
             staleAfterSeconds=None,
             note=None,
-            reason="heartbeat-missing",
+            reason=REASON_HEARTBEAT_MISSING,
         )
     record, load_reason = _load_record(path)
     if record is None:
