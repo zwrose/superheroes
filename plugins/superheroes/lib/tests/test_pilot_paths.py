@@ -1,4 +1,14 @@
-"""Tests for pilot_paths.py — path containment direction and boundary cases."""
+"""Tests for pilot_paths.py — path containment direction and boundary cases.
+
+**Residual blind spots:**
+
+- this census guards only the ``realpath(path).split(os.sep)`` containment idiom and four
+  remembered helper names (``_is_inside``, ``_is_same_or_ancestor``, ``_path_parts``,
+  ``_path_components``); ``os.path.commonpath`` containment (six call sites across five
+  ``lib/`` modules today) and helpers under other names are explicitly out of reach;
+- the census proves nothing about whether containment logic is correct, only that the
+  idiom is not reimplemented locally outside ``pilot_paths.py``.
+"""
 import ast
 import glob
 import os
@@ -14,9 +24,9 @@ if _LIB not in sys.path:
 
 import pilot_paths  # noqa: E402
 
-_CONTAINMENT_HOME = "pilot_paths.py"
+_REALPATH_SPLIT_HOME = "pilot_paths.py"
 
-# Measured grep census (issue #1005 FIX-7) — pin the set, not a remembered model.
+# Measured grep census (issue #1005 FIX-7, narrowed FIX-9) — pin the realpath+split idiom home.
 _REALPATH_SPLIT_RE = re.compile(r"os\.path\.realpath\([^)]+\)\.split\(os\.sep\)")
 _LOCAL_CONTAINMENT_DEF_RE = re.compile(
     r"def\s+(_is_inside|_is_same_or_ancestor|_path_parts|_path_components)\s*\("
@@ -46,9 +56,9 @@ def _is_delegate_to_pilot_paths(func_source):
     return "pilot_paths.is_inside" in func_source and "_path_components" not in func_source
 
 
-def _containment_census_violations(source_path):
+def _realpath_split_containment_census_violations(source_path):
     basename = os.path.basename(source_path)
-    if basename == _CONTAINMENT_HOME:
+    if basename == _REALPATH_SPLIT_HOME:
         return []
 
     with open(source_path, encoding="utf-8") as fh:
@@ -57,8 +67,8 @@ def _containment_census_violations(source_path):
     violations = []
     if _REALPATH_SPLIT_RE.search(source):
         violations.append(
-            "%s: realpath+split(os.sep) containment idiom (only %s)"
-            % (basename, _CONTAINMENT_HOME)
+            "%s: realpath+split(os.sep) containment idiom (home is %s)"
+            % (basename, _REALPATH_SPLIT_HOME)
         )
 
     if _LOCAL_CONTAINMENT_DEF_RE.search(source):
@@ -78,26 +88,29 @@ def _containment_census_violations(source_path):
                 continue
             if "_path_components" in func_source or _REALPATH_SPLIT_RE.search(func_source):
                 violations.append(
-                    "%s:%d: local containment implementation %s (only %s)"
-                    % (basename, node.lineno, node.name, _CONTAINMENT_HOME)
+                    "%s:%d: local %s reimplements realpath+split(os.sep) containment "
+                    "(home is %s)"
+                    % (basename, node.lineno, node.name, _REALPATH_SPLIT_HOME)
                 )
     return violations
 
 
-def run_containment_census():
+def run_realpath_split_containment_census():
     violations = []
     for path in _lib_py_modules():
-        violations.extend(_containment_census_violations(path))
+        violations.extend(_realpath_split_containment_census_violations(path))
     return violations
 
 
-def test_containment_census_clean():
-    violations = run_containment_census()
-    assert violations == [], "containment census violations:\n" + "\n".join(violations)
+def test_realpath_split_containment_census_clean():
+    violations = run_realpath_split_containment_census()
+    assert violations == [], (
+        "realpath+split(os.sep) containment census violations:\n" + "\n".join(violations)
+    )
 
 
-def test_containment_census_red_on_local_helper(tmp_path):
-    """Bite-axis: a fresh local containment helper must fail the census."""
+def test_realpath_split_census_red_on_realpath_split_idiom(tmp_path):
+    """Bite-axis: leg 1 — realpath+split(os.sep) outside pilot_paths.py must fail the census."""
     decoy = tmp_path / "pilot_decoy_containment.py"
     decoy.write_text(
         "import os\n"
@@ -105,15 +118,46 @@ def test_containment_census_red_on_local_helper(tmp_path):
         "    return os.path.realpath(path).split(os.sep)\n",
         encoding="utf-8",
     )
-    violations = _containment_census_violations(str(decoy))
-    assert violations, "census must flag a throwaway local _path_components implementation"
+    violations = _realpath_split_containment_census_violations(str(decoy))
+    assert violations, "census must flag a throwaway realpath+split(os.sep) implementation"
+    assert any("realpath+split(os.sep) containment idiom" in v for v in violations)
+
+
+def test_realpath_split_census_red_on_leg2_local_helper(tmp_path):
+    """Bite-axis: leg 2 — local helper reimplementation without module-scope realpath+split."""
+    decoy = tmp_path / "pilot_decoy_leg2.py"
+    decoy.write_text(
+        "def _path_components(path):\n"
+        "  parts = []\n"
+        "  for piece in path.split('/'):\n"
+        "    parts.append(piece)\n"
+        "  return parts\n",
+        encoding="utf-8",
+    )
+    violations = _realpath_split_containment_census_violations(str(decoy))
+    assert violations, "census must flag leg-2 local _path_components without realpath+split"
+    assert not any("realpath+split(os.sep) containment idiom (home" in v for v in violations)
+    assert any("local _path_components reimplements realpath+split(os.sep)" in v for v in violations)
+
+
+def test_realpath_split_census_green_on_delegate(tmp_path):
+    """Bite-axis: delegate bodies forwarding to pilot_paths.is_inside must pass."""
+    decoy = tmp_path / "pilot_decoy_delegate.py"
+    decoy.write_text(
+        "import pilot_paths\n"
+        "def _is_inside(path, root):\n"
+        "    return pilot_paths.is_inside(path, root)\n",
+        encoding="utf-8",
+    )
+    violations = _realpath_split_containment_census_violations(str(decoy))
+    assert violations == []
 
 
 def test_split_os_sep_allowlist_disclosed():
     """Every non-home split(os.sep) use outside pilot_paths is explicitly allowlisted."""
     for path in _lib_py_modules():
         basename = os.path.basename(path)
-        if basename == _CONTAINMENT_HOME:
+        if basename == _REALPATH_SPLIT_HOME:
             continue
         with open(path, encoding="utf-8") as fh:
             source = fh.read()

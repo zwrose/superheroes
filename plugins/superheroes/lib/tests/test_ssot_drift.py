@@ -1150,8 +1150,13 @@ def test_vet_receipt_markers_match_conventions_10_7():
 
 _PREFLIGHT_CHARTER_BEGIN = "<!-- launch-doctrine:preflight-charter:begin -->"
 _PREFLIGHT_CHARTER_END = "<!-- launch-doctrine:preflight-charter:end -->"
+# Row semantics (`**title**` + check id + always|conditional) are independent of list-marker spelling.
+_PREFLIGHT_ENUM_ROW_BODY = (
+    r"\*\*[^*]+\*\*\s*\(`[a-z][-a-z0-9]*`,\s*(?:always|conditional)\)"
+)
+# Any CommonMark list marker may prefix a pasted charter enumeration row.
 _PREFLIGHT_ENUM_ITEM = re.compile(
-    r"^\s*(?:\d+\.|[-*])\s+\*\*[^*]+\*\*\s*\(`[a-z][-a-z0-9]*`,\s*(?:always|conditional)\)",
+    r"^\s*(?:\d+[.)]|[*+\-])\s+" + _PREFLIGHT_ENUM_ROW_BODY,
     re.MULTILINE,
 )
 _PREFLIGHT_CHECK_ID = re.compile(r"`([a-z][-a-z0-9]*)`")
@@ -1245,6 +1250,30 @@ def test_dispatch_preflight_charter_single_home_guard():
         "showrunner/SKILL.md cites no dispatch-preflight check id at all — the pointer to the "
         "home enumeration is missing"
     )
+
+
+def test_preflight_enum_item_all_marker_forms():
+    """Each accepted CommonMark list marker must match a pasted charter enumeration row."""
+    body = "**Account** (`quota`, always)"
+    cases = (
+        "1. " + body,
+        "1) " + body,
+        "- " + body,
+        "* " + body,
+        "+ " + body,
+    )
+    for line in cases:
+        assert _PREFLIGHT_ENUM_ITEM.search(line), line
+
+
+def test_preflight_enum_form_ids_catches_stale_inline_citation():
+    """axis: enum_form_ids — inline (`id`, always|conditional) prose outside the home set must fail."""
+    home_ids = {"quota", "real-id"}
+    charter = "Duty text cites (`phantom-id`, always) without pasting the enumeration."
+    enum_form_ids = set(re.findall(r"\(`([^`]+)`,\s*(?:always|conditional)\)", charter))
+    stale = enum_form_ids - home_ids
+    with pytest.raises(AssertionError):
+        assert not stale
 
 
 def test_showrunner_preflight_count_prose_matches_home():
