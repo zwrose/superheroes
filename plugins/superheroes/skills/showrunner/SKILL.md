@@ -312,6 +312,20 @@ above).
      bodies for the **Follow-ups for the advisor** heading (the workhorse charter standardizes it;
      `<!-- superheroes:build-record -->` is the grep anchor it never had) and reconcile against the
      board. Standing duty, no machinery.
+     **Install the contract's distilled preamble at the top of the collector issue body, above the
+     items, and refresh it when it has drifted or is missing.** The canonical snippet lives in
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md` under
+     `## The collector preamble — canonical snippet`, delimited by the marker
+     `<!-- superheroes:owner-decisions-contract -->` so a refresh replaces the preamble **without
+     touching the items beneath it**. Nothing mechanical fires on a chat message, so the contract
+     cannot be gated where it is used — collector reconciliation is **already a mandatory vet-time
+     step**, so a copy at the top of the collector rides a read path that already exists: the advisor
+     cannot enumerate the items without the contract in front of them. Data-path placement standing in
+     for enforcement, and it is the **strongest available check**, not a strong one. The vet-receipt
+     contract drifted until it gained mechanical observability; this is the analogous move for a
+     surface with no artifact to stamp. When the collector pointer cannot be resolved, the preamble
+     duty is recorded as a **disclosed degradation** in the vet receipt, exactly like the existing
+     pending-items rule in this bullet — never a silent skip, and **never** a second collector.
    - A PR that adds a **gate, hook, or enforcement mechanism** must name, in its brief, the
      ratified precondition that unlocks it and the evidence it is met — **a missing citation is a
      finding in its own right**; any project must carry that rule. When the project being vetted is
@@ -463,6 +477,18 @@ above).
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.
+   **Owner-decisions delivery — read before you open the thread.** About to deliver open decisions to
+   the owner, read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
+   **first**, and do not reconstruct the shape from memory. That file carries the owner-needed filter
+   with stated grounds, the per-item spine, follow-up economics, and the delivery mechanics — chat
+   prose, stable numbering, two batches — without this charter restating them. This duty needs a shape
+   at all because the full-rigor format was **requested by the owner ~10+ times** across advisor
+   sessions 2026-07 → 2026-08 rather than delivered by default, and the inverse failure —
+   over-filtering — appeared too: the owner became the backstop for delivery quality on exactly the
+   surface the covenant says they must never backstop. The filter's *why it is yours* ground is this
+   duty's two tests, applied per item and **written down**, not re-derived silently.
+   `/superheroes:discuss-open-decisions` is the owner's keystroke for the same contract on demand; it
+   does not replace this standing duty.
 6. **Coordinate releases and drive the merge train.** The covenant's
    promise 1 governs — approval never delegates; merge-command **execution** is delegable only where
    a mechanical per-merge approval checkpoint exists on that host or path; release PRs and
