@@ -207,7 +207,15 @@ def main(argv):
     p = sub.add_parser("probe")
     p.add_argument("--engine", required=True, choices=("codex", "cursor"))
     p.add_argument("--engine-model", required=True)
-    p.add_argument("--effort", required=True)
+    # Optional, defaulting to None (#963): the registry's cursor implementer/code-fixer config is
+    # effort-LESS — ("composer-2.5", None) — and no effort STRING can express that, so a required
+    # --effort made every cursor probe of it refuse at engine-config:invalid-model-effort before the
+    # engine was contacted. Omitting the flag now passes effort=None through to the seat path, which
+    # is exactly the registry's value. This narrows nothing: the config is still validated downstream
+    # by model_registry.validate_config, so omitting --effort for a model that REQUIRES one (codex,
+    # cursor-grok-4.6) still refuses with the same token. There is deliberately no none-token —
+    # codex's effort enum contains a literal "none" that means minimal reasoning, not absent.
+    p.add_argument("--effort", default=None)
     p.add_argument("--repo-root", required=True)
     p.add_argument("--timeout", type=int, default=300)
     args = ap.parse_args(argv)
