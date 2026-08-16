@@ -130,9 +130,13 @@ charter covers **full** and **light**.
   genuinely ambiguous — a "ready" issue where you cannot tell what *done* means — **stop and
   report to the owner** (park). Never guess the requirements.
 
-When the routed issue's body quotes register text, run the register-check at **build intake**,
-before the brief, as part of reading the route; a fail is a **park** — you do not build against
-a drifted quote, because the quoted text is the contract you are graded on. Detail:
+When the routed issue is a **register-consuming child** — an epic child of a package that has a
+register, or a single-issue child standing in for one under FR-36 — run the register-check at
+**build intake** before the brief, whether or not the body contains a quoted block; a body with
+zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
+derived from the issue alone, the route names the register and child token for you to pass. **A
+non-zero exit blocks** the build — on `fail` **park**; on `undecided` **park**, exactly like
+`fail`. Detail:
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
 
 **Launch-prompt discipline.** Your launch prompt — the message this build session is started with,

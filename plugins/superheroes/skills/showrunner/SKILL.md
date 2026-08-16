@@ -84,9 +84,14 @@ above).
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
-   When an issue being filed **quotes register text** — an epic child quoting its epic's
-   register, or a single-issue child standing in for one — run the register-check against the
-   filed body **before filing**, and fix the body rather than filing a drifted quote. Detail:
+   When an issue being filed is a **register-consuming child** — an epic child of a package that
+   has a register, or a single-issue child standing in for one under FR-36 — run the register-check
+   against the filed body **before filing**, whether or not the body contains a quoted block; a body
+   with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
+   filing a drifted or incomplete quote. **A non-zero exit blocks** filing — `undecided` blocks
+   until the inputs are readable and the child token is recognized, exactly like `fail`. Where
+   applicability cannot be derived from the issue alone, the route names the register and child
+   token at routing for the builder to pass. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
@@ -112,9 +117,10 @@ above).
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
-   At an epic **package read's verification pass**, the register-to-child quote agreement is
-   re-checked with the same script, per-child, across **both** directions, and a fail is a
-   blocking package-read finding. Detail:
+   At an epic **package read's verification pass**, re-run the register-check per
+   **register-consuming child** across **both** directions, whether or not each body contains a
+   quoted block. On `fail`, record a blocking package-read finding. **A non-zero exit blocks**
+   verified — `undecided` blocks exactly like `fail`. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Mark each issue's route — **build-ready** (the builder
    goes straight to the brief)
