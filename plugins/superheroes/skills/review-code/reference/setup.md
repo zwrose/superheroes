@@ -101,9 +101,13 @@ IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 
 **What `--pins` does and does not do (#1039).** A pin value is `{vendor, model?, effort?}`; a **bare
 string is the documented shorthand** for `{"vendor": "<string>"}` and resolves down the identical
-honorability path. Any other value shape — null, number, bool, list — and a pin map that is not
-itself an object are **refused by name**: compose exits non-zero printing `pins-invalid:<seat>` (or
-`pins-invalid` for the map), never a traceback and never a silently dropped pin. **Pinning one seat
+honorability path. Any other **pin value shape** — null, number, bool, list — and a **non-null** pin
+map that is not itself an object are **refused by name**: compose exits non-zero printing
+`pins-invalid:<seat>` (or `pins-invalid` for the map), never a traceback and never a silently dropped
+pin. Two boundaries the refusal does **not** cover: `--pins null` is an **absent** pin map, not a
+refusal (it composes normally, unpinned); and the refusal grades the **value shape** only, so a
+malformed field *inside* an object pin — a `vendor` that is not a string, say — is still the
+pre-#1039 behaviour, not a named refusal. **Pinning one seat
 does not hold the others** — every unpinned seat still rotates over the live vendors on the run's
 seed, so an operator excluding a second maker family must pin **every** seat they need held; there
 is no hold-the-rest knob.

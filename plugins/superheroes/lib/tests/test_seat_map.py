@@ -1803,3 +1803,7 @@ def test_review_code_reference_documents_pin_shorthand_and_rerotation():
     assert "pins-invalid:<seat>" in text
     assert "bare\nstring is the documented shorthand" in text or "bare string is the documented shorthand" in text
     assert "Pinning one seat\ndoes not hold the others" in text or "Pinning one seat does not hold the others" in text
+    # the two boundaries the refusal does NOT cover must stay documented (review round 1, both Minor)
+    flat = " ".join(text.split())
+    assert "`--pins null` is an **absent** pin map, not a refusal" in flat
+    assert "the refusal grades the **value shape** only" in flat
