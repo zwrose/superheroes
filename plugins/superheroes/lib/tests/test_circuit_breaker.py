@@ -307,6 +307,47 @@ def test_audit_breaker_two_consecutive_malformed_outcomes_stall():
     assert res["reason"] == "audit-stall"
 
 
+def test_audit_breaker_criterion2_window_stall_stall_clean_clean():
+    """Criterion 2 evaluates only the last two rounds — historical stall pairs do not permanently halt."""
+    ident = "f.py::leak"
+    rounds = [
+        a_round(1, [nd(ident)]),
+        a_round(2, [nd(ident)]),
+        a_round(3, [dis(ident)]),
+        a_round(4, [dis(ident)]),
+    ]
+    res_at_2 = check_audit_breaker(rounds[:2], 7)
+    assert res_at_2["halt"] is True
+    assert res_at_2["reason"] == "audit-stall"
+    res_at_4 = check_audit_breaker(rounds, 7)
+    assert res_at_4["halt"] is False
+
+
+def test_audit_breaker_criterion2_alternating_stall_clean_never_halts():
+    ident = "f.py::leak"
+    rounds = [
+        a_round(1, [nd(ident)]),
+        a_round(2, [dis(ident)]),
+        a_round(3, [nd(ident)]),
+        a_round(4, [dis(ident)]),
+    ]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is False
+
+
+def test_audit_breaker_criterion1_backstop_when_latest_round_open_at_cap():
+    ident = "f.py::leak"
+    rounds = [
+        a_round(1, [nd(ident)]),
+        a_round(2, [dis(ident)]),
+        a_round(3, [nd(ident)]),
+        a_round(4, [nd(ident)]),
+    ]
+    res = check_audit_breaker(rounds, 4)
+    assert res["halt"] is True
+    assert res["reason"] == "max-iterations"
+
+
 # --- _target_aliases / audit_target_aliases (#915) -----------------------------
 
 from circuit_breaker import audit_target_aliases, _audit_outcome_aliases, _target_aliases

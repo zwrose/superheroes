@@ -1158,10 +1158,14 @@ def _persistent_not_discharged_seams(io=None):
         counter["n"] += 1
         return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
 
+    def plaus_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+
     return _seams(
         reviewer=lambda dim, tier, rnd, ctx:
             ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
              if rnd == 1 and dim == "code-reviewer" else []),
+        verifier=plaus_verifier,
         auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
                                       for t in (targets or [])],
         fix_step=fix_step, io=io)
@@ -1179,34 +1183,317 @@ def test_not_discharged_twice_self_recovers_once_then_stall_menu(tmp_path):
     kinds = [dd["kind"] for dd in receipt["decisions"]]
     # exactly one self-recovery, journalled as a decision.
     assert kinds.count("self-recovery") == 1
-    # the stall menu was presented with exactly the four choices (accept-the-risk gated out here).
+    # the stall menu was presented without accept-the-risk (PLAUSIBLE stalled target).
     assert len(menu_shown) == 1
-    assert menu_shown[0]["choices"] == ["ship-smaller", "spend-more", "hold"]
+    assert menu_shown[0]["choices"] == ["one-more-round", "hold"]
     assert menu_shown[0]["acceptRiskEligible"] is False
     assert receipt["verdict"] == "held"
 
 
-def test_accept_the_risk_gated_on_confirmed(tmp_path):
-    """accept-the-disclosed-risk is offerable ONLY for a CONFIRMED-with-receipt finding."""
+def _stall_target_state(verdict="CONFIRMED", evidence="ran", identity=None):
+    """Build state with a stalled audit target (empty findings list) for accept-risk tests."""
     state = RD.new_state(_cfg())
-    # a CONFIRMED finding with a receipt is present → eligible.
-    state["findings"] = [{"id": "v0", "verdict": "CONFIRMED", "evidence": "ran"}]
+    state["findings"] = []
+    f = {"title": "bug", "severity": "Important", "file": "f.py", "line": 1,
+         "verdict": verdict, "evidence": evidence}
+    state["fixBatch"] = [f]
+    state["_auditTargets"] = RD._audit_targets(state, state["config"], {})
+    tgt = state["_auditTargets"][0]
+    ident = identity or tgt["identity"]
+    state["_auditOutcome"] = {"notDischarged": [tgt["id"]]}
     state["selfRecovered"] = True
+    return state, ident, tgt
+
+
+_STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
+
+
+def test_accept_the_risk_gated_on_confirmed(tmp_path):
+    """accept-the-disclosed-risk is offerable ONLY for a CONFIRMED-with-receipt stalled target."""
+    state, ident, _ = _stall_target_state()
     RD._handle_stall(state, state["config"], {"reason": "audit-stall",
-                                              "detail": "x", "stalledIdentities": ["v0"]})
+                                              "detail": "x", "stalledIdentities": [ident]})
     assert state["_acceptRiskEligible"] is True
     assert "accept-the-disclosed-risk" in state["_stallChoices"]
-    # without a CONFIRMED finding → NOT eligible.
-    state2 = RD.new_state(_cfg())
-    state2["findings"] = [{"id": "v1", "verdict": "PLAUSIBLE"}]
-    state2["selfRecovered"] = True
+    # without evidence on the stalled target → NOT eligible.
+    state2, ident2, _ = _stall_target_state(verdict="CONFIRMED", evidence=None)
     RD._handle_stall(state2, state2["config"], {"reason": "audit-stall",
-                                                "detail": "x", "stalledIdentities": ["v1"]})
+                                                "detail": "x", "stalledIdentities": [ident2]})
     assert state2["_acceptRiskEligible"] is False
     assert "accept-the-disclosed-risk" not in state2["_stallChoices"]
 
 
-_STALL_BREAKER = {"reason": "audit-stall", "detail": "stalled", "stalledIdentities": ["v0"]}
+def test_accept_risk_eligible_empty_findings_confirmed_stalled_target():
+    """accept-risk reads stalled audit targets, not the findings list — empty findings still eligible."""
+    state, ident, _ = _stall_target_state()
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    assert state["_acceptRiskEligible"] is True
+
+
+def test_accept_risk_not_eligible_without_evidence_on_stalled_target():
+    state, ident, tgt = _stall_target_state(evidence=None)
+    assert tgt.get("evidence") is None
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    assert state["_acceptRiskEligible"] is False
+
+
+def test_empty_stall_targets_omit_one_more_round_from_menu():
+    """one-more-round is not offered when the stall-target snapshot is empty."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert state["_stallTargets"] == []
+    assert "one-more-round" not in state["_stallChoices"]
+
+
+def test_second_stall_menu_omits_one_more_round_after_latch():
+    """one-more-round is offerable once per session — a second stall menu drops it."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_oneMoreRoundUsed"] = True
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert "one-more-round" not in state["_stallChoices"]
+    assert state["_stallChoices"] == ["hold"]
+
+
+@pytest.mark.parametrize("choice", ["ship-smaller", "spend-more"])
+def test_retired_stall_choice_refused_at_submit(tmp_path, choice):
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": choice})
+    assert out["ok"] is False
+    assert out["reason"] == "stall-choice-retired:%s" % choice
+    ok, reloaded = RD.load_state(d)
+    assert ok and reloaded["step"] == RD.P_STALL
+
+
+def test_one_more_round_accepted_through_cmd_submit(tmp_path):
+    """Stepwise owner gate: one-more-round survives cmd_submit and re-enters dispatch-fixer."""
+    d = str(tmp_path)
+    state, ident, tgt = _stall_target_state()
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    assert "one-more-round" in state["_stallChoices"]
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
+    assert out["ok"] is True, out
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded["step"] == RD.P_FIXER
+    assert reloaded["_oneMoreRoundUsed"] is True
+    assert reloaded["_fixBatch"] == reloaded["_stallTargets"]
+
+
+def test_stale_accept_risk_flag_without_stall_targets_fails_closed():
+    """A cached _acceptRiskEligible from an older rule must not certify without a qualifying snapshot."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = []
+    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
+    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
+    assert state["terminal"] == "stalled"
+    assert state["step"] == RD.P_TERMINAL
+    assert state["certification"]["shape"] is None
+
+
+def test_stale_accept_risk_menu_refused_at_submit_chokepoint(tmp_path):
+    """Stale persisted menu with accept-the-disclosed-risk must not consume the owner gate."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = []
+    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
+    state["step"] = RD.P_STALL
+    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 1}
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"choice": "accept-the-disclosed-risk"})
+    assert out["ok"] is False
+    assert out["reason"] == RD.STALL_ACCEPT_RISK_NOT_ELIGIBLE
+    ok, reloaded = RD.load_state(d)
+    assert ok and reloaded["step"] == RD.P_STALL
+    assert reloaded.get("terminal") is None
+
+
+def test_accept_risk_submit_authorized_when_eligible(tmp_path):
+    """accept-the-disclosed-risk with a qualifying snapshot is still accepted at submit."""
+    d = str(tmp_path)
+    state, ident, _ = _stall_target_state()
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"choice": "accept-the-disclosed-risk"})
+    assert out["ok"] is True, out
+
+
+def test_stall_choice_not_offered_refused_at_submit(tmp_path):
+    """A choice absent from the presented menu is refused before fold — pending survives."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_oneMoreRoundUsed"] = True
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert "one-more-round" not in state["_stallChoices"]
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
+    assert out["ok"] is False
+    assert out["reason"] == "stall-choice-not-offered:one-more-round"
+    ok, reloaded = RD.load_state(d)
+    assert ok and reloaded["step"] == RD.P_STALL
+
+
+def test_unknown_stall_choice_fails_closed_to_stalled_terminal():
+    """An unknown stall choice still parks as `stalled` — fail-closed, not converged."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = False
+    state["_stallChoices"] = ["one-more-round", "hold"]
+    RD._fold_stall(state, state["config"], {"choice": "ship-whenever"})
+    assert state["terminal"] == "stalled"
+    assert state["step"] == RD.P_TERMINAL
+    assert state["certification"]["shape"] is None
+
+
+def _stall_then_clean_auditor_seams(io=None, clean_after=2):
+    """Auditor that not-discharges through `clean_after` audit calls, then discharges."""
+    audit_calls = {"n": 0}
+    counter = {"n": 0}
+
+    def auditor(targets, rnd):
+        audit_calls["n"] += 1
+        ruling = "not-discharged" if audit_calls["n"] <= clean_after else "discharged"
+        return [{"id": t["id"], "ruling": ruling,
+                 "reason": "broken" if ruling == "not-discharged" else "fixed",
+                 "evidence": "tests pass" if ruling == "discharged" else None,
+                 "auditorVendor": t.get("auditorVendor")}
+                for t in (targets or [])]
+
+    def fix_step(batch, rnd, payload):
+        counter["n"] += 1
+        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
+
+    def plaus_verifier(clusters, rnd):
+        return [{"id": i, "verdict": "PLAUSIBLE"} for i in range(len(clusters or []))]
+
+    seams = _seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        verifier=plaus_verifier,
+        auditor=auditor,
+        fix_step=fix_step,
+        io=io or {})
+    seams["_audit_calls"] = audit_calls
+    seams["_fix_calls"] = counter
+    return seams
+
+
+def test_audit_stall_clears_on_clean_round_then_certifies_converged():
+    """#960: stall on audit round 2, clean fold on round 3, converged certification on round 4.
+
+    Historical stall pairs must not permanently block certification once a later audit round
+  folds clean."""
+    seams = _stall_then_clean_auditor_seams(clean_after=2)
+    receipt = RD.run_loop(seams, _cfg(maxRounds=20))
+    assert receipt["verdict"] == "converged"
+    assert receipt.get("certificationShape") is not None
+    audit_rounds = [r for r in receipt["rounds"] if r.get("audits")]
+    assert len(audit_rounds) >= 3
+    assert any(r["round"] == 4 and r.get("audits") for r in receipt["rounds"])
+    kinds = [d["kind"] for d in receipt["decisions"]]
+    assert kinds.count("self-recovery") == 1
+
+
+def test_one_more_round_reenters_fixer_then_certifies_converged():
+    """#960: one-more-round re-enters dispatch-fixer, re-audits, discharges, and certifies."""
+    fix_after_menu = {"n": 0}
+    stall_menus = []
+
+    def stall_menu(payload):
+        stall_menus.append(dict(payload))
+        return "one-more-round"
+
+    base = _stall_then_clean_auditor_seams(io={"stall_menu": stall_menu}, clean_after=3)
+    orig_fix = base["fix_step"]
+
+    def fix_step(batch, rnd, payload):
+        if stall_menus:
+            fix_after_menu["n"] += 1
+        return orig_fix(batch, rnd, payload)
+
+    base["fix_step"] = fix_step
+    receipt = RD.run_loop(base, _cfg(maxRounds=20))
+    assert receipt["verdict"] == "converged"
+    assert receipt.get("certificationShape") is not None
+    assert len(stall_menus) == 1
+    assert "one-more-round" in stall_menus[0]["choices"]
+    assert fix_after_menu["n"] >= 1
+    assert base["_audit_calls"]["n"] >= 4
+
+
+def test_second_stall_menu_omits_one_more_round_after_one_more_round_spent():
+    """#960: after one-more-round is spent, a second stall menu offers exactly two choices."""
+    stall_menus = []
+
+    def stall_menu(payload):
+        stall_menus.append(dict(payload))
+        return "one-more-round" if len(stall_menus) == 1 else "hold"
+
+    counter = {"n": 0}
+
+    def fix_step(batch, rnd, payload):
+        counter["n"] += 1
+        return {"fixes": [], "headDiff": _headf(counter["n"]), "changedSubjects": ["Code"]}
+
+    seams = _seams(
+        reviewer=lambda dim, tier, rnd, ctx:
+            ({"findings": [{"title": "bug", "severity": "Important", "file": "f.py", "line": 1}]}
+             if rnd == 1 and dim == "code-reviewer" else []),
+        auditor=lambda targets, rnd: [{"id": t["id"], "ruling": "not-discharged", "reason": "broken"}
+                                      for t in (targets or [])],
+        fix_step=fix_step,
+        io={"stall_menu": stall_menu})
+    receipt = RD.run_loop(seams, _cfg(maxRounds=20))
+    assert len(stall_menus) == 2
+    assert "one-more-round" in stall_menus[0]["choices"]
+    assert "one-more-round" not in stall_menus[1]["choices"]
+    assert stall_menus[1]["choices"] == ["accept-the-disclosed-risk", "hold"]
+    assert len(stall_menus[1]["choices"]) == 2
+    assert receipt["verdict"] == "held"
+
+
+def test_one_more_round_empty_stall_targets_parks_cannot_certify():
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = False
+    state["_stallChoices"] = ["one-more-round", "hold"]
+    state["_stallTargets"] = []
+    RD._fold_stall(state, state["config"], {"choice": "one-more-round"})
+    assert state["terminal"] == "cannot-certify"
+    assert state["step"] == RD.P_TERMINAL
 
 
 def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
@@ -1245,11 +1532,9 @@ def test_eligible_owner_acceptance_converges_end_to_end(tmp_path):
     CONFIRMED-with-receipt stall, the owner submits `accept-the-disclosed-risk`, and the run
     converges (terminal, certification note records the accepted disclosed risk). Guards against a
     mutation that makes an eligible acceptance hold/park instead of converge."""
-    state = RD.new_state(_cfg())
-    state["findings"] = [{"id": "v0", "verdict": "CONFIRMED", "evidence": "ran"}]
-    state["selfRecovered"] = True
+    state, ident, _ = _stall_target_state()
     RD._handle_stall(state, state["config"], {"reason": "audit-stall", "detail": "x",
-                                              "stalledIdentities": ["v0"]})
+                                              "stalledIdentities": [ident]})
     assert state["_acceptRiskEligible"] is True
     RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
     assert state["terminal"] == "converged"
@@ -2301,6 +2586,8 @@ _ALL_CHANNELS = {
     "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
                                                   "manifest": "codex"}]},
     "recordOrphansIgnored": ["code-reviewer"],
+    "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
+                                   "storeKey": "architecture-reviewer", "occurrence": 0}],
 }
 
 
@@ -2355,6 +2642,10 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
     assert (
         "record-orphans-ignored (round 1): hand submit folded with durable seat record(s) "
         "code-reviewer still at this slot"
+        in "\n".join(_round_disclosures(receipt, 1))
+    )
+    assert (
+        "order-vendor-provenance-gap (round 1): seat(s) architecture-reviewer"
         in "\n".join(_round_disclosures(receipt, 1))
     )
     # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
@@ -2431,6 +2722,7 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
         "canaryFailed": ["security-reviewer"],             # list, not a dict
         "canaryVerified": ["codex"],                       # list, not a vendor->evidence dict
         "seatMapUnavailable": ["codex"],                   # well-shaped — survives
+        "orderVendorProvenanceGaps": [{"seat": 7}],        # int seat — malformed
     })]))
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     assert state["rounds"] == {"1": {"seatMapUnavailable": ["codex"]}}
@@ -2439,6 +2731,40 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
     prose = "\n".join(_round_disclosures(receipt, 1))
     assert "vacuous-seat" not in prose and "canary-failed" not in prose
     assert "reviewer-fell-open (round 1)" not in prose
+    assert "order-vendor-provenance-gap" not in prose
+
+
+def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
+    """Malformed gap row recorded in-session is skipped at render; receipt still produced."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"orderVendorProvenanceGaps": [{"seat": 7}]}}
+    receipt = RD.build_receipt(state)
+    assert isinstance(receipt["degraded"], list)
+    assert not any("order-vendor-provenance-gap" in line for line in receipt["degraded"])
+
+
+def test_order_vendor_gap_missing_occurrence_still_valid():
+    """occurrence is optional on gap rows — well-shaped without it."""
+    gaps = [{"seat": "architecture-reviewer"}]
+    assert RD.RESUMABLE_DISCLOSURE_CHANNELS["orderVendorProvenanceGaps"](gaps)
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"orderVendorProvenanceGaps": gaps}}
+    receipt = RD.build_receipt(state)
+    ovg_lines = [d for d in receipt["degraded"] if "order-vendor-provenance-gap" in d]
+    assert len(ovg_lines) == 1
+    assert "architecture-reviewer" in ovg_lines[0]
+
+
+def test_order_vendor_gap_non_dict_row_rejected_on_resume(tmp_path):
+    """A gap list containing a non-dict row is dropped on resume — no raise."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {
+        "orderVendorProvenanceGaps": ["not-a-dict"],
+    })]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state.get("rounds", {}) == {}
+    receipt = RD.build_receipt(state)
+    assert isinstance(receipt["degraded"], list)
 
 
 def test_resume_does_not_restore_an_empty_list_channel_as_a_disclosure(tmp_path):
@@ -2545,6 +2871,7 @@ def test_panel_round_channels_are_all_accounted_for():
 
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
+    order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
@@ -2553,14 +2880,17 @@ def test_panel_round_channels_are_all_accounted_for():
     assert submit_disclosure <= restorable, (
         "submit disclosure channels must be restorable: %s"
         % sorted(submit_disclosure - restorable))
+    assert order_emission <= restorable, (
+        "order-emission disclosure channels must be restorable: %s"
+        % sorted(order_emission - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    assert recorded | fold_provenance | submit_disclosure == accounted, (
+    assert recorded | fold_provenance | submit_disclosure | order_emission == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
-        % (sorted((recorded | fold_provenance | submit_disclosure) - accounted),
-           sorted(accounted - (recorded | fold_provenance | submit_disclosure))))
+        % (sorted((recorded | fold_provenance | submit_disclosure | order_emission) - accounted),
+           sorted(accounted - (recorded | fold_provenance | submit_disclosure | order_emission))))
 
 
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
@@ -3654,7 +3984,7 @@ def test_migrate_old_stall_routed_judgment_state(tmp_path):
     state = RD.new_state(_cfg())
     state["step"] = RD.P_STALL
     state["_judgmentFindings"] = [dict(_TRADEOFF)]
-    state["_stallChoices"] = ["ship-smaller", "spend-more", "hold"]
+    state["_stallChoices"] = ["one-more-round", "hold"]
     state["_acceptRiskEligible"] = False
     state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL,
                         "attempt": 0, "payload": {"choices": []}}

@@ -235,8 +235,9 @@ def check_audit_breaker(audit_rounds, max_rounds):
     effective rulings from `audits.apply_audit_results`. Halt conditions, checked in order:
       1. `max-iterations` — round count >= max_rounds while any latest-round outcome is
          not-discharged.
-      2. `audit-stall` — some identity is not-discharged in two CONSECUTIVE audit rounds
-         (alias-tolerant, so a retitled-but-same-class finding still stalls).
+      2. `audit-stall` — some identity is not-discharged in the last two audit rounds only
+         (alias-tolerant, so a retitled-but-same-class finding still stalls). An honestly-folded
+         clean round resets the window — historical pairs do not permanently halt later rounds.
 
     Never consults finding counts. Fail-closed on malformed input; empty history → no halt.
     """
@@ -259,16 +260,18 @@ def check_audit_breaker(audit_rounds, max_rounds):
             "stalledIdentities": open_ids,
         }
 
-    # Criterion 2: the same finding failing audit in two consecutive rounds.
-    stalled = set()
-    for i in range(1, n):
-        prev = per_round[i - 1]
-        cur = per_round[i]
+    # Criterion 2: the same finding failing audit in two consecutive rounds — last two only.
+    if n >= 2:
+        prev = per_round[-2]
+        cur = per_round[-1]
+        stalled = set()
         for cur_aliases in cur:
             for prev_aliases in prev:
                 shared = cur_aliases & prev_aliases
                 if shared:
                     stalled |= shared
+    else:
+        stalled = set()
     if stalled:
         ids = sorted(stalled)
         return {

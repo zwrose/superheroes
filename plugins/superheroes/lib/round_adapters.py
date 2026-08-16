@@ -79,6 +79,25 @@ _SINGLE_SEAT = {
     P_FIXER: SEAT_FIXER,
 }
 
+# Phases fulfilled by the orchestrator itself — no `dispatch-*` orders manifest is emitted.
+ORCHESTRATOR_FULFILLED_PHASES = (P_VERIFY,)
+
+
+def is_orchestrator_fulfilled(phase):
+    """True when the orchestrator fulfils the phase and no orders manifest is emitted.
+
+    Unknown phase strings fall to the conservative side (False) — treated as seat phases that
+    require an anchor."""
+    return isinstance(phase, str) and phase in ORCHESTRATOR_FULFILLED_PHASES
+
+
+def orchestrator_payload_fault(phase, payload):
+    """Submit-shape guard for orchestrator-fulfilled phase payloads. None when well-formed."""
+    if phase == P_VERIFY:
+        return round_phases.verify_result_fault(payload)
+    return "orchestrator-payload-unknown-phase:%s" % _label(phase)
+
+
 # A verifier seat is one CLUSTER of the round's staged findings.
 VERIFIER_SEAT_PREFIX = "verifier:"
 

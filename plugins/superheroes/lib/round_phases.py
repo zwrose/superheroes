@@ -27,16 +27,23 @@ ALL_PHASES = (
 DIMENSIONS = ["architecture-reviewer", "code-reviewer", "security-reviewer",
               "test-reviewer", "premortem-reviewer"]
 
-# The four stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
-# ONLY for a CONFIRMED-with-receipt finding; the menu payload gates it per-run.
+# The three stall-menu choices (never "judge the dispute yourself"). accept-the-risk is offerable
+# ONLY for a CONFIRMED-with-receipt stalled audit target; the menu payload gates it per-run.
+# one-more-round is offerable once per session and is NOT a terminal — it re-enters the fix leg.
+ONE_MORE_ROUND_CHOICE = "one-more-round"
 ACCEPT_RISK_CHOICE = "accept-the-disclosed-risk"
-STALL_CHOICES = ("ship-smaller", "spend-more", ACCEPT_RISK_CHOICE, "hold")
+HOLD_CHOICE = "hold"
+STALL_CHOICES = (ONE_MORE_ROUND_CHOICE, ACCEPT_RISK_CHOICE, HOLD_CHOICE)
+RETIRED_STALL_CHOICES = ("ship-smaller", "spend-more")
+RETIRED_STALL_CHOICE_PREFIX = "stall-choice-retired:"
 
 # The three per-finding judgment dispositions the judgment gate offers (never "judge the dispute
 # yourself"): fix the finding as the reviewer suggested, fix it with owner free-text guidance, or
 # skip it with a citable reason (a skipped blocker rides the exit disclosure — the skipped-blocking
-# channel). The judgment gate is an INTERVENTION that folds back into the fix leg, NOT a terminal
-# (#507 R2a) — the stall menu is the ONLY terminal, reachable solely from the audit-stall path.
+# channel). The judgment gate is an INTERVENTION that folds back into the fix leg and never
+# terminates (#507 R2a). The stall menu is the only gate that can terminate — reachable solely
+# from the audit-stall path — via hold → held or an ineligible/unknown choice → stalled; even
+# there one-more-round re-enters the fix leg rather than terminating.
 JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
 
 

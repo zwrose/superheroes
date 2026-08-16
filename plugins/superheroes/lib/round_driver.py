@@ -172,6 +172,13 @@ P_STALL = round_phases.P_STALL
 P_TERMINAL = round_phases.P_TERMINAL
 
 STALL_CHOICES = round_phases.STALL_CHOICES
+ONE_MORE_ROUND_CHOICE = round_phases.ONE_MORE_ROUND_CHOICE
+ACCEPT_RISK_CHOICE = round_phases.ACCEPT_RISK_CHOICE
+HOLD_CHOICE = round_phases.HOLD_CHOICE
+RETIRED_STALL_CHOICES = round_phases.RETIRED_STALL_CHOICES
+RETIRED_STALL_CHOICE_PREFIX = round_phases.RETIRED_STALL_CHOICE_PREFIX
+STALL_CHOICE_NOT_OFFERED_PREFIX = "stall-choice-not-offered:"
+STALL_ACCEPT_RISK_NOT_ELIGIBLE = "stall-accept-risk-not-eligible"
 JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
@@ -214,6 +221,23 @@ def _adapter_provenance_shape(value):
     return True
 
 
+def _order_vendor_provenance_gaps_shape(value):
+    # build_receipt joins gap seat names into prose, so each row's seat must be a non-empty string.
+    if not isinstance(value, list):
+        return False
+    for row in value:
+        if not isinstance(row, dict):
+            return False
+        seat = row.get("seat")
+        if not isinstance(seat, str) or not seat:
+            return False
+        if "occurrence" in row:
+            occ = row.get("occurrence")
+            if not isinstance(occ, int) or occ < 0:
+                return False
+    return True
+
+
 def _normalize_adapter_provenance(prov):
     """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
     value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
@@ -248,12 +272,18 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
     "recordOrphansIgnored": _str_list,
+    "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
 # must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
 # one home.
 SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
+
+# Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
+# Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
+# share the same one home.
+ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps",)
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
@@ -266,7 +296,7 @@ FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 # that round-records.json deliberately never stores (review_memory's persist-skeleton contract), and
 # `seatStatus` / `missingSeats` are the panel's own coverage bookkeeping, owned by the round that
 # actually ran its seats (`seatStatus` is emitted unconditionally, not as a disclosure).
-UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "compileDrops", "unverified", "missingSeats")
+UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats")
 
 # `canaryVerified` is the one channel whose EMPTY value still belongs in the receipt (a control probe
 # that ran and carried an empty evidence object is still a probe that ran), so it emits on PRESENCE.
@@ -1656,6 +1686,12 @@ def _fold_panel(state, config, artifact):
             "Critical" if circuit_breaker.is_critical(f.get("severity")) else "Important"
             for f in _blocking(compiled)]
     _record_round(state, "seatStatus", seat_status)
+    _panel_dims = _panel_dimensions(config)
+    _expected = len(_panel_dims)
+    if _expected > 0:
+        _ran = sum(1 for d in _panel_dims if seat_status.get(d) == "run")
+        _record_round(state, "lensCoverage",
+                      {"ran": _ran, "expected": _expected, "floor": incomplete})
     # #563 DoD1 — loud fall-open by MACHINERY, not builder discipline: compare the trusted ranManifest
     # against the #510 seat map's configured vendors and record a per-round dispatch-provenance row for
     # any `run` seat that fell open to a different vendor; disclose an omitted manifest too (below).
@@ -2401,6 +2437,8 @@ def _audit_targets(state, config, audit_targets_map):
             "fixerVendor": fixer_vendor,
             "auditorVendor": auditor_vendor,
             "independence": independence,
+            "verdict": f.get("verdict"),
+            "evidence": f.get("evidence"),
         })
     return targets
 
@@ -2705,41 +2743,63 @@ def _handle_stall(state, config, breaker):
         state["step"] = P_FIXER
         return
     # already self-recovered and still stalled → present the stall menu (never judge the dispute).
-    accept_eligible = _accept_risk_eligible(state)
+    accept_eligible = _accept_risk_eligible(state, breaker)
+    stall_targets = [dict(t) for t in _stalled_open_targets(state, breaker)]
+    state["_stallTargets"] = stall_targets
     choices = list(STALL_CHOICES) if accept_eligible else \
-        [c for c in STALL_CHOICES if c != "accept-the-disclosed-risk"]
+        [c for c in STALL_CHOICES if c != ACCEPT_RISK_CHOICE]
+    if state.get("_oneMoreRoundUsed"):
+        choices = [c for c in choices if c != ONE_MORE_ROUND_CHOICE]
+    if not stall_targets:
+        choices = [c for c in choices if c != ONE_MORE_ROUND_CHOICE]
     state["_stallChoices"] = choices
     state["_acceptRiskEligible"] = accept_eligible
     _decision(state, "stall-menu", "audit-stall persists after self-recovery — owner choice")
     state["step"] = P_STALL
 
 
-def _accept_risk_eligible(state):
-    """accept-the-disclosed-risk is offerable ONLY when the stalled finding is CONFIRMED with a
+def _accept_risk_eligible(state, breaker):
+    """accept-the-disclosed-risk is offerable ONLY when a stalled audit target is CONFIRMED with a
     receipt (an owner may knowingly accept a proven, disclosed risk — never an unproven one)."""
-    for f in state.get("findings") or []:
-        if isinstance(f, dict) and f.get("verdict") == "CONFIRMED" and f.get("evidence"):
+    for t in _stalled_open_targets(state, breaker):
+        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
+            return True
+    return False
+
+
+def _stall_targets_accept_risk_eligible(state):
+    """Fold-time accept-risk eligibility from the persisted stall-target snapshot — never a cached
+    boolean a prior version may have written under a broader rule."""
+    for t in state.get("_stallTargets") or []:
+        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
             return True
     return False
 
 
 def _fold_stall(state, config, artifact):
-    """Fold the owner's stall choice; journal it. hold → park; the others record the disposition and
-    terminate accordingly."""
+    """Fold the owner's stall choice; journal it. hold → park; accept-the-disclosed-risk → certify
+    when eligible; one-more-round → re-enter the fix leg from the persisted stall-target snapshot."""
     choice = artifact.get("choice")
     _record_round(state, "stallChoice", choice)
     _decision(state, "stall-choice", choice)
-    if choice == "hold":
+    if choice == HOLD_CHOICE:
         state["terminal"] = "held"
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
-    elif choice == "accept-the-disclosed-risk" and state.get("_acceptRiskEligible"):
+    elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
         return
-    elif choice in ("ship-smaller", "spend-more"):
-        state["terminal"] = "stalled"
-        state["certification"] = {"shape": None,
-                                  "reason": "owner chose %s — certification withheld" % choice}
+    elif choice == ONE_MORE_ROUND_CHOICE:
+        targets = state.get("_stallTargets") or []
+        if not targets:
+            _park_cannot_certify(
+                state, "one-more-round requested but stalled targets could not be resolved")
+            state["step"] = P_TERMINAL
+            return
+        state["_oneMoreRoundUsed"] = True
+        state["_fixBatch"] = [dict(t) for t in targets]
+        state["step"] = P_FIXER
+        return
     else:
         # an ineligible accept-the-risk or an unknown choice fails closed to a park.
         state["terminal"] = "stalled"
@@ -2832,6 +2892,8 @@ def build_receipt(state, session_dir=None):
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
+        if rec.get("lensCoverage") is not None:
+            rd["lensCoverage"] = rec.get("lensCoverage")
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
@@ -2969,6 +3031,19 @@ def build_receipt(state, session_dir=None):
                 "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
                 "%s still at this slot — records ignored (session already on hand-submit path)"
                 % (rkey, ", ".join(roi)))
+        ovg = rrec.get("orderVendorProvenanceGaps")
+        if ovg:
+            seats = []
+            for row in ovg:
+                if not isinstance(row, dict):
+                    continue
+                seat = row.get("seat")
+                if isinstance(seat, str) and seat:
+                    seats.append(seat)
+            if seats:
+                degraded.append(
+                    "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
+                    "vendor in the seat map" % (rkey, ", ".join(seats)))
         prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
@@ -3075,6 +3150,65 @@ def _validate_attested_receipt(receipt):
     return True, None
 
 
+def _validate_rounds_lens_coverage(receipt):
+    """Per-round lensCoverage shape/consistency and convergence-anchor guard (#960).
+
+    Returns (ok, reason). Legacy receipts with no lensCoverage on any round pass."""
+    rounds = receipt.get("rounds")
+    if not isinstance(rounds, list):
+        return True, None
+    for idx, rd in enumerate(rounds):
+        if not isinstance(rd, dict):
+            continue
+        lc = rd.get("lensCoverage")
+        if lc is None:
+            continue
+        rnd = rd.get("round", idx)
+        if not isinstance(lc, dict):
+            return False, "round %s lensCoverage must be an object" % rnd
+        for key in ("ran", "expected", "floor"):
+            if key not in lc:
+                return False, "round %s lensCoverage missing key %r" % (rnd, key)
+        ran, expected, floor = lc["ran"], lc["expected"], lc["floor"]
+        if type(ran) is not int or type(expected) is not int:
+            return False, "round %s lensCoverage ran and expected must be integers" % rnd
+        if not isinstance(floor, bool):
+            return False, "round %s lensCoverage floor must be a boolean" % rnd
+        if expected <= 0:
+            return False, "round %s lensCoverage expected must be positive" % rnd
+        if ran < 0 or ran > expected:
+            return False, ("round %s lensCoverage ran (%d) must satisfy 0 <= ran <= expected (%d)"
+                           % (rnd, ran, expected))
+        if ran < expected and not floor:
+            return False, ("round %s lensCoverage claims floor:false with partial coverage "
+                           "(ran %d < expected %d)" % (rnd, ran, expected))
+    if receipt.get("verdict") != "converged":
+        return True, None
+    cert = receipt.get("certification") if isinstance(receipt.get("certification"), dict) else {}
+    shape = receipt.get("certificationShape") or cert.get("shape")
+    full_panel_anchor = bool(cert.get("fullPanel")) or (
+        isinstance(shape, str) and shape.startswith("full-panel-confirmed"))
+    if not full_panel_anchor:
+        return True, None
+    round_dicts = [rd for rd in rounds if isinstance(rd, dict)]
+    if not any(rd.get("lensCoverage") is not None for rd in round_dicts):
+        return True, None
+
+    def _round_num(rd):
+        r = rd.get("round")
+        return int(r) if isinstance(r, int) or (isinstance(r, str) and str(r).isdigit()) else 0
+
+    anchor = max(round_dicts, key=_round_num)
+    anchor_lc = anchor.get("lensCoverage")
+    if anchor_lc is None:
+        return False, ("converged certification anchor round %s lacks lensCoverage"
+                       % anchor.get("round"))
+    if isinstance(anchor_lc, dict) and anchor_lc.get("floor"):
+        return False, ("converged certification cannot anchor on floor-marked round %s"
+                       % anchor.get("round"))
+    return True, None
+
+
 def _validate_certified_receipt(receipt):
     """Validate a driver receipt's SHAPE (NOT grafted onto panel_tally._valid_final_receipt — that
     is the reviewer-seat receipt; this is the loop's terminal receipt). Fail-closed: a receipt
@@ -3121,6 +3255,9 @@ def _validate_certified_receipt(receipt):
             return False, "receipt %s must be a list" % key
     if not receipt.get("verdict"):
         return False, "receipt verdict is empty"
+    ok, reason = _validate_rounds_lens_coverage(receipt)
+    if not ok:
+        return ok, reason
     return True, None
 
 
@@ -3321,7 +3458,8 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return roster_refusal
         try:
             _emit_orders_manifest(session_dir, state, pending.get("round"), phase, attempt, roster,
-                                  journal_cmd="next", pending_payload=pending.get("payload"))
+                                  journal_cmd="next", pending_payload=pending.get("payload"),
+                                  seat_map=_effective_seat_map(state))
         except round_commit.CommitRefused as exc:
             return _commit_refused_response(session_dir, "next", exc, phase=phase,
                                           rnd=pending.get("round"), attempt=attempt)
@@ -3571,6 +3709,32 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "verifier-results-shape"})
             return {"ok": False, "reason": fault}
+    if phase == P_STALL:
+        choice = artifact.get("choice") if isinstance(artifact, dict) else None
+        if isinstance(choice, str) and choice in RETIRED_STALL_CHOICES:
+            reason = "%s%s" % (RETIRED_STALL_CHOICE_PREFIX, choice)
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "stall-choice-retired"})
+            return {"ok": False, "reason": reason}
+        offered = state.get("_stallChoices")
+        if offered is None:
+            # Legacy persisted stall without a recorded menu — fail closed: only hold (and accept-risk
+            # when the session recorded eligibility) were ever safe terminals.
+            offered = [HOLD_CHOICE]
+            if _stall_targets_accept_risk_eligible(state):
+                offered.insert(0, ACCEPT_RISK_CHOICE)
+        if isinstance(choice, str) and choice not in offered:
+            reason = "%s%s" % (STALL_CHOICE_NOT_OFFERED_PREFIX, choice)
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": "stall-choice-not-offered"})
+            return {"ok": False, "reason": reason}
+        if choice == ACCEPT_RISK_CHOICE and not _stall_targets_accept_risk_eligible(state):
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": STALL_ACCEPT_RISK_NOT_ELIGIBLE})
+            return {"ok": False, "reason": STALL_ACCEPT_RISK_NOT_ELIGIBLE}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a
@@ -3959,10 +4123,42 @@ def _reviewer_engine_vendor(repo_root):
         return "claude"
 
 
-def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root):
+def _effective_seat_map(state):
+    """Seat map for order emission: the state copy wins; otherwise the seeded config (#723)."""
+    sm = state.get("seatMap")
+    if isinstance(sm, dict) and isinstance(sm.get("seats"), dict) and sm.get("seats"):
+        return sm
+    cfg_sm = (state.get("config") or {}).get("seatMap")
+    if isinstance(cfg_sm, dict):
+        return cfg_sm
+    return sm if isinstance(sm, dict) else {}
+
+
+def _disclose_order_vendor_provenance_gaps(state, gaps):
+    if not gaps:
+        return
+    rnd_key = str(state["round"])
+    rec = state["rounds"].get(rnd_key) or {}
+    prior = rec.get("orderVendorProvenanceGaps")
+    merged = list(prior) if isinstance(prior, list) else []
+    seen = {(row.get("seat"), row.get("occurrence"))
+            for row in merged if isinstance(row, dict)}
+    for row in gaps:
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("seat"), row.get("occurrence"))
+        if key in seen:
+            continue
+        merged.append(row)
+        seen.add(key)
+    _record_round(state, "orderVendorProvenanceGaps", merged)
+
+
+def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root,
+                        seat_map=None):
     """{vendor, model, engine} for transport — one home keyed to the source that actually knows."""
     if phase == P_PANEL:
-        return _seat_dispatch_row(state, seat_key)
+        return _seat_dispatch_row(state, seat_key, seat_map=seat_map)
     cfg = config if isinstance(config, dict) else {}
     payload = pending_payload if isinstance(pending_payload, dict) else {}
     if phase == P_FIXER:
@@ -4406,10 +4602,12 @@ def _orders_anchor_from_journal(session_dir, rnd, phase, attempt):
     return None
 
 
-def _seat_dispatch_row(state, seat_key):
+def _seat_dispatch_row(state, seat_key, seat_map=None):
     """{vendor, model, engine} for a seat, off the #510 seat map in state. Absent values stay None —
     the manifest records what is KNOWN, never a guessed vendor."""
-    seats = (state.get("seatMap") or {}).get("seats")
+    if seat_map is None:
+        seat_map = _effective_seat_map(state)
+    seats = (seat_map or {}).get("seats")
     entry = seats.get(seat_key) if isinstance(seats, dict) else None
     if not isinstance(entry, dict):
         return {"vendor": None, "model": None, "engine": None}
@@ -4418,7 +4616,7 @@ def _seat_dispatch_row(state, seat_key):
 
 
 def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journal_cmd="advance",
-                          pending_payload=None):
+                          pending_payload=None, seat_map=None):
     """Emit per-slot order prompts, envelope stubs, and the orders manifest for a dispatch phase.
 
     Every roster SLOT is rendered, hashed, and written inside the single `orders-emit` commit
@@ -4427,16 +4625,23 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
     that refuses."""
     pending_payload = pending_payload if isinstance(pending_payload, dict) else (
         (state.get("pending") or {}).get("payload") if isinstance(state.get("pending"), dict) else {})
+    seat_map = seat_map if isinstance(seat_map, dict) else _effective_seat_map(state)
     seats = {}
     order_hashes = {}
     rendered = []
+    vendor_gaps = []
     for seat_key, occurrence in round_records.roster_slots(roster):
         pending = pending_payload if isinstance(pending_payload, dict) else {}
         cfg = state.get("config") or {}
         repo_root = (cfg.get("repoRoot") or _session_meta(session_dir).get("repoRoot")
                      or os.getcwd())
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
+        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root,
+                                  seat_map=seat_map)
         skey = round_records.storage_key(seat_key, occurrence)
+        if phase == P_PANEL and not _seat_is_engine(row):
+            vendor = row.get("vendor")
+            if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
+                vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload)
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
@@ -4470,6 +4675,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         }
         rendered.append((paths["order_path"], order_text.encode("utf-8"),
                          paths["envelope_stub_path"], order_sha, row, occurrence, seat_key))
+
+    if vendor_gaps:
+        _disclose_order_vendor_provenance_gaps(state, vendor_gaps)
 
     manifest = {"schema": ORDERS_MANIFEST_SCHEMA, "session": _meta_session_id(session_dir),
                 "round": rnd, "phase": phase, "attempt": attempt,
@@ -5434,6 +5642,66 @@ def _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, atte
     return response
 
 
+_ORCHESTRATOR_FULFILLED_USE_SEAT_PATH = object()
+
+
+def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
+                                           git=None, broke=None):
+    """Fold an orchestrator-fulfilled phase from its host-seat bare payload when present.
+
+    When the bare payload is absent, decline so the caller can fold through the durable
+    seat-record path. A bare payload that is present but malformed refuses without fallback."""
+    roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
+    if refusal is not None:
+        return refusal
+    if not roster:
+        return _refuse_cmd(session_dir, "advance", "orchestrator-roster-empty", phase=phase,
+                           rnd=rnd, attempt=attempt)
+    seat_key = roster[0]
+    skey = round_records.storage_key(seat_key)
+    path = round_records.bare_payload_path(session_dir, rnd, phase, skey, attempt)
+    payload, perr = round_records.read_json(path)
+    if perr == "missing":
+        slots = _seat_slot_records(session_dir, rnd, phase, attempt, roster)
+        if any(env is not None for _seat, _occurrence, env in slots):
+            return _ORCHESTRATOR_FULFILLED_USE_SEAT_PATH
+        return _refuse_cmd(session_dir, "advance", "orchestrator-payload-missing", phase=phase,
+                           rnd=rnd, attempt=attempt, seat=seat_key, path=path,
+                           detail="expected host-seat payload at %s" % path)
+    if perr is not None:
+        return _refuse_cmd(session_dir, "advance", "orchestrator-payload-unreadable",
+                           phase=phase, rnd=rnd, attempt=attempt, seat=seat_key, path=path,
+                           detail=perr)
+    # Both a bare payload and a durable seat record may exist — the bare payload wins (no double fold).
+    fault = _adapters().orchestrator_payload_fault(phase, payload)
+    if fault:
+        return _refuse_cmd(session_dir, "advance", fault, phase=phase, rnd=rnd, attempt=attempt,
+                           seat=seat_key)
+    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
+                        _via_advance=True)
+    if not folded.get("ok"):
+        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
+                           attempt=attempt, detail=folded.get("reason"))
+    _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
+    nxt = cmd_next(session_dir)
+    if not nxt.get("ok"):
+        return nxt
+    ok_after, after = load_state(session_dir)
+    if not ok_after or after is None:
+        reason, fault_code, detail = _state_load_fault(session_dir)
+        return _refuse_cmd(session_dir, "advance", reason, fault=fault_code, detail=detail)
+    response = {"ok": True, "folded": {"phase": phase, "round": rnd, "attempt": attempt},
+                "nextAction": nxt, "brokeLock": broke}
+    if after.get("terminal"):
+        side = _publish_sidecar(session_dir, after, git=git)
+        if side.get("reason"):
+            return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                               detail=side.get("detail"))
+        response["terminal"] = after.get("terminal")
+        response["sidecar"] = side.get("path")
+    return response
+
+
 def _advance_locked(session_dir, state, git=None, broke=None):
     config = state.get("config") or {}
     if state.get("terminal"):
@@ -5457,6 +5725,11 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     if phase == P_JUDGMENT or phase == P_STALL:
         return _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=git,
                                    broke=broke)
+    if _adapters().is_orchestrator_fulfilled(phase):
+        orch = _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt,
+                                                      config, git=git, broke=broke)
+        if orch is not _ORCHESTRATOR_FULFILLED_USE_SEAT_PATH:
+            return orch
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal

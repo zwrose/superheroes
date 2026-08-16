@@ -9,6 +9,7 @@ that build boundary values, feeds them to the REAL consumers, and fails on SHAPE
 import importlib.util
 import inspect
 import os
+import re
 import sys
 
 import pytest
@@ -28,15 +29,47 @@ SEAT_MAP = {"seats": {dim: {"vendor": "claude", "model": "sonnet-5", "engine": "
                       for dim in round_driver.DIMENSIONS}}
 
 
-def _load_advance_module():
-    path = os.path.join(_HERE, "test_round_driver_advance.py")
-    spec = importlib.util.spec_from_file_location("test_round_driver_advance_contract", path)
+def _load_test_module(filename):
+    path = os.path.join(_HERE, filename)
+    spec = importlib.util.spec_from_file_location(
+        "contract_%s" % filename[:-3], path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
+def _load_advance_module():
+    return _load_test_module("test_round_driver_advance.py")
+
+
 _ADV = _load_advance_module()
+
+
+def _driver_adapters_seam_members():
+    """Names the driver reaches via ``_adapters().<name>`` — text scan of round_driver source.
+
+    Covers literal ``_adapters().foo`` call sites only; a dynamically-computed attribute name
+  would not be seen by this regex."""
+    driver_path = os.path.join(_LIB, "round_driver.py")
+    with open(driver_path, encoding="utf-8") as fh:
+        source = fh.read()
+    return sorted(set(re.findall(r"_adapters\(\)\.([a-z_]+)", source)))
+
+
+def _discover_fake_adapters_doubles():
+    """Return (module_filename, FakeAdapters instance) for every adapters double in this directory."""
+    doubles = []
+    for filename in sorted(os.listdir(_HERE)):
+        if not filename.startswith("test_") or not filename.endswith(".py"):
+            continue
+        path = os.path.join(_HERE, filename)
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if not re.search(r"^\s*class FakeAdapters\b", text, re.MULTILINE):
+            continue
+        mod = _load_test_module(filename)
+        doubles.append((filename, mod.FakeAdapters()))
+    return doubles
 
 
 # Shape refusals at the seam — domain refusals (unknown seat, incomplete roster, etc.) are fine.
@@ -229,15 +262,17 @@ def _signature_params(fn):
 
 
 def test_fake_adapters_methods_match_round_adapters_signatures():
-    """The advance-test stub must mirror the real adapter entry points — drift breaks every advance test."""
-    fake = _ADV.FakeAdapters()
-    pairs = (
-        ("assemble", fake.assemble, round_adapters.assemble),
-        ("roster_for", fake.roster_for, round_adapters.roster_for),
-        ("payload_fault", fake.payload_fault, round_adapters.payload_fault),
-        ("missing_policy", fake.missing_policy, round_adapters.missing_policy),
-    )
-    for name, stub, real in pairs:
-        assert _signature_params(stub) == _signature_params(real), (
-            "%s signature drift: stub %s vs real %s"
-            % (name, _signature_params(stub), _signature_params(real)))
+    """Every adapters test double must mirror each ``_adapters()`` seam member — drift breaks advance."""
+    members = _driver_adapters_seam_members()
+    doubles = _discover_fake_adapters_doubles()
+    assert doubles, "no FakeAdapters doubles found"
+    for mod_name, fake in doubles:
+        for name in members:
+            assert hasattr(fake, name), (
+                "%s FakeAdapters missing seam member %s (driver reaches _adapters().%s)"
+                % (mod_name, name, name))
+            stub = getattr(fake, name)
+            real = getattr(round_adapters, name)
+            assert _signature_params(stub) == _signature_params(real), (
+                "%s.%s signature drift: stub %s vs real %s"
+                % (mod_name, name, _signature_params(stub), _signature_params(real)))
