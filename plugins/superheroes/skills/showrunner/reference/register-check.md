@@ -93,7 +93,7 @@ first differing character — the pass/fail result names the first differing lin
     "column": 41,
     "expected": "machine work (a script with a stable invocation",
     "actual": "machine work — a script with a stable invocation",
-    "detail": "byte mismatch in quoted block for R3"
+    "detail": "R3: first differing line 2, column 41"
   },
   "findings": [
     {
@@ -103,7 +103,7 @@ first differing character — the pass/fail result names the first differing lin
       "column": 41,
       "expected": "machine work (a script with a stable invocation",
       "actual": "machine work — a script with a stable invocation",
-      "detail": "byte mismatch in quoted block for R3"
+      "detail": "R3: first differing line 2, column 41"
     }
   ]
 }

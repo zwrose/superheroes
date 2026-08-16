@@ -20,6 +20,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
+- Register-check vocabulary                              (home: register_check.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -2630,3 +2631,245 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         % (missing_conv, extra_conv)
     )
     assert list(issue_contract.SLOTS) == home_slots
+
+
+# --- Cluster: register-check vocabulary (register_check → register-check.md) ---
+
+
+_REGISTER_CHECK_DOC = "skills/showrunner/reference/register-check.md"
+
+
+def _register_check_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
+    import register_check
+
+    derived = set()
+    for name in dir(register_check):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(register_check, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
+
+
+def _register_check_vocabulary_section(doc):
+    """The drift-tested vocabulary section in register-check.md."""
+    headings = re.findall(
+        r"^## Vocabulary \(drift-tested\)\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    assert len(headings) == 1, (
+        "register-check.md: expected exactly one "
+        "## Vocabulary (drift-tested) heading, found %d"
+        % len(headings)
+    )
+    m = re.search(
+        r"^## Vocabulary \(drift-tested\)\s*\n(.*?)(?:\n## |\Z)",
+        doc,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "register-check.md: ## Vocabulary (drift-tested) section not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _register_check_tokens_under_label(section, label):
+    """Inline-code bullet tokens under a **Label:** block — scoped to that block only."""
+    pattern = (
+        r"\*\*%s\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+        % re.escape(label)
+    )
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    assert len(matches) == 1, (
+        "register-check.md: expected exactly one **%s:** label, found %d"
+        % (label, len(matches))
+    )
+    tokens = re.findall(r"^- `([^`]+)`", matches[0].group(1), re.MULTILINE)
+    assert tokens, (
+        "register-check.md: **%s:** bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+        % label
+    )
+    return set(tokens)
+
+
+def _register_check_schema_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    tokens = _register_check_tokens_under_label(section, "Schema:")
+    return tokens
+
+
+def _register_check_results_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_tokens_under_label(section, "Results:")
+
+
+def _register_check_finding_kinds_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_tokens_under_label(section, "Finding kinds:")
+
+
+def _register_check_unrunnable_reasons_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_tokens_under_label(section, "Unrunnable reasons:")
+
+
+def _register_check_exit_codes_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    pattern = r"\*\*Exit codes:\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    assert len(matches) == 1, (
+        "register-check.md: expected exactly one **Exit codes:** label, found %d"
+        % len(matches)
+    )
+    pairs = re.findall(
+        r"^- `(\d+)` — (\w+)",
+        matches[0].group(1),
+        re.MULTILINE,
+    )
+    assert pairs, (
+        "register-check.md: **Exit codes:** bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return {int(code): word for code, word in pairs}
+
+
+def _register_check_exit_codes_from_home():
+    import register_check
+
+    return {
+        register_check.EXIT_PASS: register_check.RESULT_PASS,
+        register_check.EXIT_FAIL: register_check.RESULT_FAIL,
+        register_check.EXIT_UNRUNNABLE: register_check.RESULT_UNRUNNABLE,
+    }
+
+
+def test_register_check_schema_in_register_check_doc():
+    """§11: register-check.md restates register_check.SCHEMA."""
+    import register_check
+
+    home = {register_check.SCHEMA}
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_schema_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Schema vocabulary drift from register_check.SCHEMA — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_results_in_register_check_doc():
+    """§11: register-check.md restates register_check.RESULTS."""
+    import register_check
+
+    home = set(register_check.RESULTS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_results_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Results vocabulary drift from register_check.RESULTS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_finding_kinds_in_register_check_doc():
+    """§11: register-check.md restates register_check.FINDING_KINDS."""
+    import register_check
+
+    home = set(register_check.FINDING_KINDS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_finding_kinds_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Finding kinds vocabulary drift from "
+        "register_check.FINDING_KINDS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_unrunnable_reasons_in_register_check_doc():
+    """§11: register-check.md restates register_check.UNRUNNABLE_REASONS."""
+    import register_check
+
+    home = set(register_check.UNRUNNABLE_REASONS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_unrunnable_reasons_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Unrunnable reasons vocabulary drift from "
+        "register_check.UNRUNNABLE_REASONS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_exit_codes_in_register_check_doc():
+    """§11: register-check.md restates register_check exit-code mapping."""
+    home = _register_check_exit_codes_from_home()
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_mapping = _register_check_exit_codes_from_doc(doc)
+    missing_from_doc = sorted(
+        code for code in home if code not in doc_mapping
+    )
+    extra_in_doc = sorted(
+        code for code in doc_mapping if code not in home
+    )
+    value_mismatches = sorted(
+        code for code in home
+        if code in doc_mapping and doc_mapping[code] != home[code]
+    )
+    assert (
+        not missing_from_doc
+        and not extra_in_doc
+        and not value_mismatches
+    ), (
+        "register-check.md Exit codes mapping drift from register_check "
+        "EXIT_*/RESULT_* — missing from doc: %r; present in doc but not in "
+        "home: %r; value mismatches: %r"
+        % (missing_from_doc, extra_in_doc, value_mismatches)
+    )
+
+
+def test_register_check_vocabulary_completeness():
+    """Every register_check RESULT_*/KIND_*/UNRUNNABLE_* constant is in its frozenset."""
+    import register_check
+
+    derived_results = _register_check_string_constants_by_prefix("RESULT_")
+    derived_kinds = _register_check_string_constants_by_prefix("KIND_")
+    derived_unrunnable = _register_check_string_constants_by_prefix("UNRUNNABLE_")
+    home_results = set(register_check.RESULTS)
+    home_kinds = set(register_check.FINDING_KINDS)
+    home_unrunnable = set(register_check.UNRUNNABLE_REASONS)
+    missing_results = sorted(derived_results - home_results)
+    extra_results = sorted(home_results - derived_results)
+    missing_kinds = sorted(derived_kinds - home_kinds)
+    extra_kinds = sorted(home_kinds - derived_kinds)
+    missing_unrunnable = sorted(derived_unrunnable - home_unrunnable)
+    extra_unrunnable = sorted(home_unrunnable - derived_unrunnable)
+    assert not missing_results and not extra_results, (
+        "register_check RESULT_* constants drift from register_check.RESULTS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_results, extra_results)
+    )
+    assert not missing_kinds and not extra_kinds, (
+        "register_check KIND_* constants drift from register_check.FINDING_KINDS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_kinds, extra_kinds)
+    )
+    assert not missing_unrunnable and not extra_unrunnable, (
+        "register_check UNRUNNABLE_* constants drift from "
+        "register_check.UNRUNNABLE_REASONS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_unrunnable, extra_unrunnable)
+    )

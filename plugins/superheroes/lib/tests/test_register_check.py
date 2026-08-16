@@ -351,12 +351,28 @@ def test_duplicate_one_drifted(tmp_path):
     body = tmp_path / "body.md"
     body.write_text(
         "> **R1 — One line entry.**\n"
+        "\n"
         "> **R1 — One line entry.X**\n",
         encoding="utf-8",
     )
     result = _check(register, body, "C1")
     assert result["result"] == rc.RESULT_FAIL
+    assert result["duplicateQuoteIds"] == ["R1"]
+    assert len(result["findings"]) == 1
     assert result["findings"][0]["kind"] == rc.KIND_TEXT_DRIFT
+
+
+def test_wrong_id_exact_text(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("> **R2 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_FAIL
+    assert len(result["findings"]) == 2
+    assert result["findings"][0]["kind"] == rc.KIND_MISSING_QUOTE
+    assert result["findings"][0]["entry"] == "R1"
+    assert result["findings"][1]["kind"] == rc.KIND_UNKNOWN_ENTRY
+    assert result["findings"][1]["entry"] == "R2"
 
 
 # --- malformed register -----------------------------------------------------
