@@ -1748,6 +1748,12 @@ def test_reachable_configs_string_pin_narrows_like_the_object_pin():
 
 
 def test_reachable_configs_unusable_pin_shape_rotates_conservatively():
+    # CHARACTERIZER, not refusal coverage (review round 3, Minor): this passes with or without
+    # normalize_pins in reachable_configs, because the pre-existing `isinstance(pin, dict)` guard
+    # already rotates an unusable shape. What it pins is the operator-facing property that the
+    # liveness-narrowing path stays CONSERVATIVE (over-probes) rather than refusing — the CLI is
+    # where refusal lives. The chokepoint coverage for this function is
+    # test_reachable_configs_string_pin_narrows_like_the_object_pin, which does go red without it.
     rc = SM.reachable_configs(["codex", "cursor"], {"code-reviewer": 5})
     assert rc["cursor"] != []
 
