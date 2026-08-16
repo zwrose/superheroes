@@ -23,8 +23,20 @@ not listed in the table below is the same as the **full** lane.
 | Preflight | yes | yes | no |
 | Definition-of-done table | yes | yes | no — nothing to disposition against |
 | Authorized by | the route | the route | the owner, per change |
-| Size | — | ~100–400 lines | ~100 lines or fewer |
+| Size (non-test lines — see below) | — | ~100–400 | ~100 or fewer |
 | Typical cost | 33–108 min | ~5 min | ~5 min |
+
+**Size counts non-test lines.** Every size figure in this document and in the charters — the
+lane row above, the light lane's measured escalation line, the micro ceiling, and the
+"twice the brief's estimate" scope tripwire — is read over **non-test changed lines**:
+additions plus deletions in every file *outside* a `tests/` directory (docs, skill and
+rubric prose, and code all count; test modules and their fixtures do not). Test volume
+scales with rigour here — bite-proofs, truth tables, censuses, drift tests — and a size
+line that counted it would push a builder toward fewer tests to stay in-lane, which is
+the wrong pressure. Test volume that signals a *design* problem is the third-rework
+tripwire's and the vet's to catch, not the lane line's. Estimates carry both numbers
+(behaviour + test lines) so the tripwire and the estimate share a basis (owner-ruled
+2026-08-16).
 
 **Micro skips preflight** because preflight proves tools before a session goes
 *autonomous*, and micro never does — it runs inside a long-lived advisor session with
