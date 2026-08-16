@@ -4406,7 +4406,7 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths):
+                        session_dir, rnd, paths, channel):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -4430,8 +4430,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         dim_label = _panel_dimension_label(seat_key)
         if not dim_label:
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
-        channel = _seat_channel(phase, row)
         pr_checkout = _session_pr_checkout_path(session_dir)
         ph = {
             "MODE": meta.get("mode") or cfg.get("mode") or "branch",
@@ -4459,26 +4457,23 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                 break
         if cluster_index is None:
             raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "CLUSTER_FINDINGS_PATH": _order_cluster_sidecar_path(rdir, cluster_index),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
-            "CHANNEL": _seat_channel(phase, row),
+            "CHANNEL": channel,
         }
     elif phase == P_SYNTHESIS:
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "VERIFIED_FINDINGS_PATH": _order_verified_sidecar_path(rdir),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "GROUPING_OUTPUT_PATH": os.path.join(rdir, "grouping.json"),
-            "CHANNEL": _seat_channel(phase, row),
+            "CHANNEL": channel,
         }
     elif phase == P_GAPSWEEP:
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
@@ -4486,7 +4481,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
-            "CHANNEL": _seat_channel(phase, row),
+            "CHANNEL": channel,
         }
     elif phase == P_AUDITS:
         targets = payload.get("targets")
@@ -4494,7 +4489,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             targets = []
         if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "TARGET_SUMMARY_PATH": _order_audit_target_sidecar_path(
                 rdir, round_records.storage_key(seat_key, occurrence)),
@@ -4502,10 +4496,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "TARGET_ID": seat_key,
-            "CHANNEL": _seat_channel(phase, row),
+            "CHANNEL": channel,
         }
     elif phase == P_SCOPED:
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "HUNKS_PATH": _order_scoped_hunks_sidecar_path(rdir),
             "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
@@ -4514,7 +4507,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
-            "CHANNEL": _seat_channel(phase, row),
+            "CHANNEL": channel,
         }
     elif phase == P_FIXER:
         ph = {
@@ -4540,7 +4533,13 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
     if transport_fault is not None:
         skey = round_records.storage_key(seat_key, occurrence)
         raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))
-    host_seat = _seat_channel(phase, row) == CHANNEL_FILE
+    # Resolve the channel EXACTLY ONCE and hand that value to both consumers (`host_seat`
+    # here, the `CHANNEL` placeholder below). `_seat_transport_row` is not pure for the
+    # reviewer-engine phases — it re-reads engine prefs from disk behind a fallback — so a
+    # second resolution could return a different vendor and emit an order carrying BOTH a
+    # stdout and a write instruction.
+    channel = _seat_channel(phase, row)
+    host_seat = channel == CHANNEL_FILE
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
     base_ref = cfg.get("baseRef") or meta.get("baseRef")
     residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
@@ -4565,7 +4564,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths),
+                                              session_dir, rnd, paths, channel),
     }, paths
 
 

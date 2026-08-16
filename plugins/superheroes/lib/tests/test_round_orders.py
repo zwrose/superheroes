@@ -492,8 +492,7 @@ def test_render_normalizes_focus_notes(focus, expected_substr, tmp_path):
     }
     ph = RD._order_placeholders(
         RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
-        session_dir, 2, paths,
-    )
+        session_dir, 2, paths, RD.CHANNEL_FILE,)
     if focus is None:
         assert ph["FOCUS_NOTES"] == ""
     else:
@@ -748,8 +747,7 @@ def test_fixer_order_shell_paths_are_quoted_for_metacharacters(tmp_path):
     }
     ph = RD._order_placeholders(
         RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 2, paths,
-    )
+        session_dir, 2, paths, RD.CHANNEL_FILE,)
     ctx = _base_context(
         host_seat=True,
         landing_path=paths["bare_payload_path"],
@@ -829,7 +827,7 @@ def test_unmatched_verifier_cluster_refuses_render():
         RD._order_placeholders(
             RP.P_VERIFIERS, "verifier:missing", 0, state, state["config"],
             {"clusters": [{"key": "other:0", "findings": []}]},
-            session_dir, 2, paths)
+            session_dir, 2, paths, RD.CHANNEL_FILE)
     except ValueError as exc:
         assert "unmatched-verifier-cluster:missing" in str(exc)
     else:
@@ -848,11 +846,11 @@ def test_panel_order_dimension_uses_rubric_label(tmp_path):
     paths = {"storage_key": "code-reviewer.a0"}
     ph = RD._order_placeholders(
         RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
-        session_dir, 2, paths)
+        session_dir, 2, paths, RD.CHANNEL_FILE)
     assert ph["DIMENSION"] == "Code"
     ph_sec = RD._order_placeholders(
         RP.P_PANEL, "premortem-reviewer", 0, state, state["config"], {},
-        session_dir, 2, paths)
+        session_dir, 2, paths, RD.CHANNEL_FILE)
     assert ph_sec["DIMENSION"] == "Failure-Mode"
 
 
@@ -968,8 +966,7 @@ def _fb7_panel_order_placeholders(repo_root, monkeypatch, resolve_impl):
     }
     return RD._order_placeholders(
         RP.P_PANEL, "code-reviewer", 0, state, state["config"], {},
-        session_dir, 1, paths,
-    )
+        session_dir, 1, paths, RD.CHANNEL_FILE,)
 
 
 def test_order_calibration_unresolvable_root_differs_from_resolved_empty(tmp_path, monkeypatch):
@@ -1103,8 +1100,7 @@ def test_fixer_escalation_wrapper_path_quoted_through_renderer(tmp_path, monkeyp
     }
     ph = RD._order_placeholders(
         RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 2, paths,
-    )
+        session_dir, 2, paths, RD.CHANNEL_FILE,)
     quoted_escalation = shlex.quote(escalation)
     assert ph["ESCALATION_WRAPPER_PATH"] == quoted_escalation
     assert quoted_escalation != escalation
@@ -1228,8 +1224,7 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
     state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n"}
     ph = RD._order_placeholders(
         RP.P_VERIFIERS, "verifier:f.py:0", 0, state, state["config"],
-        {"clusters": payload["clusters"]}, session_dir, 2, paths,
-    )
+        {"clusters": payload["clusters"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
     assert ph["CLUSTER_FINDINGS_PATH"] == cluster_path
     audit_write = RD._order_sidecar_writes(session_dir, 2, RP.P_AUDITS, roster,
                                           {"targets": payload["targets"]})
@@ -1237,8 +1232,7 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
     assert audit_path in [path for path, _ in audit_write]
     ph_audit = RD._order_placeholders(
         RP.P_AUDITS, "finding::auth.py::12", 0, state, state["config"],
-        {"targets": payload["targets"]}, session_dir, 2, paths,
-    )
+        {"targets": payload["targets"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
     assert ph_audit["TARGET_SUMMARY_PATH"] == audit_path
     scoped_write = RD._order_sidecar_writes(session_dir, 2, RP.P_SCOPED, roster,
                                              {"hunks": payload["hunks"]})
@@ -1246,8 +1240,7 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
     assert scoped_path in [path for path, _ in scoped_write]
     ph_scoped = RD._order_placeholders(
         RP.P_SCOPED, "scoped-finder", 0, state, state["config"],
-        {"hunks": payload["hunks"]}, session_dir, 2, paths,
-    )
+        {"hunks": payload["hunks"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)
     assert ph_scoped["HUNKS_PATH"] == scoped_path
 
 
@@ -1282,8 +1275,7 @@ def test_fixer_guard_command_uses_stdin_not_shell_path_interpolation(tmp_path):
     }
     ph = RD._order_placeholders(
         RP.P_FIXER, "fixer", 0, state, state["config"], {},
-        session_dir, 2, paths,
-    )
+        session_dir, 2, paths, RD.CHANNEL_FILE,)
     ctx = _base_context(
         host_seat=True,
         landing_path=paths["bare_payload_path"],
@@ -1335,10 +1327,18 @@ def test_synthesis_order_channel_file_when_reviewer_engine_is_codex(tmp_path, mo
         "envelope_stub_path": os.path.join(session_dir, "stub.json"),
         "order_path": os.path.join(session_dir, "order.md"),
     }
+    # The DERIVATION is the claim: synthesis is Claude-only, so its transport row is `claude` and
+    # its channel stays `file` even where the project's reviewer engine is codex. The channel is
+    # resolved once by the driver and handed to the placeholders (#1035), so assert it at the
+    # resolver rather than at the placeholder dict, which would now merely echo what was passed in.
+    row = RD._seat_transport_row(state, RP.P_SYNTHESIS, "synthesis", 0, state["config"],
+                                 {"findings": []}, repo)
+    assert row["vendor"] == "claude"
+    channel = RD._seat_channel(RP.P_SYNTHESIS, row)
+    assert channel == RD.CHANNEL_FILE
     ph = RD._order_placeholders(
         RP.P_SYNTHESIS, "synthesis", 0, state, state["config"],
-        {"findings": []}, session_dir, 2, paths,
-    )
+        {"findings": []}, session_dir, 2, paths, channel,)
     assert ph["CHANNEL"] == "file"
     ctx = _base_context(host_seat=True, placeholders=ph)
     text, reason = RO.render_order(RP.P_SYNTHESIS, "synthesis", ctx)

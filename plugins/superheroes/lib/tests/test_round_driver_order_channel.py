@@ -199,10 +199,83 @@ def test_engine_channel_renders_no_write_instruction_for_every_phase(phase):
 
 @pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
 def test_every_phase_renders_exactly_one_output_contract(phase):
-    """Direction 2: exactly one output contract per seat kind x channel — never two, never none."""
+    """Direction 2: exactly one output contract per seat kind x channel — never two, never none.
+
+    Bite axis: MUTUAL EXCLUSIVITY of the two concrete contracts. Counting the `## Return your
+    result` heading would not do this — `render_order` appends that heading unconditionally, so an
+    order carrying BOTH a stdout instruction and a landing-file write would still count 1.
+    """
     for host_seat in (True, False):
         text = _render_phase(phase, host_seat=host_seat)
-        assert text.count("## Return your result") == 1, (phase, host_seat)
+        writes = bool(_names_a_write(text))
+        emits = "final stdout" in text
+        assert writes != emits, (
+            "phase=%s host_seat=%s must state exactly one contract (writes=%s emits_stdout=%s)"
+            % (phase, host_seat, writes, emits))
+        assert writes is host_seat, (phase, host_seat, writes)
+
+
+# =================================================================================================
+# The channel is resolved ONCE and both consumers get that value (review finding, #1035)
+# =================================================================================================
+
+@pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
+def test_driver_context_gives_both_consumers_the_same_channel(tmp_path, phase, monkeypatch):
+    """`host_seat` and the `CHANNEL` placeholder must never disagree for one seat.
+
+    Bite axis: AGREEMENT between the two consumers, resolved through the REAL context builder — not
+    a hand-built context, which cannot expose a disagreement because the test would be choosing
+    both values itself. `_seat_transport_row` is not pure for the reviewer-engine phases (it
+    re-reads engine prefs from disk behind a fallback), so a second resolution is a real divergence
+    path; this pins that only one resolution happens.
+    """
+    session_dir = str(tmp_path / "ctx")
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
+                                    "fixerVendor": "claude", "verifyCommand": "none",
+                                    "seatMap": _mixed_seat_map()})
+    assert out["ok"], out
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+
+    # Every resolution after the first returns a DIFFERENT vendor. With one resolution the context
+    # is self-consistent; with two, `host_seat` and `CHANNEL` come from different rows and disagree.
+    calls = {"n": 0}
+    real_row = RD._seat_transport_row
+
+    def flipping_row(*args, **kwargs):
+        row = dict(real_row(*args, **kwargs))
+        calls["n"] += 1
+        if calls["n"] > 1:
+            row["vendor"] = "codex" if row.get("vendor") == "claude" else "claude"
+        return row
+
+    monkeypatch.setattr(RD, "_seat_transport_row", flipping_row)
+    context, _paths = RD._build_order_render_context(
+        session_dir, state, 1, phase, 1, _seat_for(phase), 0, _payload_for(phase))
+    placeholder_channel = context["placeholders"].get("CHANNEL")
+    host_seat_channel = RD.CHANNEL_FILE if context["host_seat"] else RD.CHANNEL_STDOUT
+    assert placeholder_channel == host_seat_channel, (
+        "phase=%s resolved the transport row %d times — host_seat says %s, CHANNEL says %s"
+        % (phase, calls["n"], host_seat_channel, placeholder_channel))
+
+
+def _seat_for(phase):
+    if phase == RD.P_PANEL:
+        return ENGINE_SEAT
+    if phase == RD.P_VERIFIERS:
+        return "verifier:c1"
+    if phase == RD.P_AUDITS:
+        return "t1"
+    return phase
+
+
+def _payload_for(phase):
+    if phase == RD.P_VERIFIERS:
+        return {"clusters": [{"key": "c1", "issues": []}]}
+    if phase == RD.P_AUDITS:
+        return {"targets": [{"id": "t1", "auditorVendor": "claude"}]}
+    return {}
 
 
 def test_the_fixer_is_not_swept_into_the_read_only_fold():
