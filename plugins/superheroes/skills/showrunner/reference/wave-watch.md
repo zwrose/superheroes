@@ -59,8 +59,12 @@ the ceiling returns that same refusal, so nothing falls open. The ceiling is a *
 from the first live-child refusal onward**, not a whole-call wall-clock bound: each attempt also runs
 a liveness probe that settles for a couple of seconds, so a call costs the ceiling plus one probe per
 attempt. Pick the number for how long you are willing to wait, not for when you need to be back.
-The accepted range is **0..540 seconds** — the same ceiling a single dispatch slice carries; outside
-it the verb refuses (`await-exit-invalid:<value>`) before attempting anything.
+The accepted range is **0..1800 seconds** (30 minutes — sized from the field: builders outlive their
+handback by 10–18 minutes); outside it the verb refuses (`await-exit-invalid:<value>`) before
+attempting anything. **Foreground callers stay at or under 540 seconds** — a harness with a 10-minute
+tool-call cap kills anything longer mid-wait; a longer patience is a **background** call, which is
+the shape that makes the verb itself the wait (no second watcher). A builder that outlives even that
+is the loop's `builder-exited` event's to report — re-invoke the verb then.
 
 The arming snippet above omits two flags you should **include on every arm**: `--max-total-seconds`
 (the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a

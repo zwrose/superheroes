@@ -1658,7 +1658,8 @@ def main(argv=None):
     ro.add_argument(
         "--await-exit", type=float, default=0.0,
         help="seconds to keep re-attempting while the lane's child is still alive "
-             "(0..540, default 0 = refuse immediately as before)",
+             "(0..1800, default 0 = refuse immediately as before; foreground callers "
+             "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
     )
     ro.set_defaults(func=_cli_record_outcome)
 
