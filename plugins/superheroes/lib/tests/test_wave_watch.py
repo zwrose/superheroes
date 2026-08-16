@@ -3053,6 +3053,31 @@ def test_enotdir_is_a_failed_read_not_an_absent_transcript(tmp_path, monkeypatch
     assert unresolved is True, "%s is an unreadable root, not an absent transcript" % shape
 
 
+def test_candidate_stat_enotdir_is_a_failed_read(tmp_path, monkeypatch):
+    """The third ENOTDIR site: a bucket replaced by a file between scandir and stat.
+
+    The two fixtures above both fail at the projects scan; this one pins the candidate
+    `stat`, which is otherwise only reachable through a race.
+    """
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30)
+    real_stat = ww.os.stat
+    target = os.path.join(
+        str(config_dir), "projects", "bucket-a", _TEST_SESSION_ID + ".jsonl",
+    )
+
+    def enotdir_stat(path, *a, **kw):
+        if str(path) == target:
+            raise NotADirectoryError("simulated ENOTDIR race")
+        return real_stat(path, *a, **kw)
+
+    monkeypatch.setattr(ww.os, "stat", enotdir_stat)
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(
+        _TEST_SESSION_ID, os.environ,
+    )
+    assert mtime is None and ambiguous is False and unresolved is True
+
+
 def test_unusable_recorded_root_resolves_unresolved_instead_of_raising(monkeypatch):
     """A path can be absolute and still be unusable — that must not escape the resolver.
 
