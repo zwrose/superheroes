@@ -2643,6 +2643,8 @@ _I2_SHAPES_DISCLOSING_UNRESOLVED = frozenset({
 
 @pytest.mark.parametrize("shape", _I2_STILL_STALE_SHAPES)
 def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, request, shape):
+    if shape.startswith("unreadable-") and os.geteuid() == 0:
+        pytest.skip("root can read mode-0o000 directories")  # same guard the standalone tests carry
     repo = _init_repo(tmp_path / "repo")
     worktree = str(tmp_path / "build-wt")
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
@@ -2731,6 +2733,9 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, request
         _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="readable")
         unreadable = os.path.join(str(config_dir), "projects", "unreadable")
         os.makedirs(unreadable, mode=0o000)
+        # Same hygiene as its sibling: a 0o000 dir defeats pytest's tmp cleanup (rm_rf
+        # warnings, garbage dirs left under the tmp root) — hand the mode back after the read.
+        request.addfinalizer(lambda: os.chmod(unreadable, 0o700))
     elif shape == "unreadable-projects-root":
         _write_session_transcript(config_dir, session_id, age_seconds=60)
         unreadable_root = os.path.join(str(config_dir), "projects")
@@ -2858,7 +2863,10 @@ def test_session_transcript_mtime_unreadable_bucket_candidate_stat_is_unresolved
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="unreadable")
     unreadable = os.path.join(str(config_dir), "projects", "unreadable")
     os.chmod(unreadable, 0o000)
-    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    try:
+        mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    finally:
+        os.chmod(unreadable, 0o700)  # hand the mode back so pytest's tmp cleanup can remove it
     assert mtime is None and ambiguous is False and unresolved is True
 
 

@@ -119,13 +119,18 @@ Run all locally-runnable steps before pushing:
 /usr/bin/python3 .github/scripts/validate_hosts.py
 /usr/bin/python3 .github/scripts/validate_skills.py
 /usr/bin/python3 .github/scripts/validate_stubs.py
-/usr/bin/python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
 ```
 
 Use `/usr/bin/python3` for local gates: that interpreter carries pytest, PyYAML
 and `pytest-xdist`, which the validators and test suite require — run the suite
-with `-n auto` exactly as CI does; the serial run is many times slower and is not
-the calibrated verify command. CI runs the gates on Python
+with `-n auto` exactly as CI does; the serial run is many times slower. Keep the
+`-B -X pycache_prefix=…` flags: Apple's Python caches bytecode *outside* the tree
+(`~/Library/Caches/com.apple.python/`), and a same-size, same-second edit — the
+shape of every bite-proof and probe — then runs stale bytecode; the prefix redirects
+reads and writes to a scratch tree. The full suite is CI's receipt; the calibrated
+local verify command is the four validators, and builds run the suites their
+orders name. CI runs the gates on Python
 **3.12** while `/usr/bin/python3` on macOS is **3.9.6**, so a green local run is
 strong but not conclusive evidence for CI — version-sensitive syntax or stdlib
 behavior can pass one and fail the other. The catalog-membership check and the
