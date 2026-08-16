@@ -2411,6 +2411,25 @@ def _issue_contract_slots_from_conventions():
     return [m.group(1).rstrip(":"), m.group(2).rstrip(":"), m.group(3).rstrip(":")]
 
 
+def _issue_contract_refusals_from_conventions():
+    """Refusal tokens from CONVENTIONS §11 worked example 3 guarded list."""
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"five build-ready\s+refusal-reason tokens \(([^)]+)\)",
+        text,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: issue-contract refusal-token list not found "
+        "(moved or reworded?)"
+    )
+    tokens = re.findall(r"`([^`]+)`", m.group(1))
+    assert tokens, (
+        "CONVENTIONS.md §11: refusal-token list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return set(tokens)
+
+
 def test_issue_contract_vocabulary_in_issue_contract_doc():
     """§11: issue-contract.md restates issue_contract.py vocabulary on three registry axes
     plus ordered slots.
@@ -2421,6 +2440,7 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
     - skills/showrunner/reference/issue-contract.md build-ready refusal-reason table
     - skills/showrunner/SKILL.md duty 2 three-slot skeleton enumeration
     - CONVENTIONS.md §11 worked example 3 slot-name enumeration
+    - CONVENTIONS.md §11 worked example 3 refusal-reason token list
 
     Axis notes:
     - Slots, anchor kinds, refusals: SLOT_/KIND_/REFUSAL_* constants must match the module
@@ -2492,5 +2512,13 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         "CONVENTIONS.md §11 slot order drift from issue_contract.SLOTS — "
         "doc: %r; home: %r"
         % (conventions_slots, home_slots)
+    )
+    conventions_refusals = _issue_contract_refusals_from_conventions()
+    missing_conv = sorted(home_refusals - conventions_refusals)
+    extra_conv = sorted(conventions_refusals - home_refusals)
+    assert not missing_conv and not extra_conv, (
+        "CONVENTIONS.md §11 refusal vocabulary drift from issue_contract.REFUSALS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_conv, extra_conv)
     )
     assert list(issue_contract.SLOTS) == home_slots

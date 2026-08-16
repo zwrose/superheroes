@@ -57,10 +57,22 @@ _RE_SECTION_REF = re.compile(
 _RE_AS_OF = re.compile(r"as-of\s+amendment\s+#\d+", re.IGNORECASE)
 _RE_ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _RE_RULING_WORD = re.compile(r"\bruling\b", re.IGNORECASE)
-_RE_LOCATION = re.compile(
+_RE_LOCATION_PREP = re.compile(r"\b(?:in|at)\s+(\w+)\b", re.IGNORECASE)
+_RE_LOCATION_NOUN = re.compile(
+    r"\b\w+\s+(?:channel|sitting|thread)\b",
+    re.IGNORECASE,
+)
+_RE_LOCATION_RECORDED = re.compile(
+    r"\brecorded\s+(?:in|at)\s+\S+",
+    re.IGNORECASE,
+)
+_RE_LOCATION_MARKER = re.compile(
     r"\b(?:in|at|channel|sitting|thread|recorded)\b",
     re.IGNORECASE,
 )
+_LOCATION_PREP_STOP_WORDS = frozenset({
+    "a", "an", "progress", "risk", "the", "this", "that",
+})
 _RE_RECEIPT = re.compile(r"https?://|\[[^\]]*\]\([^)]+\)")
 
 
@@ -137,6 +149,40 @@ def _parse_slots(body):
     return statuses, slots_content
 
 
+def _has_location_clause(content):
+    """Location names a place: prep+target, qualified noun, or recorded in/at <target>."""
+    if _RE_LOCATION_NOUN.search(content):
+        return True
+    if _RE_LOCATION_RECORDED.search(content):
+        return True
+    for match in _RE_LOCATION_PREP.finditer(content):
+        if match.group(1).lower() not in _LOCATION_PREP_STOP_WORDS:
+            return True
+    return False
+
+
+def _is_spec_partial(content):
+    """Any spec marker present but not all three — malformed, never a receipt."""
+    markers = (
+        bool(_RE_WORK_ITEM_SLUG.search(content)),
+        bool(_RE_SECTION_REF.search(content)),
+        bool(_RE_AS_OF.search(content)),
+    )
+    present = sum(markers)
+    return 0 < present < 3
+
+
+def _is_ruling_partial(content):
+    """Any ruling marker present but not all three — malformed, never a receipt."""
+    markers = (
+        bool(_RE_ISO_DATE.search(content)),
+        bool(_RE_RULING_WORD.search(content)),
+        bool(_RE_LOCATION_MARKER.search(content)),
+    )
+    present = sum(markers)
+    return 0 < present < 3
+
+
 def _matches_spec_section(content):
     """Full spec-section shape: work-item slug + section ref + as-of cursor."""
     return (
@@ -151,13 +197,13 @@ def _matches_owner_ruling(content):
     return (
         _RE_ISO_DATE.search(content)
         and _RE_RULING_WORD.search(content)
-        and _RE_LOCATION.search(content)
+        and _has_location_clause(content)
     )
 
 
-def _matches_receipt(content, spec_matched, ruling_matched):
-    """Receipt shape: link present and neither full spec nor full ruling matched."""
-    if spec_matched or ruling_matched:
+def _matches_receipt(content, spec_matched, ruling_matched, spec_partial, ruling_partial):
+    """Receipt: link present and anchor is neither full nor partial spec/ruling."""
+    if spec_matched or ruling_matched or spec_partial or ruling_partial:
         return False
     return _RE_RECEIPT.search(content) is not None
 
@@ -166,7 +212,9 @@ def _match_anchor_kinds(content):
     """Detect anchor kinds by full shape with receipt weakest — shape only, no resolution."""
     spec = _matches_spec_section(content)
     ruling = _matches_owner_ruling(content)
-    receipt = _matches_receipt(content, spec, ruling)
+    spec_partial = _is_spec_partial(content)
+    ruling_partial = _is_ruling_partial(content)
+    receipt = _matches_receipt(content, spec, ruling, spec_partial, ruling_partial)
     kinds = set()
     if spec:
         kinds.add(KIND_SPEC_SECTION)

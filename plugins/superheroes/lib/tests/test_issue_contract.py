@@ -63,6 +63,69 @@ def test_refusal_anchor_kind_unrecognized_ruling_no_location():
     assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
 
 
+def test_refusal_anchor_kind_unrecognized_spec_partial_with_url():
+    body = (
+        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · "
+        "https://example.com/spec\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+    assert result["matchedKinds"] == []
+
+
+def test_refusal_anchor_kind_unrecognized_ruling_partial_with_url():
+    body = (
+        "Anchor: 2026-08-07 · owner ruling · https://example.com/ruling\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+    assert result["matchedKinds"] == []
+
+
+def test_refusal_ruling_location_in_progress_not_place():
+    body = (
+        "Anchor: 2026-08-07 · ruling still in progress\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+
+
+def test_refusal_ruling_location_at_risk_not_place():
+    body = (
+        "Anchor: ruling currently at risk\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+
+
+def test_refusal_ruling_location_bare_recorded_not_place():
+    body = (
+        "Anchor: ruling was recorded\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+
+
 def test_refusal_anchor_kind_ambiguous():
     body = (
         "Anchor: front-half-sdlc-core-6181ee · §3 · as-of amendment #4 · "
@@ -122,6 +185,19 @@ def test_pass_receipt():
 
 
 def test_pass_owner_ruling():
+    body = (
+        "Anchor: 2026-08-07 · owner ruling · advisor channel, discovery sitting\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_OWNER_RULING
+    assert result["matchedKinds"] == [ic.KIND_OWNER_RULING]
+
+
+def test_pass_owner_ruling_single_channel():
     body = (
         "Anchor: 2026-08-07 · owner ruling · advisor channel\n"
         "What: scope\n"

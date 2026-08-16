@@ -74,7 +74,10 @@ appear inside a fully-shaped spec or ruling anchor because the contract mandates
   a section reference (`§`, the word *section*, or an `FR-<n>` / `UFR-<n>` citation), and the
   as-of cursor `as-of amendment #N`;
 - an **owner-ruling** anchor requires all three: an ISO date (`YYYY-MM-DD`), the word *ruling*,
-  and a location clause (`in`, `at`, `channel`, `sitting`, `thread`, or `recorded`);
+  and a location clause that names a place — a preposition (`in` / `at`) followed by a target
+  word, a qualified location noun (`<word> channel`, `<word> sitting`, or `<word> thread`), or
+  `recorded in <target>` / `recorded at <target>` (bare `in`, `at`, or `recorded` alone do not
+  qualify);
 - a **receipt** anchor is recognized by a link (`http(s)://` URL or markdown link) **only when
   neither** spec-section **nor** owner-ruling matched on its full shape.
 

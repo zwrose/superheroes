@@ -996,8 +996,9 @@ leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimens
 dropped, never widening or corrupting the roster.
 
 *Worked example 3 — the issue-contract vocabulary.* The three slot names and their order
-(`Anchor:`, `What:`, `DoD:`), the three anchor-kind tokens, and the four build-ready
-refusal-reason tokens are a cross-boundary fact: they are stated in
+(`Anchor:`, `What:`, `DoD:`), the three anchor-kind tokens, and the five build-ready
+refusal-reason tokens (`anchor-slot-missing`, `anchor-slot-empty`, `anchor-kind-unrecognized`,
+`anchor-kind-ambiguous`, `body-unreadable`) are a cross-boundary fact: they are stated in
 `plugins/superheroes/lib/issue_contract.py` and restated in
 `plugins/superheroes/skills/showrunner/reference/issue-contract.md`. The authoritative home
 is the Python module — exactly as `citation_validator.py`'s `CITATION_RE` is the home for
