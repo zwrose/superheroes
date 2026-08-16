@@ -106,6 +106,38 @@ def test_workhorse_emits_top_level_additional_context(monkeypatch, capsys, tmp_p
     assert "Verbatim tool output, file diffs" in ctx
 
 
+def test_detective_emits_top_level_additional_context(monkeypatch, capsys, tmp_path):
+    mod = _load_hook("cc_detective")
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("detective")])
+    _stdin(monkeypatch, _precompact_payload(str(path)))
+    assert mod.main() == 0
+    lines = _stdout_lines(capsys)
+    assert len(lines) == 1
+    out = json.loads(lines[0])
+    assert "additionalContext" in out
+    assert "hookSpecificOutput" not in out
+    assert "DETECTIVE" in out["additionalContext"]
+    assert "SHOWRUNNER" not in out["additionalContext"]
+    assert "WORKHORSE" not in out["additionalContext"]
+    ctx = out["additionalContext"]
+    assert "Incident under diagnosis" in ctx
+    assert "Hypotheses already ruled out" in ctx
+    assert "Demonstration state" in ctx
+    assert "disposable copy" in ctx
+    assert "diagnosis budget" in ctx
+    assert "examined surface is never edited" in ctx
+    assert "Verbatim tool output, file diffs" in ctx
+
+
+def test_compaction_skeletons_cover_all_charter_names():
+    """Skeleton dict keys must match CHARTER_NAMES — fails if detective entry is removed."""
+    import charter_detect
+
+    mod = _load_hook("cc_skeleton_roster")
+    assert set(mod._COMPACTION_SKELETONS) == set(charter_detect.CHARTER_NAMES)
+
+
 def test_no_charter_transcript_is_silent(monkeypatch, capsys, tmp_path):
     mod = _load_hook("cc_no_charter")
     path = tmp_path / "transcript.jsonl"

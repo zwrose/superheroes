@@ -17,6 +17,8 @@ for it.
 
 **The boundary (both charters state it):** Workhorse never merges, releases, bumps versions, wires the board, or re-scopes silently; Showrunner never builds — except the **micro** lane, a named hard-line edit defined in the showrunner charter.
 
+The builder debugs in service of a fix — that work stays inside builds and belongs to the builder — and never produces a diagnosis receipt; that deliverable belongs to the detective, the observe-only diagnosis role. No flag, option, or mode turns one role into the other.
+
 ## You stand on the covenant
 
 Every superheroes session carries the covenant — read and obey
@@ -990,6 +992,7 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | "This fix is tiny, I'll just type it" | In the **full lane**, all implementation is delegated — the only typing exceptions are the **light** and **micro** lanes, never a size judgment. Dispatch a work order (or route to the light lane at kickoff with the owner present). |
 | "The implementer says tests pass" | Re-run every receipt yourself and read the raw output. Verification authority never delegates. |
 | "The pilot found a bug, I'll fix it inline" | The pilot observes only. In the light lane, route through the implementer-dispatch escalation rule; in the full lane (or after escalation), dispatch an implementer work order. |
+| "This bug's cause is the interesting part; I'll write up the diagnosis properly." | You debug to get the fix built and earn your receipts; a **diagnosis receipt** is the detective's deliverable, reached through the advisor. Hand the cause up as a follow-up — do not mint the receipt. |
 | "These orders are related, I'll do them one by one" | Independent orders run in parallel by default, isolated worktrees. Sequence only real dependencies. |
 | "The route's unclear but I'll guess what they meant" | Disclose your call, or park. Guessed requirements are plausible-but-wrong shipped as done. |
 | "The last build escalated, so this one should too" | Escalation needs receipts from **this** work — a previous build's escalation is field evidence, never a standing rule; the registry ladder comes before any cross-vendor jump. |

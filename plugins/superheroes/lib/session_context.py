@@ -147,7 +147,7 @@ def _charter_recovery_parts(transcript_path, source, plugin_root):
             return "", ""
         import charter_detect
         charter = charter_detect.detect_charter(transcript_path)
-        if charter not in ("showrunner", "workhorse"):
+        if charter not in charter_detect.CHARTER_NAMES:
             return "", ""
         skill_path = _charter_skill_path(plugin_root, charter)
         return (

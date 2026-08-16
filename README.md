@@ -64,10 +64,11 @@ may add a one-line bootstrap note asking the advisor to propose a manual cleanup
 
 ---
 
-## Two heroes run your sessions; four serve inside them
+## Three heroes run your sessions; four serve inside them
 
-**Showrunner** and **Workhorse** are the two session types you actually launch — one
-long-lived advisor per project, one active builder per issue. **The Architect**,
+**Showrunner**, **Workhorse**, and **Detective** are the three session types you actually
+launch — one long-lived advisor per project, one active builder per issue, and an
+observe-only diagnostician when the cause matters more than the fix. **The Architect**,
 **Review Crew**, **Test-Pilot**, and **Guardian** serve inside those sessions.
 
 ## Showrunner — the advisor session
@@ -101,6 +102,20 @@ finding dispositioned in the PR body, and hands back a **ready PR**. It **never 
 | --- | --- |
 | `/superheroes:workhorse` | Build a routed issue and take it to a ready-for-review PR. |
 | `/superheroes:checkpoint` | Freshen live state and emit a ready-to-paste `/compact` command before compaction. |
+
+## Detective — the diagnosis session
+
+**Finds the demonstrated cause when the cause matters more than the fix.** A dedicated
+observe-only session that fires when the cause is unknown, the blast radius is
+cross-cutting, or a first fix already failed — an ordinary bug stays build-ready. It
+demonstrates a cause by **reproduction or A/B comparison on a disposable copy**, never by
+inference from error text alone. It delivers a **diagnosis receipt** on the incident issue
+for the **advisor to vet**. It **never edits the surface under diagnosis and never produces
+a fix**.
+
+| Command | Use it to… |
+| --- | --- |
+| `/superheroes:detective` | Run an observe-only diagnosis when the cause is the valuable thing — demonstrate cause, deliver a diagnosis receipt, never fix. |
 
 ## The Architect
 

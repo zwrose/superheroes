@@ -61,6 +61,11 @@ Copy-holder disposition (§11.2 caveat — adding a copy means extending the tab
   (§ ``## 10. Review before handback``), and third-rework-stop (§
   ``## 7. Delegate every implementation (lane-scoped — no size exception)``); deliberately excluded
   from the waiver-bounds row because micro is the showrunner's lane, not an oversight.
+- **``skills/workhorse/SKILL.md``** and **``skills/detective/SKILL.md``** — the diagnosis/fix
+  boundary (§ workhorse preamble and § ``## The boundary — both ways``): each charter's half of the
+  two-sided fact plus the shared no-flag clause, pinned as clause-presence sentinels — paraphrases,
+  not byte-identical lines, so no symmetric equality assertion; neither charter is authoritative
+  over the other and there is no rubric home for this seam.
 """
 import copy
 import os
@@ -81,6 +86,22 @@ _EXPECTED_PRECEDENCE_LINE = (
     "action with both sources cited — never resolve silently toward either.** This is an "
     "interim rule pending the text catching up."
 )
+
+_EXPECTED_NO_FLAG_CLAUSE = (
+    "No flag, option, or mode turns one role into the other"
+)
+
+_DIAGNOSIS_FIX_BOUNDARY_SECTIONS = {
+    "skills/workhorse/SKILL.md": (
+        "# Workhorse — the build session (an orchestrator)"
+    ),
+    "skills/detective/SKILL.md": "## The boundary — both ways",
+}
+
+_DIAGNOSIS_FIX_HOLDER_CLAUSES = {
+    "skills/workhorse/SKILL.md": "never produces a diagnosis receipt",
+    "skills/detective/SKILL.md": "You never produce a fix",
+}
 
 _FENCE_GUARDED_FILES = (
     _HOME,
@@ -621,6 +642,30 @@ def _precedence_line(skill):
     )
 
 
+def _check_diagnosis_fix_boundary(read_text=None):
+    """Assert each charter's diagnosis/fix half and the shared no-flag clause.
+
+    Neither charter is authoritative over the other and there is no rubric home for this
+    seam — presence in each charter's declared boundary section, not byte equality.
+    """
+    if read_text is None:
+        read_text = _read_plugin
+    for rel, section in _DIAGNOSIS_FIX_BOUNDARY_SECTIONS.items():
+        section_text = _file_section(rel, section, read_text)
+        if _EXPECTED_NO_FLAG_CLAUSE not in section_text:
+            raise AssertionError(
+                f"diagnosis/fix boundary: shared no-flag clause missing from "
+                f"{rel} (section {section}) — re-sync both charters: "
+                f"{_EXPECTED_NO_FLAG_CLAUSE!r}"
+            )
+        holder_clause = _DIAGNOSIS_FIX_HOLDER_CLAUSES[rel]
+        if holder_clause not in section_text:
+            raise AssertionError(
+                f"diagnosis/fix boundary: holder clause missing from "
+                f"{rel} (section {section}): {holder_clause!r}"
+            )
+
+
 def test_boundary_line_is_identical_in_both_charters():
     showrunner = _boundary_line("showrunner")
     workhorse = _boundary_line("workhorse")
@@ -644,6 +689,10 @@ def test_precedence_line_is_identical_in_both_charters():
         f"re-sync both charters.\n  found:    {showrunner}\n  expected: "
         f"{_EXPECTED_PRECEDENCE_LINE}"
     )
+
+
+def test_diagnosis_fix_boundary_clauses_present():
+    _check_diagnosis_fix_boundary()
 
 
 def test_no_fence_lines():

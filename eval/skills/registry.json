@@ -56,7 +56,7 @@
       "reached from `superheroes:configure`"
     ],
     "superheroes/checkpoint": [
-      "Use before compaction in a showrunner or workhorse charter session",
+      "Use before compaction in a showrunner, workhorse, or detective charter session",
       "freshen live state and emit a ready-to-paste `/compact` command",
       "`/compact` has no programmatic trigger; one paste is the floor",
       "Not configure, review, or discovery"
@@ -66,6 +66,13 @@
       "the single front door for superheroes configuration",
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
+    ],
+    "superheroes/detective": [
+      "why did this break, diagnose this",
+      "Observe-only",
+      "diagnosis receipt",
+      "Not the builder (that is workhorse)",
+      "never edits the surface under diagnosis and never produces a fix"
     ],
     "superheroes/discuss-open-decisions": [
       "Use when the owner needs to rule on open decisions",

@@ -54,7 +54,7 @@ original numbers so existing citations stay valid.
 ## 1. Vocabulary: the v2 loop and cast
 
 Superheroes pivoted from a v1 deterministic execution pipeline (the "spine") to a **v2
-discipline layer**: two session charters running around ordinary AI build sessions, not
+discipline layer**: three session charters running around ordinary AI build sessions, not
 an orchestration engine (PR #478/#479 — retired the spine and the
 `plan`/`tasks` definition-docs). The v2 loop:
 
@@ -69,9 +69,9 @@ definition-doc: it lives in the issue/PR, not on disk under `docs/`. The one
 definition-doc that survives the v1→v2 pivot is the **`spec`** (§3) — still owner-gated,
 still produced by The Architect.
 
-**The cast** (authoritative role definitions live in the two session charters —
-`skills/showrunner/SKILL.md` and `skills/workhorse/SKILL.md` — this is a pointer, not a
-restatement):
+**The cast** (authoritative role definitions live in the three session charters —
+`skills/showrunner/SKILL.md`, `skills/workhorse/SKILL.md`, and
+`skills/detective/SKILL.md` — this is a pointer, not a restatement):
 
 - **Showrunner** — the advisor session: project-level, long-lived, typically one per
   project. Sizes and routes incoming work (build-ready vs. needs-discovery), decomposes
@@ -88,6 +88,11 @@ restatement):
   tiered subagents or engines, verifies every receipt itself, runs test-pilot and
   multi-model review, hands back a ready PR with dispositions and receipts. **Never
   merges, releases, bumps versions, or wires the board.**
+- **Detective** — the diagnosis session: observe-only when the cause is separately
+  valuable (unknown cause, cross-cutting blast radius, or a failed first fix); demonstrates
+  by reproduction or A/B on a disposable copy; delivers a diagnosis receipt for advisor
+  vet; never edits the diagnosed surface, never fixes. (Its authoritative definition lives
+  in `skills/detective/SKILL.md`.)
 - **The Architect** — turns fuzzy intent into an owner-approved `spec` (discovery → spec
   → `review-spec`). Narrowed in v2: it produces the `spec` only — no `plan`, no `tasks`
   (retired, #479).
@@ -108,7 +113,7 @@ restatement):
   findings reach the owner as consequences; never edits code, never files issues itself,
   never runs or owns enforcement. (Its authoritative definition lives in `skills/guardian/SKILL.md`.)
 
-Two heroes run sessions; four serve inside them. The band posture above (degrade, not
+Three heroes run sessions; four serve inside them. The band posture above (degrade, not
 crash) governs this cast the same as any other.
 
 Load-bearing identifiers used throughout (`<work-item>`, the storage keys) and the
@@ -1139,8 +1144,8 @@ case** of the band rule, and the band rule's scope is **wider** — every new or
 
 ## 13. New deterministic machinery needs a named consumer and a ledger entry
 
-In v2 the heroes are **prompts and conventions** — two session charters (Showrunner,
-Workhorse) plus review/spec/test-pilot support — not a deterministic execution engine.
+In v2 the heroes are **prompts and conventions** — three session charters (Showrunner,
+Workhorse, Detective) plus review/spec/test-pilot support — not a deterministic execution engine.
 The v1→v2 pivot retired the execution spine precisely because prompts plus independent
 review beat a hand-built orchestration layer for this job (PHILOSOPHY.md B1). The guard
 against sliding back into one:
