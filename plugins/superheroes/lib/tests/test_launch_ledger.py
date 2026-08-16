@@ -3935,6 +3935,26 @@ def _scripted_liveness(monkeypatch, answers):
     return calls
 
 
+def _fake_clock(monkeypatch):
+    """Freeze the monotonic clock and make sleeping advance it.
+
+    Wall-clock assertions are unusable here: this suite runs under `-n auto` on a
+    shared machine, where a loaded worker stretches a 1.4 s test to 9 s. The fake
+    clock asserts the real contract instead -- how much wait the ceiling bought --
+    with no dependence on how busy the host is.
+    """
+    clock = {"now": 1000.0}
+    slept = []
+
+    def fake_sleep(seconds):
+        slept.append(seconds)
+        clock["now"] += seconds
+
+    monkeypatch.setattr(ll.time, "monotonic", lambda: clock["now"])
+    monkeypatch.setattr(ll.time, "sleep", fake_sleep)
+    return slept
+
+
 def _counted_terminalize(monkeypatch):
     """Count terminalize attempts without changing what it does."""
     real = ll.terminalize
@@ -3970,20 +3990,21 @@ def test_record_outcome_await_exit_returns_todays_refusal_at_the_ceiling(tmp_pat
     monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
     _scripted_liveness(monkeypatch, [True])
     attempts = _counted_terminalize(monkeypatch)
+    slept = _fake_clock(monkeypatch)
     before = len(ll.read(repo)["records"])
 
-    started_at = time.monotonic()
     result = ll.record_outcome(
         repo, "l-await-ceiling", "handback", "done", await_exit=0.5,
     )
-    elapsed = time.monotonic() - started_at
 
     assert result["ok"] is False
     assert result["reason"] == "terminal-child-live:999999"
     assert result["recorded"] is None
     assert len(attempts) > 1, "the ceiling must buy re-attempts, not one long sleep"
-    assert elapsed >= 0.5
-    assert elapsed < 4.0, "the ceiling must bound the patience, not just start it"
+    assert len(attempts) == len(slept) + 1, "every wait must be followed by a re-attempt"
+    assert sum(slept) <= 0.5 + 1e-6, (
+        "the ceiling must bound the total wait, not just start it; slept %s" % sum(slept)
+    )
     assert len(ll.read(repo)["records"]) == before
 
 
@@ -3992,16 +4013,15 @@ def test_record_outcome_await_exit_zero_makes_exactly_one_attempt(tmp_path, monk
     repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-zero")
     _scripted_liveness(monkeypatch, [True])
     attempts = _counted_terminalize(monkeypatch)
+    slept = _fake_clock(monkeypatch)
     before = len(ll.read(repo)["records"])
 
-    started_at = time.monotonic()
     result = ll.record_outcome(repo, "l-await-zero", "handback", "done")
-    elapsed = time.monotonic() - started_at
 
     assert result["ok"] is False
     assert result["reason"] == "terminal-child-live:999999"
     assert len(attempts) == 1
-    assert elapsed < 2.0, "the default must not wait at all"
+    assert slept == [], "the default must not wait at all"
     assert len(ll.read(repo)["records"]) == before
 
 
