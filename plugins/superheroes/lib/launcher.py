@@ -1505,9 +1505,11 @@ def _try_reserve_for_refusal(
     return {"reserved": result["ok"]}
 
 
-def record_outcome(repo_root, launch_id, outcome, evidence, env=None):
+def record_outcome(repo_root, launch_id, outcome, evidence, env=None, await_exit=0):
     """Thin pass-through to launch_ledger.record_outcome."""
-    return ll.record_outcome(repo_root, launch_id, outcome, evidence, env=env)
+    return ll.record_outcome(
+        repo_root, launch_id, outcome, evidence, env=env, await_exit=await_exit,
+    )
 
 
 def amend(repo_root, launch_id, kind, value, note, env=None):
@@ -1593,7 +1595,10 @@ def _cli_launch(args):
 
 
 def _cli_record_outcome(args):
-    return record_outcome(args.repo_root, args.launch_id, args.outcome, args.evidence)
+    return record_outcome(
+        args.repo_root, args.launch_id, args.outcome, args.evidence,
+        await_exit=args.await_exit,
+    )
 
 
 def _cli_amend(args):
@@ -1650,6 +1655,12 @@ def main(argv=None):
     ro.add_argument("--launch-id", required=True)
     ro.add_argument("--outcome", required=True)
     ro.add_argument("--evidence", required=True)
+    ro.add_argument(
+        "--await-exit", type=float, default=0.0,
+        help="seconds to keep re-attempting while the lane's child is still alive "
+             "(0..1800, default 0 = refuse immediately as before; foreground callers "
+             "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
+    )
     ro.set_defaults(func=_cli_record_outcome)
 
     am = sub.add_parser("amend")

@@ -21,7 +21,7 @@ edit below, and you never elicit specs (that is **discovery**).
 
 This is a **named hard-line edit**, not a lane detail slipped past the boundary. It carves the only
 exception into **Showrunner never builds**: in **micro** the advisor **types the change** in-session
-— about **100 lines or fewer**, starting from a diagnosis, **no issue**.
+— about **100 non-test lines or fewer** (`review-discipline.md` § Size), starting from a diagnosis, **no issue**.
 
 **Consequence you must hold in mind: the advisor IS the maker, so the advisor's independent
 vet-from-artifacts does not exist for that PR.** The entire independent check collapses onto (a) one
@@ -550,7 +550,10 @@ above).
    the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
    establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
    batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
-   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
+   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean.
+   `record-outcome` **refuses while the lane's child is still alive** (`terminal-child-live:<pid>`), and
+   `lane-terminal` fires a minute or two before that exit — pass **`--await-exit <seconds>`** so the verb
+   waits the child out rather than needing a second watcher; at the ceiling it returns the same refusal. **After
    a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
    batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
    refusals is a signal to inspect, never a clean sheet**. **`count` reads lanes** (a build intent
