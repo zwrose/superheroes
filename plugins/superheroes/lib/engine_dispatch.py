@@ -43,7 +43,6 @@ import engine_adapter  # noqa: E402  build_argv, parse_result, prompt_path_ok �
 import file_lock  # noqa: E402
 import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
-import review_findings_schema  # noqa: E402  canonical review-findings schema path (#949)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
 
@@ -78,6 +77,9 @@ WORKTREE_LEASE_PREFIX = "superheroes-worktree-lease-"
 PROMPT_NAME = "prompt.txt"
 PROGRESS_NAME = "progress.jsonl"
 RUN_KIND_REVIEW = "review"
+# Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
+REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
+RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
 _GIT_ROUTING_VARS = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
@@ -105,13 +107,11 @@ MAX_STDOUT_CAPTURE = 8 * 1024 * 1024   # keep only the last 8 MB of engine stdou
 # the runner before it can return the structured forfeit that triggers the Claude fall-open (#563).
 MAX_STDERR_CAPTURE = 64 * 1024
 
-SCHEMA_REFUSAL_MISSING = "schema-missing"
-SCHEMA_REFUSAL_UNREADABLE = "schema-unreadable"
-SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED = "schema-not-findings-shaped"
-
 MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
+RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
+RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
 
 _REJECTED_MODE_MAX_LEN = 120
 
@@ -133,6 +133,14 @@ def _mode_invalid_refusal(rejected_mode):
             "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
             "mode": sanitized_view.MODE_REVIEW,
             "rejectedMode": _coerce_rejected_mode(rejected_mode)}
+
+
+def _expected_result_kind_invalid_refusal(rejected_kind, effective_mode):
+    return {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+            "detail": RESULT_KIND_REFUSAL_INVALID,
+            "attempts": 0, "forfeited": False, "terminal": True, "runDir": "", "argv": [],
+            "mode": effective_mode,
+            "rejectedResultKind": _coerce_rejected_mode(rejected_kind)}
 
 
 def _scrub_env(env=None):
@@ -1241,10 +1249,14 @@ def _ledger_stages(result, state, run_dir_real, opened):
         elif result.get("engagement"):
             stages["engaged"] = engine_adapter.engagement_read(result) == "engaged"
         delivered = False
-        if result.get("ok") and isinstance(result.get("findings"), list):
-            delivered = True
-        elif result.get("ok") and result.get("investigated"):
-            delivered = True
+        if result.get("ok"):
+            kind = result.get("resultKind")
+            if kind in REVIEW_RESULT_KINDS:
+                payload = result.get(kind)
+                if isinstance(payload, list) and payload:
+                    delivered = True
+            if not delivered and result.get("investigated"):
+                delivered = True
         stages["delivered"] = delivered
     else:
         if result.get("ok"):
@@ -1948,45 +1960,17 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
     return True, ""
 
 
-def _engagement_with_read(engagement, *, findings=None, investigated=None):
+def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
     """Attach engagement.read from observed attempt evidence. Never raises."""
+    read_input = {"investigated": investigated, "engagement": engagement}
+    if items is not None:
+        if result_kind == "verdicts":
+            read_input["verdicts"] = items
+        else:
+            read_input["findings"] = items
     out = dict(engagement)
-    out["read"] = engine_adapter.engagement_read({
-        "findings": findings,
-        "investigated": investigated,
-        "engagement": engagement,
-    })
+    out["read"] = engine_adapter.engagement_read(read_input)
     return out
-
-
-def _validate_review_schema_path(schema_path):
-    """Spot-check that schema_path describes a findings-shaped object — not schema validation."""
-    if schema_path is None:
-        return True, None
-    if not isinstance(schema_path, str) or not schema_path.strip():
-        return False, SCHEMA_REFUSAL_MISSING
-    path = schema_path
-    if not os.path.isfile(path):
-        return False, SCHEMA_REFUSAL_MISSING
-    try:
-        with open(path, encoding="utf-8") as fh:
-            root = json.load(fh)
-    except Exception:
-        return False, SCHEMA_REFUSAL_UNREADABLE
-    if not isinstance(root, dict):
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    if root.get("type") != "object":
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    properties = root.get("properties")
-    if isinstance(properties, dict) and "findings" not in properties:
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    required = root.get("required")
-    if isinstance(required, list) and "findings" not in required:
-        return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    if root.get("additionalProperties") is False:
-        if not isinstance(properties, dict) or "findings" not in properties:
-            return False, SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    return True, None
 
 
 def _merge_investigated_rejections(parse_res, spot_rejected):
@@ -2011,6 +1995,69 @@ def _attach_review_rejection_fields(result, rejected_records=(), rejected_reason
     if findings_rejected_reasons:
         result["findingsRejected"] = findings_rejected_reasons
     return result
+
+
+def _parse_review_has_payload(res):
+    """True when a review parse result carries a non-empty findings or verdicts payload."""
+    if not res.get("ok"):
+        return False
+    kind = res.get("resultKind")
+    if kind not in REVIEW_RESULT_KINDS:
+        return False
+    payload = res.get(kind)
+    return isinstance(payload, list) and bool(payload)
+
+
+def _review_parse_kind_invalid(res):
+    """True when parse claims ok but resultKind is missing or outside the two-name enum."""
+    return res.get("ok") and res.get("resultKind") not in REVIEW_RESULT_KINDS
+
+
+def _build_running_graded(run_dir_real, state):
+    """Grade every ended attempt for a non-terminal running projection. Never raises."""
+    graded = []
+    try:
+        opened = state.get("opened") or {}
+        run_kind = opened.get("runKind")
+        for att in sorted(state.get("attempts") or {}):
+            slot = state["attempts"][att]
+            if slot.get("ended") is None:
+                continue
+            if run_kind == RUN_KIND_WRITE:
+                grade = _grade_write_attempt(run_dir_real, state, att)
+            elif run_kind == RUN_KIND_REVIEW:
+                grade = _grade_review_attempt(run_dir_real, state, att)
+            else:
+                continue
+            entry = {"attempt": att}
+            if grade.get("ok"):
+                kind = grade.get("resultKind")
+                if kind in REVIEW_RESULT_KINDS:
+                    entry["resultKind"] = kind
+                    payload = grade.get(kind)
+                    if isinstance(payload, list):
+                        entry[kind] = payload
+                elif run_kind == RUN_KIND_WRITE:
+                    entry["signal"] = grade.get("signal", "ok")
+                    entry["evidence"] = grade.get("evidence", {})
+            elif grade.get("forfeit") or grade.get("reason"):
+                entry["reason"] = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
+            else:
+                entry["reason"] = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
+            if grade.get("investigated") is not None:
+                entry["investigated"] = grade["investigated"]
+            graded.append(entry)
+    except Exception:
+        return []
+    return graded
+
+
+def _non_terminal_running_result(result, run_dir_real, state):
+    """Attach graded to every non-terminal running return. Never raises."""
+    out = dict(result)
+    if out.get("terminal") is False and out.get("reason") == dispatch_outcome.REASON_RUNNING:
+        out["graded"] = _build_running_graded(run_dir_real, state)
+    return out
 
 
 def _grade_review_attempt(run_dir_real, state, attempt):
@@ -2060,18 +2107,19 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         "source": source,
     }
 
-    res = engine_adapter.parse_result(engine, role_kind, stdout)
-    diagnose_stdout = stdout
-    prompt_echo_only = False
-    if not (res.get("ok") and res.get("findings")):
-        stripped = engine_adapter.strip_echoed_prompt(stdout, fed_prompt)
-        if stripped and stripped.strip():
-            diagnose_stdout = stripped
-        elif stdout and stdout.strip():
-            prompt_echo_only = True
-        else:
-            diagnose_stdout = stripped
-        res = engine_adapter.parse_result(engine, role_kind, stripped)
+    norm_strip = engine_adapter.normalize_review_stdout(stdout, fed_prompt)
+    prompt_echo_only = norm_strip["echoOnly"]
+    diagnose_stdout = norm_strip["text"]
+    envelope_error = norm_strip["rawEnvelopeError"]
+
+    res = engine_adapter.parse_result(
+        engine, role_kind, stdout, raw_envelope_error=envelope_error)
+    if not _parse_review_has_payload(res):
+        stripped_text = norm_strip["text"]
+        if stripped_text and stripped_text.strip():
+            diagnose_stdout = stripped_text
+        res = engine_adapter.parse_result(
+            engine, role_kind, stripped_text, raw_envelope_error=envelope_error)
     if not res.get("ok"):
         engagement = _engagement_with_read(engagement)
         result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
@@ -2082,12 +2130,22 @@ def _grade_review_attempt(run_dir_real, state, attempt):
                 "keysTruncated": False,
             }
         else:
-            shape = engine_adapter.review_payload_shape(diagnose_stdout)
+            shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
             if shape is not None:
                 result["payloadShape"] = shape
         return result
 
-    findings = res.get("findings") or []
+    if _review_parse_kind_invalid(res):
+        engagement = _engagement_with_read(engagement)
+        result = {"forfeit": True, "reason": dispatch_outcome.REASON_FORFEITED, "engagement": engagement}
+        shape = engine_adapter.review_payload_shape(diagnose_stdout, fed_prompt)
+        if shape is not None:
+            result["payloadShape"] = shape
+        return result
+
+    kind = res["resultKind"]
+    payload = res.get(kind)
+
     view_meta = opened.get("viewMeta")
     generated = ()
     if isinstance(view_meta, dict):
@@ -2099,9 +2157,31 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
-    if findings:
-        engagement = _engagement_with_read(engagement, findings=findings)
-        result = {"ok": True, "findings": findings, "engagement": engagement}
+
+    if not payload and not accepted:
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
+        return {
+            "forfeit": True,
+            "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
+            "engagement": engagement,
+            "investigatedRejected": rejected_reasons,
+            "investigatedRejectedRecords": rejected_records,
+        }
+
+    expected_kind = opened.get("expectedResultKind")
+    if expected_kind in REVIEW_RESULT_KINDS and kind != expected_kind:
+        engagement = _engagement_with_read(
+            engagement, result_kind=kind, items=payload or [])
+        return {
+            "forfeit": True,
+            "reason": dispatch_outcome.REASON_FORFEITED,
+            "detail": RESULT_KIND_MISMATCH_DETAIL,
+            "engagement": engagement,
+        }
+
+    if payload:
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
+        result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(
@@ -2113,21 +2193,15 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         )
 
     if accepted:
-        engagement = _engagement_with_read(engagement, findings=[], investigated=accepted)
-        result = {"ok": True, "findings": [], "investigated": accepted, "engagement": engagement}
+        engagement = _engagement_with_read(
+            engagement, result_kind=kind, items=[], investigated=accepted)
+        result = {"ok": True, "resultKind": kind, kind: [], "investigated": accepted, "engagement": engagement}
         return _attach_review_rejection_fields(
             result,
             rejected_records=rejected_records,
             rejected_reasons=rejected_reasons,
         )
-    engagement = _engagement_with_read(engagement, findings=[], investigated=None)
-    return {
-        "forfeit": True,
-        "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
-        "engagement": engagement,
-        "investigatedRejected": rejected_reasons,
-        "investigatedRejectedRecords": rejected_records,
-    }
+    assert False, "unreachable: vacuous and mismatch paths handled above"
 
 
 def _grade_write_attempt(run_dir_real, state, attempt):
@@ -2200,7 +2274,7 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
 
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                             investigated_rejected=None, investigated_rejected_records=None,
-                            payload_shape=None):
+                            payload_shape=None, detail=None):
     if reason == engine_adapter.REVIEW_FORFEIT_VACUOUS:
         terminal = {
             "ok": False,
@@ -2234,6 +2308,8 @@ def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
     }
     if payload_shape is not None:
         result["payloadShape"] = payload_shape
+    if detail is not None:
+        result["detail"] = detail
     return result
 
 
@@ -2251,8 +2327,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
         state = _journal_state(records)
         opened = state.get("opened") or {}
         return _with_run_fields(
-            {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING, "detail": "run-locked",
-             "attempts": _highest_attempt(state), "forfeited": False},
+            _non_terminal_running_result(
+                {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING, "detail": "run-locked",
+                 "attempts": _highest_attempt(state), "forfeited": False},
+                run_dir_real, state,
+            ),
             run_dir=run_dir_real, argv=opened.get("argv") or [],
         )
 
@@ -2296,8 +2375,11 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
 
             if time.monotonic() >= deadline:
                 return _with_run_fields(
-                    {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
-                     "attempts": _highest_attempt(state), "forfeited": False},
+                    _non_terminal_running_result(
+                        {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
+                         "attempts": _highest_attempt(state), "forfeited": False},
+                        run_dir_real, state,
+                    ),
                     run_dir=run_dir_real, argv=argv,
                 )
 
@@ -2423,9 +2505,18 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                             )
                             result["itemCheck"] = item_check
                     else:
+                        terminal_ok = {
+                            "ok": True, "terminal": True,
+                            "attempts": latest, "engagement": grade["engagement"],
+                        }
+                        kind = grade.get("resultKind")
+                        if kind in REVIEW_RESULT_KINDS:
+                            terminal_ok["resultKind"] = kind
+                            payload = grade.get(kind)
+                            if isinstance(payload, list):
+                                terminal_ok[kind] = payload
                         result = _with_run_fields(
-                            {"ok": True, "terminal": True, "findings": grade.get("findings", []),
-                             "attempts": latest, "engagement": grade["engagement"]},
+                            terminal_ok,
                             run_dir=run_dir_real, argv=argv,
                         )
                         if grade.get("investigated") is not None:
@@ -2489,6 +2580,7 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         investigated_rejected=grade.get("investigatedRejected"),
                         investigated_rejected_records=grade.get("investigatedRejectedRecords"),
                         payload_shape=grade.get("payloadShape"),
+                        detail=grade.get("detail"),
                     )
                     terminal = _maybe_upgrade_review_terminal_forfeit(
                         run_dir_real, state, terminal, engine,
@@ -2619,7 +2711,8 @@ def _attach_sanitized_view(result, view):
 
 def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
-                     progress_path, repo_root=None, mode="review"):
+                     progress_path, repo_root=None, mode="review",
+                     expected_result_kind=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2661,16 +2754,19 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
         "supervisorPid": os.getpid(),
         "at": time.time(),
     }
+    if expected_result_kind in REVIEW_RESULT_KINDS:
+        record["expectedResultKind"] = expected_result_kind
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
 
 
 def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
-                    schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
+                    repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
-                    run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None):
+                    run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None,
+                    expected_result_kind=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -2680,12 +2776,17 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
         if mode is not None:
             if not isinstance(mode, str) or mode not in sanitized_view.REVIEW_MODES:
                 return _mode_invalid_refusal(mode)
+        if expected_result_kind is not None:
+            if not isinstance(expected_result_kind, str) or expected_result_kind not in REVIEW_RESULT_KINDS:
+                return _expected_result_kind_invalid_refusal(
+                    expected_result_kind, mode or sanitized_view.MODE_REVIEW)
         result = _dispatch_review_impl(
             engine, model=model, effort=effort, engine_model=engine_model, prompt_path=prompt_path,
-            schema_path=schema_path, repo_root=repo_root, timeout=timeout,
+            repo_root=repo_root, timeout=timeout,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
-            diff_base=diff_base, mode=mode, resolved_mode=resolved)
+            diff_base=diff_base, mode=mode, resolved_mode=resolved,
+            expected_result_kind=expected_result_kind)
         stamped = dict(result)
         stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
@@ -2697,11 +2798,11 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
 
 
 def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_path,
-                          schema_path=None, repo_root=None, timeout=RETRY_MIN_TIMEOUT,
+                          repo_root=None, timeout=RETRY_MIN_TIMEOUT,
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, max_wait=None, order_id=None, diff_base=None,
-                          mode=None, resolved_mode=None):
+                          mode=None, resolved_mode=None, expected_result_kind=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
@@ -2800,6 +2901,15 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
+                journal_result_kind = opened.get("expectedResultKind")
+                if expected_result_kind is not None and expected_result_kind != journal_result_kind:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH,
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        run_dir=run_dir_real, argv=argv, engine=engine,
+                    )
             elif _run_dir_nonempty(run_dir_real):
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -2811,16 +2921,6 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
-            if schema_path is not None:
-                ok_schema, schema_detail = _validate_review_schema_path(schema_path)
-                if not ok_schema:
-                    return _finish_preflight_terminal(
-                        repo_detail,
-                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": schema_detail,
-                         "canonicalSchemaPath": review_findings_schema.review_findings_schema_path(),
-                         "attempts": 0, "forfeited": False, "terminal": True},
-                        run_dir=run_dir_real or "", engine=engine,
-                    )
             try:
                 view = build_view(repo_detail, diff_base=diff_base)
             except sanitized_view.SanitizedViewError as exc:
@@ -2833,8 +2933,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             view_path = view["path"]
             cwd = os.path.realpath(view_path)
-            opts = {"model": model, "engine_model": engine_model,
-                    "schema_path": schema_path, "cwd": cwd}
+            opts = {"model": model, "engine_model": engine_model, "cwd": cwd}
             built = engine_adapter.build_argv_result(engine, role_kind, effort, opts)
             if built["reason"] is not None:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -2868,6 +2967,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 fed_prompt=fed_prompt, order_id=order_id,
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
                 repo_root=repo_detail, mode=resolved_mode["mode"],
+                expected_result_kind=expected_result_kind,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3363,10 +3463,19 @@ def dispatch_poll(run_dir):
                  "poll": projection},
                 run_dir=detail, argv=argv,
             )
+        poll_terminal = projection.get("terminal", False)
+        poll_reason = (
+            dispatch_outcome.REASON_RUNNING
+            if poll_state in ("running", "idle", "abandon-requested")
+            else poll_state
+        )
+        poll_result = {
+            "ok": False, "terminal": poll_terminal,
+            "reason": poll_reason,
+            "attempts": highest, "forfeited": False, "poll": projection,
+        }
         return _with_run_fields(
-            {"ok": False, "terminal": projection.get("terminal", False),
-             "reason": dispatch_outcome.REASON_RUNNING if poll_state in ("running", "idle", "abandon-requested") else poll_state,
-             "attempts": highest, "forfeited": False, "poll": projection},
+            _non_terminal_running_result(poll_result, detail, state),
             run_dir=detail, argv=argv,
         )
     except Exception as exc:
@@ -3469,9 +3578,12 @@ def dispatch_abandon(run_dir):
             file_lock.acquire(lock_path, ttl=RUN_LOCK_TTL, reclaim_dead_holder=True)
         except file_lock.LockHeld:
             return _with_run_fields(
-                {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
-                 "detail": "run-locked",
-                 "attempts": _highest_attempt(state), "forfeited": False},
+                _non_terminal_running_result(
+                    {"ok": False, "terminal": False, "reason": dispatch_outcome.REASON_RUNNING,
+                     "detail": "run-locked",
+                     "attempts": _highest_attempt(state), "forfeited": False},
+                    run_dir_real, state,
+                ),
                 run_dir=run_dir_real, argv=argv,
             )
 
@@ -3513,7 +3625,6 @@ def build_parser():
     cc.add_argument(d, "--effort", contract="effort", required=True)
     cc.add_argument(d, "--engine-model", contract="free-text", default=None)
     cc.add_argument(d, "--prompt-path", contract="free-text", required=True)
-    cc.add_argument(d, "--schema-path", contract="free-text", default=None)
     cc.add_argument(d, "--timeout", contract="integer", default=RETRY_MIN_TIMEOUT, type=int)
     cc.add_argument(d, "--retry-timeout", contract="integer",
                     default=RETRY_MIN_TIMEOUT, type=int)
@@ -3528,6 +3639,9 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
+    cc.add_argument(d, "--expected-result-kind", contract="choices:findings,verdicts",
+                    default=None, choices=REVIEW_RESULT_KINDS,
+                    help="mechanical pin: refuse attempts whose parsed resultKind differs")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--engine", contract="choices:codex,cursor",
@@ -3566,11 +3680,12 @@ def main(argv):
     if args.cmd == "dispatch-review":
         res = dispatch_review(args.engine, model=args.model, effort=args.effort,
                               engine_model=args.engine_model, prompt_path=args.prompt_path,
-                              schema_path=args.schema_path, repo_root=args.repo_root,
+                              repo_root=args.repo_root,
                               timeout=args.timeout, retry_timeout=args.retry_timeout,
                               progress_path=args.progress_file, run_dir=args.run_dir,
                               max_wait=args.max_wait, order_id=args.order_id,
-                              diff_base=args.diff_base, mode=args.mode)
+                              diff_base=args.diff_base, mode=args.mode,
+                              expected_result_kind=args.expected_result_kind)
     elif args.cmd == "dispatch-write":
         res = dispatch_write(args.engine, model=args.model, effort=args.effort,
                              engine_model=args.engine_model, prompt_path=args.prompt_path,

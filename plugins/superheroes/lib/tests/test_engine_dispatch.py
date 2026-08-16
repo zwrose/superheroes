@@ -119,6 +119,10 @@ def _fed_prompt(base_prompt, view_meta=None):
 
 
 _VALID_FINDINGS_STDOUT = json.dumps({"findings": [{"id": "f1", "message": "issue found"}]})
+_VALID_VERDICTS_STDOUT = json.dumps({
+    "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test"}],
+})
+_UNREADABLE_REVIEW_STDOUT = json.dumps({"error": "crashed", "status": "fail"})
 
 
 def _valid_prompt(tmp_path, content="Review this code.\n"):
@@ -2282,13 +2286,7 @@ def test_run_engine_files_caps_only_after_terminate_on_timeout(tmp_path, monkeyp
     assert term_idx < first_cap_idx, "caps must run after terminate, got %r" % events
 
 
-# --- WO-B (#687): production journal timing, schema refusal, payloadShape, engagement.read ---
-
-
-def _findings_schema(tmp_path, content):
-    path = tmp_path / "schema.json"
-    path.write_text(json.dumps(content), encoding="utf-8")
-    return str(path)
+# --- WO-B (#687): production journal timing, payloadShape, engagement.read ---
 
 
 def test_run_engine_files_journals_wall_seconds_and_stdout_bytes(tmp_path, monkeypatch):
@@ -2378,214 +2376,6 @@ def test_run_engine_files_journal_append_failed_omits_timing_keys(tmp_path, monk
     assert "stdoutBytes" not in ended
 
 
-@pytest.mark.parametrize("schema_path,detail", [
-    ("missing", "schema-missing"),
-    ("unreadable", "schema-unreadable"),
-    ("not-findings", "schema-not-findings-shaped"),
-])
-def test_dispatch_review_schema_refusal_no_spawn(tmp_path, schema_path, detail):
-    repo_root = _repo(tmp_path)
-    fake = FakeRunner([])
-    if schema_path == "missing":
-        path = str(tmp_path / "no-schema.json")
-    elif schema_path == "unreadable":
-        path = tmp_path / "bad.json"
-        path.write_text("{not json", encoding="utf-8")
-        path = str(path)
-    elif schema_path == "not-findings":
-        path = _findings_schema(tmp_path, {"type": "object", "properties": {"verdicts": {}}})
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == detail
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-
-
-def test_dispatch_review_schema_none_proceeds(tmp_path):
-    """E5: schema_path=None is a no-op."""
-    repo_root = _repo(tmp_path)
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=None, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ok"] is True
-    assert len(fake.calls) == 1
-
-
-def test_dispatch_review_schema_whitespace_is_missing(tmp_path):
-    """E6: empty/whitespace schema_path is schema-missing."""
-    repo_root = _repo(tmp_path)
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path="   ", run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["detail"] == "schema-missing"
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-
-
-def test_dispatch_review_schema_top_level_array_refused(tmp_path):
-    """E8: top-level array schema is schema-not-findings-shaped."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, [{"type": "object"}])
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["detail"] == "schema-not-findings-shaped"
-    assert len(fake.calls) == 0
-
-
-def test_dispatch_review_schema_findings_not_required_refused(tmp_path):
-    """E9: findings in properties but omitted from required is refused."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, {
-        "type": "object",
-        "properties": {"findings": {"type": "array"}},
-        "required": ["verdicts"],
-    })
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["detail"] == "schema-not-findings-shaped"
-    assert len(fake.calls) == 0
-
-
-def test_dispatch_review_schema_minimal_object_accepted(tmp_path):
-    """E10: bare {\"type\": \"object\"} is accepted."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, {"type": "object"})
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ok"] is True
-    assert len(fake.calls) == 1
-
-
-def test_dispatch_review_schema_additional_properties_false_without_findings_refused(tmp_path):
-    """C1: additionalProperties:false with no findings property is refused."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, {"type": "object", "additionalProperties": False})
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["reason"] == "unrunnable"
-    assert res["detail"] == ED.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED
-    assert len(fake.calls) == 0
-
-
-def test_dispatch_review_schema_additional_properties_object_does_not_trigger_clause(tmp_path):
-    """F3: additionalProperties as a schema object does not trigger the false clause."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, {
-        "type": "object",
-        "additionalProperties": {"type": "string"},
-    })
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ok"] is True
-    assert len(fake.calls) == 1
-
-
-def test_dispatch_review_schema_padded_path_refused(tmp_path):
-    """C2: a path with trailing whitespace is validated raw — padded path is schema-missing."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, {"type": "object"})
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path + " ", run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["detail"] == ED.SCHEMA_REFUSAL_MISSING
-    assert len(fake.calls) == 0
-
-
-def test_dispatch_review_schema_validated_path_matches_argv(tmp_path):
-    """C2: the schema path that passes the gate is the same path in argv."""
-    repo_root = _repo(tmp_path)
-    path = _findings_schema(tmp_path, {"type": "object"})
-    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-        schema_path=path, run_engine=fake,
-        build_view=_fake_build_view(tmp_path),
-    )
-    assert res["ok"] is True
-    argv = res["argv"]
-    schema_in_argv = argv[argv.index("--output-schema") + 1]
-    assert schema_in_argv == path
-
-
-def test_dispatch_review_continuation_ignores_vanished_schema_path(tmp_path):
-    """C3: continuation must not refuse when a re-passed schema file has been deleted."""
-    run_dir = str(tmp_path / "run")
-    repo_root, _ = _manual_open_review_run(tmp_path, run_dir)
-    proc = subprocess.Popen(
-        [sys.executable, "-c", "import time; time.sleep(120)"],
-        start_new_session=True,
-    )
-    ED._journal_append(run_dir, {
-        "kind": "attempt-started", "attempt": 1, "childPid": proc.pid, "at": time.time(),
-    })
-    ED._journal_append(run_dir, {
-        "kind": "engine-started", "attempt": 1, "enginePgid": proc.pid, "at": time.time(),
-    })
-    vanished = tmp_path / "vanished-schema.json"
-    vanished.write_text(json.dumps({"type": "object"}), encoding="utf-8")
-    vanished.unlink()
-    build_view = _fake_build_view(tmp_path)
-    try:
-        res = ED.dispatch_review(
-            "codex", model="sonnet", effort="high",
-            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
-            schema_path=str(vanished), run_engine=FakeRunner([]),
-            build_view=build_view, run_dir=run_dir,
-            order_id="test-order", max_wait=1,
-        )
-        assert res.get("reason") != "unrunnable" or res.get("detail") not in (
-            ED.SCHEMA_REFUSAL_MISSING,
-            ED.SCHEMA_REFUSAL_UNREADABLE,
-            ED.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED,
-        )
-    finally:
-        ED._terminate_process_group(proc.pid)
-        proc.wait(timeout=2)
-
-
 def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
     """F: journalled stdoutBytes must be the pre-cap size, not the capped file size."""
     run_dir = str(tmp_path / "run")
@@ -2627,8 +2417,8 @@ def test_run_engine_files_stdout_bytes_is_pre_cap_size(tmp_path, monkeypatch):
 def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([
-        ('{"verdicts":[]}', False, 0, ""),
-        ('{"verdicts":[]}', False, 0, ""),
+        (_UNREADABLE_REVIEW_STDOUT, False, 0, ""),
+        (_UNREADABLE_REVIEW_STDOUT, False, 0, ""),
     ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
@@ -2639,7 +2429,7 @@ def test_dispatch_review_payload_shape_on_unreadable_forfeit(tmp_path):
     assert res["reason"] == "forfeited"
     shape = res["payloadShape"]
     assert shape["parsed"] == ED.engine_adapter.SHAPE_OBJECT_WITHOUT_FINDINGS
-    assert shape["topLevelKeys"] == ["verdicts"]
+    assert "error" in shape["topLevelKeys"]
 
 
 def test_dispatch_review_payload_shape_absent_on_vacuous_forfeit(tmp_path):
@@ -2784,6 +2574,113 @@ def test_grade_review_attempt_empty_stdout_payload_shape_empty_stdout(tmp_path):
     shape = grade.get("payloadShape")
     assert shape is not None
     assert shape["parsed"] == ED.engine_adapter.SHAPE_EMPTY_STDOUT
+
+
+# --- #763: kind-neutral review grading + running graded tail ---
+
+
+def test_dispatch_review_verdicts_terminal_carries_result_kind(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+    assert res["verdicts"] == [{
+        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
+    }]
+    assert "findings" not in res
+
+
+def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
+    run_dir = str(tmp_path / "run-verdicts")
+    repo_root = _repo(tmp_path)
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_VERDICTS_STDOUT)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(_VALID_VERDICTS_STDOUT), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is True
+    assert grade["resultKind"] == "verdicts"
+    assert grade["verdicts"] == [{
+        "id": "v1", "verdict": "CONFIRMED", "reason": "reproduced in test",
+    }]
+    assert "findings" not in grade
+
+
+def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
+    """Attempt 1 ended with clean findings; attempt 2 started but not ended."""
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+        "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 2, "childPid": 99999, "at": time.time(),
+    })
+    return repo_root, view
+
+
+def _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir):
+    """Attempt 1 ended with clean findings; attempt 2 is a live child process."""
+    repo_root, view = _manual_open_review_run(tmp_path, run_dir)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_VALID_FINDINGS_STDOUT)
+    ED._journal_append(run_dir, {
+        "kind": "attempt-ended", "attempt": 1,
+        "exit": 0, "timedOut": False, "refusal": None,
+        "stdoutBytes": len(_VALID_FINDINGS_STDOUT), "wallSeconds": 1.0,
+        "at": time.time(),
+    })
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(120)"],
+        start_new_session=True,
+    )
+    ED._journal_append(run_dir, {
+        "kind": "attempt-started", "attempt": 2, "childPid": proc.pid, "at": time.time(),
+    })
+    ED._journal_append(run_dir, {
+        "kind": "engine-started", "attempt": 2, "enginePgid": proc.pid, "at": time.time(),
+    })
+    return repo_root, proc
+
+
+def test_dispatch_poll_running_graded_attempt1_ended_attempt2_live(tmp_path):
+    run_dir = str(tmp_path / "run-graded")
+    _manual_two_attempt_review_poll_fixture(tmp_path, run_dir)
+    res = ED.dispatch_poll(run_dir)
+    assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+    assert res["terminal"] is False
+    graded = res["graded"]
+    assert len(graded) == 1
+    assert graded[0]["attempt"] == 1
+    assert graded[0]["resultKind"] == "findings"
+    assert graded[0]["findings"] == [{"id": "f1", "message": "issue found"}]
 
 
 # --- WO-2 (#747): per-attempt telemetry + terminal-record supersede (PR #783) ---
@@ -4163,7 +4060,7 @@ def test_legitimate_concurrent_sibling_change_observed_unattributed(tmp_path):
 # --- #1017: dispatch-review --mode brief-check ---------------------------------
 
 
-def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False):
+def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_mode=False, expected_result_kind=None):
     """Journal run-opened with optional mode key — for continuation tests."""
     repo_root = _repo(tmp_path)
     build_view = _fake_build_view(tmp_path)
@@ -4203,6 +4100,8 @@ def _manual_open_review_run_with_mode(tmp_path, run_dir, *, mode="review", omit_
     }
     if not omit_mode:
         record["mode"] = mode
+    if expected_result_kind is not None:
+        record["expectedResultKind"] = expected_result_kind
     ED._journal_append(run_dir, record)
     with open(record["promptPath"], "w", encoding="utf-8") as fh:
         fh.write(fed)
@@ -4302,6 +4201,73 @@ def test_continuation_omitted_mode_inherits_journal(tmp_path):
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
     )
     assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+
+
+def test_continuation_result_kind_pin_on_unpinned_run_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(tmp_path, run_dir)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        expected_result_kind="verdicts", max_wait=0,
+    )
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+
+
+def test_continuation_result_kind_pin_disagreeing_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(
+        tmp_path, run_dir, expected_result_kind="findings",
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        expected_result_kind="verdicts", max_wait=0,
+    )
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+
+
+def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(
+        tmp_path, run_dir, expected_result_kind="verdicts",
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        expected_result_kind="verdicts", max_wait=0,
+    )
+    assert res["terminal"] is False
+    assert res["reason"] == "running"
+    assert res.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
+
+
+def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
+    run_dir = str(tmp_path / "run")
+    repo_root, _ = _manual_open_review_run_with_mode(
+        tmp_path, run_dir, expected_result_kind="verdicts",
+    )
+    fake = FakeRunner([
+        (_VALID_FINDINGS_STDOUT, False, 0, ""),
+        (_VALID_FINDINGS_STDOUT, False, 0, ""),
+    ])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+    )
+    assert res["ok"] is False
+    assert res.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
+    assert res.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
 
 
 def test_continuation_agreeing_brief_check_mode_proceeds(tmp_path):
@@ -4407,7 +4373,6 @@ def test_review_mode_argparse_choices_match_review_modes():
      "max-wait-out-of-range:99999:allowed=0..%d" % ED.MAX_SYNC_WAIT, False, True),
     ("repo-root-absent", {"repo_root": None}, None, "review", "repo-root-absent", False, True),
     ("prompt-missing", {"prompt_path": None}, None, "review", "prompt-missing", False, True),
-    ("schema-missing", {"schema_path": "   "}, None, "review", "schema-missing", False, True),
     ("run-dir-inside-repo", {"run_dir": "INSIDE"}, "inside_repo", "review",
      "run-dir-inside-repo-root", False, True),
     ("run-dir-reused", {"order_id": "wrong"}, "opened", "review", "run-dir-reused", False, True),
@@ -4528,4 +4493,391 @@ def test_dispatch_review_every_outcome_carries_mode(
     assert res["terminal"] is expected_terminal, label
     if expected_detail is not None:
         assert res.get("detail") == expected_detail, label
+
+
+# --- #763-F: dispatch_review result key-presence matrix (F-I1–F-I4) ---
+
+
+def _other_review_result_kind(kind):
+    for candidate in ED.REVIEW_RESULT_KINDS:
+        if candidate != kind:
+            return candidate
+    raise AssertionError("REVIEW_RESULT_KINDS must declare at least two kinds")
+
+
+def _matrix_clean_payload_stdout(kind):
+    if kind == "findings":
+        return _VALID_FINDINGS_STDOUT
+    return _VALID_VERDICTS_STDOUT
+
+
+def _matrix_empty_payload_stdout(kind):
+    if kind == "findings":
+        return json.dumps({"findings": []})
+    return json.dumps({"verdicts": []})
+
+
+def _matrix_investigated_only_stdout(kind, path="good.py"):
+    if kind == "findings":
+        return json.dumps({"findings": [], "investigated": [path]})
+    return json.dumps({"verdicts": [], "investigated": [path]})
+
+
+def _matrix_placeholder_stdout(kind):
+    if kind == "findings":
+        return json.dumps({"findings": [{
+            "id": EA.REVIEW_BASE_TEMPLATE_ID,
+            "severity": "Minor", "title": "t", "body": "b",
+        }]})
+    return json.dumps({"verdicts": [{
+        "id": EA.REVIEW_BASE_TEMPLATE_ID,
+        "verdict": "CONFIRMED",
+    }]})
+
+
+_AMBIGUOUS_BOTH_KEYS_STDOUT = json.dumps({"findings": [], "verdicts": []})
+
+
+def _matrix_repo_with_good_py(tmp_path):
+    repo_root = _repo(tmp_path)
+    with open(os.path.join(repo_root, "good.py"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    return repo_root
+
+
+def _assert_dispatch_review_key_contract(res, present, absent, label):
+    for key in present:
+        assert key in res, "%s: expected %r present, got keys %r" % (label, key, sorted(res))
+    for key in absent:
+        assert key not in res, "%s: expected %r absent, got %r" % (label, key, res.get(key))
+
+
+def _dispatch_review_key_matrix_rows():
+    rows = []
+    terminal_clean_present = (
+        "ok", "terminal", "resultKind", "engagement", "sanitizedView", "mode",
+    )
+    terminal_clean_absent = ("reason", "graded", "payloadShape")
+    for kind in ED.REVIEW_RESULT_KINDS:
+        other = _other_review_result_kind(kind)
+        rows.append({
+            "label": "clean-payload-%s" % kind,
+            "kind": kind,
+            "present": terminal_clean_present + (kind,),
+            "absent": terminal_clean_absent + (other, "investigated"),
+            "responses": [(_matrix_clean_payload_stdout(kind), False, 0, "")],
+            "setup": "standard",
+        })
+        rows.append({
+            "label": "clean-investigated-%s" % kind,
+            "kind": kind,
+            "present": terminal_clean_present + (kind, "investigated"),
+            "absent": terminal_clean_absent + (other,),
+            "responses": [(_matrix_investigated_only_stdout(kind), False, 0, "")],
+            "setup": "investigated_repo",
+        })
+        empty = _matrix_empty_payload_stdout(kind)
+        rows.append({
+            "label": "vacuous-forfeit-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "sanitizedView", "mode",
+            ),
+            "absent": (
+                "findings", "verdicts", "investigated", "payloadShape", "graded",
+                "resultKind",
+            ),
+            "responses": [(empty, False, 0, ""), (empty, False, 0, "")],
+            "setup": "standard",
+            "expect_reason": ED.engine_adapter.REVIEW_FORFEIT_VACUOUS,
+        })
+        unreadable = _UNREADABLE_REVIEW_STDOUT
+        rows.append({
+            "label": "shape-unreadable-forfeit-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "payloadShape", "sanitizedView", "mode",
+            ),
+            "absent": ("findings", "verdicts", "investigated", "graded", "resultKind"),
+            "responses": [(unreadable, False, 0, ""), (unreadable, False, 0, "")],
+            "setup": "standard",
+        })
+        placeholder = _matrix_placeholder_stdout(kind)
+        rows.append({
+            "label": "placeholder-literal-refusal-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "payloadShape", "sanitizedView", "mode",
+            ),
+            "absent": ("findings", "verdicts", "investigated", "graded", "resultKind"),
+            "responses": [(placeholder, False, 0, ""), (placeholder, False, 0, "")],
+            "setup": "standard",
+        })
+        rows.append({
+            "label": "ambiguous-both-keys-%s" % kind,
+            "kind": kind,
+            "present": (
+                "ok", "terminal", "reason", "forfeited", "engagement",
+                "payloadShape", "sanitizedView", "mode",
+            ),
+            "absent": ("findings", "verdicts", "investigated", "graded", "resultKind"),
+            "responses": [
+                (_AMBIGUOUS_BOTH_KEYS_STDOUT, False, 0, ""),
+                (_AMBIGUOUS_BOTH_KEYS_STDOUT, False, 0, ""),
+            ],
+            "setup": "standard",
+        })
+        rows.append({
+            "label": "unrunnable-refusal-%s" % kind,
+            "kind": kind,
+            "present": ("ok", "terminal", "reason", "mode"),
+            "absent": ("findings", "verdicts", "investigated", "engagement", "graded"),
+            "responses": None,
+            "setup": "unrunnable",
+        })
+    rows.append({
+        "label": "running-non-terminal",
+        "kind": None,
+        "present": ("terminal", "graded", "mode", "reason"),
+        "absent": ("findings", "verdicts", "investigated", "engagement"),
+        "responses": None,
+        "setup": "running",
+    })
+    return rows
+
+
+_DISPATCH_REVIEW_KEY_MATRIX_ROWS = _dispatch_review_key_matrix_rows()
+
+
+def test_dispatch_review_key_matrix_covers_every_declared_kind():
+    covered = {
+        row["kind"] for row in _DISPATCH_REVIEW_KEY_MATRIX_ROWS if row["kind"] is not None
+    }
+    assert covered == set(ED.REVIEW_RESULT_KINDS)
+
+
+@pytest.mark.parametrize("row", _DISPATCH_REVIEW_KEY_MATRIX_ROWS, ids=lambda r: r["label"])
+def test_dispatch_review_result_key_presence_matrix(tmp_path, row):
+    label = row["label"]
+    present = row["present"]
+    absent = row["absent"]
+    setup = row["setup"]
+
+    if setup == "unrunnable":
+        fake = FakeRunner([])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=None, run_engine=fake,
+            build_view=_never_build_view,
+        )
+        assert len(fake.calls) == 0
+    elif setup == "running":
+        run_dir = str(tmp_path / ("run-%s" % label))
+        repo_root, proc = _manual_running_attempt1_ended_attempt2_live(tmp_path, run_dir)
+        try:
+            res = ED.dispatch_review(
+                "codex", model="sonnet", effort="high",
+                prompt_path=_valid_prompt(tmp_path), repo_root=repo_root,
+                run_engine=FakeRunner([]), build_view=_never_build_view,
+                run_dir=run_dir, order_id="test-order", max_wait=1,
+            )
+            assert res["terminal"] is False
+            assert res["reason"] == ED.dispatch_outcome.REASON_RUNNING
+            graded = res["graded"]
+            assert isinstance(graded, list)
+            assert len(graded) >= 1
+            assert graded[0].get("findings")
+        finally:
+            ED._terminate_process_group(proc.pid)
+            proc.wait(timeout=2)
+    else:
+        if setup == "investigated_repo":
+            repo_root = _matrix_repo_with_good_py(tmp_path)
+        else:
+            repo_root = _repo(tmp_path)
+        fake = FakeRunner(row["responses"])
+        res = ED.dispatch_review(
+            "codex", model="sonnet", effort="high",
+            prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+            build_view=_fake_build_view(tmp_path),
+        )
+        kind = row["kind"]
+        if kind is not None:
+            assert res.get("resultKind") == kind or "resultKind" in absent
+        expect_reason = row.get("expect_reason")
+        if expect_reason is not None:
+            assert res.get("reason") == expect_reason
+
+    _assert_dispatch_review_key_contract(res, present, absent, label)
+
+
+# --- #763-G: envelope gate, kind pin, investigated matrix ---
+
+
+def test_grade_review_attempt_error_envelope_gate_survives_second_parse(tmp_path):
+    def _envelope(inner_text, **extra):
+        ev = {"type": "result", "subtype": "success", "is_error": False,
+              "duration_ms": 12345, "session_id": "0aae943d", "result": inner_text}
+        ev.update(extra)
+        return json.dumps(ev)
+
+    run_dir = str(tmp_path / "run")
+    repo_root = _matrix_repo_with_good_py(tmp_path)
+    inner = json.dumps({"findings": [], "investigated": ["good.py"]})
+    stream = _envelope(inner, subtype="error", is_error=True)
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stream)
+    state = {
+        "opened": {
+            "engine": "cursor",
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stream), "wallSeconds": 1.0,
+                },
+            },
+        },
+    }
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("ok") is not True
+    assert grade.get("forfeit") is True
+
+
+def test_dispatch_review_expected_result_kind_invalid_reports_effective_mode(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, mode="brief-check", expected_result_kind="rulings",
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_BRIEF_CHECK
+    assert res["rejectedResultKind"] == "'rulings'"
+
+
+def test_dispatch_review_expected_result_kind_invalid_default_mode_when_none(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, expected_result_kind="rulings",
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["mode"] == _SV_MOD.MODE_REVIEW
+    assert res["rejectedResultKind"] == "'rulings'"
+
+
+def test_dispatch_review_cli_expected_result_kind_invalid_refused_by_argparse(tmp_path):
+    mod_path = os.path.join(_HERE, "..", "engine_dispatch.py")
+    repo_root = _repo(tmp_path)
+    prompt_path = _valid_prompt(tmp_path)
+    proc = subprocess.run(
+        [
+            sys.executable, "-B", mod_path,
+            "dispatch-review",
+            "--engine", "codex",
+            "--effort", "high",
+            "--prompt-path", prompt_path,
+            "--repo-root", repo_root,
+            "--expected-result-kind", "rulings",
+        ],
+        capture_output=True, text=True,
+    )
+    assert proc.returncode != 0
+    assert "invalid choice" in proc.stderr.lower()
+    assert proc.stdout.strip() == ""
+
+
+def test_dispatch_review_expected_result_kind_non_string_refused_at_library_boundary(tmp_path):
+    repo_root = _repo(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, expected_result_kind=0,
+    )
+    assert res["ok"] is False
+    assert res["detail"] == ED.RESULT_KIND_REFUSAL_INVALID
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+    assert res["rejectedResultKind"] == "0"
+
+
+def test_dispatch_review_expected_result_kind_none_not_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind=None,
+    )
+    assert res.get("detail") != ED.RESULT_KIND_REFUSAL_INVALID
+    assert len(fake.calls) == 1
+
+
+def test_dispatch_review_expected_result_kind_pin_refuses_mismatch(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, ""), (_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
+    )
+    assert res["ok"] is False
+    assert res.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
+
+
+def test_dispatch_review_expected_result_kind_pin_accepts_match(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_VERDICTS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "verdicts"
+
+
+def test_dispatch_review_expected_result_kind_pin_vacuous_not_masked(tmp_path):
+    """Pin set to verdicts: empty findings with no investigated stays vacuous, not mismatch."""
+    repo_root = _repo(tmp_path)
+    empty = json.dumps({"findings": []})
+    fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="verdicts",
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
+
+
+def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
+    repo_root = _repo(tmp_path)
+    unreadable = _UNREADABLE_REVIEW_STDOUT
+    fake = FakeRunner([(unreadable, False, 0, ""), (unreadable, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), expected_result_kind="findings",
+    )
+    assert res["ok"] is False
+    assert res.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
+    assert res.get("payloadShape") is not None
 
