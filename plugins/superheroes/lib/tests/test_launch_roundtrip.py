@@ -98,7 +98,7 @@ def _kill_process_group_and_wait(pid, timeout=3.0):
 def _run_launch(repo, log_dir, premise, checks, monkeypatch, **kwargs):
     return L.launch_build(
         repo,
-        656,
+        kwargs.pop("issue", 656),
         premise,
         checks,
         log_dir,
@@ -404,7 +404,8 @@ def _scenario_live_child_refuses_then_handback(repo, log_dir, surfaces, batch_id
     return launch_id
 
 
-def _scenario_surface_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_same_lane_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
+    """Both launches carry one issue, so the surviving same-lane refusal fires (#1054)."""
     first = _run_launch(
         repo,
         log_dir,
@@ -441,6 +442,54 @@ def _scenario_surface_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeyp
     return first_id
 
 
+def _scenario_surface_overlap_warning(repo, log_dir, surfaces, batch_id, monkeypatch):
+    """A DIFFERENT lane overlapping a live one launches, warned and recorded (#1054)."""
+    first = _run_launch(
+        repo,
+        log_dir,
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _all_checks(),
+        monkeypatch,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.1,
+    )
+    assert first["ok"] is True
+    first_id = first["launchId"]
+    pids = [first["pid"]]
+    try:
+        second = _run_launch(
+            repo,
+            log_dir,
+            _valid_premise(
+                repo, surfaces=[surfaces[0]], batchId=batch_id, issue=657,
+            ),
+            _all_checks(),
+            monkeypatch,
+            issue=657,
+            spawn_fn=_make_spawn_fn("sleep"),
+            settle_seconds=0.1,
+        )
+        assert second["ok"] is True, second.get("reason")
+        assert second["warnings"] == ["surface-overlap:%s" % first_id]
+        pids.append(second["pid"])
+        second_id = second["launchId"]
+        _, folded = _assert_p1(repo)
+        records = _read_ledger(repo)["records"]
+        assert _events_for_launch(records, second_id) == ["reserved", "started"]
+        assert folded["launches"][second_id]["surfaceOverlap"] == [first_id]
+        started = [
+            r for r in records
+            if r.get("event") == "started" and r["launchId"] == second_id
+        ]
+        assert "landing order per merge-train.md" in started[0]["evidence"]
+        _assert_terminal(folded, first_id, terminal=False)
+        _assert_terminal(folded, second_id, terminal=False)
+    finally:
+        for pid in pids:
+            _kill_child(pid)
+    return first_id
+
+
 PART2_SCENARIOS = [
     _scenario_preflight_refusal,
     _scenario_premise_refusal,
@@ -452,7 +501,8 @@ PART2_SCENARIOS = [
     _scenario_deadline_before_spawn,
     _scenario_deadline_after_spawn,
     _scenario_live_child_refuses_then_handback,
-    _scenario_surface_overlap_refusal,
+    _scenario_same_lane_overlap_refusal,
+    _scenario_surface_overlap_warning,
 ]
 
 
@@ -473,7 +523,8 @@ PART2_SCENARIOS = [
         "deadline-before-spawn",
         "deadline-after-spawn",
         "live-child-refuses-then-handback",
-        "surface-overlap-refusal",
+        "same-lane-overlap-refusal",
+        "surface-overlap-warning",
     ],
 )
 def test_roundtrip_scenario(tmp_path, monkeypatch, scenario_fn):
@@ -600,11 +651,15 @@ def test_interleaved_scenarios_fold_clean(tmp_path, monkeypatch, seed):
         reserved_count = sum(
             1 for r in read_result["records"] if r.get("event") == "reserved"
         )
-        assert reserved_count == len(PART2_SCENARIOS)
+        # One reserved record per scenario, plus one: the overlap-WARNING scenario's second
+        # lane now launches instead of being refused, so it reserves too (#1054).
+        assert reserved_count == len(PART2_SCENARIOS) + 1
         terminal_count = sum(
             1 for info in folded["launches"].values() if info["terminal"]
         )
-        assert terminal_count == len(PART2_SCENARIOS) - 1
+        # Three lanes are deliberately left live: the same-lane-refusal scenario's first
+        # launch, and both of the warning scenario's.
+        assert terminal_count == reserved_count - 3
     finally:
         for pid in pids:
             _kill_child(pid)

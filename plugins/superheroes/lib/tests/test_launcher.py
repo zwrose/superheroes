@@ -4105,6 +4105,109 @@ def test_launch_records_worktree_on_the_reserved_record(tmp_path, monkeypatch):
     assert ll.fold(records)["ok"] is True
 
 
+def test_launch_over_a_live_overlapping_lane_warns_and_stamps_evidence(tmp_path, monkeypatch):
+    # axis: an overlapping lane launches, and the disclosure lands in the result AND the ledger
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    first = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, surfaces=["plugins/superheroes/lib"]),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert first["ok"] is True
+    assert first["warnings"] == []
+    second = L.launch_build(
+        repo,
+        657,
+        _valid_premise(repo, surfaces=["plugins/superheroes"], issue=657),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert second["ok"] is True, second.get("reason")
+    assert second["warnings"] == ["surface-overlap:%s" % first["launchId"]]
+
+    records = ll.read(repo)["records"]
+    reserved = {
+        r["launchId"]: r for r in records if r.get("event") == "reserved"
+    }
+    assert reserved[second["launchId"]]["surfaceOverlap"] == [first["launchId"]]
+    started = {r["launchId"]: r for r in records if r.get("event") == "started"}
+    evidence = started[second["launchId"]]["evidence"]
+    assert first["launchId"] in evidence
+    assert "landing order per merge-train.md" in evidence
+    # The lane that overlapped nothing discloses nothing.
+    assert "evidence" not in started[first["launchId"]]
+    assert ll.fold(records)["ok"] is True
+
+
+def test_launch_without_overlap_stamps_no_evidence(tmp_path, monkeypatch):
+    # axis: the silent leg — no live overlap means no warning and no started evidence
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert result["ok"] is True
+    assert result["warnings"] == []
+    records = ll.read(repo)["records"]
+    started = [r for r in records if r.get("event") == "started"]
+    assert started and all("evidence" not in r for r in started)
+
+
+def test_cli_launch_stdout_carries_the_overlap_warning(tmp_path, monkeypatch):
+    # axis: the advisor reading stdout sees the warning without opening the ledger
+    import io
+    from contextlib import redirect_stdout
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    checks_path = tmp_path / "checks.json"
+    _write_json(checks_path, _all_checks())
+    premise_path = tmp_path / "premise.json"
+    _write_json(premise_path, _valid_premise(repo))
+    warnings = ["surface-overlap:launch-abc123"]
+
+    def fake_launch(*a, **k):
+        return {"ok": True, "reason": None, "launchId": "launch-x", "warnings": warnings}
+
+    monkeypatch.setattr(L, "launch_build", fake_launch)
+    buf = io.StringIO()
+    with redirect_stdout(buf):
+        exit_code = L.main([
+            "launch",
+            "--repo-root", repo,
+            "--issue", "656",
+            "--premise", str(premise_path),
+            "--checks", str(checks_path),
+            "--log-dir", str(tmp_path / "logs"),
+        ])
+    assert exit_code == 0
+    assert json.loads(buf.getvalue())["warnings"] == warnings
+
+
+def test_overlap_evidence_ignores_unparsable_warnings():
+    # axis: the disclosure is built from real overlap ids only, never from noise
+    assert L._overlap_evidence([]) is None
+    assert L._overlap_evidence(["lock-unavailable", 7, "surface-overlap:", None]) is None
+    assert L._overlap_evidence(["surface-overlap:l1", "surface-overlap:l2"]) == (
+        "overlaps l1, l2; landing order per merge-train.md"
+    )
+
+
 def test_launch_reserve_refusal_leaves_no_orphan_worktree(tmp_path, monkeypatch):
     # axis: a reserve refusal after worktree creation removes the checkout
     repo = _init_repo(tmp_path / "repo")

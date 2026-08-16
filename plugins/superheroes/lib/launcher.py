@@ -68,6 +68,11 @@ _WORKTREE_COLLISION_REMEDY = (
 
 _WORKHORSE_CMD = "/superheroes:workhorse"
 
+# What a reader of a `started` record sees when its lane launched over a recorded surface
+# overlap (#1054): which lanes it overlaps, and who carries the cost — the merge train's
+# later-lander-rebases rule, not a gate that held the lane back.
+_OVERLAP_EVIDENCE_SUFFIX = "landing order per merge-train.md"
+
 _SLOT_REMEDY = (
     "Provision this wave's pilot slots first (the advisor's duty — the builder never "
     "self-provisions), then give every lane named in `missing` its own reservation. "
@@ -957,6 +962,21 @@ def _terminalize(
     return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
 
 
+def _overlap_evidence(warnings):
+    """Disclosure text for a launch that reserved over live lanes; None when it did not."""
+    ids = []
+    for warning in warnings or []:
+        if not isinstance(warning, str):
+            continue
+        prefix, sep, live_id = warning.partition(":")
+        if prefix != "surface-overlap" or not sep or not live_id.strip():
+            continue
+        ids.append(live_id.strip())
+    if not ids:
+        return None
+    return "overlaps %s; %s" % (", ".join(ids), _OVERLAP_EVIDENCE_SUFFIX)
+
+
 def _spawn_attempt(
     repo_root,
     launch_id,
@@ -970,6 +990,7 @@ def _spawn_attempt(
     slot=None,
     generation=None,
     cwd=None,
+    evidence=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
@@ -1021,6 +1042,8 @@ def _spawn_attempt(
         "logPath": log_path,
         "errPath": err_path,
     }
+    if isinstance(evidence, str) and evidence.strip():
+        started["evidence"] = evidence
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
         term = _terminalize(
@@ -1254,6 +1277,12 @@ def launch_build(
             extra["orphanedWorktree"] = worktree_path
         return _fail(reserve_result["reason"], launchId=launch_id, **extra)
 
+    # The lanes this launch's surfaces overlapped are a recorded, disclosed warning rather
+    # than a refusal (#1054). Stamped on the `started` record so a ledger reader sees the
+    # accepted overlap and where the cost lands, without the advisor's context.
+    warnings = list(reserve_result.get("warnings") or [])
+    overlap_evidence = _overlap_evidence(warnings)
+
     ledger_recheck = _ledger_live_state(repo_root, env=env)
     slot_refusal = _slot_reservation_gate(
         repo_root,
@@ -1327,6 +1356,7 @@ def launch_build(
             slot=slot,
             generation=generation,
             cwd=worktree_path,
+            evidence=overlap_evidence,
         )
         if spawn_result.get("refused"):
             return _fail(spawn_result["reason"], launchId=launch_id)
@@ -1431,6 +1461,7 @@ def launch_build(
                 "model": compose_result["model"],
                 "modelResolution": compose_result["modelResolution"],
                 "worktree": worktree_path,
+                "warnings": warnings,
             }
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc

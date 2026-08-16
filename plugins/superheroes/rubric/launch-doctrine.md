@@ -30,7 +30,7 @@ Editing any line inside them changes what `lib/launch_doctrine.py` accepts.
 - `quota` (always) — Account and quota headroom
 - `engine-auth` (always) — Engine and CLI authentication
 - `base-state` (always) — Base state matches the premise
-- `disjoint-surfaces` (conditional) — Surfaces genuinely disjoint
+- `disjoint-surfaces` (conditional) — Overlap with a live lane recorded, with its landing order
 - `workspace-isolation` (always) — Workspace isolation, one per build
 - `standing-rulings` (conditional) — Standing rulings present verbatim
 - `owner-capability` (conditional) — Owner-capability preconditions cleared, with a stated duration
@@ -44,6 +44,24 @@ the doctrine for intent** — it is **not** a parsed invariant and is **not** de
 through the composed launch prompt (`compose_launch` sends the child only the parsed `rulingsBlock`;
 do not assume this line reaches a builder). The load-bearing statement of this duty lives in the
 showrunner charter's orchestration duty 9.
+
+**Surface overlap is recorded, not refused (documentation only — not parsed).** `disjoint-surfaces`
+no longer asks whether the surfaces are genuinely disjoint; it asks that an overlap with a live lane
+be **recorded along with its landing order**. `reserve` returns `ok` on a path or ancestor overlap
+with a live lane, carrying `warnings: ["surface-overlap:<launchId>", …]`, stamping
+`surfaceOverlap: [<launchId>, …]` on the `reserved` record, and the launcher stamps the disclosure on
+the lane's `started` record evidence; `count` tallies `overlapsAccepted` so a batch that ran
+overlapping lanes never reads as clean by omission. **Two refusals stay hard:** a second **live**
+launch for one issue (the same-lane duplicate, which keeps its `surface-overlap:<launchId>` reason)
+and an identical worktree path (`launch-worktree-collision`) — those are the shared-checkout wipeout
+class, not this one. **What the advisor accepts by launching anyway:** an overlapping pair runs in
+parallel and **the later lander rebases**, per `skills/showrunner/reference/merge-train.md`; a builder
+that lands second may take a conflict round, disclosed. The refusal was retired on its own field
+record (#1054): it never prevented an actual collision, the one real overlap it sequenced still cost
+a rework round because the base moved after the merge, it held two ready lanes for hours on a false
+positive, and its refusals were recorded nowhere. This paragraph is **documentation for advisors
+reading the doctrine for intent** — it is **not** a parsed invariant and is **not** delivered to the
+builder through the composed launch prompt.
 
 **Slot reservation gate (documentation only — not parsed).** On a project whose calibration
 declares pilot slots, `disjoint-surfaces` additionally refuses a parallel launch whose lanes carry

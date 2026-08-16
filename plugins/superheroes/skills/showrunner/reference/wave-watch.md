@@ -265,6 +265,11 @@ See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-w
 transcript second chance, the `staleSuppressed` note it emits instead, and why an unresolvable
 transcript still alerts.
 
+Lanes that launched over a live lane's surfaces carry `surfaceOverlap` (the overlapped launch ids)
+on their `reserved` ledger record, and the batch `count` tallies them as `overlapsAccepted`. The
+watcher does not act on either — read them when a lane you are watching hits a conflict at landing:
+the later lander rebases (`merge-train.md`), which is the accepted cost, not a wedge.
+
 `staleSuppressed` rides any result — `timer` included — when the transcript second chance held a
 lane back from `lane-stale` during that arm. It is a **note about what the watcher saw**, not an
 event: a result carrying only `staleSuppressed` is a result where nothing actionable happened.
