@@ -99,6 +99,15 @@ IMPL_ENGINE=$(echo "$EP" | jq -r '.implementation // "claude"')
 
 **Compose the panel seat map (#510).** Per-seat engine+model over the live vendors — this replaces the single `$REVIEWER_ENGINE`-for-all-seats knob. Optional per-seat pins come from `enginePreferences.seatPins` in `$EP`; pins the account cannot honor stay loud via the shipped seat-map machinery (degradations in the receipt, seat falls back to rotation). `$AUTHOR_FAMILY` is the implementation engine's maker family; the narrative family is this orchestrator (`anthropic`). The map (per-seat tiers + resolved models, any pin/degradation disclosures) rides into the receipt; per-seat consumption is in `skills/review-code/reference/auto-fix-loop.md`.
 
+**What `--pins` does and does not do (#1039).** A pin value is `{vendor, model?, effort?}`; a **bare
+string is the documented shorthand** for `{"vendor": "<string>"}` and resolves down the identical
+honorability path. Any other value shape — null, number, bool, list — and a pin map that is not
+itself an object are **refused by name**: compose exits non-zero printing `pins-invalid:<seat>` (or
+`pins-invalid` for the map), never a traceback and never a silently dropped pin. **Pinning one seat
+does not hold the others** — every unpinned seat still rotates over the live vendors on the run's
+seed, so an operator excluding a second maker family must pin **every** seat they need held; there
+is no hold-the-rest knob.
+
 ```bash
 CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
 AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import model_registry as m;print(m.family_for('code-fixer',sys.argv[2]) or '')" "$ROOT_DIR" "$IMPL_ENGINE")

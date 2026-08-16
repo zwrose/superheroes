@@ -1652,3 +1652,154 @@ def test_resolvable_families_for_seat_positive_family_set():
     seat_map["livenessPinScoped"] = False
     fams = SM._resolvable_families_for_seat(seat_map, seat, cfg)
     assert fams == {"anthropic", "openai", "xai"}
+
+
+# --- pin-shape normalization + refusal (#1039) -------------------------------------------------
+
+
+def test_normalize_pins_string_shorthand_is_exactly_the_vendor_object():
+    # axis: a bare string pin resolves as the vendor, with no other key invented
+    normalized, errors = SM.normalize_pins({"code-reviewer": "codex"})
+    assert normalized == {"code-reviewer": {"vendor": "codex"}}
+    assert errors == []
+
+
+def test_normalize_pins_passes_object_pins_through_unchanged():
+    # axis: the existing object shape is untouched by the new chokepoint
+    pins = {"code-reviewer": {"vendor": "codex", "model": "gpt-5.6-terra", "effort": "high"}}
+    normalized, errors = SM.normalize_pins(pins)
+    assert normalized == pins
+    assert errors == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [None, 5, True, 1.5, ["codex"], {"vendor": "codex"}.keys()],
+    ids=["null", "int", "bool", "float", "list", "non-dict-mapping-view"],
+)
+def test_normalize_pins_refuses_non_object_non_string_shapes(value):
+    # axis: REFUSAL by name — an unusable seat value is named, never dropped and never crashed on
+    normalized, errors = SM.normalize_pins({"code-reviewer": value})
+    assert errors == ["pins-invalid:code-reviewer"]
+    assert normalized == {}
+
+
+def test_normalize_pins_names_every_unusable_seat_not_just_the_first():
+    normalized, errors = SM.normalize_pins(
+        {"code-reviewer": 5, "security-reviewer": "codex", "test-reviewer": None}
+    )
+    assert sorted(errors) == ["pins-invalid:code-reviewer", "pins-invalid:test-reviewer"]
+    assert normalized == {"security-reviewer": {"vendor": "codex"}}
+
+
+@pytest.mark.parametrize(
+    "value", ["codex", 5, ["codex"], True], ids=["str", "int", "list", "bool"]
+)
+def test_normalize_pins_refuses_a_pin_map_that_is_not_an_object(value):
+    # axis: REFUSAL by name at the map level — the seatless token, still never a traceback
+    normalized, errors = SM.normalize_pins(value)
+    assert errors == ["pins-invalid"]
+    assert normalized == {}
+
+
+def test_normalize_pins_absent_map_is_not_a_refusal():
+    assert SM.normalize_pins(None) == ({}, [])
+    assert SM.normalize_pins({}) == ({}, [])
+
+
+def test_build_string_pin_resolves_as_vendor():
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins={"code-reviewer": "claude"})
+    assert m["seats"]["code-reviewer"]["source"] == "pinned"
+    assert m["seats"]["code-reviewer"]["vendor"] == "claude"
+
+
+def test_build_string_pin_is_identical_to_the_object_pin():
+    shorthand = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 7, pins={"code-reviewer": "claude"}
+    )
+    longhand = SM.build(
+        SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 7, pins={"code-reviewer": {"vendor": "claude"}}
+    )
+    assert shorthand == longhand
+
+
+def test_build_unusable_pin_shape_degrades_instead_of_raising():
+    # axis: loudness — the old behaviour was AttributeError; the new one is a named degradation
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins={"code-reviewer": 5})
+    pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
+    assert any(d["reason"] == "pins-invalid:code-reviewer" for d in pin_degs)
+    assert m["seats"]["code-reviewer"]["source"] != "pinned"
+
+
+def test_build_pin_map_that_is_not_an_object_degrades_instead_of_raising():
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0, pins="claude")
+    pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
+    assert any(d["reason"] == "pins-invalid" for d in pin_degs)
+    assert set(m["seats"]) == set(SM.PANEL_ROSTER)
+
+
+def test_reachable_configs_string_pin_narrows_like_the_object_pin():
+    shorthand = SM.reachable_configs(["codex", "cursor"], {s: "codex" for s in SM.PANEL_ROSTER})
+    longhand = SM.reachable_configs(
+        ["codex", "cursor"], {s: {"vendor": "codex"} for s in SM.PANEL_ROSTER}
+    )
+    assert shorthand == longhand
+    assert shorthand["cursor"] == []
+
+
+def test_reachable_configs_unusable_pin_shape_rotates_conservatively():
+    rc = SM.reachable_configs(["codex", "cursor"], {"code-reviewer": 5})
+    assert rc["cursor"] != []
+
+
+def test_cli_compose_string_pin_shorthand(capsys):
+    rc = SM.main(
+        [
+            "x", "compose",
+            "--live-vendors", "claude,codex,cursor",
+            "--author-family", "openai",
+            "--narrative-family", "anthropic",
+            "--pins", '{"security-reviewer":"claude"}',
+            "--pr-number", "1039",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["seats"]["security-reviewer"]["vendor"] == "claude"
+    assert receipt["seats"]["security-reviewer"]["source"] == "pinned"
+
+
+def test_cli_compose_refuses_unusable_pin_shape(capsys):
+    rc = SM.main(
+        [
+            "x", "compose",
+            "--live-vendors", "claude,codex,cursor",
+            "--pins", '{"security-reviewer":5}',
+        ]
+    )
+    assert rc != 0
+    captured = capsys.readouterr()
+    assert "pins-invalid:security-reviewer" in captured.err
+    assert captured.out == ""
+
+
+def test_cli_compose_refuses_a_pin_map_that_is_not_an_object(capsys):
+    rc = SM.main(["x", "compose", "--live-vendors", "claude", "--pins", '"codex"'])
+    assert rc != 0
+    captured = capsys.readouterr()
+    assert "pins-invalid" in captured.err
+    assert captured.out == ""
+
+
+def test_cli_compose_null_pins_is_not_a_refusal(capsys):
+    rc = SM.main(["x", "compose", "--live-vendors", "claude,codex,cursor", "--pins", "null"])
+    assert rc == 0
+    assert json.loads(capsys.readouterr().out)["seats"]
+
+
+def test_review_code_reference_documents_pin_shorthand_and_rerotation():
+    from skill_surface import surface_text
+    text = surface_text("review-code")
+    assert "pins-invalid:<seat>" in text
+    assert "bare\nstring is the documented shorthand" in text or "bare string is the documented shorthand" in text
+    assert "Pinning one seat\ndoes not hold the others" in text or "Pinning one seat does not hold the others" in text
