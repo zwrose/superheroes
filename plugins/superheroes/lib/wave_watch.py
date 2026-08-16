@@ -21,7 +21,7 @@ Contract:
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
   lane-never-stamped, pr-signal-never-sampled, log-unwritable,
-  transcript-ambiguous.
+  transcript-ambiguous, transcript-unresolved.
 - gh child env-scrubbing: ambient git/GH routing variables in _GIT_SCRUB_VARS
   are stripped via _scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below
@@ -41,13 +41,20 @@ Contract:
   unresolvable read — no session id on the ledger record, no transcript on disk,
   two-or-more transcripts with the same id, an unreadable projects directory, a
   future-dated mtime — leaves the lane STALE: the check fails toward the alert,
-  never toward silence. Ambiguity additionally records transcript-ambiguous.
+  never toward silence. Ambiguity additionally records transcript-ambiguous, and a
+  read that could not RESOLVE records transcript-unresolved (#1036) — the lane is
+  stale either way; the token only says why the watcher could not vouch. An absent
+  projects root or an absent candidate is NOT unresolved: that is a cold or absent
+  transcript, which is the wedge signal itself.
 - Transcript identity: a transcript vouches for a lane only when the launch record
   carries that lane's session id and exactly one regular file named
   <sessionId>.jsonl resolves under the host config root's projects tree. The
   watcher stat's only — it never reads transcript contents. Exactly one config root
-  is searched (the CLAUDE_CONFIG_DIR override outright, else ~/.claude), and a
-  symlinked entry is never followed.
+  is searched, never both: the lane's own recorded configDir when the launch record
+  carries one (#1036 — a lane launched under another Claude instance keeps its
+  transcript under that instance's root), else the watcher's env root (the
+  CLAUDE_CONFIG_DIR override outright, else ~/.claude). A symlinked entry is never
+  followed.
 - staleSuppressed: accumulated across an arm's ticks, keyed by launchId, and cleared
   for a lane the moment a later tick finds it still stale. It rides EVERY result of
   that arm including timer, which is what puts it in loop's --log line.
@@ -209,6 +216,7 @@ DEGRADATION_LANE_NEVER_STAMPED = "lane-never-stamped"
 DEGRADATION_PR_SIGNAL_NEVER_SAMPLED = "pr-signal-never-sampled"
 DEGRADATION_LOG_UNWRITABLE = "log-unwritable"
 DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
+DEGRADATION_TRANSCRIPT_UNRESOLVED = "transcript-unresolved"
 
 DEGRADATIONS = frozenset({
     DEGRADATION_LEDGER_TORN_TAIL,
@@ -220,6 +228,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_PR_SIGNAL_NEVER_SAMPLED,
     DEGRADATION_LOG_UNWRITABLE,
     DEGRADATION_TRANSCRIPT_AMBIGUOUS,
+    DEGRADATION_TRANSCRIPT_UNRESOLVED,
 })
 
 EVENT_PRECEDENCE = (
@@ -491,59 +500,111 @@ def _expand_home(path, env):
     return os.path.expanduser(path)
 
 
-def _transcript_config_dirs(env):
-    """The host config dir to search — EXACTLY ONE.
+def _transcript_config_dirs(env, recorded=None):
+    """The host config dir to search — EXACTLY ONE, never both.
 
-    The override wins outright rather than being searched alongside the default: the
-    launcher passes CLAUDE_CONFIG_DIR through to the builder, so when it is set, a
-    same-named transcript under the default root belongs to some OTHER session and
-    must never be allowed to vouch for this lane.
+    The lane's OWN recorded root wins when the launch record carries one (#1036): a lane
+    launched under another Claude instance (the owner's per-launch exception, e.g.
+    .claude-two) writes its transcript under THAT instance's root, and the watcher's own
+    root would find nothing. Otherwise the watcher's env root is used — the
+    CLAUDE_CONFIG_DIR override outright, else ~/.claude — which is also what a
+    pre-#1036 record (no recorded root) resolves under.
+
+    The override wins outright rather than being searched alongside the default, for the
+    same reason the recorded root does: a same-named transcript under any OTHER root
+    belongs to some OTHER session and must never be allowed to vouch for this lane.
+
+    Returns [] when a root was recorded but is unusable — the caller reads an empty list
+    as UNRESOLVED, never as a licence to fall back to the env root.
     """
+    if recorded is not None:
+        # strip() detects an all-whitespace value; it never REWRITES the recorded root.
+        # The grammar accepts any usable absolute path, so a directory whose name really
+        # does end in a space is legal — searching a stripped version of it would look in
+        # a directory the lane never wrote to, and the launcher already normalized once.
+        # A watcher that rewrites what was recorded cannot be said to search "the lane's
+        # own root" at all.
+        if not isinstance(recorded, str) or not recorded.strip():
+            return []
+        if not os.path.isabs(recorded):
+            return []
+        return [recorded]
     configured = env.get(_TRANSCRIPT_CONFIG_DIR_ENV)
     if isinstance(configured, str) and configured.strip():
         return [_expand_home(configured.strip(), env)]
     return [_expand_home(_TRANSCRIPT_DEFAULT_CONFIG_DIR, env)]
 
 
-def _session_transcript_mtime(session_id, env):
-    """(mtime, ambiguous) for the lane's own transcript, by recorded session id."""
+def _session_transcript_mtime(session_id, env, config_dir=None):
+    """(mtime, ambiguous, unresolved) for the lane's own transcript, by recorded id.
+
+    The three outcomes are mutually exclusive by construction and each fails toward the
+    alert; they differ only in what they DISCLOSE:
+
+    - a resolved single match returns its mtime (the only outcome that can suppress);
+    - ``ambiguous`` — two or more transcripts carry this id, so identity is unprovable;
+    - ``unresolved`` — the lookup itself could not complete (an unreadable projects root,
+      an unreadable bucket, a candidate stat failing for anything but absence, or a
+      recorded config root that is unusable), so the watcher cannot tell a cold
+      transcript from one it simply could not read (#1036).
+
+    ABSENCE is deliberately not ``unresolved``: a missing projects root, a missing bucket,
+    or a missing candidate all mean the transcript is not there, which is the wedge signal
+    the event exists to report — not a failed reading of it. Absence means ENOENT and
+    nothing else: ENOTDIR (a config root or bucket that is a FILE) is a malformed root the
+    watcher could not read, not a transcript that is not there.
+
+    ``ValueError`` is adjudicated alongside ``OSError`` because a path string can be
+    absolute and still be unusable — an embedded NUL or an unencodable surrogate makes
+    os.scandir raise ValueError, and letting that escape turns a lane's stale alert into a
+    whole-watch internal-error refusal, which is the fail-toward-alert invariant inverted.
+    """
     if not isinstance(session_id, str) or not session_id.strip():
-        return None, False
+        return None, False, False
     if os.sep in session_id or "/" in session_id or ".." in session_id:
-        return None, False
+        return None, False, False
+
+    roots = _transcript_config_dirs(env, recorded=config_dir)
+    if not roots:
+        # A recorded root we cannot use is a failed lookup, never a fall-back to the
+        # watcher's own root: that fall-back is exactly how a foreign same-named
+        # transcript would get to vouch for this lane.
+        return None, False, True
 
     filename = session_id + _TRANSCRIPT_SUFFIX
     matches = []
-    for root in _transcript_config_dirs(env):
+    for root in roots:
         projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
         try:
             bucket_entries = list(os.scandir(projects_root))
-        except OSError:
-            return None, False
+        except FileNotFoundError:
+            continue
+        except (OSError, ValueError):
+            return None, False, True
         for bucket_entry in bucket_entries:
             try:
                 if not bucket_entry.is_dir(follow_symlinks=False):
                     continue
-            except (FileNotFoundError, NotADirectoryError):
+            except FileNotFoundError:
                 continue
-            except OSError:
-                return None, False
+            except (OSError, ValueError):
+                return None, False, True
             candidate = os.path.join(bucket_entry.path, filename)
             try:
                 st = os.stat(candidate, follow_symlinks=False)
-            except (FileNotFoundError, NotADirectoryError):
+            except FileNotFoundError:
                 continue
-            except OSError:
-                return None, False
+            except (OSError, ValueError):
+                return None, False, True
             if not stat.S_ISREG(st.st_mode):
                 continue
             matches.append(st.st_mtime)
 
     if len(matches) == 0:
-        return None, False
+        return None, False, False
     if len(matches) >= 2:
-        return None, True
-    return matches[0], False
+        return None, True, False
+    return matches[0], False, False
 
 
 def _stale_second_chance(
@@ -560,6 +621,10 @@ def _stale_second_chance(
     ambiguity, an unusable promise, a stale transcript, or a future-dated transcript
     all leave the lane in the still-stale list. Only a positively fresh transcript
     suppresses.
+
+    The lane's transcript is looked up under the lane's OWN recorded config root when its
+    launch record carries one, so a lane launched under another Claude instance still gets
+    its second chance (#1036).
     """
     injected_now = now is not None
     if session_transcript_mtime is None:
@@ -569,12 +634,17 @@ def _stale_second_chance(
     for entry in stale_live:
         promise = entry.get("staleAfterSeconds")
         lane_info = live_lanes.get(entry["launchId"]) or {}
-        mtime, ambiguous = session_transcript_mtime(
-            lane_info.get("sessionId"), env,
+        mtime, ambiguous, unresolved = session_transcript_mtime(
+            lane_info.get("sessionId"), env, lane_info.get("configDir"),
         )
         lane_now = now if injected_now else time.time()
         if ambiguous and degraded is not None:
             degraded.add(DEGRADATION_TRANSCRIPT_AMBIGUOUS)
+        # bite-axis: DISCLOSURE — a lookup that could not complete is reported as such, so
+        # "the watcher could not read the transcript" is never silently indistinguishable
+        # from "the transcript is cold". The lane stays stale either way (#1036).
+        if unresolved and degraded is not None:
+            degraded.add(DEGRADATION_TRANSCRIPT_UNRESOLVED)
         # bite-axis: DIRECTION of failure — an unresolvable transcript or an unusable
         # promise alerts, never suppresses.
         if not _valid_positive_int(promise) or mtime is None:

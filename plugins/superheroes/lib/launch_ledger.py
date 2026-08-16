@@ -871,6 +871,26 @@ def _validate_reserved_optional_fields(rec):
         except (ValueError, AttributeError, TypeError):
             return "fold-bad-field:reserved:sessionId"
 
+    if "configDir" in rec:
+        # The config root the lane's builder was spawned under, so a consumer resolves
+        # that lane's session transcript under the RIGHT root even when the reader runs
+        # under a different Claude instance (#1036). Absolute only: a relative value would
+        # resolve against whatever cwd the reader happens to have.
+        config_dir = rec["configDir"]
+        if not isinstance(config_dir, str) or not config_dir.strip():
+            return "fold-bad-field:reserved:configDir"
+        if not os.path.isabs(config_dir):
+            return "fold-bad-field:reserved:configDir"
+        # isabs() is not usability: an embedded NUL or an unencodable surrogate passes it
+        # and then makes every filesystem call on the value raise. A record a consumer
+        # cannot act on is not a valid record.
+        try:
+            os.fsencode(config_dir)
+        except (ValueError, UnicodeEncodeError):
+            return "fold-bad-field:reserved:configDir"
+        if "\x00" in config_dir:
+            return "fold-bad-field:reserved:configDir"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1045,12 +1065,15 @@ def fold(records):
                 "slot": rec.get("slot"),
                 "generation": rec.get("generation"),
                 "boundary": rec.get("boundary"),
-                # The launcher records the build worktree and session id on the
-                # reserved record (launcher.py). Folding them through is what lets
-                # a consumer resolve the lane's session transcript by identity
-                # (#1023).
+                # The launcher records the build worktree, session id, and the config
+                # root the child was spawned under on the reserved record (launcher.py).
+                # Folding them through is what lets a consumer resolve the lane's session
+                # transcript by identity (#1023) under the lane's own root rather than the
+                # reader's (#1036). configDir is absent on pre-#1036 records, which is the
+                # documented signal to fall back to the reader's own env root.
                 "worktree": rec.get("worktree"),
                 "sessionId": rec.get("sessionId"),
+                "configDir": rec.get("configDir"),
             }
             continue
 
