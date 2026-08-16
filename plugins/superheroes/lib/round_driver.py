@@ -254,12 +254,18 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
     "recordOrphansIgnored": _str_list,
+    "orderVendorProvenanceGaps": _dict_list,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
 # must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same
 # one home.
 SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
+
+# Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
+# Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
+# share the same one home.
+ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps",)
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
@@ -2726,6 +2732,8 @@ def _handle_stall(state, config, breaker):
         [c for c in STALL_CHOICES if c != ACCEPT_RISK_CHOICE]
     if state.get("_oneMoreRoundUsed"):
         choices = [c for c in choices if c != ONE_MORE_ROUND_CHOICE]
+    if not stall_targets:
+        choices = [c for c in choices if c != ONE_MORE_ROUND_CHOICE]
     state["_stallChoices"] = choices
     state["_acceptRiskEligible"] = accept_eligible
     _decision(state, "stall-menu", "audit-stall persists after self-recovery — owner choice")
@@ -2741,6 +2749,15 @@ def _accept_risk_eligible(state, breaker):
     return False
 
 
+def _stall_targets_accept_risk_eligible(state):
+    """Fold-time accept-risk eligibility from the persisted stall-target snapshot — never a cached
+    boolean a prior version may have written under a broader rule."""
+    for t in state.get("_stallTargets") or []:
+        if isinstance(t, dict) and t.get("verdict") == "CONFIRMED" and t.get("evidence"):
+            return True
+    return False
+
+
 def _fold_stall(state, config, artifact):
     """Fold the owner's stall choice; journal it. hold → park; accept-the-disclosed-risk → certify
     when eligible; one-more-round → re-enter the fix leg from the persisted stall-target snapshot."""
@@ -2750,7 +2767,7 @@ def _fold_stall(state, config, artifact):
     if choice == HOLD_CHOICE:
         state["terminal"] = "held"
         state["certification"] = {"shape": None, "reason": "owner chose to hold"}
-    elif choice == ACCEPT_RISK_CHOICE and state.get("_acceptRiskEligible"):
+    elif choice == ACCEPT_RISK_CHOICE and _stall_targets_accept_risk_eligible(state):
         _terminal_converged(state, config, full_panel=False,
                             note="owner accepted the disclosed (CONFIRMED) risk")
         return
@@ -2996,6 +3013,15 @@ def build_receipt(state, session_dir=None):
                 "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
                 "%s still at this slot — records ignored (session already on hand-submit path)"
                 % (rkey, ", ".join(roi)))
+        ovg = rrec.get("orderVendorProvenanceGaps")
+        if ovg:
+            seats = []
+            for row in ovg:
+                if isinstance(row, dict) and row.get("seat"):
+                    seats.append(row["seat"])
+            degraded.append(
+                "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
+                "vendor in the seat map" % (rkey, ", ".join(seats)))
         prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
@@ -3122,7 +3148,7 @@ def _validate_rounds_lens_coverage(receipt):
             if key not in lc:
                 return False, "round %s lensCoverage missing key %r" % (rnd, key)
         ran, expected, floor = lc["ran"], lc["expected"], lc["floor"]
-        if not isinstance(ran, int) or not isinstance(expected, int):
+        if type(ran) is not int or type(expected) is not int:
             return False, "round %s lensCoverage ran and expected must be integers" % rnd
         if not isinstance(floor, bool):
             return False, "round %s lensCoverage floor must be a boolean" % rnd
@@ -3142,17 +3168,19 @@ def _validate_rounds_lens_coverage(receipt):
         isinstance(shape, str) and shape.startswith("full-panel-confirmed"))
     if not full_panel_anchor:
         return True, None
-    panel_rounds = [rd for rd in rounds
-                    if isinstance(rd, dict) and rd.get("lensCoverage") is not None]
-    if not panel_rounds:
+    round_dicts = [rd for rd in rounds if isinstance(rd, dict)]
+    if not any(rd.get("lensCoverage") is not None for rd in round_dicts):
         return True, None
 
     def _round_num(rd):
         r = rd.get("round")
         return int(r) if isinstance(r, int) or (isinstance(r, str) and str(r).isdigit()) else 0
 
-    anchor = max(panel_rounds, key=_round_num)
+    anchor = max(round_dicts, key=_round_num)
     anchor_lc = anchor.get("lensCoverage")
+    if anchor_lc is None:
+        return False, ("converged certification anchor round %s lacks lensCoverage"
+                       % anchor.get("round"))
     if isinstance(anchor_lc, dict) and anchor_lc.get("floor"):
         return False, ("converged certification cannot anchor on floor-marked round %s"
                        % anchor.get("round"))
@@ -3672,7 +3700,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
             # Legacy persisted stall without a recorded menu — fail closed: only hold (and accept-risk
             # when the session recorded eligibility) were ever safe terminals.
             offered = [HOLD_CHOICE]
-            if state.get("_acceptRiskEligible"):
+            if _stall_targets_accept_risk_eligible(state):
                 offered.insert(0, ACCEPT_RISK_CHOICE)
         if isinstance(choice, str) and choice not in offered:
             reason = "%s%s" % (STALL_CHOICE_NOT_OFFERED_PREFIX, choice)
@@ -4082,11 +4110,21 @@ def _effective_seat_map(state):
 def _disclose_order_vendor_provenance_gaps(state, gaps):
     if not gaps:
         return
-    rec = state["rounds"].setdefault(str(state["round"]), {})
+    rnd_key = str(state["round"])
+    rec = state["rounds"].get(rnd_key) or {}
     prior = rec.get("orderVendorProvenanceGaps")
     merged = list(prior) if isinstance(prior, list) else []
-    merged.extend(gaps)
-    rec["orderVendorProvenanceGaps"] = merged
+    seen = {(row.get("seat"), row.get("occurrence"))
+            for row in merged if isinstance(row, dict)}
+    for row in gaps:
+        if not isinstance(row, dict):
+            continue
+        key = (row.get("seat"), row.get("occurrence"))
+        if key in seen:
+            continue
+        merged.append(row)
+        seen.add(key)
+    _record_round(state, "orderVendorProvenanceGaps", merged)
 
 
 def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payload, repo_root,

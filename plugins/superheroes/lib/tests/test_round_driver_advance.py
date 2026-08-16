@@ -1140,10 +1140,15 @@ def test_advance_malformed_verify_payload_does_not_fallback_to_seat_record(tmp_p
 
 
 def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):
-    """Thread the composed seat map through `next` so host-seat orders carry a vendor."""
+    """Config seatMap fallback when top-level state seatMap is empty (#723 + #960)."""
     partial = {"seats": {"architecture-reviewer": {"vendor": "claude", "model": "sonnet-5",
                                                     "engine": "claude"}}}
     d = _session(tmp_path, seatMap=partial)
+    state = _state(d)
+    state["seatMap"] = {}
+    assert state["config"]["seatMap"] == partial
+    RD.save_state(d, state)
+    assert RD.cmd_next(d)["ok"]
     pend = _pending(d)
     manifest_path = RD._orders_manifest_path(d, pend["round"], pend["phase"], pend["attempt"])
     manifest, err = RR.read_json(manifest_path)
@@ -1158,6 +1163,9 @@ def test_emitted_order_discloses_vendor_gap_when_seat_map_absent(tmp_path, adapt
     gaps = _state(d)["rounds"][str(pend["round"])]["orderVendorProvenanceGaps"]
     assert isinstance(gaps, list) and gaps
     assert all(g.get("seat") in RD.DIMENSIONS for g in gaps)
+    receipt = RD.build_receipt(_state(d), d)
+    rd = next(r for r in receipt["rounds"] if r["round"] == pend["round"])
+    assert rd.get("orderVendorProvenanceGaps") == gaps
 
 
 def test_emitted_order_partial_seat_map_resolves_and_discloses(tmp_path, adapters):
@@ -1753,6 +1761,10 @@ def test_advance_judgment_shipped_policy_missing_parks(tmp_path, adapters, monke
     assert out["detail"] == "gate-policy-no-valid-layer"
 
 
+_CONFIRMED_STALL_TARGET = {"id": "v0", "title": "bug", "severity": "Important", "file": "f.py",
+                           "line": 1, "verdict": "CONFIRMED", "evidence": "tests pass"}
+
+
 def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
     """Stall gate authorized advance via accept-the-disclosed-risk when eligible."""
     repo = _repo_with_gate_policy(tmp_path, [{
@@ -1764,6 +1776,7 @@ def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
     state = _state(d)
     state["config"]["repoRoot"] = repo
     state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = [dict(_CONFIRMED_STALL_TARGET)]
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
@@ -1912,6 +1925,7 @@ def test_stall_accept_risk_terminal_receipt_on_disk_carries_policy_applied(tmp_p
     state = _state(d)
     state["config"]["repoRoot"] = repo
     state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = [dict(_CONFIRMED_STALL_TARGET)]
     RD.save_state(d, state)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
