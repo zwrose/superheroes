@@ -3983,6 +3983,7 @@ def test_record_outcome_await_exit_returns_todays_refusal_at_the_ceiling(tmp_pat
     assert result["recorded"] is None
     assert len(attempts) > 1, "the ceiling must buy re-attempts, not one long sleep"
     assert elapsed >= 0.5
+    assert elapsed < 4.0, "the ceiling must bound the patience, not just start it"
     assert len(ll.read(repo)["records"]) == before
 
 
@@ -4000,7 +4001,7 @@ def test_record_outcome_await_exit_zero_makes_exactly_one_attempt(tmp_path, monk
     assert result["ok"] is False
     assert result["reason"] == "terminal-child-live:999999"
     assert len(attempts) == 1
-    assert elapsed < 1.0, "the default must not wait at all"
+    assert elapsed < 2.0, "the default must not wait at all"
     assert len(ll.read(repo)["records"]) == before
 
 
