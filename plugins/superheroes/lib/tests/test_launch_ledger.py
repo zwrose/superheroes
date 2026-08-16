@@ -3839,3 +3839,69 @@ def test_reserved_worktree_absolute_path_folds():
     rec = _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-974-abcd1234")
     result = ll.fold([rec])
     assert result["ok"] is True
+
+
+def test_fold_exposes_the_recorded_worktree(tmp_path):
+    # axis: worktree reaches the folded launch (#1023 resolves the transcript from it)
+    rec = _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-1023-abcd1234")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["worktree"] == "/tmp/wt/issue-1023-abcd1234"
+
+
+def test_fold_startedts_tracks_the_latest_attempt(tmp_path):
+    # axis: RETRY — a lane that retried must expose the LATEST attempt's start, or a
+    # transcript written between attempts could vouch for the attempt after it (#1023).
+    recs = [
+        _reserved("l1", "b", ["a"], "/tmp", worktree="/tmp/wt/issue-1023-abcd1234"),
+        dict(_started("l1", attempt=1), ts=1000.0),
+        dict(_started("l1", attempt=2), ts=2000.0),
+    ]
+    result = ll.fold(recs)
+    assert result["ok"] is True, result.get("reason")
+    assert result["launches"]["l1"]["startedTs"] == 2000.0
+
+
+def test_fold_worktree_is_none_when_the_record_omits_it():
+    # axis: an older record folds to None, never a KeyError — the consumer alerts on None
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["worktree"] is None
+
+
+@pytest.mark.parametrize("session_id", ["", "   ", "not-a-uuid", 7, None])
+def test_reserved_session_id_must_be_a_well_formed_uuid(session_id):
+    rec = _reserved("l1", "b", ["a"], "/tmp", sessionId=session_id)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:sessionId"
+
+
+def test_reserved_session_id_well_formed_uuid_folds():
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        sessionId="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+
+
+def test_fold_exposes_the_recorded_session_id(tmp_path):
+    rec = _reserved(
+        "l1", "b", ["a"], "/tmp",
+        sessionId="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    )
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert (
+        result["launches"]["l1"]["sessionId"]
+        == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+    )
+
+
+def test_fold_session_id_is_none_when_the_record_omits_it():
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["sessionId"] is None

@@ -6,6 +6,7 @@
 - [`--ignore-launch` and re-arming](#--ignore-launch-and-re-arming)
 - [`--ignore-event` and re-arming](#--ignore-event-and-re-arming)
 - [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
+- [The default promise, and the number behind it](#the-default-promise-and-the-number-behind-it)
 - [Timing flags](#timing-flags)
 - [What it tells you](#what-it-tells-you)
 - [The boundary the owner accepted](#the-boundary-the-owner-accepted)
@@ -113,12 +114,65 @@ does not dedupe suppressed pairs across invocations by itself.
 ## Before treating `lane-stale` as a wedge
 
 A stale lane whose transcript is **fresh** is the **benign long-dispatch shape** — a builder alive
-inside a long engine dispatch whose heartbeat promise lapsed between stamps. Before treating
-`lane-stale` as a wedge, read the **semantic-liveness pair**: the recorded **pid** and the
-**transcript mtime**, together. `lane-stale` already requires a positively-live pid, so a fresh
-transcript on top of that means *working, not wedged*. A stale lane with a live pid **and** a
-long-cold transcript is the wedge. Field specimen: heartbeat age 1835 s against an 1800 s promise,
-transcript mtime 2.5 minutes — benign, and it terminated an arm anyway.
+inside a long engine dispatch whose heartbeat promise lapsed between stamps. **The watcher now reads
+that pair for you.** Before emitting `lane-stale` it resolves the lane's session transcript from
+the **session id the launcher recorded on the launch record**, and a transcript written **inside
+that lane's own `staleAfterSeconds` window** suppresses the event.
+
+So `lane-stale` now means three things at once: the heartbeat outran the promise, the pid is
+positively live, **and** the transcript is cold. That is the wedge.
+
+A suppressed lane is not silently dropped — it rides the arm's result under **`staleSuppressed`**,
+each entry carrying the note `stale-suppressed-transcript-fresh`, the lane's heartbeat age, its
+promise, and how old the transcript actually was. The note rides **every** result of that arm
+including `timer`, which is what puts it in the `--log` line, so a long quiet arm still shows which
+lanes it judged to be working.
+
+**The check fails toward the alert, never toward silence.** Every way the transcript read can fail to
+prove work — no session id on the lane's ledger record, no transcript on disk, two-or-more
+transcripts with the same id, an unreadable projects directory, a transcript dated into the future
+by any amount — leaves the lane stale and the event fires. Ambiguity additionally records
+`transcript-ambiguous`.
+
+**Only the lane's own transcript may vouch for it.** The launch record's session id names exactly one
+file: `<sessionId>.jsonl` under the host config root's `projects` tree. Exactly one config root is
+searched (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude` — never both, because a
+same-named file under the other root belongs to a different session); a symlinked entry is never
+followed; and the watcher **stat's only** — it never reads transcript contents.
+
+Launches without a recorded session id get **no second chance** — pre-change ledger records still
+alert. The concurrent-foreign-session-in-the-same-worktree residual is **closed** by recorded
+identity: a different session carries a different id and cannot vouch for this lane.
+
+A transcript-suppressed lane is **not** the same as an `--ignore-event` suppression: `--ignore-event`
+silences an event the watcher still believes, so the lane keeps showing up under `alsoObserved`; a
+transcript-suppressed lane is one the watcher judged to be *working*, so it drops out of
+`alsoObserved` too. A lane found still stale on a later tick of the same arm loses its earlier
+suppression note, so the note can never contradict the event it rides on.
+
+Field specimen the fix was built from: heartbeat age 1835 s against an 1800 s promise, transcript
+mtime 2.5 minutes — benign, and before this it terminated an arm anyway.
+
+## The default promise, and the number behind it
+
+A builder states its own `staleAfterSeconds` when it stamps (`--stale-after`), and that promise is
+what `lane-stale` measures against. A caller that states **no** promise gets the default in
+`lib/heartbeat.py` — `DEFAULT_STALE_AFTER_SECONDS`, **24000 s** (6 h 40 m).
+
+That floor is derived, not chosen: it is **2× the worst benign inter-stamp gap measured on this
+host, 11960 s**. The measurement pooled **45** inter-stamp gaps across **10** builder lanes, read
+from the session transcripts, and counted a gap as *benign* only when the transcript never went
+colder than **600** s anywhere inside it — 600 s being the host's foreground-Bash ceiling — so the
+lane was demonstrably working the whole way through. **44** of the 45 gaps were benign.
+
+Those numbers live in one place, `heartbeat.STALE_AFTER_MEASUREMENT`; this paragraph and
+CONVENTIONS §15 are drift-checked against it, so correcting the measurement cannot leave a stale
+derivation behind.
+
+The previous default was 300 s, which no real build has ever met: a caller that omitted the flag was
+guaranteed to read `stale` within five minutes. The floor moves only that fallback — a builder that
+states its own promise is unaffected, and `builder-exited` still surfaces a lane whose pid dies
+regardless of any promise.
 
 ## Timing flags
 
@@ -157,13 +211,25 @@ When an event fires, co-occurring lower-precedence lane signals from the same in
 under `alsoObserved` (launch ids only) — read it, or you will act on one lane and miss its
 siblings. A `timer` result has no `alsoObserved`.
 
+When **`pr-set-changed`** sends you to read a lane's CI, select the run by **workflow name and head
+sha** — never `gh run list --limit 1`. The newest run on a branch is whatever workflow happened to
+fire last, which is not necessarily the one whose green you are claiming: a watcher taking
+`--limit 1` read a preview-anchor sync and wrongly called CI green. The canonical statement lives in
+`skills/showrunner/reference/vet-receipt.md`.
+
 `loop` results — both ok and refusal — carry `arms`, the number of internal arms run in that
 invocation. `run` results never carry `arms`.
 
 `lane-stale` is a **wedged builder**: alive but frozen past its own `staleAfterSeconds` promise. It
 fires only when the builder's pid is positively alive — an uncertain probe is not a wedge, and a
-dead builder is `builder-exited` instead. See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge)
-before acting on it.
+dead builder is `builder-exited` instead — **and** only when the lane's session transcript is cold.
+See [Before treating `lane-stale` as a wedge](#before-treating-lane-stale-as-a-wedge) for the
+transcript second chance, the `staleSuppressed` note it emits instead, and why an unresolvable
+transcript still alerts.
+
+`staleSuppressed` rides any result — `timer` included — when the transcript second chance held a
+lane back from `lane-stale` during that arm. It is a **note about what the watcher saw**, not an
+event: a result carrying only `staleSuppressed` is a result where nothing actionable happened.
 
 **Refusals** (exit 1, `ok=False`):
 
@@ -195,6 +261,8 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `lane-never-stamped`
 - `pr-signal-never-sampled`
 - `log-unwritable`
+- `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is
+  ambiguous and the lane alerts rather than being suppressed
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.

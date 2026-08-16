@@ -20,16 +20,37 @@ Contract:
   lane-stale, timer.
 - Degradations (non-fatal): ledger-torn-tail, ledger-unreadable,
   heartbeat-unreadable, pid-probe-uncertain, pr-signal-unavailable,
-  lane-never-stamped, pr-signal-never-sampled, log-unwritable.
+  lane-never-stamped, pr-signal-never-sampled, log-unwritable,
+  transcript-ambiguous.
 - gh child env-scrubbing: ambient git/GH routing variables in _GIT_SCRUB_VARS
   are stripped via _scrub_env before the gh subprocess runs.
 - Deadline-bound polling: no gh poll starts when remaining time is below
   _MIN_PR_POLL_SECONDS; each poll's timeout is min(30.0, remaining).
 - Precedence: lane-terminal (E1) > lane-blocked (E2) > builder-exited (E3) >
   pr-set-changed (E4) > lane-stale (E5) > timer (E6).
-- lane-stale: a lane whose heartbeat class is stale and whose latest recorded
-  pid is positively live — a wedged builder alive but frozen past its own
+- lane-stale: a lane whose heartbeat class is stale, whose latest recorded pid is
+  positively live, and whose session transcript did NOT get written inside its own
+  promise window — a wedged builder alive but frozen past its own
   staleAfterSeconds promise.
+- Transcript second chance (#1023): before emitting lane-stale, the lane's session
+  transcript is resolved from the session id the launcher recorded on the launch
+  record, and a transcript written within staleAfterSeconds suppresses the event —
+  that lane is working through a long step, not wedged. The suppression is recorded
+  on the arm's result under staleSuppressed (note stale-suppressed-transcript-fresh),
+  so the loop stays honest about what it saw instead of going quiet. Every
+  unresolvable read — no session id on the ledger record, no transcript on disk,
+  two-or-more transcripts with the same id, an unreadable projects directory, a
+  future-dated mtime — leaves the lane STALE: the check fails toward the alert,
+  never toward silence. Ambiguity additionally records transcript-ambiguous.
+- Transcript identity: a transcript vouches for a lane only when the launch record
+  carries that lane's session id and exactly one regular file named
+  <sessionId>.jsonl resolves under the host config root's projects tree. The
+  watcher stat's only — it never reads transcript contents. Exactly one config root
+  is searched (the CLAUDE_CONFIG_DIR override outright, else ~/.claude), and a
+  symlinked entry is never followed.
+- staleSuppressed: accumulated across an arm's ticks, keyed by launchId, and cleared
+  for a lane the moment a later tick finds it still stale. It rides EVERY result of
+  that arm including timer, which is what puts it in loop's --log line.
 - Observed latch: once the ledger has returned ok or tornTail, a subsequent
   missing read is blind (store loss), not benign pre-arm silence.
 - When a lane's heartbeat is unreadable its higher-precedence E1/E2 state is
@@ -37,8 +58,9 @@ Contract:
   heartbeat-unreadable degradation token discloses that uncertainty.
 - alsoObserved: on a result that carries a payload, co-occurring lower-precedence
   lane signals from the same interval are included under alsoObserved (launchIds
-  only). A timer result carries no payload and no alsoObserved, so a lane whose
-  only signal is suppressed is not visible in that arm's output.
+  only). A timer result carries no payload and no alsoObserved, so a lane's
+  signal is not visible through alsoObserved on timer — while staleSuppressed
+  does ride timer results.
 - ignore-launch: caller-supplied launch ids excluded from lane enumeration so
   an already-handled lane that cannot be terminalized does not re-fire.
 - ignore-events: caller-supplied (launchId, event) pairs suppress that event
@@ -88,6 +110,25 @@ _GH_PR_LIST_ARGV = [
 ]
 
 _MIN_PR_POLL_SECONDS = 1.0
+
+# --- session-transcript liveness oracle (#1023) -------------------------------
+#
+# The host writes one append-only JSONL transcript per session under
+# <config-dir>/projects/<bucket>/<session-id>.jsonl. The launcher mints the
+# builder's session id, passes it on the claude argv, and records it on the lane's
+# reserved ledger record — so the watcher resolves the transcript by identity,
+# never by bucket mangling or transcript contents. Transcript mtime is the only
+# liveness oracle that held on both measured hosts.
+_TRANSCRIPT_CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+_TRANSCRIPT_DEFAULT_CONFIG_DIR = "~/.claude"
+_PROJECTS_DIR_NAME = "projects"
+_TRANSCRIPT_SUFFIX = ".jsonl"
+
+NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH = "stale-suppressed-transcript-fresh"
+# The result key is part of the same wire contract as the note token, so it gets the
+# same authoritative definition — a doc-drift guard that compared two hardcoded
+# literals would still pass if the runtime key were renamed underneath it.
+RESULT_KEY_STALE_SUPPRESSED = "staleSuppressed"
 
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
@@ -167,6 +208,7 @@ DEGRADATION_PR_SIGNAL_UNAVAILABLE = "pr-signal-unavailable"
 DEGRADATION_LANE_NEVER_STAMPED = "lane-never-stamped"
 DEGRADATION_PR_SIGNAL_NEVER_SAMPLED = "pr-signal-never-sampled"
 DEGRADATION_LOG_UNWRITABLE = "log-unwritable"
+DEGRADATION_TRANSCRIPT_AMBIGUOUS = "transcript-ambiguous"
 
 DEGRADATIONS = frozenset({
     DEGRADATION_LEDGER_TORN_TAIL,
@@ -177,6 +219,7 @@ DEGRADATIONS = frozenset({
     DEGRADATION_LANE_NEVER_STAMPED,
     DEGRADATION_PR_SIGNAL_NEVER_SAMPLED,
     DEGRADATION_LOG_UNWRITABLE,
+    DEGRADATION_TRANSCRIPT_AMBIGUOUS,
 })
 
 EVENT_PRECEDENCE = (
@@ -286,7 +329,7 @@ def _filter_suppressed_launches(launches, event, ignore_set):
     ]
 
 
-def _event_result(event, batch_id, degraded, **payload):
+def _event_result(event, batch_id, degraded, stale_suppressed=None, **payload):
     result = {
         "ok": True,
         "event": event,
@@ -294,6 +337,10 @@ def _event_result(event, batch_id, degraded, **payload):
         "degraded": sorted(degraded),
     }
     result.update(payload)
+    if stale_suppressed:
+        result[RESULT_KEY_STALE_SUPPRESSED] = sorted(
+            stale_suppressed, key=lambda entry: entry["launchId"],
+        )
     return result
 
 
@@ -430,6 +477,131 @@ def _evaluate_pid_signals(live_lanes, stale_launches, degraded):
     else:
         exited = (pids, exited_launches)
     return exited, stale_live
+
+
+def _expand_home(path, env):
+    """expanduser against the SUPPLIED env's HOME, not the ambient process env."""
+    if not path.startswith("~"):
+        return path
+    home = env.get("HOME")
+    if not isinstance(home, str) or not home:
+        return os.path.expanduser(path)
+    if path == "~" or path.startswith("~" + os.sep):
+        return home + path[1:]
+    return os.path.expanduser(path)
+
+
+def _transcript_config_dirs(env):
+    """The host config dir to search — EXACTLY ONE.
+
+    The override wins outright rather than being searched alongside the default: the
+    launcher passes CLAUDE_CONFIG_DIR through to the builder, so when it is set, a
+    same-named transcript under the default root belongs to some OTHER session and
+    must never be allowed to vouch for this lane.
+    """
+    configured = env.get(_TRANSCRIPT_CONFIG_DIR_ENV)
+    if isinstance(configured, str) and configured.strip():
+        return [_expand_home(configured.strip(), env)]
+    return [_expand_home(_TRANSCRIPT_DEFAULT_CONFIG_DIR, env)]
+
+
+def _session_transcript_mtime(session_id, env):
+    """(mtime, ambiguous) for the lane's own transcript, by recorded session id."""
+    if not isinstance(session_id, str) or not session_id.strip():
+        return None, False
+    if os.sep in session_id or "/" in session_id or ".." in session_id:
+        return None, False
+
+    filename = session_id + _TRANSCRIPT_SUFFIX
+    matches = []
+    for root in _transcript_config_dirs(env):
+        projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
+        try:
+            bucket_entries = list(os.scandir(projects_root))
+        except OSError:
+            return None, False
+        for bucket_entry in bucket_entries:
+            try:
+                if not bucket_entry.is_dir(follow_symlinks=False):
+                    continue
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError:
+                return None, False
+            candidate = os.path.join(bucket_entry.path, filename)
+            try:
+                st = os.stat(candidate, follow_symlinks=False)
+            except (FileNotFoundError, NotADirectoryError):
+                continue
+            except OSError:
+                return None, False
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            matches.append(st.st_mtime)
+
+    if len(matches) == 0:
+        return None, False
+    if len(matches) >= 2:
+        return None, True
+    return matches[0], False
+
+
+def _stale_second_chance(
+    stale_live, live_lanes, env, *, now=None, degraded=None,
+    session_transcript_mtime=None,
+):
+    """Split pid-live stale lanes into (still stale, suppressed as transcript-fresh).
+
+    A lane whose transcript was written inside its own promise window is working
+    through a long step, not wedged (#1023) — a pid-live lane already passed the
+    liveness half of the pair, and a fresh transcript is the semantic half.
+
+    Fail-toward-alert is the invariant: no session id, an unresolvable transcript,
+    ambiguity, an unusable promise, a stale transcript, or a future-dated transcript
+    all leave the lane in the still-stale list. Only a positively fresh transcript
+    suppresses.
+    """
+    injected_now = now is not None
+    if session_transcript_mtime is None:
+        session_transcript_mtime = _session_transcript_mtime
+    still_stale = []
+    suppressed = []
+    for entry in stale_live:
+        promise = entry.get("staleAfterSeconds")
+        lane_info = live_lanes.get(entry["launchId"]) or {}
+        mtime, ambiguous = session_transcript_mtime(
+            lane_info.get("sessionId"), env,
+        )
+        lane_now = now if injected_now else time.time()
+        if ambiguous and degraded is not None:
+            degraded.add(DEGRADATION_TRANSCRIPT_AMBIGUOUS)
+        # bite-axis: DIRECTION of failure — an unresolvable transcript or an unusable
+        # promise alerts, never suppresses.
+        if not _valid_positive_int(promise) or mtime is None:
+            still_stale.append(entry)
+            continue
+        transcript_age = lane_now - mtime
+        # bite-axis: a FUTURE-dated transcript is a skewed or wrong clock, not evidence
+        # of work. The watcher and the transcript share one host clock, so there is no
+        # skew to tolerate here, and tolerating any would contradict the documented
+        # fail-toward-alert invariant.
+        if transcript_age < 0:
+            still_stale.append(entry)
+            continue
+        # bite-axis: FRESHNESS of the transcript against the lane's own promise —
+        # written inside the window is working, outside it is wedged.
+        if transcript_age > promise:
+            still_stale.append(entry)
+            continue
+        suppressed.append({
+            "launchId": entry["launchId"],
+            "note": NOTE_STALE_SUPPRESSED_TRANSCRIPT_FRESH,
+            "state": entry.get("state"),
+            "ageSeconds": entry.get("ageSeconds"),
+            "staleAfterSeconds": promise,
+            "transcriptAgeSeconds": round(transcript_age, 3),
+        })
+    return still_stale, suppressed
 
 
 def _parse_pr_numbers(stdout):
@@ -739,6 +911,11 @@ def run(
         degraded = set()
         first_tick = True
         ignore_set = _ignore_events_set(ignore_events)
+        # Accumulated across this arm's ticks so a suppression stays visible in the
+        # arm's timer result (and therefore in loop's --log line) even when a later
+        # tick observed nothing. A lane that goes still-stale later is dropped, so
+        # the note can never contradict the event on the same result.
+        arm_suppressed = {}
 
         while True:
             live_lanes, ledger_readable = _derive_live_lanes(
@@ -758,6 +935,15 @@ def run(
             exited, stale_live_launches = _evaluate_pid_signals(
                 live_lanes, stale_launches, degraded,
             )
+            stale_live_launches, tick_suppressed = _stale_second_chance(
+                stale_live_launches, live_lanes, env, degraded=degraded,
+            )
+            for entry in tick_suppressed:
+                arm_suppressed[entry["launchId"]] = entry
+            # bite-axis: CONSISTENCY — a lane found still stale on a later tick loses
+            # its earlier suppression, so the note can never contradict the event.
+            for entry in stale_live_launches:
+                arm_suppressed.pop(entry["launchId"], None)
             exited_launches = exited[1] if exited is not None else []
 
             event_ctx = {
@@ -795,13 +981,20 @@ def run(
                             degraded.add(DEGRADATION_LANE_NEVER_STAMPED)
                         if not pr_sampled[0]:
                             degraded.add(DEGRADATION_PR_SIGNAL_NEVER_SAMPLED)
-                        return _event_result(EVENT_TIMER, batch_id, degraded)
+                        return _event_result(
+                            EVENT_TIMER, batch_id, degraded,
+                            stale_suppressed=list(arm_suppressed.values()),
+                        )
                     break
 
                 # Every non-timer member of EVENT_PRECEDENCE has a builder.
                 payload = _EVENT_PAYLOAD_BUILDERS[event](event_ctx)
                 if payload is not None:
-                    return _event_result(event, batch_id, degraded, **payload)
+                    return _event_result(
+                        event, batch_id, degraded,
+                        stale_suppressed=list(arm_suppressed.values()),
+                        **payload
+                    )
 
             tick = max(
                 tick + 1,
