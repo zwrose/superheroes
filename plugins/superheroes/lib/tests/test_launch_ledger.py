@@ -4104,7 +4104,66 @@ def test_record_outcome_await_exit_zero_makes_exactly_one_attempt(tmp_path, monk
     assert len(ll.read(repo)["records"]) == before
 
 
-@pytest.mark.parametrize("bad", [-1, -0.5, "5", None, True, float("inf"), float("nan")])
+@pytest.mark.parametrize(
+    "ceiling,expected_waits",
+    [
+        (0.5, 10),      # fractional: exactly ceil(0.5/0.05), not an 11th rounding crumb
+        (0.02, 1),      # below the poll interval: one wait, not zero
+        (0.05, 1),      # exactly the poll interval
+        (0.051, 2),     # a hair over: rounds up, never down
+    ],
+)
+def test_record_outcome_await_exit_makes_exactly_the_bounded_wait_count(
+    tmp_path, monkeypatch, ceiling, expected_waits,
+):
+    # axis: the documented bound is ceil(ceiling / poll) -- pinned, not asserted loosely
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-count")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    slept = _fake_clock(monkeypatch)
+
+    result = ll.record_outcome(repo, "l-await-count", "handback", "done", await_exit=ceiling)
+
+    assert result["ok"] is False
+    assert len(slept) == expected_waits
+    assert len(attempts) == expected_waits + 1
+    assert sum(slept) <= ceiling + 1e-6
+
+
+def test_record_outcome_await_exit_terminates_on_a_huge_ceiling(tmp_path, monkeypatch):
+    # axis: a ceiling large enough that `budget -= nap` is a no-op (1e308 - 5.0 ==
+    # 1e308) must not become an endless retry -- it is refused before the loop
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-huge")
+    attempts = _counted_terminalize(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    result = ll.record_outcome(repo, "l-await-huge", "handback", "done", await_exit=1e308)
+
+    assert result["ok"] is False
+    assert result["reason"] == "await-exit-invalid:1e+308"
+    assert attempts == []
+    assert len(ll.read(repo)["records"]) == before
+
+
+def test_record_outcome_await_exit_refuses_an_unfloatable_int(tmp_path, monkeypatch):
+    # axis: float(10**400) raises OverflowError; record_outcome promises never to raise
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-overflow")
+    attempts = _counted_terminalize(monkeypatch)
+
+    result = ll.record_outcome(
+        repo, "l-await-overflow", "handback", "done", await_exit=10 ** 400,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"].startswith("await-exit-invalid:")
+    assert attempts == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [-1, -0.5, "5", None, True, float("inf"), float("nan"), 541, 540.5],
+)
 def test_record_outcome_refuses_an_unusable_await_exit_ceiling(tmp_path, monkeypatch, bad):
     # axis: an unusable ceiling refuses before any attempt, never falls back to 0
     repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-bad")

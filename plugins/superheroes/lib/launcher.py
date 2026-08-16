@@ -1599,7 +1599,11 @@ def main(argv=None):
     ro.add_argument("--launch-id", required=True)
     ro.add_argument("--outcome", required=True)
     ro.add_argument("--evidence", required=True)
-    ro.add_argument("--await-exit", type=float, default=0.0)
+    ro.add_argument(
+        "--await-exit", type=float, default=0.0,
+        help="seconds to keep re-attempting while the lane's child is still alive "
+             "(0..540, default 0 = refuse immediately as before)",
+    )
     ro.set_defaults(func=_cli_record_outcome)
 
     am = sub.add_parser("amend")

@@ -19,6 +19,7 @@ prune or forward-compat skip for unknown events.
 import fcntl
 import hashlib
 import json
+import math
 import os
 import uuid
 import posixpath
@@ -62,6 +63,12 @@ _DEFAULT_LOCK_TIMEOUT = 30.0
 # How long record_outcome sleeps between re-attempts while awaiting a live child's
 # exit. The wait happens BETWEEN terminalize calls, never inside the ledger lock.
 _AWAIT_EXIT_POLL_SECONDS = 5.0
+# Longest patience a caller may ask for. Matched to the dispatch runner's --max-wait
+# ceiling so this system carries one "longest single in-turn wait" number rather than
+# two. It also keeps the wait count small enough to be exact: an unbounded ceiling
+# admits floats so large that subtracting a nap does not change them (1e308 - 5.0 ==
+# 1e308), which is a retry loop that never ends.
+_AWAIT_EXIT_MAX_SECONDS = 540.0
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -1598,16 +1605,21 @@ def _record_outcome_response(ok, reason=None, recorded=None, amendment_kind=None
 def _await_exit_ceiling(value):
     """Seconds to wait for a live child to exit, or None when the value is unusable.
 
-    Fail-closed: anything that is not a finite, non-negative real number is a
-    refusal rather than a silent fall-back to 0, so a mistyped ceiling cannot
-    quietly become today's impatient behaviour.
+    Fail-closed: anything that is not a real number inside
+    ``0.._AWAIT_EXIT_MAX_SECONDS`` is a refusal rather than a silent fall-back to
+    0, so a mistyped ceiling cannot quietly become today's impatient behaviour.
+    An int too large to be a float raises on conversion, so the conversion is
+    guarded -- ``record_outcome`` promises never to raise.
     """
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         return None
-    seconds = float(value)
+    try:
+        seconds = float(value)
+    except (OverflowError, ValueError):
+        return None
     if seconds != seconds or seconds in (float("inf"), float("-inf")):
         return None
-    if seconds < 0:
+    if seconds < 0 or seconds > _AWAIT_EXIT_MAX_SECONDS:
         return None
     return seconds
 
@@ -1617,7 +1629,9 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     """Record a terminal outcome under lock. Never raises.
 
     ``await_exit`` is a patience ceiling in seconds, default 0 (today's
-    behaviour). ``terminalize`` refuses while the launch's recorded child is
+    behaviour), accepted in ``0..540``; anything else is refused with
+    ``await-exit-invalid:<value>`` before a single attempt runs.
+    ``terminalize`` refuses while the launch's recorded child is
     still alive (``terminal-child-live:<pid>``), and ``lane-terminal`` fires a
     minute or two before that child actually exits. With a positive ceiling this
     re-attempts on exactly that refusal until the child is gone or the ceiling
@@ -1634,11 +1648,16 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     spent rather than compared against a clock, a ceiling shorter than one probe
     still buys a re-attempt instead of silently becoming a no-op.
 
-    Spending a budget is also what makes the loop terminate **by construction**:
-    each pass subtracts a strictly positive nap, so it ends after at most
-    ``ceiling / _AWAIT_EXIT_POLL_SECONDS`` waits no matter what any clock reports.
-    A loop that recomputed the remaining time from ``time.monotonic()`` would
-    instead inherit its termination from the clock advancing.
+    Termination is **by construction**, and the thing constructing it is the
+    integer wait count -- exactly ``ceil(ceiling / _AWAIT_EXIT_POLL_SECONDS)``,
+    decremented by one per pass. Neither of the two float quantities in the loop
+    can affect whether it ends: the nap sizes only divide the budget up, and the
+    budget itself is never the stopping test. That matters because both weaker
+    forms genuinely fail. A remaining-time recomputed from ``time.monotonic()``
+    inherits its termination from the clock advancing. A float budget decremented
+    toward zero stops terminating once the ceiling is large enough that a nap
+    falls below its ulp -- ``1e308 - 5.0 == 1e308`` -- which is why the ceiling is
+    also bounded at ``_AWAIT_EXIT_MAX_SECONDS`` rather than left open.
     """
     if outcome not in TERMINAL_OUTCOMES:
         return _record_outcome_response(
@@ -1652,7 +1671,8 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
             False, reason="await-exit-invalid:%s" % (await_exit,),
         )
 
-    budget = None
+    waits = None
+    budget = ceiling
     while True:
         result = terminalize(
             repo_root, launch_id, outcome=outcome, evidence=evidence,
@@ -1663,12 +1683,13 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
         reason = result["reason"]
         if not (isinstance(reason, str) and reason.startswith("terminal-child-live:")):
             break
-        if budget is None:
-            budget = ceiling
-        if budget <= 0:
+        if waits is None:
+            waits = int(math.ceil(ceiling / _AWAIT_EXIT_POLL_SECONDS))
+        if waits <= 0:
             break
         nap = min(_AWAIT_EXIT_POLL_SECONDS, budget)
         budget -= nap
+        waits -= 1
         time.sleep(nap)
     mapped_reason = result["reason"]
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
