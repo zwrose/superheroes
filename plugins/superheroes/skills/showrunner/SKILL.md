@@ -514,10 +514,15 @@ above).
    continued spend.
    Before any fix is routed, **grade the diagnosis receipt on exactly these five checks** — this
    charter is the single authoritative home for them:
-   1. **the receipt's demonstration claim matches its evidence** — a claimed demonstrated cause
-      must be backed by reproduction or A/B comparison, not inference from error text alone; an
-      honest not-demonstrated report (no repro, no distinguishing A/B — budget reached or
-      hypotheses exhausted) **passes this check** when the receipt says so plainly;
+   1. **the receipt's causal claim is supported by its evidence** — graded in two parts:
+      **Demonstration** — a mechanism shown by reproduction or A/B comparison, not inferred from
+      error text alone; **Attribution** — that mechanism tied to *this* incident on **stated
+      evidence**: the detective's own demonstration against the incident, or the incident's own
+      contemporaneous record (a log, a first-party note, a captured invocation), **cited in the
+      receipt**. An unstated leap from "this can produce the symptom" to "this is what happened"
+      does not satisfy attribution. An honest not-demonstrated report (no repro, no distinguishing
+      A/B — budget reached or hypotheses exhausted) **passes demonstration** when the receipt says
+      so plainly; **attribution is not graded** when demonstration reports none.
    2. the **recommended fix targets the cause**, not the symptom;
    3. the **blast radius is stated**;
    4. **each follow-up carries the right anchor**;
@@ -527,19 +532,27 @@ above).
    **Owner traffic:** when the **owner asked for the diagnosis directly**, the verdict **also
    returns to them in-channel**; when the diagnosis was **advisor-dispatched**, it **adds no owner
    reading traffic** — the owner-absent route.
-   **Three terminal branches** — grade all five checks first; **exactly one** applies:
-   - **Vet fails** — **one or more checks fail** (including check 1 when the receipt claims a
-     demonstrated cause without reproduction or A/B) → return the **named failures** to the
-     detective for another pass, **or park the incident**; **no fix issue is filed against that
+   **Terminal branches** — grade all five checks first; **exactly one** applies. **Failed vet
+   (UFR-4)** is separate from the three honest outcomes below.
+   - **Vet fails** — **one or more checks fail** — including check 1 when the receipt's evidence
+     does not support its causal claim (a demonstrated cause without reproduction or A/B, or an
+     attributed cause without stated evidence for attribution) → return the **named failures** to
+     the detective for another pass, **or park the incident**; **no fix issue is filed against that
      diagnosis until a re-vet passes**.
-   - **Not demonstrated** — **all five checks pass** and the receipt **plainly reports the cause
-     was not demonstrated** → **no fix issue is routed** on an undemonstrated cause; **do not send
-     the detective back for another pass** — the diagnosis did its job and reported a negative
-     result. Body update not applicable (no confirmed cause to promote).
-   - **Vet passes** — **all five checks pass** and the receipt carries a **demonstrated cause**
-     → **update the incident issue's body** to the confirmed cause and routing so it reads correct
-     top-to-bottom **without the comment thread**; **comments remain the log**. This is **your
-     write**, not the detective's — the detective never edits an issue body.
+   - **Nothing demonstrated** — **all five checks pass** and check 1's **demonstration** reports
+     none → **no fix issue is routed**; **do not send the detective back for another pass** — the
+     diagnosis did its job and reported a negative result. Body update not applicable; ruled-out
+     list carried.
+   - **Mechanism demonstrated, attribution not established** — **all five checks pass**, check 1's
+     **demonstration** is satisfied, but **attribution** is not established → the vet **does not**
+     pass. **No fix is routed.** The mechanism is kept as a real finding; the named remaining step
+     is **closing attribution**. This is an **honest exit**, not a failed vet — **do not send it
+     round the UFR-4 rework loop** when there is nothing further to test.
+   - **Vet passes** — **all five checks pass** and the cause is **demonstrated and attributed** on
+     check 1 → **update the incident issue's body** to the confirmed cause and routing so it reads
+     correct top-to-bottom **without the comment thread**; **comments remain the log**; you **may
+     route anchored fix issues**. This is **your write**, not the detective's — the detective
+     never edits an issue body.
    **Fix-issue anchors:** fix issues arising from a diagnosis **cite the vetted diagnosis as their
    receipt anchor**; a fix issue filed from an unvetted diagnosis is a **routing defect** — the
    same board-hygiene standard as any other mis-wired issue.

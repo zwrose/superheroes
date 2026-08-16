@@ -62,19 +62,19 @@ All three runs: same test **FAILED** at line 4157 (`proc is None`). No run showe
 
 **First-pass reading (corrected below).** This session's five isolated runs all failed under concurrent host load; that sample was **insufficient** to distinguish intermittent from stable behaviour — see the methodological note and orchestrator follow-on measurements.
 
-**Orchestrator verification pass (measured after this record was first written).** Independent re-runs on the same host class, attributed to the orchestrator's verification pass. Exact invocation for every run below:
+**Orchestrator verification pass (measured after this record was first written).** Independent re-runs on the same host class, attributed to the orchestrator's verification pass. Exact invocation for every run below (relative path only — **commit and worktree identity are stated here, not in the pytest output**):
 
 ```text
 /usr/bin/python3 -m pytest plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write -q
 ```
 
-**Build HEAD `da39001c` — single run (one invocation):**
+**Build HEAD `da39001c` — single run (one invocation)** in the build worktree at HEAD (`/private/tmp/sh931-woF`):
 
 ```text
 1 passed in 0.88s
 ```
 
-**Base `7571e72d` — single run (one invocation)** in detached worktree `/private/tmp/sh931-base` (without any of this build's changes). Purpose: rule **this build out as the cause** — a single run here shows the failure outcome is reachable at base without this PR's changes; a single run cannot establish more than that reachability.
+**Base `7571e72d` — single run (one invocation)** in detached worktree `/private/tmp/sh931-base` (without any of this build's changes). Purpose: show the failure outcome is **reachable at base** without this PR's changes — one failure does **not** rule this build out as a contributor to failure rate or as an additional trigger; matched run counts at both commits would be needed for that stronger claim.
 
 ```text
 E           assert None is not None
@@ -82,7 +82,7 @@ FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_aft
 1 failed in 0.95s
 ```
 
-**Build HEAD `da39001c` — 8 consecutive isolated runs** at build HEAD (worktree `issue-931-99ef90b52f31952a`). This series establishes intermittency; counts are checkable against the transcript: **3 passed (runs 1, 3, 4)** and **5 failed (runs 2, 5, 6, 7, 8)**.
+**Build HEAD `da39001c` — 8 consecutive isolated runs** in the build worktree at HEAD (`/private/tmp/sh931-woF`; worktree label `issue-931-99ef90b52f31952a`). This series establishes intermittency; counts are checkable against the transcript: **3 passed (runs 1, 3, 4)** and **5 failed (runs 2, 5, 6, 7, 8)**. The pasted pytest output below carries no cwd or commit identity — attribution to HEAD rests on this record's statement of where each series ran, not on the transcript itself.
 
 ```text
 ### Orchestrator verification pass — raw receipts
@@ -117,7 +117,7 @@ FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_aft
 1 failed in 1.63s
 ```
 
-On this host the test is **genuinely intermittent** (3 passed / 5 failed over 8 runs — runs 1, 3, 4 passed; runs 2, 5, 6, 7, 8 failed), not stably failing. The base-commit single-run failure rules **this build out as the cause** — the test fails without any of this PR's changes (reachability only; intermittency comes from the 8-run series). The first session's five consecutive failures almost certainly landed while six concurrent dispatches saturated the host.
+On this host the test is **genuinely intermittent** (3 passed / 5 failed over 8 runs — runs 1, 3, 4 passed; runs 2, 5, 6, 7, 8 failed), not stably failing. The base-commit single-run failure shows the outcome is **reachable without this build's changes** — it does not exclude this build from raising the failure rate or adding another trigger (matched run counts at both commits would be needed for that). Intermittency comes from the 8-run series at build HEAD. The first session's five consecutive failures almost certainly landed while six concurrent dispatches saturated the host.
 
 **Contrast with flake observation.** PR #1041 describes **intermittent** failure under full-suite load with **isolated pass**. Orchestrator measurements confirm **intermittency on this host** (3/8 pass under controlled repetition). What remains **undemonstrated** is **which condition** flips pass to fail — not whether the test can pass at all.
 
@@ -125,7 +125,7 @@ On this host the test is **genuinely intermittent** (3 passed / 5 failed over 8 
 
 ### 2. Demonstrated root cause
 
-**Not demonstrated.** Intermittency **is** reproducible on this host (orchestrator: 3/8 pass at build HEAD; base commit fails without this build's changes). No A/B isolates **which factor** decides pass from fail — load, timing, scheduler contention, or something else. macOS Python 3.9.6 local vs Python 3.12 ubuntu CI (per repo CI config) remains one **untested** hypothesis among others, not an explanation for the observed intermittency.
+**Not demonstrated.** Intermittency **is** reproducible on this host (orchestrator: 3/8 pass at build HEAD; base commit shows the failure outcome is reachable without this build's changes — one run only, not a rate comparison). No A/B isolates **which factor** decides pass from fail — load, timing, scheduler contention, or something else. macOS Python 3.9.6 local vs Python 3.12 ubuntu CI (per repo CI config) remains one **untested** hypothesis among others, not an explanation for the observed intermittency.
 
 ### 3. Blast radius
 
@@ -135,13 +135,13 @@ If the flake is real on CI ubuntu under suite load: intermittent red on `test_di
 
 1. **Park flake routing** — do not file a fix issue on this diagnosis; cause not demonstrated (UFR-1).
 2. **CI-side reproduction** — re-run full suite with `-n auto` on `ubuntu-latest` (the rolling image label `.github/workflows/ci.yml` actually uses — read the resolved OS version from the run log rather than assuming a pinned release) / Python 3.12 (pinned in CI); capture flake if it recurs with run link (per CLAUDE.md flake policy).
-3. **Factor isolation** — design A/B runs that vary one candidate at a time (host load, xdist width, Python version) to demonstrate what flips pass/fail; base-commit failure shows the flake predates this build.
+3. **Factor isolation** — design A/B runs that vary one candidate at a time (host load, xdist width, Python version) to demonstrate what flips pass/fail; base-commit single-run failure shows the outcome is reachable without this build's changes (not that this build cannot contribute).
 
 ### Ruled-out list (budget exhausted)
 
 | Hypothesis | What we tried | Outcome |
 | --- | --- | --- |
-| This build introduced the flake | Orchestrator: single run at base `7571e72d` (no build changes) | **Ruled out** — test fails on base; not caused by this PR |
+| This build introduced the flake | Orchestrator: single run at base `7571e72d` in `/private/tmp/sh931-base` (no build changes) | **Reachable at base** — one failure shows the outcome without this PR's changes; does not rule this build out as a contributor (matched run counts at both commits needed) |
 | Test always fails locally (stable red) | Orchestrator: 8 consecutive isolated runs at build HEAD `da39001c` (see raw receipts above) | **Ruled out** — 3 passed (runs 1, 3, 4), 5 failed (runs 2, 5, 6, 7, 8); intermittency confirmed |
 | Stall timeout vs diff-failed detail | Failure before detail assertion — `proc` never set | **Inconclusive** for CI flake; local path differs from stall-timeout story |
 | Heavy host CPU load (PR #1041 context) | First session under six concurrent dispatches; xdist file runs | **Live hypothesis** — load correlates with PR #1041 context; not isolated by A/B; orchestrator pass under lighter load suggests load may be a factor |
@@ -195,4 +195,4 @@ HEAD and porcelain hash **match** before adding these docs — no edits to `plug
 
 ## Finding for orchestrator
 
-Rehearsal 2's **flake cause was not demonstrated** — honest UFR-1 exit unchanged. **Corrected evidence:** on this host the test is **intermittent** (orchestrator: 3 passed / 5 failed over 8 consecutive runs at build HEAD `da39001c` — runs 1, 3, 4 passed; runs 2, 5, 6, 7, 8 failed; single run passed at HEAD, single run failed at base `7571e72d` without this build's changes). The first-pass "stable failure" reading was wrong — five runs under concurrent dispatch load were insufficient repetition. **No fix routed**; factor isolation (what flips pass/fail) remains follow-up.
+Rehearsal 2's **flake cause was not demonstrated** — honest UFR-1 exit unchanged. **Corrected evidence:** on this host the test is **intermittent** (orchestrator: 3 passed / 5 failed over 8 consecutive runs at build HEAD `da39001c` in `/private/tmp/sh931-woF` — runs 1, 3, 4 passed; runs 2, 5, 6, 7, 8 failed; single run passed at HEAD, single run failed at base `7571e72d` in `/private/tmp/sh931-base` — reachability only, not a rate comparison). The first-pass "stable failure" reading was wrong — five runs under concurrent dispatch load were insufficient repetition. **No fix routed**; factor isolation (what flips pass/fail) remains follow-up.

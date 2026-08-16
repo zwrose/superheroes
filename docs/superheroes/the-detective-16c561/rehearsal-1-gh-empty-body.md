@@ -84,20 +84,23 @@ $ wc -c prefill.md
 
 The known content is gone even though `gh` failed — the truncate happened at redirect open, not from `gh` writing an empty JSON field.
 
-**Disposable copy discarded** *(reconstruction — variable name corrected from the original capture; commands and output are consistent with the path used in the A/B probes above)*:
+**Disposable copy discarded** *(reconstruction of the cleanup invocation — not a captured transcript; no output was re-run for this record)*:
 
 ```text
 DISPOSABLE_PATH=/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG
 $ rm -rf "$DISPOSABLE_PATH"
 $ ls "$DISPOSABLE_PATH"
-ls: /var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG: No such file or directory
 ```
+
+Observed outcome: `ls` reported *No such file or directory* — the disposable path used in the A/B probes above was removed and confirmed absent (FR-2 discard).
 
 ### 2. Demonstrated root cause
 
 **What the A/B demonstrates (sufficient mechanism).** Running `gh issue view … > file` **outside** a git repository yields a **zero-byte file** and `gh` exit **1** (`failed to run git: not a git repository`). The **identical command inside** the repository yields a **populated file** (3563 bytes) and exit **0**. Pre-filling the target file shows the redirect empties the file **before** `gh` executes — so the failure mode is the shell redirect truncating first plus an unchecked `gh` failure, not `gh` returning an empty body string. This is a **demonstrated sufficient mechanism** for producing a zero-byte body file that could feed a later `gh pr edit --body-file`.
 
-**What the A/B does not establish about PR #1041.** No receipt from the incident session establishes that the advisor's read ran outside a git repository, that `gh` exited non-zero, that exit status was ignored, or that this zero-byte file was what `gh pr edit --body-file` consumed. The only incident evidence is the advisor's one-line note in the PR body. The mechanism is demonstrated; its application to PR #1041 remains a **plausible, unconfirmed** match until session records close the gap.
+**Attribution to PR #1041 (incident contemporaneous record).** PR #1041's own recorded note in the PR body states that *"a shell redirect truncated my working copy before `gh pr edit`"*. That is the incident's first-party contemporaneous record. Check 1's attribution rests on that cited note **plus** the A/B above, which shows the stated mechanism is real, sufficient, and produces exactly the observed zero-byte body. The A/B does not silently carry attribution — the advisor's note is the incident-specific tie.
+
+**What remains unknown (trigger, not cause).** Which condition caused the read to fail at the incident — whether cwd was outside a git repository, whether `gh` exited non-zero, whether exit status was ignored, or that this zero-byte file was what `gh pr edit --body-file` consumed — is **not** established from session records. The cwd-outside-repo hypothesis is one candidate **trigger**; it was **not** confirmed for PR #1041's session. This trigger gap does not change the demonstrated cause or the routed fixes.
 
 ### 3. Blast radius
 
@@ -106,8 +109,8 @@ ls: /var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG: No such fil
 ### 4. Recommended follow-ups
 
 1. **Advisor / showrunner charter** — document the safe pattern: read body to a variable or use a cwd inside the repo (or explicit `--repo`); never `gh … > file` from an unanchored directory; check `gh` exit status before any edit.
-2. **Close the PR #1041 gap** — recover the failing invocation, its cwd, and `gh` exit status from the advisor session record (or equivalent logs) to confirm or rule out this mechanism on the actual incident.
-3. **Restore PR #1041 body** — build-ready fix from the last good body (git history or issue cross-links), routed only after this vet passes.
+2. **Close the PR #1041 trigger gap** — recover the failing invocation, its cwd, and `gh` exit status from the advisor session record (or equivalent logs) to identify which trigger flipped the read (cause is already attributed on the PR's recorded note plus A/B; this follow-up closes the residual trigger question).
+3. **Restore PR #1041 body** — build-ready fix from the last good body (git history or issue cross-links), routed after this vet passes.
 4. **Optional guard** — shell wrapper or preflight that refuses `gh pr edit --body-file` when the file is empty or below a minimum size.
 
 ---
@@ -116,13 +119,13 @@ ls: /var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG: No such fil
 
 | Check | Grade | Notes |
 | --- | --- | --- |
-| 1. Cause demonstrated (repro or A/B, not inference) | **Pass** | A/B demonstrates a **sufficient mechanism** (0 vs 3563 bytes, exit 1 vs 0; redirect-first proof on pre-filled file). Does not by itself prove that mechanism ran on PR #1041 — only that it can produce the observed symptom. |
+| 1. Cause demonstrated (repro or A/B, not inference) | **Pass** | **Demonstration:** A/B shows a **sufficient mechanism** (0 vs 3563 bytes, exit 1 vs 0; redirect-first proof on pre-filled file). **Attribution basis:** PR #1041's own recorded note in the PR body (redirect truncated working copy before `gh pr edit`) plus demonstration that this mechanism produces the observed zero-byte body. Residual trigger (which condition caused the read to fail) not established — see follow-ups. |
 | 2. Recommended fix targets cause, not symptom | **Pass** | Follow-ups address read-modify-write cwd and exit checking; body restore is separate build work. |
 | 3. Blast radius stated | **Pass** | All `gh` body read-modify-write paths named. |
 | 4. Each follow-up carries the right anchor | **Pass** | Charter doc, PR #1041 restore, optional guard — each tied to this diagnosis. |
 | 5. No smuggled product opinion | **Pass** | No new product requirements; operational guard only. |
 
-**Verdict (plain language).** The diagnosis is vetted for what was measured: a **sufficient mechanism** — shell redirect truncation combined with `gh` failing outside a git repository — was demonstrated on a disposable copy with read-only `gh` calls. That demonstration does not confirm this mechanism on PR #1041 without session evidence (cwd, exit status, file path). Route charter documentation, session-record follow-up to close the incident gap, and a build to restore PR #1041's body; do not treat "blank body" as an `gh` API bug without this cwd check.
+**Verdict (plain language).** The diagnosis is vetted on stated evidence: a **sufficient mechanism** — shell redirect truncation combined with `gh` failing outside a git repository — was demonstrated on a disposable copy with read-only `gh` calls, and **attributed to PR #1041** on the incident's own recorded note in the PR body plus that demonstration. Which trigger caused the read to fail at the incident (cwd, exit status, file path) remains unknown and belongs in follow-ups — it does not block vet pass. Route charter documentation, trigger follow-up from session records, and a build to restore PR #1041's body; do not treat "blank body" as an `gh` API bug without this cwd check.
 
 **Terminal branch:** vet passes → advisor may update the incident body and file anchored fix issues (drafts below; not posted by this builder).
 
@@ -131,16 +134,19 @@ ls: /var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG: No such fil
 ## Incident-body update — `DRAFTED — NOT POSTED (advisor action)`
 
 ```markdown
-## Demonstrated mechanism (sufficient; incident match unconfirmed)
+## Demonstrated mechanism (attributed to PR #1041)
 
 A/B on issue #931 shows a **sufficient mechanism** for a zero-byte PR body: a shell redirect (`>`) truncates the target file **before** `gh issue view` / `gh pr view` runs; when cwd is **outside** a git repository, `gh` fails (`not a git repository`), writes nothing, and a subsequent `gh pr edit --body-file` can push the empty file. Measured: 0 vs 3563 bytes in vs out of repo; redirect-first proof on a pre-filled file.
 
-**PR #1041 gap.** The advisor's note attributes the empty body to redirect truncation, but no session receipt yet confirms cwd, `gh` exit status, or that this file fed the edit. Treat the mechanism as demonstrated; treat the PR #1041 application as plausible until session records close the gap.
+**Attribution.** PR #1041's own recorded note in the PR body states that a shell redirect truncated the working copy before `gh pr edit`. That contemporaneous record, plus the A/B above, attributes this mechanism to the incident.
+
+**Residual trigger gap.** Which condition caused the read to fail (cwd outside repo is one candidate, not confirmed) is not yet established from session records. This is a trigger question, not a cause question — it does not change the routed fixes.
 
 ## Routing
 
-- **Vet:** passed for demonstrated mechanism (see diagnosis comment).
-- **Follow-up:** recover failing invocation, cwd, and exit status from the advisor session record.
+- **Vet:** passed — cause demonstrated and attributed on PR #1041's recorded note plus A/B mechanism proof (see diagnosis comment).
+- **No fix on undemonstrated cause:** not applicable — cause demonstrated and attributed.
+- **Follow-up:** recover failing invocation, cwd, and exit status from the advisor session record (close the trigger gap).
 - **Fix:** restore PR #1041 body from last good revision; add showrunner guidance on safe body read-modify-write (cwd + exit checks).
 
 ## Log
@@ -188,4 +194,4 @@ e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855  -
 
 HEAD and porcelain hash **match** — examined surface (PR #1041 body) was not edited; only read-only `gh` and disposable temp probes.
 
-**Disposable copy:** `/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG` — removed (`rm -rf`); `ls` confirms path absent.
+**Disposable copy:** `/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG` — removed per reconstruction above; `ls` reported path absent (FR-2 discard).
