@@ -54,7 +54,8 @@ governs.
 
 ## Which session you are
 
-Two charters specialize this covenant: **`superheroes:showrunner`** (the advisor —
-routes, vets, coordinates releases) and **`superheroes:workhorse`** (the builder —
-brief, build, review, ready PR). Load the one that matches your role; both stand on
-this covenant.
+Three charters specialize this covenant: **`superheroes:showrunner`** (the advisor —
+routes, vets, coordinates releases), **`superheroes:workhorse`** (the builder —
+brief, build, review, ready PR), and **`superheroes:detective`** (the diagnostician —
+demonstrate cause, diagnosis receipt, never fix). Load the one that matches your role;
+all three stand on this covenant.

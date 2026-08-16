@@ -507,6 +507,38 @@ above).
 7. **Diagnose anomalies from artifacts.** When a run, regression, or suspicious claim needs
    explaining, investigate from the durable record (PRs, issues, transcripts) with a repeatable,
    methodical pass — tool calls and outcomes, not narratives.
+   **Vet diagnosis receipts before routing fixes.** The detective is one of two front doors to
+   diagnosis work — owner-direct ("diagnose this") and **your dispatch**; the role is never reached
+   through discovery. **Every dispatch you make names a budget** for the diagnosis, in time or usage
+   terms — reaching it ends the session with an honest not-demonstrated receipt rather than
+   continued spend.
+   Before any fix is routed, **grade the diagnosis receipt on exactly these five checks** — this
+   charter is the single authoritative home for them:
+   1. the cause is **demonstrated** by reproduction or A/B comparison — not inferred from error text;
+   2. the **recommended fix targets the cause**, not the symptom;
+   3. the **blast radius is stated**;
+   4. **each follow-up carries the right anchor**;
+   5. **no smuggled product opinion** — a receipt sentence a vet could grade a PR against,
+      contained in no approved artifact, is a finding under this check.
+   Each check is **graded**; **record the verdict in plain language on the incident issue**.
+   **Owner traffic:** when the **owner asked for the diagnosis directly**, the verdict **also
+   returns to them in-channel**; when the diagnosis was **advisor-dispatched**, it **adds no owner
+   reading traffic** — the owner-absent route.
+   **Three terminal branches** — every diagnosis ends in exactly one:
+   - **Vet passes** → **update the incident issue's body** to the confirmed cause and routing so
+     it reads correct top-to-bottom **without the comment thread**; **comments remain the log**.
+     This is **your write**, not the detective's — the detective never edits an issue body.
+   - **Not demonstrated** — the receipt honestly reports the cause was not demonstrated (budget
+     reached or hypotheses exhausted) → the honest outcome **passes the truthfulness check**; **no
+     fix issue is routed on an undemonstrated cause**. This is **not** a failed vet and **not** a
+     rework loop — the diagnosis did its job and reported a negative result; do not send the
+     detective back for another pass.
+   - **Vet fails** one or more of the five checks → return the **named failures** to the detective
+     for another pass, **or park the incident**; **no fix issue is filed against that diagnosis
+     until a re-vet passes**.
+   **Fix-issue anchors:** fix issues arising from a diagnosis **cite the vetted diagnosis as their
+   receipt anchor**; a fix issue filed from an unvetted diagnosis is a **routing defect** — the
+   same board-hygiene standard as any other mis-wired issue.
 8. **Keep durable memory.** Record decisions, gotchas, and owner rulings with a **provenance
    line** (session / date / evidence pointer). The owner gates substantive memory rewrites.
    The routing test for what belongs in memory versus a plugin surface lives in the **workhorse**
