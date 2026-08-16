@@ -178,6 +178,7 @@ HOLD_CHOICE = round_phases.HOLD_CHOICE
 RETIRED_STALL_CHOICES = round_phases.RETIRED_STALL_CHOICES
 RETIRED_STALL_CHOICE_PREFIX = round_phases.RETIRED_STALL_CHOICE_PREFIX
 STALL_CHOICE_NOT_OFFERED_PREFIX = "stall-choice-not-offered:"
+STALL_ACCEPT_RISK_NOT_ELIGIBLE = "stall-accept-risk-not-eligible"
 JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
@@ -220,6 +221,23 @@ def _adapter_provenance_shape(value):
     return True
 
 
+def _order_vendor_provenance_gaps_shape(value):
+    # build_receipt joins gap seat names into prose, so each row's seat must be a non-empty string.
+    if not isinstance(value, list):
+        return False
+    for row in value:
+        if not isinstance(row, dict):
+            return False
+        seat = row.get("seat")
+        if not isinstance(seat, str) or not seat:
+            return False
+        if "occurrence" in row:
+            occ = row.get("occurrence")
+            if not isinstance(occ, int) or occ < 0:
+                return False
+    return True
+
+
 def _normalize_adapter_provenance(prov):
     """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
     value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
@@ -254,7 +272,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "canaryVerified": _canary_verified_shape,
     "adapterProvenance": _adapter_provenance_shape,
     "recordOrphansIgnored": _str_list,
-    "orderVendorProvenanceGaps": _dict_list,
+    "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
@@ -3017,11 +3035,15 @@ def build_receipt(state, session_dir=None):
         if ovg:
             seats = []
             for row in ovg:
-                if isinstance(row, dict) and row.get("seat"):
-                    seats.append(row["seat"])
-            degraded.append(
-                "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
-                "vendor in the seat map" % (rkey, ", ".join(seats)))
+                if not isinstance(row, dict):
+                    continue
+                seat = row.get("seat")
+                if isinstance(seat, str) and seat:
+                    seats.append(seat)
+            if seats:
+                degraded.append(
+                    "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
+                    "vendor in the seat map" % (rkey, ", ".join(seats)))
         prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
@@ -3708,6 +3730,11 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "stall-choice-not-offered"})
             return {"ok": False, "reason": reason}
+        if choice == ACCEPT_RISK_CHOICE and not _stall_targets_accept_risk_eligible(state):
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": STALL_ACCEPT_RISK_NOT_ELIGIBLE})
+            return {"ok": False, "reason": STALL_ACCEPT_RISK_NOT_ELIGIBLE}
 
     # #977: the record-submit interleave fence — mirror image of `advance-submit-interleaved`.
     # `cmd_submit` never reads the durable store, so `record-result` (or `--sweep`) followed by a

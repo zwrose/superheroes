@@ -452,7 +452,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
   `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted channel names that
   fired for the certification shape (`independence`, `base`, `same-family`, `seat-map-violation`,
   `unproven-liveness`, `seat-pin`))
-- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
+- `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
 **Per-round fields and `degraded` disclosures (#563, #666, #668).** Machinery records these on the round when `_fold_panel` (or dispatch-provenance folding) detects them; `_finalize_receipt` mirrors each into a `degraded` line except `canaryVerified` (evidence-only, no disclosure).
@@ -468,6 +468,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 | `canaryUnverified` | Every cross-vendor seat that ran returned zero findings and no `canaryResult` was submitted. | `canary-unverified (round N): …` |
 | `canaryFailed` | `canaryResult` was submitted but `engaged` is not true — cross-vendor seats in that panel are downgraded to `missing`. | `canary-failed (round N): …` |
 | `canaryVerified` | `canaryResult.engaged` is true — records the probe's `evidence` dict on the round. | *(none)* |
+| `orderVendorProvenanceGaps` | An emitted order seat had no resolved vendor in the seat map. | `order-vendor-provenance-gap (round N): …` |
 
 - `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per owner-skipped judgment blocker; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.
 

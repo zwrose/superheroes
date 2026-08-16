@@ -1308,6 +1308,44 @@ def test_stale_accept_risk_flag_without_stall_targets_fails_closed():
     assert state["certification"]["shape"] is None
 
 
+def test_stale_accept_risk_menu_refused_at_submit_chokepoint(tmp_path):
+    """Stale persisted menu with accept-the-disclosed-risk must not consume the owner gate."""
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = []
+    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
+    state["step"] = RD.P_STALL
+    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 1}
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"choice": "accept-the-disclosed-risk"})
+    assert out["ok"] is False
+    assert out["reason"] == RD.STALL_ACCEPT_RISK_NOT_ELIGIBLE
+    ok, reloaded = RD.load_state(d)
+    assert ok and reloaded["step"] == RD.P_STALL
+    assert reloaded.get("terminal") is None
+
+
+def test_accept_risk_submit_authorized_when_eligible(tmp_path):
+    """accept-the-disclosed-risk with a qualifying snapshot is still accepted at submit."""
+    d = str(tmp_path)
+    state, ident, _ = _stall_target_state()
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"],
+        {"choice": "accept-the-disclosed-risk"})
+    assert out["ok"] is True, out
+
+
 def test_stall_choice_not_offered_refused_at_submit(tmp_path):
     """A choice absent from the presented menu is refused before fold — pending survives."""
     d = str(tmp_path)
@@ -2606,6 +2644,10 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
         "code-reviewer still at this slot"
         in "\n".join(_round_disclosures(receipt, 1))
     )
+    assert (
+        "order-vendor-provenance-gap (round 1): seat(s) architecture-reviewer"
+        in "\n".join(_round_disclosures(receipt, 1))
+    )
     # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
     degraded_all = "\n".join(receipt["degraded"])
     assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
@@ -2680,6 +2722,7 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
         "canaryFailed": ["security-reviewer"],             # list, not a dict
         "canaryVerified": ["codex"],                       # list, not a vendor->evidence dict
         "seatMapUnavailable": ["codex"],                   # well-shaped — survives
+        "orderVendorProvenanceGaps": [{"seat": 7}],        # int seat — malformed
     })]))
     state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
     assert state["rounds"] == {"1": {"seatMapUnavailable": ["codex"]}}
@@ -2688,6 +2731,40 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
     prose = "\n".join(_round_disclosures(receipt, 1))
     assert "vacuous-seat" not in prose and "canary-failed" not in prose
     assert "reviewer-fell-open (round 1)" not in prose
+    assert "order-vendor-provenance-gap" not in prose
+
+
+def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
+    """Malformed gap row recorded in-session is skipped at render; receipt still produced."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"orderVendorProvenanceGaps": [{"seat": 7}]}}
+    receipt = RD.build_receipt(state)
+    assert isinstance(receipt["degraded"], list)
+    assert not any("order-vendor-provenance-gap" in line for line in receipt["degraded"])
+
+
+def test_order_vendor_gap_missing_occurrence_still_valid():
+    """occurrence is optional on gap rows — well-shaped without it."""
+    gaps = [{"seat": "architecture-reviewer"}]
+    assert RD.RESUMABLE_DISCLOSURE_CHANNELS["orderVendorProvenanceGaps"](gaps)
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"orderVendorProvenanceGaps": gaps}}
+    receipt = RD.build_receipt(state)
+    ovg_lines = [d for d in receipt["degraded"] if "order-vendor-provenance-gap" in d]
+    assert len(ovg_lines) == 1
+    assert "architecture-reviewer" in ovg_lines[0]
+
+
+def test_order_vendor_gap_non_dict_row_rejected_on_resume(tmp_path):
+    """A gap list containing a non-dict row is dropped on resume — no raise."""
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {
+        "orderVendorProvenanceGaps": ["not-a-dict"],
+    })]))
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"], recordsPath=str(records)))
+    assert state.get("rounds", {}) == {}
+    receipt = RD.build_receipt(state)
+    assert isinstance(receipt["degraded"], list)
 
 
 def test_resume_does_not_restore_an_empty_list_channel_as_a_disclosure(tmp_path):
