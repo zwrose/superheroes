@@ -17,34 +17,34 @@ SCHEMA = "register-check/1"
 
 RESULT_PASS = "pass"
 RESULT_FAIL = "fail"
-RESULT_UNRUNNABLE = "unrunnable"
-RESULTS = frozenset({RESULT_PASS, RESULT_FAIL, RESULT_UNRUNNABLE})
+RESULT_UNDECIDED = "undecided"
+RESULTS = frozenset({RESULT_PASS, RESULT_FAIL, RESULT_UNDECIDED})
 
 KIND_TEXT_DRIFT = "text-drift"
 KIND_MISSING_QUOTE = "missing-quote"
 KIND_UNKNOWN_ENTRY = "unknown-entry"
 FINDING_KINDS = frozenset({KIND_TEXT_DRIFT, KIND_MISSING_QUOTE, KIND_UNKNOWN_ENTRY})
 
-UNRUNNABLE_REGISTER_UNREADABLE = "register-unreadable"
-UNRUNNABLE_BODY_UNREADABLE = "body-unreadable"
-UNRUNNABLE_REGISTER_EMPTY = "register-empty"
-UNRUNNABLE_REGISTER_MALFORMED = "register-malformed"
-UNRUNNABLE_CHILD_UNRECOGNIZED = "child-unrecognized"
-UNRUNNABLE_USAGE = "usage"
-UNRUNNABLE_INTERNAL_ERROR = "internal-error"
-UNRUNNABLE_REASONS = frozenset({
-    UNRUNNABLE_REGISTER_UNREADABLE,
-    UNRUNNABLE_BODY_UNREADABLE,
-    UNRUNNABLE_REGISTER_EMPTY,
-    UNRUNNABLE_REGISTER_MALFORMED,
-    UNRUNNABLE_CHILD_UNRECOGNIZED,
-    UNRUNNABLE_USAGE,
-    UNRUNNABLE_INTERNAL_ERROR,
+UNDECIDED_REGISTER_UNREADABLE = "register-unreadable"
+UNDECIDED_BODY_UNREADABLE = "body-unreadable"
+UNDECIDED_REGISTER_EMPTY = "register-empty"
+UNDECIDED_REGISTER_MALFORMED = "register-malformed"
+UNDECIDED_CHILD_UNRECOGNIZED = "child-unrecognized"
+UNDECIDED_USAGE = "usage"
+UNDECIDED_INTERNAL_ERROR = "internal-error"
+UNDECIDED_REASONS = frozenset({
+    UNDECIDED_REGISTER_UNREADABLE,
+    UNDECIDED_BODY_UNREADABLE,
+    UNDECIDED_REGISTER_EMPTY,
+    UNDECIDED_REGISTER_MALFORMED,
+    UNDECIDED_CHILD_UNRECOGNIZED,
+    UNDECIDED_USAGE,
+    UNDECIDED_INTERNAL_ERROR,
 })
 
 EXIT_PASS = 0
 EXIT_FAIL = 1
-EXIT_UNRUNNABLE = 2
+EXIT_UNDECIDED = 2
 
 ENTRY_HEADER_RE = re.compile(r"^\*\*(R\d+)\s+—\s")
 CONSUMERS_LINE_RE = re.compile(r"^\*Consumers:\*\s*(.*)")
@@ -172,7 +172,7 @@ def parse_register_lines(lines):
         consumers_match = CONSUMERS_LINE_RE.match(line)
         if consumers_match and not entries:
             # axis: register shape is fail-closed — malformed lines block the run.
-            return None, UNRUNNABLE_REGISTER_MALFORMED, line_no, (
+            return None, UNDECIDED_REGISTER_MALFORMED, line_no, (
                 "*Consumers:* line appears before any entry header"
             )
 
@@ -180,7 +180,7 @@ def parse_register_lines(lines):
         if header_match:
             entry_id = header_match.group(1)
             if entry_id in seen_ids:
-                return None, UNRUNNABLE_REGISTER_MALFORMED, line_no, (
+                return None, UNDECIDED_REGISTER_MALFORMED, line_no, (
                     f"entry id {entry_id} opens twice"
                 )
             seen_ids.add(entry_id)
@@ -205,7 +205,7 @@ def parse_register_lines(lines):
                 quotable.append(inner)
                 i += 1
             if not _quotable_has_substance(quotable):
-                return None, UNRUNNABLE_REGISTER_MALFORMED, line_no, (
+                return None, UNDECIDED_REGISTER_MALFORMED, line_no, (
                     f"entry {entry_id} has empty quotable text"
                 )
             consumers_lines = []
@@ -231,7 +231,7 @@ def parse_register_lines(lines):
                 i += 1
             if len(consumers_lines) >= 2:
                 bad_line = consumers_lines[1][0]
-                return None, UNRUNNABLE_REGISTER_MALFORMED, bad_line, (
+                return None, UNDECIDED_REGISTER_MALFORMED, bad_line, (
                     f"entry {entry_id} trailer has multiple *Consumers:* lines"
                 )
             consumers_text = consumers_lines[0][1] if consumers_lines else None
@@ -245,14 +245,14 @@ def parse_register_lines(lines):
         i += 1
 
     if not entries:
-        return None, UNRUNNABLE_REGISTER_EMPTY, None, "register contains no entries"
+        return None, UNDECIDED_REGISTER_EMPTY, None, "register contains no entries"
     return entries, None, None, None
 
 
 def load_register(register_path):
     lines = _read_lines(register_path)
     if lines is None:
-        return None, UNRUNNABLE_REGISTER_UNREADABLE, None, None
+        return None, UNDECIDED_REGISTER_UNREADABLE, None, None
     return parse_register_lines(lines)
 
 
@@ -428,7 +428,7 @@ def _base_result(
     }
 
 
-def _unrunnable(
+def _undecided(
     reason,
     detail,
     child=None,
@@ -436,7 +436,7 @@ def _unrunnable(
     body_path=None,
 ):
     return _base_result(
-        RESULT_UNRUNNABLE,
+        RESULT_UNDECIDED,
         reason,
         detail,
         child,
@@ -454,8 +454,8 @@ def _unrunnable(
 def check_body(register_path, body_path, child, allow_no_required_entries=False):
     """Compare a consumer body against a register for the named child token."""
     if child is None or not str(child).strip():
-        return _unrunnable(
-            UNRUNNABLE_USAGE,
+        return _undecided(
+            UNDECIDED_USAGE,
             "child token must be a non-empty string",
             child=child,
             register_path=register_path,
@@ -464,17 +464,17 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
 
     entries, reg_reason, reg_line, reg_detail = load_register(register_path)
     if entries is None:
-        if reg_reason == UNRUNNABLE_REGISTER_UNREADABLE:
-            return _unrunnable(
-                UNRUNNABLE_REGISTER_UNREADABLE,
+        if reg_reason == UNDECIDED_REGISTER_UNREADABLE:
+            return _undecided(
+                UNDECIDED_REGISTER_UNREADABLE,
                 "register file is missing or not valid UTF-8",
                 child=child,
                 register_path=register_path,
                 body_path=body_path,
             )
-        if reg_reason == UNRUNNABLE_REGISTER_EMPTY:
-            return _unrunnable(
-                UNRUNNABLE_REGISTER_EMPTY,
+        if reg_reason == UNDECIDED_REGISTER_EMPTY:
+            return _undecided(
+                UNDECIDED_REGISTER_EMPTY,
                 reg_detail,
                 child=child,
                 register_path=register_path,
@@ -483,8 +483,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
         detail = reg_detail
         if reg_line is not None:
             detail = f"register line {reg_line}: {reg_detail}"
-        return _unrunnable(
-            UNRUNNABLE_REGISTER_MALFORMED,
+        return _undecided(
+            UNDECIDED_REGISTER_MALFORMED,
             detail,
             child=child,
             register_path=register_path,
@@ -493,8 +493,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
 
     body_lines = _read_lines(body_path)
     if body_lines is None:
-        return _unrunnable(
-            UNRUNNABLE_BODY_UNREADABLE,
+        return _undecided(
+            UNDECIDED_BODY_UNREADABLE,
             "body file is missing or not valid UTF-8",
             child=child,
             register_path=register_path,
@@ -515,8 +515,8 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
     # axis: every Consumers match for the child token must appear quoted — completeness.
     if not required_entries and not allow_no_required_entries:
         # axis: an unmatched child token must not silently pass — child fail-closed.
-        return _unrunnable(
-            UNRUNNABLE_CHILD_UNRECOGNIZED,
+        return _undecided(
+            UNDECIDED_CHILD_UNRECOGNIZED,
             f"no register entry names child {child!r} on its Consumers line",
             child=child,
             register_path=register_path,
@@ -639,28 +639,28 @@ class _RegisterCheckArgumentParser(argparse.ArgumentParser):
         self._usage_paths = {"child": None, "register": None, "body": None}
 
     def error(self, message):
-        result = _unrunnable(
-            UNRUNNABLE_USAGE,
+        result = _undecided(
+            UNDECIDED_USAGE,
             message,
             child=self._usage_paths["child"],
             register_path=self._usage_paths["register"],
             body_path=self._usage_paths["body"],
         )
         _emit(result)
-        raise SystemExit(EXIT_UNRUNNABLE)
+        raise SystemExit(EXIT_UNDECIDED)
 
     def exit(self, status=0, message=None):
         if status != 0:
             detail = message or "invalid command-line arguments"
-            result = _unrunnable(
-                UNRUNNABLE_USAGE,
+            result = _undecided(
+                UNDECIDED_USAGE,
                 detail,
                 child=self._usage_paths["child"],
                 register_path=self._usage_paths["register"],
                 body_path=self._usage_paths["body"],
             )
             _emit(result)
-            raise SystemExit(EXIT_UNRUNNABLE)
+            raise SystemExit(EXIT_UNDECIDED)
         raise SystemExit(status)
 
 
@@ -698,7 +698,7 @@ def main(argv=None):
     try:
         args = parser.parse_args(argv)
     except SystemExit:
-        return EXIT_UNRUNNABLE
+        return EXIT_UNDECIDED
 
     if args.cmd != "check":
         parser._usage_paths["child"] = None
@@ -718,23 +718,23 @@ def main(argv=None):
             allow_no_required_entries=args.allow_no_required_entries,
         )
     except Exception as exc:
-        result = _unrunnable(
-            UNRUNNABLE_INTERNAL_ERROR,
+        result = _undecided(
+            UNDECIDED_INTERNAL_ERROR,
             f"{type(exc).__name__}: {exc}",
             child=args.child,
             register_path=args.register,
             body_path=args.body_file,
         )
         _emit(result)
-        return EXIT_UNRUNNABLE
+        return EXIT_UNDECIDED
 
     _emit(result)
-    # axis: exit 1 is reserved for comparison failure — unrunnable paths must not use it.
+    # axis: exit 1 is reserved for comparison failure — undecided paths must not use it.
     if result["result"] == RESULT_PASS:
         return EXIT_PASS
     if result["result"] == RESULT_FAIL:
         return EXIT_FAIL
-    return EXIT_UNRUNNABLE
+    return EXIT_UNDECIDED
 
 
 if __name__ == "__main__":

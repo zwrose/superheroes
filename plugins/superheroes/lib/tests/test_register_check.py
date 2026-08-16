@@ -281,8 +281,8 @@ def test_boundary_child_unrecognized_c09(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
     result = _check(register, body, "C09")
-    assert result["result"] == rc.RESULT_UNRUNNABLE
-    assert result["reason"] == rc.UNRUNNABLE_CHILD_UNRECOGNIZED
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
 
 
 def test_boundary_child_unrecognized_detective_child(tmp_path):
@@ -290,8 +290,8 @@ def test_boundary_child_unrecognized_detective_child(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
     result = _check(register, body, "detective child")
-    assert result["result"] == rc.RESULT_UNRUNNABLE
-    assert result["reason"] == rc.UNRUNNABLE_CHILD_UNRECOGNIZED
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
 
 
 # --- fences -----------------------------------------------------------------
@@ -387,8 +387,8 @@ def test_malformed_duplicate_entry_id(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
     result = _check(register, body, "C1")
-    assert result["result"] == rc.RESULT_UNRUNNABLE
-    assert result["reason"] == rc.UNRUNNABLE_REGISTER_MALFORMED
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
     assert "line 4" in result["detail"]
 
 
@@ -397,7 +397,7 @@ def test_malformed_consumers_before_header(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
     result = _check(register, body, "C1")
-    assert result["reason"] == rc.UNRUNNABLE_REGISTER_MALFORMED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
     assert "line 1" in result["detail"]
 
 
@@ -411,7 +411,7 @@ def test_malformed_multiple_consumers_lines(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
     result = _check(register, body, "C1")
-    assert result["reason"] == rc.UNRUNNABLE_REGISTER_MALFORMED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
     assert "line 3" in result["detail"]
 
 
@@ -423,7 +423,7 @@ def test_malformed_empty_quotable_text(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
     result = _check(register, body, "C1")
-    assert result["reason"] == rc.UNRUNNABLE_REGISTER_MALFORMED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
     assert "empty quotable text" in result["detail"]
 
 
@@ -435,7 +435,7 @@ def test_register_empty(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
     result = _check(register, body, "C1")
-    assert result["reason"] == rc.UNRUNNABLE_REGISTER_EMPTY
+    assert result["reason"] == rc.UNDECIDED_REGISTER_EMPTY
 
 
 def test_register_unreadable(tmp_path):
@@ -444,7 +444,7 @@ def test_register_unreadable(tmp_path):
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
     result = _check(register, body, "C1")
-    assert result["reason"] == rc.UNRUNNABLE_REGISTER_UNREADABLE
+    assert result["reason"] == rc.UNDECIDED_REGISTER_UNREADABLE
 
 
 def test_body_unreadable(tmp_path):
@@ -452,7 +452,7 @@ def test_body_unreadable(tmp_path):
     body = tmp_path / "body.md"
     body.write_bytes(b"\xff\xfe")
     result = _check(register, body, "C1")
-    assert result["reason"] == rc.UNRUNNABLE_BODY_UNREADABLE
+    assert result["reason"] == rc.UNDECIDED_BODY_UNREADABLE
 
 
 # --- entry without consumers ------------------------------------------------
@@ -512,9 +512,9 @@ def test_cli_unreadable_register(tmp_path):
         "--body-file", str(body),
         "--child", "C1",
     )
-    assert code == rc.EXIT_UNRUNNABLE
+    assert code == rc.EXIT_UNDECIDED
     payload = json.loads(out.strip())
-    assert payload["reason"] == rc.UNRUNNABLE_REGISTER_UNREADABLE
+    assert payload["reason"] == rc.UNDECIDED_REGISTER_UNREADABLE
 
 
 def test_cli_bad_flag(tmp_path):
@@ -527,16 +527,16 @@ def test_cli_bad_flag(tmp_path):
         "--child", "C1",
         "--nope",
     )
-    assert code == rc.EXIT_UNRUNNABLE
+    assert code == rc.EXIT_UNDECIDED
     payload = json.loads(out.strip())
-    assert payload["reason"] == rc.UNRUNNABLE_USAGE
+    assert payload["reason"] == rc.UNDECIDED_USAGE
 
 
 def test_cli_missing_required_flag(tmp_path):
     code, out, _err = _run_cli("--child", "C1")
-    assert code == rc.EXIT_UNRUNNABLE
+    assert code == rc.EXIT_UNDECIDED
     payload = json.loads(out.strip())
-    assert payload["reason"] == rc.UNRUNNABLE_USAGE
+    assert payload["reason"] == rc.UNDECIDED_USAGE
     assert payload["child"] == "C1"
 
 
@@ -566,22 +566,22 @@ def test_vocabulary_constants():
     assert rc.RESULTS == frozenset({
         rc.RESULT_PASS,
         rc.RESULT_FAIL,
-        rc.RESULT_UNRUNNABLE,
+        rc.RESULT_UNDECIDED,
     })
     assert rc.FINDING_KINDS == frozenset({
         rc.KIND_TEXT_DRIFT,
         rc.KIND_MISSING_QUOTE,
         rc.KIND_UNKNOWN_ENTRY,
     })
-    assert rc.UNRUNNABLE_REASONS == frozenset({
-        rc.UNRUNNABLE_REGISTER_UNREADABLE,
-        rc.UNRUNNABLE_BODY_UNREADABLE,
-        rc.UNRUNNABLE_REGISTER_EMPTY,
-        rc.UNRUNNABLE_REGISTER_MALFORMED,
-        rc.UNRUNNABLE_CHILD_UNRECOGNIZED,
-        rc.UNRUNNABLE_USAGE,
-        rc.UNRUNNABLE_INTERNAL_ERROR,
+    assert rc.UNDECIDED_REASONS == frozenset({
+        rc.UNDECIDED_REGISTER_UNREADABLE,
+        rc.UNDECIDED_BODY_UNREADABLE,
+        rc.UNDECIDED_REGISTER_EMPTY,
+        rc.UNDECIDED_REGISTER_MALFORMED,
+        rc.UNDECIDED_CHILD_UNRECOGNIZED,
+        rc.UNDECIDED_USAGE,
+        rc.UNDECIDED_INTERNAL_ERROR,
     })
     assert rc.EXIT_PASS == 0
     assert rc.EXIT_FAIL == 1
-    assert rc.EXIT_UNRUNNABLE == 2
+    assert rc.EXIT_UNDECIDED == 2

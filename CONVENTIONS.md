@@ -1013,8 +1013,8 @@ closed** — if it parses nothing (heading renamed, block reformatted) it raises
 passing vacuously.
 
 *Worked example 4 — the register-check vocabulary.* The three result tokens (`pass`, `fail`,
-`unrunnable`), the three finding-kind tokens (`text-drift`, `missing-quote`, `unknown-entry`),
-the seven unrunnable-reason tokens (`register-unreadable`, `body-unreadable`, `register-empty`,
+`undecided`), the three finding-kind tokens (`text-drift`, `missing-quote`, `unknown-entry`),
+the seven undecided-reason tokens (`register-unreadable`, `body-unreadable`, `register-empty`,
 `register-malformed`, `child-unrecognized`, `usage`, `internal-error`), the three exit codes
 (`0`, `1`, `2`), and the schema token (`register-check/1`) are a cross-boundary fact: they are
 stated in `plugins/superheroes/lib/register_check.py` and restated in

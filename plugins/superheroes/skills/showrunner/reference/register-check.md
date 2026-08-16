@@ -15,7 +15,7 @@ This file is the one home for the **register-quote exact-text check** — the ma
 that proves a child issue body quotes its register entries byte-exactly and carries every entry
 whose `*Consumers:*` line names that child. The check runs at child filing, child build intake,
 and an epic package read's verification pass. **Register-to-child text agreement is machine
-work, never model judgment** — the script reports pass, fail, or unrunnable; the charters decide
+work, never model judgment** — the script reports pass, fail, or undecided; the charters decide
 what to do with the result.
 
 ## The invocation
@@ -63,7 +63,7 @@ resolves register paths from prose.
 The script prints **exactly one JSON object on stdout**, always, with every key present:
 `schema`, `result`, `ok`, `reason`, `detail`, `child`, `register`, `body`, `registerEntries`,
 `requiredEntries`, `quotedEntries`, `duplicateQuoteIds`, `entriesWithoutConsumers`, `findings`,
-`firstDifference`. `ok` is true only on `pass`. `reason` is null except on `unrunnable`.
+`firstDifference`. `ok` is true only on `pass`. `reason` is null except on `undecided`.
 `firstDifference` is the first `text-drift` finding, else null.
 
 **Results:**
@@ -72,7 +72,7 @@ The script prints **exactly one JSON object on stdout**, always, with every key 
 | --- | --- | --- |
 | `pass` | 0 | Every required quote matches byte-exactly and every quoted block matches its register entry |
 | `fail` | 1 | At least one drifted or missing required quote |
-| `unrunnable` | 2 | The check could not run to a pass/fail verdict |
+| `undecided` | 2 | The check could not run to a pass/fail verdict |
 
 A finding object carries `kind`, `entry`, `line`, `column`, `expected`, `actual`, and `detail`.
 For `text-drift`, `line` is 1-based **within the quoted block** and `column` is the 1-based
@@ -132,7 +132,7 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 
 - `pass`
 - `fail`
-- `unrunnable`
+- `undecided`
 
 **Finding kinds:**
 
@@ -140,7 +140,7 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 - `missing-quote`
 - `unknown-entry`
 
-**Unrunnable reasons:**
+**Undecided reasons:**
 
 - `register-unreadable`
 - `body-unreadable`
@@ -154,13 +154,13 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 
 - `0` — pass
 - `1` — fail
-- `2` — unrunnable
+- `2` — undecided
 
 ## The three invocation points
 
 **Child filing (showrunner duty 2).** When the advisor files an issue that quotes register text,
 run the check against the body **before filing**. On `fail`, fix the body — do not file a drifted
-quote. On `unrunnable`, treat as a filing blocker until the inputs are readable and the child
+quote. On `undecided`, treat as a filing blocker until the inputs are readable and the child
 token is recognized. See the showrunner charter's board-hygiene duty for the filing obligation.
 
 **Child build intake (workhorse §1).** When the routed issue's body quotes register text, run the

@@ -2713,9 +2713,9 @@ def _register_check_finding_kinds_from_doc(doc):
     return _register_check_tokens_under_label(section, "Finding kinds:")
 
 
-def _register_check_unrunnable_reasons_from_doc(doc):
+def _register_check_undecided_reasons_from_doc(doc):
     section = _register_check_vocabulary_section(doc)
-    return _register_check_tokens_under_label(section, "Unrunnable reasons:")
+    return _register_check_tokens_under_label(section, "Undecided reasons:")
 
 
 def _register_check_exit_codes_from_doc(doc):
@@ -2744,7 +2744,7 @@ def _register_check_exit_codes_from_home():
     return {
         register_check.EXIT_PASS: register_check.RESULT_PASS,
         register_check.EXIT_FAIL: register_check.RESULT_FAIL,
-        register_check.EXIT_UNRUNNABLE: register_check.RESULT_UNRUNNABLE,
+        register_check.EXIT_UNDECIDED: register_check.RESULT_UNDECIDED,
     }
 
 
@@ -2797,18 +2797,18 @@ def test_register_check_finding_kinds_in_register_check_doc():
     )
 
 
-def test_register_check_unrunnable_reasons_in_register_check_doc():
-    """§11: register-check.md restates register_check.UNRUNNABLE_REASONS."""
+def test_register_check_undecided_reasons_in_register_check_doc():
+    """§11: register-check.md restates register_check.UNDECIDED_REASONS."""
     import register_check
 
-    home = set(register_check.UNRUNNABLE_REASONS)
+    home = set(register_check.UNDECIDED_REASONS)
     doc = _read(_REGISTER_CHECK_DOC)
-    doc_tokens = _register_check_unrunnable_reasons_from_doc(doc)
+    doc_tokens = _register_check_undecided_reasons_from_doc(doc)
     missing_from_doc = sorted(home - doc_tokens)
     extra_in_doc = sorted(doc_tokens - home)
     assert not missing_from_doc and not extra_in_doc, (
-        "register-check.md Unrunnable reasons vocabulary drift from "
-        "register_check.UNRUNNABLE_REASONS — "
+        "register-check.md Undecided reasons vocabulary drift from "
+        "register_check.UNDECIDED_REASONS — "
         "missing from doc: %r; present in doc but not in home: %r"
         % (missing_from_doc, extra_in_doc)
     )
@@ -2842,21 +2842,21 @@ def test_register_check_exit_codes_in_register_check_doc():
 
 
 def test_register_check_vocabulary_completeness():
-    """Every register_check RESULT_*/KIND_*/UNRUNNABLE_* constant is in its frozenset."""
+    """Every register_check RESULT_*/KIND_*/UNDECIDED_* constant is in its frozenset."""
     import register_check
 
     derived_results = _register_check_string_constants_by_prefix("RESULT_")
     derived_kinds = _register_check_string_constants_by_prefix("KIND_")
-    derived_unrunnable = _register_check_string_constants_by_prefix("UNRUNNABLE_")
+    derived_undecided = _register_check_string_constants_by_prefix("UNDECIDED_")
     home_results = set(register_check.RESULTS)
     home_kinds = set(register_check.FINDING_KINDS)
-    home_unrunnable = set(register_check.UNRUNNABLE_REASONS)
+    home_undecided = set(register_check.UNDECIDED_REASONS)
     missing_results = sorted(derived_results - home_results)
     extra_results = sorted(home_results - derived_results)
     missing_kinds = sorted(derived_kinds - home_kinds)
     extra_kinds = sorted(home_kinds - derived_kinds)
-    missing_unrunnable = sorted(derived_unrunnable - home_unrunnable)
-    extra_unrunnable = sorted(home_unrunnable - derived_unrunnable)
+    missing_undecided = sorted(derived_undecided - home_undecided)
+    extra_undecided = sorted(home_undecided - derived_undecided)
     assert not missing_results and not extra_results, (
         "register_check RESULT_* constants drift from register_check.RESULTS — "
         "missing from frozenset: %r; in frozenset but not derived: %r"
@@ -2867,9 +2867,9 @@ def test_register_check_vocabulary_completeness():
         "missing from frozenset: %r; in frozenset but not derived: %r"
         % (missing_kinds, extra_kinds)
     )
-    assert not missing_unrunnable and not extra_unrunnable, (
-        "register_check UNRUNNABLE_* constants drift from "
-        "register_check.UNRUNNABLE_REASONS — "
+    assert not missing_undecided and not extra_undecided, (
+        "register_check UNDECIDED_* constants drift from "
+        "register_check.UNDECIDED_REASONS — "
         "missing from frozenset: %r; in frozenset but not derived: %r"
-        % (missing_unrunnable, extra_unrunnable)
+        % (missing_undecided, extra_undecided)
     )
