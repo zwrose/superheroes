@@ -54,8 +54,11 @@ invariant and is **not** delivered to the builder through the composed launch pr
 **Build-worktree provisioning (documentation only — not parsed).** `own-worktree` is prose a builder
 must obey, and one build in roughly thirty worked in the primary checkout anyway. The launcher now
 makes it structural: `launch` creates the build worktree before it spawns — one per launch, detached
-at the premise's base commit — records the path and the builder's session id on the `reserved` ledger
-record, and starts the session inside it, so a builder never sees the primary checkout. A path that already exists, or that
+at the premise's base commit — records the path, the builder's session id, and the config root the
+child is spawned under (`configDir`, absolute; omitted when no absolute root can be derived) on the
+`reserved` ledger record, and starts the session inside it, so a builder never sees the primary
+checkout. The recorded `configDir` is what lets a watcher running under a *different* Claude instance
+resolve that lane's session transcript under the lane's own root rather than its own (#1036). A path that already exists, or that
 git still registers, refuses the launch rather than being reused. **The ruling above stays in the
 parsed block** — defense in depth, not a redundancy to prune: the structural guarantee covers
 launcher-issued sessions, while a directly-invoked builder still has only the prose. This paragraph

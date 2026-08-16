@@ -3910,13 +3910,17 @@ def test_fold_session_id_is_none_when_the_record_omits_it():
 # --- record_outcome --await-exit (#1040) ------------------------------------
 
 
-def _await_exit_lane(tmp_path, monkeypatch, launch_id, pid=999999):
-    """A reserved+started lane whose recorded child pid is `pid`."""
+def _await_exit_lane(tmp_path, monkeypatch, launch_id, pid=999999, **reserved_extra):
+    """A reserved+started lane whose recorded child pid is `pid`.
+
+    `reserved_extra` rides onto the reserved record, so a test can give the lane
+    the launcher-written provenance fields (`sessionId`, `configDir`) it needs.
+    """
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     batch = "b-%s" % launch_id
     _declare(repo, batch, 1)
-    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo, **reserved_extra))
     started = _started(launch_id)
     started["pid"] = pid
     assert ll.append(repo, started)
@@ -4207,3 +4211,99 @@ def test_record_outcome_await_exit_waits_out_a_real_child(tmp_path, monkeypatch)
         except (ProcessLookupError, PermissionError):
             pass
         reaper.join(timeout=5)
+
+
+def _reserved_line(path):
+    """The reserved record's raw ledger line, for a byte-for-byte comparison."""
+    with open(path, "rb") as fh:
+        lines = [ln for ln in fh.read().split(b"\n") if ln.strip()]
+    reserved = [
+        ln for ln in lines
+        if json.loads(ln.decode("utf-8")).get("event") == "reserved"
+    ]
+    assert len(reserved) == 1, "expected one reserved record, got %d" % len(reserved)
+    return reserved[0]
+
+
+def test_record_outcome_await_exit_leaves_the_reserved_provenance_untouched(
+    tmp_path, monkeypatch,
+):
+    # axis: the #1040 (patience) x #1036 (configDir) seam. An awaited record-outcome
+    # writes the terminal outcome and nothing else -- sessionId and configDir are the
+    # launcher's, written once at reserve. A retry loop that rewrote or dropped them
+    # would break the consumer that resolves a lane's transcript under the RIGHT
+    # config root, and no test on either side of the merge would notice.
+    session_id = "11111111-2222-3333-4444-555555555555"
+    config_dir = "/home/someone/.claude-two"
+    repo = _await_exit_lane(
+        tmp_path, monkeypatch, "l-await-provenance",
+        sessionId=session_id, configDir=config_dir,
+    )
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True, False])
+    attempts = _counted_terminalize(monkeypatch)
+    ledger = _ledger_file(repo, None)
+    before = _reserved_line(ledger)
+
+    result = ll.record_outcome(
+        repo, "l-await-provenance", "handback", "done", await_exit=10,
+    )
+
+    assert result["ok"] is True, result["reason"]
+    assert len(attempts) == 2, "the lane must actually have been waited out"
+    assert _reserved_line(ledger) == before, (
+        "an awaited record-outcome rewrote the reserved record"
+    )
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["ok"] is True, folded["reason"]
+    lane = folded["launches"]["l-await-provenance"]
+    assert lane["sessionId"] == session_id
+    assert lane["configDir"] == config_dir
+
+
+# --- reserved configDir (#1036) ---------------------------------------------
+
+
+@pytest.mark.parametrize("config_dir", ["/tmp/\x00bad", "/tmp/\ud800bad"])
+def test_reserved_config_dir_must_be_usable_as_a_path(config_dir):
+    # axis: isabs() is not usability — these pass it and then make every filesystem call
+    # on the value raise (NUL -> ValueError, lone high surrogate -> UnicodeEncodeError),
+    # so a consumer could not act on the record at all
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir=config_dir)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:configDir"
+
+
+def test_reserved_config_dir_accepts_a_surrogate_escaped_path():
+    # axis: NOT everything exotic is unusable — a surrogateescape-decoded byte round-trips
+    # through os.fsencode and names a real file, so refusing it would reject a legal root
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir="/tmp/\udcffbad")
+    assert ll.fold([rec])["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "config_dir", ["", "   ", "relative/config", "~/.claude", 7, None, True],
+)
+def test_reserved_config_dir_must_be_a_non_empty_absolute_path(config_dir):
+    # axis: a non-absolute recorded root would resolve against the READER's cwd, so the
+    # grammar refuses it here rather than letting a consumer guess (#1036).
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir=config_dir)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:configDir"
+
+
+def test_fold_exposes_the_recorded_config_dir():
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir="/home/someone/.claude-two")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["configDir"] == "/home/someone/.claude-two"
+
+
+def test_fold_config_dir_is_none_when_the_record_omits_it():
+    # axis: every pre-#1036 record — the consumer reads None as "use your own env root"
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["configDir"] is None
