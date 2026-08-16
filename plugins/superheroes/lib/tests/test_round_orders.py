@@ -717,8 +717,9 @@ def test_seat_transport_unknown_vendor_refuses_order_render():
         "reviewedDiff": "diff --git a/f b/f\n",
         "seatMap": {"seats": {}},
     }
+    row = RD._seat_transport_row(state, RP.P_FIXER, "fixer", 0, state["config"], {}, _REPO)
     try:
-        RD._build_order_render_context(session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {})
+        RD._build_order_render_context(session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {}, row)
     except ValueError as exc:
         assert "order-render-refused" in str(exc)
         assert "unknown-vendor:fixer:gemini" in str(exc)
@@ -1186,8 +1187,9 @@ def test_engine_fixer_order_landing_block_uses_fixes_stdout_contract(tmp_path, m
         "envelope_stub_path": os.path.join(session_dir, "stub.json"),
         "order_path": os.path.join(session_dir, "order.md"),
     }
+    row = RD._seat_transport_row(state, RP.P_FIXER, "fixer", 0, state["config"], {"fixes": []}, repo)
     ctx, _paths = RD._build_order_render_context(
-        session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {"fixes": []},
+        session_dir, state, 2, RP.P_FIXER, 0, "fixer", 0, {"fixes": []}, row,
     )
     text, reason = RO.render_order(RP.P_FIXER, "fixer", ctx)
     assert reason is None

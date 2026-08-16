@@ -4523,20 +4523,25 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload):
+                                pending_payload, row):
+    """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
+
+    `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
+    reviewer-engine phases (it re-reads engine prefs from disk behind a fallback), so a second
+    resolution inside this function could return a different vendor than the one the manifest and
+    envelope stub already recorded, telling a read-only engine seat to write a landing file (#1035).
+    One seat, one transport-row resolution, per emission — the caller resolves it once and passes
+    that same row to every consumer.
+    """
     cfg = state.get("config") or {}
     meta = _session_meta(session_dir)
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending_payload, repo_root)
     transport_fault = _seat_transport_fault(row, seat_key)
     if transport_fault is not None:
         skey = round_records.storage_key(seat_key, occurrence)
         raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))
-    # Resolve the channel EXACTLY ONCE and hand that value to both consumers (`host_seat`
-    # here, the `CHANNEL` placeholder below). `_seat_transport_row` is not pure for the
-    # reviewer-engine phases — it re-reads engine prefs from disk behind a fallback — so a
-    # second resolution could return a different vendor and emit an order carrying BOTH a
-    # stdout and a write instruction.
+    # Resolve the channel EXACTLY ONCE (from the row the caller resolved) and hand that value to
+    # both consumers (`host_seat` here, the `CHANNEL` placeholder below).
     channel = _seat_channel(phase, row)
     host_seat = channel == CHANNEL_FILE
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
@@ -4685,7 +4690,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
-                                                     seat_key, occurrence, pending_payload)
+                                                     seat_key, occurrence, pending_payload, row)
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))

@@ -291,7 +291,7 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   "${SEAT_MAP_ARGS[@]}"
 ```
 
-Round 1 is the round that dispatches the panel, so without the seat map no round-1 seat's vendor resolves and every seat — codex/cursor ones included — renders the wrong output contract (#1035); the guard above only passes `--seat-map` when `$SEAT_MAP` is non-empty and parses as a JSON object, so a genuinely empty/unset `$SEAT_MAP` never gets written to a file and handed to the driver.
+Round 1 is the round that dispatches the panel, and without the seat map no round-1 seat's vendor resolves, so every seat falls back to the safe stdout contract and the orchestrator must land each payload itself; passing the map keeps native seats on the direct-write path and records real vendor provenance (#1035). The guard above only passes `--seat-map` when `$SEAT_MAP` is non-empty and parses as a JSON object, so a genuinely empty/unset `$SEAT_MAP` never gets written to a file and handed to the driver.
 
 **The loop.** Until `action` is `terminal`:
 

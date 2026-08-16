@@ -28,6 +28,14 @@ def _load(name):
 RD = _load("round_driver")
 RR = _load("round_records")
 RO = _load("round_orders")
+MR = _load("model_registry")
+
+# Fail-closed edge (WO #1035 finding 2): the truth table below asserts on "cursor" and "codex" as
+# external-engine vendors. Confirm both are vendors `model_registry` actually knows before building
+# a table on the assumption — an unregistered vendor name would make every assertion about it
+# vacuous rather than a real check.
+assert "codex" in MR.vendors(), MR.vendors()
+assert "cursor" in MR.vendors(), MR.vendors()
 
 ENGINE_SEAT = RD.DIMENSIONS[0]
 NATIVE_SEAT = RD.DIMENSIONS[1]
@@ -220,14 +228,16 @@ def test_every_phase_renders_exactly_one_output_contract(phase):
 # =================================================================================================
 
 @pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
-def test_driver_context_gives_both_consumers_the_same_channel(tmp_path, phase, monkeypatch):
+def test_driver_context_gives_both_consumers_the_same_channel(tmp_path, phase):
     """`host_seat` and the `CHANNEL` placeholder must never disagree for one seat.
 
-    Bite axis: AGREEMENT between the two consumers, resolved through the REAL context builder — not
-    a hand-built context, which cannot expose a disagreement because the test would be choosing
-    both values itself. `_seat_transport_row` is not pure for the reviewer-engine phases (it
-    re-reads engine prefs from disk behind a fallback), so a second resolution is a real divergence
-    path; this pins that only one resolution happens.
+    Bite axis: AGREEMENT between the two consumers, both derived from the ONE row the caller
+    resolved and handed in — `_build_order_render_context` takes `row` as a required parameter and
+    never resolves its own (review finding, #1035), so `host_seat` and `CHANNEL` structurally cannot
+    diverge inside this function; the real divergence risk moved to whether a CALLER (e.g.
+    `_emit_orders_manifest`) resolves the row twice and passes a different one to each consumer —
+    that risk is covered separately by
+    `test_emit_orders_manifest_reuses_the_same_row_for_manifest_and_render` below.
     """
     session_dir = str(tmp_path / "ctx")
     os.makedirs(session_dir, exist_ok=True)
@@ -238,26 +248,60 @@ def test_driver_context_gives_both_consumers_the_same_channel(tmp_path, phase, m
     ok, state = RD.load_state(session_dir)
     assert ok, state
 
-    # Every resolution after the first returns a DIFFERENT vendor. With one resolution the context
-    # is self-consistent; with two, `host_seat` and `CHANNEL` come from different rows and disagree.
-    calls = {"n": 0}
-    real_row = RD._seat_transport_row
-
-    def flipping_row(*args, **kwargs):
-        row = dict(real_row(*args, **kwargs))
-        calls["n"] += 1
-        if calls["n"] > 1:
-            row["vendor"] = "codex" if row.get("vendor") == "claude" else "claude"
-        return row
-
-    monkeypatch.setattr(RD, "_seat_transport_row", flipping_row)
+    cfg = state.get("config") or {}
+    repo_root = cfg.get("repoRoot") or session_dir
+    seat = _seat_for(phase)
+    payload = _payload_for(phase)
+    row = RD._seat_transport_row(state, phase, seat, 0, cfg, payload, repo_root)
     context, _paths = RD._build_order_render_context(
-        session_dir, state, 1, phase, 1, _seat_for(phase), 0, _payload_for(phase))
+        session_dir, state, 1, phase, 1, seat, 0, payload, row)
     placeholder_channel = context["placeholders"].get("CHANNEL")
     host_seat_channel = RD.CHANNEL_FILE if context["host_seat"] else RD.CHANNEL_STDOUT
     assert placeholder_channel == host_seat_channel, (
-        "phase=%s resolved the transport row %d times — host_seat says %s, CHANNEL says %s"
-        % (phase, calls["n"], host_seat_channel, placeholder_channel))
+        "phase=%s — host_seat says %s, CHANNEL says %s"
+        % (phase, host_seat_channel, placeholder_channel))
+
+
+def test_emit_orders_manifest_reuses_the_same_row_for_manifest_and_render(tmp_path):
+    """The MANIFEST's recorded vendor and the RENDERED order's output contract must agree.
+
+    Bite axis: DISAGREEMENT between `_emit_orders_manifest`'s manifest entry (`seats[skey].vendor`,
+    written from the row it resolved once) and the channel actually baked into that seat's rendered
+    order file. A fold that resolved the transport row once for the manifest and again
+    (independently, e.g. without `seat_map=seat_map`) for `_build_order_render_context` would pass
+    every isolated channel test above while still recording `codex` in the manifest and writing a
+    landing-path WRITE instruction into the engine seat's order — the exact #1035 forfeit.
+    """
+    session_dir = str(tmp_path / "reuse")
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
+                                    "fixerVendor": "claude", "verifyCommand": "none",
+                                    "seatMap": _mixed_seat_map()})
+    assert out["ok"], out
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    pend = state["pending"]
+    assert pend["phase"] == RD.P_PANEL, pend
+
+    manifest_path = RD._orders_manifest_path(session_dir, pend["round"], RD.P_PANEL, pend["attempt"])
+    manifest, err = RR.read_json(manifest_path)
+    assert err is None, err
+
+    engine_entry = None
+    for entry in manifest["seats"].values():
+        if entry.get("seat") == ENGINE_SEAT:
+            engine_entry = entry
+            break
+    assert engine_entry is not None, manifest["seats"]
+
+    with open(engine_entry["orderPath"], encoding="utf-8") as fh:
+        order_text = fh.read()
+
+    manifest_says_engine = RD._vendor_is_external_engine(engine_entry["vendor"])
+    order_says_stdout = "final stdout" in order_text and not _names_a_landing_path(order_text)
+    assert manifest_says_engine == order_says_stdout, (
+        "manifest vendor=%r (engine=%s) but rendered order says stdout=%s:\n%s"
+        % (engine_entry["vendor"], manifest_says_engine, order_says_stdout, order_text[-1200:]))
 
 
 def _seat_for(phase):
@@ -303,6 +347,49 @@ def test_the_fixer_is_not_swept_into_the_read_only_fold():
 ])
 def test_seat_channel_folds_the_vendor_fact(vendor, expected):
     assert RD._seat_channel(RD.P_PANEL, {"vendor": vendor}) == expected
+
+
+_TRUTH_TABLE_VENDORS = ("claude", "codex", "cursor", None, "")
+
+
+@pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
+@pytest.mark.parametrize("vendor", _TRUTH_TABLE_VENDORS)
+def test_seat_channel_folds_the_vendor_fact_on_every_read_only_phase(phase, vendor):
+    """The resolver truth table, crossed over EVERY read-only-channel phase — not just P_PANEL.
+
+    Bite axis: an implementation that got P_PANEL right (the only phase the prior truth table
+    covered) but returned `CHANNEL_FILE` for an engine or unresolved vendor on verifiers, audits,
+    synthesis, gap-sweep, or scoped would pass every previously-existing test here and still emit a
+    forbidden write contract to a sandboxed engine seat dispatched through one of those phases
+    (review finding, #1035 round 2).
+    """
+    expected = RD.CHANNEL_FILE if vendor == "claude" else RD.CHANNEL_STDOUT
+    assert RD._seat_channel(phase, {"vendor": vendor}) == expected, (phase, vendor)
+
+
+@pytest.mark.parametrize("vendor", _TRUTH_TABLE_VENDORS)
+def test_seat_channel_fixer_folds_on_the_same_table_but_never_via_the_read_only_exclusion(vendor):
+    """`P_FIXER` is deliberately excluded from the READ-ONLY fold — pinned across the same vendor
+    sweep as the read-only phases above, so the exclusion is checked on the SAME table.
+
+    An engine vendor (`codex`/`cursor`) still folds to `CHANNEL_STDOUT` on the fixer phase — that is
+    the vendor-is-an-engine check (`_seat_is_engine`), which fires for every phase and is correct: a
+    genuine codex/cursor fixer really is sandboxed and needs the stdout contract (pinned separately
+    in `test_round_orders.py::test_engine_fixer_order_landing_block_uses_fixes_stdout_contract`).
+    What `P_FIXER`'s exclusion from `_READ_ONLY_CHANNEL_PHASES` protects is narrower: an UNRESOLVED
+    vendor (`None`/empty) must stay `CHANNEL_FILE` — the fixer's deliberate default-to-write (#608)
+    — rather than falling to stdout the way an unresolved read-only-phase seat would.
+
+    Bite axis: `P_FIXER` collapsing an UNRESOLVED vendor onto `CHANNEL_STDOUT`, which would silently
+    drop the fixer's deliberate default-to-write behaviour — the one fold this exclusion must never
+    let happen. (An engine vendor going to stdout is the correct, unrelated branch, asserted too so
+    the table stays honest rather than only testing the branch the bite axis cares about.)
+    """
+    if vendor in ("codex", "cursor"):
+        expected = RD.CHANNEL_STDOUT
+    else:
+        expected = RD.CHANNEL_FILE
+    assert RD._seat_channel(RD.P_FIXER, {"vendor": vendor}) == expected, vendor
 
 
 # --- rendering helper (isolated renderer, for the phase census) ----------------------------------

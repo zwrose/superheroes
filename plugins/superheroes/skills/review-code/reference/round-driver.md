@@ -207,10 +207,13 @@ carries a vendor positively known to be a host seat, and every other case — an
 vendor the driver cannot resolve — renders the **stdout** contract instead. The fold is deliberately
 asymmetric, because the two mistakes are not: a host seat handed the stdout contract still returns
 its payload for the orchestrator to land, while an engine seat handed a write contract forfeits on
-the forbidden write (#767 class). An unresolved vendor is still disclosed as
-`orderVendorProvenanceGaps` — the fold makes the gap safe, not silent. `dispatch-fixer` is outside
-this rule: it is a foreground in-place writer, never a `dispatch-review` consumer, and its vendor is
-unknown by default (#608).
+the forbidden write (#767 class). On the panel phase, an unresolved vendor is also disclosed as
+`orderVendorProvenanceGaps` — the fold makes that gap safe, not silent. The collector is panel-scoped
+today (`_emit_orders_manifest` only checks `phase == P_PANEL`), so an unresolved vendor on a
+non-panel phase (verifiers, audits, synthesis, gap-sweep, scoped) still folds safely to the stdout
+contract but discloses nothing — broadening the disclosure is tracked separately, not done here.
+`dispatch-fixer` is outside this rule: it is a foreground in-place writer, never a `dispatch-review`
+consumer, and its vendor is unknown by default (#608).
 
 **Supply `--seat-map` on the first `next` to keep host seats on the direct-write path.** Round 1 is
 the round that dispatches the panel, and before this flag the driver's only vendor source was the
