@@ -26,7 +26,7 @@ back rather than eliciting in-session. One boundary, both charters, one child.
 
 **Register text consumed (verbatim):**
 
-> **R2 — The issue skeleton.** Every routed issue body carries exactly three required sections in order — `Anchor:`, `What:`, `DoD:` — and nothing else is required; micro-route work is exempt; a routed issue missing a section is a vet finding, and an empty Anchor blocks build-ready marking while empty What/DoD do not block filing.
+> **R2 — The issue skeleton.** Every routed issue body carries exactly three required sections in order — `Anchor (<kind>):` (the kind declared per R1), `What:`, `DoD:` — and nothing else is required; micro-route work is exempt; a routed issue missing a section is a vet finding, and an empty or malformed Anchor blocks build-ready marking while empty What/DoD do not block filing.
 
 > **R6 — Route names and routing inputs.** The four intake routes are named `discovery`, `detective`, `build-ready`, `micro`, and their tests are FR-5's cases as amended: new product opinion or a genuine unknown (the spec-trigger test: *will this work produce sentences a vet could grade a PR against that no approved artifact contains yet?*) → `discovery`; "why did Y break" work meeting the detective spec's fire condition → `detective`; a repair of ratified behavior with a receipt anchor, or work under a recorded owner ruling → `build-ready`; a tiny owner-present item → `micro`, with probing-worthy micro work re-routing. These are JUDGMENT INPUTS, not a decision procedure: where more than one case matches, the route is the advisor's judgment call, recorded with the route and anchor at routing time (FR-5's overlap-resolution rule, owner-stamped amendment #4) — this register decides no precedence.
 
