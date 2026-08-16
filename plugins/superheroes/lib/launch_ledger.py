@@ -63,12 +63,16 @@ _DEFAULT_LOCK_TIMEOUT = 30.0
 # How long record_outcome sleeps between re-attempts while awaiting a live child's
 # exit. The wait happens BETWEEN terminalize calls, never inside the ledger lock.
 _AWAIT_EXIT_POLL_SECONDS = 5.0
-# Longest patience a caller may ask for. Matched to the dispatch runner's --max-wait
-# ceiling so this system carries one "longest single in-turn wait" number rather than
-# two. It also keeps the wait count small enough to be exact: an unbounded ceiling
-# admits floats so large that subtracting a nap does not change them (1e308 - 5.0 ==
-# 1e308), which is a retry loop that never ends.
-_AWAIT_EXIT_MAX_SECONDS = 540.0
+# Longest patience a caller may ask for: 30 minutes. Sized from the field, not from the
+# dispatch slice cap: on 2026-08-16 builders outlived their handback by 10-18 minutes
+# (one pathological 2h20 case is not something to wait on in-turn). A FOREGROUND caller
+# in a harness with a 10-minute tool-call cap must still stay at or under 540 seconds
+# (the dispatch --max-wait ceiling); anything longer is a BACKGROUND call, which is the
+# shape that retires the second watcher entirely (the verb itself is the wait). The bound
+# also keeps the wait count small enough to be exact: an unbounded ceiling admits floats
+# so large that subtracting a nap does not change them (1e308 - 5.0 == 1e308), which is a
+# retry loop that never ends.
+_AWAIT_EXIT_MAX_SECONDS = 1800.0
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -1652,7 +1656,7 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     """Record a terminal outcome under lock. Never raises.
 
     ``await_exit`` is a patience ceiling in seconds, default 0 (today's
-    behaviour), accepted in ``0..540``; anything else is refused with
+    behaviour), accepted in ``0..1800``; anything else is refused with
     ``await-exit-invalid:<value>`` before a single attempt runs.
     ``terminalize`` refuses while the launch's recorded child is
     still alive (``terminal-child-live:<pid>``), and ``lane-terminal`` fires a

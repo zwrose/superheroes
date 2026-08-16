@@ -4135,6 +4135,15 @@ def test_record_outcome_await_exit_makes_exactly_the_bounded_wait_count(
     assert sum(slept) <= ceiling + 1e-6
 
 
+@pytest.mark.parametrize("ceiling", [540, 1800, 1800.0])
+def test_record_outcome_await_exit_accepts_the_field_sized_maximum(monkeypatch, ceiling):
+    # axis: the maximum patience is 1800 s (30 min, sized from observed handback-to-exit
+    # gaps of 10-18 min) -- the old 540 s dispatch-slice cap must still be accepted and
+    # the new maximum itself must be accepted, so the bound cannot silently shrink back
+    assert ll._AWAIT_EXIT_MAX_SECONDS == 1800.0
+    assert ll._await_exit_ceiling(ceiling) == float(ceiling)
+
+
 def test_record_outcome_await_exit_terminates_on_a_huge_ceiling(tmp_path, monkeypatch):
     # axis: a ceiling large enough that `budget -= nap` is a no-op (1e308 - 5.0 ==
     # 1e308) must not become an endless retry -- it is refused before the loop
@@ -4166,7 +4175,7 @@ def test_record_outcome_await_exit_refuses_an_unfloatable_int(tmp_path, monkeypa
 
 @pytest.mark.parametrize(
     "bad",
-    [-1, -0.5, "5", None, True, float("inf"), float("nan"), 541, 540.5],
+    [-1, -0.5, "5", None, True, float("inf"), float("nan"), 1801, 1800.5],
 )
 def test_record_outcome_refuses_an_unusable_await_exit_ceiling(tmp_path, monkeypatch, bad):
     # axis: an unusable ceiling refuses before any attempt, never falls back to 0
