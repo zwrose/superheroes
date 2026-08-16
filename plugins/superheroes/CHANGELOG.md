@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.29.0...superheroes-v0.29.1) (2026-08-16)
+
+
+### Chores
+
+* **superheroes:** re-state [#1050](https://github.com/zwrose/superheroes/issues/1050) for release — superpowers mentions retired from plugin surfaces ([#1051](https://github.com/zwrose/superheroes/issues/1051)) ([f169e1c](https://github.com/zwrose/superheroes/commit/f169e1caa9dc45cdc57ffde82d17f98df881bfdf))
+
 ## [0.29.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.28.0...superheroes-v0.29.0) (2026-08-16)
 
 
