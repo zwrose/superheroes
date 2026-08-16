@@ -62,6 +62,14 @@ from the shell per `SKILL.md` Setup; the driver refuses a later `--diff-path` be
 round-1 artifact mid-session would break the pin/stat contract the base guard stamped at birth.
 Same discipline as `--vendors` / `--fixer-vendor` on non-fresh state.
 
+**`--seat-map <path>`** carries the #510 seat map into round 1 and is subject to that same
+fresh-state discipline. The file must be a JSON **object** shaped `{"seats": {"<dimension>":
+{"vendor": "...", "model": "...", "engine": "..."}}}`, keyed by the full reviewer dimension names —
+an unreadable file, malformed JSON, or a non-object all fail loud with `seat-map-unparseable`,
+never a silent fall-through. It is what lets round 1 resolve each seat's vendor: the panel artifact
+that otherwise supplies the seat map does not exist until the panel has already been dispatched.
+See § Emitted orders for what an unsupplied map does to each seat's output contract.
+
 After fulfilling the emitted action, fold the artifact:
 
 ```bash
@@ -192,6 +200,24 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
+
+**The order's output contract follows the seat's channel** (`round_driver._seat_channel`, the one
+home for the choice): an order names a landing path to **write** only when the seat's transport row
+carries a vendor positively known to be a host seat, and every other case — an engine vendor, or a
+vendor the driver cannot resolve — renders the **stdout** contract instead. The fold is deliberately
+asymmetric, because the two mistakes are not: a host seat handed the stdout contract still returns
+its payload for the orchestrator to land, while an engine seat handed a write contract forfeits on
+the forbidden write (#767 class). An unresolved vendor is still disclosed as
+`orderVendorProvenanceGaps` — the fold makes the gap safe, not silent. `dispatch-fixer` is outside
+this rule: it is a foreground in-place writer, never a `dispatch-review` consumer, and its vendor is
+unknown by default (#608).
+
+**Supply `--seat-map` on the first `next` to keep host seats on the direct-write path.** Round 1 is
+the round that dispatches the panel, and before this flag the driver's only vendor source was the
+panel artifact — which does not exist yet. Without a seat map, no round-1 seat's vendor resolves, so
+**every** panel seat renders the stdout contract and the orchestrator lands each payload itself.
+That is correct and safe, merely one hop less direct than a native seat writing its own landing
+file.
 
 The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and journaled as
 `orders-emitted`; ingestion checks envelopes against that anchor (`manifest-anchor-mismatch` when
