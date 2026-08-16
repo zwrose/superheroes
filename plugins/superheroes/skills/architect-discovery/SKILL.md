@@ -54,10 +54,10 @@ Create a TodoWrite item for each step and complete them in order:
   override your defaults. Then explore the rest: `README`, recent commits, and any
   existing `docs/superheroes/` specs — understand what exists before asking.
 - **You are the Discovery engine for this project.** Requirements work in a
-  superheroes project routes here — do **not** invoke superpowers `brainstorming`.
-  You may borrow its *technique* (one question at a time, explore before deciding,
+  superheroes project routes here — do **not** hand it to a generic brainstorming skill.
+  Borrow the *technique* (one question at a time, explore before deciding,
   present-and-approve), but the artifact you produce is the superheroes `spec` and
-  the phase ends with the owner's approval, not with `writing-plans`.
+  the phase ends with the owner's approval, never with a plan document.
 - **Scope check.** If the idea is really several independent pieces (e.g. "a
   platform with chat, billing, and analytics"), say so before refining details.
   Help the owner pick the **first** piece; each piece gets its own
@@ -267,7 +267,7 @@ automated review ran** — never claim a review that didn't happen:
 | Excuse | Reality |
 | --- | --- |
 | "This is too simple to need a spec" | A spec can be short; it cannot be skipped — discovery produces the *what*. "Simple" is never license to skip the thinking or fabricate requirements. |
-| "I'll just use brainstorming" | In a superheroes project, Discovery is this skill. Produce a `spec`. |
+| "I'll just use a generic brainstorming skill" | In a superheroes project, Discovery is this skill. Produce a `spec`. |
 | "Let me note the tech approach" | The *how* is the build's. Keep the spec to the *what*. |
 | "Happy path is enough" | The significant unhappy paths are the anti-slop core. Run the coverage checklist. |
 | "I'll research to be thorough" | Research is consented — offer it, name the time/usage cost, let the owner choose. |

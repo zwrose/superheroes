@@ -10,7 +10,7 @@ implements it** — then a **verification pass** confirms the cited prose actual
 produces that behavior. (Live-run cells — section 7 — record a procedure and an outcome target instead of an implementing section.)
 
 This is the **lightweight skill-testing** the design spec calls for
-(`docs/superpowers/specs/2026-06-06-code-review-marketplace-design.md`, "Skill
+(the 2026-06-06 code-review-marketplace design, an out-of-repo doc, § "Skill
 testing": "cover the verify-mode × provisional × missing-profile state matrix").
 It pairs with the finding-quality side of the eval — `eval/score.py` + the
 `eval/fixtures/` golden diffs (`eval/README.md`) — which covers agent

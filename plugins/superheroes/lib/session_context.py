@@ -14,7 +14,7 @@ that residual dependency is watched by ``lib/harness_probe.py`` (run it on harne
 upgrades) and a regression's fallback is restoring the dropped records (a one-commit
 revert).
 
-Design contract (see docs/superpowers/specs/2026-06-21-discovery-entry-path-bootstrap-design.md):
+Design contract (from the 2026-06-21 discovery-entry-path bootstrap design, an out-of-repo doc):
 
 - **Best-effort, never raises.** Each source is gathered in its own try/except;
   a failed/absent source is omitted and a one-line breadcrumb (``<source>:
