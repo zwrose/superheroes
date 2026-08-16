@@ -138,8 +138,12 @@ No `submit` on this path — `advance` echoes `expectedStateHash` itself; do not
 `round_adapters.ORCHESTRATOR_FULFILLED_PHASES` / `is_orchestrator_fulfilled`) also fold through
 `advance` from the host-seat **bare payload** at
 `$SESSION_DIR/round-N/landing/<phase>/<skey>.a<K>.payload.json` — no orders manifest, no anchor,
-validated through the phase's existing submit-shape guard. Named refusals:
-`orchestrator-payload-missing`, `orchestrator-payload-unreadable`, and the shape guard's own fault.
+validated through the phase's existing submit-shape guard. An accepted fold **writes that slot's
+durable `seat-result/1` record in the same commit**, so both fold paths leave the same
+reconstructable per-seat provenance. Named refusals:
+`orchestrator-payload-missing`, `orchestrator-payload-unreadable`, `landing-ambiguous` (a bare
+payload beside a durable seat record — two claims for one slot; the shape guard's fault is reported
+first when the payload is also malformed), and the shape guard's own fault.
 `manifest-anchor-unanchored` stays reserved for seat phases.
 
 **Refusal tokens when paths interleave.** One token can be returned by more than one command — the
@@ -207,13 +211,18 @@ carries a vendor positively known to be a host seat, and every other case — an
 vendor the driver cannot resolve — renders the **stdout** contract instead. The fold is deliberately
 asymmetric, because the two mistakes are not: a host seat handed the stdout contract still returns
 its payload for the orchestrator to land, while an engine seat handed a write contract forfeits on
-the forbidden write (#767 class). On the panel phase, an unresolved vendor is also disclosed as
-`orderVendorProvenanceGaps` — the fold makes that gap safe, not silent. The collector is panel-scoped
-today (`_emit_orders_manifest` only checks `phase == P_PANEL`), so an unresolved vendor on a
-non-panel phase (verifiers, audits, synthesis, gap-sweep, scoped) still folds safely to the stdout
-contract but discloses nothing — broadening the disclosure is tracked separately, not done here.
-`dispatch-fixer` is outside this rule: it is a foreground in-place writer, never a `dispatch-review`
-consumer, and its vendor is unknown by default (#608).
+the forbidden write (#767 class). **A vendor the driver DEFAULTED to is not a resolved vendor**: the
+reviewer phases (verifiers, gap-sweep, scoped) fall back to the literal `claude` when the
+engine-preference read raises, so the transport row carries `vendorSource: "configured" |
+"defaulted"` and `_seat_channel` treats a defaulted vendor exactly like an unresolved one — stdout.
+Reading a defaulted `claude` as positive host evidence is what handed an engine-dispatched seat the
+write contract. Every such fallback is disclosed as `orderVendorProvenanceGaps` (the row carries
+`vendorSource` when it has one) — the fold makes the gap safe, not silent. The collector derives
+from the **same** predicate the channel folds on, across every `dispatch-review` phase (panel,
+verifiers, synthesis, gap-sweep, audits, scoped), so a channel that fell back for want of vendor
+evidence can never do so without a receipt. `dispatch-fixer` is outside this rule: it is a
+foreground in-place writer, never a `dispatch-review` consumer, and its vendor is unknown by
+default (#608).
 
 **Supply `--seat-map` on the first `next` to keep host seats on the direct-write path.** Round 1 is
 the round that dispatches the panel, and before this flag the driver's only vendor source was the
@@ -441,7 +450,7 @@ cannot is an overclaim.
 | `dispatch-gap-sweep` | Big-diff only: one full-diff finder pass. Submit `{findings: [...]}`. |
 | `dispatch-audits` | Delta round: one auditor per target in `payload.targets` — **never the fixer's vendor**; single-vendor runs stamp `independence: "degraded"`. Each target carries **two** id-shaped fields: `id` (per-location — the dispatch/result/manifest key) and `identity` (line-less, driver-internal stall alias), plus `verdict` and `evidence` — finding-derived text that rides into each auditor seat's order payload. Submit `{results: [...], collectionManifest: {<result-id>: <vendor>}}`. **Every transport key is `payload.targets[].id`:** each `results[].id` and **every** `collectionManifest` key must be the per-location `id` — never `targets[].identity` (driver-internal; must not be used as a transport key). **Provenance rests on the orchestrator's dispatch manifest, not the result's echo:** you (the dispatching orchestrator) are the trusted collector — build `collectionManifest` from your OWN dispatch records (which vendor you seated per target, keyed by `targets[].id`, out-of-band from the results you got back), never copied from a result's `auditorVendor`. A clearing ruling (`discharged` / `discharged-but-new-issue`) is authenticated **iff `collectionManifest[id]` exists AND equals the driver-recorded selected auditor** (where `id` is the per-location target id); a missing manifest entry or a manifest vendor ≠ the selection → **not-discharged + `unauthenticated`**. The in-result `auditorVendor` is **advisory only** (a claimant-controlled echo authenticates nothing — a fixer can echo the expected value); an echo that disagrees with the manifest is disclosed as `echoMismatch` but the manifest governs and the discharge stands. Recorded per round as `auditProvenance: "collection-manifest"`. The driver **cannot cryptographically verify engine identity and does not pretend to** — the guarantee is exactly as strong as your dispatch manifest. **`payload.targets` is an independent batch — dispatch its auditors concurrently, per § Batch concurrency above; submit the phase once, with every result in the one artifact.** |
 | `dispatch-scoped-finder` | Delta round: scoped scan over `payload.hunks` (the split's computed new surface — file → hunk ranges + text) at `reviewer-deep`. Submit `{findings: [...]}`. Emitted **only when the computed new surface is non-empty**; a genuinely empty new surface (the split returned `unknown: False` with no new hunks) skips this dispatch and records `scopedFinder: skipped-empty-surface` on the round (receipt-visible) — never a vacuous scan over nothing. |
-| `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). Hand path: submit `{result: "pass" \| "fail" \| "timeout" \| "skipped" \| "none" \| "unverified"}`. Durable-record path: orchestrator-fulfilled — `advance` folds from the host bare payload at `$SESSION_DIR/round-N/landing/run-verify/<skey>.a<K>.payload.json` where `<skey>` is `round_records.storage_key("verify")` (no orders manifest, no anchor). Fail → terminal halt, certification withheld. |
+| `run-verify` | Run `payload.command` from the working tree (non-interactive, timeout). Hand path: submit `{result: "pass" \| "fail" \| "timeout" \| "skipped" \| "none" \| "unverified"}`. Durable-record path: orchestrator-fulfilled — `advance` folds from the host bare payload at `$SESSION_DIR/round-N/landing/run-verify/<skey>.a<K>.payload.json` where `<skey>` is `round_records.storage_key("verify")` (no orders manifest, no anchor). **The fold writes the durable seat record** for that slot (`seat-result/1` at `$SESSION_DIR/round-N/store/run-verify/<skey>.a<K>.json`, stamped `fulfilledBy: "orchestrator"`, `orderSha256` / `manifestSha256` = `not-emitted` because there is no anchor to check them against) **in the same commit as the fold**, so a `verifyResult` folded this way reconstructs from the record exactly as a seat-path fold does. **Both artifacts present → `landing-ambiguous`, no fold** — the bare payload and a durable seat record are two claims for one slot, the same invariant the seat path refuses on the envelope/bare-payload pair; delete whichever is not the one you meant. (A re-entry after this fold already committed is a replay, not a second claim, and still folds idempotently.) Fail → terminal halt, certification withheld. |
 | `dispatch-fixer` | Dispatch fixer over `payload.batch` (blocking findings the driver selected). Submit `{fixes, headDiff \| headDiffPath, escalated?, coverageDecisions?}` — `coverageDecisions` is a list of coverage-decision objects the driver accumulates into `state["_coverage"]`. The post-fix head diff comes from git via the **guarded per-round command in the SKILL's Setup** (`git diff "$BASE_REF"...HEAD` against the **pinned remote base commit** — never a local branch name, and never a bare copy without Setup's failed-diff and empty-diff halts; if `$BASE_REF` is not in this shell, restore and re-validate it first, #637), never the fixer's self-report. Provide it **inline** (`headDiff`) or, since a real head diff can be hundreds of KB and cannot reasonably inline into a JSON submit artifact, as an **absolute** file path (`headDiffPath`) the driver reads itself (**inline wins if both are present**). A missing / non-absolute / unreadable `headDiffPath` or empty content is treated as an **unknown surface** → the next round runs a full reviewer-deep panel (the unknown→run-everything rule), never an empty diff and never a silent scoped skip; the source used is recorded on the round as `headDiffSource: inline\|path\|unknown`. The changed policy subjects the #174 confirmation re-arm consumes are **derived by the driver itself** from the reviewed-vs-head diff through the accumulated findings (the injectable `changed_subjects` seam — library default + CLI wire the real git derivation, #157/#158); a self-reported `changedSubjects` is ignored on the live path. |
 | `present-judgment` | A tradeoff/product-choice blocker is an **owner-judgment** call routed here — an **intervention gate, not a terminal**. Present each `payload.findings[]` (id, file, line, title, severity) with `payload.findings[].dispositions` (`fix-as-suggested`, `fix-with-guidance`, `skip`). Submit `{dispositions: [{id, disposition, guidance?, reason?}, ...]}` — `skip` needs a citable `reason`. Fixes fold into the round's fix batch and the loop proceeds into the fix leg; skips ride the exit disclosure. Fail-closed: a missing/unknown disposition (or a reasonless skip) folds as `fix-as-suggested` — a judgment blocker is never silently skipped. Never judge the dispute yourself. |
 | `present-stall-menu` | The **audit-stall owner gate** — reached only after one invisible self-recovery (never for a judgment blocker; those go to `present-judgment`). Present `payload.choices` (three-choice menu: `one-more-round`, `accept-the-disclosed-risk`, `hold`; `accept-the-disclosed-risk` only when `payload.acceptRiskEligible` — gated on a stalled audit target that is CONFIRMED with evidence; `one-more-round` only when offered — once per session). Submit `{choice}`. **`hold`** → terminal `held`, certification withheld (absorbs the retired scope-reduction choice). **`accept-the-disclosed-risk`** → certifies when eligible. **`one-more-round`** → not a terminal: clears the stall once, re-enters `dispatch-fixer` → `dispatch-audits` with the stalled targets as the batch (journaled; recorded on the round); an empty/unresolvable stall-target snapshot parks `cannot-certify` instead of re-entering. |
@@ -474,7 +483,9 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
-- `schemaVersion` (2)
+- `schemaVersion` — `2` or `3` (`validate_receipt` accepts both). It is the **state's** version, not
+  a constant: a session bootstrapped at v2 still terminates to a v2 receipt, while a fresh session
+  (`STATE_SCHEMA_VERSION` = 3) emits 3.
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
@@ -497,7 +508,7 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 | `canaryUnverified` | Every cross-vendor seat that ran returned zero findings and no `canaryResult` was submitted. | `canary-unverified (round N): …` |
 | `canaryFailed` | `canaryResult` was submitted but `engaged` is not true — cross-vendor seats in that panel are downgraded to `missing`. | `canary-failed (round N): …` |
 | `canaryVerified` | `canaryResult.engaged` is true — records the probe's `evidence` dict on the round. | *(none)* |
-| `orderVendorProvenanceGaps` | An emitted order seat had no resolved vendor in the seat map. | `order-vendor-provenance-gap (round N): …` |
+| `orderVendorProvenanceGaps` | An emitted order seat on a `dispatch-review` phase had no **resolved** vendor — absent from the seat map, or `vendorSource: "defaulted"` (a fallback the driver guessed, not evidence). Its order rendered the stdout contract. | `order-vendor-provenance-gap (round N): …` |
 
 - `skippedBlockers` — the dedicated skipped-blocking channel (`{id, title, severity, reason}` per owner-skipped judgment blocker; possibly empty). **Required** (possibly empty) so a receipt can never omit the channel — a converge over any skip is CLEAN EXCEPT FOR SKIPPED, never a plain success, and its certification `reason` leads with `clean-except-skipped: N blocker(s) skipped with citable reasons`.
 
