@@ -545,7 +545,14 @@ def _session_transcript_mtime(session_id, env, config_dir=None):
 
     ABSENCE is deliberately not ``unresolved``: a missing projects root, a missing bucket,
     or a missing candidate all mean the transcript is not there, which is the wedge signal
-    the event exists to report — not a failed reading of it.
+    the event exists to report — not a failed reading of it. Absence means ENOENT and
+    nothing else: ENOTDIR (a config root or bucket that is a FILE) is a malformed root the
+    watcher could not read, not a transcript that is not there.
+
+    ``ValueError`` is adjudicated alongside ``OSError`` because a path string can be
+    absolute and still be unusable — an embedded NUL or an unencodable surrogate makes
+    os.scandir raise ValueError, and letting that escape turns a lane's stale alert into a
+    whole-watch internal-error refusal, which is the fail-toward-alert invariant inverted.
     """
     if not isinstance(session_id, str) or not session_id.strip():
         return None, False, False
@@ -565,24 +572,24 @@ def _session_transcript_mtime(session_id, env, config_dir=None):
         projects_root = os.path.join(root, _PROJECTS_DIR_NAME)
         try:
             bucket_entries = list(os.scandir(projects_root))
-        except (FileNotFoundError, NotADirectoryError):
+        except FileNotFoundError:
             continue
-        except OSError:
+        except (OSError, ValueError):
             return None, False, True
         for bucket_entry in bucket_entries:
             try:
                 if not bucket_entry.is_dir(follow_symlinks=False):
                     continue
-            except (FileNotFoundError, NotADirectoryError):
+            except FileNotFoundError:
                 continue
-            except OSError:
+            except (OSError, ValueError):
                 return None, False, True
             candidate = os.path.join(bucket_entry.path, filename)
             try:
                 st = os.stat(candidate, follow_symlinks=False)
-            except (FileNotFoundError, NotADirectoryError):
+            except FileNotFoundError:
                 continue
-            except OSError:
+            except (OSError, ValueError):
                 return None, False, True
             if not stat.S_ISREG(st.st_mode):
                 continue

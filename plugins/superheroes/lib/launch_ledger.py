@@ -881,6 +881,15 @@ def _validate_reserved_optional_fields(rec):
             return "fold-bad-field:reserved:configDir"
         if not os.path.isabs(config_dir):
             return "fold-bad-field:reserved:configDir"
+        # isabs() is not usability: an embedded NUL or an unencodable surrogate passes it
+        # and then makes every filesystem call on the value raise. A record a consumer
+        # cannot act on is not a valid record.
+        try:
+            os.fsencode(config_dir)
+        except (ValueError, UnicodeEncodeError):
+            return "fold-bad-field:reserved:configDir"
+        if "\x00" in config_dir:
+            return "fold-bad-field:reserved:configDir"
 
     slot_present = "slot" in rec
     generation_present = "generation" in rec

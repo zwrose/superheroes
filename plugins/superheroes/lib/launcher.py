@@ -176,7 +176,23 @@ def worktree_root(env=None):
     return os.path.join(home, WORKTREES_DIR_NAME)
 
 
-def spawn_config_dir(env=None):
+def _expand_home(path, env):
+    """expanduser against the SUPPLIED env's HOME, not the ambient process env.
+
+    The child inherits the env passed here, so expanding `~` through the launcher's own
+    HOME would record a root the child never uses.
+    """
+    if not path.startswith("~"):
+        return path
+    home = env.get("HOME")
+    if not isinstance(home, str) or not home:
+        return os.path.expanduser(path)
+    if path == "~" or path.startswith("~" + os.sep):
+        return home + path[1:]
+    return os.path.expanduser(path)
+
+
+def spawn_config_dir(env=None, cwd=None):
     """The absolute config root the spawned child will write its session transcript under.
 
     ``_scrub_env`` does not strip ``CLAUDE_CONFIG_DIR``, so the child inherits exactly what
@@ -185,6 +201,11 @@ def spawn_config_dir(env=None):
     on the lane's ``reserved`` record is what lets a watcher running under a DIFFERENT
     Claude instance still resolve this lane's transcript (#1036).
 
+    Every branch resolves through the SUPPLIED env and the child's own ``cwd`` — never the
+    launcher's ambient environment or working directory — because a root derived from the
+    launcher's context is a root the child does not write to. That includes a RELATIVE
+    override, which the child resolves against its cwd (the build worktree).
+
     Returns None when no absolute root can be derived; the caller then omits the field, and
     a consumer reading a record without it falls back to its own env root (pre-#1036
     behaviour). Recording a non-absolute value instead would refuse the whole record.
@@ -192,11 +213,12 @@ def spawn_config_dir(env=None):
     base = dict(env if env is not None else os.environ)
     configured = base.get(CONFIG_DIR_ENV)
     if isinstance(configured, str) and configured.strip():
-        # A RELATIVE override is not absolutized here: the child resolves it against its
-        # own cwd (the build worktree), not the launcher's, so any absolute path derived
-        # here would be a guess. Omitting the field is the honest answer.
-        path = os.path.expanduser(configured.strip())
-        return path if os.path.isabs(path) else None
+        path = _expand_home(configured.strip(), base)
+        if os.path.isabs(path):
+            return path
+        if isinstance(cwd, str) and os.path.isabs(cwd):
+            return os.path.normpath(os.path.join(cwd, path))
+        return None
     home = base.get("HOME")
     if not isinstance(home, str) or not home.strip():
         home = os.path.expanduser("~")
@@ -1212,7 +1234,7 @@ def launch_build(
         "worktree": worktree_path,
         "sessionId": compose_result["sessionId"],
     }
-    config_dir = spawn_config_dir(env=env)
+    config_dir = spawn_config_dir(env=env, cwd=worktree_path)
     if config_dir is not None:
         reserved["configDir"] = config_dir
     if slot is not None:

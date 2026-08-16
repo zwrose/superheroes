@@ -3029,6 +3029,63 @@ def test_unreadable_recorded_config_dir_discloses_unresolved(tmp_path, monkeypat
     assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED in result["degraded"]
 
 
+@pytest.mark.parametrize("shape", ["config-root-is-a-file", "projects-is-a-file"])
+def test_enotdir_is_a_failed_read_not_an_absent_transcript(tmp_path, monkeypatch, shape):
+    """ENOTDIR is a malformed root, not a missing transcript.
+
+    Absence means ENOENT and nothing else. A config root (or `projects`) that is a FILE is
+    something the watcher could not read — reporting it as a plain zero-match would hide an
+    unreadable root behind the same silence a genuinely cold transcript produces.
+    """
+    _point_config_dir_at(tmp_path, monkeypatch)
+    if shape == "config-root-is-a-file":
+        recorded = tmp_path / "root-is-a-file"
+        recorded.write_text("not a directory\n")
+    else:
+        recorded = tmp_path / "root-with-file-projects"
+        recorded.mkdir()
+        (recorded / "projects").write_text("not a directory\n")
+
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(
+        _TEST_SESSION_ID, os.environ, str(recorded),
+    )
+    assert mtime is None and ambiguous is False
+    assert unresolved is True, "%s is an unreadable root, not an absent transcript" % shape
+
+
+def test_unusable_recorded_root_resolves_unresolved_instead_of_raising(monkeypatch):
+    """A path can be absolute and still be unusable — that must not escape the resolver.
+
+    os.scandir raises ValueError (not OSError) on an embedded NUL. Letting it propagate
+    turns one lane's stale ALERT into a whole-watch `internal-error` refusal — the
+    fail-toward-alert invariant inverted, and the watch stops instead of reporting.
+    """
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/does-not-matter")
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(
+        _TEST_SESSION_ID, os.environ, "/tmp/\x00bad",
+    )
+    assert mtime is None and ambiguous is False and unresolved is True
+
+
+def test_a_lane_with_an_unusable_root_still_alerts_rather_than_refusing(
+    tmp_path, monkeypatch,
+):
+    """End-to-end: the arm emits lane-stale with the token, never an internal-error."""
+    stale_live = [{
+        "launchId": "lane-a", "state": "working",
+        "ageSeconds": 1835.0, "staleAfterSeconds": 1800,
+    }]
+    live_lanes = {
+        "lane-a": {"sessionId": _TEST_SESSION_ID, "configDir": "/tmp/\x00bad"},
+    }
+    degraded = set()
+    still, suppressed = ww._stale_second_chance(
+        stale_live, live_lanes, os.environ, degraded=degraded,
+    )
+    assert len(still) == 1 and suppressed == []
+    assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED in degraded
+
+
 def test_transcript_config_dirs_recorded_root_wins_over_env(monkeypatch, tmp_path):
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/env-config")
     assert ww._transcript_config_dirs(os.environ) == ["/tmp/env-config"]

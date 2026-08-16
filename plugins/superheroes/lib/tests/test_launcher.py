@@ -1150,11 +1150,13 @@ def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monke
         pass
 
 
-def test_relative_config_dir_override_is_omitted_not_guessed(tmp_path, monkeypatch):
-  # axis: a relative override resolves against the CHILD's cwd, so no absolute root can
-  # be derived here — the field is omitted, which folds back to pre-#1036 behaviour
+def test_relative_config_dir_override_records_the_childs_effective_root(
+    tmp_path, monkeypatch,
+):
+  # axis: a relative override resolves against the CHILD's cwd — the build worktree — so
+  # the recorded root is where the transcript actually lands, not an omission and not the
+  # launcher's own cwd
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
-    assert L.spawn_config_dir() is None
 
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -1171,8 +1173,10 @@ def test_relative_config_dir_override_is_omitted_not_guessed(tmp_path, monkeypat
     reserved = [
         r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
     ][0]
-    assert "configDir" not in reserved
-    # And the omission keeps the record foldable rather than refusing the whole launch.
+    assert reserved["configDir"] == os.path.join(
+        reserved["worktree"], "relative", "config",
+    )
+    # And the recorded value is one the grammar accepts, not one that refuses the launch.
     assert ll.fold(ll.read(repo)["records"])["ok"] is True
     try:
         os.kill(result["pid"], signal.SIGTERM)
@@ -1185,6 +1189,25 @@ def test_spawn_config_dir_expands_home_in_the_override(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-two")
     assert L.spawn_config_dir() == os.path.join(str(tmp_path / "home"), ".claude-two")
+
+
+def test_spawn_config_dir_expands_the_supplied_env_home_not_the_ambient_one(monkeypatch):
+  # axis: the child inherits the SUPPLIED env, so `~` must expand through THAT HOME.
+  # Expanding through the launcher's ambient HOME records a root the child never writes to
+  # — the watcher then searches the wrong root and alerts a working lane.
+    monkeypatch.setenv("HOME", "/ambient-home")
+    supplied = {"HOME": "/lane-home", "CLAUDE_CONFIG_DIR": "~/.claude-two"}
+    assert L.spawn_config_dir(env=supplied) == "/lane-home/.claude-two"
+
+
+def test_spawn_config_dir_resolves_a_relative_override_against_the_child_cwd(monkeypatch):
+  # axis: the child inherits the RAW relative value and resolves it against its own cwd
+  # (the build worktree), so that is the root the transcript actually lands under
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+    assert L.spawn_config_dir(cwd="/build/wt") == "/build/wt/relative/config"
+    # No cwd to resolve against — omit rather than guess the launcher's own cwd.
+    assert L.spawn_config_dir() is None
+    assert L.spawn_config_dir(cwd="not-absolute") is None
 
 
 def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
