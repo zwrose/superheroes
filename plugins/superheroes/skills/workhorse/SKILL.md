@@ -96,8 +96,8 @@ lane calls**; the 8-of-8 field alignment is **in-sample** — a fit, not a test.
 Stop and **move up to the full lane** when any of these is true (escalation is **up only** —
 never a self-declared downgrade):
 
-- The orchestrator **measures the working diff (additions plus deletions) as it types** and
-  **escalates when that count crosses ~400** — a flat measured line, not an estimate.
+- The orchestrator **measures the working diff's non-test lines (additions plus deletions outside `tests/`) as it types**
+  and **escalates when that count crosses ~400** — a flat measured line, not an estimate (basis: `review-discipline.md` § Size).
 - It **spreads into surfaces the lane call did not anticipate**.
 - It turns out to **touch a quiet-failure path**.
 - It turns out to need something **irreversible or expensive** — a migration, a new dependency, an
@@ -268,7 +268,7 @@ board wiring) and the fail-loud go/no-go. Don't restate it here.
 
 ~20–40 lines, **posted on the issue** and carried into the PR. Six items, in order:
 
-1. **Shape** — what gets built where; expected diff size in total changed lines (additions plus deletions — the input to the scope check below).
+1. **Shape** — what gets built where; expected diff size as TWO numbers — non-test changed lines (additions plus deletions outside `tests/`; the input to the scope check below) and test lines (derived from the DoD: one fixture per row, one bite-proof per guarded element, one census per invariant).
 2. **Contracts & state** — new/changed interfaces and data shapes; where state lives and who mutates it.
 3. **Reuse plan** — what existing code you build on; what you checked for before writing new.
 4. **Hard seams** — the 2–3 riskiest spots and how each is handled; conscious deferrals stated.
@@ -280,8 +280,8 @@ visible, never silent. **Scope check:** if the shape implies an oversized or mul
 propose a split before building; an irreducible big diff ships with an explicit scope disclosure.
 When the work is a family of parallel siblings, **one concern per PR** — one lens per PR for
 lens-family work — and any **shared shell or contract seam lands first, as its own small PR**,
-before the siblings that build on it. **Crossing twice the size your brief estimated in total changed
-lines (additions plus deletions) is itself the tripwire** — disclose it mid-build and offer a split,
+before the siblings that build on it. **Crossing twice the size your brief estimated in non-test changed
+lines (additions plus deletions outside `tests/`) is itself the tripwire** — disclose it mid-build and offer a split,
 rather than letting the overrun surface at handback. **Gates and enforcement:** any work order that
 adds a **gate, hook, or enforcement mechanism** names, in the brief before code, the ratified
 precondition that unlocks it and the evidence that it is met — in every project. When the project

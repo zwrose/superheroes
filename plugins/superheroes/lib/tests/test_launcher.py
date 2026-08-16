@@ -1083,6 +1083,133 @@ def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypat
         pass
 
 
+def test_launch_build_reserved_config_dir_matches_the_child_env(tmp_path, monkeypatch):
+  # axis: reserved record configDir equals the CLAUDE_CONFIG_DIR the child was spawned with
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    other_instance = str(tmp_path / "claude-two")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
+    spawned_envs = []
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        spawned_envs.append(dict(child_env))
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=capture_spawn,
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    assert len(spawned_envs) == 1
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    # The recorded root is not a second, independent guess at where the transcript
+    # lands — it is the root the child actually inherited.
+    assert reserved["configDir"] == spawned_envs[0]["CLAUDE_CONFIG_DIR"]
+    assert reserved["configDir"] == other_instance
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monkeypatch):
+  # axis: no override — the recorded root is the one the child's own HOME resolves to
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["configDir"] == os.path.join(str(home), ".claude")
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_relative_config_dir_override_records_the_childs_effective_root(
+    tmp_path, monkeypatch,
+):
+  # axis: a relative override resolves against the CHILD's cwd — the build worktree — so
+  # the recorded root is where the transcript actually lands, not an omission and not the
+  # launcher's own cwd
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["configDir"] == os.path.join(
+        reserved["worktree"], "relative", "config",
+    )
+    # And the recorded value is one the grammar accepts, not one that refuses the launch.
+    assert ll.fold(ll.read(repo)["records"])["ok"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_spawn_config_dir_expands_home_in_the_override(monkeypatch, tmp_path):
+  # axis: `~/.claude-two` is a real-world override shape and must record absolute
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-two")
+    assert L.spawn_config_dir() == os.path.join(str(tmp_path / "home"), ".claude-two")
+
+
+def test_spawn_config_dir_expands_the_supplied_env_home_not_the_ambient_one(monkeypatch):
+  # axis: the child inherits the SUPPLIED env, so `~` must expand through THAT HOME.
+  # Expanding through the launcher's ambient HOME records a root the child never writes to
+  # — the watcher then searches the wrong root and alerts a working lane.
+    monkeypatch.setenv("HOME", "/ambient-home")
+    supplied = {"HOME": "/lane-home", "CLAUDE_CONFIG_DIR": "~/.claude-two"}
+    assert L.spawn_config_dir(env=supplied) == "/lane-home/.claude-two"
+
+
+def test_spawn_config_dir_resolves_a_relative_override_against_the_child_cwd(monkeypatch):
+  # axis: the child inherits the RAW relative value and resolves it against its own cwd
+  # (the build worktree), so that is the root the transcript actually lands under
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+    assert L.spawn_config_dir(cwd="/build/wt") == "/build/wt/relative/config"
+    # No cwd to resolve against — omit rather than guess the launcher's own cwd.
+    assert L.spawn_config_dir() is None
+    assert L.spawn_config_dir(cwd="not-absolute") is None
+
+
 def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
   # axis: spawn OSError on every attempt refuses (no child ever ran)
     repo = _init_repo(tmp_path / "repo")
@@ -4152,3 +4279,74 @@ def test_worktree_root_prefers_the_env_then_home(tmp_path, monkeypatch):
         "/home/someone", L.WORKTREES_DIR_NAME,
     )
     assert L.worktree_root({"HOME": "relative/path"}) is None
+
+
+def _await_exit_cli_lane(tmp_path, monkeypatch, launch_id, pid):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-%s" % launch_id,
+        "repoId": ll.repo_identity(repo),
+        "issue": 1040,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": pid,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    return repo
+
+
+def _run_record_outcome_cli(repo, launch_id, *extra):
+    return subprocess.run(
+        [
+            sys.executable, _MOD, "record-outcome",
+            "--repo-root", repo,
+            "--launch-id", launch_id,
+            "--outcome", "handback",
+            "--evidence", "done",
+        ] + list(extra),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_cli_record_outcome_accepts_await_exit(tmp_path, monkeypatch):
+    # axis: --await-exit threads through to the ledger and still records a gone child
+    launch_id = "launch-await-cli"
+    repo = _await_exit_cli_lane(tmp_path, monkeypatch, launch_id, 424242)
+    proc = _run_record_outcome_cli(repo, launch_id, "--await-exit", "3")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["recorded"] == "outcome"
+
+
+def test_cli_record_outcome_refuses_a_negative_await_exit(tmp_path, monkeypatch):
+    # axis: the CLI value reaches the validator rather than being coerced to 0
+    launch_id = "launch-await-cli-bad"
+    repo = _await_exit_cli_lane(tmp_path, monkeypatch, launch_id, 424242)
+    proc = _run_record_outcome_cli(repo, launch_id, "--await-exit", "-1")
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "await-exit-invalid:-1.0"
+    assert not any(
+        r.get("event") == "outcome" for r in ll.read(repo)["records"]
+    )

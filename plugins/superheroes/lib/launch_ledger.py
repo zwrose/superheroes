@@ -19,6 +19,7 @@ prune or forward-compat skip for unknown events.
 import fcntl
 import hashlib
 import json
+import math
 import os
 import uuid
 import posixpath
@@ -59,6 +60,19 @@ WHOLE_REPO = ":whole-repo:"
 _LOCK_SUFFIX = ".lock"
 _LOCK_NAME = LEDGER_NAME + _LOCK_SUFFIX
 _DEFAULT_LOCK_TIMEOUT = 30.0
+# How long record_outcome sleeps between re-attempts while awaiting a live child's
+# exit. The wait happens BETWEEN terminalize calls, never inside the ledger lock.
+_AWAIT_EXIT_POLL_SECONDS = 5.0
+# Longest patience a caller may ask for: 30 minutes. Sized from the field, not from the
+# dispatch slice cap: on 2026-08-16 builders outlived their handback by 10-18 minutes
+# (one pathological 2h20 case is not something to wait on in-turn). A FOREGROUND caller
+# in a harness with a 10-minute tool-call cap must still stay at or under 540 seconds
+# (the dispatch --max-wait ceiling); anything longer is a BACKGROUND call, which is the
+# shape that retires the second watcher entirely (the verb itself is the wait). The bound
+# also keeps the wait count small enough to be exact: an unbounded ceiling admits floats
+# so large that subtracting a nap does not change them (1e308 - 5.0 == 1e308), which is a
+# retry loop that never ends.
+_AWAIT_EXIT_MAX_SECONDS = 1800.0
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -871,6 +885,26 @@ def _validate_reserved_optional_fields(rec):
         except (ValueError, AttributeError, TypeError):
             return "fold-bad-field:reserved:sessionId"
 
+    if "configDir" in rec:
+        # The config root the lane's builder was spawned under, so a consumer resolves
+        # that lane's session transcript under the RIGHT root even when the reader runs
+        # under a different Claude instance (#1036). Absolute only: a relative value would
+        # resolve against whatever cwd the reader happens to have.
+        config_dir = rec["configDir"]
+        if not isinstance(config_dir, str) or not config_dir.strip():
+            return "fold-bad-field:reserved:configDir"
+        if not os.path.isabs(config_dir):
+            return "fold-bad-field:reserved:configDir"
+        # isabs() is not usability: an embedded NUL or an unencodable surrogate passes it
+        # and then makes every filesystem call on the value raise. A record a consumer
+        # cannot act on is not a valid record.
+        try:
+            os.fsencode(config_dir)
+        except (ValueError, UnicodeEncodeError):
+            return "fold-bad-field:reserved:configDir"
+        if "\x00" in config_dir:
+            return "fold-bad-field:reserved:configDir"
+
     slot_present = "slot" in rec
     generation_present = "generation" in rec
     boundary_present = "boundary" in rec
@@ -1045,12 +1079,15 @@ def fold(records):
                 "slot": rec.get("slot"),
                 "generation": rec.get("generation"),
                 "boundary": rec.get("boundary"),
-                # The launcher records the build worktree and session id on the
-                # reserved record (launcher.py). Folding them through is what lets
-                # a consumer resolve the lane's session transcript by identity
-                # (#1023).
+                # The launcher records the build worktree, session id, and the config
+                # root the child was spawned under on the reserved record (launcher.py).
+                # Folding them through is what lets a consumer resolve the lane's session
+                # transcript by identity (#1023) under the lane's own root rather than the
+                # reader's (#1036). configDir is absent on pre-#1036 records, which is the
+                # documented signal to fall back to the reader's own env root.
                 "worktree": rec.get("worktree"),
                 "sessionId": rec.get("sessionId"),
+                "configDir": rec.get("configDir"),
             }
             continue
 
@@ -1592,20 +1629,95 @@ def _record_outcome_response(ok, reason=None, recorded=None, amendment_kind=None
     }
 
 
+def _await_exit_ceiling(value):
+    """Seconds to wait for a live child to exit, or None when the value is unusable.
+
+    Fail-closed: anything that is not a real number inside
+    ``0.._AWAIT_EXIT_MAX_SECONDS`` is a refusal rather than a silent fall-back to
+    0, so a mistyped ceiling cannot quietly become today's impatient behaviour.
+    An int too large to be a float raises on conversion, so the conversion is
+    guarded -- ``record_outcome`` promises never to raise.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        seconds = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        return None
+    if seconds < 0 or seconds > _AWAIT_EXIT_MAX_SECONDS:
+        return None
+    return seconds
+
+
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
-                   lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Record a terminal outcome under lock. Never raises."""
+                   lock_timeout=_DEFAULT_LOCK_TIMEOUT, await_exit=0):
+    """Record a terminal outcome under lock. Never raises.
+
+    ``await_exit`` is a patience ceiling in seconds, default 0 (today's
+    behaviour), accepted in ``0..1800``; anything else is refused with
+    ``await-exit-invalid:<value>`` before a single attempt runs.
+    ``terminalize`` refuses while the launch's recorded child is
+    still alive (``terminal-child-live:<pid>``), and ``lane-terminal`` fires a
+    minute or two before that child actually exits. With a positive ceiling this
+    re-attempts on exactly that refusal until the child is gone or the ceiling
+    is reached; at the ceiling it returns the refusal unchanged, so nothing
+    falls open. The wait is between attempts, never inside the ledger lock, and
+    every attempt is today's full liveness check.
+
+    The ceiling bounds **how long this waits between attempts**, not the whole
+    call: it is a sleep budget spent from the first live-child refusal onward.
+    Two consequences worth knowing before picking a number. A live-child probe
+    settles for a couple of seconds before it answers, so wall-clock time runs to
+    the ceiling *plus* one probe per attempt -- a 5 s ceiling against a child that
+    never exits takes about 5 s of sleep and two probes. And because the budget is
+    spent rather than compared against a clock, a ceiling shorter than one probe
+    still buys a re-attempt instead of silently becoming a no-op.
+
+    Termination is **by construction**, and the thing constructing it is the
+    integer wait count -- exactly ``ceil(ceiling / _AWAIT_EXIT_POLL_SECONDS)``,
+    decremented by one per pass. Neither of the two float quantities in the loop
+    can affect whether it ends: the nap sizes only divide the budget up, and the
+    budget itself is never the stopping test. That matters because both weaker
+    forms genuinely fail. A remaining-time recomputed from ``time.monotonic()``
+    inherits its termination from the clock advancing. A float budget decremented
+    toward zero stops terminating once the ceiling is large enough that a nap
+    falls below its ulp -- ``1e308 - 5.0 == 1e308`` -- which is why the ceiling is
+    also bounded at ``_AWAIT_EXIT_MAX_SECONDS`` rather than left open.
+    """
     if outcome not in TERMINAL_OUTCOMES:
         return _record_outcome_response(
             False, reason="outcome-invalid:%s" % outcome,
         )
     if not isinstance(evidence, str) or not evidence.strip():
         return _record_outcome_response(False, reason="outcome-evidence-empty")
+    ceiling = _await_exit_ceiling(await_exit)
+    if ceiling is None:
+        return _record_outcome_response(
+            False, reason="await-exit-invalid:%s" % (await_exit,),
+        )
 
-    result = terminalize(
-        repo_root, launch_id, outcome=outcome, evidence=evidence,
-        require_started=True, env=env, lock_timeout=lock_timeout,
-    )
+    waits = None
+    budget = ceiling
+    while True:
+        result = terminalize(
+            repo_root, launch_id, outcome=outcome, evidence=evidence,
+            require_started=True, env=env, lock_timeout=lock_timeout,
+        )
+        if result["ok"]:
+            break
+        reason = result["reason"]
+        if not (isinstance(reason, str) and reason.startswith("terminal-child-live:")):
+            break
+        if waits is None:
+            waits = int(math.ceil(ceiling / _AWAIT_EXIT_POLL_SECONDS))
+        if waits <= 0:
+            break
+        nap = min(_AWAIT_EXIT_POLL_SECONDS, budget)
+        budget -= nap
+        waits -= 1
+        time.sleep(nap)
     mapped_reason = result["reason"]
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"

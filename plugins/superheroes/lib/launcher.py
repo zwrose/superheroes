@@ -32,6 +32,8 @@ import pilot_slot  # noqa: E402
 SLOT_REF_ENV = "SUPERHEROES_SLOT_REF"
 WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
 WORKTREES_DIR_NAME = ".superheroes-worktrees"
+CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
+_DEFAULT_CONFIG_DIR_NAME = ".claude"
 
 STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 
@@ -172,6 +174,57 @@ def worktree_root(env=None):
     if not os.path.isabs(home):
         return None
     return os.path.join(home, WORKTREES_DIR_NAME)
+
+
+def _expand_home(path, env):
+    """expanduser against the SUPPLIED env's HOME, not the ambient process env.
+
+    The child inherits the env passed here, so expanding `~` through the launcher's own
+    HOME would record a root the child never uses.
+    """
+    if not path.startswith("~"):
+        return path
+    home = env.get("HOME")
+    if not isinstance(home, str) or not home:
+        return os.path.expanduser(path)
+    if path == "~" or path.startswith("~" + os.sep):
+        return home + path[1:]
+    return os.path.expanduser(path)
+
+
+def spawn_config_dir(env=None, cwd=None):
+    """The absolute config root the spawned child will write its session transcript under.
+
+    ``_scrub_env`` does not strip ``CLAUDE_CONFIG_DIR``, so the child inherits exactly what
+    is read here — that inheritance is what makes this value a true record of where the
+    lane's transcript lands rather than a second, independently-derived guess. Recording it
+    on the lane's ``reserved`` record is what lets a watcher running under a DIFFERENT
+    Claude instance still resolve this lane's transcript (#1036).
+
+    Every branch resolves through the SUPPLIED env and the child's own ``cwd`` — never the
+    launcher's ambient environment or working directory — because a root derived from the
+    launcher's context is a root the child does not write to. That includes a RELATIVE
+    override, which the child resolves against its cwd (the build worktree).
+
+    Returns None when no absolute root can be derived; the caller then omits the field, and
+    a consumer reading a record without it falls back to its own env root (pre-#1036
+    behaviour). Recording a non-absolute value instead would refuse the whole record.
+    """
+    base = dict(env if env is not None else os.environ)
+    configured = base.get(CONFIG_DIR_ENV)
+    if isinstance(configured, str) and configured.strip():
+        path = _expand_home(configured.strip(), base)
+        if os.path.isabs(path):
+            return path
+        if isinstance(cwd, str) and os.path.isabs(cwd):
+            return os.path.normpath(os.path.join(cwd, path))
+        return None
+    home = base.get("HOME")
+    if not isinstance(home, str) or not home.strip():
+        home = os.path.expanduser("~")
+    if not os.path.isabs(home):
+        return None
+    return os.path.join(home, _DEFAULT_CONFIG_DIR_NAME)
 
 
 def _repo_tag(repo_root):
@@ -1181,6 +1234,9 @@ def launch_build(
         "worktree": worktree_path,
         "sessionId": compose_result["sessionId"],
     }
+    config_dir = spawn_config_dir(env=env, cwd=worktree_path)
+    if config_dir is not None:
+        reserved["configDir"] = config_dir
     if slot is not None:
         reserved["slot"] = slot
     if generation is not None:
@@ -1449,9 +1505,11 @@ def _try_reserve_for_refusal(
     return {"reserved": result["ok"]}
 
 
-def record_outcome(repo_root, launch_id, outcome, evidence, env=None):
+def record_outcome(repo_root, launch_id, outcome, evidence, env=None, await_exit=0):
     """Thin pass-through to launch_ledger.record_outcome."""
-    return ll.record_outcome(repo_root, launch_id, outcome, evidence, env=env)
+    return ll.record_outcome(
+        repo_root, launch_id, outcome, evidence, env=env, await_exit=await_exit,
+    )
 
 
 def amend(repo_root, launch_id, kind, value, note, env=None):
@@ -1537,7 +1595,10 @@ def _cli_launch(args):
 
 
 def _cli_record_outcome(args):
-    return record_outcome(args.repo_root, args.launch_id, args.outcome, args.evidence)
+    return record_outcome(
+        args.repo_root, args.launch_id, args.outcome, args.evidence,
+        await_exit=args.await_exit,
+    )
 
 
 def _cli_amend(args):
@@ -1594,6 +1655,12 @@ def main(argv=None):
     ro.add_argument("--launch-id", required=True)
     ro.add_argument("--outcome", required=True)
     ro.add_argument("--evidence", required=True)
+    ro.add_argument(
+        "--await-exit", type=float, default=0.0,
+        help="seconds to keep re-attempting while the lane's child is still alive "
+             "(0..1800, default 0 = refuse immediately as before; foreground callers "
+             "under a 10-minute tool cap stay <=540 — longer waits are background calls)",
+    )
     ro.set_defaults(func=_cli_record_outcome)
 
     am = sub.add_parser("amend")

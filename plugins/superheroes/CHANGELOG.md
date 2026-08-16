@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.28.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.27.0...superheroes-v0.28.0) (2026-08-16)
+
+
+### Features
+
+* **superheroes:** adopt cursor-grok-4.6 as the cursor judge model — replace 4.5, §7.5 pair amendment, post-acquisition family-prose fix (release re-statement of [#1013](https://github.com/zwrose/superheroes/issues/1013)) ([#1033](https://github.com/zwrose/superheroes/issues/1033)) ([fe83ac7](https://github.com/zwrose/superheroes/commit/fe83ac7c53431ef1bbdcf6450926130a5a824125))
+* **superheroes:** dispatch-review --mode brief-check — sanctioned diff-less brief-check dispatch through the runner ([#1020](https://github.com/zwrose/superheroes/issues/1020)) ([5dfd186](https://github.com/zwrose/superheroes/commit/5dfd186b5576d1145ec914177778b29a625c05aa))
+* **superheroes:** launcher record-outcome --await-exit — wait out the builder's exit so wave_watch loop is the sole watcher ([#1045](https://github.com/zwrose/superheroes/issues/1045)) ([fc14211](https://github.com/zwrose/superheroes/commit/fc14211635ea27113c8631433cce3932b6e644aa))
+* **superheroes:** owner-decisions delivery contract — reference, charter pointers, collector preamble, /superheroes:discuss-open-decisions ([#1018](https://github.com/zwrose/superheroes/issues/1018)) ([fc85fdd](https://github.com/zwrose/superheroes/commit/fc85fddf8a1ed96d860b200d3ba893e6c8ee88e0))
+* **superheroes:** wave_watch discloses an unresolved transcript read (transcript-unresolved) and searches the lane's recorded config dir ([#1041](https://github.com/zwrose/superheroes/issues/1041)) ([bae2e48](https://github.com/zwrose/superheroes/commit/bae2e48228be9e75f16dbbabbbfbbd7cff174533))
+* **superheroes:** wave_watch loop verb — one background arm per batch, arming doctrine rewrite, wave_watch.py rider family (release re-statement of [#1012](https://github.com/zwrose/superheroes/issues/1012)) ([#1032](https://github.com/zwrose/superheroes/issues/1032)) ([aca7b64](https://github.com/zwrose/superheroes/commit/aca7b64a78d726f792faf20c00903e2de7ab5676))
+
+
+### Bug Fixes
+
+* **superheroes:** dispatch-review carries verdict-shaped results as a first-class kind; retire --schema-path ([#1027](https://github.com/zwrose/superheroes/issues/1027)) ([d675f28](https://github.com/zwrose/superheroes/commit/d675f28e93fbd40650e2af9be9dd159f37a2a24e))
+* **superheroes:** emitted seat orders' output contract follows the seat's channel — engine seats emit on stdout, never a landing-path write ([#1043](https://github.com/zwrose/superheroes/issues/1043)) ([eaee0a7](https://github.com/zwrose/superheroes/commit/eaee0a7d51d2ff45835e8541c804188fb03bf95f))
+* **superheroes:** empty-object findings members parse as a completed review — close the residual fail-open at the parse boundary ([#1010](https://github.com/zwrose/superheroes/issues/1010)) ([cd3db0c](https://github.com/zwrose/superheroes/commit/cd3db0c129c0ef4fadcad902e03bf26f61ee69b5))
+* **superheroes:** owner-authority gate — a `+`-prefixed refspec is a force spelling (asks as force-push) ([#1025](https://github.com/zwrose/superheroes/issues/1025)) ([92d514c](https://github.com/zwrose/superheroes/commit/92d514c81b09c0c98a2dbfcb996046e5ee3411f3))
+* **superheroes:** owner-authority gate — state end-of-word once, closing the silent-bypass class ([#1022](https://github.com/zwrose/superheroes/issues/1022)) ([dc6b001](https://github.com/zwrose/superheroes/commit/dc6b0014e7c90eae40870e87e65f57ecdfbd6aae))
+* **superheroes:** record-outcome --await-exit accepts up to 1800 s (30 min), sized from the field ([#1048](https://github.com/zwrose/superheroes/issues/1048)) ([236b6cb](https://github.com/zwrose/superheroes/commit/236b6cb340874c389841e70e4788bfb4393b2bbc))
+* **superheroes:** resolve a lane's transcript by recorded session id, not inference ([#1029](https://github.com/zwrose/superheroes/issues/1029)) ([9398660](https://github.com/zwrose/superheroes/commit/9398660cd9d9b183e679718c7ed7aa1d3447a3e1))
+* **superheroes:** round_driver certification is reachable when the loop converges — last-two-rounds stall breaker, three-choice stall menu with a once-only one-more-round, accept-risk from stalled targets, advance folds run-verify; lens-coverage receipt field ([#1028](https://github.com/zwrose/superheroes/issues/1028)) ([5154a32](https://github.com/zwrose/superheroes/commit/5154a32aa1ae8ba7e6ff7b25c7d8f658305d049a))
+* **superheroes:** seat_canary probe --effort is optional so cursor's effort-less config is expressible ([#1019](https://github.com/zwrose/superheroes/issues/1019)) ([60ad237](https://github.com/zwrose/superheroes/commit/60ad2376c4b8a9d1af7bd09108cf8493408cbf57))
+
+
+### Chores
+
+* **superheroes:** drain the vets-92–105 hygiene collector ([#1005](https://github.com/zwrose/superheroes/issues/1005)) ([#1011](https://github.com/zwrose/superheroes/issues/1011)) ([af7c21f](https://github.com/zwrose/superheroes/commit/af7c21fda25869ccafa041af7b83ceb44f89d9cf))
+
 ## [0.27.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.26.0...superheroes-v0.27.0) (2026-08-15)
 
 

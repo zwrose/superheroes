@@ -3905,3 +3905,414 @@ def test_fold_session_id_is_none_when_the_record_omits_it():
     result = ll.fold([rec])
     assert result["ok"] is True
     assert result["launches"]["l1"]["sessionId"] is None
+
+
+# --- record_outcome --await-exit (#1040) ------------------------------------
+
+
+def _await_exit_lane(tmp_path, monkeypatch, launch_id, pid=999999, **reserved_extra):
+    """A reserved+started lane whose recorded child pid is `pid`.
+
+    `reserved_extra` rides onto the reserved record, so a test can give the lane
+    the launcher-written provenance fields (`sessionId`, `configDir`) it needs.
+    """
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-%s" % launch_id
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo, **reserved_extra))
+    started = _started(launch_id)
+    started["pid"] = pid
+    assert ll.append(repo, started)
+    return repo
+
+
+def _scripted_liveness(monkeypatch, answers):
+    """Script the liveness probe; the last answer repeats. Returns the call log."""
+    calls = []
+
+    def fake(pid):
+        calls.append(pid)
+        return answers[min(len(calls) - 1, len(answers) - 1)]
+
+    monkeypatch.setattr(ll, "_child_group_is_live", fake)
+    return calls
+
+
+class _FakeClock:
+    """A `time` stand-in whose sleep advances a frozen monotonic clock.
+
+    Everything except `monotonic` and `sleep` delegates to the real module, so
+    record timestamps stay real.
+    """
+
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
+def _fake_clock(monkeypatch):
+    """Give launch_ledger a fake clock and return the list of sleeps it requests.
+
+    Wall-clock assertions are unusable here: this suite runs under `-n auto` on a
+    shared machine, where a loaded worker stretched a 1.4 s test to 9 s and tripped
+    an `elapsed < 4.0` bound with the code unmutated. Asserting the sleeps the
+    ceiling bought is the same contract with no dependence on host load.
+
+    The patch rebinds the name `time` **inside launch_ledger only** -- patching the
+    stdlib module object would hand a faked `sleep` to any thread another test left
+    running, which is exactly how a timing test elsewhere in the suite would start
+    failing for reasons no one could trace back to here.
+    """
+    clock = _FakeClock()
+    monkeypatch.setattr(ll, "time", clock)
+    return clock.slept
+
+
+def _counted_terminalize(monkeypatch):
+    """Count terminalize attempts without changing what it does."""
+    real = ll.terminalize
+    calls = []
+
+    def wrapper(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ll, "terminalize", wrapper)
+    return calls
+
+
+def test_record_outcome_await_exit_records_once_after_the_child_exits(tmp_path, monkeypatch):
+    # axis: alive on the first probe, gone on the second, inside the ceiling
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-exits")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True, False])
+    attempts = _counted_terminalize(monkeypatch)
+
+    result = ll.record_outcome(repo, "l-await-exits", "handback", "done", await_exit=10)
+
+    assert result["ok"] is True
+    assert result["recorded"] == "outcome"
+    assert len(attempts) == 2, "the first refusal must be retried, not returned"
+    outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+    assert len(outcomes) == 1, "patience must not double-write the outcome"
+
+
+def test_record_outcome_await_exit_returns_todays_refusal_at_the_ceiling(tmp_path, monkeypatch):
+    # axis: still alive when the ceiling expires -> unchanged refusal, nothing written
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-ceiling")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    slept = _fake_clock(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    result = ll.record_outcome(
+        repo, "l-await-ceiling", "handback", "done", await_exit=0.5,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert result["recorded"] is None
+    assert len(attempts) > 1, "the ceiling must buy re-attempts, not one long sleep"
+    assert len(attempts) == len(slept) + 1, "every wait must be followed by a re-attempt"
+    assert sum(slept) <= 0.5 + 1e-6, (
+        "the ceiling must bound the total wait, not just start it; slept %s" % sum(slept)
+    )
+    assert len(ll.read(repo)["records"]) == before
+
+
+def test_record_outcome_await_exit_terminates_on_a_frozen_clock(tmp_path, monkeypatch):
+    # axis: termination is structural -- a clock that never advances, even across
+    # sleep, must not turn a finite ceiling into an unbounded retry (review #1040).
+    # Against a deadline recomputed from time.monotonic() this test does not fail,
+    # it hangs -- which is the point.
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-frozen")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    slept = []
+
+    class _FrozenClock:
+        def monotonic(self):
+            return 1000.0
+
+        def sleep(self, seconds):
+            slept.append(seconds)
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    monkeypatch.setattr(ll, "time", _FrozenClock())
+
+    result = ll.record_outcome(repo, "l-await-frozen", "handback", "done", await_exit=0.5)
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert sum(slept) <= 0.5 + 1e-6, "the budget must be spent, not re-read from a clock"
+    assert len(attempts) == len(slept) + 1
+
+
+def test_record_outcome_await_exit_survives_a_probe_costlier_than_the_ceiling(
+    tmp_path, monkeypatch,
+):
+    # axis: a live-child probe settles ~2s before answering; a ceiling shorter than
+    # that must still buy re-attempts, or the flag is silently inert (review #1040)
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-costly")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.25)
+    clock = _FakeClock()
+    monkeypatch.setattr(ll, "time", clock)
+
+    probes = []
+
+    def slow_probe(pid):
+        probes.append(pid)
+        clock.now += 2.0  # what _child_group_is_live's settle really costs
+        return len(probes) < 2
+
+    monkeypatch.setattr(ll, "_child_group_is_live", slow_probe)
+    attempts = _counted_terminalize(monkeypatch)
+
+    result = ll.record_outcome(repo, "l-await-costly", "handback", "done", await_exit=1)
+
+    assert result["ok"] is True, result["reason"]
+    assert len(attempts) == 2, "a ceiling under the probe cost must still retry"
+    outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+    assert len(outcomes) == 1
+
+
+def test_record_outcome_await_exit_zero_makes_exactly_one_attempt(tmp_path, monkeypatch):
+    # axis: the default ceiling is today's behaviour -- one probe, no waiting
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-zero")
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    slept = _fake_clock(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    result = ll.record_outcome(repo, "l-await-zero", "handback", "done")
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert len(attempts) == 1
+    assert slept == [], "the default must not wait at all"
+    assert len(ll.read(repo)["records"]) == before
+
+
+@pytest.mark.parametrize(
+    "ceiling,expected_waits",
+    [
+        (0.5, 10),      # fractional: exactly ceil(0.5/0.05), not an 11th rounding crumb
+        (0.02, 1),      # below the poll interval: one wait, not zero
+        (0.05, 1),      # exactly the poll interval
+        (0.051, 2),     # a hair over: rounds up, never down
+    ],
+)
+def test_record_outcome_await_exit_makes_exactly_the_bounded_wait_count(
+    tmp_path, monkeypatch, ceiling, expected_waits,
+):
+    # axis: the documented bound is ceil(ceiling / poll) -- pinned, not asserted loosely
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-count")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    slept = _fake_clock(monkeypatch)
+
+    result = ll.record_outcome(repo, "l-await-count", "handback", "done", await_exit=ceiling)
+
+    assert result["ok"] is False
+    assert len(slept) == expected_waits
+    assert len(attempts) == expected_waits + 1
+    assert sum(slept) <= ceiling + 1e-6
+
+
+@pytest.mark.parametrize("ceiling", [540, 1800, 1800.0])
+def test_record_outcome_await_exit_accepts_the_field_sized_maximum(monkeypatch, ceiling):
+    # axis: the maximum patience is 1800 s (30 min, sized from observed handback-to-exit
+    # gaps of 10-18 min) -- the old 540 s dispatch-slice cap must still be accepted and
+    # the new maximum itself must be accepted, so the bound cannot silently shrink back
+    assert ll._AWAIT_EXIT_MAX_SECONDS == 1800.0
+    assert ll._await_exit_ceiling(ceiling) == float(ceiling)
+
+
+def test_record_outcome_await_exit_terminates_on_a_huge_ceiling(tmp_path, monkeypatch):
+    # axis: a ceiling large enough that `budget -= nap` is a no-op (1e308 - 5.0 ==
+    # 1e308) must not become an endless retry -- it is refused before the loop
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-huge")
+    attempts = _counted_terminalize(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    result = ll.record_outcome(repo, "l-await-huge", "handback", "done", await_exit=1e308)
+
+    assert result["ok"] is False
+    assert result["reason"] == "await-exit-invalid:1e+308"
+    assert attempts == []
+    assert len(ll.read(repo)["records"]) == before
+
+
+def test_record_outcome_await_exit_refuses_an_unfloatable_int(tmp_path, monkeypatch):
+    # axis: float(10**400) raises OverflowError; record_outcome promises never to raise
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-overflow")
+    attempts = _counted_terminalize(monkeypatch)
+
+    result = ll.record_outcome(
+        repo, "l-await-overflow", "handback", "done", await_exit=10 ** 400,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"].startswith("await-exit-invalid:")
+    assert attempts == []
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [-1, -0.5, "5", None, True, float("inf"), float("nan"), 1801, 1800.5],
+)
+def test_record_outcome_refuses_an_unusable_await_exit_ceiling(tmp_path, monkeypatch, bad):
+    # axis: an unusable ceiling refuses before any attempt, never falls back to 0
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-bad")
+    attempts = _counted_terminalize(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    result = ll.record_outcome(
+        repo, "l-await-bad", "handback", "done", await_exit=bad,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "await-exit-invalid:%s" % (bad,)
+    assert attempts == []
+    assert len(ll.read(repo)["records"]) == before
+
+
+def test_record_outcome_await_exit_waits_out_a_real_child(tmp_path, monkeypatch):
+    # axis: end-to-end against the real liveness probe and a real exiting child.
+    # NOT the retry detector -- whether the child outlives the first probe's settle
+    # is a race with host load, so this asserts only the end state. The re-attempt
+    # itself is pinned deterministically by the fake-clock tests above.
+    proc = subprocess.Popen(["sleep", "4"], start_new_session=True)
+    reaper = threading.Thread(target=proc.wait, daemon=True)
+    reaper.start()
+    try:
+        repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-real", pid=proc.pid)
+        monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.25)
+
+        result = ll.record_outcome(
+            repo, "l-await-real", "handback", "done", await_exit=30,
+        )
+
+        assert result["ok"] is True, result["reason"]
+        outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+        assert len(outcomes) == 1
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except (ProcessLookupError, PermissionError):
+            pass
+        reaper.join(timeout=5)
+
+
+def _reserved_line(path):
+    """The reserved record's raw ledger line, for a byte-for-byte comparison."""
+    with open(path, "rb") as fh:
+        lines = [ln for ln in fh.read().split(b"\n") if ln.strip()]
+    reserved = [
+        ln for ln in lines
+        if json.loads(ln.decode("utf-8")).get("event") == "reserved"
+    ]
+    assert len(reserved) == 1, "expected one reserved record, got %d" % len(reserved)
+    return reserved[0]
+
+
+def test_record_outcome_await_exit_leaves_the_reserved_provenance_untouched(
+    tmp_path, monkeypatch,
+):
+    # axis: the #1040 (patience) x #1036 (configDir) seam. An awaited record-outcome
+    # writes the terminal outcome and nothing else -- sessionId and configDir are the
+    # launcher's, written once at reserve. A retry loop that rewrote or dropped them
+    # would break the consumer that resolves a lane's transcript under the RIGHT
+    # config root, and no test on either side of the merge would notice.
+    session_id = "11111111-2222-3333-4444-555555555555"
+    config_dir = "/home/someone/.claude-two"
+    repo = _await_exit_lane(
+        tmp_path, monkeypatch, "l-await-provenance",
+        sessionId=session_id, configDir=config_dir,
+    )
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True, False])
+    attempts = _counted_terminalize(monkeypatch)
+    ledger = _ledger_file(repo, None)
+    before = _reserved_line(ledger)
+
+    result = ll.record_outcome(
+        repo, "l-await-provenance", "handback", "done", await_exit=10,
+    )
+
+    assert result["ok"] is True, result["reason"]
+    assert len(attempts) == 2, "the lane must actually have been waited out"
+    assert _reserved_line(ledger) == before, (
+        "an awaited record-outcome rewrote the reserved record"
+    )
+    folded = ll.fold(ll.read(repo)["records"])
+    assert folded["ok"] is True, folded["reason"]
+    lane = folded["launches"]["l-await-provenance"]
+    assert lane["sessionId"] == session_id
+    assert lane["configDir"] == config_dir
+
+
+# --- reserved configDir (#1036) ---------------------------------------------
+
+
+@pytest.mark.parametrize("config_dir", ["/tmp/\x00bad", "/tmp/\ud800bad"])
+def test_reserved_config_dir_must_be_usable_as_a_path(config_dir):
+    # axis: isabs() is not usability — these pass it and then make every filesystem call
+    # on the value raise (NUL -> ValueError, lone high surrogate -> UnicodeEncodeError),
+    # so a consumer could not act on the record at all
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir=config_dir)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:configDir"
+
+
+def test_reserved_config_dir_accepts_a_surrogate_escaped_path():
+    # axis: NOT everything exotic is unusable — a surrogateescape-decoded byte round-trips
+    # through os.fsencode and names a real file, so refusing it would reject a legal root
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir="/tmp/\udcffbad")
+    assert ll.fold([rec])["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "config_dir", ["", "   ", "relative/config", "~/.claude", 7, None, True],
+)
+def test_reserved_config_dir_must_be_a_non_empty_absolute_path(config_dir):
+    # axis: a non-absolute recorded root would resolve against the READER's cwd, so the
+    # grammar refuses it here rather than letting a consumer guess (#1036).
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir=config_dir)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:configDir"
+
+
+def test_fold_exposes_the_recorded_config_dir():
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir="/home/someone/.claude-two")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["configDir"] == "/home/someone/.claude-two"
+
+
+def test_fold_config_dir_is_none_when_the_record_omits_it():
+    # axis: every pre-#1036 record — the consumer reads None as "use your own env root"
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["configDir"] is None

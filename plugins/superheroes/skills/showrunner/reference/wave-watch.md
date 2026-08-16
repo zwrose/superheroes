@@ -50,6 +50,22 @@ any benign events you want suppressed (see below).
 returns immediately and shows whether the batch resolves to any lanes at all — the cheap way to catch
 a mistyped batch id before you go blind in a long `loop`.
 
+**`loop` is the wave's sole watcher — do not arm a second pid-death watcher beside it.** The one gap
+a second watcher used to cover: `lane-terminal` fires from the ledger the moment a builder hands
+back, typically a minute or two *before* its session exits, and `record-outcome` refuses while that
+child is still alive (`terminal-child-live:<pid>`). Close it on the `lane-terminal` wake with
+`launcher record-outcome --await-exit <seconds>`, which re-attempts until the child is gone and at
+the ceiling returns that same refusal, so nothing falls open. The ceiling is a **sleep budget spent
+from the first live-child refusal onward**, not a whole-call wall-clock bound: each attempt also runs
+a liveness probe that settles for a couple of seconds, so a call costs the ceiling plus one probe per
+attempt. Pick the number for how long you are willing to wait, not for when you need to be back.
+The accepted range is **0..1800 seconds** (30 minutes — sized from the field: builders outlive their
+handback by 10–18 minutes); outside it the verb refuses (`await-exit-invalid:<value>`) before
+attempting anything. **Foreground callers stay at or under 540 seconds** — a harness with a 10-minute
+tool-call cap kills anything longer mid-wait; a longer patience is a **background** call, which is
+the shape that makes the verb itself the wait (no second watcher). A builder that outlives even that
+is the loop's `builder-exited` event's to report — re-invoke the verb then.
+
 The arming snippet above omits two flags you should **include on every arm**: `--max-total-seconds`
 (the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a
 message) and `--log PATH` (each timer arm is recorded, so you can see the loop is alive and which
@@ -140,11 +156,27 @@ transcripts with the same id, an unreadable projects directory, a transcript dat
 by any amount — leaves the lane stale and the event fires. Ambiguity additionally records
 `transcript-ambiguous`.
 
+**A lookup that could not complete says so.** When the watcher could not *resolve* the transcript at
+all — the projects root or a bucket was unreadable, a candidate's `stat` failed for any reason other
+than the file being absent, or the lane recorded a config root the watcher cannot use — the lane
+alerts **and** records `transcript-unresolved`. Read it as *the watcher could not vouch either way*,
+not as *the transcript is cold*: without it, an I/O failure and a genuinely wedged builder produce
+the same alert with the same silence behind it. **Absence is not unresolved** — a missing projects
+root, a missing bucket, or a missing transcript means the transcript is not there, which is the wedge
+signal `lane-stale` exists to report, so those alert with **no** token. A pre-#1029 record carrying
+no session id gets no second chance and no token either — that is the documented no-identity class,
+not a failed reading.
+
 **Only the lane's own transcript may vouch for it.** The launch record's session id names exactly one
-file: `<sessionId>.jsonl` under the host config root's `projects` tree. Exactly one config root is
-searched (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude` — never both, because a
-same-named file under the other root belongs to a different session); a symlinked entry is never
-followed; and the watcher **stat's only** — it never reads transcript contents.
+file: `<sessionId>.jsonl` under a config root's `projects` tree. Exactly one config root is searched,
+never both — because a same-named file under any other root belongs to a different session. **The
+lane's own recorded root wins:** the launcher records on the launch record the `configDir` its
+builder was spawned under, and the watcher searches *that* root, so a lane launched under another
+Claude instance (`.claude-two`, a per-launch exception) still gets its second chance instead of
+alerting because the watcher looked in its own root. A record carrying no `configDir` — every
+pre-#1036 launch — resolves under the watcher's own env root as before (`CLAUDE_CONFIG_DIR` outright
+when set, otherwise `~/.claude`). A symlinked entry is never followed; and the watcher **stat's
+only** — it never reads transcript contents.
 
 Launches without a recorded session id get **no second chance** — pre-change ledger records still
 alert. The concurrent-foreign-session-in-the-same-worktree residual is **closed** by recorded
@@ -269,6 +301,9 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `log-unwritable`
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is
   ambiguous and the lane alerts rather than being suppressed
+- `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or
+  bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so
+  the lane alerts without the watcher being able to tell a cold transcript from an unread one
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.
