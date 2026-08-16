@@ -12,168 +12,237 @@ def _run_main(body_path):
     return ic.main(["check-build-ready", "--body-file", body_path])
 
 
+def _minimal_body(anchor_header, anchor_body):
+    return (
+        f"{anchor_header}\n"
+        f"{anchor_body}\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+
+
+# --- 1. Every kind × every carrier parses (six cases) -----------------------
+
+
+def test_pass_spec_section_plain_header():
+    body = _minimal_body(
+        "Anchor (spec-section):",
+        "front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_SPEC_SECTION
+    assert result["declaredKinds"] == [ic.KIND_SPEC_SECTION]
+
+
+def test_pass_spec_section_bold_header():
+    body = _minimal_body(
+        "**Anchor (spec-section):**",
+        "front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_SPEC_SECTION
+    assert result["declaredKinds"] == [ic.KIND_SPEC_SECTION]
+
+
+def test_pass_receipt_plain_header():
+    body = _minimal_body(
+        "Anchor (receipt):",
+        "https://github.com/zwrose/superheroes/pull/581#issuecomment-1",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_RECEIPT
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
+
+
+def test_pass_receipt_bold_header():
+    body = _minimal_body(
+        "**Anchor (receipt):**",
+        "https://github.com/zwrose/superheroes/pull/581#issuecomment-1",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_RECEIPT
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
+
+
+def test_pass_ruling_plain_header():
+    body = _minimal_body(
+        "Anchor (ruling):",
+        "2026-08-07 · owner ruling · advisor channel",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_RULING
+    assert result["declaredKinds"] == [ic.KIND_RULING]
+
+
+def test_pass_ruling_bold_header():
+    body = _minimal_body(
+        "**Anchor (ruling):**",
+        "2026-08-07 · owner ruling · advisor channel",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_RULING
+    assert result["declaredKinds"] == [ic.KIND_RULING]
+
+
+# --- 2. Each refusal token, once each way -----------------------------------
+
+
 def test_refusal_anchor_slot_missing():
     result = _check("What: scope\nDoD:\n- outcome")
     assert result["ok"] is False
     assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
     assert result["slots"][ic.SLOT_ANCHOR] == "missing"
+    assert result["declaredKinds"] == []
+
+
+def test_refusal_anchor_kind_missing_bare_anchor():
+    result = _check(_minimal_body("Anchor:", "some citation text"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MISSING
+    assert result["declaredKinds"] == []
+
+
+def test_refusal_anchor_kind_missing_empty_parens():
+    result = _check(_minimal_body("Anchor ():", "some citation text"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MISSING
+    assert result["declaredKinds"] == []
+
+
+def test_refusal_anchor_kind_multiple_comma_form():
+    result = _check(_minimal_body("Anchor (spec-section, receipt):", "citation"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MULTIPLE
+    assert result["declaredKinds"] == [ic.KIND_SPEC_SECTION, ic.KIND_RECEIPT]
+
+
+def test_refusal_anchor_kind_multiple_separate_groups():
+    result = _check(_minimal_body("Anchor (spec-section) (receipt):", "citation"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MULTIPLE
+    assert result["declaredKinds"] == [ic.KIND_SPEC_SECTION, ic.KIND_RECEIPT]
+
+
+def test_refusal_anchor_kind_unrecognized_literal_template():
+    result = _check(_minimal_body("Anchor (<kind>):", "citation text"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+    assert result["declaredKinds"] == ["<kind>"]
 
 
 def test_refusal_anchor_slot_empty():
-    result = _check("Anchor:\nWhat: scope\nDoD:\n- outcome")
+    body = (
+        "Anchor (spec-section):\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
     assert result["ok"] is False
     assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_EMPTY
     assert result["slots"][ic.SLOT_ANCHOR] == "empty"
+    assert result["declaredKinds"] == [ic.KIND_SPEC_SECTION]
 
 
-def test_refusal_anchor_kind_unrecognized():
-    body = (
-        "Anchor: front-half-sdlc-core · The issue contract section\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-    assert result["matchedKinds"] == []
+def test_refusal_body_unreadable(tmp_path, capsys):
+    missing = tmp_path / "nope.md"
+    rc = _run_main(str(missing))
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
+    assert all(v == "unknown" for v in out["slots"].values())
+    assert out["declaredKinds"] == []
 
 
-def test_refusal_anchor_kind_unrecognized_marker_only():
-    body = (
-        "Anchor: as-of amendment #4\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+# --- 3. Round-3 finding: receipt URL path text must not be classified ---------
 
 
-def test_refusal_anchor_kind_unrecognized_ruling_no_location():
-    body = (
-        "Anchor: 2026-08-07 owner ruling\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-
-
-def test_refusal_anchor_kind_unrecognized_spec_partial_with_url():
-    body = (
-        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · "
-        "https://example.com/spec\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-    assert result["matchedKinds"] == []
-
-
-def test_refusal_anchor_kind_unrecognized_ruling_partial_with_url():
-    body = (
-        "Anchor: 2026-08-07 · owner ruling · https://example.com/ruling\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-    assert result["matchedKinds"] == []
-
-
-def test_refusal_ruling_location_in_progress_not_place():
-    body = (
-        "Anchor: 2026-08-07 · ruling still in progress\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-
-
-def test_refusal_ruling_location_at_risk_not_place():
-    body = (
-        "Anchor: ruling currently at risk\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-
-
-def test_refusal_ruling_location_bare_recorded_not_place():
-    body = (
-        "Anchor: ruling was recorded\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
-
-
-def test_refusal_anchor_kind_ambiguous():
-    body = (
-        "Anchor: front-half-sdlc-core-6181ee · §3 · as-of amendment #4 · "
-        "2026-08-07 owner ruling in advisor channel\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is False
-    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_AMBIGUOUS
-    assert set(result["matchedKinds"]) == {
-        ic.KIND_SPEC_SECTION,
-        ic.KIND_OWNER_RULING,
-    }
-
-
-def test_pass_spec_section():
-    body = (
-        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
+def test_pass_receipt_url_path_contains_ruling_word():
+    """Round-3 finding: path text containing 'ruling' is not classified — kind is declared."""
+    body = _minimal_body(
+        "Anchor (receipt):",
+        "https://example.com/advisor-ruling-thread/2026-08-07",
     )
     result = _check(body)
     assert result["ok"] is True
-    assert result["reason"] is None
-    assert result["anchorKind"] == ic.KIND_SPEC_SECTION
-    assert result["matchedKinds"] == [ic.KIND_SPEC_SECTION]
+    assert result["anchorKind"] == ic.KIND_RECEIPT
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
 
 
-def test_pass_spec_section_with_url():
+def test_pass_receipt_url_path_contains_iso_date():
+    """Round-3 finding: path text containing an ISO date is not classified — kind is declared."""
+    body = _minimal_body(
+        "Anchor (receipt):",
+        "https://example.com/archive/2026-08-07/decision",
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_RECEIPT
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
+
+
+# --- 4. Precedence: header-form refusals before emptiness -------------------
+
+
+def test_precedence_bare_anchor_empty_body_reports_kind_missing():
     body = (
-        "Anchor: front-half-sdlc-core-6181ee · The section · as-of amendment #4 "
-        "https://example.com/spec\n"
+        "Anchor:\n"
         "What: scope\n"
         "DoD:\n"
         "- outcome\n"
     )
     result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == "empty"
+
+
+# --- 5. Citation body is not classified -------------------------------------
+
+
+def test_receipt_header_spec_section_prose_body_still_receipt():
+    body = _minimal_body(
+        "Anchor (receipt):",
+        "front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4",
+    )
+    result = _check(body)
     assert result["ok"] is True
-    assert result["anchorKind"] == ic.KIND_SPEC_SECTION
-    assert result["matchedKinds"] == [ic.KIND_SPEC_SECTION]
+    assert result["anchorKind"] == ic.KIND_RECEIPT
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
 
 
-def test_pass_receipt():
+# --- 6. Fenced-code immunity ------------------------------------------------
+
+
+def test_fenced_code_decoy_reports_anchor_slot_missing():
     body = (
-        "Anchor: https://github.com/zwrose/superheroes/pull/581#issuecomment-1\n"
+        "```\n"
+        "Anchor (spec-section): decoy inside fence\n"
+        "```\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["declaredKinds"] == []
+
+
+def test_fenced_code_decoy_ignored_real_header_parsed():
+    body = (
+        "Anchor (receipt): https://example.com/live\n"
+        "```\n"
+        "Anchor (spec-section): decoy inside fence\n"
+        "```\n"
         "What: scope\n"
         "DoD:\n"
         "- outcome\n"
@@ -181,52 +250,15 @@ def test_pass_receipt():
     result = _check(body)
     assert result["ok"] is True
     assert result["anchorKind"] == ic.KIND_RECEIPT
-    assert result["matchedKinds"] == [ic.KIND_RECEIPT]
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
 
 
-def test_pass_owner_ruling():
-    body = (
-        "Anchor: 2026-08-07 · owner ruling · advisor channel, discovery sitting\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is True
-    assert result["anchorKind"] == ic.KIND_OWNER_RULING
-    assert result["matchedKinds"] == [ic.KIND_OWNER_RULING]
-
-
-def test_pass_owner_ruling_single_channel():
-    body = (
-        "Anchor: 2026-08-07 · owner ruling · advisor channel\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is True
-    assert result["anchorKind"] == ic.KIND_OWNER_RULING
-    assert result["matchedKinds"] == [ic.KIND_OWNER_RULING]
-
-
-def test_pass_owner_ruling_with_url():
-    body = (
-        "Anchor: 2026-08-07 · owner ruling · advisor channel "
-        "https://example.com/ruling\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is True
-    assert result["anchorKind"] == ic.KIND_OWNER_RULING
-    assert result["matchedKinds"] == [ic.KIND_OWNER_RULING]
+# --- preserved: slot parsing, CLI, advisory exit ----------------------------
 
 
 def test_empty_what_and_dod_do_not_block():
     body = (
-        "Anchor: front-half-sdlc-core-6181ee · section · as-of amendment #0\n"
+        "Anchor (spec-section): front-half-sdlc-core-6181ee · section · as-of amendment #0\n"
         "What:\n"
         "DoD:\n"
     )
@@ -236,18 +268,6 @@ def test_empty_what_and_dod_do_not_block():
     assert result["slots"][ic.SLOT_DOD] == "empty"
 
 
-def test_bold_anchor_header_recognized():
-    body = (
-        "**Anchor:** front-half-sdlc-core-6181ee · §2 · as-of amendment #2\n"
-        "What: scope\n"
-        "DoD:\n"
-        "- outcome\n"
-    )
-    result = _check(body)
-    assert result["ok"] is True
-    assert result["slots"][ic.SLOT_ANCHOR] == "filled"
-
-
 def test_exit_zero_on_refusal(tmp_path):
     body_path = tmp_path / "body.md"
     body_path.write_text("What: only\n", encoding="utf-8")
@@ -255,16 +275,6 @@ def test_exit_zero_on_refusal(tmp_path):
     assert rc == 0
     result = _check("What: only\n")
     assert result["ok"] is False
-
-
-def test_unreadable_body_file(tmp_path, capsys):
-    missing = tmp_path / "nope.md"
-    rc = _run_main(str(missing))
-    assert rc == 0
-    out = json.loads(capsys.readouterr().out.strip())
-    assert out["ok"] is False
-    assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
-    assert all(v == "unknown" for v in out["slots"].values())
 
 
 def test_non_utf8_body_file(tmp_path, capsys):
@@ -280,7 +290,8 @@ def test_non_utf8_body_file(tmp_path, capsys):
 
 def test_main_happy_path(tmp_path, capsys):
     body = (
-        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4\n"
+        "Anchor (spec-section): front-half-sdlc-core-6181ee · § The issue contract · "
+        "as-of amendment #4\n"
         "What: scope\n"
         "DoD:\n"
         "- outcome\n"
@@ -292,11 +303,13 @@ def test_main_happy_path(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out.strip())
     assert out["ok"] is True
     assert out["anchorKind"] == ic.KIND_SPEC_SECTION
+    assert out["declaredKinds"] == [ic.KIND_SPEC_SECTION]
 
 
 def test_realistic_whole_body_fixture():
     body = (
-        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4\n"
+        "Anchor (spec-section): front-half-sdlc-core-6181ee · § The issue contract · "
+        "as-of amendment #4\n"
         "What: Route the issue-contract build-ready check and its drift guard.\n"
         "DoD:\n"
         "- `pytest` over `plugins/superheroes/lib/tests/test_issue_contract.py` exits 0\n"
@@ -306,7 +319,7 @@ def test_realistic_whole_body_fixture():
         "ok": True,
         "reason": None,
         "anchorKind": ic.KIND_SPEC_SECTION,
-        "matchedKinds": [ic.KIND_SPEC_SECTION],
+        "declaredKinds": [ic.KIND_SPEC_SECTION],
         "slots": {
             ic.SLOT_ANCHOR: "filled",
             ic.SLOT_WHAT: "filled",
@@ -318,15 +331,17 @@ def test_realistic_whole_body_fixture():
 
 def test_vocabulary_constants():
     assert ic.SLOTS == (ic.SLOT_ANCHOR, ic.SLOT_WHAT, ic.SLOT_DOD)
+    assert ic.ANCHOR_HEADER_FORM == "Anchor (<kind>):"
     assert ic.ANCHOR_KINDS == frozenset({
         ic.KIND_SPEC_SECTION,
         ic.KIND_RECEIPT,
-        ic.KIND_OWNER_RULING,
+        ic.KIND_RULING,
     })
     assert ic.REFUSALS == frozenset({
         ic.REFUSAL_ANCHOR_SLOT_MISSING,
         ic.REFUSAL_ANCHOR_SLOT_EMPTY,
+        ic.REFUSAL_ANCHOR_KIND_MISSING,
         ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED,
-        ic.REFUSAL_ANCHOR_KIND_AMBIGUOUS,
+        ic.REFUSAL_ANCHOR_KIND_MULTIPLE,
         ic.REFUSAL_BODY_UNREADABLE,
     })

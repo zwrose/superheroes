@@ -21,12 +21,13 @@ file carries the detail.
 
 ## The three-slot skeleton
 
-Every routed issue body carries exactly three required sections, **in order** — `Anchor:`,
-`What:`, `DoD:` — and nothing else is required. The smallest conforming issue is **three
-filled lines**; the skeleton adds no further required ceremony.
+Every routed issue body carries exactly three required sections, **in order** — `Anchor
+(<kind>):`, `What:`, `DoD:` — where `<kind>` is exactly one of `spec-section`, `receipt`,
+`ruling` — and nothing else is required. The smallest conforming issue is **three filled
+lines**; the skeleton adds no further required ceremony.
 
 ```markdown
-Anchor: <one anchor kind, filled>
+Anchor (spec-section): <one anchor of the declared kind>
 What: <plain-language scope and why>
 DoD:
 - <observable outcome a vet can grade from the handback's artifacts alone>
@@ -41,51 +42,38 @@ filing-time block (except the empty-Anchor rule at build-ready marking).
 
 ## The Anchor slot
 
-The Anchor slot names the owner-approved decision the issue is downstream of. Exactly **one**
-of three kinds — never zero, never two:
+The Anchor slot names the owner-approved decision the issue is downstream of. The kind is
+**declared in the header** and **never inferred from the citation's prose**. Exactly one kind
+per Anchor: a header declaring no kind, an unknown kind, or more than one kind is a
+**malformed Anchor** and blocks build-ready marking exactly as an empty Anchor does.
+
+The three recognized kinds:
 
 1. **Spec section** — work-item slug + section heading + the anchor's as-of cursor
    `as-of amendment #N` (N is the count of entries in the spec's Amendments log at citation
    time; 0 when the log is empty).
 
-   *Example:* `front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4`
+   *Example:* `Anchor (spec-section): front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4`
 
 2. **Receipt** — a live link to a review finding, incident record, bug report, or gate result.
 
-   *Example:* `https://github.com/zwrose/superheroes/pull/581#issuecomment-1234567890`
+   *Example:* `Anchor (receipt): https://github.com/zwrose/superheroes/pull/581#issuecomment-1234567890`
 
-3. **Dated owner ruling** — an ISO date together with where the ruling was made.
+3. **Ruling** — an ISO date together with where the ruling was made.
 
-   *Example:* `2026-08-07 · owner ruling · advisor channel, discovery sitting`
+   *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · advisor channel, discovery sitting`
+
+The citation text is **never read to decide a kind** — a bare receipt URL whose path happens
+to contain `ruling` or a date is a perfectly good `Anchor (receipt):`.
+
+A slot header inside a fenced code block is not a slot header — so a body that only shows the
+skeleton in an example does not accidentally satisfy it.
 
 ### Shape, not resolution
 
-What is checked at **build-ready marking** is **which kind the Anchor cites and whether it
-cites exactly one** — never whether that anchor *resolves*. Anchor resolution — is the spec
-approved, does the cited section still exist, has a later substantive amendment superseded it,
-is the link live, was the ruling superseded — is a **different, later check owned by another
-work item**; this file defines the shape test only.
-
-The shape markers the check reads (each kind matches only on its **full** shape; kinds are
-mutually exclusive by **stated precedence** — a link is the weakest signal and may legitimately
-appear inside a fully-shaped spec or ruling anchor because the contract mandates that link):
-
-- a **spec-section** anchor requires all three: a work-item slug (`[a-z0-9][a-z0-9-]*-[0-9a-f]{6}`),
-  a section reference (`§`, the word *section*, or an `FR-<n>` / `UFR-<n>` citation), and the
-  as-of cursor `as-of amendment #N`;
-- an **owner-ruling** anchor requires all three: an ISO date (`YYYY-MM-DD`), the word *ruling*,
-  and a location clause that names a place — a preposition (`in` / `at`) followed by a target
-  word, a qualified location noun (`<word> channel`, `<word> sitting`, or `<word> thread`), or
-  `recorded in <target>` / `recorded at <target>` (bare `in`, `at`, or `recorded` alone do not
-  qualify);
-- a **receipt** anchor is recognized by a link (`http(s)://` URL or markdown link) **only when
-  neither** spec-section **nor** owner-ruling matched on its full shape.
-
-A link alone is a receipt, but a link **inside** a fully-shaped spec or ruling anchor does not
-make it ambiguous — the contract mandates that one-hop link for currency (FR-10).
-
-An Anchor matching **two or more** kinds on their full shapes is refused as **ambiguous** — the
-fix is to state one kind plainly.
+What is checked at **build-ready marking** is that the header **declares** exactly one
+recognized kind; whether that anchor **resolves** is a **different, later check owned by
+another work item**.
 
 ## The build-ready block
 
@@ -97,11 +85,15 @@ token below. Micro work never reaches this check.
 
 | Token | Meaning |
 | --- | --- |
-| `anchor-slot-missing` | The body has no `Anchor:` section |
-| `anchor-slot-empty` | The `Anchor:` section is present but empty |
-| `anchor-kind-unrecognized` | The Anchor is filled but cites none of the three kinds |
-| `anchor-kind-ambiguous` | The Anchor matches two or more kinds on their full shapes |
+| `anchor-slot-missing` | The body has no Anchor slot header line |
+| `anchor-slot-empty` | The Anchor header is present but the citation body has no word character |
+| `anchor-kind-missing` | The Anchor header declares zero kind tokens (`Anchor:`, `Anchor ():`) |
+| `anchor-kind-unrecognized` | The Anchor header declares exactly one token that is not an anchor kind |
+| `anchor-kind-multiple` | The Anchor header declares two or more kind tokens |
 | `body-unreadable` | The body file could not be read (path typo, permission error, or invalid encoding) |
+
+Header-form refusals are reported before emptiness — when both a malformed header and an empty
+Anchor hold, the reported token is the header-form refusal.
 
 > This check is **advisory**. It computes the refusal and its reason and prints them; it never
 > exits non-zero, never intercepts a command, and enforces nothing on its own. **The advisor's
@@ -182,18 +174,21 @@ checked against it.
 - `What`
 - `DoD`
 
+The Anchor slot's rendered header form is `Anchor (<kind>):`.
+
 **Anchor kinds** (exactly one per Anchor):
 
 - `spec-section`
 - `receipt`
-- `owner-ruling`
+- `ruling`
 
 **Refusal reasons** (build-ready marking declined):
 
 - `anchor-slot-missing`
 - `anchor-slot-empty`
+- `anchor-kind-missing`
 - `anchor-kind-unrecognized`
-- `anchor-kind-ambiguous`
+- `anchor-kind-multiple`
 - `body-unreadable`
 
 **Slot statuses** (per-slot reporting in the JSON result):

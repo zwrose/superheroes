@@ -82,7 +82,7 @@ above).
    additions.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
-   (`Anchor:`, `What:`, `DoD:`); micro-route work is exempt. Detail:
+   (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
    Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
