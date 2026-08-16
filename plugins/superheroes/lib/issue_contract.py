@@ -53,6 +53,17 @@ REFUSALS = frozenset({
     REFUSAL_BODY_UNREADABLE,
 })
 
+SLOT_STATUS_MISSING = "missing"
+SLOT_STATUS_EMPTY = "empty"
+SLOT_STATUS_FILLED = "filled"
+SLOT_STATUS_UNKNOWN = "unknown"
+SLOT_STATUSES = frozenset({
+    SLOT_STATUS_MISSING,
+    SLOT_STATUS_EMPTY,
+    SLOT_STATUS_FILLED,
+    SLOT_STATUS_UNKNOWN,
+})
+
 
 def _normalize_header_line(line):
     """Strip markdown heading/emphasis decoration from a slot header line."""
@@ -87,7 +98,7 @@ def _extract_declared_kinds(header_rest):
             return None
         inner = header_rest[pos + 1:close]
         for token in inner.split(","):
-            token = token.strip().lower()
+            token = token.strip()
             if token:
                 declared.append(token)
         pos = close + 1
@@ -132,9 +143,30 @@ def _content_has_word_char(text):
     return bool(re.search(r"[A-Za-z0-9]", cleaned))
 
 
-def _is_fence_line(line):
+def _parse_fence_marker(line):
+    """If `line` is a fence marker, return (marker_char, run_length). Else None."""
     stripped = line.strip()
-    return stripped.startswith("```") or stripped.startswith("~~~")
+    if not stripped:
+        return None
+    if stripped[0] == "`":
+        run = 0
+        for ch in stripped:
+            if ch == "`":
+                run += 1
+            else:
+                break
+        if run >= 3:
+            return ("`", run)
+    elif stripped[0] == "~":
+        run = 0
+        for ch in stripped:
+            if ch == "~":
+                run += 1
+            else:
+                break
+        if run >= 3:
+            return ("~", run)
+    return None
 
 
 def _parse_slots(body):
@@ -144,13 +176,28 @@ def _parse_slots(body):
     current_slot = None
     anchor_declared_kinds = []
     in_fence = False
+    fence_char = None
+    fence_len = 0
 
     for line in body.splitlines():
         # axis: slot headers inside fenced blocks are ignored — only unfenced lines open or continue slots.
-        if _is_fence_line(line):
-            in_fence = not in_fence
-            if current_slot is not None:
+        fence_marker = _parse_fence_marker(line)
+        if in_fence:
+            if (
+                fence_marker is not None
+                and fence_marker[0] == fence_char
+                and fence_marker[1] >= fence_len
+            ):
+                in_fence = False
+                fence_char = None
+                fence_len = 0
+            elif current_slot is not None:
                 slots_content[current_slot].append(line)
+            continue
+        if fence_marker is not None:
+            in_fence = True
+            fence_char = fence_marker[0]
+            fence_len = fence_marker[1]
             continue
         if not in_fence:
             slot, rest, declared = _parse_slot_header(line)
@@ -168,11 +215,11 @@ def _parse_slots(body):
     statuses = {}
     for slot in SLOTS:
         if not found[slot]:
-            statuses[slot] = "missing"
+            statuses[slot] = SLOT_STATUS_MISSING
         elif _content_has_word_char("\n".join(slots_content[slot])):
-            statuses[slot] = "filled"
+            statuses[slot] = SLOT_STATUS_FILLED
         else:
-            statuses[slot] = "empty"
+            statuses[slot] = SLOT_STATUS_EMPTY
     return statuses, slots_content, anchor_declared_kinds
 
 
@@ -181,7 +228,7 @@ def check_build_ready(body):
     statuses, slots_content, declared_kinds = _parse_slots(body)
 
     # axis: no Anchor slot header line anywhere in the body — slot status missing, not empty or filled.
-    if statuses[SLOT_ANCHOR] == "missing":
+    if statuses[SLOT_ANCHOR] == SLOT_STATUS_MISSING:
         return _result(
             ok=False,
             reason=REFUSAL_ANCHOR_SLOT_MISSING,
@@ -218,7 +265,7 @@ def check_build_ready(body):
             slots=statuses,
         )
     # axis: Anchor slot header present and kind valid but citation body has no word character.
-    if statuses[SLOT_ANCHOR] == "empty":
+    if statuses[SLOT_ANCHOR] == SLOT_STATUS_EMPTY:
         return _result(
             ok=False,
             reason=REFUSAL_ANCHOR_SLOT_EMPTY,
@@ -248,7 +295,7 @@ def _result(ok, reason, anchor_kind, declared_kinds, slots):
 
 def _fail_closed_unreadable_body():
     # axis: unreadable body fails closed — every slot status is unknown, not missing or empty.
-    slots = {slot: "unknown" for slot in SLOTS}
+    slots = {slot: SLOT_STATUS_UNKNOWN for slot in SLOTS}
     return _result(
         ok=False,
         reason=REFUSAL_BODY_UNREADABLE,

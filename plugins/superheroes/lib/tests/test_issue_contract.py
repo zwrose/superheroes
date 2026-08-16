@@ -98,7 +98,7 @@ def test_refusal_anchor_slot_missing():
     result = _check("What: scope\nDoD:\n- outcome")
     assert result["ok"] is False
     assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
-    assert result["slots"][ic.SLOT_ANCHOR] == "missing"
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
     assert result["declaredKinds"] == []
 
 
@@ -147,7 +147,7 @@ def test_refusal_anchor_slot_empty():
     result = _check(body)
     assert result["ok"] is False
     assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_EMPTY
-    assert result["slots"][ic.SLOT_ANCHOR] == "empty"
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_EMPTY
     assert result["declaredKinds"] == [ic.KIND_SPEC_SECTION]
 
 
@@ -158,7 +158,7 @@ def test_refusal_body_unreadable(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out.strip())
     assert out["ok"] is False
     assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
-    assert all(v == "unknown" for v in out["slots"].values())
+    assert all(v == ic.SLOT_STATUS_UNKNOWN for v in out["slots"].values())
     assert out["declaredKinds"] == []
 
 
@@ -202,7 +202,33 @@ def test_precedence_bare_anchor_empty_body_reports_kind_missing():
     result = _check(body)
     assert result["ok"] is False
     assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MISSING
-    assert result["slots"][ic.SLOT_ANCHOR] == "empty"
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_EMPTY
+
+
+def test_precedence_multiple_kinds_empty_body_reports_kind_multiple():
+    body = (
+        "Anchor (spec-section, receipt):\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_MULTIPLE
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_EMPTY
+
+
+def test_precedence_unrecognized_kind_empty_body_reports_kind_unrecognized():
+    body = (
+        "Anchor (nonsense):\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_EMPTY
 
 
 # --- 5. Citation body is not classified -------------------------------------
@@ -253,6 +279,70 @@ def test_fenced_code_decoy_ignored_real_header_parsed():
     assert result["declaredKinds"] == [ic.KIND_RECEIPT]
 
 
+def test_fence_four_backticks_nested_three_backtick_decoy_reports_anchor_slot_missing():
+    body = (
+        "````markdown\n"
+        "```\n"
+        "Anchor (receipt): https://example.com/decoy\n"
+        "```\n"
+        "````\n"
+        "What: real\n"
+        "DoD:\n"
+        "- x\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["declaredKinds"] == []
+
+
+def test_fence_tilde_inside_backtick_fence_decoy_reports_anchor_slot_missing():
+    body = (
+        "```markdown\n"
+        "~~~\n"
+        "Anchor (receipt): https://example.com/decoy\n"
+        "~~~\n"
+        "```\n"
+        "What: real\n"
+        "DoD:\n"
+        "- x\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["declaredKinds"] == []
+
+
+def test_fence_empty_markdown_fence_reports_anchor_slot_empty():
+    body = (
+        "Anchor (receipt):\n"
+        "```markdown\n"
+        "```\n"
+        "What: real\n"
+        "DoD:\n"
+        "- x\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_EMPTY
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_EMPTY
+    assert result["declaredKinds"] == [ic.KIND_RECEIPT]
+
+
+def test_refusal_anchor_kind_unrecognized_uppercase_receipt():
+    result = _check(_minimal_body("Anchor (RECEIPT):", "https://example.com/x"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+    assert result["declaredKinds"] == ["RECEIPT"]
+
+
+def test_refusal_anchor_kind_unrecognized_mixed_case_spec_section():
+    result = _check(_minimal_body("Anchor (Spec-Section):", "citation text"))
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+    assert result["declaredKinds"] == ["Spec-Section"]
+
+
 # --- preserved: slot parsing, CLI, advisory exit ----------------------------
 
 
@@ -264,8 +354,8 @@ def test_empty_what_and_dod_do_not_block():
     )
     result = _check(body)
     assert result["ok"] is True
-    assert result["slots"][ic.SLOT_WHAT] == "empty"
-    assert result["slots"][ic.SLOT_DOD] == "empty"
+    assert result["slots"][ic.SLOT_WHAT] == ic.SLOT_STATUS_EMPTY
+    assert result["slots"][ic.SLOT_DOD] == ic.SLOT_STATUS_EMPTY
 
 
 def test_exit_zero_on_refusal(tmp_path):
@@ -285,7 +375,7 @@ def test_non_utf8_body_file(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out.strip())
     assert out["ok"] is False
     assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
-    assert all(v == "unknown" for v in out["slots"].values())
+    assert all(v == ic.SLOT_STATUS_UNKNOWN for v in out["slots"].values())
 
 
 def test_main_happy_path(tmp_path, capsys):
@@ -321,9 +411,9 @@ def test_realistic_whole_body_fixture():
         "anchorKind": ic.KIND_SPEC_SECTION,
         "declaredKinds": [ic.KIND_SPEC_SECTION],
         "slots": {
-            ic.SLOT_ANCHOR: "filled",
-            ic.SLOT_WHAT: "filled",
-            ic.SLOT_DOD: "filled",
+            ic.SLOT_ANCHOR: ic.SLOT_STATUS_FILLED,
+            ic.SLOT_WHAT: ic.SLOT_STATUS_FILLED,
+            ic.SLOT_DOD: ic.SLOT_STATUS_FILLED,
         },
         "advisory": True,
     }
@@ -344,4 +434,10 @@ def test_vocabulary_constants():
         ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED,
         ic.REFUSAL_ANCHOR_KIND_MULTIPLE,
         ic.REFUSAL_BODY_UNREADABLE,
+    })
+    assert ic.SLOT_STATUSES == frozenset({
+        ic.SLOT_STATUS_MISSING,
+        ic.SLOT_STATUS_EMPTY,
+        ic.SLOT_STATUS_FILLED,
+        ic.SLOT_STATUS_UNKNOWN,
     })

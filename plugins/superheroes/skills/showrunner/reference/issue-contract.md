@@ -64,10 +64,14 @@ The three recognized kinds:
    *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · advisor channel, discovery sitting`
 
 The citation text is **never read to decide a kind** — a bare receipt URL whose path happens
-to contain `ruling` or a date is a perfectly good `Anchor (receipt):`.
+to contain `ruling` or a date is a perfectly good `Anchor (receipt):`. Declared kind tokens
+are matched **exactly** — `Anchor (RECEIPT):` is `anchor-kind-unrecognized`, not a receipt
+anchor.
 
 A slot header inside a fenced code block is not a slot header — so a body that only shows the
-skeleton in an example does not accidentally satisfy it.
+skeleton in an example does not accidentally satisfy it. A fence closes only on a matching
+marker of the same character and at least the opening length, so a nested example inside a
+longer fence stays fenced.
 
 ### Shape, not resolution
 
