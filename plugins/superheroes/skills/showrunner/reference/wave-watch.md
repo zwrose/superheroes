@@ -50,6 +50,13 @@ any benign events you want suppressed (see below).
 returns immediately and shows whether the batch resolves to any lanes at all — the cheap way to catch
 a mistyped batch id before you go blind in a long `loop`.
 
+**`loop` is the wave's sole watcher — do not arm a second pid-death watcher beside it.** The one gap
+a second watcher used to cover: `lane-terminal` fires from the ledger the moment a builder hands
+back, typically a minute or two *before* its session exits, and `record-outcome` refuses while that
+child is still alive (`terminal-child-live:<pid>`). Close it on the `lane-terminal` wake with
+`launcher record-outcome --await-exit <seconds>`, which re-attempts until the child is gone and at
+the ceiling returns that same refusal, so nothing falls open.
+
 The arming snippet above omits two flags you should **include on every arm**: `--max-total-seconds`
 (the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a
 message) and `--log PATH` (each timer arm is recorded, so you can see the loop is alive and which

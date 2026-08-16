@@ -3905,3 +3905,143 @@ def test_fold_session_id_is_none_when_the_record_omits_it():
     result = ll.fold([rec])
     assert result["ok"] is True
     assert result["launches"]["l1"]["sessionId"] is None
+
+
+# --- record_outcome --await-exit (#1040) ------------------------------------
+
+
+def _await_exit_lane(tmp_path, monkeypatch, launch_id, pid=999999):
+    """A reserved+started lane whose recorded child pid is `pid`."""
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-%s" % launch_id
+    _declare(repo, batch, 1)
+    ll.reserve(repo, _reserved(launch_id, batch, ["a"], repo))
+    started = _started(launch_id)
+    started["pid"] = pid
+    assert ll.append(repo, started)
+    return repo
+
+
+def _scripted_liveness(monkeypatch, answers):
+    """Script the liveness probe; the last answer repeats. Returns the call log."""
+    calls = []
+
+    def fake(pid):
+        calls.append(pid)
+        return answers[min(len(calls) - 1, len(answers) - 1)]
+
+    monkeypatch.setattr(ll, "_child_group_is_live", fake)
+    return calls
+
+
+def _counted_terminalize(monkeypatch):
+    """Count terminalize attempts without changing what it does."""
+    real = ll.terminalize
+    calls = []
+
+    def wrapper(*args, **kwargs):
+        calls.append(1)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(ll, "terminalize", wrapper)
+    return calls
+
+
+def test_record_outcome_await_exit_records_once_after_the_child_exits(tmp_path, monkeypatch):
+    # axis: alive on the first probe, gone on the second, inside the ceiling
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-exits")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True, False])
+    attempts = _counted_terminalize(monkeypatch)
+
+    result = ll.record_outcome(repo, "l-await-exits", "handback", "done", await_exit=10)
+
+    assert result["ok"] is True
+    assert result["recorded"] == "outcome"
+    assert len(attempts) == 2, "the first refusal must be retried, not returned"
+    outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+    assert len(outcomes) == 1, "patience must not double-write the outcome"
+
+
+def test_record_outcome_await_exit_returns_todays_refusal_at_the_ceiling(tmp_path, monkeypatch):
+    # axis: still alive when the ceiling expires -> unchanged refusal, nothing written
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-ceiling")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    started_at = time.monotonic()
+    result = ll.record_outcome(
+        repo, "l-await-ceiling", "handback", "done", await_exit=0.5,
+    )
+    elapsed = time.monotonic() - started_at
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert result["recorded"] is None
+    assert len(attempts) > 1, "the ceiling must buy re-attempts, not one long sleep"
+    assert elapsed >= 0.5
+    assert len(ll.read(repo)["records"]) == before
+
+
+def test_record_outcome_await_exit_zero_makes_exactly_one_attempt(tmp_path, monkeypatch):
+    # axis: the default ceiling is today's behaviour -- one probe, no waiting
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-zero")
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    started_at = time.monotonic()
+    result = ll.record_outcome(repo, "l-await-zero", "handback", "done")
+    elapsed = time.monotonic() - started_at
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert len(attempts) == 1
+    assert elapsed < 1.0, "the default must not wait at all"
+    assert len(ll.read(repo)["records"]) == before
+
+
+@pytest.mark.parametrize("bad", [-1, -0.5, "5", None, True, float("inf"), float("nan")])
+def test_record_outcome_refuses_an_unusable_await_exit_ceiling(tmp_path, monkeypatch, bad):
+    # axis: an unusable ceiling refuses before any attempt, never falls back to 0
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-bad")
+    attempts = _counted_terminalize(monkeypatch)
+    before = len(ll.read(repo)["records"])
+
+    result = ll.record_outcome(
+        repo, "l-await-bad", "handback", "done", await_exit=bad,
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "await-exit-invalid:%s" % (bad,)
+    assert attempts == []
+    assert len(ll.read(repo)["records"]) == before
+
+
+def test_record_outcome_await_exit_waits_out_a_real_child(tmp_path, monkeypatch):
+    # axis: end-to-end against the real liveness probe and a real exiting child
+    proc = subprocess.Popen(["sleep", "2"], start_new_session=True)
+    reaper = threading.Thread(target=proc.wait, daemon=True)
+    reaper.start()
+    try:
+        repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-real", pid=proc.pid)
+        monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.25)
+
+        result = ll.record_outcome(
+            repo, "l-await-real", "handback", "done", await_exit=30,
+        )
+
+        assert result["ok"] is True, result["reason"]
+        outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+        assert len(outcomes) == 1
+        with pytest.raises(ProcessLookupError):
+            os.kill(proc.pid, 0)
+    finally:
+        try:
+            os.kill(proc.pid, 9)
+        except (ProcessLookupError, PermissionError):
+            pass
+        reaper.join(timeout=5)

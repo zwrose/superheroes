@@ -4152,3 +4152,74 @@ def test_worktree_root_prefers_the_env_then_home(tmp_path, monkeypatch):
         "/home/someone", L.WORKTREES_DIR_NAME,
     )
     assert L.worktree_root({"HOME": "relative/path"}) is None
+
+
+def _await_exit_cli_lane(tmp_path, monkeypatch, launch_id, pid):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": "batch-%s" % launch_id,
+        "repoId": ll.repo_identity(repo),
+        "issue": 1040,
+        "surfaces": ["a"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": pid,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    return repo
+
+
+def _run_record_outcome_cli(repo, launch_id, *extra):
+    return subprocess.run(
+        [
+            sys.executable, _MOD, "record-outcome",
+            "--repo-root", repo,
+            "--launch-id", launch_id,
+            "--outcome", "handback",
+            "--evidence", "done",
+        ] + list(extra),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+
+def test_cli_record_outcome_accepts_await_exit(tmp_path, monkeypatch):
+    # axis: --await-exit threads through to the ledger and still records a gone child
+    launch_id = "launch-await-cli"
+    repo = _await_exit_cli_lane(tmp_path, monkeypatch, launch_id, 424242)
+    proc = _run_record_outcome_cli(repo, launch_id, "--await-exit", "3")
+    assert proc.returncode == 0, proc.stderr
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["recorded"] == "outcome"
+
+
+def test_cli_record_outcome_refuses_a_negative_await_exit(tmp_path, monkeypatch):
+    # axis: the CLI value reaches the validator rather than being coerced to 0
+    launch_id = "launch-await-cli-bad"
+    repo = _await_exit_cli_lane(tmp_path, monkeypatch, launch_id, 424242)
+    proc = _run_record_outcome_cli(repo, launch_id, "--await-exit", "-1")
+    assert proc.returncode != 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "await-exit-invalid:-1.0"
+    assert not any(
+        r.get("event") == "outcome" for r in ll.read(repo)["records"]
+    )

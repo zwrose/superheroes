@@ -59,6 +59,9 @@ WHOLE_REPO = ":whole-repo:"
 _LOCK_SUFFIX = ".lock"
 _LOCK_NAME = LEDGER_NAME + _LOCK_SUFFIX
 _DEFAULT_LOCK_TIMEOUT = 30.0
+# How long record_outcome sleeps between re-attempts while awaiting a live child's
+# exit. The wait happens BETWEEN terminalize calls, never inside the ledger lock.
+_AWAIT_EXIT_POLL_SECONDS = 5.0
 _GIT_SCRUB_VARS = (
     "GIT_DIR",
     "GIT_WORK_TREE",
@@ -1592,20 +1595,63 @@ def _record_outcome_response(ok, reason=None, recorded=None, amendment_kind=None
     }
 
 
+def _await_exit_ceiling(value):
+    """Seconds to wait for a live child to exit, or None when the value is unusable.
+
+    Fail-closed: anything that is not a finite, non-negative real number is a
+    refusal rather than a silent fall-back to 0, so a mistyped ceiling cannot
+    quietly become today's impatient behaviour.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    seconds = float(value)
+    if seconds != seconds or seconds in (float("inf"), float("-inf")):
+        return None
+    if seconds < 0:
+        return None
+    return seconds
+
+
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
-                   lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Record a terminal outcome under lock. Never raises."""
+                   lock_timeout=_DEFAULT_LOCK_TIMEOUT, await_exit=0):
+    """Record a terminal outcome under lock. Never raises.
+
+    ``await_exit`` is a patience ceiling in seconds, default 0 (today's
+    behaviour). ``terminalize`` refuses while the launch's recorded child is
+    still alive (``terminal-child-live:<pid>``), and ``lane-terminal`` fires a
+    minute or two before that child actually exits. With a positive ceiling this
+    re-attempts on exactly that refusal until the child is gone or the ceiling
+    is reached; at the ceiling it returns the refusal unchanged, so nothing
+    falls open. The wait is between attempts, never inside the ledger lock, and
+    every attempt is today's full liveness check.
+    """
     if outcome not in TERMINAL_OUTCOMES:
         return _record_outcome_response(
             False, reason="outcome-invalid:%s" % outcome,
         )
     if not isinstance(evidence, str) or not evidence.strip():
         return _record_outcome_response(False, reason="outcome-evidence-empty")
+    ceiling = _await_exit_ceiling(await_exit)
+    if ceiling is None:
+        return _record_outcome_response(
+            False, reason="await-exit-invalid:%s" % (await_exit,),
+        )
 
-    result = terminalize(
-        repo_root, launch_id, outcome=outcome, evidence=evidence,
-        require_started=True, env=env, lock_timeout=lock_timeout,
-    )
+    deadline = time.monotonic() + ceiling
+    while True:
+        result = terminalize(
+            repo_root, launch_id, outcome=outcome, evidence=evidence,
+            require_started=True, env=env, lock_timeout=lock_timeout,
+        )
+        if result["ok"]:
+            break
+        reason = result["reason"]
+        if not (isinstance(reason, str) and reason.startswith("terminal-child-live:")):
+            break
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        time.sleep(min(_AWAIT_EXIT_POLL_SECONDS, remaining))
     mapped_reason = result["reason"]
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"
