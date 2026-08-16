@@ -48,7 +48,7 @@ of three kinds — never zero, never two:
    `as-of amendment #N` (N is the count of entries in the spec's Amendments log at citation
    time; 0 when the log is empty).
 
-   *Example:* `front-half-sdlc-core-6181ee · The issue contract · as-of amendment #4`
+   *Example:* `front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4`
 
 2. **Receipt** — a live link to a review finding, incident record, bug report, or gate result.
 
@@ -66,15 +66,23 @@ approved, does the cited section still exist, has a later substantive amendment 
 is the link live, was the ruling superseded — is a **different, later check owned by another
 work item**; this file defines the shape test only.
 
-The shape markers the check reads:
+The shape markers the check reads (each kind matches only on its **full** shape; kinds are
+mutually exclusive by **stated precedence** — a link is the weakest signal and may legitimately
+appear inside a fully-shaped spec or ruling anchor because the contract mandates that link):
 
-- a **spec-section** anchor is recognized by the as-of cursor `as-of amendment #N`;
-- an **owner-ruling** anchor is recognized by an ISO date (`YYYY-MM-DD`) together with the
-  word *ruling*;
-- a **receipt** anchor is recognized by a link.
+- a **spec-section** anchor requires all three: a work-item slug (`[a-z0-9][a-z0-9-]*-[0-9a-f]{6}`),
+  a section reference (`§`, the word *section*, or an `FR-<n>` / `UFR-<n>` citation), and the
+  as-of cursor `as-of amendment #N`;
+- an **owner-ruling** anchor requires all three: an ISO date (`YYYY-MM-DD`), the word *ruling*,
+  and a location clause (`in`, `at`, `channel`, `sitting`, `thread`, or `recorded`);
+- a **receipt** anchor is recognized by a link (`http(s)://` URL or markdown link) **only when
+  neither** spec-section **nor** owner-ruling matched on its full shape.
 
-An Anchor matching **two or more** kinds is refused as **ambiguous** — the fix is to state one
-kind plainly.
+A link alone is a receipt, but a link **inside** a fully-shaped spec or ruling anchor does not
+make it ambiguous — the contract mandates that one-hop link for currency (FR-10).
+
+An Anchor matching **two or more** kinds on their full shapes is refused as **ambiguous** — the
+fix is to state one kind plainly.
 
 ## The build-ready block
 
@@ -89,15 +97,23 @@ token below. Micro work never reaches this check.
 | `anchor-slot-missing` | The body has no `Anchor:` section |
 | `anchor-slot-empty` | The `Anchor:` section is present but empty |
 | `anchor-kind-unrecognized` | The Anchor is filled but cites none of the three kinds |
-| `anchor-kind-ambiguous` | The Anchor matches two or more kinds |
+| `anchor-kind-ambiguous` | The Anchor matches two or more kinds on their full shapes |
+| `body-unreadable` | The body file could not be read (path typo, permission error, or invalid encoding) |
 
 > This check is **advisory**. It computes the refusal and its reason and prints them; it never
 > exits non-zero, never intercepts a command, and enforces nothing on its own. **The advisor's
 > charter duty is what declines the marking.** It is not a mechanical enforcement boundary and is
 > not claimed as one.
 
-**Invocation:** write the issue body to a file, then run the plugin's `issue_contract.py`
-check against it with `check-build-ready` and `--body-file`, reading the JSON result.
+**Invocation:** write the issue body to a file, then run (from a plugin-cache install,
+`ROOT_DIR` is `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/issue_contract.py" check-build-ready --body-file <path>
+```
+
+reading the JSON result from stdout.
 
 **Empty What or DoD** are **reported but never blocking** at filing — they are graded at vet,
 not refused at build-ready marking.
@@ -175,3 +191,11 @@ checked against it.
 - `anchor-slot-empty`
 - `anchor-kind-unrecognized`
 - `anchor-kind-ambiguous`
+- `body-unreadable`
+
+**Slot statuses** (per-slot reporting in the JSON result):
+
+- `missing` — the slot header is not present in the body
+- `empty` — the slot header is present but has no content
+- `filled` — the slot header is present and has content
+- `unknown` — the body could not be read (`body-unreadable`); no slot reading was taken

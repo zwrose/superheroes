@@ -19,6 +19,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7)
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
+- Issue-contract vocabulary                              (home: issue_contract.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -2346,7 +2347,7 @@ def _issue_contract_refusals_from_doc(doc):
     """Refusal tokens from the Refusal reasons bullet block — scoped to that block only."""
     section = _issue_contract_vocabulary_section(doc)
     m = re.search(
-        r"\*\*Refusal reasons\*\*.*?:\n\n(.*?)(?=\n## |\Z)",
+        r"\*\*Refusal reasons\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
         section,
         re.DOTALL,
     )
@@ -2362,9 +2363,64 @@ def _issue_contract_refusals_from_doc(doc):
     return tokens
 
 
+def _issue_contract_refusals_from_doc_table(doc):
+    """Refusal tokens from the build-ready refusal-reason table — scoped to that block only."""
+    m = re.search(
+        r"\*\*Refusal reasons\*\* \(build-ready marking declined\):\n\n"
+        r"\| Token \| Meaning \|\n\| --- \| --- \|\n(.*?)(?:\n>|$)",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: build-ready refusal-reason table not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"\| `([^`]+)` \|", m.group(1)))
+    assert tokens, (
+        "issue-contract.md: refusal-reason table parsed to zero tokens "
+        "(regex drift or empty table?)"
+    )
+    return tokens
+
+
+def _issue_contract_slots_from_showrunner_skill():
+    """Ordered slot names from showrunner/SKILL.md duty 2 — scoped to that enumeration."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"three-slot skeleton\s*\n\s*\(`([^`]+)`, `([^`]+)`, `([^`]+)`\)",
+        text,
+    )
+    assert m, (
+        "showrunner/SKILL.md: duty 2 three-slot skeleton enumeration not found "
+        "(moved or reworded?)"
+    )
+    return [m.group(1).rstrip(":"), m.group(2).rstrip(":"), m.group(3).rstrip(":")]
+
+
+def _issue_contract_slots_from_conventions():
+    """Ordered slot names from CONVENTIONS §11 worked example 3."""
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"three slot names and their order\s*\n\(`([^`]+)`, `([^`]+)`, `([^`]+)`\)",
+        text,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: issue-contract slot enumeration not found "
+        "(moved or reworded?)"
+    )
+    return [m.group(1).rstrip(":"), m.group(2).rstrip(":"), m.group(3).rstrip(":")]
+
+
 def test_issue_contract_vocabulary_in_issue_contract_doc():
     """§11: issue-contract.md restates issue_contract.py vocabulary on three registry axes
     plus ordered slots.
+
+    Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
+    - skills/showrunner/reference/issue-contract.md ## Vocabulary (drift-tested) — Slots,
+      Anchor kinds, Refusal reasons bullet lists
+    - skills/showrunner/reference/issue-contract.md build-ready refusal-reason table
+    - skills/showrunner/SKILL.md duty 2 three-slot skeleton enumeration
+    - CONVENTIONS.md §11 worked example 3 slot-name enumeration
 
     Axis notes:
     - Slots, anchor kinds, refusals: SLOT_/KIND_/REFUSAL_* constants must match the module
@@ -2416,5 +2472,25 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         "issue-contract.md Refusal reasons vocabulary drift from issue_contract.REFUSALS — "
         "missing from doc: %r; present in doc but not in home: %r"
         % (missing_refusals, extra_refusals)
+    )
+    table_refusals = _issue_contract_refusals_from_doc_table(doc)
+    missing_table = sorted(home_refusals - table_refusals)
+    extra_table = sorted(table_refusals - home_refusals)
+    assert not missing_table and not extra_table, (
+        "issue-contract.md refusal-reason table drift from issue_contract.REFUSALS — "
+        "missing from table: %r; present in table but not in home: %r"
+        % (missing_table, extra_table)
+    )
+    skill_slots = _issue_contract_slots_from_showrunner_skill()
+    assert skill_slots == home_slots, (
+        "showrunner/SKILL.md duty 2 slot order drift from issue_contract.SLOTS — "
+        "doc: %r; home: %r"
+        % (skill_slots, home_slots)
+    )
+    conventions_slots = _issue_contract_slots_from_conventions()
+    assert conventions_slots == home_slots, (
+        "CONVENTIONS.md §11 slot order drift from issue_contract.SLOTS — "
+        "doc: %r; home: %r"
+        % (conventions_slots, home_slots)
     )
     assert list(issue_contract.SLOTS) == home_slots

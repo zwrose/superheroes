@@ -40,16 +40,27 @@ REFUSAL_ANCHOR_SLOT_MISSING = "anchor-slot-missing"
 REFUSAL_ANCHOR_SLOT_EMPTY = "anchor-slot-empty"
 REFUSAL_ANCHOR_KIND_UNRECOGNIZED = "anchor-kind-unrecognized"
 REFUSAL_ANCHOR_KIND_AMBIGUOUS = "anchor-kind-ambiguous"
+REFUSAL_BODY_UNREADABLE = "body-unreadable"
 REFUSALS = frozenset({
     REFUSAL_ANCHOR_SLOT_MISSING,
     REFUSAL_ANCHOR_SLOT_EMPTY,
     REFUSAL_ANCHOR_KIND_UNRECOGNIZED,
     REFUSAL_ANCHOR_KIND_AMBIGUOUS,
+    REFUSAL_BODY_UNREADABLE,
 })
 
-_RE_SPEC_SECTION = re.compile(r"as-of\s+amendment\s+#\d+", re.IGNORECASE)
+_RE_WORK_ITEM_SLUG = re.compile(r"[a-z0-9][a-z0-9-]*-[0-9a-f]{6}")
+_RE_SECTION_REF = re.compile(
+    r"§|(?:\bsection\b)|(?:\bFR-\d+\b)|(?:\bUFR-\d+\b)",
+    re.IGNORECASE,
+)
+_RE_AS_OF = re.compile(r"as-of\s+amendment\s+#\d+", re.IGNORECASE)
 _RE_ISO_DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _RE_RULING_WORD = re.compile(r"\bruling\b", re.IGNORECASE)
+_RE_LOCATION = re.compile(
+    r"\b(?:in|at|channel|sitting|thread|recorded)\b",
+    re.IGNORECASE,
+)
 _RE_RECEIPT = re.compile(r"https?://|\[[^\]]*\]\([^)]+\)")
 
 
@@ -126,14 +137,42 @@ def _parse_slots(body):
     return statuses, slots_content
 
 
+def _matches_spec_section(content):
+    """Full spec-section shape: work-item slug + section ref + as-of cursor."""
+    return (
+        _RE_WORK_ITEM_SLUG.search(content)
+        and _RE_SECTION_REF.search(content)
+        and _RE_AS_OF.search(content)
+    )
+
+
+def _matches_owner_ruling(content):
+    """Full owner-ruling shape: ISO date + ruling word + location clause."""
+    return (
+        _RE_ISO_DATE.search(content)
+        and _RE_RULING_WORD.search(content)
+        and _RE_LOCATION.search(content)
+    )
+
+
+def _matches_receipt(content, spec_matched, ruling_matched):
+    """Receipt shape: link present and neither full spec nor full ruling matched."""
+    if spec_matched or ruling_matched:
+        return False
+    return _RE_RECEIPT.search(content) is not None
+
+
 def _match_anchor_kinds(content):
-    """Detect anchor kinds independently — shape only, no resolution."""
+    """Detect anchor kinds by full shape with receipt weakest — shape only, no resolution."""
+    spec = _matches_spec_section(content)
+    ruling = _matches_owner_ruling(content)
+    receipt = _matches_receipt(content, spec, ruling)
     kinds = set()
-    if _RE_SPEC_SECTION.search(content):
+    if spec:
         kinds.add(KIND_SPEC_SECTION)
-    if _RE_ISO_DATE.search(content) and _RE_RULING_WORD.search(content):
+    if ruling:
         kinds.add(KIND_OWNER_RULING)
-    if _RE_RECEIPT.search(content):
+    if receipt:
         kinds.add(KIND_RECEIPT)
     return kinds
 
@@ -196,11 +235,11 @@ def _result(ok, reason, anchor_kind, matched_kinds, slots):
     }
 
 
-def _fail_closed_missing_file():
-    slots = {slot: "missing" for slot in SLOTS}
+def _fail_closed_unreadable_body():
+    slots = {slot: "unknown" for slot in SLOTS}
     return _result(
         ok=False,
-        reason=REFUSAL_ANCHOR_SLOT_MISSING,
+        reason=REFUSAL_BODY_UNREADABLE,
         anchor_kind=None,
         matched_kinds=[],
         slots=slots,
@@ -211,7 +250,7 @@ def _read_body_file(path):
     try:
         with open(path, encoding="utf-8") as fh:
             return fh.read()
-    except OSError:
+    except (OSError, ValueError):
         return None
 
 
@@ -231,7 +270,7 @@ def main(argv=None):
 
     body = _read_body_file(args.body_file)
     if body is None:
-        result = _fail_closed_missing_file()
+        result = _fail_closed_unreadable_body()
     else:
         result = check_build_ready(body)
     _emit(result)

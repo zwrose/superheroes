@@ -1,8 +1,5 @@
 """Tests for issue_contract (#932)."""
 import json
-import os
-
-import pytest
 
 import issue_contract as ic
 
@@ -42,9 +39,34 @@ def test_refusal_anchor_kind_unrecognized():
     assert result["matchedKinds"] == []
 
 
+def test_refusal_anchor_kind_unrecognized_marker_only():
+    body = (
+        "Anchor: as-of amendment #4\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+
+
+def test_refusal_anchor_kind_unrecognized_ruling_no_location():
+    body = (
+        "Anchor: 2026-08-07 owner ruling\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED
+
+
 def test_refusal_anchor_kind_ambiguous():
     body = (
-        "Anchor: 2026-08-07 owner ruling https://example.com/receipt\n"
+        "Anchor: front-half-sdlc-core-6181ee · §3 · as-of amendment #4 · "
+        "2026-08-07 owner ruling in advisor channel\n"
         "What: scope\n"
         "DoD:\n"
         "- outcome\n"
@@ -53,14 +75,14 @@ def test_refusal_anchor_kind_ambiguous():
     assert result["ok"] is False
     assert result["reason"] == ic.REFUSAL_ANCHOR_KIND_AMBIGUOUS
     assert set(result["matchedKinds"]) == {
+        ic.KIND_SPEC_SECTION,
         ic.KIND_OWNER_RULING,
-        ic.KIND_RECEIPT,
     }
 
 
 def test_pass_spec_section():
     body = (
-        "Anchor: slug · heading · as-of amendment #4\n"
+        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4\n"
         "What: scope\n"
         "DoD:\n"
         "- outcome\n"
@@ -68,6 +90,20 @@ def test_pass_spec_section():
     result = _check(body)
     assert result["ok"] is True
     assert result["reason"] is None
+    assert result["anchorKind"] == ic.KIND_SPEC_SECTION
+    assert result["matchedKinds"] == [ic.KIND_SPEC_SECTION]
+
+
+def test_pass_spec_section_with_url():
+    body = (
+        "Anchor: front-half-sdlc-core-6181ee · The section · as-of amendment #4 "
+        "https://example.com/spec\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is True
     assert result["anchorKind"] == ic.KIND_SPEC_SECTION
     assert result["matchedKinds"] == [ic.KIND_SPEC_SECTION]
 
@@ -98,8 +134,26 @@ def test_pass_owner_ruling():
     assert result["matchedKinds"] == [ic.KIND_OWNER_RULING]
 
 
+def test_pass_owner_ruling_with_url():
+    body = (
+        "Anchor: 2026-08-07 · owner ruling · advisor channel "
+        "https://example.com/ruling\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["anchorKind"] == ic.KIND_OWNER_RULING
+    assert result["matchedKinds"] == [ic.KIND_OWNER_RULING]
+
+
 def test_empty_what_and_dod_do_not_block():
-    body = "Anchor: as-of amendment #0\nWhat:\nDoD:\n"
+    body = (
+        "Anchor: front-half-sdlc-core-6181ee · section · as-of amendment #0\n"
+        "What:\n"
+        "DoD:\n"
+    )
     result = _check(body)
     assert result["ok"] is True
     assert result["slots"][ic.SLOT_WHAT] == "empty"
@@ -108,7 +162,7 @@ def test_empty_what_and_dod_do_not_block():
 
 def test_bold_anchor_header_recognized():
     body = (
-        "**Anchor:** as-of amendment #2\n"
+        "**Anchor:** front-half-sdlc-core-6181ee · §2 · as-of amendment #2\n"
         "What: scope\n"
         "DoD:\n"
         "- outcome\n"
@@ -127,19 +181,46 @@ def test_exit_zero_on_refusal(tmp_path):
     assert result["ok"] is False
 
 
-def test_missing_body_file(tmp_path, capsys):
+def test_unreadable_body_file(tmp_path, capsys):
     missing = tmp_path / "nope.md"
     rc = _run_main(str(missing))
     assert rc == 0
     out = json.loads(capsys.readouterr().out.strip())
     assert out["ok"] is False
-    assert out["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
-    assert all(v == "missing" for v in out["slots"].values())
+    assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
+    assert all(v == "unknown" for v in out["slots"].values())
+
+
+def test_non_utf8_body_file(tmp_path, capsys):
+    body_path = tmp_path / "body.md"
+    body_path.write_bytes(b"\xff\xfe Anchor: bad\n")
+    rc = _run_main(str(body_path))
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["ok"] is False
+    assert out["reason"] == ic.REFUSAL_BODY_UNREADABLE
+    assert all(v == "unknown" for v in out["slots"].values())
+
+
+def test_main_happy_path(tmp_path, capsys):
+    body = (
+        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    body_path = tmp_path / "body.md"
+    body_path.write_text(body, encoding="utf-8")
+    rc = _run_main(str(body_path))
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out["ok"] is True
+    assert out["anchorKind"] == ic.KIND_SPEC_SECTION
 
 
 def test_realistic_whole_body_fixture():
     body = (
-        "Anchor: front-half-sdlc-core-6181ee · The issue contract · as-of amendment #4\n"
+        "Anchor: front-half-sdlc-core-6181ee · § The issue contract · as-of amendment #4\n"
         "What: Route the issue-contract build-ready check and its drift guard.\n"
         "DoD:\n"
         "- `pytest` over `plugins/superheroes/lib/tests/test_issue_contract.py` exits 0\n"
@@ -171,4 +252,5 @@ def test_vocabulary_constants():
         ic.REFUSAL_ANCHOR_SLOT_EMPTY,
         ic.REFUSAL_ANCHOR_KIND_UNRECOGNIZED,
         ic.REFUSAL_ANCHOR_KIND_AMBIGUOUS,
+        ic.REFUSAL_BODY_UNREADABLE,
     })
