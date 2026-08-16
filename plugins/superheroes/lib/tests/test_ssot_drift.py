@@ -2634,6 +2634,9 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
 
 
 # --- Cluster: register-check vocabulary (register_check → register-check.md) ---
+#
+# Drift-tested labels guarded here: Schema:, Results:, Finding kinds:,
+# Undecided reasons:, Exit codes:, Result fields:, Finding fields:.
 
 
 _REGISTER_CHECK_DOC = "skills/showrunner/reference/register-check.md"
@@ -2697,6 +2700,26 @@ def _register_check_tokens_under_label(section, label):
     return set(tokens)
 
 
+def _register_check_ordered_tokens_under_label(section, label):
+    """Inline-code bullet tokens under a **Label:** block — order preserved."""
+    pattern = (
+        r"\*\*%s\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+        % re.escape(label)
+    )
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    assert len(matches) == 1, (
+        "register-check.md: expected exactly one **%s:** label, found %d"
+        % (label, len(matches))
+    )
+    tokens = re.findall(r"^- `([^`]+)`", matches[0].group(1), re.MULTILINE)
+    assert tokens, (
+        "register-check.md: **%s:** bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+        % label
+    )
+    return tokens
+
+
 def _register_check_schema_from_doc(doc):
     section = _register_check_vocabulary_section(doc)
     tokens = _register_check_tokens_under_label(section, "Schema:")
@@ -2736,6 +2759,16 @@ def _register_check_exit_codes_from_doc(doc):
         "(regex drift or empty list?)"
     )
     return {int(code): word for code, word in pairs}
+
+
+def _register_check_result_fields_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_ordered_tokens_under_label(section, "Result fields:")
+
+
+def _register_check_finding_fields_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_ordered_tokens_under_label(section, "Finding fields:")
 
 
 def _register_check_exit_codes_from_home():
@@ -2838,6 +2871,34 @@ def test_register_check_exit_codes_in_register_check_doc():
         "EXIT_*/RESULT_* — missing from doc: %r; present in doc but not in "
         "home: %r; value mismatches: %r"
         % (missing_from_doc, extra_in_doc, value_mismatches)
+    )
+
+
+def test_register_check_result_fields_in_register_check_doc():
+    """§11: register-check.md restates register_check.RESULT_FIELDS in order."""
+    import register_check
+
+    home = list(register_check.RESULT_FIELDS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_result_fields_from_doc(doc)
+    assert doc_tokens == home, (
+        "register-check.md Result fields drift from register_check.RESULT_FIELDS — "
+        "doc: %r; home: %r"
+        % (doc_tokens, home)
+    )
+
+
+def test_register_check_finding_fields_in_register_check_doc():
+    """§11: register-check.md restates register_check.FINDING_FIELDS in order."""
+    import register_check
+
+    home = list(register_check.FINDING_FIELDS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_finding_fields_from_doc(doc)
+    assert doc_tokens == home, (
+        "register-check.md Finding fields drift from register_check.FINDING_FIELDS — "
+        "doc: %r; home: %r"
+        % (doc_tokens, home)
     )
 
 

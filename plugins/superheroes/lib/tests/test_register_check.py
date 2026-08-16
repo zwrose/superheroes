@@ -35,6 +35,31 @@ def _run_cli(*args):
     return proc.returncode, proc.stdout, proc.stderr
 
 
+def _run_raw_cli(*args):
+    cmd = [sys.executable, "-B", _MODULE, *args]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    return proc.returncode, proc.stdout, proc.stderr
+
+
+def _stdout_has_no_json(stdout):
+    text = stdout.strip()
+    if not text:
+        return True
+    try:
+        json.loads(text)
+    except json.JSONDecodeError:
+        return True
+    return False
+
+
+def _assert_result_field_keys(result):
+    assert set(result.keys()) == set(rc.RESULT_FIELDS)
+
+
+def _assert_finding_field_keys(finding):
+    assert set(finding.keys()) == set(rc.FINDING_FIELDS)
+
+
 def _minimal_register(tmp_path, body, name="register.md"):
     path = tmp_path / name
     path.write_text(body, encoding="utf-8")
@@ -46,12 +71,44 @@ def _blockquote_lines(quotable_lines):
 
 
 def _load_live_entries():
-    if not os.path.isfile(_LIVE_REGISTER):
-        return None
+    assert os.path.isfile(_LIVE_REGISTER), (
+        "live register missing at %s — the register-check real-shape tests "
+        "are unproven without it" % _LIVE_REGISTER
+    )
     entries, reason, _line, _detail = rc.load_register(_LIVE_REGISTER)
     if entries is None:
         pytest.fail(f"live register unreadable or malformed: {reason}")
     return entries
+
+
+def _assert_live_register_quotables_are_single_paragraph():
+    with open(_LIVE_REGISTER, encoding="utf-8", newline="") as fh:
+        text = fh.read()
+    lines = text.split("\n")
+    if text.endswith("\n"):
+        lines = lines[:-1]
+    lines = [line[:-1] if line.endswith("\r") else line for line in lines]
+
+    entries, reason, _line, _detail = rc.load_register(_LIVE_REGISTER)
+    assert reason is None
+    for entry in entries:
+        j = entry["header_line"]
+        while j < len(lines):
+            line = lines[j]
+            if not line.strip():
+                pytest.fail(
+                    "%s quotable text spans a blank line in the register "
+                    "(line %d) — a register entry written as two paragraphs "
+                    "needs the parser's stop rule revisited, not this test "
+                    "relaxed" % (entry["id"], j + 1)
+                )
+            if line.startswith("*Consumers:"):
+                break
+            if line.startswith("*") and not line.startswith("**"):
+                break
+            if rc.ENTRY_HEADER_RE.match(line):
+                break
+            j += 1
 
 
 def _entry_quotable(entry_id, entries):
@@ -65,13 +122,15 @@ def _entry_quotable(entry_id, entries):
 
 
 def test_live_register_census():
-    if not os.path.isfile(_LIVE_REGISTER):
-        pytest.skip("live register not present in this checkout")
+    assert os.path.isfile(_LIVE_REGISTER), (
+        "live register missing at %s — the register-check real-shape tests "
+        "are unproven without it" % _LIVE_REGISTER
+    )
     entries, reason, _line, _detail = rc.load_register(_LIVE_REGISTER)
     assert reason is None
-    assert [entry["id"] for entry in entries] == [
-        f"R{i}" for i in range(1, 10)
-    ]
+    ids = [entry["id"] for entry in entries]
+    assert ids, "live register has no entries"
+    assert ids == ["R%d" % i for i in range(1, len(ids) + 1)]
     for entry in entries:
         assert entry["quotable_lines"]
         for line in entry["quotable_lines"]:
@@ -79,6 +138,7 @@ def test_live_register_census():
                 line.startswith("*") and not line.startswith("**")
             ), f"{entry['id']} quotable contains italic metadata line"
         assert entry["consumers_text"] is not None
+    _assert_live_register_quotables_are_single_paragraph()
 
 
 # --- real consumer shapes ---------------------------------------------------
@@ -86,8 +146,6 @@ def test_live_register_census():
 
 def test_real_consumer_shape_c9(tmp_path):
     entries = _load_live_entries()
-    if entries is None:
-        pytest.skip("live register not present in this checkout")
     r3 = _entry_quotable("R3", entries)
     register = _minimal_register(
         tmp_path,
@@ -108,8 +166,6 @@ def test_real_consumer_shape_c9(tmp_path):
 
 def test_real_consumer_shape_detective_child(tmp_path):
     entries = _load_live_entries()
-    if entries is None:
-        pytest.skip("live register not present in this checkout")
     r9 = _entry_quotable("R9", entries)
     register = _minimal_register(
         tmp_path,
@@ -135,6 +191,35 @@ def _tiny_register(tmp_path):
         "*Consumers:* C1\n"
     )
     return _minimal_register(tmp_path, text)
+
+
+def test_blockquote_no_space_after_gt_passes(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text(">**R1 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_PASS
+    _assert_result_field_keys(result)
+
+
+def test_blockquote_two_spaces_after_gt_drift(tmp_path):
+    register = _minimal_register(
+        tmp_path,
+        "**R1 — Line one.**\n"
+        "Second quotable line.\n"
+        "*Consumers:* C1\n",
+    )
+    body = tmp_path / "body.md"
+    body.write_text(
+        "> **R1 — Line one.**\n"
+        ">  Second quotable line.\n",
+        encoding="utf-8",
+    )
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_FAIL
+    assert result["findings"][0]["kind"] == rc.KIND_TEXT_DRIFT
+    _assert_result_field_keys(result)
+    _assert_finding_field_keys(result["findings"][0])
 
 
 def test_one_byte_drift(tmp_path):
@@ -317,11 +402,14 @@ def test_fenced_decoy_unknown_entry_not_reported(tmp_path):
     body.write_text(
         "~~~\n"
         "> **R99 — Unknown.**\n"
-        "~~~\n",
+        "~~~\n"
+        "> **R1 — One line entry.**\n",
         encoding="utf-8",
     )
     result = _check(register, body, "C1")
     assert all(f["kind"] != rc.KIND_UNKNOWN_ENTRY for f in result["findings"])
+    assert result["result"] == rc.RESULT_PASS
+    assert result["quotedEntries"] == ["R1"]
 
 
 # --- unknown / duplicate quotes ---------------------------------------------
@@ -425,6 +513,56 @@ def test_malformed_empty_quotable_text(tmp_path):
     result = _check(register, body, "C1")
     assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
     assert "empty quotable text" in result["detail"]
+
+
+def test_malformed_unterminated_fence(tmp_path):
+    register = _minimal_register(
+        tmp_path,
+        "**R1 — Entry.**\n"
+        "```\n"
+        "fence content\n",
+    )
+    body = tmp_path / "body.md"
+    body.write_text("x\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
+    assert "unterminated code fence" in result["detail"]
+    assert "register line 2:" in result["detail"]
+    _assert_result_field_keys(result)
+
+
+def test_malformed_four_tick_fence_closed_by_three(tmp_path):
+    register = _minimal_register(
+        tmp_path,
+        "**R1 — Entry.**\n"
+        "````\n"
+        "fence content\n"
+        "```\n",
+    )
+    body = tmp_path / "body.md"
+    body.write_text("x\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_REGISTER_MALFORMED
+    assert "unterminated code fence" in result["detail"]
+    assert "register line 2:" in result["detail"]
+
+
+def test_terminated_fence_parses_later_entries(tmp_path):
+    register = _minimal_register(
+        tmp_path,
+        "```\n"
+        "ignored\n"
+        "```\n\n"
+        "**R1 — One line entry.**\n"
+        "*Consumers:* C1\n",
+    )
+    body = tmp_path / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_PASS
+    _assert_result_field_keys(result)
 
 
 # --- unreadable / empty -----------------------------------------------------
@@ -538,6 +676,92 @@ def test_cli_missing_required_flag(tmp_path):
     payload = json.loads(out.strip())
     assert payload["reason"] == rc.UNDECIDED_USAGE
     assert payload["child"] == "C1"
+    _assert_result_field_keys(payload)
+
+
+def test_cli_unknown_subcommand():
+    code, out, _err = _run_raw_cli("bogus")
+    assert code == rc.EXIT_UNDECIDED
+    payload = json.loads(out.strip())
+    assert payload["reason"] == rc.UNDECIDED_USAGE
+    _assert_result_field_keys(payload)
+
+
+def test_cli_no_subcommand():
+    code, out, _err = _run_raw_cli()
+    assert code == rc.EXIT_UNDECIDED
+    payload = json.loads(out.strip())
+    assert payload["reason"] == rc.UNDECIDED_USAGE
+    _assert_result_field_keys(payload)
+
+
+def test_cli_help_exits_zero_without_json():
+    code, out, _err = _run_raw_cli("--help")
+    assert code == rc.EXIT_PASS
+    assert out.strip()
+    assert _stdout_has_no_json(out)
+
+
+def test_cli_check_help_exits_zero_without_json():
+    code, out, _err = _run_raw_cli("check", "--help")
+    assert code == rc.EXIT_PASS
+    assert out.strip()
+    assert _stdout_has_no_json(out)
+
+
+def test_internal_error(monkeypatch, tmp_path, capsys):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("x\n", encoding="utf-8")
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("probe")
+
+    monkeypatch.setattr(rc, "check_body", boom)
+    code = rc.main([
+        "check",
+        "--register", str(register),
+        "--body-file", str(body),
+        "--child", "C1",
+    ])
+    out = capsys.readouterr().out
+    assert code == rc.EXIT_UNDECIDED
+    payload = json.loads(out.strip())
+    assert payload["reason"] == rc.UNDECIDED_INTERNAL_ERROR
+    _assert_result_field_keys(payload)
+
+
+def test_emitted_objects_use_authoritative_field_sets(tmp_path):
+    register = _tiny_register(tmp_path)
+    pass_body = tmp_path / "pass.md"
+    pass_body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    pass_result = _check(register, pass_body, "C1")
+    _assert_result_field_keys(pass_result)
+
+    drift_body = tmp_path / "drift.md"
+    drift_body.write_text("> **R1 — One line entry.X**\n", encoding="utf-8")
+    drift_result = _check(register, drift_body, "C1")
+    _assert_result_field_keys(drift_result)
+    _assert_finding_field_keys(drift_result["findings"][0])
+
+    missing_body = tmp_path / "missing.md"
+    missing_body.write_text("No quotes here.\n", encoding="utf-8")
+    missing_result = _check(register, missing_body, "C1")
+    _assert_result_field_keys(missing_result)
+    _assert_finding_field_keys(missing_result["findings"][0])
+
+    unknown_body = tmp_path / "unknown.md"
+    unknown_body.write_text("> **R99 — Unknown entry.**\n", encoding="utf-8")
+    unknown_result = _check(
+        register, unknown_body, "NOCHILD", allow_no_required_entries=True,
+    )
+    _assert_result_field_keys(unknown_result)
+    _assert_finding_field_keys(unknown_result["findings"][0])
+
+    undecided_body = tmp_path / "undecided.md"
+    undecided_body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    undecided_result = _check(register, undecided_body, "C09")
+    _assert_result_field_keys(undecided_result)
 
 
 # --- determinism ------------------------------------------------------------
