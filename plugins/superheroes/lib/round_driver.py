@@ -1241,6 +1241,8 @@ def _advance(state, config):
         # against — never from the cached `_acceptRiskEligible` boolean, which a prior version may
         # have written under a broader rule. The chokepoint was already honest; this makes the
         # DISPLAY honest too, so the menu can no longer offer a choice the fold will refuse.
+        # axis: the SOURCE the menu advertises from. Asserting the flag's value would pass against
+        # a menu still reading the cached boolean whenever the two happen to agree.
         eligible = _stall_targets_accept_risk_eligible(state)
         choices = list(state.get("_stallChoices") or STALL_CHOICES)
         if not eligible:
@@ -3590,6 +3592,9 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 c = round_commit.begin(session_dir, "submit-accept")
                 c.add_replace_file(os.path.join(session_dir, STATE_FILE),
                                    _canonical(state).encode("utf-8"))
+                # axis: ATOMICITY with the fold — that the record cannot land without the state
+                # advance, or the advance without the record. Asserting the record merely exists
+                # after a successful fold would pass against a second, separate commit.
                 if _durable_record is not None:
                     c.add_replace_file(
                         _durable_record["storePath"],
@@ -4167,6 +4172,9 @@ def _vendor_is_resolved(row):
     driver made, not evidence about the seat. Reading it the other way is what handed an
     engine-dispatched seat the landing-path WRITE contract, which a sandboxed engine forfeits on.
     """
+    # axis: the SOURCE of the vendor claim, not its value. A `vendor == "claude"` check bites on
+    # the value and cannot tell a configured claude seat from a defaulted one — which is exactly the
+    # pair that must fold to opposite channels.
     if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
         return False
     vendor = row.get("vendor")
@@ -4737,6 +4745,9 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # fell back to stdout for want of vendor evidence can never do so silently. Previously
         # panel-only and keyed on an empty vendor string; a DEFAULTED reviewer vendor (#1037 rider)
         # is a gap by the same reasoning and was invisible under both halves of that condition.
+        # axis: that a fallback fold is DISCLOSED, not that the fold is safe. Safety is
+        # `_seat_channel`'s job and is checked separately; a safe fold with no receipt is the
+        # silence this collector exists to prevent.
         if phase in _READ_ONLY_CHANNEL_PHASES and not _seat_is_engine(row):
             if not _vendor_is_resolved(row):
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence,
@@ -5846,6 +5857,10 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         # One artifact per slot — the seat path's invariant, now enforced on the bare-vs-record pair
         # too. Placed AFTER the shape guard so a malformed payload keeps its own, more actionable
         # reason (#960's fixture): both refuse, neither folds, and the state hash is untouched.
+        #
+        # axis: that a SECOND claim for the slot REFUSES the fold — not that the fold prefers one
+        # artifact over the other. A precedence rule (either direction) folds one claim and
+        # silently discards the other, which is the residual this replaces, not a fix for it.
         if os.path.exists(record_path):
             return _refuse_cmd(
                 session_dir, "advance", "landing-ambiguous", phase=phase, rnd=rnd, attempt=attempt,
