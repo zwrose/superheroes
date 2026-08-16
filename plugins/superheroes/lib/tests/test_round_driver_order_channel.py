@@ -119,7 +119,11 @@ def test_engine_seat_order_carries_the_stdout_contract(tmp_path):
 
 
 def test_engine_seat_order_names_no_landing_path_write(tmp_path):
-    """The bite of this change: a sandboxed seat is never told to write a file it cannot write."""
+    """The bite of this change: a sandboxed seat is never told to write a file it cannot write.
+
+    Bite axis: the PRESENCE of a write instruction in an engine seat's order — not the presence of
+    the stdout contract (a fold that emitted both would satisfy that and still forfeit the seat).
+    """
     orders = _emit(tmp_path, "mixed", _mixed_seat_map())
     text = orders[ENGINE_SEAT]
     assert _names_a_write(text) == [], _names_a_write(text)
@@ -128,7 +132,11 @@ def test_engine_seat_order_names_no_landing_path_write(tmp_path):
 
 
 def test_native_seat_order_still_carries_the_landing_path_write(tmp_path):
-    """The other direction — the fix must not collapse every seat onto stdout."""
+    """The other direction — the fix must not collapse every seat onto stdout.
+
+    Bite axis: the ABSENCE of the write instruction for a seat positively known to be native. This
+    is the guard against "fix" that just deletes the write contract everywhere.
+    """
     orders = _emit(tmp_path, "mixed", _mixed_seat_map())
     text = orders[NATIVE_SEAT]
     assert _names_a_write(text), text[-1200:]
@@ -153,6 +161,9 @@ def test_absent_seat_map_never_emits_a_write_contract(tmp_path):
     Folding that unknown to "native" is what told real codex seats to write (10/10 lanes). The
     fold direction is asymmetric on purpose: a host seat handed the stdout contract still returns
     its payload for the orchestrator to land; an engine seat handed the write contract is lost.
+
+    Bite axis: the FOLD DIRECTION for an unknowable vendor — that no write instruction is stated
+    without positive evidence. Not seat-map parsing, which is a different failure.
     """
     orders = _emit(tmp_path, "nomap", None)
     for dim, text in sorted(orders.items()):
