@@ -1,6 +1,6 @@
 ---
 name: checkpoint
-description: "Use before compaction in a showrunner or workhorse charter session — freshen live state and emit a ready-to-paste `/compact` command. `/compact` has no programmatic trigger; one paste is the floor. Not configure, review, or discovery."
+description: "Use before compaction in a showrunner, workhorse, or detective charter session — freshen live state and emit a ready-to-paste `/compact` command. `/compact` has no programmatic trigger; one paste is the floor. Not configure, review, or discovery."
 user-invocable: true
 ---
 
@@ -8,12 +8,13 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 # checkpoint
 
-Prepare a **long-lived charter session** (Showrunner advisor or Workhorse builder) for
-context compaction. This skill does **not** compact by itself — `/compact` has no
-programmatic trigger on any host, so the floor is: **run checkpoint, paste the emitted
-command once.** After compaction, the SessionStart recovery hook re-injects a pointer to
-re-read the charter skill from disk, so the owner does **not** need to re-invoke
-`/superheroes:showrunner` or `/superheroes:workhorse` by hand.
+Prepare a **long-lived charter session** (Showrunner advisor, Workhorse builder, or
+Detective diagnostician) for context compaction. This skill does **not** compact by itself
+— `/compact` has no programmatic trigger on any host, so the floor is: **run checkpoint,
+paste the emitted command once.** After compaction, the SessionStart recovery hook
+re-injects a pointer to re-read the charter skill from disk, so the owner does **not** need
+to re-invoke `/superheroes:showrunner`, `/superheroes:workhorse`, or
+`/superheroes:detective` by hand.
 
 ## Invocation
 
@@ -31,10 +32,12 @@ transcript). On Codex, follow `codex-tools.md` for the equivalent session record
 
 Then call `charter_detect.detect_charter(transcript_path)` from the plugin lib. The
 function scans the transcript forward from the start (up to 200 MB), matches user records
-whose message content contains `<command-name>/superheroes:showrunner</command-name>` or
-`<command-name>/superheroes:workhorse</command-name>`, ignores sidechain records, and
-returns the **last** charter name it finds (`"showrunner"`, `"workhorse"`, or `None`). It
-never raises — a missing file, bad JSON line, or any internal error returns `None`.
+whose message content contains `<command-name>/superheroes:showrunner</command-name>`,
+`<command-name>/superheroes:workhorse</command-name>`, or
+`<command-name>/superheroes:detective</command-name>`, ignores sidechain records, and
+returns the **last** charter name it finds (`"showrunner"`, `"workhorse"`, `"detective"`,
+or `None`; the roster lives in `charter_detect.CHARTER_NAMES`). It never raises — a
+missing file, bad JSON line, or any internal error returns `None`.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -48,8 +51,9 @@ print(charter_detect.detect_charter(sys.argv[2]))
 ```
 
 **If the result is `None`** → refuse with a plain, friendly message: `checkpoint` is for
-charter sessions (`/superheroes:showrunner` or `/superheroes:workhorse`); this session is
-not one. Stop — no error traceback, no partial `/compact` output.
+charter sessions (`/superheroes:showrunner`, `/superheroes:workhorse`, or
+`/superheroes:detective`); this session is not one. Stop — no error traceback, no partial
+`/compact` output.
 
 ## Step 2 — Freshen and validate the resume point
 
@@ -72,11 +76,19 @@ continue. Do not invent a storage format, path, or filename for the resume point
 - the build worktree and branch;
 - which receipts are earned versus owed.
 
+**Detective** — confirm from the incident issue and session ledger:
+
+- the incident and its issue;
+- the hypotheses ruled out and what ruled each;
+- the demonstration state and which disposable copy holds it;
+- the named budget and how much is spent.
+
 ## Step 4 — Emit the ready-to-paste `/compact` command
 
 Build `/compact` followed by summarization instructions with **five parts, in order**:
 
-1. **Identity** — which charter this session is (Showrunner advisor or Workhorse builder).
+1. **Identity** — which charter this session is (Showrunner advisor, Workhorse builder, or
+   Detective diagnostician).
 2. **Resume-point pointer** — where the resume point lives (the pointer, not its contents).
 3. **Live-state one-liner** — the current truth in one sentence.
 4. **Open owner decisions** — unresolved owner choices (or state plainly when none).
@@ -99,6 +111,12 @@ Present the finished line in a fenced code block clearly marked as the thing to 
 /compact Preserve this as a Workhorse (builder) charter session. Resume pointer: first fenced block at the top of this session's ledger. Live: building issue #911 — WO4 checkpoint skill on branch wh911-wo4 in worktree /private/tmp/sh911-wo4; parallel orders own hooks and session_context. Receipts earned: charter_detect green on base; owed: validate_skills, validate_hosts, validate_marketplace, pytest for this WO. Open owner decisions: none in this build (advisor-routed full lane). Drop verbatim tool receipts, file diffs, probe transcripts, and command stdout — recoverable from GitHub and the ledger.
 ```
 
+**Detective:**
+
+```text
+/compact Preserve this as a Detective (diagnostician) charter session. Resume pointer: top-of-ledger block under "## Resume point". Live: incident #931 — checkpoint skill omits detective charter; ruled out stale transcript path (grep shows correct command); disposable copy at /tmp/sh931-probe holds A/B toggle. Budget: one advisor dispatch, ~40% spent. Open owner decisions: whether detective checkpoint ships in 0.25.0. Drop verbatim tool receipts, file diffs, probe transcripts, and command stdout — recoverable from GitHub and the ledger.
+```
+
 ## What happens after you paste
 
 Compaction runs on the host. On the next SessionStart with `source: compact`, the
@@ -110,7 +128,7 @@ that was step 5 of the old five-step dance and this feature removes it. You stil
 
 | Mistake | Fix |
 | --- | --- |
-| Emitting `/compact` for a non-charter session | Step 1 must return `showrunner` or `workhorse`; otherwise refuse with no partial output. |
+| Emitting `/compact` for a non-charter session | Step 1 must return `showrunner`, `workhorse`, or `detective`; otherwise refuse with no partial output. |
 | Inventing a resume-point path or format | Only freshen a resume point the session already keeps; if none, say so and continue. |
 | Pasting charter prose into the `/compact` line | The line carries pointers and live state; the charter reloads from disk after compaction. |
 | Claiming checkpoint compacts by itself | Emit the line; the owner pastes `/compact` once — that is the floor. |
