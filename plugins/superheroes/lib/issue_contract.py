@@ -74,6 +74,8 @@ def _normalize_header_line(line):
 
 
 def _extract_declared_kinds(header_rest):
+    # axis: kind tokens are parsed from parenthesized groups in the header — never from citation
+    # prose; a header with no closing parenthesis or without a trailing colon is not a valid header.
     """Parse parenthesized kind-token groups after ``Anchor`` and before ``:``."""
     declared = []
     pos = 0
@@ -144,6 +146,7 @@ def _parse_slots(body):
     in_fence = False
 
     for line in body.splitlines():
+        # axis: slot headers inside fenced blocks are ignored — only unfenced lines open or continue slots.
         if _is_fence_line(line):
             in_fence = not in_fence
             if current_slot is not None:
@@ -177,6 +180,7 @@ def check_build_ready(body):
     """Decide build-ready marking from an issue body string. Always returns a result dict."""
     statuses, slots_content, declared_kinds = _parse_slots(body)
 
+    # axis: no Anchor slot header line anywhere in the body — slot status missing, not empty or filled.
     if statuses[SLOT_ANCHOR] == "missing":
         return _result(
             ok=False,
@@ -185,6 +189,7 @@ def check_build_ready(body):
             declared_kinds=declared_kinds,
             slots=statuses,
         )
+    # axis: Anchor header declares zero kind tokens (Anchor: or Anchor ():) — not whether content is empty.
     if len(declared_kinds) == 0:
         return _result(
             ok=False,
@@ -193,6 +198,7 @@ def check_build_ready(body):
             declared_kinds=declared_kinds,
             slots=statuses,
         )
+    # axis: how many kind tokens the header declares — two or more is refused before any validity check.
     if len(declared_kinds) >= 2:
         return _result(
             ok=False,
@@ -202,6 +208,7 @@ def check_build_ready(body):
             slots=statuses,
         )
     declared = declared_kinds[0]
+    # axis: the single declared token is not a recognized anchor kind — membership in ANCHOR_KINDS.
     if declared not in ANCHOR_KINDS:
         return _result(
             ok=False,
@@ -210,6 +217,7 @@ def check_build_ready(body):
             declared_kinds=declared_kinds,
             slots=statuses,
         )
+    # axis: Anchor slot header present and kind valid but citation body has no word character.
     if statuses[SLOT_ANCHOR] == "empty":
         return _result(
             ok=False,
@@ -239,6 +247,7 @@ def _result(ok, reason, anchor_kind, declared_kinds, slots):
 
 
 def _fail_closed_unreadable_body():
+    # axis: unreadable body fails closed — every slot status is unknown, not missing or empty.
     slots = {slot: "unknown" for slot in SLOTS}
     return _result(
         ok=False,

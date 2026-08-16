@@ -2438,6 +2438,8 @@ def _issue_contract_refusals_from_conventions():
     assert count_word in _NUMBER_WORDS, (
         "CONVENTIONS.md §11 uses unknown refusal-count word %r" % count_word
     )
+    # axis: the prose count word (six, seven, …) must match len(REFUSALS) — distinct from the
+    # adjacent token-set membership check on the same passage.
     assert _NUMBER_WORDS[count_word] == len(issue_contract.REFUSALS), (
         "CONVENTIONS.md §11 refusal count word %r (%d) drift from "
         "len(issue_contract.REFUSALS) (%d)"
@@ -2480,6 +2482,8 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
 
     home_slots = _issue_contract_slots_from_home()
     home_rendered = _issue_contract_rendered_headers_from_home()
+    # axis: ANCHOR_HEADER_FORM must move with SLOT_ANCHOR — a slot rename cannot leave the rendered
+    # header form pointing at a stale prefix or missing the trailing colon.
     assert issue_contract.ANCHOR_HEADER_FORM.startswith(issue_contract.SLOT_ANCHOR), (
         "issue_contract.ANCHOR_HEADER_FORM must start with SLOT_ANCHOR — "
         "form: %r; anchor: %r"
@@ -2540,6 +2544,7 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         "missing from table: %r; present in table but not in home: %r"
         % (missing_table, extra_table)
     )
+    # axis: SKILL.md and CONVENTIONS §11 enumerate rendered header forms, not bare slot names.
     skill_headers = _issue_contract_rendered_headers_from_showrunner_skill()
     assert skill_headers == home_rendered, (
         "showrunner/SKILL.md duty 2 rendered-header drift from issue_contract — "
