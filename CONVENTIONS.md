@@ -710,8 +710,8 @@ preconditions with a stated horizon, and the standing exclusions it applies itse
 PRs excluded, force-push never). **The launcher also provisions the build worktree** (#974):
 `launch` creates it before spawning — one per launch, detached at the premise's base commit,
 under `SUPERHEROES_WORKTREES_ROOT` when set and `~/.superheroes-worktrees` otherwise — records
-its path on the `reserved` record, and starts the session with that worktree as its working
-directory, never the primary checkout. A target path that already exists on disk, or that git
+its path and the builder's session id on the `reserved` record, and starts the session with that
+worktree as its working directory, never the primary checkout. A target path that already exists on disk, or that git
 still registers, is a **collision**: the launch refuses (`launch-worktree-collision`) rather than
 reuse a checkout another build may be holding. The `own-worktree` standing ruling stays in the
 composed prompt as defense in depth — a builder that never sees the primary checkout cannot
@@ -1246,6 +1246,12 @@ canonical ruling record is `LEDGERS.md` §4.
 **Sweep classes:** `fresh`, `stale`, `terminal`, `unknown`.
 
 **Verbs:** `stamp`, `read`, `sweep`.
+
+**Default promise.** A caller that states no `staleAfterSeconds` gets
+`heartbeat.DEFAULT_STALE_AFTER_SECONDS` = **24000** seconds — floored at 2× the worst *benign*
+inter-stamp gap measured on the reference host (11960 s, over 45 gaps across 10 builder lanes, 44 of
+them benign). The prior 300 s default was below every real build's stamping cadence, so an omitting
+caller read `stale` within five minutes. A builder that states its own promise is unaffected.
 
 **Semantic core.** The builder stamps `staleAfterSeconds` — its own promise about when it will next
 stamp. A lane is late only when it has outrun **the promise it made itself** — semantic liveness, not

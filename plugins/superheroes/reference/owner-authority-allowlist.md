@@ -148,9 +148,52 @@ pins and what it does not: inputs, environment overrides, ref-selected workflow 
   unrecognized flags, `-R` / `--repo` (a dispatch naming another repository is not the dispatch
   you pre-authorized), or anything that does not name exactly one workflow. Ref flags (`-r` /
   `--ref`) ask **unless** a `schemaVersion: 2` entry with `ref: "any"` covers them.
-- **Shell quoting:** the gate matches on the **text** of the command and does not lex shell
-  quoting. Flag-prefixed dispatches (including repo-flagged ones) are classified and **ask**, at
-  any flag length. What the gate still does not resolve is shell quoting — both a
-  quote-concatenated command word (`g''h`) and a **separator inside a quoted value**
-  (`git -c user.name="x;y" push --force`) go unclassified. Both are pre-existing and unchanged
-  by #989.
+- **Shell quoting:** owner ratification 2026-08-14 (#1000): the gate is a **best-effort text
+  matcher over shell syntax** that **errs closed**; **no shell lexer will be built** and quoting
+  semantics are **declined**, because skipping quoted text would choose fail-open in a security
+  gate. Known silent-bypass shapes are **closed as they are found**; **over-matching is an
+  accepted cost**. **Redirection is handled** for the operator spellings the code models — fd
+  optional (`\d{0,9}`), then `>>`, `>`, `<<`, `<`, with optional `&` or `|` suffix (`2>&1`,
+  `&>`, `>|`, `<&`, and similar) — and the operand is consumed when adjacent (`gh pr
+  merge>/dev/null` asks; `gh 2>&1 pr merge 123` asks). Operators not in that set (`<<<`,
+  `<>`, zero-padded file descriptors beyond the bounded fd) are **not** modelled. **Shell word
+  terminators on gated words are handled** — a gated shell word ends at any shell word-terminator
+  (whitespace, `)`, `(`, backtick, `"`, `'`, redirection characters, end-of-string) in
+  subshell, command-substitution, paren, and `bash -c` wrappers (`\`gh pr merge\``,
+  `bash -c "git push origin main"`, and `(gh release create)` classify correctly; #1000).
+  **Payload identifiers** inside arguments (the `merge-api` REST path segment and the
+  `merge-graphql` GraphQL field name) terminate on **any non-word character** — so
+  `pulls/42/merge-async`, `pulls/42/merge.json`, and `.mergePullRequest.number` ask. **Still
+  open by ratified decline:** a real shell lexer, quote **pairing**, and escape handling.
+  **Over-match costs an extra prompt, never an unapproved run** — the fail direction is
+  unchanged. **Accepted over-match (ratified 2026-08-14):** a command that merely **quotes or
+  mentions** a gated phrase now asks — for example `git commit -m "fix the push to main"`,
+  `echo "git push origin main"`, and `grep -r 'git push origin main' docs/`. That is the
+  accepted cost of declining quote semantics. A commit message that does not put `push` and
+  `main` as bare words in the same segment stays silent (e.g. `git commit -m 'merge main into
+  feature'`). **The `+` refspec form is a force spelling** (owner-ruled 2026-08-15): a refspec
+  word beginning with `+` — `git push origin +feature`, `+main`, `+refs/heads/main`,
+  `+HEAD:main`, `+*:refs/review/*`, `+@{u}:refs/heads/x`, `++feature` (a branch literally named
+  `+feature`), quoted or parenthesised, on any refspec position — asks as `force-push`, exactly
+  as `--force` does. The `+` must start a word (never after `=`, `:`, `.`, `/`, `-` or a word
+  character) and be followed by anything that is not whitespace or a separator, so
+  `--push-option=+x`, `a+b`, `feature,+other` (a comma-named branch), a bare `+`,
+  `HEAD:refs/heads/+feature` (a `+`-named branch), `./+repo` (a repository path) and
+  `git pull origin +main` are not force. **Accepted
+  over-matches — they ask, one prompt, never an unapproved run:** a redirection to a file whose
+  name begins with `+` (`2>+log`), the separate-argument push option (`-o +x`, `--push-option
+  +x`), a repository operand named `+…` (`git push +repo feature`), a quoted inline option
+  value (`--push-option="+x"`), and any other value-taking option whose value starts with `+`
+  (`--receive-pack +helper`) — telling those apart from a refspec would need option parsing,
+  which the ratified posture declines. **Outside this rule, known-open:** a **config-driven**
+  force push (`git -c remote.origin.push=+HEAD:refs/heads/main push origin`, `remote.*.mirror`,
+  `push.default`) is a different mechanism the gate does not model — recorded 2026-08-15 for the
+  owner's word; and a quoted separator character inside a ref name (`'+(feature):refs/heads/x'`)
+  stays under the ratified quoting decline, as does a backslash-escaped `+` (`\+feature` —
+  escape handling is declined).
+  **Known-open specimens still silent today:** a **quote-concatenated command word**
+  (`g''h pr merge 123`, `gi''t push --force origin f`), a **separator inside a quoted value**
+  (`git -c user.name="x;y" push --force`, `git -c user.name="x|y" push --force`), a
+  **zero-padded file descriptor** (`gh pr 0000000001>&1 merge 123`), a **composite `<>` operator
+  with a spaced operand** (`gh pr <> /dev/null merge 123`), and a **here-string `<<<` operator**
+  (`gh pr <<< foo merge 123`).

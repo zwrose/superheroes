@@ -47,9 +47,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 
 > **External-engine reviewers — stdout channel grading mechanics (#38, #196, #666).** When `$REVIEWER_ENGINE` is
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
-> instead of a named subagent, and it returns its findings on **stdout** rather than writing the
-> findings file. The required stdout shape is `{"findings": [...], "investigated": [...]}` — a seat
-> that omits `investigated` forfeits vacuously. The contract shape also lives in the base rubric's
+> instead of a named subagent, and it returns its payload on **stdout** rather than writing a
+> findings file. Panel seats emit `{"findings": [...], "investigated": [...]}`; verifier seats emit
+> `{"verdicts": [...], "investigated": [...]}`. The graded result carries **`resultKind`**
+> (`findings` or `verdicts`) naming which payload key survived. A non-empty `findings` or
+> `verdicts` payload succeeds without `investigated`; only an **empty** payload needs a surviving
+> `investigated` path (see below). The contract shape also lives in the base rubric's
 > "Findings output format" section; the
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
@@ -223,33 +226,47 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
 > **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
-> carries **`reason`** (and usually **`detail`**). Outcome-dependent keys include **`findings`**,
-> **`investigated`**, **`engagement`**, and **`sanitizedView`** — a consumer must **not** read an
-> absent `findings` as "zero findings"; that is the fail-open reading this subsystem exists to
-> prevent. An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
+> carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
+> (one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name.
+> **`investigated`** is present only when at least one claimed path survives the runner's spot-check
+> (resolves inside the sanitized review view and exists on disk); a normal `{"verdicts": [...]}`
+> reply omits it. Outcome-dependent keys also include **`engagement`** and
+> **`sanitizedView`**. A consumer must **not** read an absent `findings` as "zero findings" — an
+> absent `findings` may mean a `verdicts`-kind result instead; that is the fail-open reading this
+> subsystem exists to prevent. An object carrying **both** `findings` and `verdicts` is refused as
+> `unreadable`. An item whose `id` is exactly `<agent-name>-001` or whose `severity` is exactly
+> `Critical | Important | Minor | Nit` — the `review-base.md` template literals — is refused as
+> `unreadable` (field-exact; an honest finding that *quotes* those literals in its prose survives).
+> An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
 > `sanitizedView` **only when raised after the sanitized view was built** — early refusals
 > (`prompt-*`, `run-dir-is-symlink`, `run-dir-not-writable`, `schema-*`, and argparse failures for
 > `--repo-root` / `--run-dir`) precede the view and carry none. A terminal
 > forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
 > `result.findings` reads nothing.
 >
-> **`findings`-only transport (#687).** The runner forwards **only** `findings` and `investigated`
-> from the seat's stdout. Every other key the seat emits is dropped. A caller that needs a different
-> payload shape — verdicts, per-id audit rulings — **cannot** get it through this verb: the result
-> parses as `unreadable`, retries once at full token cost, and returns a forfeit whose disclosure
-> names the engine. Encode the payload **inside `findings` objects** instead, or use the
-> file-writing subagent verifier path that `verification-pass.md` already describes.
->
-> **`--schema-path` pre-spawn validation (#687).** Before spawn, the runner performs a **structural
-> spot-check** on the schema file: it refuses a schema that **positively forbids or displaces** a
-> top-level `findings` key (`detail` is one of `schema-missing`, `schema-unreadable`, or
-> `schema-not-findings-shaped`) with `attempts: 0` and no engine spawned. Refusals also carry
-> `canonicalSchemaPath` pointing at the shipped strict-mode schema
-> (`lib/schemas/review-findings.schema.json`; resolved by
-> `review_findings_schema.review_findings_schema_path()`). A bare `{"type": "object"}`
-> is accepted (it constrains nothing). This is not full JSON Schema validation — it does not require
-> every valid schema to declare `findings`. Previously `--schema-path` **forced** a shape the grader
-> then rejected.
+> **Review payload transport (#687).** The runner accepts **two** result kinds on stdout. Every
+> `ok: true` review result carries **`resultKind`** — exactly `"findings"` or `"verdicts"` — plus
+> **exactly one** payload key of that name; **`investigated`** is attached only when at least one
+> claimed path survives spot-checking. Every other top-level key the
+> seat emits is dropped. Callers may pin the expected kind mechanically via
+> `dispatch-review --expected-result-kind {findings,verdicts}` (library:
+> `expected_result_kind=`); a mismatched kind is refused with `detail: result-kind-mismatch`, not
+> `unreadable`. The pin is journaled when the run is **opened**; on a continuation an **omitted** pin
+> inherits the journaled value, while a **supplied** pin that disagrees with the journaled one —
+> including supplying a pin on a run opened without one — refuses `run-dir-result-kind-mismatch`,
+> `attempts: 0`, no spawn — a run's identity is fixed at open. **Review panel** seats pass the
+> **`findings`** pin; the **verify phase** passes the
+> **`verdicts`** pin. When no pin is set the transport accepts either kind, each graded by its own
+> engagement floor; #687's findings-only posture for panel seats is carried by the pin those seats
+> pass, not by a transport default. Any other `expected_result_kind` value is refused before dispatch
+> on either route — neither silently ignores it. The **library** API (`expected_result_kind=`)
+> returns a structured refusal with `attempts: 0`, `detail: "expected-result-kind-invalid"`, and the
+> rejected value under `rejectedResultKind`; the **CLI** (`--expected-result-kind`) is rejected by
+> argparse before dispatch with a usage error, a non-zero exit, and no result object. A **`verdicts`** payload now travels
+> through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
+> parses `unreadable` by construction. **Per-id audit rulings** (`dispatch-audits`) still do not
+> travel through this verb; encode those inside audit result objects or use the file-writing auditor
+> path. For verifier delivery channels, see `verification-pass.md`.
 >
 > **`engagement.read` (#687).** When the result carries an **`engagement`** block with a non-`null`
 > value (present only when the attempt produced stdout that was graded), `engagement.read` is
@@ -283,10 +300,12 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > **`payloadShape` on shape-unreadable forfeit (#687).** When the **last** attempt forfeits because
 > stdout was shape-unreadable, the result may carry `payloadShape`: a mapping with `parsed` (one of
-> `object-without-findings`, `object-findings-not-a-list`, `array-not-all-objects`,
-> `findings-hollow-member`, `no-parseable-json`, `empty-stdout`, or `prompt-echo-only`), `topLevelKeys` (a list of strings,
+> `object-without-findings`, `object-both-payload-keys`, `object-findings-not-a-list`,
+> `object-verdicts-not-a-list`, `array-not-all-objects`, `findings-hollow-member`,
+> `verdicts-hollow-member`, `placeholder-literal-refusal`, `no-parseable-json`, `empty-stdout`, or
+> `prompt-echo-only`), `topLevelKeys` (a list of strings,
 > populated only when
-> `parsed` is `object-without-findings`), and `keysTruncated` (bool; signals the key list was
+> `parsed` is `object-without-findings` or `object-both-payload-keys`), and `keysTruncated` (bool; signals the key list was
 > capped). Diagnosis only — it never changes the fail direction. `payloadShape` is **absent** on a
 > vacuous forfeit and on success.
 >
@@ -319,6 +338,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
+>   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 12 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > # CONTINUATION — re-invoke while .terminal is false: full slice up to 540 s
@@ -326,6 +346,7 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >   --engine "$REVIEWER_ENGINE" --engine-model "$SEAT_ENGINE_MODEL" --effort "$SEAT_EFFORT" \
 >   --prompt-path "$SEAT_PROMPT" --repo-root "$REPO_ROOT" \
 >   --diff-base "$BASE_REF" \
+>   --expected-result-kind findings \
 >   --run-dir "$RUN_DIR" --max-wait 540 \
 >   --progress-file "$SEAT_PROGRESS" --timeout 900 --retry-timeout 900
 > ```
