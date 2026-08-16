@@ -3905,3 +3905,48 @@ def test_fold_session_id_is_none_when_the_record_omits_it():
     result = ll.fold([rec])
     assert result["ok"] is True
     assert result["launches"]["l1"]["sessionId"] is None
+
+
+@pytest.mark.parametrize("config_dir", ["/tmp/\x00bad", "/tmp/\ud800bad"])
+def test_reserved_config_dir_must_be_usable_as_a_path(config_dir):
+    # axis: isabs() is not usability — these pass it and then make every filesystem call
+    # on the value raise (NUL -> ValueError, lone high surrogate -> UnicodeEncodeError),
+    # so a consumer could not act on the record at all
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir=config_dir)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:configDir"
+
+
+def test_reserved_config_dir_accepts_a_surrogate_escaped_path():
+    # axis: NOT everything exotic is unusable — a surrogateescape-decoded byte round-trips
+    # through os.fsencode and names a real file, so refusing it would reject a legal root
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir="/tmp/\udcffbad")
+    assert ll.fold([rec])["ok"] is True
+
+
+@pytest.mark.parametrize(
+    "config_dir", ["", "   ", "relative/config", "~/.claude", 7, None, True],
+)
+def test_reserved_config_dir_must_be_a_non_empty_absolute_path(config_dir):
+    # axis: a non-absolute recorded root would resolve against the READER's cwd, so the
+    # grammar refuses it here rather than letting a consumer guess (#1036).
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir=config_dir)
+    result = ll.fold([rec])
+    assert result["ok"] is False
+    assert result["reason"] == "fold-bad-field:reserved:configDir"
+
+
+def test_fold_exposes_the_recorded_config_dir():
+    rec = _reserved("l1", "b", ["a"], "/tmp", configDir="/home/someone/.claude-two")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["configDir"] == "/home/someone/.claude-two"
+
+
+def test_fold_config_dir_is_none_when_the_record_omits_it():
+    # axis: every pre-#1036 record — the consumer reads None as "use your own env root"
+    rec = _reserved("l1", "b", ["a"], "/tmp")
+    result = ll.fold([rec])
+    assert result["ok"] is True
+    assert result["launches"]["l1"]["configDir"] is None
