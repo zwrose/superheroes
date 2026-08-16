@@ -55,7 +55,9 @@ a second watcher used to cover: `lane-terminal` fires from the ledger the moment
 back, typically a minute or two *before* its session exits, and `record-outcome` refuses while that
 child is still alive (`terminal-child-live:<pid>`). Close it on the `lane-terminal` wake with
 `launcher record-outcome --await-exit <seconds>`, which re-attempts until the child is gone and at
-the ceiling returns that same refusal, so nothing falls open.
+the ceiling returns that same refusal, so nothing falls open. The ceiling counts **waiting for the
+exit** — it starts at the first live-child refusal, not at the call — so a whole call runs to about
+one liveness probe plus the ceiling.
 
 The arming snippet above omits two flags you should **include on every arm**: `--max-total-seconds`
 (the loop stops re-arming and emits the last `timer`, so prolonged silence eventually becomes a

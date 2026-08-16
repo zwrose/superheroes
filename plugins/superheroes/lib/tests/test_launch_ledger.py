@@ -4028,6 +4028,34 @@ def test_record_outcome_await_exit_returns_todays_refusal_at_the_ceiling(tmp_pat
     assert len(ll.read(repo)["records"]) == before
 
 
+def test_record_outcome_await_exit_survives_a_probe_costlier_than_the_ceiling(
+    tmp_path, monkeypatch,
+):
+    # axis: a live-child probe settles ~2s before answering; a ceiling shorter than
+    # that must still buy re-attempts, or the flag is silently inert (review #1040)
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-costly")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.25)
+    clock = _FakeClock()
+    monkeypatch.setattr(ll, "time", clock)
+
+    probes = []
+
+    def slow_probe(pid):
+        probes.append(pid)
+        clock.now += 2.0  # what _child_group_is_live's settle really costs
+        return len(probes) < 2
+
+    monkeypatch.setattr(ll, "_child_group_is_live", slow_probe)
+    attempts = _counted_terminalize(monkeypatch)
+
+    result = ll.record_outcome(repo, "l-await-costly", "handback", "done", await_exit=1)
+
+    assert result["ok"] is True, result["reason"]
+    assert len(attempts) == 2, "a ceiling under the probe cost must still retry"
+    outcomes = [r for r in ll.read(repo)["records"] if r.get("event") == "outcome"]
+    assert len(outcomes) == 1
+
+
 def test_record_outcome_await_exit_zero_makes_exactly_one_attempt(tmp_path, monkeypatch):
     # axis: the default ceiling is today's behaviour -- one probe, no waiting
     repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-zero")
@@ -4063,8 +4091,11 @@ def test_record_outcome_refuses_an_unusable_await_exit_ceiling(tmp_path, monkeyp
 
 
 def test_record_outcome_await_exit_waits_out_a_real_child(tmp_path, monkeypatch):
-    # axis: end-to-end against the real liveness probe and a real exiting child
-    proc = subprocess.Popen(["sleep", "2"], start_new_session=True)
+    # axis: end-to-end against the real liveness probe and a real exiting child.
+    # NOT the retry detector -- whether the child outlives the first probe's settle
+    # is a race with host load, so this asserts only the end state. The re-attempt
+    # itself is pinned deterministically by the fake-clock tests above.
+    proc = subprocess.Popen(["sleep", "4"], start_new_session=True)
     reaper = threading.Thread(target=proc.wait, daemon=True)
     reaper.start()
     try:
