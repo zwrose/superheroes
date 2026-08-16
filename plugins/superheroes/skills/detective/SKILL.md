@@ -83,17 +83,20 @@ exists. The receipt carries four elements:
 
 ## Redaction before posting
 
-Diagnostic output is published to an issue, so **every quoted diagnostic is scrubbed** before it
-reaches a comment:
+Diagnostic output is published to an issue, so **nothing sensitive reaches a comment** — secrets,
+tokens, credentials, authorization headers, private URLs, and PII must all come out before
+posting. Run every quoted diagnostic through the scrub helper first:
 
 ```bash
 python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub
 ```
 
-(stdin→stdout). Secrets, tokens, credentials, authorization headers, private URLs, and PII come
-out. **Say that scrubbing happened** — never drop it silently. Reproducibility is preserved
-through commands, hashes, and redacted excerpts — never through raw publication of sensitive
-material.
+(stdin→stdout). The helper mechanically removes **credential classes** — authorization and cookie
+headers, API keys, bearer tokens, secret key-value pairs, URI userinfo credentials, and provider
+token formats such as GitHub tokens. It does **not** detect private URLs or personal data such as
+email addresses; **read those out yourself** before posting. **Say that scrubbing happened** —
+never drop it silently. Reproducibility is preserved through commands, hashes, and redacted
+excerpts — never through raw publication of sensitive material.
 
 ## What you may write
 

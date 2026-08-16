@@ -1,5 +1,5 @@
 {
-  "recordedAt": "2026-08-15",
+  "recordedAt": "2026-08-16",
   "observations": [
     {
       "skill": "superheroes/architect-discovery",
@@ -1977,63 +1977,63 @@
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
+      "phrase": "what decisions are waiting on me right now \u2014 sweep everything and give me batch 1",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
+      "phrase": "what decisions are waiting on me right now \u2014 sweep everything and give me batch 1",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what decisions are waiting on me right now — sweep everything and give me batch 1",
+      "phrase": "what decisions are waiting on me right now \u2014 sweep everything and give me batch 1",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
+      "phrase": "I was away for a week \u2014 walk me through the open decisions that need my ruling",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
+      "phrase": "I was away for a week \u2014 walk me through the open decisions that need my ruling",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "I was away for a week — walk me through the open decisions that need my ruling",
+      "phrase": "I was away for a week \u2014 walk me through the open decisions that need my ruling",
       "direction": "should_fire",
       "run": 2,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+      "phrase": "undelivered owner calls have piled up \u2014 run the collector and deliver what's blocking you",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+      "phrase": "undelivered owner calls have piled up \u2014 run the collector and deliver what's blocking you",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "undelivered owner calls have piled up — run the collector and deliver what's blocking you",
+      "phrase": "undelivered owner calls have piled up \u2014 run the collector and deliver what's blocking you",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2061,21 +2061,21 @@
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
+      "phrase": "what's blocking the advisor that needs my decision \u2014 standing proposals first, batch 1 only",
       "direction": "should_fire",
       "run": 0,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
+      "phrase": "what's blocking the advisor that needs my decision \u2014 standing proposals first, batch 1 only",
       "direction": "should_fire",
       "run": 1,
       "activated": true
     },
     {
       "skill": "superheroes/discuss-open-decisions",
-      "phrase": "what's blocking the advisor that needs my decision — standing proposals first, batch 1 only",
+      "phrase": "what's blocking the advisor that needs my decision \u2014 standing proposals first, batch 1 only",
       "direction": "should_fire",
       "run": 2,
       "activated": true
@@ -2160,6 +2160,195 @@
     {
       "skill": "superheroes/discuss-open-decisions",
       "phrase": "freshen live state and give me the /compact command to paste",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "why did this break \u2014 demonstrate the cause before scoping any fix",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "why did this break \u2014 demonstrate the cause before scoping any fix",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "why did this break \u2014 demonstrate the cause before scoping any fix",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "diagnose this failure observe-only and deliver a diagnosis receipt without editing anything",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "diagnose this failure observe-only and deliver a diagnosis receipt without editing anything",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "diagnose this failure observe-only and deliver a diagnosis receipt without editing anything",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "we already tried a fix and the failure came back \u2014 find the real cause",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "we already tried a fix and the failure came back \u2014 find the real cause",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "we already tried a fix and the failure came back \u2014 find the real cause",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "the same failure shows up in CI and locally \u2014 investigate the cause before anyone writes a fix",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "the same failure shows up in CI and locally \u2014 investigate the cause before anyone writes a fix",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "the same failure shows up in CI and locally \u2014 investigate the cause before anyone writes a fix",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "run /superheroes:detective on this incident",
+      "direction": "should_fire",
+      "run": 0,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "run /superheroes:detective on this incident",
+      "direction": "should_fire",
+      "run": 1,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "run /superheroes:detective on this incident",
+      "direction": "should_fire",
+      "run": 2,
+      "activated": true
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "build issue #481 and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "build issue #481 and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "build issue #481 and take it to a ready PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "run a read-only repo-health sweep and report the drift since last time",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "review my code changes before I merge this pull request",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "turn this fuzzy idea into an owner-approved requirements spec",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "turn this fuzzy idea into an owner-approved requirements spec",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "turn this fuzzy idea into an owner-approved requirements spec",
       "direction": "should_not_fire",
       "run": 2,
       "activated": false

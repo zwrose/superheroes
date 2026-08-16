@@ -67,6 +67,12 @@
       "see the whole project's calibration on one screen",
       "move a project between in-repo and out-of-repo storage"
     ],
+    "superheroes/detective": [
+      "why did this break, diagnose this",
+      "Observe-only",
+      "diagnosis receipt",
+      "Not the builder (that is workhorse)"
+    ],
     "superheroes/discuss-open-decisions": [
       "Use when the owner needs to rule on open decisions",
       "Sweeps the standing-proposals collector, open parks, and in-session pending items",

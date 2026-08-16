@@ -1,0 +1,15 @@
+{
+  "should_fire": [
+    "why did this break — demonstrate the cause before scoping any fix",
+    "diagnose this failure observe-only and deliver a diagnosis receipt without editing anything",
+    "we already tried a fix and the failure came back — find the real cause",
+    "the same failure shows up in CI and locally — investigate the cause before anyone writes a fix",
+    "run /superheroes:detective on this incident"
+  ],
+  "should_not_fire": [
+    "build issue #481 and take it to a ready PR",
+    "run a read-only repo-health sweep and report the drift since last time",
+    "review my code changes before I merge this pull request",
+    "turn this fuzzy idea into an owner-approved requirements spec"
+  ]
+}
