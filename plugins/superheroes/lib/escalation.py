@@ -4,7 +4,7 @@
 Paired with the prose rubric `the-architect/rubric/escalation-base.md` exactly as
 `review-base.md` is paired with `loop_state.py`: the model supplies the fuzzy axis
 judgments, this module owns the deterministic floor + routing table + the fixer
-file-scope guard. See docs/superpowers/specs/2026-06-16-escalation-rubric-design.md.
+file-scope guard. Design: the 2026-06-16 escalation-rubric design (an out-of-repo doc).
 """
 import argparse
 import json

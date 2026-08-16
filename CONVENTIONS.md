@@ -25,7 +25,7 @@ utility — e.g. `review-code`, test-pilot's browser runs — but that is not a 
 A missing band member **degrades, it does not crash**: the spec review gate
 (`review-spec`) never self-certifies — the `spec` is always **owner-gated** — so its
 absence simply leaves the spec for the owner to approve directly, never silently waved
-through. This is the superheroes-internal analog of "superpowers is an assumed
+through. This is the superheroes-internal analog of "the review plugin is an assumed
 dependency."
 
 **Section numbers are stable permalinks**, cited across the codebase (skills, rubric,

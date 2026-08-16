@@ -8,7 +8,7 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 # writing-specs
 
 Turn an **owner-approved** set of requirements into the on-disk `spec`
-definition-doc. This is the spec's analogue of superpowers `writing-plans`: the
+definition-doc. This is the artifact step, distinct from the dialogue: the
 dialogue happens in `discovery`; this skill owns the **artifact**. The frontmatter
 linkage is machine-read, so it is emitted by the lib — never hand-written.
 
