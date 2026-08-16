@@ -105,8 +105,8 @@ cancelled by the concurrency group.
    activation-result CI gate). Schema tests
    need `jsonschema`. Runs under `pytest-xdist` (`-n auto`; adopted on #897's
    measured parity A/B) with `--durations=25` so the slow tail stays visible as
-   the suite grows. A parallel-run failure of the #806/#809/#882 names is the
-   known load-flake class — check those issues before treating it as a regression.
+   the suite grows. A parallel-run failure that passes on a re-run is a flake
+   observation — record it on an issue with the run link, not a regression.
 
 **Job `pr-title`** (**pull-request events only**)
 
@@ -119,11 +119,13 @@ Run all locally-runnable steps before pushing:
 /usr/bin/python3 .github/scripts/validate_hosts.py
 /usr/bin/python3 .github/scripts/validate_skills.py
 /usr/bin/python3 .github/scripts/validate_stubs.py
-/usr/bin/python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q
+/usr/bin/python3 -m pytest .github/scripts/tests/ plugins/superheroes/lib/tests/ plugins/superheroes/eval/tests/ eval/lib/tests/ -q -n auto --durations=25
 ```
 
-Use `/usr/bin/python3` for local gates: that interpreter carries both pytest and
-PyYAML, which the validators and test suite require. CI runs the gates on Python
+Use `/usr/bin/python3` for local gates: that interpreter carries pytest, PyYAML
+and `pytest-xdist`, which the validators and test suite require — run the suite
+with `-n auto` exactly as CI does; the serial run is many times slower and is not
+the calibrated verify command. CI runs the gates on Python
 **3.12** while `/usr/bin/python3` on macOS is **3.9.6**, so a green local run is
 strong but not conclusive evidence for CI — version-sensitive syntax or stdlib
 behavior can pass one and fail the other. The catalog-membership check and the
