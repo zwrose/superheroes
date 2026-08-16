@@ -105,9 +105,8 @@ cancelled by the concurrency group.
    activation-result CI gate). Schema tests
    need `jsonschema`. Runs under `pytest-xdist` (`-n auto`; adopted on #897's
    measured parity A/B) with `--durations=25` so the slow tail stays visible as
-   the suite grows. A parallel-run failure that passes on a re-run is a fresh
-   flake observation — record it on a new issue with the run link; the earlier
-   load-flake issues (#806/#809/#882) are closed and are history, not a checklist.
+   the suite grows. A parallel-run failure that passes on a re-run is a flake
+   observation — record it on an issue with the run link, not a regression.
 
 **Job `pr-title`** (**pull-request events only**)
 
