@@ -4,6 +4,8 @@
 
 A rehearsal record is a Definition-of-Done artifact: it shows, from documents alone, that the detective → advisor pipeline produces honest artifacts. **Every claim in this record is either a command that was actually run with its real output pasted below, or is explicitly labelled `DRAFTED — NOT POSTED` / `DRAFTED — NOT FILED`.** A reader can tell, for every artifact, whether it happened or was written for someone else to perform.
 
+**DoD row status (partial).** This record satisfies the detective DoD row **in part**: the **diagnosis receipt** and **five-check vet verdict** are produced here; the **incident-body update** and **fix issue** are drafted for the advisor, because a builder never wires the board. The row is therefore **carried as partially satisfied and disclosed in the PR** — not claimed closed by this document alone.
+
 **Board-wiring boundary.** A builder never wires the board — it does not file issues and does not edit issue bodies. In this record:
 
 - the **diagnosis receipt** and **five-check vet verdict** are **produced for real** (`PRODUCED`);
@@ -82,28 +84,31 @@ $ wc -c prefill.md
 
 The known content is gone even though `gh` failed — the truncate happened at redirect open, not from `gh` writing an empty JSON field.
 
-**Disposable copy discarded:**
+**Disposable copy discarded** *(reconstruction — variable name corrected from the original capture; commands and output are consistent with the path used in the A/B probes above)*:
 
 ```text
 DISPOSABLE_PATH=/var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG
-$ rm -rf "$DISPOSABLE"
-$ ls "$DISPOSABLE"
+$ rm -rf "$DISPOSABLE_PATH"
+$ ls "$DISPOSABLE_PATH"
 ls: /var/folders/dy/s097fm_n7tldcbdtthd1zgqh0000gn/T/tmp.ZoAcoORYJG: No such file or directory
 ```
 
 ### 2. Demonstrated root cause
 
-**Demonstrated by A/B.** Running `gh issue view … > file` **outside** a git repository yields a **zero-byte file** and `gh` exit **1** (`failed to run git: not a git repository`). The **identical command inside** the repository yields a **populated file** (3563 bytes) and exit **0**. Pre-filling the target file shows the redirect empties the file **before** `gh` executes — so the failure is the shell redirect plus unchecked `gh` failure, not `gh` returning an empty body string.
+**What the A/B demonstrates (sufficient mechanism).** Running `gh issue view … > file` **outside** a git repository yields a **zero-byte file** and `gh` exit **1** (`failed to run git: not a git repository`). The **identical command inside** the repository yields a **populated file** (3563 bytes) and exit **0**. Pre-filling the target file shows the redirect empties the file **before** `gh` executes — so the failure mode is the shell redirect truncating first plus an unchecked `gh` failure, not `gh` returning an empty body string. This is a **demonstrated sufficient mechanism** for producing a zero-byte body file that could feed a later `gh pr edit --body-file`.
+
+**What the A/B does not establish about PR #1041.** No receipt from the incident session establishes that the advisor's read ran outside a git repository, that `gh` exited non-zero, that exit status was ignored, or that this zero-byte file was what `gh pr edit --body-file` consumed. The only incident evidence is the advisor's one-line note in the PR body. The mechanism is demonstrated; its application to PR #1041 remains a **plausible, unconfirmed** match until session records close the gap.
 
 ### 3. Blast radius
 
-Any workflow that **reads an issue/PR body to a file with `>`** and later **writes that file back** with `gh issue edit` / `gh pr edit --body-file` — when the read happens outside a resolvable git context (wrong cwd, detached temp dir, stale worktree path). Affects advisor vet-slot corrections, incident-body drafts, and any agent script using the same read-modify-write pattern. Silent when shell exit codes are not checked.
+**Exposure the demonstrated mechanism creates.** Any workflow that **reads an issue/PR body to a file with `>`** and later **writes that file back** with `gh issue edit` / `gh pr edit --body-file` is exposed when the read happens outside a resolvable git context (wrong cwd, detached temp dir, stale worktree path). That exposure pattern matches advisor vet-slot corrections, incident-body drafts, and any agent script using the same read-modify-write shape. Failure is silent when shell exit codes are not checked — regardless of whether PR #1041's session actually hit this path.
 
 ### 4. Recommended follow-ups
 
 1. **Advisor / showrunner charter** — document the safe pattern: read body to a variable or use a cwd inside the repo (or explicit `--repo`); never `gh … > file` from an unanchored directory; check `gh` exit status before any edit.
-2. **Restore PR #1041 body** — build-ready fix from the last good body (git history or issue cross-links), routed only after this vet passes.
-3. **Optional guard** — shell wrapper or preflight that refuses `gh pr edit --body-file` when the file is empty or below a minimum size.
+2. **Close the PR #1041 gap** — recover the failing invocation, its cwd, and `gh` exit status from the advisor session record (or equivalent logs) to confirm or rule out this mechanism on the actual incident.
+3. **Restore PR #1041 body** — build-ready fix from the last good body (git history or issue cross-links), routed only after this vet passes.
+4. **Optional guard** — shell wrapper or preflight that refuses `gh pr edit --body-file` when the file is empty or below a minimum size.
 
 ---
 
@@ -111,13 +116,13 @@ Any workflow that **reads an issue/PR body to a file with `>`** and later **writ
 
 | Check | Grade | Notes |
 | --- | --- | --- |
-| 1. Cause demonstrated (repro or A/B, not inference) | **Pass** | A/B contrast on cwd is measured: 0 vs 3563 bytes, exit 1 vs 0; redirect-first proof on pre-filled file. |
+| 1. Cause demonstrated (repro or A/B, not inference) | **Pass** | A/B demonstrates a **sufficient mechanism** (0 vs 3563 bytes, exit 1 vs 0; redirect-first proof on pre-filled file). Does not by itself prove that mechanism ran on PR #1041 — only that it can produce the observed symptom. |
 | 2. Recommended fix targets cause, not symptom | **Pass** | Follow-ups address read-modify-write cwd and exit checking; body restore is separate build work. |
 | 3. Blast radius stated | **Pass** | All `gh` body read-modify-write paths named. |
 | 4. Each follow-up carries the right anchor | **Pass** | Charter doc, PR #1041 restore, optional guard — each tied to this diagnosis. |
 | 5. No smuggled product opinion | **Pass** | No new product requirements; operational guard only. |
 
-**Verdict (plain language).** The diagnosis is vetted. The empty PR body is explained by shell redirect truncation combined with `gh` failing outside a git repository, demonstrated on a disposable copy with read-only `gh` calls. Route charter documentation and a build to restore PR #1041's body; do not treat "blank body" as an `gh` API bug without this cwd check.
+**Verdict (plain language).** The diagnosis is vetted for what was measured: a **sufficient mechanism** — shell redirect truncation combined with `gh` failing outside a git repository — was demonstrated on a disposable copy with read-only `gh` calls. That demonstration does not confirm this mechanism on PR #1041 without session evidence (cwd, exit status, file path). Route charter documentation, session-record follow-up to close the incident gap, and a build to restore PR #1041's body; do not treat "blank body" as an `gh` API bug without this cwd check.
 
 **Terminal branch:** vet passes → advisor may update the incident body and file anchored fix issues (drafts below; not posted by this builder).
 
@@ -126,15 +131,17 @@ Any workflow that **reads an issue/PR body to a file with `>`** and later **writ
 ## Incident-body update — `DRAFTED — NOT POSTED (advisor action)`
 
 ```markdown
-## Confirmed cause
+## Demonstrated mechanism (sufficient; incident match unconfirmed)
 
-PR #1041 received a zero-byte body because a shell redirect (`>`) truncated the working copy **before** `gh issue view` / `gh pr view` completed, while the session cwd was **outside** a git repository. `gh` failed (`not a git repository`), wrote nothing to the file, and a subsequent `gh pr edit --body-file` pushed the empty file. Demonstrated by A/B on issue #931 read in vs out of repo (0 vs 3563 bytes) plus redirect-first proof on a pre-filled file.
+A/B on issue #931 shows a **sufficient mechanism** for a zero-byte PR body: a shell redirect (`>`) truncates the target file **before** `gh issue view` / `gh pr view` runs; when cwd is **outside** a git repository, `gh` fails (`not a git repository`), writes nothing, and a subsequent `gh pr edit --body-file` can push the empty file. Measured: 0 vs 3563 bytes in vs out of repo; redirect-first proof on a pre-filled file.
+
+**PR #1041 gap.** The advisor's note attributes the empty body to redirect truncation, but no session receipt yet confirms cwd, `gh` exit status, or that this file fed the edit. Treat the mechanism as demonstrated; treat the PR #1041 application as plausible until session records close the gap.
 
 ## Routing
 
-- **Vet:** passed (see diagnosis comment).
+- **Vet:** passed for demonstrated mechanism (see diagnosis comment).
+- **Follow-up:** recover failing invocation, cwd, and exit status from the advisor session record.
 - **Fix:** restore PR #1041 body from last good revision; add showrunner guidance on safe body read-modify-write (cwd + exit checks).
-- **No fix on undemonstrated cause:** not applicable — cause demonstrated.
 
 ## Log
 

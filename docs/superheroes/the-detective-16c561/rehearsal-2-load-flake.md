@@ -32,7 +32,7 @@ PR #1041's build record reports `plugins/superheroes/lib/tests/test_sanitized_vi
 $ /usr/bin/python3 -m pytest plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write -v --tb=short --durations=0
 ```
 
-Representative output (all five runs matched this failure shape; excerpt):
+Representative output (excerpt only — per-run outputs were not retained; the excerpt below is representative of the failure shape observed across all five runs):
 
 ```text
 plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write FAILED [100%]
@@ -62,15 +62,62 @@ All three runs: same test **FAILED** at line 4157 (`proc is None`). No run showe
 
 **First-pass reading (corrected below).** This session's five isolated runs all failed under concurrent host load; that sample was **insufficient** to distinguish intermittent from stable behaviour — see the methodological note and orchestrator follow-on measurements.
 
-**Orchestrator verification pass (measured after this record was first written).** Independent re-runs on the same host class, attributed to the orchestrator's verification pass:
+**Orchestrator verification pass (measured after this record was first written).** Independent re-runs on the same host class, attributed to the orchestrator's verification pass. Exact invocation for every run below:
 
-| Where | Command | Result |
-| --- | --- | --- |
-| Build HEAD `da39001c` | `/usr/bin/python3 -m pytest plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write -v --tb=short --durations=0` (single run) | **1 passed** |
-| Base `7571e72d` (detached worktree `/private/tmp/sh931-base`, without any of this build's changes) | same command (single run) | **1 failed** |
-| Build HEAD `da39001c` | same command, **8 consecutive runs** | **3 passed, 5 failed** |
+```text
+/usr/bin/python3 -m pytest plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write -q
+```
 
-On this host the test is **genuinely intermittent** (~3/8 passing), not stably failing. The base-commit failure rules **this build out as the cause** — the test fails without any of this PR's changes. The first session's five consecutive failures almost certainly landed while six concurrent dispatches saturated the host.
+**Build HEAD `da39001c` — single run (one invocation):**
+
+```text
+1 passed in 0.88s
+```
+
+**Base `7571e72d` — single run (one invocation)** in detached worktree `/private/tmp/sh931-base` (without any of this build's changes). Purpose: rule **this build out as the cause** — a single run here shows the failure outcome is reachable at base without this PR's changes; a single run cannot establish more than that reachability.
+
+```text
+E           assert None is not None
+FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write
+1 failed in 0.95s
+```
+
+**Build HEAD `da39001c` — 8 consecutive isolated runs** at build HEAD (worktree `issue-931-99ef90b52f31952a`). This series establishes intermittency; counts are checkable against the transcript: **3 passed (runs 1, 3, 4)** and **5 failed (runs 2, 5, 6, 7, 8)**.
+
+```text
+### Orchestrator verification pass — raw receipts
+
+Run series: 8 consecutive isolated runs at build HEAD (worktree issue-931-99ef90b52f31952a).
+
+--- run 1 ---
+1 passed in 0.88s
+--- run 2 ---
+E           assert None is not None
+FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write
+1 failed in 0.95s
+--- run 3 ---
+1 passed in 1.07s
+--- run 4 ---
+1 passed in 0.91s
+--- run 5 ---
+E           assert None is not None
+FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write
+1 failed in 1.32s
+--- run 6 ---
+E           assert None is not None
+FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write
+1 failed in 0.92s
+--- run 7 ---
+E           assert None is not None
+FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write
+1 failed in 1.38s
+--- run 8 ---
+E           assert None is not None
+FAILED plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write
+1 failed in 1.63s
+```
+
+On this host the test is **genuinely intermittent** (3 passed / 5 failed over 8 runs — runs 1, 3, 4 passed; runs 2, 5, 6, 7, 8 failed), not stably failing. The base-commit single-run failure rules **this build out as the cause** — the test fails without any of this PR's changes (reachability only; intermittency comes from the 8-run series). The first session's five consecutive failures almost certainly landed while six concurrent dispatches saturated the host.
 
 **Contrast with flake observation.** PR #1041 describes **intermittent** failure under full-suite load with **isolated pass**. Orchestrator measurements confirm **intermittency on this host** (3/8 pass under controlled repetition). What remains **undemonstrated** is **which condition** flips pass to fail — not whether the test can pass at all.
 
@@ -87,7 +134,7 @@ If the flake is real on CI ubuntu under suite load: intermittent red on `test_di
 ### 4. Recommended follow-ups
 
 1. **Park flake routing** — do not file a fix issue on this diagnosis; cause not demonstrated (UFR-1).
-2. **CI-side reproduction** — re-run full suite with `-n auto` on ubuntu-22.04 / Python 3.12 matching `.github/workflows/ci.yml`; capture flake if it recurs with run link (per CLAUDE.md flake policy).
+2. **CI-side reproduction** — re-run full suite with `-n auto` on `ubuntu-latest` (the rolling image label `.github/workflows/ci.yml` actually uses — read the resolved OS version from the run log rather than assuming a pinned release) / Python 3.12 (pinned in CI); capture flake if it recurs with run link (per CLAUDE.md flake policy).
 3. **Factor isolation** — design A/B runs that vary one candidate at a time (host load, xdist width, Python version) to demonstrate what flips pass/fail; base-commit failure shows the flake predates this build.
 
 ### Ruled-out list (budget exhausted)
@@ -95,7 +142,7 @@ If the flake is real on CI ubuntu under suite load: intermittent red on `test_di
 | Hypothesis | What we tried | Outcome |
 | --- | --- | --- |
 | This build introduced the flake | Orchestrator: single run at base `7571e72d` (no build changes) | **Ruled out** — test fails on base; not caused by this PR |
-| Test always fails locally (stable red) | Orchestrator: 8 consecutive isolated runs at build HEAD `da39001c` | **Ruled out** — 3 passed, 5 failed; intermittency confirmed |
+| Test always fails locally (stable red) | Orchestrator: 8 consecutive isolated runs at build HEAD `da39001c` (see raw receipts above) | **Ruled out** — 3 passed (runs 1, 3, 4), 5 failed (runs 2, 5, 6, 7, 8); intermittency confirmed |
 | Stall timeout vs diff-failed detail | Failure before detail assertion — `proc` never set | **Inconclusive** for CI flake; local path differs from stall-timeout story |
 | Heavy host CPU load (PR #1041 context) | First session under six concurrent dispatches; xdist file runs | **Live hypothesis** — load correlates with PR #1041 context; not isolated by A/B; orchestrator pass under lighter load suggests load may be a factor |
 | Concurrency / xdist load triggers flake | 3× full file with `-n auto` (first session) | **Inconclusive** — all failed in that sample; no factor isolation; not ruled out |
@@ -148,4 +195,4 @@ HEAD and porcelain hash **match** before adding these docs — no edits to `plug
 
 ## Finding for orchestrator
 
-Rehearsal 2's **flake cause was not demonstrated** — honest UFR-1 exit unchanged. **Corrected evidence:** on this host the test is **intermittent** (orchestrator: 3 passed / 5 failed over 8 consecutive runs at build HEAD `da39001c`; single run passed at HEAD, single run failed at base `7571e72d` without this build's changes). The first-pass "stable failure" reading was wrong — five runs under concurrent dispatch load were insufficient repetition. **No fix routed**; factor isolation (what flips pass/fail) remains follow-up.
+Rehearsal 2's **flake cause was not demonstrated** — honest UFR-1 exit unchanged. **Corrected evidence:** on this host the test is **intermittent** (orchestrator: 3 passed / 5 failed over 8 consecutive runs at build HEAD `da39001c` — runs 1, 3, 4 passed; runs 2, 5, 6, 7, 8 failed; single run passed at HEAD, single run failed at base `7571e72d` without this build's changes). The first-pass "stable failure" reading was wrong — five runs under concurrent dispatch load were insufficient repetition. **No fix routed**; factor isolation (what flips pass/fail) remains follow-up.

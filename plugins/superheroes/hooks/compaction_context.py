@@ -40,6 +40,19 @@ PRESERVE (compact pointers and state, not raw artifacts):
 DROP (recoverable from GitHub or the ledger — do not spend summary budget):
 - Verbatim tool output, file diffs, probe transcripts, and command stdout
 """,
+    "detective": """\
+Superheroes charter session — summarization directive for DETECTIVE.
+
+PRESERVE (compact pointers and state, not raw artifacts):
+- Incident under diagnosis and its issue number
+- Hypotheses already ruled out and what ruled them out
+- Demonstration state: what has been reproduced or A/B'd, and on which disposable copy
+- Named diagnosis budget and how much of it is spent
+- The standing prohibition: the examined surface is never edited
+
+DROP (recoverable from GitHub or the ledger — do not spend summary budget):
+- Verbatim tool output, file diffs, probe transcripts, and command stdout
+""",
 }
 
 

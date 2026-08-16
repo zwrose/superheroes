@@ -40,6 +40,18 @@ def test_detects_workhorse(tmp_path):
     assert cd.detect_charter(str(path)) == "workhorse"
 
 
+def test_detects_detective(tmp_path):
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("detective")])
+    assert cd.detect_charter(str(path)) == "detective"
+
+
+def test_charter_names_matches_detection_regex():
+    """CHARTER_NAMES is the single roster; reverting detective drops it here first."""
+    assert "detective" in cd.CHARTER_NAMES
+    assert len(cd.CHARTER_NAMES) == 3
+
+
 def test_no_charter_transcript_returns_none(tmp_path):
     path = tmp_path / "transcript.jsonl"
     _write_transcript(path, [

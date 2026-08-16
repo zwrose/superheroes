@@ -503,6 +503,10 @@ def _showrunner_skill_path():
     return os.path.join(_PLUGIN_ROOT, "skills", "showrunner", "SKILL.md")
 
 
+def _detective_skill_path():
+    return os.path.join(_PLUGIN_ROOT, "skills", "detective", "SKILL.md")
+
+
 def test_compact_workhorse_transcript_injects_charter_recovery(tmp_path, monkeypatch):
     import mode_registry
     monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
@@ -523,6 +527,17 @@ def test_compact_showrunner_transcript_injects_charter_recovery(tmp_path, monkey
     assert "### Charter recovery" in out
     assert _showrunner_skill_path() in out
     assert "showrunner" in out
+
+
+def test_compact_detective_transcript_injects_charter_recovery(tmp_path, monkeypatch):
+    import mode_registry
+    monkeypatch.setattr(mode_registry, "read_registry", lambda cwd, root=None: None)
+    path = tmp_path / "transcript.jsonl"
+    _write_transcript(path, [_user_charter("detective")])
+    out = sc.assemble(str(tmp_path), str(path), _PLUGIN_ROOT, "claude", source="compact")
+    assert "### Charter recovery" in out
+    assert _detective_skill_path() in out
+    assert "detective" in out
 
 
 def test_compact_no_charter_transcript_omits_charter_recovery(tmp_path, monkeypatch):

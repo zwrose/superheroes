@@ -91,12 +91,16 @@ posting. Run every quoted diagnostic through the scrub helper first:
 python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/pr_comment.py" scrub
 ```
 
-(stdin→stdout). The helper mechanically removes **credential classes** — authorization and cookie
-headers, API keys, bearer tokens, secret key-value pairs, URI userinfo credentials, and provider
-token formats such as GitHub tokens. It does **not** detect private URLs or personal data such as
-email addresses; **read those out yourself** before posting. **Say that scrubbing happened** —
-never drop it silently. Reproducibility is preserved through commands, hashes, and redacted
-excerpts — never through raw publication of sensitive material.
+(stdin→stdout). The helper reliably removes **authorization and cookie headers**, **bearer tokens**,
+**URI userinfo credentials** (`scheme://user:pass@host`), **provider token formats** (GitHub
+`gh*_`/`github_pat_`, `sk-…` keys), and **`key=value` pairs whose key is one of a fixed list** —
+`token`, `api_key`, `access_token`, `refresh_token`, `password`, `passwd`, `pwd`, `client_secret`,
+`session`/`session_id`/`sid`. A key name the list does not carry — including a prefixed variant
+such as `DB_PASSWORD` or `AWS_SECRET_ACCESS_KEY` — passes through untouched, as do **private URLs**
+and **personal data** such as email addresses; **remove those by hand** before posting. The helper is
+a **first pass, never the whole redaction** — read the scrubbed text and strip what remains.
+**Say that scrubbing happened** — never drop it silently. Reproducibility is preserved through
+commands, hashes, and redacted excerpts — never through raw publication of sensitive material.
 
 ## What you may write
 

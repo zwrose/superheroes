@@ -71,7 +71,8 @@
       "why did this break, diagnose this",
       "Observe-only",
       "diagnosis receipt",
-      "Not the builder (that is workhorse)"
+      "Not the builder (that is workhorse)",
+      "never edits the surface under diagnosis and never produces a fix"
     ],
     "superheroes/discuss-open-decisions": [
       "Use when the owner needs to rule on open decisions",

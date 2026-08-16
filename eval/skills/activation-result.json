@@ -2352,6 +2352,48 @@
       "direction": "should_not_fire",
       "run": 2,
       "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "fix the null dereference in OrderService.validate \u2014 the stack trace points at line 42, patch it and ship the PR",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "fix the null dereference in OrderService.validate \u2014 the stack trace points at line 42, patch it and ship the PR",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "fix the null dereference in OrderService.validate \u2014 the stack trace points at line 42, patch it and ship the PR",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "direction": "should_not_fire",
+      "run": 0,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "direction": "should_not_fire",
+      "run": 1,
+      "activated": false
+    },
+    {
+      "skill": "superheroes/detective",
+      "phrase": "I'm on the OAuth migration build and pytest fails on test_callback \u2014 figure out which mock is wrong and get the PR ready",
+      "direction": "should_not_fire",
+      "run": 2,
+      "activated": false
     }
   ]
 }

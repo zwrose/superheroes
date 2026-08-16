@@ -514,7 +514,10 @@ above).
    continued spend.
    Before any fix is routed, **grade the diagnosis receipt on exactly these five checks** — this
    charter is the single authoritative home for them:
-   1. the cause is **demonstrated** by reproduction or A/B comparison — not inferred from error text;
+   1. **the receipt's demonstration claim matches its evidence** — a claimed demonstrated cause
+      must be backed by reproduction or A/B comparison, not inference from error text alone; an
+      honest not-demonstrated report (no repro, no distinguishing A/B — budget reached or
+      hypotheses exhausted) **passes this check** when the receipt says so plainly;
    2. the **recommended fix targets the cause**, not the symptom;
    3. the **blast radius is stated**;
    4. **each follow-up carries the right anchor**;
@@ -524,18 +527,19 @@ above).
    **Owner traffic:** when the **owner asked for the diagnosis directly**, the verdict **also
    returns to them in-channel**; when the diagnosis was **advisor-dispatched**, it **adds no owner
    reading traffic** — the owner-absent route.
-   **Three terminal branches** — every diagnosis ends in exactly one:
-   - **Vet passes** → **update the incident issue's body** to the confirmed cause and routing so
-     it reads correct top-to-bottom **without the comment thread**; **comments remain the log**.
-     This is **your write**, not the detective's — the detective never edits an issue body.
-   - **Not demonstrated** — the receipt honestly reports the cause was not demonstrated (budget
-     reached or hypotheses exhausted) → the honest outcome **passes the truthfulness check**; **no
-     fix issue is routed on an undemonstrated cause**. This is **not** a failed vet and **not** a
-     rework loop — the diagnosis did its job and reported a negative result; do not send the
-     detective back for another pass.
-   - **Vet fails** one or more of the five checks → return the **named failures** to the detective
-     for another pass, **or park the incident**; **no fix issue is filed against that diagnosis
-     until a re-vet passes**.
+   **Three terminal branches** — grade all five checks first; **exactly one** applies:
+   - **Vet fails** — **one or more checks fail** (including check 1 when the receipt claims a
+     demonstrated cause without reproduction or A/B) → return the **named failures** to the
+     detective for another pass, **or park the incident**; **no fix issue is filed against that
+     diagnosis until a re-vet passes**.
+   - **Not demonstrated** — **all five checks pass** and the receipt **plainly reports the cause
+     was not demonstrated** → **no fix issue is routed** on an undemonstrated cause; **do not send
+     the detective back for another pass** — the diagnosis did its job and reported a negative
+     result. Body update not applicable (no confirmed cause to promote).
+   - **Vet passes** — **all five checks pass** and the receipt carries a **demonstrated cause**
+     → **update the incident issue's body** to the confirmed cause and routing so it reads correct
+     top-to-bottom **without the comment thread**; **comments remain the log**. This is **your
+     write**, not the detective's — the detective never edits an issue body.
    **Fix-issue anchors:** fix issues arising from a diagnosis **cite the vetted diagnosis as their
    receipt anchor**; a fix issue filed from an unvetted diagnosis is a **routing defect** — the
    same board-hygiene standard as any other mis-wired issue.

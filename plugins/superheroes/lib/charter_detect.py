@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Charter detection from session transcripts.
 
-Long-lived superheroes sessions run under one of two charters (showrunner or
-workhorse), invoked via slash command. Hooks need to know which charter is
-active without wedging compaction — so detection is best-effort, never raises,
-and reads the append-only JSONL transcript forward from the start (charter
-invocations appear early; a tail window would miss them in long sessions).
+Long-lived superheroes sessions run under one of three charters (showrunner,
+workhorse, or detective), invoked via slash command. Hooks need to know which
+charter is active without wedging compaction — so detection is best-effort,
+never raises, and reads the append-only JSONL transcript forward from the
+start (charter invocations appear early; a tail window would miss them in long
+sessions).
 """
 import json
 import os
@@ -14,9 +15,12 @@ import sys
 
 MAX_SCAN_BYTES = 200 * 1024 * 1024
 
+CHARTER_NAMES = ("showrunner", "workhorse", "detective")
+
 _PREFILTER = "/superheroes:"
 _CHARTER_RE = re.compile(
-    r"<command-name>\s*/superheroes:(showrunner|workhorse)\s*</command-name>"
+    r"<command-name>\s*/superheroes:(%s)\s*</command-name>"
+    % "|".join(CHARTER_NAMES)
 )
 
 
@@ -48,7 +52,7 @@ def _breadcrumb(transcript_path, exc):
 
 
 def detect_charter(transcript_path):
-    """Return "showrunner", "workhorse", or None."""
+    """Return a charter name from CHARTER_NAMES, or None."""
     try:
         if not transcript_path:
             return None
