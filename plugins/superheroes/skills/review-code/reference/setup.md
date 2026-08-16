@@ -108,9 +108,9 @@ pin. Two boundaries the refusal does **not** cover: `--pins null` is an **absent
 refusal (it composes normally, unpinned); and the refusal grades the **value shape** only, so a
 malformed field *inside* an object pin — a `vendor` that is not a string, say — is still the
 pre-#1039 behaviour, not a named refusal. **Pinning one seat
-does not hold the others** — every unpinned seat still rotates over the live vendors on the run's
-seed, so an operator excluding a second maker family must pin **every** seat they need held; there
-is no hold-the-rest knob.
+does not hold the others** — every unpinned seat stays in the normal seeded assignment over whatever
+vendors are eligible for it, so an operator excluding a second maker family must pin **every** seat
+they need held; there is no hold-the-rest knob.
 
 ```bash
 CONFIGURED=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');import preflight_probe,core_md;p=(core_md.read('.') or {}).get('enginePreferences') or {};print(','.join(preflight_probe.configured_cross_vendor_engines(p)))" "$ROOT_DIR")
