@@ -19,6 +19,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7)
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
+- Issue-contract vocabulary                              (home: issue_contract.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -2251,3 +2252,381 @@ def test_owner_authority_allowlist_doc_matches_code():
     for ch in refused_doc:
         assert not pattern.fullmatch("X" + ch + "Y"), (
             "doc lists %r as refused but _LITERAL_SAFE_COMMAND accepts it" % ch)
+
+
+# --- Cluster: issue-contract vocabulary (issue_contract → issue-contract.md) ---
+
+
+def _issue_contract_slots_from_home():
+    import issue_contract
+
+    return list(issue_contract.SLOTS)
+
+
+def _issue_contract_rendered_headers_from_home():
+    import issue_contract
+
+    return [
+        issue_contract.ANCHOR_HEADER_FORM,
+        issue_contract.SLOT_WHAT + ":",
+        issue_contract.SLOT_DOD + ":",
+    ]
+
+
+def _issue_contract_anchor_kinds_from_home():
+    import issue_contract
+
+    return set(issue_contract.ANCHOR_KINDS)
+
+
+def _issue_contract_refusals_from_home():
+    import issue_contract
+
+    return set(issue_contract.REFUSALS)
+
+
+def _issue_contract_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
+    import issue_contract
+
+    derived = set()
+    for name in dir(issue_contract):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(issue_contract, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
+
+
+def _issue_contract_vocabulary_section(doc):
+    """The drift-tested vocabulary section in issue-contract.md."""
+    m = re.search(
+        r"^## Vocabulary \(drift-tested\)\s*\n(.*?)(?:\n## |\Z)",
+        doc,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: ## Vocabulary (drift-tested) section not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _issue_contract_slots_from_doc(doc):
+    """Ordered slot names from the Slots bullet block — scoped to that block only."""
+    section = _issue_contract_vocabulary_section(doc)
+    m = re.search(
+        r"\*\*Slots\*\* \(in order\):\n\n(.*?)(?=\n\*\*|\n## |\Z)",
+        section,
+        re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: Slots bullet list not found "
+        "(moved or reworded?)"
+    )
+    tokens = re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE)
+    assert tokens, (
+        "issue-contract.md: Slots bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
+
+
+def _issue_contract_anchor_kinds_from_doc(doc):
+    """Anchor-kind tokens from the Anchor kinds bullet block — scoped to that block only."""
+    section = _issue_contract_vocabulary_section(doc)
+    m = re.search(
+        r"\*\*Anchor kinds\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
+        section,
+        re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: Anchor kinds bullet list not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
+    assert tokens, (
+        "issue-contract.md: Anchor kinds bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
+
+
+def _issue_contract_refusals_from_doc(doc):
+    """Refusal tokens from the Refusal reasons bullet block — scoped to that block only."""
+    section = _issue_contract_vocabulary_section(doc)
+    m = re.search(
+        r"\*\*Refusal reasons\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
+        section,
+        re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: Refusal reasons bullet list not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
+    assert tokens, (
+        "issue-contract.md: Refusal reasons bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
+
+
+def _issue_contract_refusals_from_doc_table(doc):
+    """Refusal tokens from the build-ready refusal-reason table — scoped to that block only."""
+    m = re.search(
+        r"\*\*Refusal reasons\*\* \(build-ready marking declined\):\n\n"
+        r"\| Token \| Meaning \|\n\| --- \| --- \|\n(.*?)(?:\n>|$)",
+        doc,
+        re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: build-ready refusal-reason table not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"\| `([^`]+)` \|", m.group(1)))
+    assert tokens, (
+        "issue-contract.md: refusal-reason table parsed to zero tokens "
+        "(regex drift or empty table?)"
+    )
+    return tokens
+
+
+def _issue_contract_rendered_header_from_doc(doc):
+    """Rendered Anchor header form from the vocabulary section — scoped to that sentence."""
+    section = _issue_contract_vocabulary_section(doc)
+    m = re.search(
+        r"The Anchor slot's rendered header form is `([^`]+)`\.",
+        section,
+    )
+    assert m, (
+        "issue-contract.md: rendered Anchor header form sentence not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _issue_contract_slot_statuses_from_doc(doc):
+    """Slot-status tokens from the Slot statuses bullet block — scoped to that block only."""
+    section = _issue_contract_vocabulary_section(doc)
+    m = re.search(
+        r"\*\*Slot statuses\*\*.*?:\n\n(.*?)(?=\n\*\*|\n## |\Z)",
+        section,
+        re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: Slot statuses bullet list not found "
+        "(moved or reworded?)"
+    )
+    tokens = set(re.findall(r"^- `([^`]+)`", m.group(1), re.MULTILINE))
+    assert tokens, (
+        "issue-contract.md: Slot statuses bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
+
+
+def _issue_contract_slot_statuses_from_home():
+    import issue_contract
+
+    return set(issue_contract.SLOT_STATUSES)
+
+
+def _issue_contract_rendered_headers_from_showrunner_skill():
+    """Rendered slot headers from showrunner/SKILL.md duty 2 — scoped to that enumeration."""
+    text = _read("skills/showrunner/SKILL.md")
+    m = re.search(
+        r"three-slot skeleton\s*\n\s*\(`([^`]+)`, `([^`]+)`, `([^`]+)`\)",
+        text,
+    )
+    assert m, (
+        "showrunner/SKILL.md: duty 2 three-slot skeleton enumeration not found "
+        "(moved or reworded?)"
+    )
+    return [m.group(1), m.group(2), m.group(3)]
+
+
+def _issue_contract_rendered_headers_from_conventions():
+    """Rendered slot headers from CONVENTIONS §11 worked example 3."""
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"three slot names and their order\s*\n\(`([^`]+)`, `([^`]+)`, `([^`]+)`\)",
+        text,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: issue-contract slot enumeration not found "
+        "(moved or reworded?)"
+    )
+    return [m.group(1), m.group(2), m.group(3)]
+
+
+def _issue_contract_refusals_from_conventions():
+    """Refusal tokens and count word from CONVENTIONS §11 worked example 3."""
+    import issue_contract
+
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"(\w+) build-ready\s+refusal-reason tokens \(([^)]+)\)",
+        text,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: issue-contract refusal-token list not found "
+        "(moved or reworded?)"
+    )
+    count_word = m.group(1).lower()
+    assert count_word in _NUMBER_WORDS, (
+        "CONVENTIONS.md §11 uses unknown refusal-count word %r" % count_word
+    )
+    # axis: the prose count word (six, seven, …) must match len(REFUSALS) — distinct from the
+    # adjacent token-set membership check on the same passage.
+    assert _NUMBER_WORDS[count_word] == len(issue_contract.REFUSALS), (
+        "CONVENTIONS.md §11 refusal count word %r (%d) drift from "
+        "len(issue_contract.REFUSALS) (%d)"
+        % (count_word, _NUMBER_WORDS[count_word], len(issue_contract.REFUSALS))
+    )
+    tokens = re.findall(r"`([^`]+)`", m.group(2))
+    assert tokens, (
+        "CONVENTIONS.md §11: refusal-token list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return set(tokens)
+
+
+def test_issue_contract_vocabulary_in_issue_contract_doc():
+    """§11: issue-contract.md restates issue_contract.py vocabulary on three registry axes
+    plus ordered slots.
+
+    Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
+  **Names** (compared against ``issue_contract.SLOTS`` and sibling registries):
+    - skills/showrunner/reference/issue-contract.md ## Vocabulary (drift-tested) — Slots,
+      Anchor kinds, Refusal reasons bullet lists, Slot statuses bullet list
+    - skills/showrunner/reference/issue-contract.md build-ready refusal-reason table
+  **Rendered headers** (compared against ``ANCHOR_HEADER_FORM``, ``What:``, ``DoD:``):
+    - skills/showrunner/reference/issue-contract.md ## Vocabulary (drift-tested) — rendered
+      Anchor header form sentence
+    - skills/showrunner/SKILL.md duty 2 three-slot skeleton enumeration
+    - CONVENTIONS.md §11 worked example 3 slot-header enumeration
+  **Refusal count word** (compared against ``len(issue_contract.REFUSALS)``):
+    - CONVENTIONS.md §11 worked example 3 refusal-reason prose
+  **Refusal token list** (compared against ``issue_contract.REFUSALS``):
+    - CONVENTIONS.md §11 worked example 3 refusal-reason token list
+
+    Axis notes:
+    - Slots, anchor kinds, refusals, slot statuses: SLOT_/KIND_/REFUSAL_/SLOT_STATUS_* constants
+      must match the module registries; the doc bullet lists must match the home registries.
+    - Slot order: the doc Slots block is compared as an ordered sequence against SLOTS.
+    - Rendered headers: SKILL.md and CONVENTIONS §11 enumerate header forms, not bare names.
+    - ``ANCHOR_HEADER_FORM`` must start with ``SLOT_ANCHOR`` and end with ``:`` so both axes
+      move together when the Anchor slot is renamed.
+    """
+    import issue_contract
+
+    home_slots = _issue_contract_slots_from_home()
+    home_rendered = _issue_contract_rendered_headers_from_home()
+    # axis: ANCHOR_HEADER_FORM must move with SLOT_ANCHOR — a slot rename cannot leave the rendered
+    # header form pointing at a stale prefix or missing the trailing colon.
+    assert issue_contract.ANCHOR_HEADER_FORM.startswith(issue_contract.SLOT_ANCHOR), (
+        "issue_contract.ANCHOR_HEADER_FORM must start with SLOT_ANCHOR — "
+        "form: %r; anchor: %r"
+        % (issue_contract.ANCHOR_HEADER_FORM, issue_contract.SLOT_ANCHOR)
+    )
+    assert issue_contract.ANCHOR_HEADER_FORM.endswith(":"), (
+        "issue_contract.ANCHOR_HEADER_FORM must end with ':' — form: %r"
+        % issue_contract.ANCHOR_HEADER_FORM
+    )
+    home_kinds = _issue_contract_anchor_kinds_from_home()
+    home_refusals = _issue_contract_refusals_from_home()
+    home_slot_statuses = _issue_contract_slot_statuses_from_home()
+    derived_slots = _issue_contract_string_constants_by_prefix("SLOT_")
+    derived_kinds = _issue_contract_string_constants_by_prefix("KIND_")
+    derived_refusals = _issue_contract_string_constants_by_prefix("REFUSAL_")
+    derived_slot_statuses = _issue_contract_string_constants_by_prefix("SLOT_STATUS_")
+    derived_slots = derived_slots - derived_slot_statuses
+    assert derived_slots == set(home_slots), (
+        "issue_contract SLOT_* constants drift from issue_contract.SLOTS — "
+        "symmetric difference: %r"
+        % sorted(derived_slots ^ set(home_slots))
+    )
+    assert derived_kinds == home_kinds, (
+        "issue_contract KIND_* constants drift from issue_contract.ANCHOR_KINDS — "
+        "symmetric difference: %r"
+        % sorted(derived_kinds ^ home_kinds)
+    )
+    assert derived_refusals == home_refusals, (
+        "issue_contract REFUSAL_* constants drift from issue_contract.REFUSALS — "
+        "symmetric difference: %r"
+        % sorted(derived_refusals ^ home_refusals)
+    )
+    assert derived_slot_statuses == home_slot_statuses, (
+        "issue_contract SLOT_STATUS_* constants drift from issue_contract.SLOT_STATUSES — "
+        "symmetric difference: %r"
+        % sorted(derived_slot_statuses ^ home_slot_statuses)
+    )
+    doc = _read("skills/showrunner/reference/issue-contract.md")
+    doc_slots = _issue_contract_slots_from_doc(doc)
+    assert doc_slots == home_slots, (
+        "issue-contract.md Slots order drift from issue_contract.SLOTS — "
+        "doc: %r; home: %r"
+        % (doc_slots, home_slots)
+    )
+    doc_kinds = _issue_contract_anchor_kinds_from_doc(doc)
+    missing_kinds = sorted(home_kinds - doc_kinds)
+    extra_kinds = sorted(doc_kinds - home_kinds)
+    assert not missing_kinds and not extra_kinds, (
+        "issue-contract.md Anchor kinds vocabulary drift from issue_contract.ANCHOR_KINDS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_kinds, extra_kinds)
+    )
+    doc_refusals = _issue_contract_refusals_from_doc(doc)
+    missing_refusals = sorted(home_refusals - doc_refusals)
+    extra_refusals = sorted(doc_refusals - home_refusals)
+    assert not missing_refusals and not extra_refusals, (
+        "issue-contract.md Refusal reasons vocabulary drift from issue_contract.REFUSALS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_refusals, extra_refusals)
+    )
+    table_refusals = _issue_contract_refusals_from_doc_table(doc)
+    missing_table = sorted(home_refusals - table_refusals)
+    extra_table = sorted(table_refusals - home_refusals)
+    assert not missing_table and not extra_table, (
+        "issue-contract.md refusal-reason table drift from issue_contract.REFUSALS — "
+        "missing from table: %r; present in table but not in home: %r"
+        % (missing_table, extra_table)
+    )
+    doc_rendered_header = _issue_contract_rendered_header_from_doc(doc)
+    assert doc_rendered_header == issue_contract.ANCHOR_HEADER_FORM, (
+        "issue-contract.md rendered Anchor header form drift from "
+        "issue_contract.ANCHOR_HEADER_FORM — doc: %r; home: %r"
+        % (doc_rendered_header, issue_contract.ANCHOR_HEADER_FORM)
+    )
+    doc_slot_statuses = _issue_contract_slot_statuses_from_doc(doc)
+    missing_statuses = sorted(home_slot_statuses - doc_slot_statuses)
+    extra_statuses = sorted(doc_slot_statuses - home_slot_statuses)
+    assert not missing_statuses and not extra_statuses, (
+        "issue-contract.md Slot statuses vocabulary drift from issue_contract.SLOT_STATUSES — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_statuses, extra_statuses)
+    )
+    # axis: SKILL.md and CONVENTIONS §11 enumerate rendered header forms, not bare slot names.
+    skill_headers = _issue_contract_rendered_headers_from_showrunner_skill()
+    assert skill_headers == home_rendered, (
+        "showrunner/SKILL.md duty 2 rendered-header drift from issue_contract — "
+        "doc: %r; home: %r"
+        % (skill_headers, home_rendered)
+    )
+    conventions_headers = _issue_contract_rendered_headers_from_conventions()
+    assert conventions_headers == home_rendered, (
+        "CONVENTIONS.md §11 rendered-header drift from issue_contract — "
+        "doc: %r; home: %r"
+        % (conventions_headers, home_rendered)
+    )
+    conventions_refusals = _issue_contract_refusals_from_conventions()
+    missing_conv = sorted(home_refusals - conventions_refusals)
+    extra_conv = sorted(conventions_refusals - home_refusals)
+    assert not missing_conv and not extra_conv, (
+        "CONVENTIONS.md §11 refusal vocabulary drift from issue_contract.REFUSALS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_conv, extra_conv)
+    )
+    assert list(issue_contract.SLOTS) == home_slots

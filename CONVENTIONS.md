@@ -995,6 +995,18 @@ the affected copy until it is updated to match. Separately, the runtime
 leg may run a subset, but only of sanctioned seats — an unsanctioned `--dimensions` input is
 dropped, never widening or corrupting the roster.
 
+*Worked example 3 — the issue-contract vocabulary.* The three slot names and their order
+(`Anchor (<kind>):`, `What:`, `DoD:`), the three anchor-kind tokens, and the six build-ready
+refusal-reason tokens (`anchor-slot-missing`, `anchor-slot-empty`, `anchor-kind-missing`,
+`anchor-kind-unrecognized`, `anchor-kind-multiple`, `body-unreadable`) are a cross-boundary fact: they are stated in
+`plugins/superheroes/lib/issue_contract.py` and restated in
+`plugins/superheroes/skills/showrunner/reference/issue-contract.md`. The authoritative home
+is the Python module — exactly as `citation_validator.py`'s `CITATION_RE` is the home for
+the citation grammar. The reference doc's `## Vocabulary (drift-tested)` section is
+drift-tested against the module by `lib/tests/test_ssot_drift.py`; that reader **fails
+closed** — if it parses nothing (heading renamed, block reformatted) it raises rather than
+passing vacuously.
+
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the
 enumerating drift test must name every known copy-holder (a comment listing them), and
