@@ -1140,21 +1140,47 @@ def test_advance_malformed_verify_payload_does_not_fallback_to_seat_record(tmp_p
 
 
 def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):
-    """Config seatMap fallback when top-level state seatMap is empty (#723 + #960)."""
-    partial = {"seats": {"architecture-reviewer": {"vendor": "claude", "model": "sonnet-5",
-                                                    "engine": "claude"}}}
+    """Config seatMap fallback when a submitted panel empties state seats (#723 + #960)."""
+    seeded_vendor = "codex"
+    partial = {"seats": {"architecture-reviewer": {"vendor": seeded_vendor, "model": "gpt-5",
+                                                    "engine": "codex"}}}
     d = _session(tmp_path, seatMap=partial)
+    initial_pend = _pending(d)
+    initial_attempt = initial_pend["attempt"]
+
+    pend = initial_pend
+    seats = {dim: {"findings": []} for dim in RD.DIMENSIONS}
+    submit_out = RD.cmd_submit(
+        d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
+        {"seats": seats, "seatMap": {"seats": {}}},
+    )
+    assert submit_out["ok"] is True, submit_out
+
     state = _state(d)
-    state["seatMap"] = {}
-    assert state["config"]["seatMap"] == partial
+    assert state["seatMap"]["seats"] == {}
+    assert state["config"]["seatMap"]["seats"] == partial["seats"]
+
+    rnd = initial_pend["round"]
+    state["step"] = RD.P_PANEL
+    state["pending"] = None
+    state["lastAccepted"] = {"phase": RD.P_PANEL, "round": rnd, "attempt": 0,
+                             "artifactHash": "abc"}
     RD.save_state(d, state)
-    assert RD.cmd_next(d)["ok"]
-    pend = _pending(d)
-    manifest_path = RD._orders_manifest_path(d, pend["round"], pend["phase"], pend["attempt"])
+
+    next_out = RD.cmd_next(d)
+    assert next_out["ok"] is True, next_out
+    fresh_pend = _pending(d)
+    assert fresh_pend["phase"].startswith("dispatch-"), fresh_pend
+    assert fresh_pend["attempt"] != initial_attempt, (
+        "must emit a fresh attempt, not re-read the pre-submit manifest")
+
+    manifest_path = RD._orders_manifest_path(
+        d, fresh_pend["round"], fresh_pend["phase"], fresh_pend["attempt"])
     manifest, err = RR.read_json(manifest_path)
-    assert err is None
+    assert err is None, err
     skey = RR.storage_key("architecture-reviewer")
-    assert manifest["seats"][skey]["vendor"] == "claude"
+    assert manifest["seats"][skey]["vendor"] == seeded_vendor, (
+        "config seat-map fallback must supply the seeded vendor for architecture-reviewer")
 
 
 def test_emitted_order_discloses_vendor_gap_when_seat_map_absent(tmp_path, adapters):
