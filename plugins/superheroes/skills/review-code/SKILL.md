@@ -273,6 +273,13 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 # Live vendors from the seat map (family-aware; #510) — the pool the driver seats independent
 # fix-auditors from; falls back to the reviewer+impl engines if the seat map is unreadable.
 VENDORS=$(echo "$SEAT_MAP" | python3 -B -c 'import json,sys; d=json.load(sys.stdin); print(json.dumps(sorted(d.get("liveVendors") or [])))' 2>/dev/null || python3 -B -c 'import json,sys; print(json.dumps(sorted({v for v in sys.argv[1:] if v})))' "$REVIEWER_ENGINE" "$IMPL_ENGINE")
+SEAT_MAP_ARGS=()
+if [ -n "$SEAT_MAP" ] && echo "$SEAT_MAP" | python3 -B -c 'import json,sys
+d=json.load(sys.stdin)
+sys.exit(0 if isinstance(d, dict) else 1)' 2>/dev/null; then
+  printf '%s' "$SEAT_MAP" > "$SESSION_DIR/seat-map.json"
+  SEAT_MAP_ARGS=(--seat-map "$SESSION_DIR/seat-map.json")
+fi
 python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --session-dir "$SESSION_DIR" \
   --diff-path "$SESSION_DIR/round-1/diff.txt" \
@@ -280,8 +287,11 @@ python3 -B "$ROOT_DIR/lib/round_driver.py" next \
   --vendors "$VENDORS" \
   --fixer-vendor "$IMPL_ENGINE" \
   --prior-comments "$SESSION_DIR/prior-comments.json" \
-  --max-rounds 7
+  --max-rounds 7 \
+  "${SEAT_MAP_ARGS[@]}"
 ```
+
+Round 1 is the round that dispatches the panel, and without the seat map no round-1 seat's vendor resolves, so every seat falls back to the safe stdout contract and the orchestrator must land each payload itself; passing the map keeps native seats on the direct-write path and records real vendor provenance (#1035). The guard above only passes `--seat-map` when `$SEAT_MAP` is non-empty and parses as a JSON object, so a genuinely empty/unset `$SEAT_MAP` never gets written to a file and handed to the driver.
 
 **The loop.** Until `action` is `terminal`:
 

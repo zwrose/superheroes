@@ -4114,6 +4114,49 @@ def _seat_is_engine(row):
     return _vendor_is_external_engine(row.get("vendor"))
 
 
+CHANNEL_FILE = "file"
+CHANNEL_STDOUT = "stdout"
+
+# Phases whose seats an orchestrator dispatches through `dispatch-review` — a READ-ONLY sandbox on
+# an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,
+# never a `dispatch-review` consumer, and its vendor is UNKNOWN by default (#608), so folding an
+# absent vendor to the stdout contract there would rewrite a deliberate default rather than close a
+# forfeit. DERIVED from `round_orders.ORDER_PHASES` (not hand-typed) so a phase added there and
+# forgotten here cannot silently fold an unresolved vendor to the WRITE contract (#1035).
+_READ_ONLY_CHANNEL_PHASES = frozenset(round_orders.ORDER_PHASES) - {P_FIXER}
+
+
+def _vendor_is_resolved(row):
+    """True when the transport row carries a non-empty vendor string — the channel is knowable."""
+    vendor = row.get("vendor")
+    return isinstance(vendor, str) and bool(vendor.strip())
+
+
+def _seat_channel(phase, row):
+    """The channel the seat's OUTPUT CONTRACT follows — the one home for that choice (#1035).
+
+    The vendor fact is three-valued (host / engine / unknowable) and the contract is two-valued, so
+    the fold direction is the whole design: a landing-path WRITE contract is stated only on positive
+    evidence that the seat is a host seat that can write.
+
+    * engine vendor -> stdout. A sandboxed seat forfeits on the forbidden write (#767 class).
+    * absent vendor on a `dispatch-review` phase -> stdout. The driver cannot establish the channel,
+      and the two errors are not symmetric: a host seat handed the stdout contract still returns its
+      payload and the orchestrator lands it on the durable path, while an engine seat handed the
+      write contract is lost to a forfeit. Fail-safe, not fail-open. The gap is still DISCLOSED as
+      `orderVendorProvenanceGaps` — this makes it safe, it does not make it silent.
+    * host vendor (and every phase outside `_READ_ONLY_CHANNEL_PHASES`) -> file. Unchanged.
+
+    This is also the single switch behind BOTH the `host_seat` context flag and the `CHANNEL`
+    placeholder; deriving them independently is how the two could disagree for one seat.
+    """
+    if _seat_is_engine(row):
+        return CHANNEL_STDOUT
+    if phase in _READ_ONLY_CHANNEL_PHASES and not _vendor_is_resolved(row):
+        return CHANNEL_STDOUT
+    return CHANNEL_FILE
+
+
 def _reviewer_engine_vendor(repo_root):
     """Reviewer-role engine for single-seat reviewer phases (verifiers, gap-sweep, scoped)."""
     try:
@@ -4362,7 +4405,7 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths):
+                        session_dir, rnd, paths, channel):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -4386,8 +4429,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         dim_label = _panel_dimension_label(seat_key)
         if not dim_label:
             raise ValueError("order-render-refused:no-dimension-label:%s" % seat_key)
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
-        channel = "stdout" if _seat_is_engine(row) else "file"
         pr_checkout = _session_pr_checkout_path(session_dir)
         ph = {
             "MODE": meta.get("mode") or cfg.get("mode") or "branch",
@@ -4415,26 +4456,23 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                 break
         if cluster_index is None:
             raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "CLUSTER_FINDINGS_PATH": _order_cluster_sidecar_path(rdir, cluster_index),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
-            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+            "CHANNEL": channel,
         }
     elif phase == P_SYNTHESIS:
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "VERIFIED_FINDINGS_PATH": _order_verified_sidecar_path(rdir),
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "GROUPING_OUTPUT_PATH": os.path.join(rdir, "grouping.json"),
-            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+            "CHANNEL": channel,
         }
     elif phase == P_GAPSWEEP:
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "DIFF_PATH": diff_path,
             "RUBRIC_PATH": rubric_path,
@@ -4442,7 +4480,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "gap-sweep-findings.json"),
-            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+            "CHANNEL": channel,
         }
     elif phase == P_AUDITS:
         targets = payload.get("targets")
@@ -4450,7 +4488,6 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             targets = []
         if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "TARGET_SUMMARY_PATH": _order_audit_target_sidecar_path(
                 rdir, round_records.storage_key(seat_key, occurrence)),
@@ -4458,10 +4495,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "TARGET_ID": seat_key,
-            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+            "CHANNEL": channel,
         }
     elif phase == P_SCOPED:
-        row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, payload, repo_root)
         ph = {
             "HUNKS_PATH": _order_scoped_hunks_sidecar_path(rdir),
             "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
@@ -4470,7 +4506,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "LAYER_PATH": layer_path,
             "VERIFICATION_ROOT": repo_root,
             "FINDINGS_OUTPUT_PATH": os.path.join(rdir, "scoped-findings.json"),
-            "CHANNEL": "stdout" if _seat_is_engine(row) else "file",
+            "CHANNEL": channel,
         }
     elif phase == P_FIXER:
         ph = {
@@ -4487,16 +4523,27 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload):
+                                pending_payload, row):
+    """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
+
+    `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
+    reviewer-engine phases (it re-reads engine prefs from disk behind a fallback), so a second
+    resolution inside this function could return a different vendor than the one the manifest and
+    envelope stub already recorded, telling a read-only engine seat to write a landing file (#1035).
+    One seat, one transport-row resolution, per emission — the caller resolves it once and passes
+    that same row to every consumer.
+    """
     cfg = state.get("config") or {}
     meta = _session_meta(session_dir)
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
-    row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending_payload, repo_root)
     transport_fault = _seat_transport_fault(row, seat_key)
     if transport_fault is not None:
         skey = round_records.storage_key(seat_key, occurrence)
         raise ValueError("order-render-refused:%s:%s" % (skey, transport_fault))
-    host_seat = not _seat_is_engine(row)
+    # Resolve the channel EXACTLY ONCE (from the row the caller resolved) and hand that value to
+    # both consumers (`host_seat` here, the `CHANNEL` placeholder below).
+    channel = _seat_channel(phase, row)
+    host_seat = channel == CHANNEL_FILE
     paths = _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat)
     base_ref = cfg.get("baseRef") or meta.get("baseRef")
     residuals, prov, res_failure = round_orders.resolve_order_residuals(repo_root, base_ref)
@@ -4521,7 +4568,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths),
+                                              session_dir, rnd, paths, channel),
     }, paths
 
 
@@ -4643,7 +4690,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
             if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
-                                                     seat_key, occurrence, pending_payload)
+                                                     seat_key, occurrence, pending_payload, row)
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
