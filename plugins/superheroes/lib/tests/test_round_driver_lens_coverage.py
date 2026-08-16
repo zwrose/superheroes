@@ -145,3 +145,32 @@ def test_validate_receipt_refuses_ran_above_expected():
     ok, reason = RD.validate_receipt(mutated)
     assert ok is False
     assert "ran" in reason
+
+
+def test_validate_receipt_refuses_bool_ran_expected():
+    seats = _all_seats_empty()
+    _, receipt = _fold_and_receipt(seats)
+    mutated = copy.deepcopy(receipt)
+    mutated["rounds"][0]["lensCoverage"] = {"ran": True, "expected": True, "floor": False}
+    mutated["terminal"] = "converged"
+    mutated["verdict"] = "converged"
+    mutated["certification"] = {"shape": "audited-chain", "fullPanel": False}
+    mutated["certificationShape"] = "audited-chain"
+    ok, reason = RD.validate_receipt(mutated)
+    assert ok is False
+    assert "integers" in reason
+
+
+def test_validate_receipt_refuses_anchor_round_without_lens_coverage():
+    seats = _all_seats_empty()
+    state, receipt = _fold_and_receipt(seats)
+    state["round"] = 2
+    RD._record_round(state, "roundKind", "delta")
+    RD._record_round(state, "blockingCount", 0)
+    converged = _converged_receipt_from_state(state)
+    converged["certification"]["fullPanel"] = True
+    converged["certification"]["shape"] = "full-panel-confirmed"
+    converged["certificationShape"] = "full-panel-confirmed"
+    ok, reason = RD.validate_receipt(converged)
+    assert ok is False
+    assert "lacks lensCoverage" in reason

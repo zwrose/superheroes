@@ -1239,6 +1239,15 @@ def test_accept_risk_not_eligible_without_evidence_on_stalled_target():
     assert state["_acceptRiskEligible"] is False
 
 
+def test_empty_stall_targets_omit_one_more_round_from_menu():
+    """one-more-round is not offered when the stall-target snapshot is empty."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    RD._handle_stall(state, state["config"], _STALL_BREAKER)
+    assert state["_stallTargets"] == []
+    assert "one-more-round" not in state["_stallChoices"]
+
+
 def test_second_stall_menu_omits_one_more_round_after_latch():
     """one-more-round is offerable once per session — a second stall menu drops it."""
     state = RD.new_state(_cfg())
@@ -1264,6 +1273,39 @@ def test_retired_stall_choice_refused_at_submit(tmp_path, choice):
     assert out["reason"] == "stall-choice-retired:%s" % choice
     ok, reloaded = RD.load_state(d)
     assert ok and reloaded["step"] == RD.P_STALL
+
+
+def test_one_more_round_accepted_through_cmd_submit(tmp_path):
+    """Stepwise owner gate: one-more-round survives cmd_submit and re-enters dispatch-fixer."""
+    d = str(tmp_path)
+    state, ident, tgt = _stall_target_state()
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    assert "one-more-round" in state["_stallChoices"]
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    out = RD.cmd_submit(
+        d, n["phase"], n["attempt"], n["expectedStateHash"], {"choice": "one-more-round"})
+    assert out["ok"] is True, out
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded["step"] == RD.P_FIXER
+    assert reloaded["_oneMoreRoundUsed"] is True
+    assert reloaded["_fixBatch"] == reloaded["_stallTargets"]
+
+
+def test_stale_accept_risk_flag_without_stall_targets_fails_closed():
+    """A cached _acceptRiskEligible from an older rule must not certify without a qualifying snapshot."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = []
+    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
+    RD._fold_stall(state, state["config"], {"choice": "accept-the-disclosed-risk"})
+    assert state["terminal"] == "stalled"
+    assert state["step"] == RD.P_TERMINAL
+    assert state["certification"]["shape"] is None
 
 
 def test_stall_choice_not_offered_refused_at_submit(tmp_path):
@@ -2506,6 +2548,8 @@ _ALL_CHANNELS = {
     "adapterProvenance": {"vendorEchoMismatch": [{"seat": "test-reviewer", "echo": "cursor",
                                                   "manifest": "codex"}]},
     "recordOrphansIgnored": ["code-reviewer"],
+    "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
+                                   "storeKey": "architecture-reviewer", "occurrence": 0}],
 }
 
 
@@ -2750,6 +2794,7 @@ def test_panel_round_channels_are_all_accounted_for():
 
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
+    order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
     restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
@@ -2758,14 +2803,17 @@ def test_panel_round_channels_are_all_accounted_for():
     assert submit_disclosure <= restorable, (
         "submit disclosure channels must be restorable: %s"
         % sorted(submit_disclosure - restorable))
+    assert order_emission <= restorable, (
+        "order-emission disclosure channels must be restorable: %s"
+        % sorted(order_emission - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    assert recorded | fold_provenance | submit_disclosure == accounted, (
+    assert recorded | fold_provenance | submit_disclosure | order_emission == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
-        % (sorted((recorded | fold_provenance | submit_disclosure) - accounted),
-           sorted(accounted - (recorded | fold_provenance | submit_disclosure))))
+        % (sorted((recorded | fold_provenance | submit_disclosure | order_emission) - accounted),
+           sorted(accounted - (recorded | fold_provenance | submit_disclosure | order_emission))))
 
 
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():

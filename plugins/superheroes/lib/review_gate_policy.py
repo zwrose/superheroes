@@ -218,7 +218,8 @@ def validate_policy_for_write(policy: object) -> str | None:
             and isinstance(disposition, str)
             and disposition in round_phases.RETIRED_STALL_CHOICES
         ):
-            return "%s%s" % (round_phases.RETIRED_STALL_CHOICE_PREFIX, disposition)
+            return "rules[%d]: %s%s" % (
+                index, round_phases.RETIRED_STALL_CHOICE_PREFIX, disposition)
         allowed = _allowed_dispositions(gate, finding_class)
         if not isinstance(disposition, str) or disposition not in allowed:
             return "rules[%d].disposition for gate %s class %s must be one of %s (got %r)" % (
