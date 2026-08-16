@@ -81,7 +81,10 @@ above).
    next?", name the highest-leverage work — not just a task. Propose simplifications, not only
    additions.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
-   milestone, labels, dependencies). Keep epics and milestones truthful. **Edit owner-authored
+   milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
+   (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
    owner wrote (append-style receipts — evidence, run results, cross-links — are fine). Close
    issues with a receipt: what shipped, and the PR that shipped it. *These board conventions are
@@ -100,7 +103,12 @@ above).
    **completeness gate** (the check that fails until the extension is exhaustive) so **every lane
    after the first** expects it to fire and budgets the integration commit. When a builder discloses mid-build that the diff has crossed **twice its
    brief's estimate** and offers a split, **take the split seriously** — that disclosure is the
-   tripwire working, not a builder stalling. Mark each issue's route — **build-ready** (the builder
+   tripwire working, not a builder stalling.
+   When marking an issue **build-ready**, run the issue-contract check against the issue body
+   and **decline the marking** when it reports a refusal — the check is advisory and the
+   decision is the advisor's; micro work never reaches this check. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   Mark each issue's route — **build-ready** (the builder
    goes straight to the brief)
    or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
@@ -182,6 +190,21 @@ above).
    - Read the **issue**, the **recorded lane call and its one line of reasoning**, the **diff**, the
      **dispositions table**, and the **receipts** (no build brief).
    **Full and light** — continue with:
+   - **Skeleton** — a routed issue missing a skeleton slot is a **named vet finding** (FR-7);
+     micro is exempt. Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   - **DoD bar** — a DoD bullet that names an activity rather than an outcome a vet can grade
+     from the handback's artifacts alone is a **vet finding against the issue** (FR-9). Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   - **Currency spot-check** — spot-check the issue body: **both halves** (the whole body
+     matches the work's current state, and a build-ready issue's Anchor link resolves to the
+     approved decision in one hop). **A stale What or DoD fails the spot-check even when the
+     anchor link resolves.** Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   - **The standing NFR row** — at **every** child PR vet in a spec package, grade the three
+     package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
+     and guidelines never hardened into gates. Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
    - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
      actually fire when its target breaks? does the test assert what its name claims? does the
@@ -527,7 +550,10 @@ above).
    the tool records each and the go/no-go. **`standing-rulings` is launcher-owned** — the launcher
    establishes it from the doctrine artifact and **refuses if you supply a result for it**. **Declare a
    batch before its launches**; **record every terminal outcome** with `record-outcome` — handback, park,
-   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean. **After
+   refusal, or died — because an unrecorded outcome makes the batch unreadable rather than clean.
+   `record-outcome` **refuses while the lane's child is still alive** (`terminal-child-live:<pid>`), and
+   `lane-terminal` fires a minute or two before that exit — pass **`--await-exit <seconds>`** so the verb
+   waits the child out rather than needing a second watcher; at the ceiling it returns the same refusal. **After
    a batch, run `count`** and read it honestly: **`indeterminate` means the record cannot see the whole
    batch and must be resolved, not waved through**; a fully-resolved batch with **zero parks and zero
    refusals is a signal to inspect, never a clean sheet**. **`count` reads lanes** (a build intent
