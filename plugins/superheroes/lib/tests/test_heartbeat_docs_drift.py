@@ -54,40 +54,73 @@ def test_conventions_section_15_matches_heartbeat_constants():
     _assert_tokens_present(section, "CONVENTIONS.md §15", tokens)
 
 
-def test_conventions_and_wave_watch_pin_the_default_promise():
-    # bite-axis: the DEFAULT PROMISE NUMBER *and its derivation* in prose track the
-    # module. Both docs state them; neither may drift from heartbeat's constants.
-    default = str(hb.DEFAULT_STALE_AFTER_SECONDS)
-    measured = str(hb.STALE_AFTER_MEASUREMENT["worstBenignGapSeconds"])
-    _assert_tokens_present(
-        _conventions_section_15(), "CONVENTIONS.md §15",
-        ["DEFAULT_STALE_AFTER_SECONDS", default, measured],
-    )
-    _assert_tokens_present(
-        _read_plugin("skills/showrunner/reference/wave-watch.md"),
-        "reference/wave-watch.md",
-        ["DEFAULT_STALE_AFTER_SECONDS", default, measured],
-    )
-
-
-def test_wave_watch_doc_states_the_full_measurement_corpus():
-    # bite-axis: the CORPUS COUNTS behind the floor track their authoritative home,
-    # so correcting the measurement cannot leave the documented derivation stale.
+def _bind_conventions_section_15_measurement(section):
+    """Field-bind every STALE_AFTER_MEASUREMENT value stated in CONVENTIONS §15."""
     m = hb.STALE_AFTER_MEASUREMENT
-    doc = _read_plugin("skills/showrunner/reference/wave-watch.md")
+    label = "CONVENTIONS.md §15"
     _assert_bound_fragment(
-        doc, "lanes", "across **%d** builder lanes" % m["lanes"],
+        section, label,
+        "`heartbeat.DEFAULT_STALE_AFTER_SECONDS` = **%d** seconds"
+        % hb.DEFAULT_STALE_AFTER_SECONDS,
     )
     _assert_bound_fragment(
-        doc, "gaps", "pooled **%d** inter-stamp gaps" % m["gaps"],
+        section, label, "floored at %d× the worst" % m["multiplier"],
     )
     _assert_bound_fragment(
-        doc, "benignGaps",
+        section, label, "(%d s, over" % m["worstBenignGapSeconds"],
+    )
+    _assert_bound_fragment(
+        section, label, "over %d gaps across" % m["gaps"],
+    )
+    _assert_bound_fragment(
+        section, label, "across %d builder lanes" % m["lanes"],
+    )
+    _assert_bound_fragment(
+        section, label, "builder lanes, %d of" % m["benignGaps"],
+    )
+    # coldThresholdSeconds is not stated in §15 — only in wave-watch.md.
+
+
+def _bind_wave_watch_measurement_corpus(doc):
+    """Field-bind every STALE_AFTER_MEASUREMENT value stated in wave-watch.md."""
+    m = hb.STALE_AFTER_MEASUREMENT
+    label = "reference/wave-watch.md"
+    _assert_bound_fragment(
+        doc, label,
+        "`DEFAULT_STALE_AFTER_SECONDS`, **%d s**" % hb.DEFAULT_STALE_AFTER_SECONDS,
+    )
+    _assert_bound_fragment(
+        doc, label,
+        "**%d× the worst benign inter-stamp gap" % m["multiplier"],
+    )
+    _assert_bound_fragment(
+        doc, label, "host, %d s**" % m["worstBenignGapSeconds"],
+    )
+    _assert_bound_fragment(
+        doc, label, "across **%d** builder lanes" % m["lanes"],
+    )
+    _assert_bound_fragment(
+        doc, label, "pooled **%d** inter-stamp gaps" % m["gaps"],
+    )
+    _assert_bound_fragment(
+        doc, label,
         "**%d** of the %d gaps were benign" % (m["benignGaps"], m["gaps"]),
     )
     _assert_bound_fragment(
-        doc, "coldThresholdSeconds",
+        doc, label,
         "colder than **%d** s anywhere inside it" % m["coldThresholdSeconds"],
+    )
+
+
+def test_conventions_section_15_pins_the_measurement_corpus():
+    # bite-axis: every measurement field stated in §15 tracks heartbeat.py.
+    _bind_conventions_section_15_measurement(_conventions_section_15())
+
+
+def test_wave_watch_doc_states_the_full_measurement_corpus():
+    # bite-axis: every measurement field stated in wave-watch.md tracks heartbeat.py.
+    _bind_wave_watch_measurement_corpus(
+        _read_plugin("skills/showrunner/reference/wave-watch.md"),
     )
 
 

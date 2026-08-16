@@ -2771,11 +2771,35 @@ def test_transcript_mtime_after_call_beginning_suppresses_lane():
     assert still == [] and len(suppressed) == 1
 
 
-def test_session_transcript_mtime_unreadable_bucket_is_unresolved(tmp_path, monkeypatch):
+def test_session_transcript_mtime_bucket_entry_is_dir_oserror_is_unresolved(
+    tmp_path, monkeypatch,
+):
+    """bucket_entry.is_dir raising OSError must fail closed, not continue past."""
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
-    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="readable")
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="fresh")
+    os.makedirs(os.path.join(str(config_dir), "projects", "poison"), exist_ok=True)
+
+    real_is_dir = os.DirEntry.is_dir
+
+    def _is_dir(self, *args, **kwargs):
+        if os.path.basename(self.path) == "poison":
+            raise PermissionError("simulated is_dir failure")
+        return real_is_dir(self, *args, **kwargs)
+
+    monkeypatch.setattr(os.DirEntry, "is_dir", _is_dir)
+    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode-0o000 directories")
+def test_session_transcript_mtime_unreadable_bucket_candidate_stat_is_unresolved(
+    tmp_path, monkeypatch,
+):
+    """chmod 0o000 on a bucket dir fails at os.stat(candidate), not is_dir."""
+    config_dir = _point_config_dir_at(tmp_path, monkeypatch)
+    _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="unreadable")
     unreadable = os.path.join(str(config_dir), "projects", "unreadable")
-    os.makedirs(unreadable, mode=0o000)
+    os.chmod(unreadable, 0o000)
     mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
     assert mtime is None and ambiguous is False
 

@@ -58,8 +58,9 @@ Contract:
   heartbeat-unreadable degradation token discloses that uncertainty.
 - alsoObserved: on a result that carries a payload, co-occurring lower-precedence
   lane signals from the same interval are included under alsoObserved (launchIds
-  only). A timer result carries no payload and no alsoObserved, so a lane whose
-  only signal is suppressed is not visible in that arm's output.
+  only). A timer result carries no payload and no alsoObserved, so a lane's
+  signal is not visible through alsoObserved on timer — while staleSuppressed
+  does ride timer results.
 - ignore-launch: caller-supplied launch ids excluded from lane enumeration so
   an already-handled lane that cannot be terminalized does not re-fire.
 - ignore-events: caller-supplied (launchId, event) pairs suppress that event
