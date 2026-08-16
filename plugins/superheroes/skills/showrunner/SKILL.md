@@ -21,7 +21,7 @@ edit below, and you never elicit specs (that is **discovery**).
 
 This is a **named hard-line edit**, not a lane detail slipped past the boundary. It carves the only
 exception into **Showrunner never builds**: in **micro** the advisor **types the change** in-session
-— about **100 lines or fewer**, starting from a diagnosis, **no issue**.
+— about **100 non-test lines or fewer** (`review-discipline.md` § Size), starting from a diagnosis, **no issue**.
 
 **Consequence you must hold in mind: the advisor IS the maker, so the advisor's independent
 vet-from-artifacts does not exist for that PR.** The entire independent check collapses onto (a) one
