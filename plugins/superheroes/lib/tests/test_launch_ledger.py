@@ -4028,6 +4028,37 @@ def test_record_outcome_await_exit_returns_todays_refusal_at_the_ceiling(tmp_pat
     assert len(ll.read(repo)["records"]) == before
 
 
+def test_record_outcome_await_exit_terminates_on_a_frozen_clock(tmp_path, monkeypatch):
+    # axis: termination is structural -- a clock that never advances, even across
+    # sleep, must not turn a finite ceiling into an unbounded retry (review #1040).
+    # Against a deadline recomputed from time.monotonic() this test does not fail,
+    # it hangs -- which is the point.
+    repo = _await_exit_lane(tmp_path, monkeypatch, "l-await-frozen")
+    monkeypatch.setattr(ll, "_AWAIT_EXIT_POLL_SECONDS", 0.05)
+    _scripted_liveness(monkeypatch, [True])
+    attempts = _counted_terminalize(monkeypatch)
+    slept = []
+
+    class _FrozenClock:
+        def monotonic(self):
+            return 1000.0
+
+        def sleep(self, seconds):
+            slept.append(seconds)
+
+        def __getattr__(self, name):
+            return getattr(time, name)
+
+    monkeypatch.setattr(ll, "time", _FrozenClock())
+
+    result = ll.record_outcome(repo, "l-await-frozen", "handback", "done", await_exit=0.5)
+
+    assert result["ok"] is False
+    assert result["reason"] == "terminal-child-live:999999"
+    assert sum(slept) <= 0.5 + 1e-6, "the budget must be spent, not re-read from a clock"
+    assert len(attempts) == len(slept) + 1
+
+
 def test_record_outcome_await_exit_survives_a_probe_costlier_than_the_ceiling(
     tmp_path, monkeypatch,
 ):

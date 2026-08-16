@@ -1625,12 +1625,20 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
     falls open. The wait is between attempts, never inside the ledger lock, and
     every attempt is today's full liveness check.
 
-    The ceiling measures **waiting for the exit**, so the clock starts at the
-    first live-child refusal rather than at entry. A live-child probe settles for
-    a couple of seconds before it answers, so a ceiling started at entry would be
-    partly spent before the first answer arrived -- and any ceiling shorter than
-    that settle would buy no re-attempt at all, making the flag silently inert.
-    A total call therefore runs to roughly one probe plus the ceiling.
+    The ceiling bounds **how long this waits between attempts**, not the whole
+    call: it is a sleep budget spent from the first live-child refusal onward.
+    Two consequences worth knowing before picking a number. A live-child probe
+    settles for a couple of seconds before it answers, so wall-clock time runs to
+    the ceiling *plus* one probe per attempt -- a 5 s ceiling against a child that
+    never exits takes about 5 s of sleep and two probes. And because the budget is
+    spent rather than compared against a clock, a ceiling shorter than one probe
+    still buys a re-attempt instead of silently becoming a no-op.
+
+    Spending a budget is also what makes the loop terminate **by construction**:
+    each pass subtracts a strictly positive nap, so it ends after at most
+    ``ceiling / _AWAIT_EXIT_POLL_SECONDS`` waits no matter what any clock reports.
+    A loop that recomputed the remaining time from ``time.monotonic()`` would
+    instead inherit its termination from the clock advancing.
     """
     if outcome not in TERMINAL_OUTCOMES:
         return _record_outcome_response(
@@ -1644,7 +1652,7 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
             False, reason="await-exit-invalid:%s" % (await_exit,),
         )
 
-    deadline = None
+    budget = None
     while True:
         result = terminalize(
             repo_root, launch_id, outcome=outcome, evidence=evidence,
@@ -1655,13 +1663,13 @@ def record_outcome(repo_root, launch_id, outcome, evidence, env=None,
         reason = result["reason"]
         if not (isinstance(reason, str) and reason.startswith("terminal-child-live:")):
             break
-        now = time.monotonic()
-        if deadline is None:
-            deadline = now + ceiling
-        remaining = deadline - now
-        if remaining <= 0:
+        if budget is None:
+            budget = ceiling
+        if budget <= 0:
             break
-        time.sleep(min(_AWAIT_EXIT_POLL_SECONDS, remaining))
+        nap = min(_AWAIT_EXIT_POLL_SECONDS, budget)
+        budget -= nap
+        time.sleep(nap)
     mapped_reason = result["reason"]
     if mapped_reason in ("terminal-unknown-launch", "terminal-launch-id-invalid"):
         mapped_reason = "outcome-unknown-launch"
