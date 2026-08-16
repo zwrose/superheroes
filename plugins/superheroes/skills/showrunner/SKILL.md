@@ -84,6 +84,10 @@ above).
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   When an issue being filed **quotes register text** — an epic child quoting its epic's
+   register, or a single-issue child standing in for one — run the register-check against the
+   filed body **before filing**, and fix the body rather than filing a drifted quote. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
    owner wrote (append-style receipts — evidence, run results, cross-links — are fine). Close
@@ -108,6 +112,10 @@ above).
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   At an epic **package read's verification pass**, the register-to-child quote agreement is
+   re-checked with the same script, per-child, across **both** directions, and a fail is a
+   blocking package-read finding. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Mark each issue's route — **build-ready** (the builder
    goes straight to the brief)
    or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the

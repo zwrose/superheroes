@@ -130,6 +130,11 @@ charter covers **full** and **light**.
   genuinely ambiguous — a "ready" issue where you cannot tell what *done* means — **stop and
   report to the owner** (park). Never guess the requirements.
 
+When the routed issue's body quotes register text, run the register-check at **build intake**,
+before the brief, as part of reading the route; a fail is a **park** — you do not build against
+a drifted quote, because the quoted text is the contract you are graded on. Detail:
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
+
 **Launch-prompt discipline.** Your launch prompt — the message this build session is started with,
 whoever drafted it (advisor routing prompt or owner's own words), not the context the harness injects
 (covenant, CLAUDE.md, memory) — is the workhorse command + the issue pointer; everything durable
