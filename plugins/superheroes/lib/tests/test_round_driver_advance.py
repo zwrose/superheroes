@@ -1290,19 +1290,34 @@ def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, 
     assert state["seatMap"]["seats"] == {}
     assert state["config"]["seatMap"]["seats"] == partial["seats"]
 
+    # Reach the next panel dispatch through the SUPPORTED re-arm — the #174 confirmation re-arm,
+    # which is how a fresh full panel is actually scheduled — rather than hand-setting
+    # `step`/`pending`/`lastAccepted` (PR #1028 rework finding 24). A hand-set state can emit a
+    # dispatch the driver would never have emitted, and the seat-map fallback assertion below would
+    # then prove nothing about the live path.
     rnd = initial_pend["round"]
-    state["step"] = RD.P_PANEL
+    state["confirmations"] = 0
+    state["surfacedSinceLastPanel"] = ["Critical"]      # a Critical under budget owes one panel
+    state["fullPanelRan"] = False
+    state["findings"] = []
+    state["auditRounds"] = [{"round": rnd, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
+    state["_changedSubjects"] = ["Code"]
     state["pending"] = None
-    state["lastAccepted"] = {"phase": RD.P_PANEL, "round": rnd, "attempt": 0,
-                             "artifactHash": "abc"}
+    RD._settle_delta(state, state["config"])
+    assert state.get("terminal") is None, "the re-arm must not certify"
+    assert state["step"] == RD.P_PANEL
+    assert any(dd["kind"] == "confirmation-rearm" for dd in state["decisions"])
+    assert state["round"] == rnd + 1
     RD.save_state(d, state)
 
     next_out = RD.cmd_next(d)
     assert next_out["ok"] is True, next_out
     fresh_pend = _pending(d)
     assert fresh_pend["phase"].startswith("dispatch-"), fresh_pend
-    assert fresh_pend["attempt"] != initial_attempt, (
-        "must emit a fresh attempt, not re-read the pre-submit manifest")
+    assert (fresh_pend["round"], fresh_pend["attempt"]) != (rnd, initial_attempt), (
+        "must emit a fresh dispatch, not re-read the pre-submit manifest")
+    assert (fresh_pend["round"], fresh_pend["attempt"]) == (rnd + 1, 0), fresh_pend
 
     manifest_path = RD._orders_manifest_path(
         d, fresh_pend["round"], fresh_pend["phase"], fresh_pend["attempt"])
