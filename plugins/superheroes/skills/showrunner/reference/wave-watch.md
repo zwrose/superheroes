@@ -105,11 +105,17 @@ a long arm chain. Only the four **lane-keyed** events are suppressible: `lane-te
 `pr-set-changed` and `timer` are not lane-keyed; naming them is a refusal (`ignore-event-invalid`).
 A malformed pair is a refusal (`ignore-event-invalid`), never a silent drop.
 
-**Pattern:** when `loop` wakes you on an event you judge benign, re-arm with
+**Pattern — the exception, not the routine:** when `loop` wakes you on an event you have **verified**
+benign (for `lane-stale`: pid live **and** transcript fresh — the watcher now checks the transcript
+itself, so a `lane-stale` that still fires is one it could not vouch for), re-arm with
 `--ignore-event <launchId>:<event>` so that exact pair stops waking you **while that lane's other
 events still do**. Within a single `loop` invocation, the first unsuppressed actionable event exits
 the loop; persistence across invocations is **your** job — pass `--ignore-event` on re-arm. The tool
-does not dedupe suppressed pairs across invocations by itself.
+does not dedupe suppressed pairs across invocations by itself. **Do not pre-arm `--ignore-event` for
+`lane-stale` as a matter of course**: an arm that ignores every lane's stale signal has quietly
+reduced the watcher to `pr-set-changed`, and the wave's wedges arrive as surprises. If you find
+yourself suppressing the same event on most lanes of a wave, that is a field observation to record
+(the promise or the second chance is wrong), not a pattern to keep.
 
 ## Before treating `lane-stale` as a wedge
 
