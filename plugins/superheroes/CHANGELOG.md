@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.29.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.28.0...superheroes-v0.29.0) (2026-08-16)
+
+
+### Features
+
+* **superheroes:** the detective — observe-only diagnosis hero (spec the-detective-16c561, whole) ([#1046](https://github.com/zwrose/superheroes/issues/1046)) ([826fa4c](https://github.com/zwrose/superheroes/commit/826fa4ccde7df49f8596e6ce73719ce5aeeb2297))
+* **superheroes:** the issue contract — three-slot skeleton, anchor block, DoD bar (seam child) ([#1042](https://github.com/zwrose/superheroes/issues/1042)) ([03f9da4](https://github.com/zwrose/superheroes/commit/03f9da4673d8339fdbd80869a8ac9150ca8b657d))
+
 ## [0.28.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.27.0...superheroes-v0.28.0) (2026-08-16)
 
 
