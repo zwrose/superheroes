@@ -1283,6 +1283,17 @@ def launch_build(
     warnings = list(reserve_result.get("warnings") or [])
     overlap_evidence = _overlap_evidence(warnings)
 
+    def _post_reserve_fail(reason, **extra):
+        """Every return past the reservation carries the overlap disclosure.
+
+        The reservation is where the overlap becomes a fact, so a caller reading a
+        LATER failure still needs it — a lane that spawned and then died over an
+        accepted overlap is exactly when the advisor wants to know. Routing the
+        post-reserve failures through one helper is what keeps a future failure path
+        from silently omitting it.
+        """
+        return _fail(reason, launchId=launch_id, warnings=warnings, **extra)
+
     ledger_recheck = _ledger_live_state(repo_root, env=env)
     slot_refusal = _slot_reservation_gate(
         repo_root,
@@ -1305,9 +1316,8 @@ def launch_build(
             env=env,
         )
         reason = _terminalization_reason(term, refusal_reason)
-        return _fail(
+        return _post_reserve_fail(
             reason,
-            launchId=launch_id,
             **_preflight_extra(slot_refusal),
         )
 
@@ -1323,7 +1333,7 @@ def launch_build(
             env=env,
         )
         reason = _terminalization_reason(term, "log-dir-create-failed")
-        return _fail(reason, launchId=launch_id)
+        return _post_reserve_fail(reason)
     log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 
@@ -1341,7 +1351,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
 
         spawn_result = _spawn_attempt(
             repo_root,
@@ -1359,7 +1369,7 @@ def launch_build(
             evidence=overlap_evidence,
         )
         if spawn_result.get("refused"):
-            return _fail(spawn_result["reason"], launchId=launch_id)
+            return _post_reserve_fail(spawn_result["reason"])
         if spawn_result.get("oserror"):
             if attempt >= max_attempts:
                 term = _terminalize(
@@ -1371,7 +1381,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, "spawn-oserror-exhausted")
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 term = _terminalize(
@@ -1383,7 +1393,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, "retry-deadline-exceeded")
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             delay_idx = min(attempt - 1, len(backoff_seconds) - 1)
             delay = min(backoff_seconds[delay_idx], remaining)
             if delay >= remaining:
@@ -1396,7 +1406,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, "retry-deadline-exceeded")
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             retry_record = {
                 "event": "retry",
                 "launchId": launch_id,
@@ -1417,7 +1427,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, retry_append["reason"])
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             if delay > 0:
                 time.sleep(delay)
             attempt += 1
@@ -1432,7 +1442,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, spawn_result["reason"])
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
 
         child_ever_spawned = True
         proc = spawn_result["proc"]
@@ -1448,7 +1458,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
         if rc is None:
             return {
                 "ok": True,
@@ -1476,9 +1486,9 @@ def launch_build(
         )
         if rc == 0:
             reason = _terminalization_reason(term, "settle-exit-zero-uncertain")
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
         reason = _terminalization_reason(term, "settle-nonzero-exit")
-        return _fail(reason, launchId=launch_id)
+        return _post_reserve_fail(reason)
 
 
 def _try_reserve_for_refusal(

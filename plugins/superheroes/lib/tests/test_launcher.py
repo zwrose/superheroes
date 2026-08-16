@@ -1,5 +1,6 @@
 import argparse
 import importlib.util
+import inspect
 import json
 import os
 import shutil
@@ -3388,7 +3389,10 @@ def test_launch_build_post_reserve_slot_recheck_refuses(tmp_path, monkeypatch):
             "schema": ll.SCHEMA,
             "batchId": "wave-test",
             "repoId": ll.repo_identity(repo),
-            "issue": 656,
+            # A genuine sibling LANE, not a duplicate of this launch's own issue: since
+            # #1054 a second live launch for one issue is refused at reserve, which would
+            # short-circuit the post-reserve slot re-check this test is about.
+            "issue": 657,
             "surfaces": ["other/path"],
             "premise": {},
             "preflight": {},
@@ -4197,6 +4201,58 @@ def test_cli_launch_stdout_carries_the_overlap_warning(tmp_path, monkeypatch):
         ])
     assert exit_code == 0
     assert json.loads(buf.getvalue())["warnings"] == warnings
+
+
+def test_every_post_reserve_failure_returns_the_overlap_warnings():
+    # axis: census — no post-reserve failure path can silently drop the disclosure
+    lines = inspect.getsource(L.launch_build).split("\n")
+    anchor = next(
+        i for i, ln in enumerate(lines)
+        if 'warnings = list(reserve_result.get("warnings")' in ln
+    )
+    helper = next(
+        i for i, ln in enumerate(lines) if "def _post_reserve_fail(" in ln
+    )
+    helper_end = next(
+        i for i, ln in enumerate(lines)
+        if i > helper and "return _fail(" in ln
+    )
+    offenders = [
+        (i, ln.strip()) for i, ln in enumerate(lines)
+        if i > anchor and i != helper_end and "return _fail(" in ln
+    ]
+    assert offenders == [], (
+        "post-reserve failure path bypasses _post_reserve_fail and drops `warnings`: %r"
+        % (offenders,)
+    )
+
+
+def test_settle_failure_still_returns_the_overlap_warnings(tmp_path, monkeypatch):
+    # axis: the behavioural leg of that census — a lane that died carries its disclosure
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    first = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, surfaces=["plugins/superheroes/lib"]),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert first["ok"] is True
+    second = L.launch_build(
+        repo,
+        657,
+        _valid_premise(repo, surfaces=["plugins/superheroes"], issue=657),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("exit1"),
+        settle_seconds=0.3,
+    )
+    assert second["ok"] is False
+    assert second["warnings"] == ["surface-overlap:%s" % first["launchId"]]
 
 
 def test_overlap_evidence_ignores_unparsable_warnings():

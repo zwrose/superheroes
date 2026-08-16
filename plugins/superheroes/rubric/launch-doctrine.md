@@ -55,8 +55,11 @@ overlapping lanes never reads as clean by omission. **Two refusals stay hard:** 
 launch for one issue (the same-lane duplicate, which keeps its `surface-overlap:<launchId>` reason)
 and an identical worktree path (`launch-worktree-collision`) — those are the shared-checkout wipeout
 class, not this one. **What the advisor accepts by launching anyway:** an overlapping pair runs in
-parallel and **the later lander rebases**, per `skills/showrunner/reference/merge-train.md`; a builder
-that lands second may take a conflict round, disclosed. The refusal was retired on its own field
+parallel and the cost moves to landing — the later lander **rebases onto the moved base and keeps its
+lane branch-current**, which is the practice `skills/showrunner/reference/merge-train.md` already
+requires of every remaining lane, and a union fix rides the **last open PR**, disclosed, per that same
+file. A builder that lands second may take a conflict round, disclosed. (`merge-train.md` states
+branch-currency and the union-absorber rule; it does not name a "landing order" rule as such.) The refusal was retired on its own field
 record (#1054): it never prevented an actual collision, the one real overlap it sequenced still cost
 a rework round because the base moved after the merge, it held two ready lanes for hours on a false
 positive, and its refusals were recorded nowhere. This paragraph is **documentation for advisors
