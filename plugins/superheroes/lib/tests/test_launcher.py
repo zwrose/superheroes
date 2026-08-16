@@ -1083,6 +1083,110 @@ def test_launch_build_reserved_session_id_matches_spawn_argv(tmp_path, monkeypat
         pass
 
 
+def test_launch_build_reserved_config_dir_matches_the_child_env(tmp_path, monkeypatch):
+  # axis: reserved record configDir equals the CLAUDE_CONFIG_DIR the child was spawned with
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    other_instance = str(tmp_path / "claude-two")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", other_instance)
+    spawned_envs = []
+
+    def capture_spawn(argv, repo_root, out_fh, err_fh, child_env):
+        spawned_envs.append(dict(child_env))
+        return _make_spawn_fn("sleep")(argv, repo_root, out_fh, err_fh, child_env)
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=capture_spawn,
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    assert len(spawned_envs) == 1
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    # The recorded root is not a second, independent guess at where the transcript
+    # lands — it is the root the child actually inherited.
+    assert reserved["configDir"] == spawned_envs[0]["CLAUDE_CONFIG_DIR"]
+    assert reserved["configDir"] == other_instance
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_launch_build_records_the_default_config_root_when_unset(tmp_path, monkeypatch):
+  # axis: no override — the recorded root is the one the child's own HOME resolves to
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    monkeypatch.setenv("HOME", str(home))
+
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        log_dir,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert reserved["configDir"] == os.path.join(str(home), ".claude")
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_relative_config_dir_override_is_omitted_not_guessed(tmp_path, monkeypatch):
+  # axis: a relative override resolves against the CHILD's cwd, so no absolute root can
+  # be derived here — the field is omitted, which folds back to pre-#1036 behaviour
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "relative/config")
+    assert L.spawn_config_dir() is None
+
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.2,
+    )
+    assert result["ok"] is True, result
+    reserved = [
+        r for r in ll.read(repo)["records"] if r.get("event") == "reserved"
+    ][0]
+    assert "configDir" not in reserved
+    # And the omission keeps the record foldable rather than refusing the whole launch.
+    assert ll.fold(ll.read(repo)["records"])["ok"] is True
+    try:
+        os.kill(result["pid"], signal.SIGTERM)
+    except ProcessLookupError:
+        pass
+
+
+def test_spawn_config_dir_expands_home_in_the_override(monkeypatch, tmp_path):
+  # axis: `~/.claude-two` is a real-world override shape and must record absolute
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "~/.claude-two")
+    assert L.spawn_config_dir() == os.path.join(str(tmp_path / "home"), ".claude-two")
+
+
 def test_spawn_oserror_exhausted_refuses(tmp_path, monkeypatch):
   # axis: spawn OSError on every attempt refuses (no child ever ran)
     repo = _init_repo(tmp_path / "repo")

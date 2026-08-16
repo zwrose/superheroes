@@ -134,11 +134,27 @@ transcripts with the same id, an unreadable projects directory, a transcript dat
 by any amount — leaves the lane stale and the event fires. Ambiguity additionally records
 `transcript-ambiguous`.
 
+**A lookup that could not complete says so.** When the watcher could not *resolve* the transcript at
+all — the projects root or a bucket was unreadable, a candidate's `stat` failed for any reason other
+than the file being absent, or the lane recorded a config root the watcher cannot use — the lane
+alerts **and** records `transcript-unresolved`. Read it as *the watcher could not vouch either way*,
+not as *the transcript is cold*: without it, an I/O failure and a genuinely wedged builder produce
+the same alert with the same silence behind it. **Absence is not unresolved** — a missing projects
+root, a missing bucket, or a missing transcript means the transcript is not there, which is the wedge
+signal `lane-stale` exists to report, so those alert with **no** token. A pre-#1029 record carrying
+no session id gets no second chance and no token either — that is the documented no-identity class,
+not a failed reading.
+
 **Only the lane's own transcript may vouch for it.** The launch record's session id names exactly one
-file: `<sessionId>.jsonl` under the host config root's `projects` tree. Exactly one config root is
-searched (`CLAUDE_CONFIG_DIR` outright when set, otherwise `~/.claude` — never both, because a
-same-named file under the other root belongs to a different session); a symlinked entry is never
-followed; and the watcher **stat's only** — it never reads transcript contents.
+file: `<sessionId>.jsonl` under a config root's `projects` tree. Exactly one config root is searched,
+never both — because a same-named file under any other root belongs to a different session. **The
+lane's own recorded root wins:** the launcher records on the launch record the `configDir` its
+builder was spawned under, and the watcher searches *that* root, so a lane launched under another
+Claude instance (`.claude-two`, a per-launch exception) still gets its second chance instead of
+alerting because the watcher looked in its own root. A record carrying no `configDir` — every
+pre-#1036 launch — resolves under the watcher's own env root as before (`CLAUDE_CONFIG_DIR` outright
+when set, otherwise `~/.claude`). A symlinked entry is never followed; and the watcher **stat's
+only** — it never reads transcript contents.
 
 Launches without a recorded session id get **no second chance** — pre-change ledger records still
 alert. The concurrent-foreign-session-in-the-same-worktree residual is **closed** by recorded
@@ -263,6 +279,9 @@ it can fire before the watch loop ever runs; neither `ledger-unreadable` on the 
 - `log-unwritable`
 - `transcript-ambiguous` — two or more transcripts carry the lane's session id, so identity is
   ambiguous and the lane alerts rather than being suppressed
+- `transcript-unresolved` — the transcript lookup could not complete (unreadable projects root or
+  bucket, a candidate `stat` failing for anything but absence, an unusable recorded config root), so
+  the lane alerts without the watcher being able to tell a cold transcript from an unread one
 
 A degradation token is a disclosure that the reading is partial, not a clean sheet — e.g. a lane
 whose heartbeat is unreadable can be reported by a lower-precedence event than its true state.

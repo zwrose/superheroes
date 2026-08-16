@@ -2504,7 +2504,7 @@ _OTHER_SESSION_ID = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff"
 def _stale_lane_with_worktree(
     repo, tmp_path, monkeypatch, *, worktree, session_id=_TEST_SESSION_ID,
     launch_id="lane-a", batch_id="batch-982", stale_after_seconds=1800,
-    age_seconds=1835,
+    age_seconds=1835, config_dir=None,
 ):
     """A pid-live lane past its own promise, with session id on the ledger record."""
     store_root = _ledger_env(tmp_path, monkeypatch)
@@ -2515,6 +2515,8 @@ def _stale_lane_with_worktree(
         extra["worktree"] = worktree
     if session_id is not None:
         extra["sessionId"] = session_id
+    if config_dir is not None:
+        extra["configDir"] = config_dir
     ll.append(
         repo,
         _reserved(launch_id, batch_id, ["plugins/superheroes/lib"], repo, **extra),
@@ -2602,7 +2604,7 @@ def test_session_transcript_mtime_resolves_exactly_one_match(tmp_path, monkeypat
     _write_session_transcript(
         config_dir, _OTHER_SESSION_ID, age_seconds=9000, bucket="b",
     )
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
     assert ambiguous is False
     assert mtime is not None
     assert time.time() - mtime < 120
@@ -2623,11 +2625,23 @@ _I2_STILL_STALE_SHAPES = (
     "transcript-is-a-directory",
     "symlink-at-exact-filename",
     "unreadable-bucket-with-fresh-match",
+    "unreadable-projects-root",
+    "recorded-config-dir-not-absolute",
 )
+
+# The same census, second axis (#1036): staying stale is the INVARIANT; whether the arm
+# also discloses transcript-unresolved is the shape's own answer to "could the watcher
+# read the transcript at all?". Only a failed READ discloses — absence of a transcript is
+# the wedge signal itself, and a record with no session id is the no-identity class.
+_I2_SHAPES_DISCLOSING_UNRESOLVED = frozenset({
+    "unreadable-bucket-with-fresh-match",
+    "unreadable-projects-root",
+    "recorded-config-dir-not-absolute",
+})
 
 
 @pytest.mark.parametrize("shape", _I2_STILL_STALE_SHAPES)
-def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
+def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, request, shape):
     repo = _init_repo(tmp_path / "repo")
     worktree = str(tmp_path / "build-wt")
     config_dir = _point_config_dir_at(tmp_path, monkeypatch)
@@ -2650,10 +2664,35 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
             "staleAfterSeconds": 1800,
         }]
         live_lanes = {"lane-a": {"sessionId": evil_session_id}}
+        degraded = set()
         still, suppressed = ww._stale_second_chance(
-            stale_live, live_lanes, os.environ,
+            stale_live, live_lanes, os.environ, degraded=degraded,
         )
         assert len(still) == 1 and suppressed == []
+        assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED not in degraded
+        return
+    elif shape == "recorded-config-dir-not-absolute":
+        # The ledger REFUSES a non-absolute configDir, so a lane can only reach the
+        # second chance carrying one if the grammar were bypassed. Exercised at the
+        # seam for the same reason the path-separator shape is: the invariant under
+        # test is that an unusable recorded root never falls back to the watcher's own
+        # root, which would let a foreign transcript vouch.
+        _write_session_transcript(config_dir, session_id, age_seconds=60)
+        stale_live = [{
+            "launchId": "lane-a",
+            "state": "working",
+            "ageSeconds": 1835.0,
+            "staleAfterSeconds": 1800,
+        }]
+        live_lanes = {
+            "lane-a": {"sessionId": session_id, "configDir": "relative/config"},
+        }
+        degraded = set()
+        still, suppressed = ww._stale_second_chance(
+            stale_live, live_lanes, os.environ, degraded=degraded,
+        )
+        assert len(still) == 1 and suppressed == []
+        assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED in degraded
         return
     else:
         _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
@@ -2691,6 +2730,13 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
         _write_session_transcript(config_dir, session_id, age_seconds=60, bucket="readable")
         unreadable = os.path.join(str(config_dir), "projects", "unreadable")
         os.makedirs(unreadable, mode=0o000)
+    elif shape == "unreadable-projects-root":
+        _write_session_transcript(config_dir, session_id, age_seconds=60)
+        unreadable_root = os.path.join(str(config_dir), "projects")
+        os.chmod(unreadable_root, 0o000)
+        # A non-empty 0o000 tree defeats pytest's tmp cleanup, so hand the mode back the
+        # moment the watcher has read it.
+        request.addfinalizer(lambda: os.chmod(unreadable_root, 0o700))
     else:
         _write_session_transcript(config_dir, session_id, age_seconds=60)
 
@@ -2705,6 +2751,17 @@ def test_i2_failure_shapes_leave_lane_still_stale(tmp_path, monkeypatch, shape):
     assert "staleSuppressed" not in result
     if shape == "two-or-more-matches":
         assert ww.DEGRADATION_TRANSCRIPT_AMBIGUOUS in result["degraded"]
+    # #1036's second axis: the alert is the same, the disclosure is not.
+    if shape in _I2_SHAPES_DISCLOSING_UNRESOLVED:
+        assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED in result["degraded"], (
+            "%s could not READ the transcript — that must be disclosed, not "
+            "presented as a cold transcript" % shape
+        )
+    else:
+        assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED not in result["degraded"], (
+            "%s is an ABSENT or unidentifiable transcript, not a failed read — "
+            "disclosing it would make the token meaningless" % shape
+        )
 
 
 def test_transcript_fresh_but_promise_unusable_still_alerts(tmp_path, monkeypatch):
@@ -2719,7 +2776,7 @@ def test_transcript_fresh_but_promise_unusable_still_alerts(tmp_path, monkeypatc
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
         now=1000.0,
-        session_transcript_mtime=lambda sid, env: (999.0, False),
+        session_transcript_mtime=lambda sid, env, cfg=None: (999.0, False, False),
     )
     assert still == stale_live
     assert suppressed == []
@@ -2738,7 +2795,7 @@ def test_second_chance_boundary_is_inclusive_at_the_promise():
     still, suppressed = ww._stale_second_chance(
         entry(), live_lanes, os.environ,
         now=10000.0,
-        session_transcript_mtime=lambda sid, env: (10000.0 - 1800, False),
+        session_transcript_mtime=lambda sid, env, cfg=None: (10000.0 - 1800, False, False),
     )
     assert still == [] and len(suppressed) == 1
 
@@ -2746,7 +2803,7 @@ def test_second_chance_boundary_is_inclusive_at_the_promise():
     still, suppressed = ww._stale_second_chance(
         entry(), live_lanes, os.environ,
         now=10000.0,
-        session_transcript_mtime=lambda sid, env: (10000.0 - 1801, False),
+        session_transcript_mtime=lambda sid, env, cfg=None: (10000.0 - 1801, False, False),
     )
     assert len(still) == 1 and suppressed == []
 
@@ -2759,10 +2816,10 @@ def test_transcript_mtime_after_call_beginning_suppresses_lane():
         "launchId": "lane-a", "state": "working",
         "ageSeconds": 3600.0, "staleAfterSeconds": 1800,
     }]
-    def _mtime_after_call_beginning(sid, env):
+    def _mtime_after_call_beginning(sid, env, cfg=None):
         # Sleep so time.time() here is provably later than any clock read before lookup.
         time.sleep(0.05)
-        return (time.time(), False)
+        return (time.time(), False, False)
 
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
@@ -2787,8 +2844,8 @@ def test_session_transcript_mtime_bucket_entry_is_dir_oserror_is_unresolved(
         return real_is_dir(self, *args, **kwargs)
 
     monkeypatch.setattr(os.DirEntry, "is_dir", _is_dir)
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False and unresolved is True
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode-0o000 directories")
@@ -2800,8 +2857,8 @@ def test_session_transcript_mtime_unreadable_bucket_candidate_stat_is_unresolved
     _write_session_transcript(config_dir, _TEST_SESSION_ID, age_seconds=30, bucket="unreadable")
     unreadable = os.path.join(str(config_dir), "projects", "unreadable")
     os.chmod(unreadable, 0o000)
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False and unresolved is True
 
 
 def test_absent_bucket_with_fresh_match_suppresses_lane(tmp_path, monkeypatch):
@@ -2833,7 +2890,7 @@ def test_any_future_dated_transcript_alerts(ahead_seconds):
     still, suppressed = ww._stale_second_chance(
         stale_live, live_lanes, os.environ,
         now=10000.0,
-        session_transcript_mtime=lambda sid, env: (10000.0 + ahead_seconds, False),
+        session_transcript_mtime=lambda sid, env, cfg=None: (10000.0 + ahead_seconds, False, False),
     )
     assert len(still) == 1 and suppressed == []
 
@@ -2848,13 +2905,139 @@ def test_config_dir_override_is_searched_alone(tmp_path, monkeypatch):
     _write_session_transcript(decoy, _TEST_SESSION_ID, age_seconds=5)
 
     assert ww._transcript_config_dirs(os.environ) == [str(override)]
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False and unresolved is False
 
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     assert ww._transcript_config_dirs(os.environ) == [str(decoy)]
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
     assert mtime is not None and ambiguous is False
+
+
+def test_recorded_config_dir_is_searched_instead_of_the_watchers_own(
+    tmp_path, monkeypatch,
+):
+    """DoD (#1036): a lane launched under ANOTHER Claude instance gets its second chance.
+
+    Root A is the lane's recorded root and holds its fresh transcript; root B is the
+    watcher's own env root and holds nothing. Before this, the watcher searched B, found
+    nothing, and alerted a working builder.
+    """
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    root_a = tmp_path / "config-a"
+    root_b = tmp_path / "config-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    _stale_lane_with_worktree(
+        repo, tmp_path, monkeypatch, worktree=worktree, config_dir=str(root_a),
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_b))
+    _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=120)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "timer"
+    assert [e["launchId"] for e in result["staleSuppressed"]] == ["lane-a"]
+    assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED not in result["degraded"]
+
+
+def test_without_a_recorded_config_dir_only_the_env_root_resolves(
+    tmp_path, monkeypatch,
+):
+    """DoD (#1036): a pre-change record still resolves under the watcher's env root.
+
+    Same two roots as the test above, same fresh transcript under root A — but the lane
+    records no configDir, so the watcher searches its own root B only and finds nothing.
+    Unchanged behaviour, and the guarantee that #1036 never widened the search to both.
+    """
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    root_a = tmp_path / "config-a"
+    root_b = tmp_path / "config-b"
+    root_a.mkdir()
+    root_b.mkdir()
+    _stale_lane_with_worktree(repo, tmp_path, monkeypatch, worktree=worktree)
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_b))
+    _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=120)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "lane-stale"
+    assert "staleSuppressed" not in result
+    assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED not in result["degraded"]
+
+    # And the same lane resolves once the env root IS the one holding the transcript —
+    # proving the miss above is the root choice, not a broken fixture.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(root_a))
+    again = ww.run(
+        repo, "batch-982", max_seconds=1, interval_seconds=1, gh_run=_noop_gh_run,
+    )
+    assert [e["launchId"] for e in again["staleSuppressed"]] == ["lane-a"]
+
+
+def test_recorded_config_dir_never_falls_back_to_the_env_root(tmp_path, monkeypatch):
+    """A recorded root that resolves to nothing must NOT be retried under the env root.
+
+    The fall-back would be the #1023 foreign-transcript hole reopened: the env root's
+    same-named file belongs to whatever session wrote it there.
+    """
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    root_a = tmp_path / "config-a"
+    env_root = tmp_path / "config-env"
+    root_a.mkdir()
+    env_root.mkdir()
+    _stale_lane_with_worktree(
+        repo, tmp_path, monkeypatch, worktree=worktree, config_dir=str(root_a),
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(env_root))
+    _write_session_transcript(env_root, _TEST_SESSION_ID, age_seconds=60)
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "lane-stale"
+    assert "staleSuppressed" not in result
+
+
+def test_unreadable_recorded_config_dir_discloses_unresolved(tmp_path, monkeypatch, request):
+    """An I/O failure under the lane's OWN root discloses, exactly like the env root's."""
+    repo = _init_repo(tmp_path / "repo")
+    worktree = str(tmp_path / "build-wt")
+    root_a = tmp_path / "config-a"
+    root_a.mkdir()
+    _stale_lane_with_worktree(
+        repo, tmp_path, monkeypatch, worktree=worktree, config_dir=str(root_a),
+    )
+    _point_config_dir_at(tmp_path, monkeypatch)
+    _write_session_transcript(root_a, _TEST_SESSION_ID, age_seconds=60)
+    unreadable_root = os.path.join(str(root_a), "projects")
+    os.chmod(unreadable_root, 0o000)
+    request.addfinalizer(lambda: os.chmod(unreadable_root, 0o700))
+
+    result = ww.run(
+        repo, "batch-982", max_seconds=2, interval_seconds=60, gh_run=_noop_gh_run,
+    )
+
+    assert result["event"] == "lane-stale"
+    assert ww.DEGRADATION_TRANSCRIPT_UNRESOLVED in result["degraded"]
+
+
+def test_transcript_config_dirs_recorded_root_wins_over_env(monkeypatch, tmp_path):
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/env-config")
+    assert ww._transcript_config_dirs(os.environ) == ["/tmp/env-config"]
+    assert ww._transcript_config_dirs(
+        os.environ, recorded="/tmp/lane-config",
+    ) == ["/tmp/lane-config"]
+    # Unusable recorded roots resolve to NO root — never to the env root.
+    for bad in ("", "   ", "relative/config", 17, True):
+        assert ww._transcript_config_dirs(os.environ, recorded=bad) == [], bad
 
 
 def test_folded_session_id_wires_end_to_end_to_suppressed_lane(tmp_path, monkeypatch):
@@ -2933,8 +3116,8 @@ def test_unreadable_matched_bucket_still_alerts(tmp_path, monkeypatch):
         return real_stat(path, *a, **kw)
 
     monkeypatch.setattr(ww.os, "stat", refuse_stat)
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False and unresolved is True
 
 
 def test_symlinked_transcript_is_never_followed(tmp_path, monkeypatch):
@@ -2946,8 +3129,8 @@ def test_symlinked_transcript_is_never_followed(tmp_path, monkeypatch):
     target.write_text("{}\n")
     os.symlink(str(target), os.path.join(bucket_dir, _TEST_SESSION_ID + ".jsonl"))
 
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False and unresolved is False
 
 
 def test_directory_named_session_id_never_suppresses(tmp_path, monkeypatch):
@@ -2955,13 +3138,13 @@ def test_directory_named_session_id_never_suppresses(tmp_path, monkeypatch):
     bucket_dir = os.path.join(str(config_dir), "projects", "bucket-a")
     os.makedirs(os.path.join(bucket_dir, _TEST_SESSION_ID + ".jsonl"), exist_ok=True)
 
-    mtime, ambiguous = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime(_TEST_SESSION_ID, os.environ)
+    assert mtime is None and ambiguous is False and unresolved is False
 
 
 def test_session_id_with_path_separator_resolves_to_nothing():
-    mtime, ambiguous = ww._session_transcript_mtime("../evil", os.environ)
-    assert mtime is None and ambiguous is False
+    mtime, ambiguous, unresolved = ww._session_transcript_mtime("../evil", os.environ)
+    assert mtime is None and ambiguous is False and unresolved is False
 
 
 def test_suppressed_lane_drops_out_of_also_observed(tmp_path, monkeypatch):
@@ -3010,12 +3193,12 @@ def test_later_tick_finding_lane_still_stale_clears_its_suppression(
 
     calls = [0]
 
-    def fading_transcript(session_id, _env):
+    def fading_transcript(session_id, _env, _config_dir=None):
         calls[0] += 1
         # Fresh on the first tick, long cold on every tick after it.
         if calls[0] == 1:
-            return time.time() - 60, False
-        return time.time() - 100000, False
+            return time.time() - 60, False, False
+        return time.time() - 100000, False, False
 
     monkeypatch.setattr(ww, "_session_transcript_mtime", fading_transcript)
 
