@@ -345,6 +345,23 @@ def _phase_placeholders(phase, channel):
     raise AssertionError("unmapped phase %r" % phase)
 
 
+def test_read_only_channel_phases_is_derived_not_hand_typed():
+    """`_READ_ONLY_CHANNEL_PHASES` must track `round_orders.ORDER_PHASES` minus the fixer exactly.
+
+    Bite axis: set MEMBERSHIP drift between the two registries — a phase added to `ORDER_PHASES`
+    and forgotten in the fold, or a phase named in the fold that `ORDER_PHASES` does not know about
+    — not channel behaviour, which the tests above already cover.
+    """
+    order_phases = set(RO.ORDER_PHASES)
+    fold = set(RD._READ_ONLY_CHANNEL_PHASES)
+    expected = order_phases - {RD.P_FIXER}
+    missing = expected - fold
+    assert not missing, "phase(s) in ORDER_PHASES (minus the fixer) missing from the fold: %s" % sorted(missing)
+    assert RD.P_FIXER not in fold, "the fixer must stay excluded from the fold"
+    extra = fold - order_phases
+    assert not extra, "fold names phase(s) ORDER_PHASES does not know about: %s" % sorted(extra)
+
+
 def _render_phase(phase, host_seat):
     channel = RD.CHANNEL_FILE if host_seat else RD.CHANNEL_STDOUT
     context = {

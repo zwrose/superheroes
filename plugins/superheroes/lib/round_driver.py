@@ -4121,10 +4121,9 @@ CHANNEL_STDOUT = "stdout"
 # an external engine. `dispatch-fixer` is deliberately absent: it is a foreground in-place writer,
 # never a `dispatch-review` consumer, and its vendor is UNKNOWN by default (#608), so folding an
 # absent vendor to the stdout contract there would rewrite a deliberate default rather than close a
-# forfeit.
-_READ_ONLY_CHANNEL_PHASES = frozenset({
-    P_PANEL, P_VERIFIERS, P_SYNTHESIS, P_GAPSWEEP, P_AUDITS, P_SCOPED,
-})
+# forfeit. DERIVED from `round_orders.ORDER_PHASES` (not hand-typed) so a phase added there and
+# forgotten here cannot silently fold an unresolved vendor to the WRITE contract (#1035).
+_READ_ONLY_CHANNEL_PHASES = frozenset(round_orders.ORDER_PHASES) - {P_FIXER}
 
 
 def _vendor_is_resolved(row):
