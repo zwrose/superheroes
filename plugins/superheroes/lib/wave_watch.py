@@ -518,12 +518,17 @@ def _transcript_config_dirs(env, recorded=None):
     as UNRESOLVED, never as a licence to fall back to the env root.
     """
     if recorded is not None:
+        # strip() detects an all-whitespace value; it never REWRITES the recorded root.
+        # The grammar accepts any usable absolute path, so a directory whose name really
+        # does end in a space is legal — searching a stripped version of it would look in
+        # a directory the lane never wrote to, and the launcher already normalized once.
+        # A watcher that rewrites what was recorded cannot be said to search "the lane's
+        # own root" at all.
         if not isinstance(recorded, str) or not recorded.strip():
             return []
-        candidate = recorded.strip()
-        if not os.path.isabs(candidate):
+        if not os.path.isabs(recorded):
             return []
-        return [candidate]
+        return [recorded]
     configured = env.get(_TRANSCRIPT_CONFIG_DIR_ENV)
     if isinstance(configured, str) and configured.strip():
         return [_expand_home(configured.strip(), env)]

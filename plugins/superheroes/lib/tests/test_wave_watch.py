@@ -8,6 +8,7 @@ import pytest
 
 import heartbeat as hb
 import launch_ledger as ll
+import launcher
 import wave_watch as ww
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -3120,6 +3121,46 @@ def test_transcript_config_dirs_recorded_root_wins_over_env(monkeypatch, tmp_pat
     # Unusable recorded roots resolve to NO root — never to the env root.
     for bad in ("", "   ", "relative/config", 17, True):
         assert ww._transcript_config_dirs(os.environ, recorded=bad) == [], bad
+
+
+def test_a_recorded_root_is_searched_verbatim_never_rewritten(monkeypatch):
+    """The watcher searches what was RECORDED, byte for byte.
+
+    The grammar accepts any usable absolute path, so a directory whose name genuinely
+    ends in a space is a legal root. Trimming it before searching looks in a directory
+    the lane never wrote to — and "the lane's own root" stops meaning anything if the
+    reader gets to normalize it on the way in.
+    """
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/env-config")
+    for recorded in ("/tmp/lane-config ", "/tmp/trailing  ", "/tmp/a b/c "):
+        assert ww._transcript_config_dirs(os.environ, recorded=recorded) == [recorded]
+    # A LEADING space makes the string non-absolute, so it is not a legal recorded root
+    # at all — refused as unusable, not silently trimmed into a different directory.
+    assert ww._transcript_config_dirs(os.environ, recorded=" /tmp/leading") == []
+
+
+def test_every_root_the_launcher_can_record_round_trips_through_the_watcher(monkeypatch):
+    """The invariant that makes the pair coherent: record R, and the watcher searches R.
+
+    This is the seam #1036 actually rests on — it pins launcher and watcher together
+    rather than testing either side's parsing in isolation, so a normalization added to
+    one side and not the other fails here.
+    """
+    monkeypatch.setenv("HOME", "/ambient-home")
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/tmp/watcher-own-root")
+    spellings = [
+        "/abs/plain", " /abs/with-space ", "~/.claude-two", "relative/config",
+        "", "   ", None,
+    ]
+    for spelling in spellings:
+        env = {"HOME": "/lane-home"}
+        if spelling is not None:
+            env["CLAUDE_CONFIG_DIR"] = spelling
+        recorded = launcher.spawn_config_dir(env=env, cwd="/build/wt")
+        assert recorded is not None, spelling
+        assert ww._transcript_config_dirs(os.environ, recorded=recorded) == [recorded], (
+            "launcher recorded %r but the watcher would search elsewhere" % recorded
+        )
 
 
 def test_folded_session_id_wires_end_to_end_to_suppressed_lane(tmp_path, monkeypatch):
