@@ -3935,24 +3935,44 @@ def _scripted_liveness(monkeypatch, answers):
     return calls
 
 
+class _FakeClock:
+    """A `time` stand-in whose sleep advances a frozen monotonic clock.
+
+    Everything except `monotonic` and `sleep` delegates to the real module, so
+    record timestamps stay real.
+    """
+
+    def __init__(self):
+        self.now = 1000.0
+        self.slept = []
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.slept.append(seconds)
+        self.now += seconds
+
+    def __getattr__(self, name):
+        return getattr(time, name)
+
+
 def _fake_clock(monkeypatch):
-    """Freeze the monotonic clock and make sleeping advance it.
+    """Give launch_ledger a fake clock and return the list of sleeps it requests.
 
     Wall-clock assertions are unusable here: this suite runs under `-n auto` on a
-    shared machine, where a loaded worker stretches a 1.4 s test to 9 s. The fake
-    clock asserts the real contract instead -- how much wait the ceiling bought --
-    with no dependence on how busy the host is.
+    shared machine, where a loaded worker stretched a 1.4 s test to 9 s and tripped
+    an `elapsed < 4.0` bound with the code unmutated. Asserting the sleeps the
+    ceiling bought is the same contract with no dependence on host load.
+
+    The patch rebinds the name `time` **inside launch_ledger only** -- patching the
+    stdlib module object would hand a faked `sleep` to any thread another test left
+    running, which is exactly how a timing test elsewhere in the suite would start
+    failing for reasons no one could trace back to here.
     """
-    clock = {"now": 1000.0}
-    slept = []
-
-    def fake_sleep(seconds):
-        slept.append(seconds)
-        clock["now"] += seconds
-
-    monkeypatch.setattr(ll.time, "monotonic", lambda: clock["now"])
-    monkeypatch.setattr(ll.time, "sleep", fake_sleep)
-    return slept
+    clock = _FakeClock()
+    monkeypatch.setattr(ll, "time", clock)
+    return clock.slept
 
 
 def _counted_terminalize(monkeypatch):
