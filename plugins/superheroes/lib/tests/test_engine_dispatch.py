@@ -4246,6 +4246,8 @@ def test_continuation_result_kind_pin_agreeing_proceeds(tmp_path):
         build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
         expected_result_kind="verdicts", max_wait=0,
     )
+    assert res["terminal"] is False
+    assert res["reason"] == "running"
     assert res.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
 
 
@@ -4254,11 +4256,17 @@ def test_continuation_omitted_result_kind_inherits_journal(tmp_path):
     repo_root, _ = _manual_open_review_run_with_mode(
         tmp_path, run_dir, expected_result_kind="verdicts",
     )
+    fake = FakeRunner([
+        (_VALID_FINDINGS_STDOUT, False, 0, ""),
+        (_VALID_FINDINGS_STDOUT, False, 0, ""),
+    ])
     res = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
-        build_view=_never_build_view, run_dir=run_dir, order_id="test-order", max_wait=0,
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
     )
+    assert res["ok"] is False
+    assert res.get("detail") == ED.RESULT_KIND_MISMATCH_DETAIL
     assert res.get("detail") != ED.RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH
 
 
