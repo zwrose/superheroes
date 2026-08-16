@@ -2,12 +2,13 @@
 
 1. [Dispatch mechanics — long dispatches you own](#dispatch-mechanics--long-dispatches-you-own)
 2. [Turn survival — the harness evidence](#turn-survival--the-harness-evidence)
-3. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
-4. [Supervised review dispatch](#supervised-review-dispatch)
-5. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
-6. [Supervised write dispatch](#supervised-write-dispatch)
-7. [Declared items](#declared-items)
-8. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
+3. [Process cleanup — kill by the PID you recorded](#process-cleanup--kill-by-the-pid-you-recorded)
+4. [Launch slice vs continuation slice](#launch-slice-vs-continuation-slice)
+5. [Supervised review dispatch](#supervised-review-dispatch)
+6. [Brief-check dispatch (`--mode brief-check`)](#brief-check-dispatch---mode-brief-check)
+7. [Supervised write dispatch](#supervised-write-dispatch)
+8. [Declared items](#declared-items)
+9. [Engine forfeits and order shape](#engine-forfeits-and-order-shape)
 
 ---
 
@@ -92,6 +93,34 @@ pinned to the harness versions they were observed on.
   diversity of one panel. The prior charter phrasing missed this because it was framed as work in
   flight; two of the three deaths had none.
 
+## Process cleanup — kill by the PID you recorded
+
+Tearing down what you started is where a wave kills its own siblings. **The kill target is a PID you
+recorded when you started the process** — read back out of the dispatch's run dir, the launch record,
+or the note you wrote at spawn time — and never a match on the process's command text. Record the PID
+at spawn precisely so this is available later; a teardown that has to go looking has already lost the
+argument.
+
+**A command-text match is a cross-session kill, not a cleanup.** Sibling sessions in the same wave run
+*identical* commands — the same dev server, the same test invocation, the same engine CLI — so
+`pkill -f dev-server.js` or a `pkill -f` on a test command matches **their** process as readily as
+yours, and the process that dies is whichever the pattern happens to reach. Field record: exactly that
+pattern reached **two launched builders in one wave** (both self-disclosed; one called it "exactly the
+forbidden move"), and until now the lesson lived in a seat memory — which a launched builder never
+reads.
+
+**If you did not record the PID, identify the process by something your own run owns** — the **cwd**
+of the worktree you dispatched into, or the **port** your own server bound — and kill *that* PID.
+Two properties make that safe, and establishing both is on you. **Read kernel-reported process
+metadata, never the command line** — a process's *actual* working directory is ownership evidence,
+while a worktree path matched inside its *command line* is command-text matching wearing a different
+hat. And **ownership has to still hold now**: a port is evidence only while your process is the one
+holding it, since a sibling can rebind it the moment yours exits, and a port query not restricted to
+the **listener** also returns every client connected to it — so corroborate a port candidate against
+the run's own cwd or launch record before killing anything. **Zero verified candidates,
+or more than one, means you have no kill target** — stop there and say so rather than widening the
+match (charter §7).
+
 ## Launch slice vs continuation slice
 
 Every `dispatch-review` / `dispatch-write` call names a `--max-wait` **slice** on that `--run-dir`.
@@ -130,10 +159,17 @@ documents the runner's result mechanics — read both before authoring seat prom
 the at-dispatch-time summary only.
 
 Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
-`runDir`, and `argv`; on a failure, `reason` (and usually `detail`). **Outcome-dependent:**
-`findings`, `investigated`, `engagement`, and `sanitizedView` — do **not** read an absent `findings`
-as "zero findings". An `unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it
-carries `sanitizedView` **only when raised after the sanitized view was built** — the early refusals
+`runDir`, and `argv`; on a failure, `reason` (and usually `detail`). On success: **`resultKind`**
+(one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name.
+**`investigated`** is present only when at least one claimed path survives spot-checking; a normal
+`{"verdicts": [...]}` reply omits it. **Outcome-dependent:** `engagement` and `sanitizedView` — do **not** read an
+absent `findings` as "zero findings"; an absent `findings` may mean a `verdicts`-kind result
+instead. An object carrying **both** `findings` and `verdicts` is refused as `unreadable`. An item
+whose `id` is exactly `<agent-name>-001` or whose `severity` is exactly
+`Critical | Important | Minor | Nit` — the `review-base.md` template literals — is refused as
+`unreadable` (field-exact; an honest finding that *quotes* those literals in its prose survives). An
+`unrunnable` refusal carries no `findings` / `investigated` / `engagement`; it carries
+`sanitizedView` **only when raised after the sanitized view was built** — the early refusals
 (`repo-root-*`, `prompt-*`, `run-dir-*`, `schema-*`) precede the view and carry none. A terminal
 forfeit carries no `findings`/`investigated`. There is no `result` wrapper; `result.findings` reads
 nothing. Optional **`--mode {review,brief-check}`** (default `review`) — full contract in
@@ -151,9 +187,19 @@ omitted, or under `--mode brief-check`). On a continuation (`--run-dir` naming a
 invocation also asserts `--mode brief-check` explicitly, which refuses
 `mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
 withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
-The runner's transport carries **only** `findings` and `investigated` from the seat's stdout — every
-other key the seat emits is dropped, so verdict-shaped or other alternate payloads parse `unreadable`,
-retry once, and forfeit.
+The runner accepts **two** result kinds on stdout. Every `ok: true` review result carries
+**`resultKind`** — exactly `"findings"` or `"verdicts"` — plus **exactly one** payload key of that
+name; **`investigated`** is attached only when at least one claimed path survives spot-checking.
+Callers may pin the expected kind via **`--expected-result-kind {findings,verdicts}`**; a mismatch
+refuses with `detail: result-kind-mismatch`. The pin is journaled when the run is **opened**; on a
+continuation an omitted pin inherits the journaled value, while a supplied pin that disagrees —
+including on a run opened without one — refuses `run-dir-result-kind-mismatch` (`attempts: 0`, no
+spawn); a run's identity is fixed at open. **Panel** seats pass the **`findings`** pin; the
+**verify phase** passes the **`verdicts`** pin. When unset, both kinds are accepted. Per-id audit rulings still
+do not travel through this verb. A non-terminal `{"reason": "running", "terminal": false}` is **not**
+a forfeit. It carries a **`graded`** list describing each attempt that has already ended — each entry
+names `resultKind` and its payload when that attempt graded `ok`. Re-invoke **`dispatch-review`**
+(never `dispatch-poll`) on the same `--run-dir` with `--max-wait 540` while `.terminal` is false.
 
 When the result carries an **`engagement`** block with a non-`null` value (present only when the
 attempt produced stdout that was graded), `engagement.read` is `"engaged"` when the seat

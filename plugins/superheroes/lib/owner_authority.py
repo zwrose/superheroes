@@ -39,14 +39,69 @@ import sys
 # LIFTED VERBATIM from the retired lib/enforcer.py GATED_COMMANDS (pre-#478). The tool-to-
 # subcommand junction was re-derived under owner ratification 2026-08-13 (issue #989) to close
 # a silent classification bypass. First hit wins (see owner_authority_action).
+#
+# Owner ratification 2026-08-14 (issue #1000): this gate is a best-effort text matcher over shell
+# syntax that errs closed. No shell lexer will be built; quoting semantics are declined — skipping
+# quoted text would choose fail-open in a security gate. Known silent-bypass shapes are closed as
+# they are found; over-matching is an accepted cost.
+#
+# No row states its own end anchor; a row selects one of the two named shared anchors (`_WORD_END`
+# or `_TOKEN_END`), decided by whether the row matches a shell word or a payload identifier.
+# Every matcher row is built through `_gated` and must not carry its own end anchor — so a row
+# added later is boundary-aware by construction.
+#
 # Shell segment boundaries. Splitting first, then searching within a segment, replaces the old
 # tool-to-subcommand span: it removes BOTH the length cap (which fell through to None past 256
 # chars — an approval bypass) and the unbounded `.*` wildcards (quadratic in a PreToolUse hook:
 # 26.1s on a 35KB input, vs 0.002s here). Re-derived under owner ratification 2026-08-13 (#989).
 _SEGMENT_SPLIT = re.compile(r"[;&|\n]+")
 
+# A shell redirection is not part of the command's word structure — NEITHER the operator NOR its
+# operand. Two distinct failures motivated each half. (a) Operators that CONTAIN a `;&|` character
+# (`2>&1`, `&>`, `>|`, `<&`) were split as separators, tearing `gh 2>&1 pr merge 123` into `gh 2>`
+# and `1 pr merge 123`. (b) Operators WITHOUT one (`>`, `>>`, `<`, `<<`) never split anything, but
+# glued to a token they defeat the rows' OWN anchors: `gh pr merge>/dev/null` failed
+# `(?<!\S)pr\s+merge(?!\S)` and classified None — a silent merge. And the operand matters on its
+# own: substituting only the operator leaves `gh pr 2>&1 merge 123` as `gh pr  1 merge 123`, whose
+# surviving `1` still breaks `pr`/`merge` adjacency.
+# `&&`, `||`, `|&` and a bare background `&` match NOTHING here and stay separators.
+# The fd is bounded (`\d{0,9}`, and shell fds are small): an unbounded `\d*` before a tail that
+# fails on digit input backtracks quadratically — measured 46.64s end-to-end on a 100,000-digit
+# run, in a gate that runs on EVERY Bash call. This is the same hazard `_short_flag` documents.
+_REDIRECTION_OP_SRC = r"(?:&>>?|\d{0,9}(?:>>?|<<?)[&|]?)"
+_REDIRECTION_OPERATOR = re.compile(_REDIRECTION_OP_SRC)
+_REDIRECTION_WITH_OPERAND = re.compile(_REDIRECTION_OP_SRC + r"\s*[^\s;&|]*")
+
 # The shell removes a backslash-newline before parsing, so it is not a segment boundary.
 _LINE_CONTINUATION = re.compile(r"\\\r?\n")
+
+
+def _segments(command):
+    """Every segment the row matcher searches, line-continuations already removed.
+
+    Returns the raw split PLUS splits of operator-only and operator-and-operand neutralizations,
+    and is therefore strictly ADDITIVE: every segment the matcher saw before this helper existed is
+    still in the list, so no classification can be LOST here — only gained. (An in-place strip would
+    risk the opposite: an over-matching pattern could merge two genuine segments and drop a live
+    hit.)
+
+    Operand-consuming neutralization is what closes `gh pr 2>&1 merge 123`, but it can also swallow
+    a gated word (`gh 2>&pr merge 1` → `gh  merge 1`), which the operator-only copy still catches.
+    On shapes like `gh >pr merge 1` (stdout redirected to a file named `pr`, then `gh merge 1`),
+    the operator-only copy's contribution is over-matching — an extra prompt on a command that is
+    not actually the gated one — which is the accepted direction under the ratified posture.
+    Keeping both neutralizations, on top of the raw split, is the fail-closed choice: more segments
+    can only mean more matching, never less."""
+    command_nc = _LINE_CONTINUATION.sub("", command)
+    out = list(_SEGMENT_SPLIT.split(command_nc))
+    seen = {command_nc}
+    for pattern in (_REDIRECTION_OPERATOR, _REDIRECTION_WITH_OPERAND):
+        neutral = pattern.sub(" ", command_nc)
+        if neutral not in seen:
+            seen.add(neutral)
+            out.extend(_SEGMENT_SPLIT.split(neutral))
+    return out
+
 
 # Subcommand words are matched as WHITESPACE-DELIMITED TOKENS, not with \b: `\bpush\b` also matches
 # inside `push.default`, which classified `git config push.default main` as push-to-default.
@@ -54,19 +109,132 @@ _LINE_CONTINUATION = re.compile(r"\\\r?\n")
 _GH = re.compile(r"\bgh\b", re.I)
 _GIT = re.compile(r"\bgit\b", re.I)
 
+# A gated word that is a SHELL WORD ends at a shell word-terminator. `.` and `-` continue a
+# word here (`git config push.default main`, `git push origin main-feature`).
+_WORD_END = r"(?=[^\w.-]|$)"
+
+# A gated PAYLOAD IDENTIFIER is not a shell word — it lives INSIDE an argument (a GraphQL field
+# name, a REST path segment), where `.` and `-` are ordinary terminators, not continuations
+# (`--jq .data.mergePullRequest.number`, `pulls/42/merge-async`). This restores exactly the
+# breadth the `\b` these rows used to carry: after a word character, `\b` == `(?=\W|$)`.
+_TOKEN_END = r"(?=\W|$)"
+
+# Leading boundary for push-to-default's ref operand only — treats quote, backtick, `(`, `/` as
+# boundaries before `main`/`master`. Subcommand rows keep `(?<!\S)`; widening those would admit
+# `gh pr create -t "pr merge"` as a false merge-pr, and every real wrapped shape has a space before
+# the gated word with only its end quoted.
+_WORD_START = r"(?<![\w.-])"
+
+# Identity registries — structural census proves rows were built here, not by string-shape guessing.
+_GATED_REGISTRY = set()
+_SHORT_FLAG_REGISTRY = set()
+
+
+_FORBIDDEN_BODY_ANCHORS = (
+    r"(?!\S)", r"(?=\s", r"\b", r"\B", "$", r"\Z", r"\z",
+)
+
+
+# The ONLY end anchors a gated row may carry — a closed selector, not an open regex string. A row
+# that passes any other `ending` re-opens the word-terminator class with every test green (PR #1022
+# round-4 confirmation finding, three seats), so the builder refuses it by name rather than
+# trusting the author.
+_ALLOWED_ENDINGS = (_WORD_END, _TOKEN_END)
+# The ONLY leading anchors — shell-word start, token boundary, or the push-to-default ref start.
+# Same closed-selector rule as the endings: an open `leading` regex could smuggle a lookahead
+# that re-imposes a whitespace-only terminator (micro review round 2, R-001).
+_SHELL_WORD_START = r"(?<!\S)"
+_ALLOWED_LEADINGS = (_SHELL_WORD_START, r"\b", _WORD_START)
+# A gated body is a plain match — never an assertion. Any lookaround in the body could re-state
+# an end condition the shared anchors are supposed to own, in a spelling the blacklist above does
+# not name (`(?![^\s])`, micro review round 2, R-002). Refused structurally, not by spelling.
+_LOOKAROUND_OPENERS = ("(?=", "(?!", "(?<=", "(?<!")
+
+
+def _gated(body, leading=_SHELL_WORD_START, ending=_WORD_END):
+    for token in _FORBIDDEN_BODY_ANCHORS:
+        if token in body:
+            raise ValueError(
+                "gated body must not contain end-anchor %r — use _WORD_END or _TOKEN_END"
+                % token)
+    for opener in _LOOKAROUND_OPENERS:
+        if opener in body:
+            raise ValueError(
+                "gated body must not contain a lookaround %r — anchors are the builder's, "
+                "not the body's" % opener)
+    if leading not in _ALLOWED_LEADINGS:
+        raise ValueError(
+            "gated leading must be one of the shared start anchors, not %r" % (leading,))
+    if ending not in _ALLOWED_ENDINGS:
+        raise ValueError(
+            "gated ending must be _WORD_END or _TOKEN_END, not %r" % (ending,))
+    # The body is wrapped in a non-capturing group so the anchors bind the WHOLE body: an
+    # ungrouped alternation (`push|pull`) would otherwise leave every branch but the last
+    # un-anchored while the pattern still ends with the shared anchor (micro review, R-001).
+    compiled = re.compile(leading + "(?:" + body + ")" + ending, re.I)
+    _GATED_REGISTRY.add(id(compiled))
+    return compiled
+
+
+# A short-option flag can arrive standalone (`-f`) or CLUSTERED (`-qf`, `-fq`, `-uvf`, `-4f`).
+# `_short_flag(letter)` is the builder every row's short-flag requirement must be composed from,
+# so a row added later is cluster-aware by construction rather than by the author remembering.
+# The construction is deliberately LINEAR: one unbounded class then the literal letter. Do NOT
+# write `[A-Za-z0-9]*f[A-Za-z0-9]*` — two unbounded repetitions around the letter backtrack
+# quadratically (measured 5.97s on a 30,000-character token; this gate runs on EVERY Bash call).
+# `(?<![\w-])` — not `(?<!\S)` — keeps the shipped behaviour of matching a QUOTED flag
+# (`git push "-f" origin feature` classifies force-push today and must keep doing so) while still
+# refusing a match inside `--force` or inside a word like `feature-fast`.
+def _short_flag(letter):
+    return r"(?<![\w-])-(?!-)[A-Za-z0-9]*" + letter
+
+
+# git's OTHER force spelling: a refspec word beginning with `+` (`git push origin +feature`,
+# `+HEAD:main`, `+refs/heads/x`, `+*:refs/review/*`, `+@{u}:refs/heads/x`) force-updates the
+# remote ref exactly as `--force` does. The `+` must START a word — whitespace, quote, backtick,
+# `(` or a redirection operator before it; never `=`, `:`, `.`, `/`, `-`, `+` or a word char, so
+# `--push-option=+x`, `a+b`, `HEAD:refs/heads/+x` and `./+repo` are not force — and be followed
+# by ANY non-space, non-separator character (git allows almost any punctuation to start a ref —
+# `++feature` and `+!feature` are legal force refspecs — so the follower class is deliberately
+# broad rather than an enumeration of "ref characters"; a bare `+` before whitespace or a
+# separator is not a refspec). Accepted over-matches, documented in the reference: a redirection
+# to a `+`-named file (`2>+log`), the separate-argument push option (`-o +x`, `--push-option +x`),
+# a repository operand named `+…` (`git push +repo feature`), and a quoted inline option value
+# (`--push-option="+x"`) ask — a prompt, never an unapproved run. Owner-ruled 2026-08-15
+# (@116-3, a).
+# Left boundary is a CLOSED inclusion set — the `+` starts a shell word: start-of-segment,
+# whitespace, a quote, a backtick, `(`, or a redirection operator before it. (An exclusion class
+# let a comma-named branch `feature,+other` and an inline value `ci:list,+x` read as force —
+# round-3 Minor.) Python's lookbehind must be fixed-width, hence the alternation.
+_PLUS_REFSPEC = r"(?:(?<=^)|(?<=\s)|(?<=[\"'`(>]))\+(?=[^\s;|&<>()])"
+
+
+def _force_push_flag_trailing():
+    compiled = re.compile(r"(--force\b|-f\b|--force-with-lease|"
+                          + _short_flag("f") + r"|" + _PLUS_REFSPEC + r")", re.I)
+    _SHORT_FLAG_REGISTRY.add(id(compiled))
+    return compiled
+
+
 # (action, tool-word, subcommand-token, trailing-requirement-or-None)
 # The trailing requirement is searched AFTER the subcommand match, within the same segment.
 OWNER_AUTHORITY_COMMANDS = [
-    ("merge-pr",        _GH,  re.compile(r"(?<!\S)pr\s+merge(?!\S)", re.I), None),
-    ("merge-api",       _GH,  re.compile(r"(?<!\S)api(?!\S)", re.I),
-                              re.compile(r"\bpulls/[^/\s]+/merge\b", re.I)),
-    ("merge-graphql",   None, re.compile(r"\bmergePullRequest\b", re.I), None),
-    ("release",         _GH,  re.compile(r"(?<!\S)release\s+create(?!\S)", re.I), None),
-    ("run-workflow",    _GH,  re.compile(r"(?<!\S)workflow\s+(run|enable|disable)(?!\S)", re.I), None),
-    ("force-push",      _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
-                              re.compile(r"(--force\b|-f\b|--force-with-lease)", re.I)),
-    ("push-to-default", _GIT, re.compile(r"(?<!\S)push(?!\S)", re.I),
-                              re.compile(r"(?::|[ \t])(?:refs/heads/)?(main|master)(?:\s|$)", re.I)),
+    ("merge-pr",        _GH,  _gated(r"pr\s+merge"), None),
+    ("merge-api",       _GH,  _gated(r"api"),
+                              _gated(r"pulls/[^/\s]+/merge", leading=r"\b",
+                                     ending=_TOKEN_END)),
+    ("merge-graphql",   None, _gated(r"mergePullRequest", leading=r"\b",
+                                     ending=_TOKEN_END), None),
+    ("release",         _GH,  _gated(r"release\s+create"), None),
+    ("run-workflow",    _GH,  _gated(r"workflow\s+(run|enable|disable)"), None),
+    ("force-push",      _GIT, _gated(r"push"),
+                              # `-f\b` is retained deliberately: no `(?<![\w-])` lookbehind, so it
+                              # still matches a trailing `-f` in `git push origin my-f` that the
+                              # builder deliberately refuses — removing it would narrow a security
+                              # matcher. Built from `_short_flag`, not `_gated` — flags, not words.
+                              _force_push_flag_trailing()),
+    ("push-to-default", _GIT, _gated(r"push"),
+                              _gated(r"(?:refs/heads/)?(main|master)", leading=_WORD_START)),
 ]
 
 ALLOW_FILENAME = "owner-authority-allow.json"
@@ -111,8 +279,7 @@ def owner_authority_action(command):
     the subcommand token must follow the tool word when a tool word is required."""
     if not isinstance(command, str):
         return None
-    command = _LINE_CONTINUATION.sub("", command)
-    segments = _SEGMENT_SPLIT.split(command)
+    segments = _segments(command)
     # Rows OUTER, segments INNER — this preserves the shipped first-hit-wins precedence across the
     # whole command. Iterating segments first would let a later row in an earlier segment win.
     for action, tool, sub, trailing in OWNER_AUTHORITY_COMMANDS:
@@ -401,9 +568,8 @@ def calibration_state(cwd):
 def _ask_reason(action, command, notes):
     reason = "owner-authority action '%s' needs your live approval" % action
     # Informational pointer only — segment-scoped gh/workflow-run shape, not workflow_run_dispatch.
-    command_nc = _LINE_CONTINUATION.sub("", command)
     pointer_hit = False
-    for segment in _SEGMENT_SPLIT.split(command_nc):
+    for segment in _segments(command):
         m_tool = _GH.search(segment)
         if m_tool and _WORKFLOW_RUN_POINTER.search(segment, m_tool.end()):
             pointer_hit = True

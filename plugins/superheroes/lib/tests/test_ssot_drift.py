@@ -239,6 +239,81 @@ def test_review_payload_shape_tokens_in_auto_fix_loop_doc():
     )
 
 
+# --- Cluster: review resultKind enum (engine_adapter → doc copies) ---
+
+
+def _review_result_kind_enum_from_home():
+    import engine_adapter
+
+    return set(engine_adapter.REVIEW_RESULT_KINDS)
+
+
+def _review_result_kind_tokens_from_doc_block(block):
+    return set(re.findall(r"`([^`]+)`", block))
+
+
+_REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
+    "skills/review-code/reference/auto-fix-loop.md": 3,
+    "skills/workhorse/reference/dispatch-mechanics.md": 2,
+}
+
+
+def _review_result_kind_enum_copies_from_doc(doc):
+    """Every resultKind enumeration copy in a doc file."""
+    patterns = [
+        r"\(one of\s*(.*?)\)\s*naming the payload",
+        r"\(`([^`]+)` or `([^`]+)`\) naming which payload",
+        r'exactly `"([^"]+)"` or `"([^"]+)"`',
+    ]
+    copies = []
+    for pat in patterns:
+        for m in re.finditer(pat, doc, re.DOTALL):
+            if m.lastindex == 2:
+                copies.append({m.group(1), m.group(2)})
+            else:
+                tokens = _review_result_kind_tokens_from_doc_block(m.group(1))
+                if tokens:
+                    copies.append(tokens)
+    assert copies, (
+        "doc: no resultKind enumeration copies found (moved or reworded?)"
+    )
+    return copies
+
+
+def _assert_review_result_kind_enum_copies_match_home(doc_rel):
+    """§11: every pinned resultKind enum copy in doc_rel matches engine_adapter."""
+    home = _review_result_kind_enum_from_home()
+    doc = _read(doc_rel)
+    copies = _review_result_kind_enum_copies_from_doc(doc)
+    expected_count = _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS[doc_rel]
+    assert len(copies) == expected_count, (
+        "%s: expected %d resultKind enum copies, found %d "
+        "(a copy dropped out of recognition or a new copy was not registered?)"
+        % (doc_rel, expected_count, len(copies))
+    )
+    for i, doc_tokens in enumerate(copies):
+        missing_from_doc = sorted(home - doc_tokens)
+        extra_in_doc = sorted(doc_tokens - home)
+        assert not missing_from_doc and not extra_in_doc, (
+            "%s resultKind enum copy %d drift from "
+            "engine_adapter.REVIEW_RESULT_KINDS — "
+            "missing from doc: %r; present in doc but not in home: %r"
+            % (doc_rel, i, missing_from_doc, extra_in_doc)
+        )
+
+
+def test_review_result_kind_enum_in_auto_fix_loop_doc():
+    """§11: every resultKind enum copy in auto-fix-loop.md matches engine_adapter."""
+    _assert_review_result_kind_enum_copies_match_home(
+        "skills/review-code/reference/auto-fix-loop.md")
+
+
+def test_review_result_kind_enum_in_dispatch_mechanics_doc():
+    """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
+    _assert_review_result_kind_enum_copies_match_home(
+        "skills/workhorse/reference/dispatch-mechanics.md")
+
+
 # --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---
 
 
@@ -276,53 +351,6 @@ def test_config_read_fields_in_preflight_doc():
     assert not missing_from_doc and not extra_in_doc, (
         "preflight.md configRead field vocabulary drift from "
         "preflight_probe.CONFIG_READ_FIELDS — "
-        "missing from doc: %r; present in doc but not in home: %r"
-        % (missing_from_doc, extra_in_doc)
-    )
-
-
-# --- Cluster: schema refusal tokens (engine_dispatch → auto-fix-loop.md) ---
-
-
-def _schema_refusal_tokens_from_home():
-    import engine_dispatch
-
-    return set((
-        engine_dispatch.SCHEMA_REFUSAL_MISSING,
-        engine_dispatch.SCHEMA_REFUSAL_UNREADABLE,
-        engine_dispatch.SCHEMA_REFUSAL_NOT_FINDINGS_SHAPED,
-    ))
-
-
-def _schema_refusal_tokens_from_auto_fix_loop_doc(doc):
-    """The `--schema-path` refusal `detail` enumeration in auto-fix-loop.md — scoped to that block only."""
-    m = re.search(
-        r"`detail`\s+is one of\s+(.*?)\)\s+with\s+`attempts:",
-        doc,
-        re.DOTALL,
-    )
-    assert m, (
-        "auto-fix-loop.md: schema refusal detail enumeration not found "
-        "(moved or reworded?)"
-    )
-    tokens = set(re.findall(r"`([^`]+)`", m.group(1)))
-    assert tokens, (
-        "auto-fix-loop.md: schema refusal detail enumeration parsed to zero tokens "
-        "(regex drift or empty enumeration?)"
-    )
-    return tokens
-
-
-def test_schema_refusal_tokens_in_auto_fix_loop_doc():
-    """§11: auto-fix-loop.md restates the schema-path refusal detail tokens from engine_dispatch."""
-    home = _schema_refusal_tokens_from_home()
-    doc = _read("skills/review-code/reference/auto-fix-loop.md")
-    doc_tokens = _schema_refusal_tokens_from_auto_fix_loop_doc(doc)
-    missing_from_doc = sorted(home - doc_tokens)
-    extra_in_doc = sorted(doc_tokens - home)
-    assert not missing_from_doc and not extra_in_doc, (
-        "auto-fix-loop.md schema refusal detail vocabulary drift from "
-        "engine_dispatch.py — "
         "missing from doc: %r; present in doc but not in home: %r"
         % (missing_from_doc, extra_in_doc)
     )

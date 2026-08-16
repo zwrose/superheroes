@@ -18,7 +18,7 @@ import owner_authority as oa
 
 # --- owner_authority_action: the enumerated set --------------------------------
 
-_RECOGNISES_EACH_SHAPE = [
+_BASE_SHAPES = [
     ("gh pr merge 42 --squash", "merge-pr"),
     ("gh api -X PUT repos/o/r/pulls/42/merge", "merge-api"),
     ("gh api graphql -f query='mutation { mergePullRequest(input: {}) }'", "merge-graphql"),
@@ -35,6 +35,76 @@ _RECOGNISES_EACH_SHAPE = [
     ("git push origin master", "push-to-default"),
     ("git push origin refs/heads/main", "push-to-default"),
 ]
+
+# Invariant A — redirection operators are not segment boundaries (#1000).
+_REDIRECTION_CENSUS = [
+    ("gh 2>&1 pr merge 123", "merge-pr"),
+    ("gh 2>&1 release create v1.0.0", "release"),
+    ("gh 2>&1 workflow run deploy.yml", "run-workflow"),
+    ("gh 1>&2 api -X PUT repos/o/r/pulls/42/merge", "merge-api"),
+    ("git 2>&1 push --force origin feature", "force-push"),
+    ("git push 2>&1 --force origin feature", "force-push"),
+    ("git 2>&1 push origin main", "push-to-default"),
+    ("gh &>out pr merge 123", "merge-pr"),
+    ("gh &>>out pr merge 123", "merge-pr"),
+    ("gh >&out pr merge 123", "merge-pr"),
+    ("gh >|out pr merge 123", "merge-pr"),
+    ("gh 2>&- pr merge 123", "merge-pr"),
+    ("gh <&0 pr merge 123", "merge-pr"),
+    ("gh 2>>&1 pr merge 123", "merge-pr"),
+    ("gh <&- pr merge 123", "merge-pr"),
+    ("gh 1>|out pr merge 123", "merge-pr"),
+    ("gh pr merge>/dev/null", "merge-pr"),
+    ("gh pr merge>>log", "merge-pr"),
+    ("gh pr merge<in", "merge-pr"),
+    ("git push origin main>/dev/null", "push-to-default"),
+    ("git push origin main>>log", "push-to-default"),
+    ("git push -u origin main>log", "push-to-default"),
+    ("git push origin HEAD:main>/dev/null", "push-to-default"),
+    ("gh pr 2>&1 merge 123", "merge-pr"),
+    ("gh release 2>&1 create v1.0.0", "release"),
+    ("gh workflow 2>&1 run deploy.yml", "run-workflow"),
+    ("gh pr &>out merge 123", "merge-pr"),
+    ("gh pr >out merge 123", "merge-pr"),
+    ("gh pr 1>out merge 123", "merge-pr"),
+    # Operator-only neutralization branch — load-bearing on runnable shapes (#1000 round-2).
+    ("gh >pr merge 1", "merge-pr"),
+    ("gh 2>pr merge 1", "merge-pr"),
+    ("gh >&pr merge 1", "merge-pr"),
+    ("git >push --force origin f", "force-push"),
+    # Shell word terminators on gated words — paren/subshell wrappers (#1000).
+    ("(cd sub && git push origin main)", "push-to-default"),
+    ("(git push origin main)", "push-to-default"),
+    ("git push origin main)", "push-to-default"),
+    ("$(gh pr merge)", "merge-pr"),
+    ("(gh pr merge)", "merge-pr"),
+]
+
+# Invariant B — short-option clusters (#1000).
+_CLUSTER_CENSUS = [
+    ("git push -qf origin feature", "force-push"),
+    ("git push -fq origin feature", "force-push"),
+    ("git push -uvf origin feature", "force-push"),
+    ("git push -4f origin feature", "force-push"),
+    ("git push -f4 origin feature", "force-push"),
+    ("git push -6f origin feature", "force-push"),
+    # Quoted-flag preservation — must keep classifying after cluster builder (#1000).
+    ("git push \"-f\" origin feature", "force-push"),
+    ("git push '-f' origin feature", "force-push"),
+    ("git push \"-qf\" origin feature", "force-push"),
+]
+
+# Invariant C — payload-identifier terminators on merge-api / merge-graphql (#1000 round-4).
+_PAYLOAD_IDENTIFIER_CENSUS = [
+    ("gh api -X PUT repos/o/r/pulls/42/merge-async", "merge-api"),
+    ("gh api repos/o/r/pulls/42/merge.json", "merge-api"),
+    ("gh api graphql -F query=@merge.graphql --jq .data.mergePullRequest.number",
+     "merge-graphql"),
+    ("gh api graphql -f query='{mergePullRequest.foo}'", "merge-graphql"),
+    ("gh api graphql --jq .mergePullRequest-x", "merge-graphql"),
+]
+
+_RECOGNISES_EACH_SHAPE = _BASE_SHAPES + _REDIRECTION_CENSUS + _CLUSTER_CENSUS + _PAYLOAD_IDENTIFIER_CENSUS
 
 _NONE_FOR_ORDINARY = [
     "git push origin my-branch",
@@ -55,6 +125,11 @@ _NONE_FOR_ORDINARY = [
     "git config --global push.default simple",
     "git config push.default current",
     "gh api repos/o/r/pulls/42/merged",
+    "git push -q origin feature",
+    "gh pr list | grep 'pr merge'",
+    "git push origin my-branch>/dev/null",
+    "git status 2>&1",
+    "cat a.txt > b.txt",
 ]
 
 
@@ -106,6 +181,265 @@ def test_owner_authority_action_no_regression_census():
         assert oa.owner_authority_action(command) is None
 
 
+# --- structural census: every row built through _gated or _short_flag (#1000) ---
+
+_OWNER_AUTHORITY_ROW_COUNT = 7
+
+
+def test_owner_authority_commands_structural_census():
+    # _gated's products are all retained in OWNER_AUTHORITY_COMMANDS, so their id()s cannot
+    # be recycled while the module is loaded. _short_flag returns a string (not a compiled
+    # pattern), so only _force_push_flag_trailing registers in _SHORT_FLAG_REGISTRY.
+    assert len(oa.OWNER_AUTHORITY_COMMANDS) == _OWNER_AUTHORITY_ROW_COUNT
+    assert oa._GATED_REGISTRY
+    assert oa._SHORT_FLAG_REGISTRY
+    for action, _tool, sub, trailing in oa.OWNER_AUTHORITY_COMMANDS:
+        assert id(sub) in oa._GATED_REGISTRY, action
+        # Shape, not only provenance: every gated pattern ENDS with one of the two shared anchors.
+        # Provenance alone proved a row came from _gated; this proves the row ends correctly, so
+        # a custom `ending` cannot re-open the word-terminator class with the census green.
+        assert sub.pattern.endswith(oa._ALLOWED_ENDINGS), action
+        assert sub.pattern.startswith(oa._ALLOWED_LEADINGS), action
+        if trailing is not None:
+            trailing_id = id(trailing)
+            assert (trailing_id in oa._GATED_REGISTRY
+                    or trailing_id in oa._SHORT_FLAG_REGISTRY), action
+            if trailing_id in oa._GATED_REGISTRY:
+                assert trailing.pattern.endswith(oa._ALLOWED_ENDINGS), action
+                assert trailing.pattern.startswith(oa._ALLOWED_LEADINGS), action
+
+
+_GATED_CLEAN_BODIES = [
+    r"pr\s+merge",
+    r"api",
+    r"pulls/[^/\s]+/merge",
+    r"mergePullRequest",
+    r"release\s+create",
+    r"workflow\s+(run|enable|disable)",
+    r"push",
+    r"(?:refs/heads/)?(main|master)",
+]
+
+
+@pytest.mark.parametrize("body", _GATED_CLEAN_BODIES)
+def test_gated_clean_body_builds(body):
+    oa._gated(body)
+
+
+@pytest.mark.parametrize("body", [
+    r"pr\s+merge(?!\S)",
+    r"mergePullRequest\b",
+    r"api$",
+    r"push\Z",
+])
+def test_gated_rejects_body_with_end_anchor(body):
+    with pytest.raises(ValueError, match="end-anchor"):
+        oa._gated(body)
+
+
+@pytest.mark.parametrize("ending", [
+    r"(?!\S)",        # the pre-#1000 per-row anchor — the exact shape that re-opened backticks
+    r"(?:\s|$)",
+    r"\b",
+    r"[)\s]",
+    "",
+])
+def test_gated_rejects_custom_ending(ending):
+    # The `ending` argument is a closed selector: only _WORD_END / _TOKEN_END build. Anything else
+    # is refused by name (round-4 confirmation finding: an unvalidated ending let a future row
+    # re-open the word-terminator class with the structural census green).
+    with pytest.raises(ValueError, match="gated ending must be"):
+        oa._gated(r"pr\s+merge", ending=ending)
+
+
+@pytest.mark.parametrize("ending", [oa._WORD_END, oa._TOKEN_END])
+def test_gated_accepts_the_two_shared_endings(ending):
+    assert oa._gated(r"pr\s+merge", ending=ending).pattern.endswith(ending)
+
+
+@pytest.mark.parametrize("leading", [
+    r"(?=push(?![^\s]))(?<!\S)",   # round-2 R-001: a leading lookahead re-imposing whitespace-only
+    r"\B",
+    r"^",
+    "",
+])
+def test_gated_rejects_custom_leading(leading):
+    with pytest.raises(ValueError, match="gated leading must be"):
+        oa._gated(r"push", leading=leading)
+
+
+@pytest.mark.parametrize("leading", list(oa._ALLOWED_LEADINGS))
+def test_gated_accepts_the_shared_leadings(leading):
+    assert oa._gated(r"push", leading=leading).pattern.startswith(leading)
+
+
+@pytest.mark.parametrize("body", [
+    r"pr\s+merge(?![^\s])",     # round-2 R-002: whitespace-only terminator the blacklist misses
+    r"pr\s+merge(?=[ \t])",
+    r"(?<=gh )pr\s+merge",
+    r"(?<!x)push",
+])
+def test_gated_rejects_body_with_lookaround(body):
+    # A body is a plain match; anchors — every assertion — belong to the builder. Refused by
+    # construct (`(?=`, `(?!`, `(?<=`, `(?<!`), not by spelling.
+    with pytest.raises(ValueError, match="lookaround"):
+        oa._gated(body)
+
+
+def test_gated_anchors_bind_the_whole_body_not_the_last_alternative():
+    # An ungrouped alternation body must not leave its first branch un-anchored: before the
+    # non-capturing wrap, `_gated(r"push|pull")` compiled to `(?<!\S)push|pull(?=…)`, so
+    # `pushXYZ` matched via the un-anchored `push` branch while the pattern still ended with the
+    # shared anchor and passed every structural check (micro review R-001).
+    p = oa._gated(r"push|pull")
+    assert p.search("pushXYZ") is None
+    assert p.search("pullXYZ") is None
+    # The leading anchor is untouched: a terminator AFTER the word is accepted for both branches.
+    assert p.search("push") and p.search("pull") and p.search("push)") and p.search("x pull`")
+
+
+# --- class-level behavioral census: gated-word terminators in wrappers (#1000) ---
+
+_MINIMAL_GATED_FORMS = [
+    ("gh pr merge", "merge-pr"),
+    ("gh api repos/o/r/pulls/42/merge", "merge-api"),
+    ("gh api graphql -f query='{mergePullRequest}'", "merge-graphql"),
+    ("gh release create", "release"),
+    ("gh workflow run", "run-workflow"),
+    ("git push --force", "force-push"),
+    ("git push origin main", "push-to-default"),
+]
+
+_WRAPPER_FORMS = [
+    ("$(%s)", lambda s: '"' not in s),
+    ("`%s`", lambda _s: True),
+    ("(%s)", lambda _s: True),
+    ('bash -c "%s"', lambda s: '"' not in s),
+    ("bash -c '%s'", lambda s: "'" not in s),
+]
+
+_QUOTED_OPERAND_ROWS = [
+    ('git push origin "main"', "push-to-default"),
+    ("git push origin 'main'", "push-to-default"),
+    ("git push origin `main`", "push-to-default"),
+]
+
+_NEGATIVE_WRAPPED_NONE = [
+    "`git status`",
+    'bash -c "echo hello"',
+    "$(gh pr view 123)",
+    "(git config push.default main)",
+    "`git push origin feature`",
+    'bash -c "git push origin main-feature"',
+    "$(npm run build)",
+    "`gh pr checks 42`",
+]
+
+
+# Terminator sweep — spelling-independent: every minimal gated form, followed IMMEDIATELY by every
+# shell word-terminator the anchor promises, still classifies. Crosses the forms with a fixed
+# alphabet, so it does not depend on which anchor spellings _FORBIDDEN_BODY_ANCHORS happens to
+# blacklist (round-4 finding 4).
+_TERMINATOR_ALPHABET = [")", "`", '"', "'", ";", " | cat", " && true", " x", ""]
+
+
+def test_minimal_gated_forms_cover_every_gate_action():
+    # The sweep below derives from _MINIMAL_GATED_FORMS; this pins that the list covers every
+    # action in OWNER_AUTHORITY_COMMANDS, so a row added later cannot escape the sweep by omission.
+    assert {a for _f, a in _MINIMAL_GATED_FORMS} == {a for a, *_ in oa.OWNER_AUTHORITY_COMMANDS}
+
+
+@pytest.mark.parametrize("terminator", _TERMINATOR_ALPHABET)
+@pytest.mark.parametrize("form,action", _MINIMAL_GATED_FORMS)
+def test_owner_authority_action_terminator_sweep(form, action, terminator):
+    assert oa.owner_authority_action(form + terminator) == action, repr(form + terminator)
+
+def _wrapper_corpus():
+    base_shapes = list(_BASE_SHAPES) + list(_MINIMAL_GATED_FORMS)
+    corpus = []
+    per_wrapper = {i: [] for i in range(len(_WRAPPER_FORMS))}
+    for shape, action in base_shapes:
+        for i, (fmt, skip) in enumerate(_WRAPPER_FORMS):
+            if not skip(shape):
+                continue
+            cmd = fmt % shape
+            corpus.append((cmd, action))
+            per_wrapper[i].append((cmd, action))
+    return corpus, per_wrapper
+
+
+def test_owner_authority_action_wrapper_corpus_nonempty():
+    _corpus, per_wrapper = _wrapper_corpus()
+    for i, entries in per_wrapper.items():
+        assert entries, "wrapper %d produced empty corpus" % i
+    actions_seen = {action for _cmd, action in _corpus}
+    assert actions_seen == {action for _a, action in _MINIMAL_GATED_FORMS}
+
+
+@pytest.mark.parametrize("command,action", _wrapper_corpus()[0])
+def test_owner_authority_action_wrapper_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _QUOTED_OPERAND_ROWS)
+def test_owner_authority_action_quoted_operand_push_to_default(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command", _NEGATIVE_WRAPPED_NONE)
+def test_owner_authority_action_negative_wrapped_none(command):
+    assert oa.owner_authority_action(command) is None
+
+
+# Intended cross-row shifts — pinned so reviewers see the before/after (#1000).
+_INTENDED_SHIFTS = [
+    # force-push row precedes push-to-default; -qf on main is force-push, not push-to-default.
+    ("git push -qf origin main", "push-to-default", "force-push"),
+    # merge-pr row precedes run-workflow once redirection exposes the merge segment.
+    ("gh 2>&1 pr merge 123 && gh workflow run deploy.yml", "run-workflow", "merge-pr"),
+    # `+` refspec = git's other force spelling (owner-ruled 2026-08-15): the force-push row
+    # precedes push-to-default, so `+main` shifts from push-to-default (23865a68) to force-push,
+    # and `+feature` from the known-open list (None) to force-push.
+    ("git push origin +main", "push-to-default", "force-push"),
+    ("git push origin +refs/heads/main", "push-to-default", "force-push"),
+    ("git push origin +feature", None, "force-push"),
+    # ratified quoted-mention over-match (_WORD_END) — gated words in quotes/mentions now ask.
+    ('git commit -m "fix the push to main"', None, "push-to-default"),
+    ('git commit -m "do not push to main"', None, "push-to-default"),
+    ('echo "git push origin main"', None, "push-to-default"),
+    ("grep -r 'git push origin main' docs/", None, "push-to-default"),
+]
+
+# Documented known-open bypasses — pinned so the reference doc and classifier cannot drift.
+# A change that closes one should update owner-authority-allowlist.md and move the row, not delete it.
+_KNOWN_OPEN_UNCLASSIFIED = [
+    "g''h pr merge 123",                            # quote-concatenated command word
+    "gi''t push --force origin f",                  # quote-concatenated command word
+    "git push origin '+(feature):refs/heads/x'",   # quoted separator inside a ref name (ratified quoting decline)
+    "git -c remote.origin.push=+HEAD:refs/heads/main push origin",  # config-driven force push — a separate class (collector, 2026-08-15)
+    r"git push origin \+feature",                   # backslash-escaped `+` — escape handling is ratified-declined
+    'git -c user.name="x;y" push --force',          # separator inside a quoted value
+    'git -c user.name="x|y" push --force',          # separator inside a quoted value
+    # Pre-existing, outside #1000's ratified scope — carried as advisor follow-ups.
+    "gh pr 0000000001>&1 merge 123",                # zero-padded fd defeats bounded \d{0,9}
+    "gh pr <> /dev/null merge 123",                 # composite operator <> with spaced operand
+    "gh pr <<< foo merge 123",                      # here-string operator not modelled
+]
+
+
+@pytest.mark.parametrize("command,before,after", _INTENDED_SHIFTS)
+def test_owner_authority_action_intended_shift(command, before, after):
+    # `before` is the stale classification a reviewer might expect; assert inequality so a row
+    # that claims a shift but records the same value on both sides fails.
+    assert before != after
+    assert oa.owner_authority_action(command) == after
+
+
+@pytest.mark.parametrize("command", _KNOWN_OPEN_UNCLASSIFIED)
+def test_owner_authority_action_known_open_unclassified(command):
+    assert oa.owner_authority_action(command) is None
+
+
 @pytest.mark.parametrize("command", [
     "git push -u origin superheroes/x && git checkout main",
     "git push origin superheroes/x ; echo on main",
@@ -144,6 +478,113 @@ def test_owner_authority_action_bounded_runtime():
     command = "gh " + "api " * 30000
     start = time.monotonic()
     assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+def test_owner_authority_action_bounded_runtime_cluster_flag():
+    import time
+    command = "git push -" + "f" * 30000 + "1"
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) == "force-push"
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+def test_owner_authority_action_bounded_runtime_cluster_flag_nonmatch():
+    import time
+    command = "git push -" + "q" * 30000 + " origin feature"
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+def test_owner_authority_action_bounded_runtime_digit_run():
+    import time
+    command = "git push " + "1" * 30000 + " origin feature"
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) is None
+    elapsed = time.monotonic() - start
+    assert elapsed < 2.0
+
+
+@pytest.mark.parametrize("command,action", _REDIRECTION_CENSUS)
+def test_owner_authority_action_redirection_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _CLUSTER_CENSUS)
+def test_owner_authority_action_cluster_census(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+# --- `+` refspec force spelling (owner-ruled 2026-08-15, @116-3 option a) ---
+
+_PLUS_REFSPEC_CENSUS = [
+    ("git push origin +feature", "force-push"),
+    ("git push origin +main", "force-push"),
+    ("git push origin +refs/heads/main", "force-push"),
+    ("git push origin +HEAD:main", "force-push"),
+    ('git push origin "+feature"', "force-push"),
+    ("(git push origin +feature)", "force-push"),
+    ("git push -u origin +feature", "force-push"),
+    ("git push origin +*:refs/review/*", "force-push"),        # glob source (review round 1)
+    ("git push origin +@{u}:refs/heads/feature", "force-push"),  # revision-expression source
+    ("git push origin +@:refs/heads/feature", "force-push"),
+    ("git push origin feature +other", "force-push"),          # `+` on the second refspec
+    ("git push origin ++feature", "force-push"),               # branch literally named `+feature`
+    ("git push origin '+!feature'", "force-push"),             # punctuation-led ref name (round 2)
+    ('git push origin +"feature"', "force-push"),              # `+` then a quote — still a `+` word
+]
+
+# Accepted over-matches — pinned as such so a reader cannot mistake them for intent (they ask;
+# a prompt, never an unapproved run; documented in owner-authority-allowlist.md).
+_PLUS_REFSPEC_ACCEPTED_OVERMATCH = [
+    ("git push origin feature 2>+log", "force-push"),          # redirection to a `+`-named file
+    ("git push -o +x origin feature", "force-push"),           # separate-argument push option
+    ("git push --push-option +x origin feature", "force-push"),
+    ("git push +repo feature", "force-push"),                  # repository operand named `+…`
+    ("git push --repo +repo feature", "force-push"),
+    ('git push --push-option="+x" origin feature', "force-push"),  # quote sits before the `+`
+    ("git push --receive-pack +helper origin feature", "force-push"),  # value-taking option (round 4)
+]
+
+_PLUS_REFSPEC_NEGATIVE = [
+    ("git push origin HEAD:refs/heads/+feature", None),      # `/` before `+` — a `+`-named branch
+    ("git push ./+repo feature", None),                       # repository operand, `/` before `+`
+    ("git push origin feature,+other", None),                 # comma-named branch (round 3)
+    ("git push --push-option=ci:list,+x origin feature", None),  # inline value, comma before `+`
+    ("git push origin feature", None),
+    ("git push --push-option=+x origin feature", None),      # `+` after `=` is not a refspec
+    ("git push origin a+b", None),                            # mid-word `+`
+    ("git push origin +", None),                              # bare `+` — no ref follows
+    ("git push origin + feature", None),                      # `+` then space
+    ("git pull origin +main", None),                          # not a push
+    ("git push origin HEAD:refs/for/main+", "push-to-default"),  # trailing `+`, pre-existing
+]
+
+
+@pytest.mark.parametrize("command,action", _PLUS_REFSPEC_CENSUS)
+def test_owner_authority_action_plus_refspec_is_force(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _PLUS_REFSPEC_NEGATIVE)
+def test_owner_authority_action_plus_refspec_negatives(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+@pytest.mark.parametrize("command,action", _PLUS_REFSPEC_ACCEPTED_OVERMATCH)
+def test_owner_authority_action_plus_refspec_accepted_overmatch(command, action):
+    assert oa.owner_authority_action(command) == action
+
+
+def test_owner_authority_action_bounded_runtime_redirection():
+    import time
+    command = "gh " + "2>&1 " * 30000 + "pr merge 1"
+    start = time.monotonic()
+    assert oa.owner_authority_action(command) == "merge-pr"
     elapsed = time.monotonic() - start
     assert elapsed < 2.0
 
@@ -847,6 +1288,12 @@ def test_classify_hostile_merge_pr_file_does_not_silence_pr_merge(tmp_path, monk
 def test_classify_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeypatch):
     monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
     _, reason = oa.classify("gh workflow run deploy.yml", str(tmp_path))
+    assert "reference/owner-authority-allowlist.md" in reason
+
+
+def test_classify_redirection_workflow_dispatch_ask_reason_has_doc_pointer(tmp_path, monkeypatch):
+    monkeypatch.setattr(oa, "calibration_state", lambda cwd: "calibrated")
+    _, reason = oa.classify("gh 2>&1 workflow run deploy.yml", str(tmp_path))
     assert "reference/owner-authority-allowlist.md" in reason
 
 
