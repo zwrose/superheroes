@@ -46,6 +46,13 @@ EXIT_PASS = 0
 EXIT_FAIL = 1
 EXIT_UNDECIDED = 2
 
+RESULT_FIELDS = (
+    "schema", "result", "ok", "reason", "detail", "child", "register", "body",
+    "registerEntries", "requiredEntries", "quotedEntries", "duplicateQuoteIds",
+    "entriesWithoutConsumers", "findings", "firstDifference",
+)
+FINDING_FIELDS = ("kind", "entry", "line", "column", "expected", "actual", "detail")
+
 ENTRY_HEADER_RE = re.compile(r"^\*\*(R\d+)\s+—\s")
 CONSUMERS_LINE_RE = re.compile(r"^\*Consumers:\*\s*(.*)")
 
@@ -97,6 +104,7 @@ def _is_entry_header(line):
 
 
 def _quotable_stop_line(line):
+    # A register entry is a single paragraph; text after a blank line is trailer, not quotable.
     if not line.strip():
         return True
     if _is_entry_header(line):
@@ -132,6 +140,56 @@ def _advance_past_fence(lines, i, in_fence, fence_char, fence_len):
     return i + 1, False, None, 0
 
 
+def _make_finding(kind, entry, line, column, expected, actual, detail):
+    values = (kind, entry, line, column, expected, actual, detail)
+    if len(values) != len(FINDING_FIELDS):
+        raise ValueError("finding field count mismatch")
+    finding = dict(zip(FINDING_FIELDS, values))
+    assert set(finding) == set(FINDING_FIELDS)
+    return finding
+
+
+def _make_result(
+    schema,
+    result,
+    ok,
+    reason,
+    detail,
+    child,
+    register_path,
+    body_path,
+    register_entries,
+    required_entries,
+    quoted_entries,
+    duplicate_quote_ids,
+    entries_without_consumers,
+    findings,
+    first_difference,
+):
+    values = (
+        schema,
+        result,
+        ok,
+        reason,
+        detail,
+        child,
+        register_path,
+        body_path,
+        register_entries,
+        required_entries,
+        quoted_entries,
+        duplicate_quote_ids,
+        entries_without_consumers,
+        findings,
+        first_difference,
+    )
+    if len(values) != len(RESULT_FIELDS):
+        raise ValueError("result field count mismatch")
+    payload = dict(zip(RESULT_FIELDS, values))
+    assert set(payload) == set(RESULT_FIELDS)
+    return payload
+
+
 def _quotable_has_substance(quotable):
     if not quotable:
         return False
@@ -149,6 +207,7 @@ def parse_register_lines(lines):
     in_fence = False
     fence_char = None
     fence_len = 0
+    fence_opener_line = None
     i = 0
     n = len(lines)
 
@@ -164,6 +223,7 @@ def parse_register_lines(lines):
         fence_marker = _parse_fence_marker(line)
         if fence_marker is not None:
             in_fence = True
+            fence_opener_line = line_no
             fence_char = fence_marker[0]
             fence_len = fence_marker[1]
             i += 1
@@ -196,6 +256,7 @@ def parse_register_lines(lines):
                 inner_fence = _parse_fence_marker(inner)
                 if inner_fence is not None:
                     in_fence = True
+                    fence_opener_line = i + 1
                     fence_char = inner_fence[0]
                     fence_len = inner_fence[1]
                     i += 1
@@ -219,6 +280,7 @@ def parse_register_lines(lines):
                 inner_fence = _parse_fence_marker(inner)
                 if inner_fence is not None:
                     in_fence = True
+                    fence_opener_line = i + 1
                     fence_char = inner_fence[0]
                     fence_len = inner_fence[1]
                     i += 1
@@ -244,6 +306,10 @@ def parse_register_lines(lines):
             continue
         i += 1
 
+    if in_fence:
+        return None, UNDECIDED_REGISTER_MALFORMED, fence_opener_line, (
+            "unterminated code fence — entries after this line were not parsed"
+        )
     if not entries:
         return None, UNDECIDED_REGISTER_EMPTY, None, "register contains no entries"
     return entries, None, None, None
@@ -301,8 +367,6 @@ def parse_quoted_blocks(lines):
             while i < n:
                 current = lines[i]
                 current_fence = _parse_fence_marker(current)
-                if in_fence:
-                    break
                 if current_fence is not None:
                     break
                 if not current.startswith(">"):
@@ -346,15 +410,15 @@ def _compare_quotable(entry_id, expected_lines, actual_lines):
                 f"register entry has {len(expected_lines)} — "
                 f"first differing line {line_idx + 1}"
             )
-            return {
-                "kind": KIND_TEXT_DRIFT,
-                "entry": entry_id,
-                "line": line_idx + 1,
-                "column": None,
-                "expected": None,
-                "actual": actual,
-                "detail": detail,
-            }
+            return _make_finding(
+                KIND_TEXT_DRIFT,
+                entry_id,
+                line_idx + 1,
+                None,
+                None,
+                actual,
+                detail,
+            )
         if line_idx >= len(actual_lines):
             expected = expected_lines[line_idx]
             detail = (
@@ -362,15 +426,15 @@ def _compare_quotable(entry_id, expected_lines, actual_lines):
                 f"register entry has {len(expected_lines)} — "
                 f"first differing line {line_idx + 1}"
             )
-            return {
-                "kind": KIND_TEXT_DRIFT,
-                "entry": entry_id,
-                "line": line_idx + 1,
-                "column": None,
-                "expected": expected,
-                "actual": None,
-                "detail": detail,
-            }
+            return _make_finding(
+                KIND_TEXT_DRIFT,
+                entry_id,
+                line_idx + 1,
+                None,
+                expected,
+                None,
+                detail,
+            )
         expected = expected_lines[line_idx]
         actual = actual_lines[line_idx]
         if expected != actual:
@@ -378,15 +442,15 @@ def _compare_quotable(entry_id, expected_lines, actual_lines):
             detail = (
                 f"{entry_id}: first differing line {line_idx + 1}, column {column}"
             )
-            return {
-                "kind": KIND_TEXT_DRIFT,
-                "entry": entry_id,
-                "line": line_idx + 1,
-                "column": column,
-                "expected": expected,
-                "actual": actual,
-                "detail": detail,
-            }
+            return _make_finding(
+                KIND_TEXT_DRIFT,
+                entry_id,
+                line_idx + 1,
+                column,
+                expected,
+                actual,
+                detail,
+            )
     return None
 
 
@@ -409,23 +473,23 @@ def _base_result(
         if finding["kind"] == KIND_TEXT_DRIFT:
             first_difference = finding
             break
-    return {
-        "schema": SCHEMA,
-        "result": result,
-        "ok": result == RESULT_PASS,
-        "reason": reason,
-        "detail": detail,
-        "child": child,
-        "register": register_path,
-        "body": body_path,
-        "registerEntries": register_entries,
-        "requiredEntries": required_entries,
-        "quotedEntries": quoted_entries,
-        "duplicateQuoteIds": duplicate_quote_ids,
-        "entriesWithoutConsumers": entries_without_consumers,
-        "findings": findings,
-        "firstDifference": first_difference,
-    }
+    return _make_result(
+        SCHEMA,
+        result,
+        result == RESULT_PASS,
+        reason,
+        detail,
+        child,
+        register_path,
+        body_path,
+        register_entries,
+        required_entries,
+        quoted_entries,
+        duplicate_quote_ids,
+        entries_without_consumers,
+        findings,
+        first_difference,
+    )
 
 
 def _undecided(
@@ -540,17 +604,17 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
     for entry_id, block_lines in quoted_blocks:
         if entry_id not in entry_by_id:
             # axis: quoted ids must exist in the register — unknown-entry is fail-closed.
-            findings.append({
-                "kind": KIND_UNKNOWN_ENTRY,
-                "entry": entry_id,
-                "line": None,
-                "column": None,
-                "expected": None,
-                "actual": None,
-                "detail": (
+            findings.append(_make_finding(
+                KIND_UNKNOWN_ENTRY,
+                entry_id,
+                None,
+                None,
+                None,
+                None,
+                (
                     f"{entry_id}: quoted in the body but not defined in the register"
                 ),
-            })
+            ))
             continue
         drift = _compare_quotable(
             entry_id,
@@ -564,18 +628,18 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
         if entry_id not in required_entries:
             continue
         if entry_id not in quoted_ids_present:
-            findings.append({
-                "kind": KIND_MISSING_QUOTE,
-                "entry": entry_id,
-                "line": None,
-                "column": None,
-                "expected": None,
-                "actual": None,
-                "detail": (
+            findings.append(_make_finding(
+                KIND_MISSING_QUOTE,
+                entry_id,
+                None,
+                None,
+                None,
+                None,
+                (
                     f"{entry_id}: required by child {child} (named on its Consumers line) "
                     "but not quoted in the body"
                 ),
-            })
+            ))
 
     def _sort_key(finding):
         entry_id = finding["entry"]
@@ -630,6 +694,7 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
 
 
 def _emit(result):
+    assert set(result) == set(RESULT_FIELDS)
     sys.stdout.write(json.dumps(result, separators=(",", ": ")) + "\n")
 
 
@@ -697,7 +762,9 @@ def main(argv=None):
     check.exit = parser.exit
     try:
         args = parser.parse_args(argv)
-    except SystemExit:
+    except SystemExit as exc:
+        if exc.code in (0, None):
+            return EXIT_PASS
         return EXIT_UNDECIDED
 
     if args.cmd != "check":
