@@ -4,7 +4,7 @@
 
 A rehearsal record is a Definition-of-Done artifact for the detective spec's unhappy path: when a cause **cannot** be demonstrated, the receipt says so plainly and the advisor does not route fixes on it (UFR-1). **Every claim below is either a command that was actually run with its real output pasted, or is explicitly labelled as drafted-not-performed.** Diagnostic output was **scrubbed** for secrets and PII; local paths retained.
 
-This rehearsal exercises the **not-demonstrated** branch: the flake observation from PR #1041's build record was **not reproduced** in this session; the receipt and vet reflect that honest outcome.
+This rehearsal exercises the **not-demonstrated** branch: the **cause** of the flake observation from PR #1041's build record was **not demonstrated** in this session; the receipt and vet reflect that honest outcome.
 
 ---
 
@@ -14,7 +14,7 @@ PR #1041's build record reports `plugins/superheroes/lib/tests/test_sanitized_vi
 
 **Examined surface:** the test and its behavior (observe-only; no test or lib edits in this rehearsal).
 
-**Dispatch budget (this session):** five isolated runs of the named test, three parallel file runs (`-n auto`), plus ruled-out hypotheses — budget reached after parallel load attempts showed no intermittent pass/fail pattern.
+**Dispatch budget (this session):** five isolated runs of the named test, three parallel file runs (`-n auto`), plus ruled-out hypotheses — budget reached after parallel load attempts; follow-on orchestrator verification (below) corrected the first-pass reading.
 
 ---
 
@@ -24,7 +24,7 @@ PR #1041's build record reports `plugins/superheroes/lib/tests/test_sanitized_vi
 
 **Recorded flake shape (from PR #1041 build record, not re-run here).** Full CI suite: test **failed**; isolated re-run: test **passed** (twice); under heavy load; classified flake observation.
 
-**Reproduction attempts (this session, 2026-08-16).** Host: darwin, Python 3.9.6, pytest 8.4.2, pytest-xdist 3.8.0. Repo: `/private/tmp/sh931-woF` at `9013a46e42a60c7cca058633dedd69a51f045b98`.
+**Reproduction attempts (this session, 2026-08-16).** Host: darwin, Python 3.9.6, pytest 8.4.2, pytest-xdist 3.8.0. Repo: `/private/tmp/sh931-woF` at `9013a46e42a60c7cca058633dedd69a51f045b98`. **Context:** six concurrent engine dispatches were saturating the host during these runs — the same heavy-load condition PR #1041 reported.
 
 **Isolated runs (5×) — named test only:**
 
@@ -60,32 +60,47 @@ $ /usr/bin/python3 -m pytest plugins/superheroes/lib/tests/test_sanitized_view.p
 
 All three runs: same test **FAILED** at line 4157 (`proc is None`). No run showed pass/fail alternation within the attempt.
 
-**Contrast with flake observation.** The PR #1041 record describes **intermittent** failure under full-suite load with **isolated pass**. This session shows **stable failure** in isolation and under xdist — the **flake pattern was not reproduced**.
+**First-pass reading (corrected below).** This session's five isolated runs all failed under concurrent host load; that sample was **insufficient** to distinguish intermittent from stable behaviour — see the methodological note and orchestrator follow-on measurements.
+
+**Orchestrator verification pass (measured after this record was first written).** Independent re-runs on the same host class, attributed to the orchestrator's verification pass:
+
+| Where | Command | Result |
+| --- | --- | --- |
+| Build HEAD `da39001c` | `/usr/bin/python3 -m pytest plugins/superheroes/lib/tests/test_sanitized_view.py::test_diff_stall_after_partial_write -v --tb=short --durations=0` (single run) | **1 passed** |
+| Base `7571e72d` (detached worktree `/private/tmp/sh931-base`, without any of this build's changes) | same command (single run) | **1 failed** |
+| Build HEAD `da39001c` | same command, **8 consecutive runs** | **3 passed, 5 failed** |
+
+On this host the test is **genuinely intermittent** (~3/8 passing), not stably failing. The base-commit failure rules **this build out as the cause** — the test fails without any of this PR's changes. The first session's five consecutive failures almost certainly landed while six concurrent dispatches saturated the host.
+
+**Contrast with flake observation.** PR #1041 describes **intermittent** failure under full-suite load with **isolated pass**. Orchestrator measurements confirm **intermittency on this host** (3/8 pass under controlled repetition). What remains **undemonstrated** is **which condition** flips pass to fail — not whether the test can pass at all.
+
+**Methodological note.** A single run, or five runs taken under uncontrolled concurrent load, cannot establish "stable" versus "intermittent." Distinguishing the two requires enough repetition under known conditions. This record's first pass did not do enough of that; the orchestrator's eight-run series is the corrective measurement.
 
 ### 2. Demonstrated root cause
 
-**Not demonstrated.** No reproduction of the recorded flake (fail full-suite / pass isolated). No A/B isolates a cause for the intermittent CI behavior. The consistent local failure (`proc is None`) may reflect environment divergence from CI (Python 3.9.6 macOS local vs Python 3.12 ubuntu CI per repo CI config) but that does not demonstrate why the test **passed** on isolated re-run in the original flake observation.
+**Not demonstrated.** Intermittency **is** reproducible on this host (orchestrator: 3/8 pass at build HEAD; base commit fails without this build's changes). No A/B isolates **which factor** decides pass from fail — load, timing, scheduler contention, or something else. macOS Python 3.9.6 local vs Python 3.12 ubuntu CI (per repo CI config) remains one **untested** hypothesis among others, not an explanation for the observed intermittency.
 
 ### 3. Blast radius
 
-If the flake is real on CI ubuntu under suite load: intermittent red on `test_diff_stall_after_partial_write` in full `pytest -n auto` runs; isolated green misleads triage. **Unconfirmed in this session** — only the historical observation applies.
+If the flake is real on CI ubuntu under suite load: intermittent red on `test_diff_stall_after_partial_write` in full `pytest -n auto` runs; isolated green misleads triage. **Intermittency confirmed locally** by orchestrator measurements; **cause** of the flip remains unconfirmed.
 
 ### 4. Recommended follow-ups
 
 1. **Park flake routing** — do not file a fix issue on this diagnosis; cause not demonstrated (UFR-1).
 2. **CI-side reproduction** — re-run full suite with `-n auto` on ubuntu-22.04 / Python 3.12 matching `.github/workflows/ci.yml`; capture flake if it recurs with run link (per CLAUDE.md flake policy).
-3. **Local env note** — document that this test **consistently fails** on macOS Python 3.9.6 in this worktree (separate from the CI flake; may warrant a separate build if CI is green).
+3. **Factor isolation** — design A/B runs that vary one candidate at a time (host load, xdist width, Python version) to demonstrate what flips pass/fail; base-commit failure shows the flake predates this build.
 
 ### Ruled-out list (budget exhausted)
 
 | Hypothesis | What we tried | Outcome |
 | --- | --- | --- |
-| Intermittent flake reproduces locally under isolation | 5 isolated runs of named test | **Ruled out** — 5/5 failed, same assertion; no pass |
-| Concurrency / xdist load triggers flake | 3× full file with `-n auto` | **Ruled out** — stable fail; no intermittent pass |
+| This build introduced the flake | Orchestrator: single run at base `7571e72d` (no build changes) | **Ruled out** — test fails on base; not caused by this PR |
+| Test always fails locally (stable red) | Orchestrator: 8 consecutive isolated runs at build HEAD `da39001c` | **Ruled out** — 3 passed, 5 failed; intermittency confirmed |
 | Stall timeout vs diff-failed detail | Failure before detail assertion — `proc` never set | **Inconclusive** for CI flake; local path differs from stall-timeout story |
-| Heavy host CPU load (PR #1041 context) | Not simulated beyond xdist parallel file runs | **Could not test** — no load generator; budget spent on pytest attempts |
+| Heavy host CPU load (PR #1041 context) | First session under six concurrent dispatches; xdist file runs | **Live hypothesis** — load correlates with PR #1041 context; not isolated by A/B; orchestrator pass under lighter load suggests load may be a factor |
+| Concurrency / xdist load triggers flake | 3× full file with `-n auto` (first session) | **Inconclusive** — all failed in that sample; no factor isolation; not ruled out |
 
-**Budget end:** five isolated + three parallel file runs completed; flake pattern not observed; session stops per UFR-3.
+**Budget end:** five isolated + three parallel file runs completed in first session; orchestrator follow-on established intermittency; **cause of the flip** not demonstrated; session stops per UFR-3.
 
 ---
 
@@ -95,11 +110,11 @@ If the flake is real on CI ubuntu under suite load: intermittent red on `test_di
 | --- | --- | --- |
 | 1. Cause demonstrated | **Pass (truthfulness)** | Receipt **plainly states cause not demonstrated** — honest negative per UFR-1; not a failed vet. |
 | 2. Fix targets cause, not symptom | **Pass** | **No fix routed** on undemonstrated cause; park + CI re-observation only. |
-| 3. Blast radius stated | **Pass** | Scoped to unconfirmed CI flake; local stable fail noted separately. |
-| 4. Follow-ups carry right anchor | **Pass** | Park, CI repro, local env note — each anchored to this receipt. |
+| 3. Blast radius stated | **Pass** | Scoped to intermittent behaviour confirmed locally; CI flake cause still unconfirmed. |
+| 4. Follow-ups carry right anchor | **Pass** | Park, CI repro, factor isolation — each anchored to this receipt. |
 | 5. No smuggled product opinion | **Pass** | No new requirements. |
 
-**Verdict (plain language).** This is the **not-demonstrated** terminal branch (UFR-1): the diagnosis did its job. The flake observation from PR #1041 was **not reproduced**; the receipt is truthful. **Do not route a fix issue** on the undemonstrated flake cause. If the flake recurs on CI, record it with a run link per repo flake policy — that is follow-up observation, not this diagnosis.
+**Verdict (plain language).** This is the **not-demonstrated** terminal branch (UFR-1): the diagnosis did its job. **Intermittency is reproducible on this host** (orchestrator: 3/8 pass); the **cause** of the pass/fail flip was **not demonstrated**. The receipt is truthful. **Do not route a fix issue** on the undemonstrated flake cause. If the flake recurs on CI, record it with a run link per repo flake policy — that is follow-up observation, not this diagnosis.
 
 **No fix routed.** Incident body update not applicable (no confirmed cause to promote).
 
@@ -133,4 +148,4 @@ HEAD and porcelain hash **match** before adding these docs — no edits to `plug
 
 ## Finding for orchestrator
 
-Rehearsal 2's **flake cause did not reproduce**. Local runs show a **stable failure** (`proc is None` at line 4157), which is a **different signal** from the PR #1041 flake record (isolated pass). That stable failure was **not** the subject of this rehearsal's demonstrated-cause path — it is noted as environment divergence for separate triage if CI stays green.
+Rehearsal 2's **flake cause was not demonstrated** — honest UFR-1 exit unchanged. **Corrected evidence:** on this host the test is **intermittent** (orchestrator: 3 passed / 5 failed over 8 consecutive runs at build HEAD `da39001c`; single run passed at HEAD, single run failed at base `7571e72d` without this build's changes). The first-pass "stable failure" reading was wrong — five runs under concurrent dispatch load were insufficient repetition. **No fix routed**; factor isolation (what flips pass/fail) remains follow-up.
