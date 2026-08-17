@@ -27,10 +27,11 @@ _UNDER_HANDLING_ALLOWLIST = {
         ),
     },
     ("round_driver.py", "_settle_delta"): {
-        "handles": frozenset({"max-iterations", "audit-stall", cb.ROUND_CEILING_REASON}),
+        "handles": frozenset({"max-iterations", "audit-stall"}),
         "reason": (
-            "round-ceiling is claimed by _ceiling_halt before the reason switch; unlisted reasons "
-            "park fail-closed via the final branch"
+            "Round ceiling is enforced on the round-advance boundary; check_audit_breaker never "
+            "emits round-ceiling, so it is unreachable here — unlisted reasons park fail-closed "
+            "via the final branch"
         ),
     },
 }
@@ -40,13 +41,6 @@ _UNDER_HANDLING_ALLOWLIST = {
 _CIRCUIT_BREAKER_EMITTED = frozenset({
     "max-iterations", "no-net-progress", "challenged-principle-recurring", "recurring-finding",
 })
-
-_REACHABLE_BY_CONSUMER = {
-    ("round_driver.py", "_challenged_recurring_halt"): frozenset({"challenged-principle-recurring"}),
-    ("round_driver.py", "_settle_delta"): frozenset({
-        "max-iterations", "audit-stall", cb.ROUND_CEILING_REASON,
-    }),
-}
 
 
 def _lib_py_paths():
@@ -106,20 +100,25 @@ def _handled_reasons_for_consumer(filename, function, compared_literals):
 
 
 def _reachable_reasons_for_consumer(filename, function):
+    """Return the breaker reasons that can reach this consumer, or None when unregistered."""
     key = (filename, function)
-    if key in _REACHABLE_BY_CONSUMER:
-        return _REACHABLE_BY_CONSUMER[key]
+    if key in _UNDER_HANDLING_ALLOWLIST:
+        return _UNDER_HANDLING_ALLOWLIST[key]["handles"]
     if filename == "review_loop_plan.py":
         return _CIRCUIT_BREAKER_EMITTED | {cb.ROUND_CEILING_REASON}
-    return frozenset()
+    return None
 
 
 def compute_consumer_gaps(reason_set):
     """Return {(fname, func): set of unhandled reasons} for consumers with per-consumer gaps."""
+    # axis: an unregistered consumer that switches on breaker reasons is a census failure, not a pass
     gaps = {}
     for (fname, func), literals in _consumer_sites().items():
-        handled = _handled_reasons_for_consumer(fname, func, literals)
         reachable = _reachable_reasons_for_consumer(fname, func)
+        if reachable is None:
+            gaps[(fname, func)] = set(reason_set)
+            continue
+        handled = _handled_reasons_for_consumer(fname, func, literals)
         unhandled = (reachable & reason_set) - handled
         if unhandled:
             gaps[(fname, func)] = unhandled
