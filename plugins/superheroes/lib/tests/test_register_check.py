@@ -373,6 +373,15 @@ def test_boundary_child_unrecognized_c1_against_c10_consumers(tmp_path):
     assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
 
 
+def test_boundary_child_unrecognized_c09(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C09")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
+
+
 def test_boundary_child_unrecognized_c10_against_c1_consumers(tmp_path):
     register = _tiny_register(tmp_path)
     body = tmp_path / "body.md"
@@ -408,6 +417,20 @@ def test_blockquote_without_entry_header_not_collected(tmp_path):
     assert result["findings"][0]["kind"] == rc.KIND_MISSING_QUOTE
     assert result["findings"][0]["entry"] == "R1"
     assert all(f["kind"] != rc.KIND_UNKNOWN_ENTRY for f in result["findings"])
+
+
+def test_fenced_decoy_missing_quote(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text(
+        "```\n"
+        "> **R1 — One line entry.**\n"
+        "```\n",
+        encoding="utf-8",
+    )
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_FAIL
+    assert result["findings"][0]["kind"] == rc.KIND_MISSING_QUOTE
 
 
 def test_fenced_example_does_not_satisfy_required_quote(tmp_path):
@@ -658,11 +681,12 @@ def test_entry_without_consumers_not_required(tmp_path):
 # --- CLI seam ---------------------------------------------------------------
 
 
-def test_check_body_blank_child_guard(tmp_path):
+@pytest.mark.parametrize("child", [None, "", "   ", "\t"])
+def test_check_body_blank_child_guard(tmp_path, child):
     register = _tiny_register(tmp_path)
     body = tmp_path / "body.md"
     body.write_text("x\n", encoding="utf-8")
-    result = rc.check_body(str(register), str(body), "   ")
+    result = rc.check_body(str(register), str(body), child)
     assert result["result"] == rc.RESULT_UNDECIDED
     assert result["reason"] == rc.UNDECIDED_USAGE
 
@@ -848,10 +872,12 @@ def test_deterministic_stdout(tmp_path):
     assert code1 == code2 == rc.EXIT_FAIL
     assert out1 == out2
     payload = json.loads(out1.strip())
-    kinds = [f["kind"] for f in payload["findings"]]
-    assert rc.KIND_TEXT_DRIFT in kinds
-    assert rc.KIND_UNKNOWN_ENTRY in kinds
-    assert rc.KIND_MISSING_QUOTE in kinds
+    findings_seq = [(f["kind"], f["entry"]) for f in payload["findings"]]
+    assert findings_seq == [
+        (rc.KIND_TEXT_DRIFT, "R1"),
+        (rc.KIND_MISSING_QUOTE, "R2"),
+        (rc.KIND_UNKNOWN_ENTRY, "R99"),
+    ]
 
 
 def test_vocabulary_constants():

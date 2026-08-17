@@ -13,7 +13,9 @@ and trailing ``\\r`` stripping per line.
 Deliberately out of scope: fences inside blockquote or list-item containers
 (a line like ``> ```py`` is ordinary ``text`` here because ``>`` is not
 whitespace), content or info-string extraction beyond the backtick restriction,
-HTML blocks, and indented (non-fenced) code blocks.
+HTML blocks, and indented (non-fenced) code blocks. Indented code blocks are not
+implemented here; a consumer that must accept indented content must apply
+``indent_width`` itself.
 """
 import collections
 
@@ -26,6 +28,17 @@ KINDS = frozenset({KIND_TEXT, KIND_OPENER, KIND_CONTENT, KIND_CLOSER})
 FenceScan = collections.namedtuple(
     "FenceScan", ("kinds", "inert", "unterminated_opener_line")
 )
+
+INDENT_CODE_BLOCK_COLUMNS = 4
+
+
+def indent_width(line):
+    """Column width of `line`'s leading whitespace (space = 1, tab to the next multiple of 4)."""
+    if line.endswith("\r"):
+        line = line[:-1]
+    width, _ = _split_indent(line)
+    # axis: indent column width — spaces count 1, tabs advance to the next multiple of 4.
+    return width
 
 
 def _split_indent(line):

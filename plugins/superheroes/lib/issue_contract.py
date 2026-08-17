@@ -152,6 +152,8 @@ def _parse_slots(body):
     current_slot = None
     anchor_declared_kinds = []
     lines = body.splitlines()
+    # axis: unterminated fence is not a refusal here — every later line is fence content, so a real
+    # header after it is swallowed and reports as missing (fail-closed).
     scan = md_fence.scan(lines)
 
     for line, kind in zip(lines, scan.kinds):
@@ -161,6 +163,12 @@ def _parse_slots(body):
         if kind == md_fence.KIND_CLOSER:
             continue
         if kind == md_fence.KIND_CONTENT:
+            if current_slot is not None:
+                slots_content[current_slot].append(line)
+            continue
+        # axis: indented code block (4+ columns) — never a live slot header; prevents fail-open on
+        # indent-4 headers and on headers inside indent-4 fences that scan does not classify as inert.
+        if md_fence.indent_width(line) >= md_fence.INDENT_CODE_BLOCK_COLUMNS:
             if current_slot is not None:
                 slots_content[current_slot].append(line)
             continue

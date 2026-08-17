@@ -137,8 +137,11 @@ advisory issue-contract check, its exit codes are load-bearing for the charters 
 - the block is a markdown blockquote whose lines begin with `>` **at column 0**;
 - one `>` plus **at most one** following space is stripped per line;
 - the **first** stripped line must be the entry header `**R<n> — `;
-- the block ends at the first line that does not begin with `>`, and **every** stripped line of the
-  block is compared — an appended quoted paragraph is drift, not decoration;
+- the block ends at the first line that does not begin with `>` at column 0, and **every** stripped
+  line of the block is compared — an appended `>`-prefixed paragraph is drift, not decoration; a
+  lazy continuation (a non-`>` line immediately after the quote with no blank line) is **not** part
+  of the block here but GitHub renders it as blockquote continuation, so source and rendering can
+  disagree;
 - a blockquote inside a ``` or ~~~ **fence is ignored on purpose**, so an example quote inside a
   fenced code block never counts as a real one.
 
@@ -224,36 +227,56 @@ quoted block; a body with zero quoted blocks is exactly the case the check is th
 Where applicability cannot be derived from the issue alone, the route names the register and
 child token at routing for the builder to pass. On `fail`, fix the body — do not file a drifted
 quote. On `pass`, record the check's own output in the filing note — the `result` line, or `pass`
-together with `requiredEntries` — not merely a claim that it ran. When whether the check applies
-cannot be established here, run it anyway and let `undecided` block — never skip on unclear
-applicability; that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero
-exit blocks** filing — `undecided` blocks until the inputs are readable and the child token is
-recognized, exactly like `fail`. See the showrunner charter's board-hygiene duty for the filing
-obligation.
+together with `requiredEntries` — not merely a claim that it ran. When the register path and child
+token are known — the route names them or they are derivable — **run the check**; an `undecided`
+result blocks exactly like `fail`. When they are not known and applicability is genuinely unclear,
+that is a **routing gap, not a reason to proceed**: raise it with the advisor (a builder **parks**;
+the advisor resolves it before filing or before marking the package verified) rather than silently
+treating the check as inapplicable; that is the same fail-closed direction as **A non-zero exit
+blocks**. **A non-zero exit blocks** filing — `undecided` blocks until the inputs are readable and
+the child token is recognized, exactly like `fail`. See the showrunner charter's board-hygiene duty
+for the filing obligation.
 
 **Child build intake (workhorse §1).** When the routed issue is a **register-consuming child**,
 run the check at intake before the brief, whether or not the body contains a quoted block. On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
 not a buildable surface. On `pass`, record the check's own output in the intake note — the
 `result` line, or `pass` together with `requiredEntries` — not merely a claim that it ran. When
-whether the check applies cannot be established here, run it anyway and let `undecided` block —
-never skip on unclear applicability; that is the same fail-closed direction as **A non-zero exit
-blocks**. **A non-zero exit blocks** the build — `undecided` is a **park**, exactly like `fail`.
-See the workhorse charter's intake section for the park obligation.
+the register path and child token are known — the route names them or they are derivable — **run
+the check**; an `undecided` result blocks exactly like `fail`. When they are not known and
+applicability is genuinely unclear, that is a **routing gap, not a reason to proceed**: raise it
+with the advisor (a builder **parks**; the advisor resolves it before filing or before marking the
+package verified) rather than silently treating the check as inapplicable; that is the same
+fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks** the build —
+`undecided` is a **park**, exactly like `fail`. See the workhorse charter's intake section for the
+park obligation.
 
 **Package-read verification pass (showrunner duty 3).** At an epic package read's verification
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
 not each body contains a quoted block. On `fail`, record a blocking package-read finding and do
 not treat the package as verified. On `pass`, record the check's own output in the package-read
 verification record — the `result` line, or `pass` together with `requiredEntries` — not merely a
-claim that it ran. When whether the check applies cannot be established here, run it anyway and
-let `undecided` block — never skip on unclear applicability; that is the same fail-closed
-direction as **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks
-exactly like `fail`. See the showrunner charter's size/decompose/route duty for the verification
-obligation.
+claim that it ran. When the register path and child token are known — the route names them or they
+are derivable — **run the check**; an `undecided` result blocks exactly like `fail`. When they are
+not known and applicability is genuinely unclear, that is a **routing gap, not a reason to
+proceed**: raise it with the advisor (a builder **parks**; the advisor resolves it before filing
+or before marking the package verified) rather than silently treating the check as inapplicable;
+that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks**
+verified — `undecided` blocks exactly like `fail`. See the showrunner charter's size/decompose/route
+duty for the verification obligation.
 
 ## What this check does not do
 
+- **Rendered output** — the check compares **source text, not rendered output**. Two known constructs
+  can make source and GitHub rendering disagree in the **fail-open** direction (both pre-existing,
+  not closed by the fence fix): an **HTML comment** (`<!--` … `-->`) hides a quoted register entry
+  from rendering while the checker still collects it as live; and a **lazy blockquote continuation**
+  (exact quote immediately followed by a non-`>` line with no blank line) renders as a two-line
+  blockquote on GitHub while only the `>`-prefixed lines are compared. Each requires a body that
+  carries the construct.
+- **Fence indent** — fence recognition follows CommonMark §4.5 at indent **0–3**; indented code
+  blocks (four or more spaces) are not implemented. A consumer that accepts indented content applies
+  its own indent guard.
 - **Register path resolution** — the caller reads the quote header and passes `--register`. That
   keeps the script call-site-agnostic.
 - **Issue fetch** — the caller supplies a body file. The script never reaches the network and

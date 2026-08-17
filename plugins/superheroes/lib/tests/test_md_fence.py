@@ -145,10 +145,11 @@ CORPUS = [
         "nested_marker_inside_fence_is_content",
         [
             "```",
-            "~~~",
+            "```py",
+            "code here",
             "```",
         ],
-        (O, C, X),
+        (O, C, C, X),
         None,
         id="nested_marker_inside_fence_is_content",
     ),
@@ -162,6 +163,94 @@ CORPUS = [
         (O, C, C),
         1,
         id="unterminated_fence",
+    ),
+    pytest.param(
+        "unterminated_fence_not_on_line_1",
+        [
+            "preamble",
+            "```",
+            "inside",
+        ],
+        (T, O, C),
+        2,
+        id="unterminated_fence_not_on_line_1",
+    ),
+    pytest.param(
+        "closer_with_trailing_spaces",
+        [
+            "```",
+            "inside",
+            "```   ",
+        ],
+        (O, C, X),
+        None,
+        id="closer_with_trailing_spaces",
+    ),
+    pytest.param(
+        "closer_with_trailing_tab",
+        [
+            "```",
+            "inside",
+            "```\t",
+        ],
+        (O, C, X),
+        None,
+        id="closer_with_trailing_tab",
+    ),
+    pytest.param(
+        "tilde_closer_with_trailing_spaces",
+        [
+            "~~~",
+            "inside",
+            "~~~   ",
+        ],
+        (O, C, X),
+        None,
+        id="tilde_closer_with_trailing_spaces",
+    ),
+    pytest.param(
+        "single_backtick_inline_code",
+        ["`inline code without a closing backtick"],
+        (T,),
+        None,
+        id="single_backtick_inline_code",
+    ),
+    pytest.param(
+        "double_backtick_inline",
+        ["``inline code without a closing run"],
+        (T,),
+        None,
+        id="double_backtick_inline",
+    ),
+    pytest.param(
+        "double_tilde_strikethrough",
+        ["~~deleted~~"],
+        (T,),
+        None,
+        id="double_tilde_strikethrough",
+    ),
+    pytest.param(
+        "blank_and_whitespace_lines",
+        [
+            "",
+            "   ",
+            "\t",
+            "plain text",
+        ],
+        (T, T, T, T),
+        None,
+        id="blank_and_whitespace_lines",
+    ),
+    pytest.param(
+        "closer_indent_differs_from_opener",
+        [
+            "```",
+            "inside",
+            "  ```",
+        ],
+        (O, C, X),
+        None,
+        id="closer_indent_differs_from_opener",
     ),
     pytest.param(
         "crlf_input",
@@ -214,3 +303,13 @@ def test_corpus_invariant(_name, lines, expected_kinds, expected_unterminated):
         assert kind in mf.KINDS
     for i, kind in enumerate(result.kinds):
         assert result.inert[i] == (kind != mf.KIND_TEXT)
+
+
+def test_scan_rejects_non_str_line():
+    with pytest.raises(TypeError, match="each line must be a str"):
+        mf.scan([123])
+
+
+def test_scan_non_str_error_names_offending_type():
+    with pytest.raises(TypeError, match="got int"):
+        mf.scan([123])

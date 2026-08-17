@@ -90,9 +90,13 @@ above).
    with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
    filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
    note — the `result` line, or `pass` together with `requiredEntries` — not merely a claim that
-   it ran. When whether the check applies cannot be established here, run it anyway and let
-   `undecided` block — never skip on unclear applicability; that is the same fail-closed direction
-   as **A non-zero exit blocks**. **A non-zero exit blocks** filing — `undecided` blocks until the
+   it ran. When the register path and child token are known — the route names them or they are
+   derivable — **run the check**; an `undecided` result blocks exactly like `fail`. When they are
+   not known and applicability is genuinely unclear, that is a **routing gap, not a reason to
+   proceed**: raise it with the advisor (a builder **parks**; the advisor resolves it before filing
+   or before marking the package verified) rather than silently treating the check as inapplicable;
+   that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks**
+   filing — `undecided` blocks until the
    inputs are readable and the child token is recognized, exactly like `fail`. Where applicability
    cannot be derived from the issue alone, the route names the register and child token at routing
    for the builder to pass. Detail:
@@ -125,10 +129,14 @@ above).
    **register-consuming child** across **both** directions, whether or not each body contains a
    quoted block. On `fail`, record a blocking package-read finding. On `pass`, record the check's
    own output in the package-read verification record — the `result` line, or `pass` together with
-   `requiredEntries` — not merely a claim that it ran. When whether the check applies cannot be
-   established here, run it anyway and let `undecided` block — never skip on unclear applicability;
-   that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks**
-   verified — `undecided` blocks exactly like `fail`. Detail:
+   `requiredEntries` — not merely a claim that it ran. When the register path and child token are
+   known — the route names them or they are derivable — **run the check**; an `undecided` result
+   blocks exactly like `fail`. When they are not known and applicability is genuinely unclear,
+   that is a **routing gap, not a reason to proceed**: raise it with the advisor (a builder
+   **parks**; the advisor resolves it before filing or before marking the package verified) rather
+   than silently treating the check as inapplicable; that is the same fail-closed direction as
+   **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks exactly
+   like `fail`. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Mark each issue's route — **build-ready** (the builder
    goes straight to the brief)
