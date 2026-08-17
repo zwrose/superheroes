@@ -98,6 +98,23 @@ above).
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   When an issue being filed is a **register-consuming child** — an epic child of a package that
+   has a register, or a single-issue child standing in for one under FR-36 — run the register-check
+   against the filed body **before filing**, whether or not the body contains a quoted block; a body
+   with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
+   filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
+   note — the `result` line, or `pass` together with `requiredEntries` — not merely a claim that
+   it ran. When the register path and child token are known — the route names them or they are
+   derivable — **run the check**; an `undecided` result blocks exactly like `fail`. When they are
+   not known and applicability is genuinely unclear, that is a **routing gap, not a reason to
+   proceed**: raise it with the advisor (a builder **parks**; the advisor resolves it before filing
+   or before marking the package verified) rather than silently treating the check as inapplicable;
+   that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks**
+   filing — `undecided` blocks until the
+   inputs are readable and the child token is recognized, exactly like `fail`. Where applicability
+   cannot be derived from the issue alone, the route names the register and child token at routing
+   for the builder to pass. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
    owner wrote (append-style receipts — evidence, run results, cross-links — are fine). Close
@@ -122,6 +139,19 @@ above).
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   At an epic **package read's verification pass**, re-run the register-check per
+   **register-consuming child** across **both** directions, whether or not each body contains a
+   quoted block. On `fail`, record a blocking package-read finding. On `pass`, record the check's
+   own output in the package-read verification record — the `result` line, or `pass` together with
+   `requiredEntries` — not merely a claim that it ran. When the register path and child token are
+   known — the route names them or they are derivable — **run the check**; an `undecided` result
+   blocks exactly like `fail`. When they are not known and applicability is genuinely unclear,
+   that is a **routing gap, not a reason to proceed**: raise it with the advisor (a builder
+   **parks**; the advisor resolves it before filing or before marking the package verified) rather
+   than silently treating the check as inapplicable; that is the same fail-closed direction as
+   **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks exactly
+   like `fail`. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Mark each issue's route — **build-ready** (the builder
    goes straight to the brief)
    or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the
