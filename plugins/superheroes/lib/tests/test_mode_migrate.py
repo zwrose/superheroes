@@ -124,6 +124,7 @@ def test_calibration_bucket_excludes_every_work_item_doc(tmp_path):
     sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
     m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
     pv = mm.preview(m)
+    assert pv["calibration"], "calibration bucket empty — the exclusion assertion would be vacuous"
     work_item_basenames = {"spec.md", "plan.md", "tasks.md", "findings.md"}
     for path in pv["calibration"]:
         assert os.path.basename(path) not in work_item_basenames
@@ -139,6 +140,86 @@ def test_plan_refuses_when_not_interactive(tmp_path):
 
 
 # --------------------------------------------------------------------------- A4 preview
+
+
+def test_preview_buckets_every_definition_doc_basename_by_name(tmp_path):
+    # Narrowing _is_definition_doc to spec.md alone must go red here: each of the three
+    # definition-doc basenames is asserted into definitionDocs by name, and findings.md is
+    # asserted out of it.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
+        sc.atomic_write(os.path.join(ddir, name), name + " body\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    for name in mm._DEFINITION_DOCS:
+        src = os.path.join(ddir, name)
+        assert src in pv["definitionDocs"], name
+        assert src not in pv["workItemRecords"], name
+        assert src not in pv["calibration"], name
+    for name in mm._WORK_ITEM_RECORDS:
+        src = os.path.join(ddir, name)
+        assert src in pv["workItemRecords"], name
+        assert src not in pv["definitionDocs"], name
+        assert src not in pv["calibration"], name
+
+
+def test_preview_disclosure_names_every_non_empty_bucket(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
+        sc.atomic_write(os.path.join(ddir, name), name + " body\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    disc = pv["disclosure"].lower()
+    if pv["workItemRecords"]:
+        assert "work-item record" in disc
+    if pv["definitionDocs"]:
+        assert "definition document" in disc
+    if pv["calibration"]:
+        assert "calibration" in disc
+
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
+    gdir = os.path.join(mr.project_store_dir(str(tmp_path), root), "config")
+    os.makedirs(gdir, exist_ok=True)
+    sc.atomic_write(os.path.join(gdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": "x"},
+                                        "confirmed", "2026-06-27", "2026-06-27"))
+    sc.atomic_write(os.path.join(gdir, "review-crew.md"), "<!-- review-crew: v1 -->\nbody\n")
+    gdocs = os.path.join(mr.project_store_dir(str(tmp_path), root), "docs", "wi")
+    os.makedirs(gdocs, exist_ok=True)
+    for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
+        sc.atomic_write(os.path.join(gdocs, name), name + " body\n")
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, interactive=True)
+    pv = mm.preview(m)
+    disc = pv["disclosure"].lower()
+    if pv["workItemRecords"]:
+        assert "work-item record" in disc
+    if pv["definitionDocs"]:
+        assert "definition document" in disc
+    if pv["calibration"]:
+        assert "calibration" in disc
+
+
+def test_definition_docs_constant_tracks_definition_doc_doc_types():
+    # _DEFINITION_DOCS is the *classification* set; DOC_TYPES is its home. A new definition-doc
+    # type that is not added here would be silently bucketed as a work-item record.
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(mm.__file__)), "definition_doc.py")
+    spec = importlib.util.spec_from_file_location("definition_doc_mm_test", path)
+    dd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dd)
+    assert set(mm._DEFINITION_DOCS) == {t + ".md" for t in dd.DOC_TYPES}
 
 
 def test_preview_lists_calibration_and_defdocs(tmp_path):

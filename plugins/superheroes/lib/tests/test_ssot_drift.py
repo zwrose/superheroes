@@ -3289,12 +3289,37 @@ def test_r7_park_surface_exactly_once_in_in_repo_copy_holders():
     )
 
 
+def _expect_assertion_error(fn, *, match):
+    """Require fn() to raise AssertionError matching `match`.
+
+    `pytest.raises(AssertionError)` is not enough for a bite-proof: a detector that
+    regresses into `pytest.skip` raises `Skipped`, which derives from BaseException,
+    so pytest.raises declines it and the whole test is reported SKIPPED — green. This
+    helper catches BaseException and turns anything that is not a matching
+    AssertionError into a failure, so a detector that stopped biting is always red.
+    """
+    try:
+        fn()
+    except AssertionError as exc:
+        if not re.search(match, str(exc)):
+            raise AssertionError(
+                "detector raised AssertionError but message %r does not match %r"
+                % (str(exc), match)
+            ) from None
+        return exc
+    except BaseException as exc:  # noqa: BLE001 — Skipped is a BaseException, and that is the point
+        raise AssertionError(
+            "detector did not bite: expected AssertionError, got %s: %s"
+            % (type(exc).__name__, exc)
+        ) from None
+    raise AssertionError("detector did not bite: no exception raised")
+
+
 def test_negative_assert_literal_across_holders_checks_past_an_unreachable_one():
-    with pytest.raises(
-        AssertionError,
-        match=r"skills/architect-discovery/SKILL\.md: expected exactly one occurrence",
-    ):
-        _assert_literal_exactly_once_across_holders(
+    _expect_assertion_error(
+        lambda: _assert_literal_exactly_once_across_holders(
             "a literal no holder contains",
             ("does/not/exist.md", "skills/architect-discovery/SKILL.md"),
-        )
+        ),
+        match=r"skills/architect-discovery/SKILL\.md: expected exactly one occurrence",
+    )

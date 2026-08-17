@@ -32,6 +32,7 @@ _REBIND = mode_registry.REBIND_KIND
 _CAL_BASENAMES_PRESERVE = ("core.md", "patterns.md")  # plus any <plugin>.md layer
 # The definition-doc basenames — the three docs that carry §3.1 frontmatter and gates.
 # This is the *classification* set: it answers "is this a definition-doc?", nothing else.
+# Kept in lock-step with definition_doc.DOC_TYPES (tested); a new doc type must be added here too.
 _DEFINITION_DOCS = ("spec.md", "plan.md", "tasks.md")
 # Per-work-item files that are NOT definition-docs but still live in the work-item folder.
 # A findings record (Exit B of discovery) carries the owner's ratification and no gates —
@@ -204,11 +205,13 @@ def preview(migration):
         else:
             work_item_records.append(src)
     if migration.target == mode_registry.IN_REPO:
-        disclosure = ("Switching to repo-shared publishes the calibration AND every definition "
-                      "document into the repo — visible to collaborators.")
+        disclosure = ("Switching to repo-shared publishes the calibration, every definition "
+                      "document, AND every work-item record (a discovery findings record "
+                      "carries the owner's ratification) into the repo — visible to "
+                      "collaborators.")
     else:
-        disclosure = ("Switching to out-of-repo moves the calibration and definition documents "
-                      "out of the repo — the repo stays pristine.")
+        disclosure = ("Switching to out-of-repo moves the calibration, the definition documents "
+                      "and the work-item records out of the repo — the repo stays pristine.")
     return {"target": migration.target, "calibration": calibration,
             "definitionDocs": def_docs, "workItemRecords": work_item_records,
             "disclosure": disclosure}

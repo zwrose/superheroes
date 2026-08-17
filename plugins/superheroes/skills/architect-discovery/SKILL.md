@@ -35,9 +35,9 @@ gates cannot be self-approved — you may *record the owner's* explicit approval
 discovery legitimately ends** (see **The three exits**). Each closes by writing its own
 durable artifact, which is why **Exit B mints the work-item and places its record** and
 why **Exit C hands back with no approved spec**. Where a draft was already written before
-the park — step 7's unweighable draft is the usual case — **the draft rides the park note,
-explicitly marked unapproved**, and is neither discarded nor treated as an artifact anything
-may anchor to. What is never permitted on any exit is fabricating a spec, or approving one on
+the park — step 7's unweighable draft is the usual case — **the draft stays on disk at its
+canonical `spec.md` path with `status: draft`, and the park note carries that path, never a
+second copy**. The draft is neither discarded nor treated as an artifact anything may anchor to. What is never permitted on any exit is fabricating a spec, or approving one on
 the owner's behalf.
 </HARD-GATE>
 
@@ -84,12 +84,21 @@ with what is there."
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
    ROOT=$(git rev-parse --show-toplevel)
-   WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
+   WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>") \
+     || { echo "the-architect: cannot mint the work-item (see message above) — not writing the findings record." >&2; exit 1; }
+   [ -n "$WORK_ITEM" ] \
+     || { echo "the-architect: mint returned an empty work-item — not writing the findings record." >&2; exit 1; }
    SPEC=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" resolve-write \
      --doc spec --work-item "$WORK_ITEM" --root "$ROOT") \
      || { echo "the-architect: cannot resolve the work-item folder (see message above) — not writing the findings record." >&2; exit 1; }
    FINDINGS="$(dirname "$SPEC")/findings.md"
    ```
+
+   **Both captures are guarded, and the empty-string check is not belt-and-braces.**
+   `resolve-write` accepts an empty `--work-item`, exits 0, and returns the docs base with the
+   work-item folder collapsed out — so an unguarded `mint` failure would land the owner's
+   ratified record outside any work-item folder instead of stopping. Guard the mint, check it is
+   non-empty, and only then resolve.
 
    `resolve-write` is used **only to learn where the work-item folder is** — it is the one
    resolver that is correct in both storage modes. **Take its directory; never write to the
@@ -113,6 +122,11 @@ on.
 
 **A park lands the full park note — what was elicited or found so far, explicitly marked unapproved — on the owner's reading surface at park time: in the advisor's delivery message when the owner is present, else as the opening item of the advisor's next delivery message; a durable copy lands as a comment on the parked item's issue or PR, and the durable copy is for the record — it is never required owner reading.**
 
+- **A draft that already exists stays where step 6 put it.** It remains at the canonical
+  `docs/superheroes/<work-item>/spec.md` path with `status: draft` — a parked draft is never
+  `approved` and its review gate is never flipped — and the park note **names that path and
+  marks the draft unapproved in the same breath**. One durable artifact per home: the note
+  points at the draft, it never carries a copy of it. Nothing may anchor to a parked draft.
 - **"Explicitly marked unapproved" is load-bearing.** Elicited requirements in a park note are
   notes. Nothing downstream may anchor to them, and nothing in them is approved content.
 - **Nothing elicited is lost.** Every answer the owner gave goes into the note, so the work
@@ -321,7 +335,8 @@ the spec to `docs/superheroes/<work-item>/spec.md`. Hand it the approved set:
 criteria), the significant-unhappy-path requirements, non-functional requirements,
 UI/UX outcome, definition of done, assumptions & dependencies, constraints,
 out-of-scope, and `size`.** That skill owns the on-disk artifact; you own the
-dialogue that feeds it.
+dialogue that feeds it. What it writes is a **draft** — `status: draft` until the owner approves it at step 8, and if
+the discovery parks before then, the draft stays exactly where this step put it (Exit C).
 
 ### 7. The weight call, then review at that weight
 
@@ -329,7 +344,8 @@ dialogue that feeds it.
 before: you cannot weigh a spec you have not written. **When discovery runs with no advisor in
 the loop, the completed draft waits for the advisor's call** — you do not weigh your own draft,
 and you do not proceed to review at a weight you picked. If that wait cannot be resolved, the
-item **parks (Exit C)** with the draft explicitly marked unapproved.
+item **parks (Exit C)** with the draft left at its canonical `spec.md` path, `status: draft`,
+and explicitly marked unapproved in the park note.
 
 **A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.**
 
@@ -403,8 +419,13 @@ in the conversation and record the answer when it comes. On `full`, agree a **sc
 review**: hand the spec over, name when you will come back to it, and do not press for a verdict
 in the moment. Weight changes how the approval is scheduled; it never changes who approves.
 
-- If the owner requests changes, apply them and (where available) **re-run
-  `review-spec` on the deltas** before coming back to them.
+- **If the owner requests changes, apply them and re-review the revised draft at its effective
+  weight before coming back to them.** On `light`, the one independent seat reads it again; on
+  `full`, `review-spec`'s panel runs again; on a draft called down to `light` because the panel
+  could not run, the one independent seat reads it again. **There is no path from "changes
+  requested" to `set-gate … passed` without a re-review at the effective weight** — a revised
+  draft is a draft, and step 7's rule that no draft reaches the owner unreviewed applies to it
+  exactly as it applied the first time.
 - **The owner's approval is the terminal gate** — review-crew advises, the owner
   decides. **Only once the owner explicitly approves**, record their decision so the
   work-item is ready to build:
@@ -461,3 +482,5 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
 | "No advisor is around, so I'll call the weight myself" | The weight call is the advisor's. The completed draft waits for it; if the wait can't be resolved, the item parks (Exit C). |
 | "Only 7 gradable lines, so it's light" | Both inputs are graded. Interlocking sections make it `full` whatever the count says. |
 | "It's 12 lines, so the guideline blocks light" | The bar is a guideline, never a gate. Override in either direction with one stated sentence. |
+| "They only asked for a small wording change — I'll just apply it and flip the gate" | A revised draft is a draft. Re-review at the effective weight before going back to the owner; there is no path from "changes requested" to `set-gate … passed` without one (step 8). |
+| "We're parking — I'll paste the draft into the park note so nothing is lost" | The draft is already durable at its canonical `spec.md` path. The note carries the **path** and the unapproved mark, never a second copy — one artifact per home (Exit C). |

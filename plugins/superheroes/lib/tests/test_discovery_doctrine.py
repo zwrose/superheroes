@@ -72,12 +72,24 @@ _BANNED_DISCOVERY_STRINGS = [
         "coming straight to you",
         "bypass owner review phrasing removed in #935",
     ),
+    (
+        "the draft rides the park note",
+        "retired two-artifact park phrasing",
+    ),
 ]
 
 _DISCOVERY_HARD_GATE_CLAUSES = [
     "hands back with no approved spec",
-    "the draft rides the park note",
+    "the draft stays on disk at its canonical `spec.md` path with `status: draft`",
+    "the park note carries that path, never a second copy",
 ]
+
+_EXIT_B_HEADING = "### Exit B — the findings record"
+_STEP8_HEADING = "### 8. Owner review & final approval (terminal gate)"
+
+_INDEPENDENCE_NEGATION_RE = re.compile(
+    r"(?i)\b(not|never|without|no)\b[^.]{0,60}(independent|review)"
+)
 
 _DISCOVERY_SECTION_CLAUSES = {
     "## The one front door": [
@@ -100,12 +112,15 @@ _DISCOVERY_SECTION_CLAUSES = {
         "The ratification is the owner's, never yours",
         "Report the exit to the advisor",
         "not writing the findings record.",
+        "cannot mint the work-item",
+        "mint returned an empty work-item",
     ],
     "### Exit C — the park note": [
         R7_PARK_SURFACE,
         "Explicitly marked unapproved",
         "Nothing elicited is lost.",
         "Report the park to the advisor",
+        "One durable artifact per home: the note points at the draft, it never carries a copy of it.",
     ],
     "### 2. The consent gate — investigation spend is the owner's to authorize": [
         "Consent before spend, with the spend named.",
@@ -138,6 +153,7 @@ _DISCOVERY_SECTION_CLAUSES = {
         "Both inputs must hold for `light`",
         "An override is valid only when stated, and one stated sentence is enough",
         "The 10-line bar is a guideline, never a gate.",
+        "item parks (Exit C) with the draft left at its canonical `spec.md` path, `status: draft`",
     ],
     "### 8. Owner review & final approval (terminal gate)": [
         "How you ask depends on the weight called in step 7.",
@@ -147,6 +163,8 @@ _DISCOVERY_SECTION_CLAUSES = {
         "At `full` weight:",
         "There is no fourth message.",
         "never offer them a spec that had none",
+        "re-review the revised draft at its effective weight",
+        "without a re-review at the effective weight",
     ],
 }
 
@@ -163,7 +181,7 @@ _ARCHITECT_SPEC_SECTION_CLAUSES = {
         "Empty sections are omitted, never filled.",
         "A heading with nothing",
         "is recorded by hand today rather than",
-        "1062",
+        "[#1062](https://github.com/zwrose/superheroes/issues/1062)'s work, not this skill's",
     ],
 }
 
@@ -182,7 +200,7 @@ _DUTY1_CLAUSES = [
 ]
 
 _PLACEHOLDER_BODIES = frozenset({"N/A", "None", "TBD", "-", "—"})
-_PLACEHOLDER_BODY_RE = re.compile(r"^\{\{.*\}\}$")
+_PLACEHOLDER_BODY_RE = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
 
 _WEIGHT_SECTION = "### 7. The weight call, then review at that weight"
 
@@ -225,6 +243,37 @@ def _normalized(text):
     return re.sub(r"\s+", " ", text.replace("*", "")).strip()
 
 
+def _expect_assertion_error(fn, *, match):
+    """Require fn() to raise AssertionError matching `match`.
+
+    `pytest.raises(AssertionError)` is not enough for a bite-proof: a detector that
+    regresses into `pytest.skip` raises `Skipped`, which derives from BaseException,
+    so pytest.raises declines it and the whole test is reported SKIPPED — green. This
+    helper catches BaseException and turns anything that is not a matching
+    AssertionError into a failure, so a detector that stopped biting is always red.
+    """
+    try:
+        fn()
+    except AssertionError as exc:
+        if not re.search(match, str(exc)):
+            raise AssertionError(
+                "detector raised AssertionError but message %r does not match %r"
+                % (str(exc), match)
+            ) from None
+        return exc
+    except BaseException as exc:  # noqa: BLE001 — Skipped is a BaseException, and that is the point
+        raise AssertionError(
+            "detector did not bite: expected AssertionError, got %s: %s"
+            % (type(exc).__name__, exc)
+        ) from None
+    raise AssertionError("detector did not bite: no exception raised")
+
+
+def _read_spec_template():
+    with open(_SPEC_TEMPLATE, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def _heading_level(line):
     stripped = line.strip()
     if not stripped.startswith("#"):
@@ -262,6 +311,348 @@ def _file_section_raw(rel, heading, read_text=None):
             end = i
             break
     return "\n".join(lines[start:end])
+
+
+def _text_section_raw(text, heading):
+    """Extract a named section from in-memory text; raises if absent or duplicated."""
+    lines = text.splitlines()
+    indices = [i for i, line in enumerate(lines) if line.strip() == heading]
+    if len(indices) == 0:
+        raise RuntimeError(f"heading {heading!r} not found")
+    if len(indices) > 1:
+        raise RuntimeError(
+            f"heading {heading!r} appears {len(indices)} times"
+        )
+    start = indices[0]
+    start_level = _heading_level(lines[start])
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        level = _heading_level(lines[i])
+        if level is not None and level <= start_level:
+            end = i
+            break
+    return "\n".join(lines[start:end])
+
+
+def _parse_markdown_table(section_text):
+    """Return row-dicts for the first markdown table in section_text."""
+    table_lines = []
+    in_table = False
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            in_table = True
+            table_lines.append(stripped)
+        elif in_table:
+            break
+    if not table_lines:
+        raise RuntimeError("no markdown table found in section")
+    if len(table_lines) < 2:
+        raise RuntimeError("markdown table has no header row")
+    headers = [cell.strip() for cell in table_lines[0].strip("|").split("|")]
+    rows = []
+    for table_line in table_lines[2:]:
+        cells = [cell.strip() for cell in table_line.strip("|").split("|")]
+        if len(cells) != len(headers):
+            raise RuntimeError(
+                "markdown table row has %d cells, expected %d"
+                % (len(cells), len(headers))
+            )
+        rows.append(dict(zip(headers, cells)))
+    if not rows:
+        raise RuntimeError("markdown table has no data rows")
+    return rows
+
+
+def _template_coverage_areas():
+    section_text = _text_section_raw(_read_spec_template(), "## Coverage")
+    rows = _parse_markdown_table(section_text)
+    areas = [row["Area"].strip("`").strip() for row in rows]
+    if len(areas) < 5:
+        raise RuntimeError(
+            "templates/spec.md Coverage table has fewer than 5 areas (%d)"
+            % len(areas)
+        )
+    return areas
+
+
+def _template_coverage_dispositions():
+    section_text = _text_section_raw(_read_spec_template(), "## Coverage")
+    before_table = section_text.split("| Area |", 1)[0]
+    dispositions = re.findall(r"`([^`]+)`\s*→", before_table)
+    if len(dispositions) != 3:
+        raise RuntimeError(
+            "templates/spec.md Coverage intro has %d disposition tokens, expected 3"
+            % len(dispositions)
+        )
+    return dispositions
+
+
+def _fixture_coverage_section():
+    fixture_text = open(_LIGHT_SPEC_FIXTURE, encoding="utf-8").read()
+    return _text_section_raw(fixture_text, "## Coverage")
+
+
+def _assert_coverage_table_rows_match_areas(table_text, expected_areas):
+    rows = _parse_markdown_table(table_text)
+    row_areas = [row["Area"].strip("`").strip() for row in rows]
+    if len(row_areas) != len(set(row_areas)):
+        raise AssertionError(
+            "coverage table has duplicate or extra area rows: %r" % row_areas
+        )
+    if len(row_areas) != len(expected_areas):
+        raise AssertionError(
+            "coverage table areas %r do not match template areas %r"
+            % (row_areas, expected_areas)
+        )
+    if sorted(row_areas) != sorted(expected_areas):
+        raise AssertionError(
+            "coverage table areas %r do not match template areas %r"
+            % (row_areas, expected_areas)
+        )
+
+
+def _assert_coverage_dispositions_real(table_text, disposition_vocab):
+    rows = _parse_markdown_table(table_text)
+    placeholder_re = re.compile(r"\{\{.*\}\}")
+    for row in rows:
+        disposition = row["Disposition"].strip("`").strip()
+        where = row["Where / why"].strip()
+        if not disposition:
+            raise AssertionError("coverage row %r has blank Disposition" % row["Area"])
+        if placeholder_re.search(disposition):
+            raise AssertionError(
+                "coverage row %r Disposition is a template placeholder: %r"
+                % (row["Area"], disposition)
+            )
+        if disposition not in disposition_vocab:
+            raise AssertionError(
+                "coverage row %r Disposition %r not in template vocabulary %r"
+                % (row["Area"], disposition, disposition_vocab)
+            )
+        if not where:
+            raise AssertionError(
+                "coverage row %r has blank Where / why" % row["Area"]
+            )
+        if placeholder_re.search(where):
+            raise AssertionError(
+                "coverage row %r Where / why is a template placeholder: %r"
+                % (row["Area"], where)
+            )
+
+
+def _extract_hard_gate_block(text):
+    """Return normalized text strictly between <HARD-GATE> and </HARD-GATE>."""
+    lines = text.splitlines()
+    open_indices = [
+        i for i, line in enumerate(lines) if line.strip() == "<HARD-GATE>"
+    ]
+    close_indices = [
+        i for i, line in enumerate(lines) if line.strip() == "</HARD-GATE>"
+    ]
+    if len(open_indices) != 1:
+        raise RuntimeError(
+            "<HARD-GATE> found %d times (expected 1)" % len(open_indices)
+        )
+    if len(close_indices) != 1:
+        raise RuntimeError(
+            "</HARD-GATE> found %d times (expected 1)" % len(close_indices)
+        )
+    open_idx = open_indices[0]
+    close_idx = close_indices[0]
+    if close_idx <= open_idx:
+        raise RuntimeError("</HARD-GATE> precedes <HARD-GATE>")
+    return _normalized("\n".join(lines[open_idx + 1:close_idx]))
+
+
+def _assert_clauses_in_text(text, clauses, label):
+    """Fail if any required clause is absent from normalized text."""
+    normalized = _normalized(text)
+    for clause in clauses:
+        if _normalized(clause) not in normalized:
+            raise AssertionError(
+                f"{label}: required clause missing: {clause!r}"
+            )
+
+
+def _extract_fenced_bash_block(section_text):
+    """Return content of the single ```bash fence in section_text."""
+    pattern = re.compile(r"```bash\s*\n(.*?)```", re.DOTALL)
+    matches = pattern.findall(section_text)
+    if len(matches) != 1:
+        raise RuntimeError(
+            "expected exactly one ```bash fence, found %d" % len(matches)
+        )
+    return matches[0]
+
+
+def _extract_exit_b_bash_block(section_text=None, read_text=None):
+    if section_text is None:
+        section_text = _file_section_raw(
+            _DISCOVERY_CHARTER, _EXIT_B_HEADING, read_text
+        )
+    return _extract_fenced_bash_block(section_text)
+
+
+def _logical_shell_lines(block):
+    """Join backslash-continued lines into logical shell lines."""
+    physical = block.splitlines()
+    logical = []
+    current = ""
+    for line in physical:
+        stripped = line.rstrip()
+        if stripped.endswith("\\"):
+            current += stripped[:-1].rstrip() + " "
+        else:
+            current += stripped
+            logical.append(current.strip())
+            current = ""
+    if current.strip():
+        logical.append(current.strip())
+    return logical
+
+
+def _assert_exit_b_fail_closed(block):
+    lines = _logical_shell_lines(block)
+    mint_lines = [ln for ln in lines if "mint --title" in ln]
+    resolve_lines = [ln for ln in lines if "resolve-write" in ln]
+    nonempty_lines = [ln for ln in lines if "[ -n \"$WORK_ITEM\" ]" in ln]
+
+    if len(mint_lines) != 1:
+        raise AssertionError(
+            "expected exactly one mint --title line, found %d" % len(mint_lines)
+        )
+    mint_line = mint_lines[0]
+    if "|| {" not in mint_line or "exit 1" not in mint_line:
+        raise AssertionError(
+            "mint line is not fail-closed: %r" % mint_line
+        )
+
+    if len(resolve_lines) != 1:
+        raise AssertionError(
+            "expected exactly one resolve-write line, found %d" % len(resolve_lines)
+        )
+    resolve_line = resolve_lines[0]
+    if "|| {" not in resolve_line or "exit 1" not in resolve_line:
+        raise AssertionError(
+            "resolve-write line is not fail-closed: %r" % resolve_line
+        )
+
+    if not nonempty_lines:
+        raise AssertionError("missing [ -n \"$WORK_ITEM\" ] non-empty check")
+    nonempty_line = nonempty_lines[0]
+    if "|| {" not in nonempty_line or "exit 1" not in nonempty_line:
+        raise AssertionError(
+            "work-item non-empty check is not fail-closed: %r" % nonempty_line
+        )
+
+    resolve_idx = lines.index(resolve_line)
+    nonempty_idx = lines.index(nonempty_line)
+    if nonempty_idx >= resolve_idx:
+        raise AssertionError(
+            "work-item non-empty check must precede resolve-write"
+        )
+
+
+def _extract_step_block(rel, number, read_text=None):
+    """Return raw text for ### {number}. … through the next same-or-higher heading."""
+    if read_text is None:
+        read_text = _read_plugin
+    text = read_text(rel)
+    lines = text.splitlines()
+    heading_re = re.compile(rf"^### {number}\.\s")
+    indices = [i for i, line in enumerate(lines) if heading_re.match(line)]
+    if len(indices) != 1:
+        raise RuntimeError(
+            "step %d heading found %d times (expected 1)" % (number, len(indices))
+        )
+    start = indices[0]
+    start_level = _heading_level(lines[start])
+    end = len(lines)
+    for i in range(start + 1, len(lines)):
+        level = _heading_level(lines[i])
+        if level is not None and level <= start_level:
+            end = i
+            break
+    return "\n".join(lines[start:end])
+
+
+def _extract_handoff_messages(step8_text):
+    """Return normalized handoff blockquotes; each opens with > *At ."""
+    messages = []
+    current_parts = []
+    for line in step8_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("> *At "):
+            if current_parts:
+                messages.append(_normalized(" ".join(current_parts)))
+            current_parts = [stripped]
+        elif stripped.startswith(">") and current_parts:
+            if stripped == ">":
+                continue
+            current_parts.append(stripped.lstrip(">").strip())
+        elif current_parts:
+            messages.append(_normalized(" ".join(current_parts)))
+            current_parts = []
+    if current_parts:
+        messages.append(_normalized(" ".join(current_parts)))
+    if len(messages) != 3:
+        raise RuntimeError(
+            "expected exactly 3 handoff messages, found %d" % len(messages)
+        )
+    return messages
+
+
+def _assert_step8_handoff_messages_name_review(step8_text):
+    messages = _extract_handoff_messages(step8_text)
+    light_msgs = [m for m in messages if "At `light` weight:" in m]
+    full_msgs = [
+        m for m in messages
+        if "At `full` weight:" in m and "overridden" not in m
+    ]
+    down_msgs = [m for m in messages if "overridden" in m]
+
+    if len(light_msgs) != 1:
+        raise AssertionError(
+            "expected one light-weight handoff, found %d" % len(light_msgs)
+        )
+    if len(full_msgs) != 1:
+        raise AssertionError(
+            "expected one full-weight handoff, found %d" % len(full_msgs)
+        )
+    if len(down_msgs) != 1:
+        raise AssertionError(
+            "expected one overridden-down handoff, found %d" % len(down_msgs)
+        )
+
+    light = light_msgs[0]
+    full = full_msgs[0]
+    down = down_msgs[0]
+
+    if "one independent reviewer" not in light:
+        raise AssertionError("light handoff missing one independent reviewer")
+    if "review-spec" in light:
+        raise AssertionError("light handoff must not mention review-spec")
+    if "review-spec" not in full or "panel" not in full:
+        raise AssertionError("full handoff missing review-spec panel wording")
+    if "one independent reviewer" in full:
+        raise AssertionError(
+            "full handoff must not mention one independent reviewer"
+        )
+    if "called down" not in down or "light weight" not in down:
+        raise AssertionError("overridden-down handoff missing called-down wording")
+    if "one independent reviewer" not in down:
+        raise AssertionError(
+            "overridden-down handoff missing one independent reviewer"
+        )
+
+
+def _assert_step8_handoff_messages_never_negate(step8_text):
+    for message in _extract_handoff_messages(step8_text):
+        if _INDEPENDENCE_NEGATION_RE.search(message):
+            raise AssertionError(
+                "handoff message negates independent review: %r" % message
+            )
 
 
 def _extract_table_row(section_text, row_label):
@@ -321,16 +712,6 @@ def _assert_weight_table_rows(rel, read_text=None):
         raise AssertionError(
             f"{rel}: full row must not contain one independent review seat phrase"
         )
-
-
-def _assert_clauses_present(text, clauses, label):
-    """Fail if any required clause is absent from the whole file."""
-    normalized = _normalized(text)
-    for clause in clauses:
-        if _normalized(clause) not in normalized:
-            raise AssertionError(
-                f"{label}: required clause missing: {clause!r}"
-            )
 
 
 def _check_banned_absent(text, banned_strings, label):
@@ -492,7 +873,8 @@ def test_discovery_charter_banned_strings_absent():
 
 def test_discovery_charter_hard_gate_clauses_present():
     text = _read_plugin(_DISCOVERY_CHARTER)
-    _assert_clauses_present(text, _DISCOVERY_HARD_GATE_CLAUSES, _DISCOVERY_CHARTER)
+    block = _extract_hard_gate_block(text)
+    _assert_clauses_in_text(block, _DISCOVERY_HARD_GATE_CLAUSES, _DISCOVERY_CHARTER)
 
 
 # --- 1b. Section-scoped presence, architect-discovery ----------------------
@@ -610,23 +992,86 @@ def test_light_spec_empty_sections_omitted_not_filled():
     _assert_no_placeholder_sections(fixture_text)
 
 
+def test_light_spec_coverage_table_rows_match_template_areas():
+    areas = _template_coverage_areas()
+    _assert_coverage_table_rows_match_areas(_fixture_coverage_section(), areas)
+
+
+def test_light_spec_coverage_dispositions_are_real():
+    vocab = _template_coverage_dispositions()
+    _assert_coverage_dispositions_real(_fixture_coverage_section(), vocab)
+
+
+def test_light_spec_must_omit_headings_exist_in_template():
+    template_text = _read_spec_template()
+    template_heads = set(_h2_headings(template_text))
+    for heading in _LIGHT_SPEC_MUST_OMIT | _LIGHT_SPEC_MUST_KEEP:
+        if heading not in template_heads:
+            raise AssertionError(
+                "templates/spec.md missing H2 heading %r referenced by light-spec constants"
+                % heading
+            )
+
+
+def test_exit_b_command_block_is_fail_closed():
+    block = _extract_exit_b_bash_block()
+    _assert_exit_b_fail_closed(block)
+
+
+def test_step8_handoff_messages_name_their_review():
+    step8 = _extract_step_block(_DISCOVERY_CHARTER, 8)
+    _assert_step8_handoff_messages_name_review(step8)
+
+
+def test_step8_handoff_messages_never_negate_independence():
+    step8 = _extract_step_block(_DISCOVERY_CHARTER, 8)
+    _assert_step8_handoff_messages_never_negate(step8)
+
+
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
 
 
 def test_negative_hard_gate_clause_missing_in_synthetic():
-    synthetic = "Some charter text without the hard-gate clauses."
-    with pytest.raises(AssertionError, match="required clause missing"):
-        _assert_clauses_present(
-            synthetic,
-            _DISCOVERY_HARD_GATE_CLAUSES,
-            "synthetic",
-        )
+    synthetic = "\n".join([
+        "<HARD-GATE>",
+        "hands back with no approved spec only",
+        "</HARD-GATE>",
+    ])
+    block = _extract_hard_gate_block(synthetic)
+    _expect_assertion_error(
+        lambda: _assert_clauses_in_text(
+            block, _DISCOVERY_HARD_GATE_CLAUSES, "synthetic",
+        ),
+        match="required clause missing",
+    )
+
+
+def test_negative_hard_gate_duplicate_open_raises():
+    synthetic = "\n".join([
+        "<HARD-GATE>",
+        "<HARD-GATE>",
+        "content",
+        "</HARD-GATE>",
+    ])
+    with pytest.raises(RuntimeError, match="<HARD-GATE>"):
+        _extract_hard_gate_block(synthetic)
+
+
+def test_negative_hard_gate_missing_close_raises():
+    synthetic = "\n".join([
+        "<HARD-GATE>",
+        "content without close tag",
+    ])
+    with pytest.raises(RuntimeError, match="</HARD-GATE>"):
+        _extract_hard_gate_block(synthetic)
 
 
 def test_negative_banned_string_detected_in_synthetic():
     synthetic = "Some charter text.\nAskUserQuestion\nMore text."
-    with pytest.raises(AssertionError, match="banned string found"):
-        _check_banned_absent(synthetic, _BANNED_DISCOVERY_STRINGS, "synthetic")
+    _expect_assertion_error(
+        lambda: _check_banned_absent(synthetic, _BANNED_DISCOVERY_STRINGS, "synthetic"),
+        match="banned string found",
+    )
 
 
 def test_negative_banned_string_line_wrapped_in_synthetic():
@@ -637,15 +1082,19 @@ def test_negative_banned_string_line_wrapped_in_synthetic():
         "approval.",
         "More text.",
     ])
-    with pytest.raises(AssertionError, match="matched only after normalization"):
-        _check_banned_absent(synthetic, [(banned, "probe")], "synthetic")
+    _expect_assertion_error(
+        lambda: _check_banned_absent(synthetic, [(banned, "probe")], "synthetic"),
+        match="matched only after normalization",
+    )
 
 
 def test_negative_banned_string_emphasis_in_synthetic():
     banned = "Prefer multiple-choice"
     synthetic = "Routing: Prefer **multiple-choice** widgets here."
-    with pytest.raises(AssertionError, match="banned string found"):
-        _check_banned_absent(synthetic, [(banned, "probe")], "synthetic")
+    _expect_assertion_error(
+        lambda: _check_banned_absent(synthetic, [(banned, "probe")], "synthetic"),
+        match="banned string found",
+    )
 
 
 def test_negative_section_scoped_clause_rejects_out_of_section_match():
@@ -664,15 +1113,14 @@ def test_negative_section_scoped_clause_rejects_out_of_section_match():
             return synthetic_text
         return _read_plugin(rel)
 
-    with pytest.raises(
-        AssertionError,
-        match=r"clause missing from section '## The three exits'",
-    ):
-        _assert_section_clauses(
+    _expect_assertion_error(
+        lambda: _assert_section_clauses(
             synthetic_path,
             {heading: [clause]},
             read_text,
-        )
+        ),
+        match=r"clause missing from section '## The three exits'",
+    )
 
 
 def test_negative_duty1_duplicate_start_boundary_raises():
@@ -704,8 +1152,10 @@ def test_negative_fixture_headings_not_subset_of_template():
         "## Not In Template",
     ])
     template_text = "## Purpose\n## Who it's for\n"
-    with pytest.raises(AssertionError, match="not in templates/spec.md"):
-        _fixture_headings_subset_of_template(synthetic_doc, template_text)
+    _expect_assertion_error(
+        lambda: _fixture_headings_subset_of_template(synthetic_doc, template_text),
+        match="not in templates/spec.md",
+    )
 
 
 def test_negative_fixture_missing_required_heading():
@@ -721,8 +1171,10 @@ def test_negative_fixture_missing_required_heading():
         "## Functional requirements",
         "## Definition of done / success",
     ])
-    with pytest.raises(AssertionError, match="missing required spec headings"):
-        _fixture_headings_subset_of_template(synthetic_doc, template_text)
+    _expect_assertion_error(
+        lambda: _fixture_headings_subset_of_template(synthetic_doc, template_text),
+        match="missing required spec headings",
+    )
 
 
 def test_negative_fixture_kept_omitted_heading():
@@ -744,8 +1196,10 @@ def test_negative_fixture_kept_omitted_heading():
         "## Coverage",
         "## Glossary",
     ])
-    with pytest.raises(AssertionError, match="must omit light-spec template headings"):
-        _fixture_headings_subset_of_template(synthetic_doc, template_text)
+    _expect_assertion_error(
+        lambda: _fixture_headings_subset_of_template(synthetic_doc, template_text),
+        match="must omit light-spec template headings",
+    )
 
 
 def test_negative_placeholder_section_body_fails():
@@ -756,8 +1210,23 @@ def test_negative_placeholder_section_body_fails():
         "## Constraints",
         "N/A",
     ])
-    with pytest.raises(AssertionError, match="placeholder"):
-        _assert_no_placeholder_sections(synthetic_doc)
+    _expect_assertion_error(
+        lambda: _assert_no_placeholder_sections(synthetic_doc),
+        match="placeholder",
+    )
+
+
+def test_negative_multiline_placeholder_section_body_fails():
+    synthetic_doc = "\n".join([
+        "# t",
+        "## Purpose",
+        "{{line one",
+        "line two}}",
+    ])
+    _expect_assertion_error(
+        lambda: _assert_no_placeholder_sections(synthetic_doc),
+        match="template placeholder",
+    )
 
 
 def test_clause_tables_survive_normalization():
@@ -771,14 +1240,18 @@ def test_clause_tables_survive_normalization():
 
 
 def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
-    with pytest.raises(AssertionError, match=r"contains '\*'"):
-        _assert_clause_tables_survive_normalization(
+    _expect_assertion_error(
+        lambda: _assert_clause_tables_survive_normalization(
             {"synthetic": {"## Section": ["has * star"]}},
-        )
-    with pytest.raises(AssertionError, match="consecutive spaces"):
-        _assert_clause_tables_survive_normalization(
+        ),
+        match=r"contains '\*'",
+    )
+    _expect_assertion_error(
+        lambda: _assert_clause_tables_survive_normalization(
             {"synthetic": {"## Section": ["has  double space"]}},
-        )
+        ),
+        match="consecutive spaces",
+    )
 
 
 def _synthetic_weight_section(
@@ -828,8 +1301,10 @@ def test_negative_weight_table_swapped_rows_fail():
             return synthetic_text
         return _read_plugin(rel)
 
-    with pytest.raises(AssertionError, match="light row"):
-        _assert_weight_table_rows(synthetic_path, read_text)
+    _expect_assertion_error(
+        lambda: _assert_weight_table_rows(synthetic_path, read_text),
+        match="light row",
+    )
 
 
 def test_negative_weight_table_full_row_corrupted_fails():
@@ -841,8 +1316,10 @@ def test_negative_weight_table_full_row_corrupted_fails():
             return synthetic_text
         return _read_plugin(rel)
 
-    with pytest.raises(AssertionError, match="full row missing phrase"):
-        _assert_weight_table_rows(synthetic_path, read_text)
+    _expect_assertion_error(
+        lambda: _assert_weight_table_rows(synthetic_path, read_text),
+        match="full row missing phrase",
+    )
 
 
 def test_negative_weight_table_inverted_classification_rule_fails():
@@ -856,11 +1333,8 @@ def test_negative_weight_table_inverted_classification_rule_fails():
             return synthetic_text
         return _read_plugin(rel)
 
-    with pytest.raises(
-        AssertionError,
-        match=r"clause missing from section '### 7\. The weight call, then review at that weight'",
-    ):
-        _assert_section_clauses(
+    _expect_assertion_error(
+        lambda: _assert_section_clauses(
             synthetic_path,
             {
                 _WEIGHT_SECTION: [
@@ -868,7 +1342,9 @@ def test_negative_weight_table_inverted_classification_rule_fails():
                 ],
             },
             read_text,
-        )
+        ),
+        match=r"clause missing from section '### 7\. The weight call, then review at that weight'",
+    )
 
 
 def test_negative_weight_table_absent_raises():
@@ -882,6 +1358,225 @@ def test_negative_weight_table_absent_raises():
 
     with pytest.raises(RuntimeError, match="no markdown table found"):
         _assert_weight_table_rows(synthetic_path, read_text)
+
+
+def _synthetic_coverage_table(rows):
+    lines = [
+        "| Area | Disposition | Where / why |",
+        "| --- | --- | --- |",
+    ]
+    lines.extend(rows)
+    return "\n".join(lines)
+
+
+def _canonical_coverage_rows():
+    areas = _template_coverage_areas()
+    vocab = _template_coverage_dispositions()
+    return [
+        f"| {area} | {vocab[0]} | reason for {area} |"
+        for area in areas
+    ]
+
+
+def _synthetic_exit_b_bash(
+    *,
+    mint_fail_closed=True,
+    mint_guard=True,
+    nonempty_check=True,
+    nonempty_before_resolve=True,
+):
+    lines = [
+        "ROOT_DIR=\"${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}\"",
+        "ROOT=$(git rev-parse --show-toplevel)",
+    ]
+    mint_assign = (
+        "WORK_ITEM=$(python3 -B \"$ROOT_DIR/lib/definition_doc.py\" mint --title \"<title>\")"
+    )
+    if mint_guard:
+        if mint_fail_closed:
+            lines.append(mint_assign + " \\")
+            lines.append(
+                "  || { echo \"the-architect: cannot mint the work-item\" >&2; exit 1; }"
+            )
+        else:
+            lines.append(mint_assign + " \\")
+            lines.append("  || { echo \"the-architect: cannot mint the work-item\" >&2; }")
+    else:
+        lines.append(mint_assign)
+    resolve_block = [
+        "SPEC=$(python3 -B \"$ROOT_DIR/lib/definition_doc.py\" resolve-write \\",
+        "  --doc spec --work-item \"$WORK_ITEM\" --root \"$ROOT\") \\",
+        "  || { echo \"the-architect: cannot resolve\" >&2; exit 1; }",
+        "FINDINGS=\"$(dirname \"$SPEC\")/findings.md\"",
+    ]
+    if nonempty_check and nonempty_before_resolve:
+        lines.append("[ -n \"$WORK_ITEM\" ] \\")
+        lines.append("  || { echo \"empty work-item\" >&2; exit 1; }")
+        lines.extend(resolve_block)
+    elif nonempty_check:
+        lines.extend(resolve_block)
+        lines.append("[ -n \"$WORK_ITEM\" ] \\")
+        lines.append("  || { echo \"empty work-item\" >&2; exit 1; }")
+    else:
+        lines.extend(resolve_block)
+    return "\n".join(lines)
+
+
+def _synthetic_step8_text(messages):
+    return "\n".join([
+        "### 8. Owner review & final approval (terminal gate)",
+        "",
+        "Ask the owner to review the written spec.",
+        "",
+    ] + messages)
+
+
+def _canonical_step8_messages():
+    return [
+        "> *At `light` weight:* read by one independent reviewer.",
+        "> *At `full` weight:* through `review-spec`'s panel.",
+        "> *At `full` weight, overridden down because the panel could not run:* "
+        "called down to light weight and read by one independent reviewer.",
+    ]
+
+
+def test_negative_coverage_blank_disposition_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("Specify", "   ", 1)
+    table = _synthetic_coverage_table(rows)
+    vocab = _template_coverage_dispositions()
+    _expect_assertion_error(
+        lambda: _assert_coverage_dispositions_real(table, vocab),
+        match="blank Disposition",
+    )
+
+
+def test_negative_coverage_tbd_disposition_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("Specify", "TBD", 1)
+    table = _synthetic_coverage_table(rows)
+    vocab = _template_coverage_dispositions()
+    _expect_assertion_error(
+        lambda: _assert_coverage_dispositions_real(table, vocab),
+        match="not in template vocabulary",
+    )
+
+
+def test_negative_coverage_placeholder_disposition_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("Specify", "{{Specify}}", 1)
+    table = _synthetic_coverage_table(rows)
+    vocab = _template_coverage_dispositions()
+    _expect_assertion_error(
+        lambda: _assert_coverage_dispositions_real(table, vocab),
+        match="template placeholder",
+    )
+
+
+def test_negative_coverage_dropped_area_row_fails():
+    rows = _canonical_coverage_rows()[1:]
+    table = _synthetic_coverage_table(rows)
+    areas = _template_coverage_areas()
+    _expect_assertion_error(
+        lambda: _assert_coverage_table_rows_match_areas(table, areas),
+        match="do not match template areas",
+    )
+
+
+def test_negative_coverage_duplicated_area_row_fails():
+    rows = _canonical_coverage_rows()
+    rows.append(rows[0])
+    table = _synthetic_coverage_table(rows)
+    areas = _template_coverage_areas()
+    _expect_assertion_error(
+        lambda: _assert_coverage_table_rows_match_areas(table, areas),
+        match="duplicate or extra area rows",
+    )
+
+
+def test_negative_coverage_blank_where_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = re.sub(r"\| reason for .* \|$", "|  |", rows[0])
+    table = _synthetic_coverage_table(rows)
+    vocab = _template_coverage_dispositions()
+    _expect_assertion_error(
+        lambda: _assert_coverage_dispositions_real(table, vocab),
+        match="blank Where / why",
+    )
+
+
+def test_negative_exit_b_mint_missing_exit_1_fails():
+    block = _synthetic_exit_b_bash(mint_fail_closed=False)
+    _expect_assertion_error(
+        lambda: _assert_exit_b_fail_closed(block),
+        match="mint line is not fail-closed",
+    )
+
+
+def test_negative_exit_b_mint_missing_guard_fails():
+    block = _synthetic_exit_b_bash(mint_guard=False)
+    _expect_assertion_error(
+        lambda: _assert_exit_b_fail_closed(block),
+        match="mint line is not fail-closed",
+    )
+
+
+def test_negative_exit_b_nonempty_check_deleted_fails():
+    block = _synthetic_exit_b_bash(nonempty_check=False)
+    _expect_assertion_error(
+        lambda: _assert_exit_b_fail_closed(block),
+        match="missing \\[ -n",
+    )
+
+
+def test_negative_exit_b_nonempty_after_resolve_fails():
+    block = _synthetic_exit_b_bash(nonempty_before_resolve=False)
+    _expect_assertion_error(
+        lambda: _assert_exit_b_fail_closed(block),
+        match="must precede resolve-write",
+    )
+
+
+def test_negative_step8_handoff_messages_swapped_fail():
+    canonical = _canonical_step8_messages()
+    messages = [
+        "> *At `light` weight:* through `review-spec`'s panel.",
+        "> *At `full` weight:* read by one independent reviewer.",
+        canonical[2],
+    ]
+    step8 = _synthetic_step8_text(messages)
+    _expect_assertion_error(
+        lambda: _assert_step8_handoff_messages_name_review(step8),
+        match="light handoff",
+    )
+
+
+def test_negative_step8_light_message_negates_independence_fails():
+    messages = _canonical_step8_messages()
+    messages[0] = (
+        "> *At `light` weight:* but not read by one independent reviewer."
+    )
+    step8 = _synthetic_step8_text(messages)
+    _expect_assertion_error(
+        lambda: _assert_step8_handoff_messages_never_negate(step8),
+        match="negates independent review",
+    )
+
+
+def test_negative_step8_third_message_deleted_raises():
+    messages = _canonical_step8_messages()[:2]
+    step8 = _synthetic_step8_text(messages)
+    with pytest.raises(RuntimeError, match="expected exactly 3 handoff messages"):
+        _extract_handoff_messages(step8)
+
+
+def test_negative_step8_fourth_message_added_raises():
+    messages = _canonical_step8_messages() + [
+        "> *At `light` weight:* extra fourth message.",
+    ]
+    step8 = _synthetic_step8_text(messages)
+    with pytest.raises(RuntimeError, match="expected exactly 3 handoff messages"):
+        _extract_handoff_messages(step8)
 
 
 def test_negative_set_gate_without_gates_line_fails(tmp_path):
