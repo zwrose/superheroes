@@ -2,7 +2,7 @@
 superheroes: doc
 schemaVersion: 1
 docType: spec
-workItem: light-spec-sample-a1b2c3d4
+workItem: light-spec-sample-a1b2c3
 issue: null
 parent: null
 size: small

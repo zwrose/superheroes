@@ -75,11 +75,23 @@ Take it when the work resolves without opening a new product surface: the answer
 nothing to specify", "what exists already covers it", or "the idea does not survive contact
 with what is there."
 
-1. **Mint the work-item** if one does not exist yet (`definition_doc.py mint --title "<title>"`),
-   and resolve where the spec *would* live
-   (`definition_doc.py resolve-write --doc spec --work-item "$WORK_ITEM" --root "$ROOT"`). The
-   findings record is **`findings.md` in that same folder** — the work-item folder, in whichever
-   storage mode the project uses. It is **not** a definition-doc: no frontmatter block, no gates.
+1. **Mint the work-item** if one does not exist yet, then resolve **the folder** the spec would
+   occupy. Use the canonical form — the bare script name is not on `PATH`:
+
+   ```bash
+   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+   ROOT=$(git rev-parse --show-toplevel)
+   WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
+   SPEC=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" resolve-write \
+     --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
+   FINDINGS="$(dirname "$SPEC")/findings.md"
+   ```
+
+   `resolve-write` is used **only to learn where the work-item folder is** — it is the one
+   resolver that is correct in both storage modes. **Take its directory; never write to the
+   `spec.md` path it names** — on this exit no spec is written at all. The findings record is
+   `findings.md` in that folder, and it is **not** a definition-doc: no frontmatter block, no
+   gates.
 2. **Write it in plain language:** what was asked, what was investigated, what was found, and
    **the outcome — that no spec is being written, and why**. State that outcome explicitly; a
    findings record that trails off without saying it is not an exit.
@@ -181,8 +193,10 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   Put each one in front of them and **ask whether they care** — "do you have a view on X, or
   should I choose?" A dimension they explicitly hand back to you is a **recorded disposition**,
   not a skipped question.
-- **The Dispositions table is the stopping rule, not a question quota.** Discovery closes when
-  **every dimension the table covers carries a disposition** — Specify, Defer-to-build, or N-A.
+- **The spec's dispositions table is the stopping rule, not a question quota.** That table is
+  the spec's `## Coverage` section: one row per probed area, each carrying its disposition.
+  Discovery closes when **every dimension the table covers carries a disposition** — Specify,
+  Defer-to-build, or N-A.
   **A small surface therefore closes having asked only the questions its table needed**, and
   that is the expected outcome for small work, never a shortcut you have to justify.
 - **Frame every consequential choice as prose — never a pick-one widget.** A choice is
@@ -343,12 +357,19 @@ turns it into a hard block: a 40-line draft may be called `light` with one state
 a 4-line draft may be called `full` the same way. If you find yourself saying "the number won't
 let me", the number has been misread.
 
-Address the review's findings **before** asking the owner to spend their time — the automated
-review catches ambiguity, missing coverage and tech leakage the owner would otherwise have to.
-Fix what it raises (or, where it is a judgment call, note it for the owner). **If `review-spec`
-is not available in this project**, say so and proceed to step 8 — the self-review (step 6)
-stands in, and the owner's review is the terminal gate regardless. Never fabricate a review
-result.
+Address the review's findings **before** asking the owner to spend their time — the review
+catches ambiguity, missing coverage and tech leakage the owner would otherwise have to. Fix what
+it raises (or, where it is a judgment call, note it for the owner). **Never fabricate a review
+result.**
+
+**If `review-spec` is not available in this project**, that is not an exemption from review —
+handle it by weight. On `light`, `review-spec` was never the reviewer: the **one independent
+seat still runs**, because a fresh-context reviewer needs no skill to be installed. On `full`,
+the panel cannot run, so either the advisor **calls it down to `light` with the one stated
+sentence** an override needs and the single seat runs, or the draft **parks (Exit C)** marked
+unapproved. **Self-review is never the substitute** — step 6's self-review is the author's own
+pass and was never independent. Whichever way it goes, the owner is told, in plain language,
+what did not run.
 
 ### 8. Owner review & final approval (terminal gate)
 
@@ -423,7 +444,7 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
 | "The owner went quiet — I'll leave it and come back" | An abandoned discovery gets a park note (**Exit C**). Silence is not an exit, and the note is what keeps their answers from being lost or mistaken for approved content. |
 | "A pick-one widget is faster than writing the options out" | Options are prose in the conversation. A widget forces the owner into your labels — and they may not be in your labels. |
 | "They answered with a question instead of picking one — I'll re-ask the list" | That is re-forcing the choice. Answer the question and carry the dialogue forward. |
-| "This looks small, I'll run the light version of discovery" | There is no up-front ceremony choice. Probe each opinion-bearing dimension and stop when the Dispositions table is satisfied — a small surface closes early on its own. |
+| "This looks small, I'll run the light version of discovery" | There is no up-front ceremony choice. Probe each opinion-bearing dimension and stop when the spec's dispositions table (`## Coverage`) is satisfied — a small surface closes early on its own. |
 | "No advisor is around, so I'll call the weight myself" | The weight call is the advisor's. The completed draft waits for it; if the wait can't be resolved, the item parks (Exit C). |
 | "Only 7 gradable lines, so it's light" | Both inputs are graded. Interlocking sections make it `full` whatever the count says. |
 | "It's 12 lines, so the guideline blocks light" | The bar is a guideline, never a gate. Override in either direction with one stated sentence. |

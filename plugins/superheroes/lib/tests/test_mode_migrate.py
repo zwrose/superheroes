@@ -69,6 +69,26 @@ def test_plan_enumerates_calibration_and_defdocs_and_marks_bookkeeping_not_moved
     assert m.remote_key == sc.derive_identifiers(str(tmp_path))["remote_hash"]
 
 
+def test_plan_enumerates_findings_md_with_spec_and_preview_lists_both(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec body\n")
+    sc.atomic_write(os.path.join(ddir, "findings.md"), "owner ratification\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    moved = {f["src"] for f in m.files}
+    spec_src = os.path.join(ddir, "spec.md")
+    findings_src = os.path.join(ddir, "findings.md")
+    assert spec_src in moved
+    assert findings_src in moved
+    pv = mm.preview(m)
+    assert spec_src in pv["definitionDocs"]
+    assert findings_src in pv["definitionDocs"]
+
+
 def test_plan_refuses_when_not_interactive(tmp_path):
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")

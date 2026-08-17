@@ -21,8 +21,8 @@ are gone with them; no lib/*.js copy-holders remain):
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
 - Register-check vocabulary                              (home: register_check.py)
-- R5 weight vocabulary + R7 park surface (pinned literals) (copy-holders: architect-discovery,
-  showrunner SKILL.md)
+- R5 weight vocabulary + R7 park surface (pinned literals) (home: epic register when
+  reachable; copy-holders: architect-discovery, showrunner SKILL.md, epic children)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -3123,11 +3123,15 @@ def test_register_check_vocabulary_completeness():
     )
 # --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
 
-# The epic register is the home of record for these sentences, but lib/tests/ ships inside
-# the plugin to projects that do not carry the register file — so we pin the literals here
-# and assert every copy-holder matches the pin byte-for-byte. Two copies drifting together
-# to the same wrong sentence would still pass an equality check between copies; the pin is
-# the anchor.
+# The epic register is the home of record for these sentences. lib/tests/ ships inside the
+# plugin to projects that do not carry the register, so the literals are pinned here; the
+# pin is validated against the home whenever the home is reachable, so a register edit in
+# this repo turns the guard red instead of leaving two copies agreeing about the wrong text.
+_EPIC_REGISTER_REL = os.path.normpath(
+    os.path.join("..", "..", "docs", "superheroes",
+                 "front-half-sdlc-core-6181ee", "register.md")
+)
+
 R5_WEIGHT_VOCABULARY = (
     "A weight call names `light` or `full`, states its measurables (gradable-line count "
     "for a spec draft; child count and register-entry count for a package read), names a "
@@ -3144,19 +3148,54 @@ R7_PARK_SURFACE = (
     "owner reading."
 )
 
-_R5_COPY_HOLDERS = (
+_R5_PLUGIN_COPY_HOLDERS = (
     "skills/architect-discovery/SKILL.md",
     "skills/showrunner/SKILL.md",
 )
 
-_R7_COPY_HOLDERS = (
+_R7_PLUGIN_COPY_HOLDERS = (
     "skills/architect-discovery/SKILL.md",
     "skills/showrunner/SKILL.md",
 )
 
+# §11.2: every known in-repo copy-holder outside the plugin for R5. A child doc that stops
+# quoting an entry is a real failure, not a stale test — the register's Consumers line
+# decides who must quote it.
+_R5_IN_REPO_COPY_HOLDERS = (
+    _EPIC_REGISTER_REL,
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c4-discovery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c6-epic-machinery.md")
+    ),
+)
 
-def _assert_literal_exactly_once(literal, rel):
-    text = _read(rel)
+# §11.2: every known in-repo copy-holder outside the plugin for R7. A child doc that stops
+# quoting an entry is a real failure, not a stale test — the register's Consumers line
+# decides who must quote it.
+_R7_IN_REPO_COPY_HOLDERS = (
+    _EPIC_REGISTER_REL,
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c4-discovery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c6-epic-machinery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c7-closure.md")
+    ),
+)
+
+
+def _assert_literal_exactly_once(literal, rel, text=None):
+    if text is None:
+        text = _read(rel)
     count = text.count(literal)
     if count == 0:
         raise AssertionError(
@@ -3170,13 +3209,66 @@ def _assert_literal_exactly_once(literal, rel):
         )
 
 
-def test_r5_weight_vocabulary_exactly_once_in_copy_holders():
-    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated copy-holder."""
-    for rel in _R5_COPY_HOLDERS:
+def _assert_literal_exactly_once_if_reachable(literal, rel):
+    path = os.path.normpath(os.path.join(PLUGIN, rel))
+    if not os.path.isfile(path):
+        pytest.skip(path)
+    _assert_literal_exactly_once(literal, rel)
+
+
+def test_negative_assert_literal_exactly_once_absent():
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic\.md: expected exactly one occurrence of pinned literal, found 0",
+    ):
+        _assert_literal_exactly_once(
+            "probe literal",
+            "synthetic.md",
+            text="no probe here",
+        )
+
+
+def test_negative_assert_literal_exactly_once_duplicated():
+    literal = "probe literal"
+    duplicated = literal + " " + literal
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic\.md: expected exactly one occurrence of pinned literal, found 2",
+    ):
+        _assert_literal_exactly_once(literal, "synthetic.md", text=duplicated)
+
+
+def test_r5_pinned_literal_exactly_once_in_epic_register_when_reachable():
+    """§11.2: pinned R5 literal is byte-exact in the epic register when the home is reachable."""
+    _assert_literal_exactly_once_if_reachable(
+        R5_WEIGHT_VOCABULARY, _EPIC_REGISTER_REL
+    )
+
+
+def test_r7_pinned_literal_exactly_once_in_epic_register_when_reachable():
+    """§11.2: pinned R7 literal is byte-exact in the epic register when the home is reachable."""
+    _assert_literal_exactly_once_if_reachable(R7_PARK_SURFACE, _EPIC_REGISTER_REL)
+
+
+def test_r5_weight_vocabulary_exactly_once_in_plugin_copy_holders():
+    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated plugin copy-holder."""
+    for rel in _R5_PLUGIN_COPY_HOLDERS:
         _assert_literal_exactly_once(R5_WEIGHT_VOCABULARY, rel)
 
 
-def test_r7_park_surface_exactly_once_in_copy_holders():
-    """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated copy-holder."""
-    for rel in _R7_COPY_HOLDERS:
+def test_r7_park_surface_exactly_once_in_plugin_copy_holders():
+    """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated plugin copy-holder."""
+    for rel in _R7_PLUGIN_COPY_HOLDERS:
         _assert_literal_exactly_once(R7_PARK_SURFACE, rel)
+
+
+def test_r5_weight_vocabulary_exactly_once_in_in_repo_copy_holders():
+    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated in-repo copy-holder."""
+    for rel in _R5_IN_REPO_COPY_HOLDERS:
+        _assert_literal_exactly_once_if_reachable(R5_WEIGHT_VOCABULARY, rel)
+
+
+def test_r7_park_surface_exactly_once_in_in_repo_copy_holders():
+    """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated in-repo copy-holder."""
+    for rel in _R7_IN_REPO_COPY_HOLDERS:
+        _assert_literal_exactly_once_if_reachable(R7_PARK_SURFACE, rel)

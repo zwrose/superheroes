@@ -30,7 +30,8 @@ import store_core      # noqa: E402  (sibling)
 _JOURNAL = mode_registry.MIGRATION_JOURNAL
 _REBIND = mode_registry.REBIND_KIND
 _CAL_BASENAMES_PRESERVE = ("core.md", "patterns.md")  # plus any <plugin>.md layer
-_DEF_DOCS = ("spec.md", "plan.md", "tasks.md")
+# Per-work-item documents a storage-mode flip moves (not limited to definition-docs).
+_DEF_DOCS = ("spec.md", "plan.md", "tasks.md", "findings.md")
 
 
 class Migration:

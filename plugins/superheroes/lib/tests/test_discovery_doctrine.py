@@ -5,6 +5,7 @@ Enforces: (1) the old spec-only exit vocabulary is gone from architect-discovery
 and showrunner duty-1; (3) a light-weight spec is the same artifact class as a full spec.
 """
 import importlib.util
+import json
 import os
 import re
 
@@ -12,6 +13,7 @@ import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
+_REPO_ROOT = os.path.normpath(os.path.join(_HERE, "..", "..", "..", ".."))
 _FIXTURES = os.path.join(_HERE, "fixtures")
 _LIGHT_SPEC_FIXTURE = os.path.join(_FIXTURES, "light_spec_sample.md")
 
@@ -78,7 +80,8 @@ _DISCOVERY_SECTION_CLAUSES = {
     ],
     "### Exit B — the findings record": [
         "findings.md",
-        "definition_doc.py mint",
+        "lib/definition_doc.py\" mint --title",
+        "Take its directory; never write to the",
         "no frontmatter block, no gates",
         "that no spec is being written, and why",
         "The ratification is the owner's, never yours",
@@ -103,7 +106,8 @@ _DISCOVERY_SECTION_CLAUSES = {
         "No up-front ceremony choice",
         "ask whether they care",
         "recorded disposition",
-        "The Dispositions table is the stopping rule, not a question quota.",
+        "The spec's dispositions table is the stopping rule, not a question quota.",
+        "the spec's `## Coverage` section",
         "closes having asked only the questions its table needed",
         "Never route a consequential choice through a pick-one widget",
         "Accept free-form answers and carry the dialogue forward.",
@@ -116,13 +120,8 @@ _DISCOVERY_SECTION_CLAUSES = {
         "the completed draft waits for the advisor's call",
         "Gradable requirement lines",
         "Interlocking sections",
-        "Both inputs must hold for",
-        "one independent review seat",
-        "`review-spec`'s panel",
-        "light vet",
-        "full spec vet",
-        "in-channel",
-        "scheduled owner review",
+        "At or under 10 gradable requirement lines with no interlocking sections calls `light`; above calls `full`.",
+        "Both inputs must hold for `light`",
         "An override is valid only when stated, and one stated sentence is enough",
         "The 10-line bar is a guideline, never a gate.",
     ],
@@ -165,6 +164,25 @@ _DUTY1_CLAUSES = [
 _PLACEHOLDER_BODIES = frozenset({"N/A", "None", "TBD", "-", "—"})
 _PLACEHOLDER_BODY_RE = re.compile(r"^\{\{.*\}\}$")
 
+_WEIGHT_SECTION = "### 7. The weight call, then review at that weight"
+
+_LIGHT_SPEC_MUST_OMIT = frozenset({
+    "## When things go wrong (significant unhappy paths)",
+    "## Non-functional requirements",
+    "## UI / UX",
+    "## Assumptions & dependencies",
+    "## Open questions",
+    "## Glossary",
+    "## Coverage",
+})
+
+_LIGHT_SPEC_MUST_KEEP = frozenset({
+    "## Purpose",
+    "## Who it's for",
+    "## Functional requirements",
+    "## Definition of done / success",
+})
+
 
 def _load_definition_doc():
     path = os.path.join(_HERE, "..", "definition_doc.py")
@@ -199,6 +217,11 @@ def _heading_level(line):
 
 def _file_section(rel, heading, read_text=None):
     """Extract a named section; raises if heading is absent or duplicated."""
+    return _normalized(_file_section_raw(rel, heading, read_text))
+
+
+def _file_section_raw(rel, heading, read_text=None):
+    """Extract a named section as raw text; raises if heading is absent or duplicated."""
     if read_text is None:
         read_text = _read_plugin
     text = read_text(rel)
@@ -218,19 +241,87 @@ def _file_section(rel, heading, read_text=None):
         if level is not None and level <= start_level:
             end = i
             break
-    return _normalized("\n".join(lines[start:end]))
+    return "\n".join(lines[start:end])
+
+
+def _extract_table_row(section_text, row_label):
+    """Return normalized text for the table row whose first cell matches row_label."""
+    table_lines = []
+    in_table = False
+    for line in section_text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("|") and stripped.endswith("|"):
+            in_table = True
+            table_lines.append(stripped)
+        elif in_table:
+            break
+    if not table_lines:
+        raise RuntimeError("no markdown table found in section")
+    if len(table_lines) < 2:
+        raise RuntimeError("markdown table has no data rows")
+    data_rows = []
+    for table_line in table_lines[2:]:
+        cells = [cell.strip() for cell in table_line.strip("|").split("|")]
+        if cells:
+            data_rows.append(cells)
+    matches = []
+    for cells in data_rows:
+        first_cell = cells[0].strip("`").strip()
+        if first_cell == row_label:
+            matches.append(" | ".join(cells))
+    if len(matches) == 0:
+        raise RuntimeError(f"table row {row_label!r} not found")
+    if len(matches) > 1:
+        raise RuntimeError(
+            f"table row {row_label!r} appears {len(matches)} times"
+        )
+    return _normalized(matches[0])
+
+
+def _assert_weight_table_rows(rel, read_text=None):
+    """Assert weight-table row phrases are bound to the correct light/full row."""
+    section_text = _file_section_raw(rel, _WEIGHT_SECTION, read_text)
+    light_row = _extract_table_row(section_text, "light")
+    full_row = _extract_table_row(section_text, "full")
+    for phrase in ("one independent review seat", "light vet", "in-channel"):
+        if phrase not in light_row:
+            raise AssertionError(
+                f"{rel}: light row missing phrase {phrase!r} in {_WEIGHT_SECTION!r}"
+            )
+    for phrase in ("review-spec", "full spec vet", "scheduled owner review"):
+        if phrase not in full_row:
+            raise AssertionError(
+                f"{rel}: full row missing phrase {phrase!r} in {_WEIGHT_SECTION!r}"
+            )
+    if "scheduled owner review" in light_row:
+        raise AssertionError(
+            f"{rel}: light row must not contain scheduled owner review phrase"
+        )
+    if "one independent review seat" in full_row:
+        raise AssertionError(
+            f"{rel}: full row must not contain one independent review seat phrase"
+        )
 
 
 def _check_banned_absent(text, banned_strings, label):
-    """Fail if any banned substring appears anywhere in text."""
+    """Fail if any banned substring appears in normalized text."""
+    normalized = _normalized(text)
     for banned, _comment in banned_strings:
-        if banned in text:
-            line_no = next(
-                i + 1 for i, line in enumerate(text.splitlines()) if banned in line
-            )
+        if _normalized(banned) not in normalized:
+            continue
+        line_no = None
+        for i, line in enumerate(text.splitlines()):
+            if banned in line:
+                line_no = i + 1
+                break
+        if line_no is not None:
             raise AssertionError(
                 f"{label}: banned string found — {banned!r} at line {line_no}"
             )
+        raise AssertionError(
+            f"{label}: banned string found — {banned!r} at "
+            "line: unknown (matched only after normalization)"
+        )
 
 
 def _assert_clause_survives_normalization(table_label, section_key, clause):
@@ -311,17 +402,22 @@ def _h2_headings(text):
 
 def _fixture_headings_subset_of_template(doc_text, template_text):
     """Equivalence 1: every fixture H2 heading exists in the template."""
-    fixture_heads = _h2_headings(doc_text)
+    fixture_heads = set(_h2_headings(doc_text))
     template_heads = set(_h2_headings(template_text))
     extra = [h for h in fixture_heads if h not in template_heads]
     if extra:
         raise AssertionError(
             "fixture headings not in templates/spec.md: %r" % extra
         )
-    omitted = len(template_heads - set(fixture_heads))
-    if omitted < 3:
+    missing_keep = _LIGHT_SPEC_MUST_KEEP - fixture_heads
+    if missing_keep:
         raise AssertionError(
-            "fixture must omit at least three template headings; omitted %d" % omitted
+            "fixture missing required spec headings: %r" % sorted(missing_keep)
+        )
+    wrongly_kept = _LIGHT_SPEC_MUST_OMIT & fixture_heads
+    if wrongly_kept:
+        raise AssertionError(
+            "fixture must omit light-spec template headings: %r" % sorted(wrongly_kept)
         )
 
 
@@ -377,6 +473,8 @@ def test_discovery_charter_banned_strings_absent():
 )
 def test_discovery_charter_section_clauses(heading, clauses):
     _assert_section_clauses(_DISCOVERY_CHARTER, {heading: clauses})
+    if heading == _WEIGHT_SECTION:
+        _assert_weight_table_rows(_DISCOVERY_CHARTER)
 
 
 # --- 1c. Section-scoped presence, architect-spec ---------------------------
@@ -412,11 +510,22 @@ def test_light_spec_same_template():
 
 
 def test_light_spec_same_home(tmp_path):
-    fixture_text = open(_LIGHT_SPEC_FIXTURE, encoding="utf-8").read()
+    # In-repo mode only — the global-mode resolver needs a configured project store
+    # this test does not have.
     fm, _body = DD.read_frontmatter(_LIGHT_SPEC_FIXTURE)
     work_item = fm["workItem"]
-    path = DD.doc_path(work_item, "spec", root=str(tmp_path))
-    assert path.endswith("docs/superheroes/%s/spec.md" % work_item)
+    work_dir = DD.work_item_dir(work_item, root=str(tmp_path))
+    assert os.path.basename(work_dir) == work_item
+    spec_path = DD.doc_path(work_item, "spec", root=str(tmp_path))
+    expected_spec = os.path.join(work_dir, "spec.md")
+    assert spec_path == expected_spec
+    plan_path = DD.doc_path(work_item, "plan", root=str(tmp_path))
+    tasks_path = DD.doc_path(work_item, "tasks", root=str(tmp_path))
+    assert os.path.dirname(spec_path) == os.path.dirname(plan_path) == os.path.dirname(tasks_path)
+    assert spec_path != plan_path
+    assert spec_path != tasks_path
+    assert plan_path.endswith("plan.md")
+    assert tasks_path.endswith("tasks.md")
 
 
 def test_light_spec_same_anchor_power():
@@ -436,13 +545,24 @@ def test_light_spec_same_owner_approval_authority(tmp_path):
     dest = tmp_path / "light-spec.md"
     shutil.copy2(_LIGHT_SPEC_FIXTURE, dest)
     text = dest.read_text(encoding="utf-8")
-    result = DD.set_gate(
+    result_pending = DD.set_gate(
+        str(dest),
+        "pending",
+        expected_hash=DD.content_hash(text),
+        run_id="test-light-spec-pending",
+    )
+    assert result_pending.get("ok") is True, result_pending
+    assert DD.read_gate(str(dest)) == "pending"
+    fm, _body = DD.read_frontmatter(str(dest))
+    assert fm.get("status") == "draft"
+    text_after_pending = dest.read_text(encoding="utf-8")
+    result_passed = DD.set_gate(
         str(dest),
         "passed",
-        expected_hash=DD.content_hash(text),
-        run_id="test-light-spec",
+        expected_hash=DD.content_hash(text_after_pending),
+        run_id="test-light-spec-passed",
     )
-    assert result.get("ok") is True, result
+    assert result_passed.get("ok") is True, result_passed
     assert DD.read_gate(str(dest)) == "passed"
     fm, _body = DD.read_frontmatter(str(dest))
     assert fm.get("status") == "approved"
@@ -460,6 +580,25 @@ def test_negative_banned_string_detected_in_synthetic():
     synthetic = "Some charter text.\nAskUserQuestion\nMore text."
     with pytest.raises(AssertionError, match="banned string found"):
         _check_banned_absent(synthetic, _BANNED_DISCOVERY_STRINGS, "synthetic")
+
+
+def test_negative_banned_string_line_wrapped_in_synthetic():
+    banned = "and ends with the owner's approval."
+    synthetic = "\n".join([
+        "Some charter text.",
+        "and ends with the owner's",
+        "approval.",
+        "More text.",
+    ])
+    with pytest.raises(AssertionError, match="matched only after normalization"):
+        _check_banned_absent(synthetic, [(banned, "probe")], "synthetic")
+
+
+def test_negative_banned_string_emphasis_in_synthetic():
+    banned = "Prefer multiple-choice"
+    synthetic = "Routing: Prefer **multiple-choice** widgets here."
+    with pytest.raises(AssertionError, match="banned string found"):
+        _check_banned_absent(synthetic, [(banned, "probe")], "synthetic")
 
 
 def test_negative_section_scoped_clause_rejects_out_of_section_match():
@@ -489,10 +628,19 @@ def test_negative_section_scoped_clause_rejects_out_of_section_match():
         )
 
 
-def test_negative_duty1_missing_start_boundary_raises():
+def test_negative_duty1_duplicate_start_boundary_raises():
     synthetic = "\n".join([
         "1. **Think at the project level.** (duplicate)",
         "1. **Think at the project level.** (duplicate)",
+        "2. **Board hygiene — file and wire.**",
+    ])
+    with pytest.raises(RuntimeError, match="duty-1 start"):
+        _extract_duty1_block(synthetic)
+
+
+def test_negative_duty1_missing_start_boundary_raises():
+    synthetic = "\n".join([
+        "Preamble without the duty-1 start marker.",
         "2. **Board hygiene — file and wire.**",
     ])
     with pytest.raises(RuntimeError, match="duty-1 start"):
@@ -510,6 +658,43 @@ def test_negative_fixture_headings_not_subset_of_template():
     ])
     template_text = "## Purpose\n## Who it's for\n"
     with pytest.raises(AssertionError, match="not in templates/spec.md"):
+        _fixture_headings_subset_of_template(synthetic_doc, template_text)
+
+
+def test_negative_fixture_missing_required_heading():
+    synthetic_doc = "\n".join([
+        "# t",
+        "## Purpose",
+        "## Who it's for",
+        "## Definition of done / success",
+    ])
+    template_text = "\n".join([
+        "## Purpose",
+        "## Who it's for",
+        "## Functional requirements",
+        "## Definition of done / success",
+    ])
+    with pytest.raises(AssertionError, match="missing required spec headings"):
+        _fixture_headings_subset_of_template(synthetic_doc, template_text)
+
+
+def test_negative_fixture_kept_omitted_heading():
+    synthetic_doc = "\n".join([
+        "# t",
+        "## Purpose",
+        "## Who it's for",
+        "## Functional requirements",
+        "## Definition of done / success",
+        "## Glossary",
+    ])
+    template_text = "\n".join([
+        "## Purpose",
+        "## Who it's for",
+        "## Functional requirements",
+        "## Definition of done / success",
+        "## Glossary",
+    ])
+    with pytest.raises(AssertionError, match="must omit light-spec template headings"):
         _fixture_headings_subset_of_template(synthetic_doc, template_text)
 
 
@@ -544,3 +729,125 @@ def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
         _assert_clause_tables_survive_normalization(
             {"synthetic": {"## Section": ["has  double space"]}},
         )
+
+
+def _synthetic_weight_section(*, swap_rows=False, classification_rule=None, include_table=True):
+    light_review = "one independent review seat"
+    light_vet = "light vet"
+    light_owner = "in-channel"
+    full_review = "review-spec panel"
+    full_vet = "full spec vet"
+    full_owner = "scheduled owner review"
+    if swap_rows:
+        light_review, full_review = full_review, light_review
+        light_vet, full_vet = full_vet, light_vet
+        light_owner, full_owner = full_owner, light_owner
+    rule = classification_rule or "Both inputs must hold for `light`"
+    lines = [
+        _WEIGHT_SECTION,
+        "",
+        rule,
+        "",
+    ]
+    if include_table:
+        lines.extend([
+            "| Weight | Review | Vet | Owner approval |",
+            "| --- | --- | --- | --- |",
+            f"| `light` | {light_review} | {light_vet} | {light_owner} |",
+            f"| `full` | {full_review} | {full_vet} | {full_owner} |",
+        ])
+    return "\n".join(lines)
+
+
+def test_negative_weight_table_swapped_rows_fail():
+    synthetic_path = "synthetic/weight.md"
+    synthetic_text = _synthetic_weight_section(swap_rows=True)
+
+    def read_text(rel):
+        if rel == synthetic_path:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    with pytest.raises(AssertionError, match="light row"):
+        _assert_weight_table_rows(synthetic_path, read_text)
+
+
+def test_negative_weight_table_inverted_classification_rule_fails():
+    synthetic_path = "synthetic/weight-rule.md"
+    synthetic_text = _synthetic_weight_section(
+        classification_rule="Both inputs must hold for `full`",
+    )
+
+    def read_text(rel):
+        if rel == synthetic_path:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    with pytest.raises(
+        AssertionError,
+        match=r"clause missing from section '### 7\. The weight call, then review at that weight'",
+    ):
+        _assert_section_clauses(
+            synthetic_path,
+            {
+                _WEIGHT_SECTION: [
+                    "Both inputs must hold for `light`",
+                ],
+            },
+            read_text,
+        )
+
+
+def test_negative_weight_table_absent_raises():
+    synthetic_path = "synthetic/weight-no-table.md"
+    synthetic_text = _synthetic_weight_section(include_table=False)
+
+    def read_text(rel):
+        if rel == synthetic_path:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    with pytest.raises(RuntimeError, match="no markdown table found"):
+        _assert_weight_table_rows(synthetic_path, read_text)
+
+
+def test_negative_set_gate_without_gates_line_fails(tmp_path):
+    import shutil
+
+    dest = tmp_path / "no-gates.md"
+    shutil.copy2(_LIGHT_SPEC_FIXTURE, dest)
+    text = dest.read_text(encoding="utf-8")
+    text_no_gates = re.sub(r"^gates:.*\n", "", text, flags=re.MULTILINE)
+    dest.write_text(text_no_gates, encoding="utf-8")
+    with pytest.raises(ValueError, match="gates"):
+        DD.set_gate(
+            str(dest),
+            "passed",
+            expected_hash=DD.content_hash(text_no_gates),
+            run_id="test-no-gates",
+        )
+
+
+# Pre-existing schema gap: docs/superheroes/front-half-sdlc-core-6181ee/spec.md carries
+# approved: and fails the same validation — fixture mirrors real artifact practice.
+def test_light_spec_fixture_schema_approved_exemption():
+    jsonschema = pytest.importorskip("jsonschema")
+    yaml = pytest.importorskip("yaml")
+
+    schema_path = os.path.join(
+        _REPO_ROOT, "eval", "lib", "schemas", "definition-doc.schema.json"
+    )
+    with open(schema_path, encoding="utf-8") as fh:
+        schema = json.load(fh)
+
+    fixture_text = open(_LIGHT_SPEC_FIXTURE, encoding="utf-8").read()
+    lines = fixture_text.splitlines()
+    end = lines.index("---", 1)
+    fm = yaml.safe_load("\n".join(lines[1:end]))
+    assert "approved" in fm
+
+    fm_without_approved = {key: value for key, value in fm.items() if key != "approved"}
+    jsonschema.validate(fm_without_approved, schema)
+
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(fm, schema)
