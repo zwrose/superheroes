@@ -146,6 +146,42 @@ blocks**. **A non-zero exit blocks** the build — on `fail` **park**; on `undec
 exactly like `fail`. Detail:
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
 
+**Confirm the Anchor resolves before any spend.** A routed issue cites an **Anchor** — the
+owner-approved decision it is downstream of — in a body header of the form `Anchor (<kind>):`,
+where the kind is exactly one of `spec-section`, `receipt`, or `ruling`. That the header declares a
+valid kind was checked when the issue was marked build-ready; **that the anchor still resolves is
+yours to confirm, and you confirm it here** — before the brief, before any edit, before any
+dispatch. Each kind has its own test:
+
+- **Spec-section anchor.** It resolves when the spec's owner approval is recorded (`status: approved` with its `approved:` date), the cited section exists in the current body, and no substantive-class Amendments entry numbered greater than the anchor's `as-of amendment #N` names the cited section among its touched sections. Wording-class entries never stale an anchor. Entries are numbered by their order of addition to the log, oldest = 1 — the number is positional, not a field — so same-day amendments stay ordered, and the cursor test compares entry numbers, never dates.
+- **Receipt anchor.** It resolves when the link is live.
+- **Ruling anchor.** It resolves when the dated, owner-attributed record is reachable where the ruling was made and no later owner decision supersedes it.
+
+A malformed Anchor — a header that declares no kind, an unknown kind, or more than one kind — and
+an empty Anchor **do not resolve**: they stop intake exactly as a failed per-kind test does.
+
+**The log side fails closed too.** The cursor leg reads as *no* substantive entry numbered greater
+than N — a sentence that is trivially satisfied when there is nothing to read. So it does not pass
+by default. If the spec carries no Amendments log at all, if the log cannot be read, if an entry is
+missing its class or its touched-section list, or if the anchor's `#N` is greater than the number of
+entries the log holds, the cursor leg **does not resolve** — it stops intake exactly as a named
+substantive entry would. A leg you cannot complete never resolves an anchor.
+
+**On any failure, stop before any spend and report.** No file in the repository changes — the stop
+comes before the brief, before the worktree edits, and before every dispatch. Report on the issue,
+where the advisor will find it, naming **which per-kind test failed** and **what failed to
+resolve**. **You never repair the anchor yourself:** re-anchoring, re-routing, and parking to the
+owner are the advisor's repair, and the build resumes only on the advisor's word. This is the same
+fail-closed direction as the register-check above — a check you cannot complete blocks, it never
+falls open — but it is **not the same terminal**: the register-check parks; this one hands the issue
+back and waits. **Post the report on the issue**, so it outlives this session and the advisor finds
+it without being told to look.
+
+This layer grades the **issue**, never the diff. The layer that inspects the diff is the advisor's
+standing anchor-coverage row at vet. And it adds **no machinery over the Amendments log** — it
+reads the log's entry numbers, classes, and touched sections as they already stand. Detail:
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+
 **Launch-prompt discipline.** Your launch prompt — the message this build session is started with,
 whoever drafted it (advisor routing prompt or owner's own words), not the context the harness injects
 (covenant, CLAUDE.md, memory) — is the workhorse command + the issue pointer; everything durable
@@ -1035,3 +1071,4 @@ for repo-local operational knowledge. Memory may hold a recall copy — never th
 | "Let me pkill the leftover engine processes from my run." | Kill **by a PID you recorded yourself** (or its process group). A path- or name-matched `pkill` matches a **sibling session's child** — that is how one got killed mid-work. Without a recorded PID the only recovery is the one in `dispatch-mechanics.md` § Process cleanup — exactly one PID resolved from your own run's kernel-reported cwd or listener port; zero or several candidates means no kill target (§7). |
 | "The new test passes — that proves the guard works." | A green run is equally consistent with *the code is right* and *this detector cannot fail*. Neutralize the guarded thing, show the detector red **with the detector unedited**, restore, show it green — **per guarded element**, not one representative — and put the receipts in the build record (`rubric/bite-proof.md`). |
 | "The launch said there's a slot but I can't find it — I'll just make a worktree." | A builder told a slot was supplied **refuses**. Self-provisioning is the race the advisor's provisioning duty exists to prevent — park and say the slot is missing. |
+| "The issue's anchor points at a spec section that moved — close enough, I'll build it." | An anchor that does not resolve **stops the build before any spend** — no file changes, and you report which per-kind test failed. Re-anchoring is the advisor's repair, never yours. |
