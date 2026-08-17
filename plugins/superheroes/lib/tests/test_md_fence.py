@@ -242,6 +242,20 @@ CORPUS = [
         id="blank_and_whitespace_lines",
     ),
     pytest.param(
+        "blank_lines_inside_fence",
+        [
+            "```",
+            "line one",
+            "",
+            "   ",
+            "line two",
+            "```",
+        ],
+        (O, C, C, C, C, X),
+        None,
+        id="blank_lines_inside_fence",
+    ),
+    pytest.param(
         "closer_indent_differs_from_opener",
         [
             "```",

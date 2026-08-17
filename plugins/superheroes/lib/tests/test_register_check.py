@@ -374,7 +374,10 @@ def test_boundary_child_unrecognized_c1_against_c10_consumers(tmp_path):
 
 
 def test_boundary_child_unrecognized_c09(tmp_path):
-    register = _tiny_register(tmp_path)
+    register = _minimal_register(
+        tmp_path,
+        "**R1 — One line entry.**\n*Consumers:* C9\n",
+    )
     body = tmp_path / "body.md"
     body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
     result = _check(register, body, "C09")
@@ -876,6 +879,35 @@ def test_deterministic_stdout(tmp_path):
     assert findings_seq == [
         (rc.KIND_TEXT_DRIFT, "R1"),
         (rc.KIND_MISSING_QUOTE, "R2"),
+        (rc.KIND_UNKNOWN_ENTRY, "R99"),
+    ]
+
+    # Entry position and finding-kind rank disagree: R1 missing (kind 1, pos 0)
+    # vs R2 drift (kind 0, pos 1) — sort must use both axes, not either alone.
+    sort_register = _minimal_register(
+        tmp_path,
+        "**R1 — Required entry.**\n*Consumers:* C1\n"
+        "**R2 — Also required.**\n*Consumers:* C1\n",
+        name="sort_register.md",
+    )
+    sort_body = tmp_path / "sort_body.md"
+    sort_body.write_text(
+        "> **R2 — Also required.X**\n"
+        "\n"
+        "> **R99 — Unknown.**\n",
+        encoding="utf-8",
+    )
+    sort_code, sort_out, _sort_err = _run_cli(
+        "--register", str(sort_register),
+        "--body-file", str(sort_body),
+        "--child", "C1",
+    )
+    assert sort_code == rc.EXIT_FAIL
+    sort_payload = json.loads(sort_out.strip())
+    sort_seq = [(f["kind"], f["entry"]) for f in sort_payload["findings"]]
+    assert sort_seq == [
+        (rc.KIND_MISSING_QUOTE, "R1"),
+        (rc.KIND_TEXT_DRIFT, "R2"),
         (rc.KIND_UNKNOWN_ENTRY, "R99"),
     ]
 
