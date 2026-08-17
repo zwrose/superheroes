@@ -388,16 +388,45 @@ def test_a_defaulted_vendor_folds_to_stdout_on_every_read_only_phase(phase):
     assert RD._seat_channel(phase, {"vendor": "claude"}) == RD.CHANNEL_FILE, phase
 
 
-def test_reviewer_engine_vendor_marks_a_raised_read_as_defaulted(monkeypatch, tmp_path):
-    """The marker is produced where the fallback happens, not inferred downstream."""
+def test_reviewer_engine_vendor_marks_a_refused_read_as_defaulted(monkeypatch, tmp_path):
+    """The PRODUCTION failure path is a refusal RETURN, not an exception.
+
+    `engine_pref.load_engine_prefs` documents "Never raises" — an unreadable/refused core.md comes
+    back as `refusal_engine_prefs(readError=…)`. A marker keyed only on `except` would never fire
+    here, leaving the whole rider inert while every test that monkeypatched a *raise* still passed.
+    So this drives the real return shape, produced by `engine_pref` itself rather than hand-built.
+    """
+    refusal = RD.engine_pref.refusal_engine_prefs("core.md unreadable")
+    assert refusal.get("readError"), "fixture must be the real refusal shape"
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: refusal)
+    assert RD._reviewer_engine_vendor(str(tmp_path)) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
+
+
+def test_a_genuinely_absent_config_is_configured_not_defaulted(monkeypatch, tmp_path):
+    """A/B on the distinction `readError` draws: absent config is not a failed read.
+
+    `degenerate_engine_prefs()` is "nothing configured", whose documented defaults ARE the
+    configuration. Marking it `defaulted` would push every greenfield reviewer seat onto the stdout
+    channel and disclose a provenance gap that does not exist."""
+    degenerate = RD.engine_pref.degenerate_engine_prefs()
+    assert degenerate.get("readError") is None, "fixture must be the real absent-config shape"
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: degenerate)
+    vendor, source = RD._reviewer_engine_vendor(str(tmp_path))
+    assert source == RD.VENDOR_SOURCE_CONFIGURED, (vendor, source)
+
+
+def test_reviewer_engine_vendor_still_degrades_if_the_loader_violates_its_contract(monkeypatch,
+                                                                                   tmp_path):
+    """Belt-and-braces only: the `except` arms are not the primary signal (see the test above)."""
     def boom(_root):
         raise RuntimeError("engine prefs unreadable")
 
     monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", boom)
-    vendor, source = RD._reviewer_engine_vendor(str(tmp_path))
-    assert (vendor, source) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
+    assert RD._reviewer_engine_vendor(str(tmp_path)) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
 
-    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {})   # A/B
+
+def test_a_configured_engine_vendor_keeps_the_configured_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {"effort": {}})
     monkeypatch.setattr(RD.engine_pref, "resolve_engine", lambda _role, _prefs: "codex")
     assert RD._reviewer_engine_vendor(str(tmp_path)) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
 
@@ -405,10 +434,8 @@ def test_reviewer_engine_vendor_marks_a_raised_read_as_defaulted(monkeypatch, tm
 @pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
 def test_reviewer_phase_transport_row_carries_the_vendor_source(monkeypatch, phase, tmp_path):
     """The marker reaches the transport row — the seam `_seat_channel` and the gap collector read."""
-    def boom(_root):
-        raise RuntimeError("engine prefs unreadable")
-
-    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", boom)
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
+                        lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
     state = {"config": {}, "seatMap": {}, "pending": {}, "round": 1, "rounds": {}}
     row = RD._seat_transport_row(state, phase, "verifier", 0, {}, {}, str(tmp_path))
     assert row["vendor"] == "claude"
@@ -435,10 +462,8 @@ def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path,
     rnd_key = str(state["round"])
     state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)   # clear round-1
 
-    def boom(_root):
-        raise RuntimeError("engine prefs unreadable")
-
-    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", boom)
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
+                        lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
     seat = _seat_for(phase)
     RD._emit_orders_manifest(session_dir, state, state["round"], phase, 0, [seat],
                              journal_cmd="next", pending_payload=_payload_for(phase), seat_map={})

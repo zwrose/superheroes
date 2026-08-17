@@ -1196,11 +1196,14 @@ def test_orchestrator_fulfilled_fold_writes_record_and_receipt_on_a_terminal_ver
     assert record["payload"] == {"result": "fail"}
 
 
-def test_orchestrator_fulfilled_record_and_journal_land_in_one_commit(tmp_path, adapters):
-    """Record and journal identity ride the SAME commit — `reconcile` sees no two-commit remnant.
+def test_orchestrator_fulfilled_record_and_journal_reconcile_clean(tmp_path, adapters):
+    """Record and journal identity agree after the fold — `reconcile` sees no two-commit remnant.
 
-    A record committed without its journal append would come back as `reappend`; a journal identity
-    with no record would come back as `journalOrphan`. Both are empty only if the pair is atomic."""
+    SCOPE, stated because the name it used to carry over-claimed: a clean `reconcile` after a
+    SUCCESSFUL run would also result from three separate sequential commits, so this proves
+    consistency, not atomicity. The atomicity itself is asserted structurally by
+    `test_durable_record_rides_the_folds_own_commit_intent` below, which inspects the single commit
+    the fold builds rather than its aftermath."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
@@ -1212,6 +1215,102 @@ def test_orchestrator_fulfilled_record_and_journal_land_in_one_commit(tmp_path, 
     identities = RD._journal_record_identities(d, 1, RD.P_VERIFY)
     assert any(i.get("seat") == "verify" for i in identities), identities
     assert os.path.exists(_verify_store_path(d))
+
+
+def test_durable_record_rides_the_folds_own_commit_intent(tmp_path, adapters, monkeypatch):
+    """ONE sealed intent carries the state advance, the record, and the record's journal identity.
+
+    axis: ATOMICITY — that the three writes share a single commit. Asserting their presence after a
+    successful run cannot show this (three sequential commits leave the same aftermath), so this
+    inspects the commit object the fold actually builds, before it runs.
+    """
+    seen = []
+    real_begin = RD.round_commit.begin
+
+    def spy(session_dir, kind, **kw):
+        commit = real_begin(session_dir, kind, **kw)
+        seen.append((kind, commit))
+        return commit
+
+    monkeypatch.setattr(RD.round_commit, "begin", spy)
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    seen.clear()          # drop setup's own commits — only the verify fold is under inspection
+    assert _advance(d, tmp_path)["ok"] is True
+
+    accepts = [c for kind, c in seen if kind == "submit-accept"]
+    assert len(accepts) == 1, [k for k, _ in seen]
+    parts = accepts[0]._parts
+    targets = [p.get("target") for p in parts if p.get("type") == "replace-file"]
+    journals = [p for p in parts if p.get("type") == "journal-append"]
+    assert any(t.endswith(RD.STATE_FILE) for t in targets), targets
+    assert any("run-verify" in (t or "") for t in targets), targets
+    assert any((j.get("entry") or {}).get("outcome") == "recorded" for j in journals), journals
+
+
+def test_orchestrator_fold_refuses_to_write_a_record_with_no_session_id(tmp_path, adapters):
+    """A record whose `session` would be null reconstructs nothing — refuse, don't commit it.
+
+    axis: that the fold REFUSES, not that the envelope merely ends up with a null field. The seat
+    path enforces the same precondition as `bootstrap-required` inside `validate_landing`; this
+    path does not route through that validation, so it owes its own check."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    meta = os.path.join(d, RR.META_FILE)
+    with open(meta, encoding="utf-8") as fh:
+        saved = fh.read()
+    with open(meta, "w", encoding="utf-8") as fh:
+        fh.write("{}")                                   # a meta.json carrying no session id
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "bootstrap-required", out
+    assert not os.path.exists(_verify_store_path(d)), "a refusal must leave nothing behind"
+    assert _state(d)["rounds"]["1"].get("verifyResult") is None
+
+    with open(meta, "w", encoding="utf-8") as fh:        # A/B — the same setup with the id back
+        fh.write(saved)
+    assert _advance(d, tmp_path)["ok"] is True
+    assert os.path.exists(_verify_store_path(d))
+
+
+def test_landing_ambiguity_probe_fails_closed_on_a_dangling_record_symlink(tmp_path, adapters):
+    """axis: the EXISTENCE probe's fail direction. `os.path.exists` follows symlinks and answers
+    False for a dangling one, which would fold the bare payload over an unknown store state."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    record_path = _verify_store_path(d)
+    os.makedirs(os.path.dirname(record_path), exist_ok=True)
+    os.symlink(os.path.join(os.path.dirname(record_path), "no-such-record.json"), record_path)
+    assert not os.path.exists(record_path), "fixture must be a DANGLING symlink"
+    assert os.path.lexists(record_path)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
+    assert _state(d)["rounds"]["1"].get("verifyResult") is None
+
+
+def test_replay_does_not_wave_through_a_foreign_record(tmp_path, adapters):
+    """A record this path did not write is a genuine ambiguity even when `lastAccepted` matches.
+
+    axis: that the replay escape hatch is bound to the record's OWN provenance, not only to state.
+    Keyed on `lastAccepted` alone, any record sitting in the slot would be waved through."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"] is True                       # A/B: the real replay setup
+    folded = _state(d)
+    folded["step"] = RD.P_VERIFY
+    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
+                         "payload": {"command": "none"}}
+    RD.save_state(d, folded)
+    # Swap our own record for a seat-written one: same slot, same payload, different provenance.
+    record, err = RR.read_json(_verify_store_path(d))
+    assert err is None and record["fulfilledBy"] == "orchestrator"
+    record.pop("fulfilledBy")
+    RR.atomic_write_json(_verify_store_path(d), record)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
 
 
 def test_advance_refuses_landing_ambiguous_when_payload_and_record_both_present(tmp_path, adapters):
@@ -1247,12 +1346,18 @@ def test_landing_ambiguous_ab_each_artifact_alone_still_folds(tmp_path, adapters
     assert _state(payload_only)["rounds"]["1"]["verifyResult"] == "pass"
 
 
-def test_advance_stays_idempotent_after_its_own_fold_wrote_the_record(tmp_path, adapters):
+def test_advance_replay_does_not_refuse_on_the_record_its_own_fold_wrote(tmp_path, adapters):
     """A re-entry after this fold committed is a replay, not a second claim.
 
-    #960's session-death replay discipline: the fold commits, the post-fold `next` dies before it
-    clears the folded `pending`, and the successor `advance` must still recover. The record this
-    path wrote is now on disk beside the bare payload — the ambiguity refusal must not fire on it."""
+    What this pins, exactly: the ambiguity refusal must NOT fire on the record this path itself
+    wrote, and the fold must not be applied twice.
+
+    What it does NOT claim — the honest limit: `cmd_submit` answers a replay `duplicate` and
+    returns BEFORE `_cmd_submit_prepare` clears `state["pending"]`, so the following `cmd_next`
+    re-emits the same pending step. That stale-pending-after-duplicate behaviour is `cmd_submit`'s
+    long-standing contract for every phase and both fold paths — it predates this change and is
+    unaltered by it — so it is recorded as a follow-up rather than silently implied to be fixed
+    here. This test therefore asserts recovery-without-corruption, not loop progress."""
     d = _session(tmp_path)
     _at_run_verify(tmp_path, d)
     _write_verify_payload(d, {"result": "pass"})
@@ -1266,7 +1371,16 @@ def test_advance_stays_idempotent_after_its_own_fold_wrote_the_record(tmp_path, 
     RD.save_state(d, folded)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
+    assert out.get("reason") != "landing-ambiguous"
     assert _state(d)["rounds"]["1"]["verifyResult"] == "pass"
+    # not folded twice: exactly one `advanced` journal event for this slot per real fold.
+    folds = [e for e in RD.read_journal(d)
+             if e.get("outcome") == "advanced" and e.get("phase") == RD.P_VERIFY
+             and e.get("round") == 1 and e.get("attempt") == 0]
+    assert len(folds) == 2, folds   # the original fold + this replay's no-op re-entry
+    records = [e for e in RD.read_journal(d)
+               if e.get("outcome") == "recorded" and e.get("phase") == RD.P_VERIFY]
+    assert len(records) == 1, "the replay must not write a SECOND durable record"
 
 
 def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):

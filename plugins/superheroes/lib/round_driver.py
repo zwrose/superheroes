@@ -4209,15 +4209,30 @@ def _seat_channel(phase, row):
 def _reviewer_engine_vendor(repo_root):
     """`(vendor, source)` for single-seat reviewer phases (verifiers, gap-sweep, scoped).
 
-    `source` is the marker `_vendor_is_resolved` reads: `configured` when the engine-preference read
-    answered, `defaulted` when it raised and the literal `"claude"` below stood in. Returning the
-    bare string lost that distinction — a defaulted `"claude"` read as positive host evidence, and
-    the seat was handed the write contract even when the orchestrator dispatched it on a real
-    engine (a forfeit)."""
+    `source` is the marker `_vendor_is_resolved` reads: `configured` when the preference read
+    answered from real configuration, `defaulted` when it did not and the all-claude stand-in
+    below was used instead. Returning the bare string lost that distinction — a defaulted
+    `"claude"` read as positive host evidence, and the seat was handed the write contract even
+    when the orchestrator dispatched it on a real engine (a forfeit).
+
+    **The failure path is a RETURN VALUE, not an exception.** `engine_pref.load_engine_prefs`
+    documents "Never raises": an unreadable / refused core.md comes back as
+    `refusal_engine_prefs(read_error)` — every role forced to claude, carrying `readError`. Keying
+    this marker on `except` alone would therefore never fire on the path that actually produces the
+    stand-in, leaving the whole rider inert. `readError` is that path's own marker, and it is what
+    separates a refusal from `degenerate_engine_prefs()` (a genuinely absent config, whose
+    documented defaults ARE the configuration). The `except` arms below stay as belt-and-braces
+    for a contract violation, not as the primary signal."""
     try:
         prefs = engine_pref.load_engine_prefs(repo_root)
-        return engine_pref.resolve_engine("review", prefs), VENDOR_SOURCE_CONFIGURED
     except Exception:  # noqa: BLE001 — transport must degrade, never refuse render
+        return "claude", VENDOR_SOURCE_DEFAULTED
+    source = (VENDOR_SOURCE_DEFAULTED
+              if isinstance(prefs, dict) and prefs.get("readError") is not None
+              else VENDOR_SOURCE_CONFIGURED)
+    try:
+        return engine_pref.resolve_engine("review", prefs), source
+    except Exception:  # noqa: BLE001 — same degradation, and the vendor is then a stand-in
         return "claude", VENDOR_SOURCE_DEFAULTED
 
 
@@ -5845,13 +5860,27 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     occurrence = 0
     record_path = round_records.store_path(session_dir, rnd, phase, skey, attempt)
     # A RE-ENTRY after this same fold already committed is a replay, not a second claim: the record
-    # below is one THIS path wrote, and `advance` stays idempotent when the post-fold `next` failed
-    # and left the folded `pending` in place. Keyed on the artifact hash so it means exactly what
-    # `cmd_submit` will answer (`duplicate`) — a bare payload that CHANGED under us is not a replay.
+    # on disk is one THIS path wrote, so it is not evidence of a competing artifact.
+    #
+    # The predicate is deliberately narrow, because every field it drops is a way for a FOREIGN
+    # record to be waved through as "ours": `round` (a `lastAccepted` from another round whose
+    # phase/attempt happen to match), the artifact hash (a bare payload that CHANGED under us), and
+    # the record's OWN provenance — a seat-written, superseded, or corrupt record sitting in the
+    # slot is a genuine ambiguity even when `lastAccepted` matches. So the record must also read
+    # back as one this path wrote, for this payload.
     prior = state.get("lastAccepted")
     replay = bool(isinstance(prior, dict) and prior.get("phase") == phase
+                  and prior.get("round") == rnd
                   and prior.get("attempt") == attempt
                   and prior.get("artifactHash") == _sha256(_canonical(payload)))
+    if replay:
+        stored, serr = round_records.read_json(record_path)
+        replay = bool(serr is None and isinstance(stored, dict)
+                      and stored.get("fulfilledBy") == "orchestrator"
+                      and stored.get("seat") == seat_key
+                      and stored.get("occurrence") == occurrence
+                      and stored.get("attempt") == attempt
+                      and stored.get("payloadSha256") == round_records.payload_sha256(payload))
     record = None
     if not replay:
         # One artifact per slot — the seat path's invariant, now enforced on the bare-vs-record pair
@@ -5861,12 +5890,27 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         # axis: that a SECOND claim for the slot REFUSES the fold — not that the fold prefers one
         # artifact over the other. A precedence rule (either direction) folds one claim and
         # silently discards the other, which is the residual this replaces, not a fix for it.
-        if os.path.exists(record_path):
+        #
+        # `_store_file_exists`, not `os.path.exists`: the same fail-closed existence probe the
+        # record-submit fence uses. `os.path.exists` follows symlinks and answers False for a
+        # DANGLING one (and on some permission errors), which would fold the bare payload over an
+        # unknown store state — the fail-open direction this guard exists to close.
+        if _store_file_exists(record_path):
             return _refuse_cmd(
                 session_dir, "advance", "landing-ambiguous", phase=phase, rnd=rnd, attempt=attempt,
                 seat=seat_key, path=path, storePath=record_path,
                 detail="both a host-seat bare payload (%s) and a durable seat record (%s) are "
                        "present for this slot" % (path, record_path))
+        # A record must be bound to a live session id — the same precondition
+        # `round_records.validate_landing` enforces as `bootstrap-required` before accepting any
+        # seat record. This path does not route through that validation, so it refuses here rather
+        # than committing an envelope whose `session` is null and whose provenance therefore
+        # reconstructs nothing.
+        if not _meta_session_id(session_dir):
+            return _refuse_cmd(session_dir, "advance", "bootstrap-required", phase=phase, rnd=rnd,
+                               attempt=attempt, seat=seat_key,
+                               detail="no session id in meta.json — refusing to write a durable "
+                                      "seat record that could not carry its session provenance")
         envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
                                                     seat_key, occurrence, payload)
         record = {
