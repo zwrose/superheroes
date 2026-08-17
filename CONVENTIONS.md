@@ -74,8 +74,9 @@ still produced by The Architect.
 `skills/detective/SKILL.md` — this is a pointer, not a restatement):
 
 - **Showrunner** — the advisor session: project-level, long-lived, typically one per
-  project. Sizes and routes incoming work (build-ready vs. needs-discovery), decomposes
-  big asks into small mergeable issues, drafts the builder's launch prompt (command + issue
+  project. Routes incoming work to one of four intake routes (discovery, detective,
+  build-ready, micro), decomposes big asks into small mergeable issues, drafts the builder's
+  launch prompt (command + issue
   pointer; durable build context lives in the issue), vets every PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
   durable memory. **Never builds.** The never-delegable act is the **approval** — the gate

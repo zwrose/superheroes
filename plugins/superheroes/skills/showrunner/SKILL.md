@@ -1,6 +1,6 @@
 ---
 name: showrunner
-description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "vet this PR", "route this issue", "what should we build next". It sizes and routes incoming work (build-ready vs. needs-discovery), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro — advisor-typed only — skips advisor vet), and coordinates releases. Not the builder (that is workhorse); not spec elicitation (discovery); not code review (review-code).
+description: Use to run the long-lived advisor session for a superheroes project — the Showrunner — "be the advisor", "vet this PR", "route this issue", "what should we build next". It sizes and routes incoming work to one of four routes (discovery, detective, build-ready, micro), decomposes into mergeable issues, drafts launch prompts, vets every PR from its artifacts against the issue/spec and the build brief (full lane; light without brief; micro — advisor-typed only — skips advisor vet), and coordinates releases. Not the builder (that is workhorse); not spec elicitation (discovery); not code review (review-code).
 user-invocable: true
 ---
 
@@ -170,9 +170,31 @@ above).
    **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks exactly
    like `fail`. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
-   Mark each issue's route — **build-ready** (the builder
-   goes straight to the brief)
-   or **needs-discovery** (the builder runs discovery with the owner first) — and **draft the
+   **Route each issue to exactly one of four routes.** The four intake routes are named
+   `discovery`, `detective`, `build-ready`, `micro`, and their tests are: new product opinion or a
+   genuine unknown (the spec-trigger test: *will this work produce sentences a vet could grade a PR
+   against that no approved artifact contains yet?*) → `discovery`; "why did Y break" work meeting
+   the detective spec's fire condition → `detective`; a repair of ratified behavior with a receipt
+   anchor, or work under a recorded owner ruling → `build-ready`; a tiny owner-present item →
+   `micro`, with probing-worthy micro work re-routing. **The detective route applies the test the
+   detective charter owns** — `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/detective/SKILL.md`
+   § *When this role fires* — and never restates it here; that charter is what changes when the
+   condition changes. **These are JUDGMENT INPUTS, not a decision procedure:** where more than one
+   case matches, the route is the advisor's judgment call, recorded with the route and anchor at
+   routing time. **No precedence procedure exists and none ships** — the recorded judgment is the
+   whole mechanism, and a route recorded without its judgment is the gap.
+   **Two outcomes are worth naming, because both arrive looking like discovery.** A follow-up the
+   owner **already ruled on** — a dated, owner-attributed ruling reachable where it was made —
+   routes **`build-ready`** anchored to that ruling, with **no discovery step**. A follow-up raising
+   a **product question no approved artifact answers** routes **`discovery`** — the spec-trigger
+   test decides it, not how small the follow-up looks.
+   **Intake routing records the route and the anchor, nothing more** — no discovery size, no lane,
+   and no review weight are assigned when the route is *chosen*; review weight first appears on the
+   spec draft. The **lane call and the presentation call attach to the build-ready marking**, a
+   later act than route selection: an issue routed to `discovery` has nothing to lane yet.
+   **`micro` never reaches a builder** — it is your own hard-line edit above, typed in this session
+   and recorded in the PR, and probing-worthy micro work re-routes rather than being typed.
+   Then **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
    process constraints (test right-sizing, E2E policy), and launch context (local export paths,
@@ -196,7 +218,7 @@ above).
    "main will not move", the sequencing you assumed — **bind you, the dispatcher**, including when
    an owner merge you coordinated moves the world under a live order. **Amend the order** when that
    happens; a builder that parks on a stale premise did the right thing.
-   **Call the lane when routing, with the owner present at kickoff.** Lane guidance is
+   **Call the lane when you mark the issue build-ready, with the owner present at kickoff.** Lane guidance is
    **provisional pending accumulated recorded lane calls** — the recorded 8-of-8 field alignment is
    **in-sample** (fitted to the same changes it validates against), a fit not a test. It is
    **judgement, not a rule** — the strongest signal available was right about three times in four,
@@ -847,7 +869,7 @@ above).
 | "I'll re-run the tests to be sure" | Trust CI-green; spend the time on probes CI cannot contain. Re-running green suites is wasted vetting. |
 | "The issue is big but the builder can handle it" | Size and split before it reaches a builder. Big diffs hide drift and escapes. |
 | "I'll correct the body with a comment" | Edit the owner-authored body in place; a correcting comment drifts the record. |
-| "The idea is fuzzy, I'll just write the spec" | Spec elicitation is discovery's. Route it needs-discovery; don't take on discovery's job. |
+| "The idea is fuzzy, I'll just write the spec" | Spec elicitation is discovery's. Route it `discovery`; don't take on discovery's job. |
 | "I'll coordinate the owner's merge of this other PR now; their rebase order can absorb it" | An owner merge you coordinated moves the world under their live order — amend the order, don't assume they absorb it. |
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
