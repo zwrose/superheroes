@@ -749,7 +749,12 @@ obligation, **not** something a tool grant enforces (never reason about a seat f
 A seat may ground a finding by *reading*, and where its dispatch permits a read-only command, by
 running one and quoting it; putting a seat where its only compliant answer is *"I could not do
 this"* (the non-compliant answer being a false receipt) is the **orchestrator's error** — never ask
-any review seat for a mutation probe, a planted defect, or a written throwaway test. When a claim
+any review seat for a mutation probe, a planted defect, or a written throwaway test. The same error
+in prompt form: **never assert a capability in a seat's dispatch prompt** ("you have Bash — run
+things") — the lens seats (`agents/*-reviewer.md`) read, grep, glob and write findings, and on this
+host carry no shell; a prompt that tells one to *run* checks manufactures exactly the false-receipt
+pressure this rule removes (observed 2026-08-17: a seat dispatched that way answered honestly that
+it had no shell — a less careful seat would have claimed the runs). When a claim
 needs a run no review seat may make:
 
 1. **You run it** — the default, and the only place the *decisive* check ever runs.
