@@ -177,9 +177,9 @@ above).
    the detective spec's fire condition → `detective`; a repair of ratified behavior with a receipt
    anchor, or work under a recorded owner ruling → `build-ready`; a tiny owner-present item →
    `micro`, with probing-worthy micro work re-routing. **The detective route applies the test the
-   detective charter owns** — `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/detective/SKILL.md`
-   § *When this role fires* — and never restates it here; that charter is what changes when the
-   condition changes. **These are JUDGMENT INPUTS, not a decision procedure:** where more than one
+   `detective` charter owns**, under its own *When this role fires* heading — never a restatement
+   here; that charter is what changes when the condition changes. **These are JUDGMENT INPUTS, not a
+   decision procedure:** where more than one
    case matches, the route is the advisor's judgment call, recorded with the route and anchor at
    routing time. **No precedence procedure exists and none ships** — the recorded judgment is the
    whole mechanism, and a route recorded without its judgment is the gap.

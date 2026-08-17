@@ -25,6 +25,8 @@ are gone with them; no lib/*.js copy-holders remain):
   copy-holders: skills/workhorse/SKILL.md (operative resolution bullets, log-side paragraph,
   stop), skills/showrunner/SKILL.md (filing, repair, notice and standing-row clauses),
   skills/showrunner/reference/vet-receipt.md (owner-half delivery clause))
+- Four-route drift (R6 register → two charters) (home: docs/superheroes/front-half-sdlc-core-6181ee/register.md R6;
+  copy-holders: skills/showrunner/SKILL.md routing block, skills/workhorse/SKILL.md §1 intake)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -3637,4 +3639,357 @@ def test_anchor_stop_terminal_and_resume_gate():
     ) in home_norm, (
         "issue-contract ## Anchor resolution missing resumes-only clause "
         "(moved or reworded?)"
+    )
+
+
+# --- Cluster: four-route drift (register R6 → the two charters) ---------------
+
+_ROUTING_REGISTER_REL = (
+    "../../docs/superheroes/front-half-sdlc-core-6181ee/register.md"
+)
+
+_ROUTING_SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
+_ROUTING_WORKHORSE_CHARTER = "skills/workhorse/SKILL.md"
+
+# Holder-specific pin — charter wording denying a precedence procedure; not derived from R6.
+_ROUTING_PRECEDENCE_DENIAL_PIN = "No precedence procedure exists and none ships"
+
+_ROUTING_INVERTED_FORMS = (
+    "run **discovery** yourself",
+    "elicit with the owner",
+    "judge the route yourself",
+    "you run discovery when the route calls for it",
+    "the builder runs discovery with the owner first",
+)
+
+
+def _routing_register_path():
+    return os.path.normpath(os.path.join(PLUGIN, _ROUTING_REGISTER_REL))
+
+
+def _routing_normalize(text):
+    """Compare charter spans to R6 after stripping emphasis and collapsing whitespace."""
+    return re.sub(r"\s+", " ", text.replace("*", "")).strip()
+
+
+def _routing_parse_r6_entry_text():
+    """Fail-closed R6 quotable text — header line through the first blank line."""
+    path = _routing_register_path()
+    try:
+        text = _read(_ROUTING_REGISTER_REL)
+    except OSError:
+        pytest.fail(
+            "register R6 entry not found — cannot read register at %s" % path
+        )
+    m = re.search(r"^\*\*R6 — ", text, re.MULTILINE)
+    if not m:
+        pytest.fail(
+            "register R6 entry not found — no **R6 — header in %s" % path
+        )
+    lines = text[m.start():].splitlines()
+    entry_lines = [lines[0]]
+    for line in lines[1:]:
+        if line.strip() == "":
+            break
+        entry_lines.append(line)
+    entry_text = "\n".join(entry_lines)
+    if not entry_text.strip():
+        pytest.fail(
+            "register R6 entry not found — empty entry body in %s" % path
+        )
+    return entry_text
+
+
+def _routing_route_names_from_r6(entry_text):
+    m = re.search(
+        r"The four intake routes are named (.*?), and their tests are",
+        entry_text,
+    )
+    assert m, (
+        "register R6: four-route name enumeration not found (moved or reworded?)"
+    )
+    names = re.findall(r"`([^`]+)`", m.group(1))
+    assert len(names) == 4, (
+        "register R6: expected exactly four route names, found %d: %r"
+        % (len(names), names)
+    )
+    assert len(set(names)) == 4, (
+        "register R6: route names must be distinct, found duplicates in %r"
+        % names
+    )
+    return names
+
+
+def _routing_route_tests_from_r6(entry_text):
+    m_start = re.search(
+        r"and their tests are FR-5's cases as amended: ",
+        entry_text,
+    )
+    assert m_start, (
+        "register R6: route-test segment start not found (moved or reworded?)"
+    )
+    tail = entry_text[m_start.end():]
+    m_end = re.search(r"\bThese are JUDGMENT INPUTS", tail)
+    assert m_end, (
+        "register R6: route-test segment end not found (moved or reworded?)"
+    )
+    segment = tail[:m_end.start()]
+    parts = segment.split("; ")
+    assert len(parts) == 4, (
+        "register R6: expected exactly four route tests, found %d: %r"
+        % (len(parts), parts)
+    )
+    for part in parts:
+        assert re.search(r"→ `[^`]+`", part), (
+            "register R6: route test missing arrow-and-route-name: %r" % part
+        )
+    return parts
+
+
+def _routing_judgment_sentence_from_r6(entry_text):
+    m = re.search(
+        r"(These are JUDGMENT INPUTS.*?recorded with the route and anchor at routing time)",
+        entry_text,
+        re.DOTALL,
+    )
+    assert m, (
+        "register R6: judgment-input sentence not found (moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _showrunner_routing_block():
+    text = _read(_ROUTING_SHOWRUNNER_CHARTER)
+    start_m = re.search(
+        r"^\s*\*\*Route each issue to exactly one of four routes\.\*\*",
+        text,
+        re.MULTILINE,
+    )
+    assert start_m, (
+        "showrunner/SKILL.md: routing block start not found (moved or reworded?)"
+    )
+    end_m = re.search(
+        r"^\s+Then \*\*draft the",
+        text[start_m.start():],
+        re.MULTILINE,
+    )
+    assert end_m, (
+        "showrunner/SKILL.md: routing block end not found (moved or reworded?)"
+    )
+    block = text[start_m.start(): start_m.start() + end_m.start()].strip()
+    assert block.strip(), (
+        "showrunner/SKILL.md: routing block is empty (moved or reworded?)"
+    )
+    return block
+
+
+def _workhorse_intake_section():
+    text = _read(_ROUTING_WORKHORSE_CHARTER)
+    m = re.search(
+        r"^## 1\. Intake — read the route and get the go-ahead\n(.*?)(?=^## 2\.|\Z)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "workhorse/SKILL.md: §1 Intake section not found (moved or reworded?)"
+    )
+    body = m.group(1)
+    assert body.strip(), (
+        "workhorse/SKILL.md: §1 Intake section body is empty (moved or reworded?)"
+    )
+    return body
+
+
+def _workhorse_route_carry_sentence():
+    section = _workhorse_intake_section()
+    lines = section.splitlines()
+    carry_lines = []
+    started = False
+    for line in lines:
+        if line.startswith(
+            "A routed issue carries exactly one of the advisor's four routes"
+        ):
+            started = True
+            carry_lines.append(line)
+        elif started:
+            if line.strip() == "" or line.startswith("- "):
+                break
+            carry_lines.append(line)
+    assert carry_lines, (
+        "workhorse/SKILL.md: routed-issue route sentence not found "
+        "(moved or reworded?)"
+    )
+    return "\n".join(carry_lines)
+
+
+def _workhorse_route_bullet_names():
+    section = _workhorse_intake_section()
+    names = []
+    for line in section.splitlines():
+        m = re.match(r"^- \*\*`([^`]+)`\*\*", line)
+        if m:
+            names.append(m.group(1))
+    assert len(names) == 4, (
+        "workhorse/SKILL.md: expected exactly four §1 route bullets, found %d: %r"
+        % (len(names), names)
+    )
+    return names
+
+
+def _routing_charter_surfaces():
+    return (
+        _ROUTING_SHOWRUNNER_CHARTER,
+        _ROUTING_WORKHORSE_CHARTER,
+    )
+
+
+def _retired_discovery_route_literal():
+    """Retired route name — composed at runtime so this census file can scan itself."""
+    return "-".join(("needs", "discovery"))
+
+
+def _routing_census_paths():
+    repo_root = os.path.normpath(os.path.join(PLUGIN, "..", ".."))
+    readme = os.path.join(repo_root, "README.md")
+    conventions = os.path.join(repo_root, "CONVENTIONS.md")
+    return [readme, conventions] + _collect_plugin_source_paths(PLUGIN)
+
+
+def _scan_paths_for_literal(paths, literal):
+    hits = []
+    for path in paths:
+        if not os.path.isfile(path):
+            continue
+        rel = os.path.relpath(path, PLUGIN)
+        if rel.startswith(".."):
+            rel = os.path.relpath(path, os.path.normpath(os.path.join(PLUGIN, "..", "..")))
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    hits.append((rel, lineno))
+    return hits
+
+
+def test_r6_route_spans_in_showrunner_routing_block():
+    # axis: text agreement with register R6 — route tests and judgment-input sentence
+    entry = _routing_parse_r6_entry_text()
+    route_tests = _routing_route_tests_from_r6(entry)
+    judgment = _routing_judgment_sentence_from_r6(entry)
+    block = _showrunner_routing_block()
+    block_norm = _routing_normalize(block)
+    for span in route_tests:
+        span_norm = _routing_normalize(span)
+        assert span_norm in block_norm, (
+            "showrunner routing block missing R6 route test span %r" % span
+        )
+    judgment_norm = _routing_normalize(judgment)
+    assert judgment_norm in block_norm, (
+        "showrunner routing block missing R6 judgment-input sentence %r" % judgment
+    )
+    # Holder-specific pin — not home-derived; bounds the register-voice tail adaptation.
+    pin_norm = _routing_normalize(_ROUTING_PRECEDENCE_DENIAL_PIN)
+    assert pin_norm in block_norm, (
+        "showrunner routing block missing precedence-denial pin %r"
+        % _ROUTING_PRECEDENCE_DENIAL_PIN
+    )
+
+
+def test_route_names_enumerated_in_order_in_both_charters():
+    # axis: completeness and order of route-name enumeration — duplicate-sensitive list compare
+    entry = _routing_parse_r6_entry_text()
+    expected = _routing_route_names_from_r6(entry)
+    showrunner_block = _showrunner_routing_block()
+    m_names = re.search(
+        r"The four intake routes are named.*?and their tests are",
+        showrunner_block,
+        re.DOTALL,
+    )
+    assert m_names, (
+        "showrunner/SKILL.md: route-name sentence not found in routing block"
+    )
+    showrunner_names = re.findall(r"`([^`]+)`", m_names.group(0))
+    assert showrunner_names == expected, (
+        "showrunner route-name list drift — expected %r, found %r"
+        % (expected, showrunner_names)
+    )
+    workhorse_sentence = _workhorse_route_carry_sentence()
+    workhorse_names = re.findall(r"`([^`]+)`", workhorse_sentence)
+    assert workhorse_names == expected, (
+        "workhorse route-carry sentence list drift — expected %r, found %r"
+        % (expected, workhorse_names)
+    )
+    workhorse_bullets = _workhorse_route_bullet_names()
+    assert len(workhorse_bullets) == 4, (
+        "workhorse §1 route-bullet list drift — expected four bullets, found %d: %r"
+        % (len(workhorse_bullets), workhorse_bullets)
+    )
+    bullet_drift = [
+        name
+        for name in expected
+        if workhorse_bullets.count(name) != 1
+    ]
+    assert not bullet_drift, (
+        "workhorse §1 route-bullet list drift — each R6 name must appear once "
+        "in bullets; problems for %r in %r"
+        % (bullet_drift, workhorse_bullets)
+    )
+
+
+def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
+    """Retired route name: __pycache__ carrying the literal is excluded; .py source is reported."""
+    literal = _retired_discovery_route_literal()
+    root = tmp_path / "plugin"
+    pycache = root / "lib" / "tests" / "__pycache__"
+    pycache.mkdir(parents=True)
+    stale_pyc = pycache / "fixture.cpython-314.pyc"
+    stale_pyc.write_bytes(b"prefix " + literal.encode() + b" suffix")
+
+    stale_py = root / "lib" / "stale_hit.py"
+    stale_py.parent.mkdir(parents=True, exist_ok=True)
+    stale_py.write_text('token = "%s"\n' % literal, encoding="utf-8")
+
+    paths = _collect_plugin_source_paths(str(root))
+    assert not any("__pycache__" in p for p in paths)
+    assert not any(p.endswith(".pyc") for p in paths)
+    assert str(stale_pyc) not in paths
+    assert str(stale_py) in paths
+
+    scanned = []
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                if literal in line:
+                    scanned.append((path, lineno))
+    assert scanned == [(str(stale_py), 1)]
+
+
+def test_retired_discovery_route_name_census():
+    # axis: absence of the retired route name across plugin source, README, CONVENTIONS
+    # docs/ is out of scope — specs and child definition-docs quote the retired name as history.
+    literal = _retired_discovery_route_literal()
+    paths = _routing_census_paths()
+    hits = _scan_paths_for_literal(paths, literal)
+    assert not hits, (
+        "retired route name %r found outside allowed history-only docs — hits: %r"
+        % (literal, hits)
+    )
+
+
+def test_charters_forbid_inverted_routing_forms():
+    # axis: removed routing behaviours have not crept back into either charter
+    inverted = list(_ROUTING_INVERTED_FORMS)
+    inverted.append(_retired_discovery_route_literal())
+    inverted_norm = [_routing_normalize(form) for form in inverted]
+    hits = []
+    for rel in _routing_charter_surfaces():
+        text = _read(rel)
+        text_norm = _routing_normalize(text)
+        for form, form_norm in zip(inverted, inverted_norm):
+            if form_norm.lower() in text_norm.lower():
+                for lineno, line in enumerate(text.splitlines(), start=1):
+                    line_norm = _routing_normalize(line)
+                    if form_norm.lower() in line_norm.lower():
+                        hits.append((rel, lineno, form, line.strip()))
+    assert not hits, (
+        "inverted routing form(s) found in charter(s): %r" % hits
     )

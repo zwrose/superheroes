@@ -76,9 +76,8 @@ observe-only diagnostician when the cause matters more than the fix. **The Archi
 **Keeps the project honest at project altitude.** One long-lived session per project:
 it keeps the roadmap and issue board truthful, routes incoming work to one of four intake routes
 (discovery, detective, build-ready, micro), decomposes big asks into small, independently mergeable
-issues, drafts each
-builder's launch prompt as just the command and the issue pointer (everything durable lives in the
-issue), vets
+issues, drafts each builder's launch prompt as just the command and the issue pointer (everything
+durable lives in the issue), vets
 every PR from its artifacts — the diff, the issue/spec, the build brief — against what was
 asked and what was proposed, diagnoses anomalies from artifacts, and coordinates releases. It
 keeps **merge approval** with the owner and may **execute an approved merge** only where

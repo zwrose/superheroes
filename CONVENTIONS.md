@@ -76,8 +76,8 @@ still produced by The Architect.
 - **Showrunner** — the advisor session: project-level, long-lived, typically one per
   project. Routes incoming work to one of four intake routes (discovery, detective,
   build-ready, micro), decomposes big asks into small mergeable issues, drafts the builder's
-  launch prompt (command + issue
-  pointer; durable build context lives in the issue), vets every PR from its artifacts against the
+  launch prompt (command + issue pointer; durable build context lives in the issue), vets every
+  PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
   durable memory. **Never builds.** The never-delegable act is the **approval** — the gate
   click, the release cut, the publish decision. **Merge-command execution** is delegable, but
