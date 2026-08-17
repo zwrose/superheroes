@@ -957,3 +957,46 @@ def test_read_findings_file_counts_miscased_severities(tmp_path):
     assert res["valid"] is True
     assert res["blocking"] == 2   # critical + blocker (was 0 under case-sensitive `in BLOCKING`)
     assert res["critical"] == 1   # lowercase critical counts (was 0 under `== "Critical"`)
+
+
+def test_haltkind_round_ceiling_parks_not_round_cap(tmp_path, monkeypatch):
+    """A round-ceiling breaker halt parks — never the round-cap handoff kind."""
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[_blocker()]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    monkeypatch.setattr(
+        rlp.circuit_breaker, "check_circuit_breaker",
+        lambda *a, **k: {
+            "halt": True,
+            "reason": circuit_breaker.ROUND_CEILING_REASON,
+            "detail": "Round ceiling 10 reached at round 10",
+        },
+    )
+    ans = _tally(path, 1, max_rounds=10, gate="blocking", present_blocking=1)
+    assert ans["terminal"] == "halted"
+    assert ans["breaker"]["reason"] == circuit_breaker.ROUND_CEILING_REASON
+    assert ans["haltKind"] == "other"
+    assert ans["haltKind"] != "round-cap"
+
+
+def test_haltkind_max_iterations_unchanged_vs_round_ceiling(tmp_path, monkeypatch):
+    """A/B: max-iterations still yields round-cap; round-ceiling does not."""
+    recs = [_skeleton_round(1, {"code-reviewer": _dim(findings=[_blocker()]),
+                                "security-reviewer": _dim()})]
+    path = _write_records(tmp_path, recs)
+    ans_cap = _tally(path, 1, max_rounds=1, gate="blocking", present_blocking=1)
+    assert ans_cap["breaker"]["reason"] == "max-iterations"
+    assert ans_cap["haltKind"] == "round-cap"
+
+    monkeypatch.setattr(
+        rlp.circuit_breaker, "check_circuit_breaker",
+        lambda *a, **k: {
+            "halt": True,
+            "reason": circuit_breaker.ROUND_CEILING_REASON,
+            "detail": "Round ceiling 10 reached at round 12",
+        },
+    )
+    ans_ceiling = _tally(path, 1, max_rounds=10, gate="blocking", present_blocking=1)
+    assert ans_ceiling["breaker"]["reason"] == circuit_breaker.ROUND_CEILING_REASON
+    assert ans_ceiling["haltKind"] == "other"
+    assert ans_ceiling["haltKind"] != ans_cap["haltKind"]

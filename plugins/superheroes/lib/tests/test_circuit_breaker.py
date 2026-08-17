@@ -426,9 +426,10 @@ def test_check_round_ceiling_does_not_halt_below_ceiling():
 
 
 def test_check_round_ceiling_halt_detail_names_ceiling_and_round():
-    res = check_round_ceiling(10, 10)
+    res = check_round_ceiling(12, 10)
     assert "10" in res["detail"]
-    assert "max-iterations" not in res["detail"] or "not a max-iterations" in res["detail"]
+    assert "12" in res["detail"]
+    assert "not a max-iterations cap halt" in res["detail"]
 
 
 def test_resolve_round_ceiling_named_above_cap():

@@ -5293,18 +5293,36 @@ def test_persisted_config_without_max_rounds_absolute_resolves_default_ceiling()
     assert RD._round_ceiling(cfg) == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
 
 
-def test_round_counter_mutation_sites_census():
-    """The round counter has exactly three mutation sites — a fourth must reconsider the ceiling."""
+def _round_counter_mutation_sites():
+    """Multiset of (enclosing function, mutation statement) for state['round'] writes."""
     path = os.path.join(_LIB, "round_driver.py")
     with open(path, encoding="utf-8") as fh:
         lines = fh.readlines()
-    sites = [(i + 1, line.strip()) for i, line in enumerate(lines)
-             if re.search(r'state\["round"\]\s*(=|\+=)', line)]
-    assert sites == [
-        (1020, 'state["round"] = resume_round'),
-        (2398, 'state["round"] += 1'),
-        (2675, 'state["round"] += 1'),
-    ]
+    sites = []
+    for i, line in enumerate(lines):
+        if not re.search(r'state\["round"\]\s*(=|\+=)', line):
+            continue
+        func = None
+        for j in range(i, -1, -1):
+            m = re.match(r"^def (\w+)", lines[j])
+            if m:
+                func = m.group(1)
+                break
+        sites.append((func, line.strip()))
+    return sites
+
+
+def test_round_counter_mutation_sites_census():
+    """The round counter has exactly three mutation sites — a fourth must reconsider the ceiling."""
+    sites = _round_counter_mutation_sites()
+    assert sorted(sites) == sorted([
+        ("_seed_resume", 'state["round"] = resume_round'),
+        ("_fold_verify", 'state["round"] += 1'),
+        ("_settle_delta", 'state["round"] += 1'),
+    ])
+    stmts = [stmt for _func, stmt in sites]
+    assert stmts.count('state["round"] = resume_round') == 1
+    assert stmts.count('state["round"] += 1') == 2
 
 
 def _delta_settle_state_for_breaker(monkeypatch, breaker_result):

@@ -583,8 +583,8 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
         #                  classified explicitly here — the cap-halt proceed path must never swallow a
         #                  red verify (#381 fail-closed guard).
         #   'fix-failed' — the fix step did not complete.
-        #   'other'      — breaker recurrence / no-net-progress / challenged-principle, confirmation-panel
-        #                  cap park, or any fail-closed halt. All park.
+        #   'other'      — breaker recurrence / no-net-progress / challenged-principle / round-ceiling,
+        #                  confirmation-panel cap park, or any fail-closed halt. All park.
         verify_red = verify_result is not None and verify_result not in _VERIFY_OK
         halt_kind = None
         if terminal == "halted":
@@ -597,6 +597,10 @@ def tally_round_decider(path, round_no, roster, max_rounds, gate, confidence, mi
                 # gate parks regardless (the uncertified flag rides the verdict for the consumer guard).
                 halt_kind = ("round-cap" if gate == "blocking" and confidence == "high"
                              else "other")
+            elif breaker_halt and brk.get("reason") == circuit_breaker.ROUND_CEILING_REASON:
+                # #1030: the ceiling is an unconditional cost backstop — never the round-cap handoff
+                # kind; the caller's one-fix-pass proceed path must not be reachable from a ceiling halt.
+                halt_kind = "other"
             else:
                 halt_kind = "other"
 
