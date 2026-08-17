@@ -877,12 +877,7 @@ def _validate_reserved_optional_fields(rec):
         # that a pre-#1054 writer would simply have omitted, so it is refused here rather
         # than folded as an ambiguous signal. Ids carry the same shape as `launchId` itself.
         # Sorted and duplicate-free is the shape `reserve` writes, so a record that is not
-        # is not one this ledger produced; and a launch never overlaps itself. What this
-        # validation deliberately does NOT do is re-derive the overlap: fold is a linear
-        # state machine with no repo root, so it cannot canonicalize surfaces, and the
-        # measurement point is `reserve` under the ledger lock. A hand-written record can
-        # therefore still name a lane that exists but did not overlap — recorded as an
-        # accepted residual rather than papered over here.
+        # is not one this ledger produced; and a launch never overlaps itself.
         overlap = rec["surfaceOverlap"]
         if not isinstance(overlap, list) or not overlap:
             return "fold-bad-field:reserved:surfaceOverlap"
@@ -1096,6 +1091,28 @@ def fold(records):
                     "launches": {},
                     "batchDeclarations": batch_declarations,
                 }
+            # Referential half of the surfaceOverlap grammar (#1054). `_validate_event_fields`
+            # checks the field's SHAPE; only here does the reader hold the prior launches and
+            # their state at this record's index, which is what makes "this lane overlapped
+            # THOSE lanes" a checkable claim rather than a decoration. Every named id must be
+            # a launch reserved EARLIER that was still LIVE and on a DIFFERENT issue — exactly
+            # what `reserve` selects from. What is still not re-derived is the surface
+            # comparison itself: the recorded surfaces are canonicalized against a repo root
+            # this reader does not have, so a fabricated record naming a genuinely live
+            # different-issue lane it did not overlap still folds (accepted residual).
+            for overlapped_id in rec.get("surfaceOverlap") or []:
+                prior = launches.get(overlapped_id)
+                if (
+                    prior is None
+                    or prior.get("terminal")
+                    or prior.get("issue") == rec.get("issue")
+                ):
+                    return {
+                        "ok": False,
+                        "reason": "fold-bad-field:reserved:surfaceOverlap",
+                        "launches": {},
+                        "batchDeclarations": batch_declarations,
+                    }
             launches[launch_id] = {
                 "batchId": rec["batchId"],
                 "issue": rec["issue"],
@@ -1480,6 +1497,12 @@ def _validate_started_repair(started_repair):
         return False
     if not isinstance(err_path, str):
         return False
+    # Optional, and non-empty when present — the same shape a first-attempt `started`
+    # record's disclosure carries (#1054), so a repaired record can preserve it.
+    if "evidence" in started_repair:
+        evidence = started_repair["evidence"]
+        if not isinstance(evidence, str) or not evidence.strip():
+            return False
     return True
 
 
@@ -1604,6 +1627,12 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                     "errPath": started_repair["errPath"],
                     "repaired": True,
                 }
+                # A repaired record stands in for the one whose append failed, so it must
+                # carry that record's overlap disclosure too — otherwise a lane that
+                # launched over an accepted overlap loses the evidence precisely on the
+                # path where the ledger was already having trouble (#1054).
+                if started_repair.get("evidence"):
+                    started_record["evidence"] = started_repair["evidence"]
                 folded_repair = fold(records + [started_record])
                 if not folded_repair["ok"]:
                     return {

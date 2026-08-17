@@ -402,7 +402,7 @@ def test_reserve_ignores_a_caller_supplied_surface_overlap(tmp_path, monkeypatch
 
 
 def test_fold_refuses_a_malformed_surface_overlap(tmp_path):
-    # axis: grammar census — unknown id shape and the empty list both refuse by name
+    # axis: grammar census — the shape half of surfaceOverlap validation
     base = _reserved("l1", "b1", ["alpha"], str(tmp_path), issue=1001)
     bad_values = (
         [], ["ok", ""], ["ok", 7], "l2", {}, [None],
@@ -416,9 +416,37 @@ def test_fold_refuses_a_malformed_surface_overlap(tmp_path):
         folded = ll.fold([rec])
         assert folded["ok"] is False, "surfaceOverlap %r folded clean" % (bad,)
         assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
-    good = dict(base)
-    good["surfaceOverlap"] = ["l2"]
-    assert ll.fold([good])["ok"] is True
+
+
+def test_fold_refuses_an_ungrounded_surface_overlap(tmp_path):
+    # axis: the REFERENTIAL half — a named lane must be one reserve could have chosen:
+    # reserved earlier, still live, on a different issue
+    repo = str(tmp_path)
+    live = _reserved("l1", "b1", ["alpha"], repo, issue=1001)
+    started = _started("l1")
+
+    ghost = _reserved("l2", "b1", ["alpha"], repo, issue=1002)
+    ghost["surfaceOverlap"] = ["nobody"]
+    folded = ll.fold([live, ghost])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+    same_issue = _reserved("l3", "b1", ["alpha"], repo, issue=1001)
+    same_issue["surfaceOverlap"] = ["l1"]
+    folded = ll.fold([live, same_issue])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+    after_terminal = _reserved("l4", "b1", ["alpha"], repo, issue=1002)
+    after_terminal["surfaceOverlap"] = ["l1"]
+    folded = ll.fold([live, started, _outcome("l1", outcome="handback"), after_terminal])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+    # The grounded shape reserve actually writes folds clean.
+    grounded = _reserved("l5", "b1", ["alpha"], repo, issue=1002)
+    grounded["surfaceOverlap"] = ["l1"]
+    assert ll.fold([live, grounded])["ok"] is True
 
 
 def test_fold_refuses_empty_started_evidence(tmp_path):
@@ -429,7 +457,7 @@ def test_fold_refuses_empty_started_evidence(tmp_path):
     folded = ll.fold([reserved, started])
     assert folded["ok"] is False
     assert folded["reason"] == "fold-bad-field:started:evidence"
-    started["evidence"] = "overlaps l2; landing order per merge-train.md"
+    started["evidence"] = "overlaps l2; later lander rebases and stays branch-current"
     assert ll.fold([reserved, started])["ok"] is True
 
 

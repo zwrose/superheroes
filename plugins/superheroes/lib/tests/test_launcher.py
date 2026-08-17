@@ -4145,7 +4145,7 @@ def test_launch_over_a_live_overlapping_lane_warns_and_stamps_evidence(tmp_path,
     started = {r["launchId"]: r for r in records if r.get("event") == "started"}
     evidence = started[second["launchId"]]["evidence"]
     assert first["launchId"] in evidence
-    assert "landing order per merge-train.md" in evidence
+    assert "branch-current" in evidence
     # The lane that overlapped nothing discloses nothing.
     assert "evidence" not in started[first["launchId"]]
     assert ll.fold(records)["ok"] is True
@@ -4203,28 +4203,62 @@ def test_cli_launch_stdout_carries_the_overlap_warning(tmp_path, monkeypatch):
     assert json.loads(buf.getvalue())["warnings"] == warnings
 
 
-def test_every_post_reserve_failure_returns_the_overlap_warnings():
-    # axis: census — no post-reserve failure path can silently drop the disclosure
+def test_no_launch_build_return_drops_the_overlap_warnings():
+    # axis: census over the WHOLE function — every reservation in launch_build (the main
+    # one and the five accounting reservations) can stamp an overlap, so no `return _fail`
+    # anywhere in it may bypass the two helpers that attach `warnings`
     lines = inspect.getsource(L.launch_build).split("\n")
-    anchor = next(
-        i for i, ln in enumerate(lines)
-        if 'warnings = list(reserve_result.get("warnings")' in ln
-    )
     helper = next(
         i for i, ln in enumerate(lines) if "def _post_reserve_fail(" in ln
     )
     helper_end = next(
-        i for i, ln in enumerate(lines)
-        if i > helper and "return _fail(" in ln
+        i for i, ln in enumerate(lines) if i > helper and "return _fail(" in ln
     )
     offenders = [
         (i, ln.strip()) for i, ln in enumerate(lines)
-        if i > anchor and i != helper_end and "return _fail(" in ln
+        if i != helper_end and "return _fail(" in ln
+        and 'reserve_result["reason"]' not in ln
     ]
     assert offenders == [], (
-        "post-reserve failure path bypasses _post_reserve_fail and drops `warnings`: %r"
-        % (offenders,)
+        "launch_build failure path bypasses _post_reserve_fail/_accounted_fail and drops "
+        "`warnings`: %r" % (offenders,)
     )
+    # The one exempt return: its OWN reservation failed, so no record carrying
+    # surfaceOverlap exists to disclose. Pinned so the exemption cannot quietly widen.
+    exempt = [ln for ln in lines if 'reserve_result["reason"]' in ln]
+    assert len(exempt) == 1, exempt
+
+
+def test_prespawn_refusal_returns_the_overlap_warnings(tmp_path, monkeypatch):
+    # axis: the behavioural leg — a launch refused BEFORE spawn still discloses the
+    # overlap its accounting reservation recorded
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    first = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, surfaces=["plugins/superheroes/lib"]),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert first["ok"] is True
+    checks = _all_checks()
+    checks["engine-auth"] = {"state": "fail", "reason": "no auth"}
+    refused = L.launch_build(
+        repo,
+        657,
+        _valid_premise(repo, surfaces=["plugins/superheroes"], issue=657),
+        checks,
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
+    )
+    assert refused["ok"] is False
+    assert refused["reason"] == "preflight-failed:engine-auth"
+    assert refused["warnings"] == ["surface-overlap:%s" % first["launchId"]]
 
 
 def test_settle_failure_still_returns_the_overlap_warnings(tmp_path, monkeypatch):
@@ -4259,9 +4293,63 @@ def test_overlap_evidence_ignores_unparsable_warnings():
     # axis: the disclosure is built from real overlap ids only, never from noise
     assert L._overlap_evidence([]) is None
     assert L._overlap_evidence(["lock-unavailable", 7, "surface-overlap:", None]) is None
-    assert L._overlap_evidence(["surface-overlap:l1", "surface-overlap:l2"]) == (
-        "overlaps l1, l2; landing order per merge-train.md"
+    evidence = L._overlap_evidence(["surface-overlap:l1", "surface-overlap:l2"])
+    assert evidence.startswith("overlaps l1, l2; ")
+    # Both citations name rules those homes actually state; merge-train.md carries
+    # branch-currency, not a landing-order rule.
+    assert "base-moved" in evidence
+    assert "branch-current" in evidence
+
+
+def test_repaired_started_record_keeps_the_overlap_disclosure(tmp_path, monkeypatch):
+    # axis: a started-append failure must not lose the disclosure — the repaired record
+    # stands in for the one that failed, so it carries the same evidence
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    _worktree_root(tmp_path, monkeypatch)
+    first = L.launch_build(
+        repo,
+        656,
+        _valid_premise(repo, surfaces=["plugins/superheroes/lib"]),
+        _all_checks(),
+        str(tmp_path / "logs"),
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.3,
     )
+    assert first["ok"] is True
+
+    real_append = L._append_under_lock
+
+    def fail_started_append(repo_root, record, env=None):
+        if record.get("event") == "started":
+            return {"ok": False, "reason": "ledger-append-failed"}
+        return real_append(repo_root, record, env=env)
+
+    # Restored by hand, not with monkeypatch.undo(): undo() reverts EVERY patch this test
+    # made, including the ledger-root fixture, which would send the read below to a
+    # different ledger entirely.
+    L._append_under_lock = fail_started_append
+    try:
+        second = L.launch_build(
+            repo,
+            657,
+            _valid_premise(repo, surfaces=["plugins/superheroes"], issue=657),
+            _all_checks(),
+            str(tmp_path / "logs"),
+            spawn_fn=_make_spawn_fn("sleep"),
+            settle_seconds=0.3,
+        )
+    finally:
+        L._append_under_lock = real_append
+    assert second["ok"] is False
+    records = ll.read(repo)["records"]
+    repaired = [
+        r for r in records
+        if r.get("event") == "started" and r.get("repaired") and r["launchId"] == second["launchId"]
+    ]
+    assert repaired, "no repaired started record was written"
+    assert first["launchId"] in repaired[0]["evidence"]
+    assert ll.fold(records)["ok"] is True
 
 
 def test_launch_reserve_refusal_leaves_no_orphan_worktree(tmp_path, monkeypatch):

@@ -485,7 +485,8 @@ def _scenario_surface_overlap_warning(repo, log_dir, surfaces, batch_id, monkeyp
             r for r in records
             if r.get("event") == "started" and r["launchId"] == second_id
         ]
-        assert "landing order per merge-train.md" in started[0]["evidence"]
+        assert started[0]["evidence"].startswith("overlaps %s;" % first_id)
+        assert "branch-current" in started[0]["evidence"]
         _assert_terminal(folded, first_id, terminal=False)
         _assert_terminal(folded, second_id, terminal=False)
     finally:
