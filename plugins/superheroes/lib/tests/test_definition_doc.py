@@ -480,6 +480,37 @@ def test_approved_above_status_reanchored(tmp_path):
     assert status_i + 1 < end
 
 
+def test_approved_impossible_date_replaced_with_today(tmp_path):
+    # Axis: semantically invalid canonical-shaped approved dates are not preserved on repassed.
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    today = datetime.date.today().isoformat()
+    text = open(p, encoding="utf-8").read()
+    text = text.replace(f'approved: "{today}"', 'approved: "2026-02-30"', 1)
+    assert 'approved: "2026-02-30"' in text
+    open(p, "w", encoding="utf-8").write(text)
+    result = _set_gate_file(p, "passed")
+    assert result["approved"] == today
+    parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
+    jsonschema.validate(parsed, SCHEMA, format_checker=jsonschema.FormatChecker())
+    assert parsed["approved"] == today
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == [f'approved: "{today}"']
+
+
+def test_approved_body_decoy_survives_padded_closing_fence(tmp_path):
+    # Axis: body approved lines survive when the closing frontmatter fence has trailing whitespace.
+    p = _write_spec_with_frontmatter(tmp_path, body_extra="\napproved: \"1999-01-01\"\n")
+    text = open(p, encoding="utf-8").read()
+    text = text.replace("\n---\n\n# Title", "\n--- \n\n# Title", 1)
+    assert "\n--- \n\n# Title" in text
+    open(p, "w", encoding="utf-8").write(text)
+    _set_gate_file(p, "passed")
+    body = open(p, encoding="utf-8").read().split("---", 2)[2]
+    assert 'approved: "1999-01-01"' in body
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == [
+        f'approved: "{datetime.date.today().isoformat()}"']
+
+
 def test_approved_body_decoy_untouched(tmp_path):
     p = _write_spec_with_frontmatter(tmp_path, body_extra="\napproved: \"1999-01-01\"\n")
     _set_gate_file(p, "passed")
@@ -507,6 +538,12 @@ def test_approved_frontmatter_coherence_guard():
         DD.frontmatter("spec", WI, size="medium", approved="2026-06-14")
     with pytest.raises(ValueError):
         DD.frontmatter("spec", WI, size="medium", review="passed", status="approved")
+    with pytest.raises(ValueError):
+        DD.frontmatter(
+            "spec", WI, size="medium", review="passed", approved="2026-01-01", status="draft")
+    with pytest.raises(ValueError):
+        DD.frontmatter(
+            "spec", WI, size="medium", review="passed", approved="not-a-date", status="approved")
 
 
 def test_approved_live_doc_conformance():

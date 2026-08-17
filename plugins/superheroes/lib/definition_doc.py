@@ -162,10 +162,22 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
     """
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
+    # `set_gate` is the sole writer that mints an approved date; this emitter only round-trips
+    # a caller-supplied value and synthesises nothing.
     if approved is not None and review != "passed":
         raise ValueError("approved may be set only when gates.review is passed (§3.1)")
     if review == "passed" and approved is None:
         raise ValueError("gates.review passed requires an approved date (§3.1)")
+    if status != _STATUS_FOR_REVIEW[review]:
+        raise ValueError(
+            f"status {status!r} contradicts gates.review {review!r} (§3.1)")
+    if approved is not None:
+        try:
+            parsed = datetime.date.fromisoformat(approved)
+        except ValueError:
+            raise ValueError(f"approved must be a canonical ISO date, got {approved!r}")
+        if parsed.isoformat() != approved:
+            raise ValueError(f"approved must be a canonical ISO date, got {approved!r}")
     if allow_orphan and doc_type == "tasks" and parent is None:
         parent_obj = None
     else:
@@ -265,9 +277,12 @@ def _frontmatter_bounds(text, path):
     lines = text.split("\n")
     if not lines or lines[0].strip() != "---":
         raise ValueError(f"{path}: missing opening '---' frontmatter fence")
-    try:
-        end = lines.index("---", 1)
-    except ValueError:
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
         raise ValueError(f"{path}: unterminated frontmatter (no closing '---')")
     return lines, end
 
@@ -284,7 +299,16 @@ def _apply_approved_pass(lines, end, review, current_review):
             if not m:
                 all_canonical = False
                 break
-            dates.append(m.group(1))
+            captured = m.group(1)
+            try:
+                parsed = datetime.date.fromisoformat(captured)
+            except ValueError:
+                all_canonical = False
+                break
+            if parsed.isoformat() != captured:
+                all_canonical = False
+                break
+            dates.append(captured)
         if all_canonical and len(set(dates)) == 1:
             kept_date = dates[0]
     for i in sorted(approved_indices, reverse=True):
