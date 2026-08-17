@@ -1023,6 +1023,19 @@ the Python module. The reference doc's `## Vocabulary (drift-tested)` section is
 against the module by `lib/tests/test_ssot_drift.py`; that reader **fails closed** — if it parses
 nothing (heading renamed, list reformatted) it raises rather than passing vacuously.
 
+*Worked example 5 — the anchor resolution tests.* The three per-kind anchor resolution tests
+(`spec-section`, `receipt`, `ruling`) are a cross-boundary fact: they are **operative text** in
+`plugins/superheroes/skills/workhorse/SKILL.md` §1, where the builder applies them at intake, and
+they are stated in full in
+`plugins/superheroes/skills/showrunner/reference/issue-contract.md` under `## Anchor resolution`,
+which is the authoritative home. The two copies are drift-tested by `lib/tests/test_ssot_drift.py`,
+which compares them **whitespace-normalized** — so re-wrapping a charter paragraph is free while
+dropping a qualifier is not — and which additionally asserts that the **inverted forms are absent**.
+That second half is what makes the guard bite: a presence-only check for both "numbered greater
+than N" and "date" happily passes prose reading *"use date comparison instead of entries numbered
+greater than N."* A presence sentinel proves a phrase is there, never that the sentence around it
+still says the right thing.
+
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the
 enumerating drift test must name every known copy-holder (a comment listing them), and
