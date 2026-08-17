@@ -1028,9 +1028,11 @@ nothing (heading renamed, list reformatted) it raises rather than passing vacuou
 `plugins/superheroes/skills/workhorse/SKILL.md` §1, where the builder applies them at intake, and
 they are stated in full in
 `plugins/superheroes/skills/showrunner/reference/issue-contract.md` under `## Anchor resolution`,
-which is the authoritative home. A third copy-holder,
-`plugins/superheroes/skills/showrunner/reference/vet-receipt.md`, carries the owner-half delivery
-clause for the standing anchor-coverage row. The three copy-holders are drift-tested by
+which is the authoritative home. The showrunner charter,
+`plugins/superheroes/skills/showrunner/SKILL.md`, is also a copy-holder for the filing, repair,
+notice, and standing-row clauses. `plugins/superheroes/skills/showrunner/reference/vet-receipt.md`
+carries the owner-half delivery clause for the standing anchor-coverage row. These copy-holders are
+drift-tested by
 `lib/tests/test_ssot_drift.py`, which compares the resolution bullets **whitespace-normalized** —
 so re-wrapping a charter paragraph is free while dropping a qualifier is not — and which applies
 the same normalization to **clause checks** as well as bullet equality. It additionally asserts that
