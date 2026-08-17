@@ -4106,7 +4106,12 @@ def test_diff_stall_after_partial_write(tmp_path, monkeypatch):
     fake_tmp = str(tmp_path / "tmpdir")
     os.makedirs(fake_tmp)
     monkeypatch.setattr(sv.tempfile, "gettempdir", lambda: fake_tmp)
-    budget = 0.3
+    # The budget must outlast the three real git spawns `_stage_review_diff` makes BEFORE
+    # the diff child (rev-parse, merge-base, changed-tree) — under `-n auto` load on a
+    # busy host those alone exceeded 0.3 s, so the stall child was never spawned and
+    # `proc is None` failed at base (2026-08-16, three builds; #1057/#1058/#1059 receipts).
+    # 2.0 s keeps the test well inside the 5 s bound below while giving ~6× headroom.
+    budget = 2.0
     monkeypatch.setattr(sv, "SANITIZED_VIEW_EXPORT_TIMEOUT_SECONDS", budget)
 
     real_popen = subprocess.Popen
