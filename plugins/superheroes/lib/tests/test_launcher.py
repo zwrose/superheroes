@@ -4223,8 +4223,11 @@ def test_no_launch_build_return_drops_the_overlap_warnings():
         "launch_build failure path bypasses _post_reserve_fail/_accounted_fail and drops "
         "`warnings`: %r" % (offenders,)
     )
-    # The one exempt return: its OWN reservation failed, so no record carrying
-    # surfaceOverlap exists to disclose. Pinned so the exemption cannot quietly widen.
+    # The one exempt return: its OWN reservation reported failure, so the caller has no
+    # reservation to disclose against. That is not the same as "no record exists" — an
+    # append that fails at fsync AFTER flush leaves a readable row while reporting failure
+    # (`_append_raw`), a pre-existing ledger property this change does not touch and does
+    # not fix. Pinned at exactly one so the exemption cannot quietly widen.
     exempt = [ln for ln in lines if 'reserve_result["reason"]' in ln]
     assert len(exempt) == 1, exempt
 
