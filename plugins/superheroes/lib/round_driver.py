@@ -322,6 +322,17 @@ def state_hash(state):
     return _sha256(_canonical(state))
 
 
+class RoundCeilingRefusal(ValueError):
+    """The one load-time refusal for an invalid ``maxRoundsAbsolute`` vs ``maxRounds`` pairing.
+
+    Raised only from ``_default_config`` — the single config load point — when
+    ``circuit_breaker.resolve_round_ceiling`` refuses the named ceiling."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
 class JournalFaultUnrecordable(Exception):
     """Last-resort fail-loud (#507 WO-FIX-RECOVERY): the journal append failed AND the durable fault
     marker that would have made finalization park ALSO could not be written. There is NO silent tier
@@ -865,6 +876,9 @@ def _default_config(overrides=None):
         "fixerVendor": None,  # UNKNOWN by default — auditor independence must DEGRADE, not assume claude (#608)
         "verifyCommand": "none",
         "maxRounds": 7,
+        # Hard round ceiling (default circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE) — owner-tunable
+        # like maxRounds. An effective ceiling below maxRounds refuses at load.
+        "maxRoundsAbsolute": None,
         "dimensions": list(DIMENSIONS),
         # Optional resume/records seam (#507 WO-D). When `recordsPath` is set the driver reads it
         # ONCE at new_state to resume at round N+1 from the durable seeds (review_loop_plan's
@@ -888,7 +902,26 @@ def _default_config(overrides=None):
     cfg["code"] = cfg.get("leg") != "panel"
     if not isinstance(cfg.get("dimensions"), list) or not cfg["dimensions"]:
         cfg["dimensions"] = list(DIMENSIONS)
+    ceiling, refusal = circuit_breaker.resolve_round_ceiling(
+        cfg["maxRounds"], cfg.get("maxRoundsAbsolute"))
+    if refusal is not None:
+        raise RoundCeilingRefusal(refusal, cfg.get("maxRoundsAbsolute"))
+    cfg["maxRoundsAbsolute"] = ceiling
     return cfg
+
+
+def _round_ceiling(config):
+    """Return the resolved unconditional round ceiling for this session.
+
+    Persisted state from before #1030 may lack ``maxRoundsAbsolute`` on ``config``; in that case
+    re-resolve from ``maxRounds`` so the default ceiling still applies — a resumed session never
+    runs ceiling-less."""
+    ceiling = config.get("maxRoundsAbsolute")
+    if isinstance(ceiling, int) and not isinstance(ceiling, bool):
+        return ceiling
+    resolved, _refusal = circuit_breaker.resolve_round_ceiling(
+        config.get("maxRounds", 7), None)
+    return resolved
 
 
 def new_state(config=None):
@@ -983,6 +1016,8 @@ def _seed_resume(state, cfg):
     qualifying = sum(1 for r in records
                      if r.get("kind") == "confirmation" and review_loop_plan._confirmation_qualifies(r))
     state["confirmations"] = qualifying
+    if _ceiling_halt(state, cfg, prospective_round=resume_round):
+        return
     state["round"] = resume_round
     state["step"] = P_PANEL
     state["fullPanelRan"] = False
@@ -1999,6 +2034,8 @@ def _after_findings_settled(state, config):
     verify+synthesis, so when the delta settle is armed it must re-settle the delta (audit breaker +
     #174 confirmation re-arm) rather than the round-1 fix/terminal path. Either way the gap/verify
     carry is merged back first."""
+    if _ceiling_halt(state, config):
+        return
     # merge any gap-sweep / verify carry back in.
     if state.get("_verifiedCarry") is not None:
         carry = state.pop("_verifiedCarry")
@@ -2532,6 +2569,8 @@ def _settle_delta(state, config):
     fix leg; else the converged decision (with the #174 confirmation re-arm)."""
     state.pop("_settleDelta", None)
     state.pop("_postAudit", None)
+    if _ceiling_halt(state, config):
+        return
     outcome = state.get("_auditOutcome") or {"notDischarged": [], "discharged": []}
     max_rounds = config.get("maxRounds", 7)
     # Record this delta round in the in-memory ledger and run the challenged-coverage breaker BEFORE
@@ -2582,6 +2621,11 @@ def _settle_delta(state, config):
                               + " — blocking finding(s) remain not-discharged; certification withheld")
             return
         _terminal_converged(state, config, full_panel=False, note=breaker.get("detail"))
+        return
+    if breaker.get("halt"):
+        _park_cannot_certify(
+            state, "unhandled circuit-breaker halt (%s) — cannot certify"
+            % (breaker.get("reason") or "<missing-reason>",))
         return
 
     # a scoped-finder / new-issue blocking finding OR a not-discharged audit means the round still
@@ -2651,6 +2695,24 @@ def _batch_severity_is_critical(state, target_id):
                 and circuit_breaker.is_critical(f.get("severity")):
             return True
     return False
+
+
+def _ceiling_halt(state, config, prospective_round=None):
+    """Ask the unconditional round ceiling; park loud when ``round >= ceiling``."""
+    brk = circuit_breaker.check_round_ceiling(
+        prospective_round if prospective_round is not None else state["round"],
+        _round_ceiling(config))
+    if brk.get("halt"):
+        _park_round_ceiling(state, brk.get("detail"))
+        return True
+    return False
+
+
+def _park_round_ceiling(state, detail):
+    state["terminal"] = "halted"
+    state["certification"] = {"shape": None, "reason": detail or "round ceiling reached"}
+    _decision(state, "round-ceiling", detail)
+    state["step"] = P_TERMINAL
 
 
 def _park_capped(state, detail):
@@ -3421,7 +3483,13 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "reason": mint_reason})
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
         _bootstrap_review_session_marker(session_dir)
-        state = new_state(config_overrides)
+        try:
+            state = new_state(config_overrides)
+        except RoundCeilingRefusal as refusal:
+            _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                          "attempt": None, "outcome": "refused-round-ceiling",
+                                          "reason": refusal.reason})
+            return {"ok": False, "reason": refusal.reason, "value": refusal.value}
     else:
         state = loaded
     if state.get("pending"):
@@ -6345,6 +6413,11 @@ def build_parser():
                                    "state → fails loud (nonzero), never a silent default")
     cli_contract.add_argument(pn, "--verify-command", contract="free-text", default=None)
     cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int)
+    cli_contract.add_argument(pn, "--max-rounds-absolute", contract="integer", default=None,
+                              type=int,
+                              help="hard round ceiling (fresh state only): owner-tunable like "
+                                   "--max-rounds; an effective ceiling below maxRounds refuses "
+                                   "at load")
     cli_contract.add_argument(pn, "--diff-path", contract="free-text", default=None,
                               help="round-1 reviewed diff (fresh state only)")
     cli_contract.add_argument(pn, "--repo-root", contract="repo-root", default=None,
@@ -6473,6 +6546,14 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
+        if args.max_rounds_absolute is not None:
+            overrides["maxRoundsAbsolute"] = args.max_rounds_absolute
+            try:
+                _default_config(dict(overrides))
+            except RoundCeilingRefusal as refusal:
+                sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
+                                             "value": args.max_rounds_absolute}) + "\n")
+                return 1
         st_ok, st = load_state(args.session_dir)
         if st_ok:
             fresh = st is None

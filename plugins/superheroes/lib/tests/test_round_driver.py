@@ -5144,3 +5144,231 @@ def test_cursor_fix_never_gets_an_independent_cursor_auditor():
         v, ind = RD._auditor_vendor({"vendors": [other, "cursor"]}, "cursor")
         assert ind == "independent", (other, v, ind)
         assert v == other
+
+
+# =============================================================================
+# #1030 — hard round ceiling wired into the live loop
+# =============================================================================
+
+CB = _load("circuit_breaker")
+
+
+def _rearm_forever_seams():
+    """Every review round surfaces one fresh Important blocker; audits stay clean."""
+    seq = {"n": 0}
+
+    def reviewer(dim, tier, rnd, ctx):
+        if dim == "gap-sweep":
+            return []
+        if dim == "scoped-finder":
+            seq["n"] += 1
+            return [{"title": "scoped-%d" % seq["n"], "severity": "Important",
+                     "file": "newsurf.py", "line": 1}]
+        if dim == "code-reviewer":
+            seq["n"] += 1
+            return {"findings": [{"title": "panel-%d" % seq["n"], "severity": "Important",
+                                  "file": "f.py", "line": 1}]}
+        return {}
+
+    fix_n = {"n": 0}
+
+    def fix_step(batch, rnd, payload):
+        fix_n["n"] += 1
+        return {"fixes": [], "headDiff": _headf_ns(fix_n["n"]), "changedSubjects": ["Code"]}
+
+    return _seams(reviewer=reviewer, fix_step=fix_step)
+
+
+def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
+    """DoD headline: clean audits + fresh blocker every review round halts at the ceiling."""
+    receipt = RD.run_loop(_rearm_forever_seams(), _cfg(maxRoundsAbsolute=10, maxRounds=7))
+    assert receipt["verdict"] == "halted"
+    assert receipt["certificationShape"] is None
+    detail = " ".join(d["detail"] for d in receipt["decisions"] if d["kind"] == "round-ceiling")
+    assert CB.ROUND_CEILING_REASON == "round-ceiling"
+    assert "round-ceiling" in [d["kind"] for d in receipt["decisions"]]
+    assert "10" in detail, detail
+    assert "ceiling" in detail.lower(), detail
+    assert receipt.get("scriptRan", {}).get("invocations", 999) < RD._RUN_LOOP_GUARD
+
+
+def test_round_nine_below_ceiling_does_not_halt_on_ceiling():
+    """Round 9 with ceiling 11 does not halt on the round-ceiling breaker."""
+    state = RD.new_state(_cfg(maxRoundsAbsolute=11))
+    state["round"] = 9
+    state["findings"] = []
+    state["fullPanelRan"] = True
+    RD._after_findings_settled(state, state["config"])
+    assert state["terminal"] == "converged"
+    assert not any(d["kind"] == "round-ceiling" for d in state["decisions"])
+
+
+def test_delta_settle_at_ceiling_halts_not_routes_to_fixer():
+    """A delta settle at the ceiling halts instead of routing to the fixer."""
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=10))
+    state["round"] = 10
+    state["findings"] = [{"title": "open", "severity": "Important", "file": "f.py", "line": 1}]
+    state["auditRounds"] = [{"round": 9, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "halted"
+    assert state["step"] != RD.P_FIXER
+    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
+
+def test_clean_below_ceiling_still_certifies_converged(tmp_path):
+    """No-regression: a clean run below the ceiling still certifies converged."""
+    receipt = RD.run_loop(_seams(), _cfg(maxRoundsAbsolute=10))
+    assert receipt["verdict"] == "converged"
+    assert receipt["certificationShape"] is not None
+
+
+def test_panel_settle_at_ceiling_halts_not_certifies():
+    """A clean panel settle at the ceiling halts instead of certifying."""
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10))
+    state["round"] = 10
+    state["findings"] = []
+    state["fullPanelRan"] = True
+    RD._after_findings_settled(state, state["config"])
+    assert state["terminal"] == "halted"
+    assert state["certification"]["shape"] is None
+    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "round-ceiling")
+    assert "10" in detail and "ceiling" in detail.lower()
+
+
+def test_seed_resume_above_ceiling_halts_without_assigning_round(tmp_path):
+    """A records-seeded resume above the ceiling halts loud; counter stays below the ceiling."""
+    records = tmp_path / "round-records.json"
+    seed = [
+        {"schemaVersion": 2, "round": 10, "kind": "baseline",
+         "dimensions": {"code-reviewer": {"status": "run", "confidence": "high",
+                                            "tier": "reviewer-deep", "findings": []}},
+         "findings": [], "coverageDecisions": []},
+    ]
+    records.write_text(json.dumps(seed))
+    state = RD.new_state(_cfg(recordsPath=str(records), maxRoundsAbsolute=10))
+    assert state["terminal"] == "halted"
+    assert state["round"] == 1
+    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "round-ceiling")
+    assert "11" in detail
+
+
+def test_load_refusal_when_ceiling_below_max_rounds():
+    """A ceiling below maxRounds refuses at load with the named token."""
+    with pytest.raises(RD.RoundCeilingRefusal) as exc:
+        RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 5})
+    assert exc.value.reason == CB.CEILING_BELOW_CAP_REFUSAL
+
+
+def test_load_accepts_ceiling_at_or_above_max_rounds():
+    """A ceiling at or above maxRounds resolves and loads."""
+    cfg = RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 10})
+    assert cfg["maxRoundsAbsolute"] == 10
+    cfg2 = RD._default_config({"maxRounds": 7, "maxRoundsAbsolute": 7})
+    assert cfg2["maxRoundsAbsolute"] == 7
+
+
+def test_max_rounds_absolute_cli_structured_refusal(tmp_path, capsys):
+    """CLI --max-rounds-absolute below maxRounds emits the structured refusal shape."""
+    d = str(tmp_path)
+    rc = RD.main(["next", "--session-dir", d, "--max-rounds", "7",
+                  "--max-rounds-absolute", "5"])
+    assert rc == 1
+    out = json.loads(capsys.readouterr().out.strip())
+    assert out == {"ok": False, "reason": CB.CEILING_BELOW_CAP_REFUSAL, "value": 5}
+
+
+def test_persisted_config_without_max_rounds_absolute_resolves_default_ceiling():
+    """Persisted config predating #1030 resolves the default ceiling — never ceiling-less."""
+    cfg = dict(RD.new_state(_cfg())["config"])
+    cfg.pop("maxRoundsAbsolute", None)
+    assert RD._round_ceiling(cfg) == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
+
+
+def test_round_counter_mutation_sites_census():
+    """The round counter has exactly three mutation sites — a fourth must reconsider the ceiling."""
+    path = os.path.join(_LIB, "round_driver.py")
+    with open(path, encoding="utf-8") as fh:
+        lines = fh.readlines()
+    sites = [(i + 1, line.strip()) for i, line in enumerate(lines)
+             if re.search(r'state\["round"\]\s*(=|\+=)', line)]
+    assert sites == [
+        (1021, 'state["round"] = resume_round'),
+        (2399, 'state["round"] += 1'),
+        (2676, 'state["round"] += 1'),
+    ]
+
+
+def _delta_settle_state_for_breaker(monkeypatch, breaker_result):
+    state = RD.new_state(_cfg(maxRounds=10, maxRoundsAbsolute=10))
+    state["round"] = 3
+    state["findings"] = []
+    state["auditRounds"] = [{"round": 2, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
+    monkeypatch.setattr(RD.circuit_breaker, "check_audit_breaker",
+                        lambda *a, **k: dict(breaker_result))
+    return state
+
+
+@pytest.mark.parametrize("reason", sorted(CB.BREAKER_REASONS))
+def test_settle_delta_every_breaker_reason_does_not_fall_through(reason, monkeypatch):
+    """Every BREAKER_REASONS member halting in _settle_delta must not route to the fixer."""
+    if reason == CB.ROUND_CEILING_REASON:
+        state = RD.new_state(_cfg(maxRoundsAbsolute=10))
+        state["round"] = 10
+        state["findings"] = []
+        state["auditRounds"] = []
+        state["_auditOutcome"] = {"notDischarged": [], "discharged": []}
+        RD._settle_delta(state, state["config"])
+    elif reason == "challenged-principle-recurring":
+        state = RD.new_state(_cfg(maxRounds=10, maxRoundsAbsolute=10))
+        state["round"] = 3
+        state["findings"] = [dict(_CHALLENGED_FINDING)]
+        state["_records"] = [
+            {"round": 1, "findings": [dict(_CHALLENGED_FINDING)],
+             "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
+                                              "tier": RD.DEEP, "findings": []}}},
+            {"round": 2, "findings": [dict(_CHALLENGED_FINDING)],
+             "coverageDecisions": [{"classKey": "Test::coverage::x", "challengedBy": "owner"}],
+             "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
+                                              "tier": RD.DEEP, "findings": []}}},
+        ]
+        state["auditRounds"] = []
+        state["_auditOutcome"] = {"notDischarged": [], "discharged": []}
+        RD._settle_delta(state, state["config"])
+    elif reason == "audit-stall":
+        state = _delta_settle_state_for_breaker(monkeypatch, {
+            "halt": True, "reason": "audit-stall", "detail": "stalled",
+            "stalledIdentities": ["x"],
+        })
+        state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
+                                   "file": "f.py", "line": 1}]
+        RD._settle_delta(state, state["config"])
+    elif reason == "max-iterations":
+        state = _delta_settle_state_for_breaker(monkeypatch, {
+            "halt": True, "reason": "max-iterations", "detail": "cap",
+            "stalledIdentities": [],
+        })
+        RD._settle_delta(state, state["config"])
+    else:
+        state = _delta_settle_state_for_breaker(monkeypatch, {
+            "halt": True, "reason": reason, "detail": "synthetic halt for %s" % reason,
+            "stalledIdentities": [],
+        })
+        RD._settle_delta(state, state["config"])
+    assert state["step"] != RD.P_FIXER
+    assert (state.get("terminal") is not None
+            or state["step"] in (RD.P_STALL, RD.P_PANEL, RD.P_TERMINAL))
+
+
+def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
+    """A synthetic unregistered halting reason hits the fail-closed park."""
+    state = _delta_settle_state_for_breaker(monkeypatch, {
+        "halt": True, "reason": "synthetic-unregistered-reason", "detail": "unhandled",
+        "stalledIdentities": [],
+    })
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+    assert state["step"] != RD.P_FIXER
