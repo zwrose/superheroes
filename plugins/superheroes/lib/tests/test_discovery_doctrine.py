@@ -68,7 +68,7 @@ _DISCOVERY_SECTION_CLAUSES = {
     "## The one front door": [
         "The plugin offers no separate spike",
         "when an investigation ends, discovery's exit gate is still",
-        "is already the *what*",
+        "A decision the owner has already made needs no discovery.",
         "is the advisor's call, not",
     ],
     "## The three exits": [
@@ -231,6 +231,37 @@ def _check_banned_absent(text, banned_strings, label):
             raise AssertionError(
                 f"{label}: banned string found — {banned!r} at line {line_no}"
             )
+
+
+def _assert_clause_survives_normalization(table_label, section_key, clause):
+    """Refuse clause literals that _normalized would make unmatchable."""
+    if "*" in clause:
+        raise AssertionError(
+            f"{table_label}[{section_key!r}]: clause contains '*' "
+            f"(stripped by _normalized): {clause!r}"
+        )
+    if "\n" in clause:
+        raise AssertionError(
+            f"{table_label}[{section_key!r}]: clause contains newline "
+            f"(collapsed by _normalized): {clause!r}"
+        )
+    if "  " in clause:
+        raise AssertionError(
+            f"{table_label}[{section_key!r}]: clause contains consecutive spaces "
+            f"(collapsed by _normalized): {clause!r}"
+        )
+
+
+def _assert_clause_tables_survive_normalization(section_clause_tables, list_clause_tables=None):
+    """Walk clause tables and refuse literals _normalized cannot match."""
+    for table_label, table in section_clause_tables.items():
+        for section_key, clauses in table.items():
+            for clause in clauses:
+                _assert_clause_survives_normalization(table_label, section_key, clause)
+    if list_clause_tables:
+        for table_label, clauses in list_clause_tables.items():
+            for index, clause in enumerate(clauses):
+                _assert_clause_survives_normalization(table_label, index, clause)
 
 
 def _assert_section_clauses(rel, section_clauses, read_text=None):
@@ -492,3 +523,24 @@ def test_negative_placeholder_section_body_fails():
     ])
     with pytest.raises(AssertionError, match="placeholder"):
         _assert_no_placeholder_sections(synthetic_doc)
+
+
+def test_clause_tables_survive_normalization():
+    _assert_clause_tables_survive_normalization(
+        {
+            "discovery": _DISCOVERY_SECTION_CLAUSES,
+            "architect_spec": _ARCHITECT_SPEC_SECTION_CLAUSES,
+        },
+        {"duty1": _DUTY1_CLAUSES},
+    )
+
+
+def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
+    with pytest.raises(AssertionError, match=r"contains '\*'"):
+        _assert_clause_tables_survive_normalization(
+            {"synthetic": {"## Section": ["has * star"]}},
+        )
+    with pytest.raises(AssertionError, match="consecutive spaces"):
+        _assert_clause_tables_survive_normalization(
+            {"synthetic": {"## Section": ["has  double space"]}},
+        )

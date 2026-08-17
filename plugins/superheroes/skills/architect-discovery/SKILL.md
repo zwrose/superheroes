@@ -404,7 +404,7 @@ in the moment. Weight changes how the approval is scheduled; it never changes wh
 | Excuse | Reality |
 | --- | --- |
 | "This is too simple to need a spec" | On the spec path a spec can be short; it cannot be skipped — discovery produces the *what*. "Simple" is never license to skip the thinking or fabricate requirements. If there is genuinely nothing to specify, that is **Exit B**, not a thin spec. |
-| "I'll just use a generic brainstorming skill" | In a superheroes project, Discovery is this skill. Produce a `spec`. |
+| "I'll just use a generic brainstorming skill" | In a superheroes project, Discovery is this skill — and it closes at one of its three exits, never with a plan document or a hand-off to somewhere else. |
 | "Let me note the tech approach" | The *how* is the build's. Keep the spec to the *what*. |
 | "Happy path is enough" | The significant unhappy paths are the anti-slop core. Run the coverage checklist. |
 | "I'll research to be thorough" | Research is consented — offer it, name the time/usage cost, let the owner choose. |

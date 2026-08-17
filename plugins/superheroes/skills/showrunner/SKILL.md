@@ -93,9 +93,7 @@ above).
    never weighs its own draft. **A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.** Grade **both** classification inputs — the
    gradable-line count **and** whether any sections interlock — and state both alongside the
    resulting weight; `light` needs both to hold. The two review paths and the 10-line guideline
-   live in the discovery charter
-   (`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-discovery/SKILL.md`) — read them
-   there rather than restating them here.
+   live in the discovery charter — read them there rather than restating them here.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
