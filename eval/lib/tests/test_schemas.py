@@ -110,6 +110,24 @@ def test_definition_doc_draft_without_approved_is_valid():
     jsonschema.validate(draft, _load("definition-doc.schema.json"))
 
 
+def test_definition_doc_passed_without_approved_is_rejected():
+    bad = dict(VALID["definition-doc.schema.json"])
+    del bad["approved"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            bad, _load("definition-doc.schema.json"),
+            format_checker=jsonschema.FormatChecker())
+
+
+def test_definition_doc_pending_with_approved_is_rejected():
+    bad = dict(VALID["definition-doc.schema.json"],
+               status="draft", gates={"review": "pending"})
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            bad, _load("definition-doc.schema.json"),
+            format_checker=jsonschema.FormatChecker())
+
+
 # The §6.1 work-item slug pattern is duplicated across every schema that carries a
 # work-item (4 sites). These two tests are the anti-drift guard: all sites must use the
 # SAME pattern, and that pattern must agree with what work_item_slug actually emits — so
