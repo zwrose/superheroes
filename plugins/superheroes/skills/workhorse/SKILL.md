@@ -134,9 +134,12 @@ When the routed issue is a **register-consuming child** — an epic child of a p
 register, or a single-issue child standing in for one under FR-36 — run the register-check at
 **build intake** before the brief, whether or not the body contains a quoted block; a body with
 zero quoted blocks is exactly the case the check is there to fail. Where applicability cannot be
-derived from the issue alone, the route names the register and child token for you to pass. **A
-non-zero exit blocks** the build — on `fail` **park**; on `undecided` **park**, exactly like
-`fail`. Detail:
+derived from the issue alone, the route names the register and child token for you to pass. On
+`pass`, record the check's own output in the intake note — the `result` line, or `pass` together
+with `requiredEntries` — not merely a claim that it ran. When whether the check applies cannot be
+established here, run it anyway and let `undecided` block — never skip on unclear applicability;
+that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks**
+the build — on `fail` **park**; on `undecided` **park**, exactly like `fail`. Detail:
 `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
 
 **Launch-prompt discipline.** Your launch prompt — the message this build session is started with,

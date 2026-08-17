@@ -1014,8 +1014,8 @@ passing vacuously.
 
 *Worked example 4 — the register-check vocabulary.* The three result tokens (`pass`, `fail`,
 `undecided`), the three finding-kind tokens (`text-drift`, `missing-quote`, `unknown-entry`),
-the seven undecided-reason tokens (`register-unreadable`, `body-unreadable`, `register-empty`,
-`register-malformed`, `child-unrecognized`, `usage`, `internal-error`), the three exit codes
+the eight undecided-reason tokens (`register-unreadable`, `body-unreadable`, `register-empty`,
+`register-malformed`, `body-malformed`, `child-unrecognized`, `usage`, `internal-error`), the three exit codes
 (`0`, `1`, `2`), and the schema token (`register-check/1`) are a cross-boundary fact: they are
 stated in `plugins/superheroes/lib/register_check.py` and restated in
 `plugins/superheroes/skills/showrunner/reference/register-check.md`. The authoritative home is

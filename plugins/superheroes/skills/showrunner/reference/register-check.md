@@ -83,7 +83,7 @@ except on `undecided`. `firstDifference` is the first `text-drift` finding, else
 | Result | Exit code | Meaning |
 | --- | --- | --- |
 | `pass` | 0 | Every required quote matches byte-exactly and every quoted block matches its register entry |
-| `fail` | 1 | At least one drifted or missing required quote |
+| `fail` | 1 | At least one `text-drift`, `missing-quote`, or `unknown-entry` finding |
 | `undecided` | 2 | The check could not run to a pass/fail verdict |
 
 A finding object carries the fields listed under **Finding fields** in
@@ -175,6 +175,8 @@ checked against it by `lib/tests/test_ssot_drift.py` per CONVENTIONS §11.2.
 - `register-malformed` — a `*Consumers:*` line before any entry header; a duplicate entry id; an
   entry with empty quotable text; multiple `*Consumers:*` lines in one entry's trailer; or an
   unterminated code fence in the register (reported at the fence **opener's** line number)
+- `body-malformed` — an unterminated code fence in the consumer body (reported at the fence
+  **opener's** line number)
 - `child-unrecognized`
 - `usage`
 - `internal-error`
@@ -221,20 +223,32 @@ FR-36 — run the check against the body **before filing**, whether or not the b
 quoted block; a body with zero quoted blocks is exactly the case the check is there to fail.
 Where applicability cannot be derived from the issue alone, the route names the register and
 child token at routing for the builder to pass. On `fail`, fix the body — do not file a drifted
-quote. **A non-zero exit blocks** filing — `undecided` blocks until the inputs are readable and
-the child token is recognized, exactly like `fail`. See the showrunner charter's board-hygiene
-duty for the filing obligation.
+quote. On `pass`, record the check's own output in the filing note — the `result` line, or `pass`
+together with `requiredEntries` — not merely a claim that it ran. When whether the check applies
+cannot be established here, run it anyway and let `undecided` block — never skip on unclear
+applicability; that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero
+exit blocks** filing — `undecided` blocks until the inputs are readable and the child token is
+recognized, exactly like `fail`. See the showrunner charter's board-hygiene duty for the filing
+obligation.
 
 **Child build intake (workhorse §1).** When the routed issue is a **register-consuming child**,
 run the check at intake before the brief, whether or not the body contains a quoted block. On
 `fail`, **park** — the quoted text is the contract the build is graded on, so a drifted quote is
-not a buildable surface. **A non-zero exit blocks** the build — `undecided` is a **park**, exactly
-like `fail`. See the workhorse charter's intake section for the park obligation.
+not a buildable surface. On `pass`, record the check's own output in the intake note — the
+`result` line, or `pass` together with `requiredEntries` — not merely a claim that it ran. When
+whether the check applies cannot be established here, run it anyway and let `undecided` block —
+never skip on unclear applicability; that is the same fail-closed direction as **A non-zero exit
+blocks**. **A non-zero exit blocks** the build — `undecided` is a **park**, exactly like `fail`.
+See the workhorse charter's intake section for the park obligation.
 
 **Package-read verification pass (showrunner duty 3).** At an epic package read's verification
 pass, re-run the check per **register-consuming child** across **both** directions, whether or
 not each body contains a quoted block. On `fail`, record a blocking package-read finding and do
-not treat the package as verified. **A non-zero exit blocks** verified — `undecided` blocks
+not treat the package as verified. On `pass`, record the check's own output in the package-read
+verification record — the `result` line, or `pass` together with `requiredEntries` — not merely a
+claim that it ran. When whether the check applies cannot be established here, run it anyway and
+let `undecided` block — never skip on unclear applicability; that is the same fail-closed
+direction as **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks
 exactly like `fail`. See the showrunner charter's size/decompose/route duty for the verification
 obligation.
 

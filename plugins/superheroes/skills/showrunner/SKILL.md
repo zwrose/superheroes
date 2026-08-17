@@ -88,10 +88,14 @@ above).
    has a register, or a single-issue child standing in for one under FR-36 — run the register-check
    against the filed body **before filing**, whether or not the body contains a quoted block; a body
    with zero quoted blocks is exactly the case the check is there to fail. Fix the body rather than
-   filing a drifted or incomplete quote. **A non-zero exit blocks** filing — `undecided` blocks
-   until the inputs are readable and the child token is recognized, exactly like `fail`. Where
-   applicability cannot be derived from the issue alone, the route names the register and child
-   token at routing for the builder to pass. Detail:
+   filing a drifted or incomplete quote. On `pass`, record the check's own output in the filing
+   note — the `result` line, or `pass` together with `requiredEntries` — not merely a claim that
+   it ran. When whether the check applies cannot be established here, run it anyway and let
+   `undecided` block — never skip on unclear applicability; that is the same fail-closed direction
+   as **A non-zero exit blocks**. **A non-zero exit blocks** filing — `undecided` blocks until the
+   inputs are readable and the child token is recognized, exactly like `fail`. Where applicability
+   cannot be derived from the issue alone, the route names the register and child token at routing
+   for the builder to pass. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Keep epics and milestones truthful. **Edit owner-authored
    issue/PR bodies in place** when the facts change — never a comment that corrects a body the
@@ -119,7 +123,11 @@ above).
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
    At an epic **package read's verification pass**, re-run the register-check per
    **register-consuming child** across **both** directions, whether or not each body contains a
-   quoted block. On `fail`, record a blocking package-read finding. **A non-zero exit blocks**
+   quoted block. On `fail`, record a blocking package-read finding. On `pass`, record the check's
+   own output in the package-read verification record — the `result` line, or `pass` together with
+   `requiredEntries` — not merely a claim that it ran. When whether the check applies cannot be
+   established here, run it anyway and let `undecided` block — never skip on unclear applicability;
+   that is the same fail-closed direction as **A non-zero exit blocks**. **A non-zero exit blocks**
    verified — `undecided` blocks exactly like `fail`. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
    Mark each issue's route — **build-ready** (the builder
