@@ -68,6 +68,16 @@ _WORKTREE_COLLISION_REMEDY = (
 
 _WORKHORSE_CMD = "/superheroes:workhorse"
 
+# What a reader of a `started` record sees when its lane launched over a recorded surface
+# overlap (#1054): which lanes it overlaps, and where the cost lands. Both citations are
+# to rules those homes actually state — `base-moved` is the doctrine ruling that says to
+# rebase when the base moves, and merge-train.md is what requires a remaining lane to stay
+# branch-current. merge-train.md does NOT state a "landing order" rule, so this does not
+# claim one.
+_OVERLAP_EVIDENCE_SUFFIX = (
+    "later lander rebases (base-moved ruling) and stays branch-current (merge-train.md)"
+)
+
 _SLOT_REMEDY = (
     "Provision this wave's pilot slots first (the advisor's duty — the builder never "
     "self-provisions), then give every lane named in `missing` its own reservation. "
@@ -957,6 +967,32 @@ def _terminalize(
     return {"ok": bool(result.get("ok")), "reason": result.get("reason")}
 
 
+def _accounted_fail(reserve_result, reason, launch_id, **extra):
+    """A pre-spawn refusal carries the disclosure its accounting reservation recorded.
+
+    These branches refuse before any child spawns, but `_try_reserve_for_refusal` has
+    already written a `reserved` record — which may carry `surfaceOverlap` (#1054). A
+    result that omits the warning hides an overlap the ledger is holding.
+    """
+    warnings = list((reserve_result or {}).get("warnings") or [])
+    return _fail(reason, launchId=launch_id, warnings=warnings, **extra)
+
+
+def _overlap_evidence(warnings):
+    """Disclosure text for a launch that reserved over live lanes; None when it did not."""
+    ids = []
+    for warning in warnings or []:
+        if not isinstance(warning, str):
+            continue
+        prefix, sep, live_id = warning.partition(":")
+        if prefix != "surface-overlap" or not sep or not live_id.strip():
+            continue
+        ids.append(live_id.strip())
+    if not ids:
+        return None
+    return "overlaps %s; %s" % (", ".join(ids), _OVERLAP_EVIDENCE_SUFFIX)
+
+
 def _spawn_attempt(
     repo_root,
     launch_id,
@@ -970,6 +1006,7 @@ def _spawn_attempt(
     slot=None,
     generation=None,
     cwd=None,
+    evidence=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
@@ -1021,6 +1058,8 @@ def _spawn_attempt(
         "logPath": log_path,
         "errPath": err_path,
     }
+    if isinstance(evidence, str) and evidence.strip():
+        started["evidence"] = evidence
     append_result = _append_under_lock(repo_root, started, env=env)
     if not append_result["ok"]:
         term = _terminalize(
@@ -1031,12 +1070,15 @@ def _spawn_attempt(
             evidence="started-append-failed",
             proc=proc,
             env=env,
-            started_repair={
-                "attempt": attempt,
-                "pid": proc.pid,
-                "logPath": log_path,
-                "errPath": err_path,
-            },
+            started_repair=dict(
+                {
+                    "attempt": attempt,
+                    "pid": proc.pid,
+                    "logPath": log_path,
+                    "errPath": err_path,
+                },
+                **({"evidence": started["evidence"]} if "evidence" in started else {})
+            ),
         )
         fail_reason = _terminalization_reason(term, append_result["reason"])
         return {"ok": False, "reason": fail_reason, "proc": None, "refused": True}
@@ -1112,14 +1154,16 @@ def launch_build(
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
             if not term["ok"]:
-                return _fail(
+                return _accounted_fail(
+                    reserve_result,
                     _terminalization_reason(term, reason),
-                    launchId=launch_id,
+                    launch_id,
                     **_preflight_extra(preflight_result),
                 )
-        return _fail(
+        return _accounted_fail(
+            reserve_result,
             reason,
-            launchId=launch_id,
+            launch_id,
             **_preflight_extra(preflight_result),
         )
 
@@ -1140,8 +1184,10 @@ def launch_build(
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
             if not term["ok"]:
-                return _fail(_terminalization_reason(term, reason), launchId=launch_id)
-        return _fail(reason, launchId=launch_id)
+                return _accounted_fail(
+                    reserve_result, _terminalization_reason(term, reason), launch_id,
+                )
+        return _accounted_fail(reserve_result, reason, launch_id)
 
     compose_result = compose_launch(
         repo_root, issue, premise_result["premise"], model=model, doctrine_loader=doctrine_loader,
@@ -1159,8 +1205,10 @@ def launch_build(
         if reserve_result.get("reserved"):
             term = _terminalize(repo_root, launch_id, False, reason, stage=stage, env=env)
             if not term["ok"]:
-                return _fail(_terminalization_reason(term, reason), launchId=launch_id)
-        return _fail(reason, launchId=launch_id)
+                return _accounted_fail(
+                    reserve_result, _terminalization_reason(term, reason), launch_id,
+                )
+        return _accounted_fail(reserve_result, reason, launch_id)
 
     stamped = premise_result["premise"]
     doctrine = compose_result["doctrine"]
@@ -1178,11 +1226,14 @@ def launch_build(
                 stage="worktree", env=env,
             )
             if not term["ok"]:
-                return _fail(
+                return _accounted_fail(
+                    reserve_result,
                     _terminalization_reason(term, "launch-worktree-path-unresolvable"),
-                    launchId=launch_id,
+                    launch_id,
                 )
-        return _fail("launch-worktree-path-unresolvable", launchId=launch_id)
+        return _accounted_fail(
+            reserve_result, "launch-worktree-path-unresolvable", launch_id,
+        )
 
     worktree_result = create_build_worktree(
         repo_root, worktree_path, stamped["baseCommit"], env=env,
@@ -1206,12 +1257,13 @@ def launch_build(
                 env=env,
             )
             if not term["ok"]:
-                return _fail(
+                return _accounted_fail(
+                    reserve_result,
                     _terminalization_reason(term, refusal_reason),
-                    launchId=launch_id,
+                    launch_id,
                     **extra,
                 )
-        return _fail(refusal_reason, launchId=launch_id, **extra)
+        return _accounted_fail(reserve_result, refusal_reason, launch_id, **extra)
 
     resolution = compose_result["modelResolution"]
     model_reason = resolution["reason"]
@@ -1254,6 +1306,23 @@ def launch_build(
             extra["orphanedWorktree"] = worktree_path
         return _fail(reserve_result["reason"], launchId=launch_id, **extra)
 
+    # The lanes this launch's surfaces overlapped are a recorded, disclosed warning rather
+    # than a refusal (#1054). Stamped on the `started` record so a ledger reader sees the
+    # accepted overlap and where the cost lands, without the advisor's context.
+    warnings = list(reserve_result.get("warnings") or [])
+    overlap_evidence = _overlap_evidence(warnings)
+
+    def _post_reserve_fail(reason, **extra):
+        """Every return past the reservation carries the overlap disclosure.
+
+        The reservation is where the overlap becomes a fact, so a caller reading a
+        LATER failure still needs it — a lane that spawned and then died over an
+        accepted overlap is exactly when the advisor wants to know. Routing the
+        post-reserve failures through one helper is what keeps a future failure path
+        from silently omitting it.
+        """
+        return _fail(reason, launchId=launch_id, warnings=warnings, **extra)
+
     ledger_recheck = _ledger_live_state(repo_root, env=env)
     slot_refusal = _slot_reservation_gate(
         repo_root,
@@ -1276,9 +1345,8 @@ def launch_build(
             env=env,
         )
         reason = _terminalization_reason(term, refusal_reason)
-        return _fail(
+        return _post_reserve_fail(
             reason,
-            launchId=launch_id,
             **_preflight_extra(slot_refusal),
         )
 
@@ -1294,7 +1362,7 @@ def launch_build(
             env=env,
         )
         reason = _terminalization_reason(term, "log-dir-create-failed")
-        return _fail(reason, launchId=launch_id)
+        return _post_reserve_fail(reason)
     log_path = os.path.join(log_dir, "%s.stdout" % launch_id)
     err_path = os.path.join(log_dir, "%s.stderr" % launch_id)
 
@@ -1312,7 +1380,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
 
         spawn_result = _spawn_attempt(
             repo_root,
@@ -1327,9 +1395,10 @@ def launch_build(
             slot=slot,
             generation=generation,
             cwd=worktree_path,
+            evidence=overlap_evidence,
         )
         if spawn_result.get("refused"):
-            return _fail(spawn_result["reason"], launchId=launch_id)
+            return _post_reserve_fail(spawn_result["reason"])
         if spawn_result.get("oserror"):
             if attempt >= max_attempts:
                 term = _terminalize(
@@ -1341,7 +1410,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, "spawn-oserror-exhausted")
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 term = _terminalize(
@@ -1353,7 +1422,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, "retry-deadline-exceeded")
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             delay_idx = min(attempt - 1, len(backoff_seconds) - 1)
             delay = min(backoff_seconds[delay_idx], remaining)
             if delay >= remaining:
@@ -1366,7 +1435,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, "retry-deadline-exceeded")
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             retry_record = {
                 "event": "retry",
                 "launchId": launch_id,
@@ -1387,7 +1456,7 @@ def launch_build(
                     env=env,
                 )
                 reason = _terminalization_reason(term, retry_append["reason"])
-                return _fail(reason, launchId=launch_id)
+                return _post_reserve_fail(reason)
             if delay > 0:
                 time.sleep(delay)
             attempt += 1
@@ -1402,7 +1471,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, spawn_result["reason"])
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
 
         child_ever_spawned = True
         proc = spawn_result["proc"]
@@ -1418,7 +1487,7 @@ def launch_build(
                 env=env,
             )
             reason = _terminalization_reason(term, "retry-deadline-exceeded")
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
         if rc is None:
             return {
                 "ok": True,
@@ -1431,6 +1500,7 @@ def launch_build(
                 "model": compose_result["model"],
                 "modelResolution": compose_result["modelResolution"],
                 "worktree": worktree_path,
+                "warnings": warnings,
             }
 
         evidence = "exit-zero" if rc == 0 else "nonzero-exit:%s" % rc
@@ -1445,9 +1515,9 @@ def launch_build(
         )
         if rc == 0:
             reason = _terminalization_reason(term, "settle-exit-zero-uncertain")
-            return _fail(reason, launchId=launch_id)
+            return _post_reserve_fail(reason)
         reason = _terminalization_reason(term, "settle-nonzero-exit")
-        return _fail(reason, launchId=launch_id)
+        return _post_reserve_fail(reason)
 
 
 def _try_reserve_for_refusal(
@@ -1502,7 +1572,11 @@ def _try_reserve_for_refusal(
     if boundary is not None:
         reserved["boundary"] = boundary
     result = ll.reserve(repo_root, reserved, env=env)
-    return {"reserved": result["ok"]}
+    # This accounting reservation can itself land on a live lane's surfaces, so it carries
+    # the same disclosure a normal reservation does (#1054). Dropping it here is how the
+    # pre-spawn refusal paths used to return a result that hid an overlap the ledger had
+    # already recorded on the reserved record.
+    return {"reserved": result["ok"], "warnings": list(result.get("warnings") or [])}
 
 
 def record_outcome(repo_root, launch_id, outcome, evidence, env=None, await_exit=0):

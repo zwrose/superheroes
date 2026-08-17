@@ -135,6 +135,14 @@ Four elements, in this order:
 3. **What accepting it means** — what the owner still carries after merging.
 4. **What is theirs to decide** — the open calls at the click, or `None`.
 
+**Writing the slot is a read-modify-write of a body you did not author — do it safely.** Read the
+body from the repo cwd or with an explicit `-R <owner/repo>`, into a scratch file you will *not*
+push from directly; check the read's exit status and that the file is non-empty and still carries
+the `advisor-vet` and `build-record` markers **before** any `--body-file` push. The failure mode, in
+one clause: a shell redirect truncates the target file *before* `gh` runs, so a `gh` read that fails
+(wrong cwd, no repo context) leaves an empty file that the next `--body-file` pushes as the body —
+observed on PR #1041 (2026-08-16), diagnosed by the detective's first rehearsal.
+
 **Probes, accounting and dispositions are mechanism.** Where they belong in the slot at all they go
 **collapsed inside `<details>`**, below the four elements, never above them; the pointer to the
 receipt comment carries the rest. Consequence up, mechanism down — the same rule the PR body's own

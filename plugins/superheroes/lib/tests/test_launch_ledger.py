@@ -276,15 +276,189 @@ def test_append_failure_returns_false(tmp_path, monkeypatch):
     assert ll.append(repo, {"x": 1}) is False
 
 
-def test_reserve_surface_overlap(tmp_path, monkeypatch):
+def test_reserve_surface_overlap_warns_and_records(tmp_path, monkeypatch):
+    # axis: an ancestor overlap with a DIFFERENT lane reserves, warns, and records (#1054)
     repo = _init_repo(tmp_path / "repo")
     env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
-    r1 = ll.reserve(repo, _reserved("l1", "b1", ["plugins/superheroes/lib"], repo), env=env)
+    r1 = ll.reserve(
+        repo,
+        _reserved("l1", "b1", ["plugins/superheroes/lib"], repo, issue=1001),
+        env=env,
+    )
     assert r1["ok"] is True
-    r2 = ll.reserve(repo, _reserved("l2", "b2", ["plugins/superheroes"], repo), env=env)
+    assert r1["warnings"] == []
+    r2 = ll.reserve(
+        repo,
+        _reserved("l2", "b2", ["plugins/superheroes"], repo, issue=1002),
+        env=env,
+    )
+    assert r2["ok"] is True
+    assert r2["warnings"] == ["surface-overlap:l1"]
+
+    records = ll.read(repo, env=env)["records"]
+    reserved = {r["launchId"]: r for r in records if r.get("event") == "reserved"}
+    assert reserved["l2"]["surfaceOverlap"] == ["l1"]
+    # The lane that overlapped nothing carries no field at all — never an empty list.
+    assert "surfaceOverlap" not in reserved["l1"]
+    folded = ll.fold(records)
+    assert folded["ok"] is True
+    assert folded["launches"]["l2"]["surfaceOverlap"] == ["l1"]
+    assert folded["launches"]["l1"]["surfaceOverlap"] is None
+
+
+def test_reserve_disjoint_surfaces_carry_no_overlap_field(tmp_path, monkeypatch):
+    # axis: the no-overlap pair is silent — no warning, no field, nothing to disclose
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    r1 = ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo, issue=1001), env=env)
+    r2 = ll.reserve(repo, _reserved("l2", "b2", ["beta"], repo, issue=1002), env=env)
+    assert r1["ok"] is True and r2["ok"] is True
+    assert r1["warnings"] == [] and r2["warnings"] == []
+    records = ll.read(repo, env=env)["records"]
+    for rec in records:
+        assert "surfaceOverlap" not in rec
+
+
+def test_reserve_same_lane_duplicate_still_refuses(tmp_path, monkeypatch):
+    # axis: the hard refusal that stays — a second LIVE launch for one issue (#1054)
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    r1 = ll.reserve(
+        repo,
+        _reserved("l1", "b1", ["plugins/superheroes/lib"], repo, issue=1001),
+        env=env,
+    )
+    assert r1["ok"] is True
+    r2 = ll.reserve(
+        repo,
+        _reserved("l2", "b2", ["plugins/superheroes"], repo, issue=1001),
+        env=env,
+    )
     assert r2["ok"] is False
     assert r2["reason"] == "surface-overlap:l1"
+    assert r2["blockingLaunchId"] == "l1"
+    records = ll.read(repo, env=env)["records"]
+    assert [r["launchId"] for r in records if r.get("event") == "reserved"] == ["l1"]
+
+
+def test_reserve_same_lane_duplicate_refuses_even_on_disjoint_surfaces(tmp_path, monkeypatch):
+    # axis: the same-lane refusal is keyed on the ISSUE, never on surfaces — a duplicate
+    # reserved under a different batch id is one `count` could never have caught (#1054)
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    r1 = ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo, issue=1001), env=env)
+    assert r1["ok"] is True
+    r2 = ll.reserve(repo, _reserved("l2", "b2", ["beta"], repo, issue=1001), env=env)
+    assert r2["ok"] is False
+    assert r2["reason"] == "surface-overlap:l1"
+    assert r2["blockingLaunchId"] == "l1"
+    records = ll.read(repo, env=env)["records"]
+    assert [r["launchId"] for r in records if r.get("event") == "reserved"] == ["l1"]
+
+
+def test_reserve_same_lane_refusal_lifts_once_the_first_is_terminal(tmp_path, monkeypatch):
+    # axis: the refusal is scoped to LIVE lanes — a relaunch after handback reserves
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    ll.reserve(repo, _reserved("l1", "b1", ["alpha"], repo, issue=1001), env=env)
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
+    r2 = ll.reserve(repo, _reserved("l2", "b1", ["alpha"], repo, issue=1001), env=env)
+    assert r2["ok"] is True
+    assert r2["warnings"] == []
+
+
+def test_reserve_warning_names_every_overlapped_live_lane(tmp_path, monkeypatch):
+    # axis: two live lanes overlapped -> both named, sorted, in warning and record
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    ll.reserve(repo, _reserved("zzz", "b1", ["pkg/a"], repo, issue=1001), env=env)
+    ll.reserve(repo, _reserved("aaa", "b1", ["pkg/b"], repo, issue=1002), env=env)
+    r3 = ll.reserve(repo, _reserved("l3", "b1", ["pkg"], repo, issue=1003), env=env)
+    assert r3["ok"] is True
+    assert r3["warnings"] == ["surface-overlap:aaa", "surface-overlap:zzz"]
+    records = ll.read(repo, env=env)["records"]
+    reserved = {r["launchId"]: r for r in records if r.get("event") == "reserved"}
+    assert reserved["l3"]["surfaceOverlap"] == ["aaa", "zzz"]
+
+
+def test_reserve_ignores_a_caller_supplied_surface_overlap(tmp_path, monkeypatch):
+    # axis: the field is measured by the ledger, never a caller's claim
+    repo = _init_repo(tmp_path / "repo")
+    env = {ll.LEDGER_ROOT_ENV: str(tmp_path / "ledger")}
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, env[ll.LEDGER_ROOT_ENV])
+    record = _reserved("l1", "b1", ["alpha"], repo, issue=1001, surfaceOverlap=["ghost"])
+    result = ll.reserve(repo, record, env=env)
+    assert result["ok"] is True
+    assert result["warnings"] == []
+    records = ll.read(repo, env=env)["records"]
+    assert "surfaceOverlap" not in records[0]
+
+
+def test_fold_refuses_a_malformed_surface_overlap(tmp_path):
+    # axis: grammar census — the shape half of surfaceOverlap validation
+    base = _reserved("l1", "b1", ["alpha"], str(tmp_path), issue=1001)
+    bad_values = (
+        [], ["ok", ""], ["ok", 7], "l2", {}, [None],
+        ["l3", "l2"],        # unsorted is not a shape reserve writes
+        ["l2", "l2"],        # nor is a duplicate
+        ["l1"],              # nor is a launch overlapping itself
+    )
+    for bad in bad_values:
+        rec = dict(base)
+        rec["surfaceOverlap"] = bad
+        folded = ll.fold([rec])
+        assert folded["ok"] is False, "surfaceOverlap %r folded clean" % (bad,)
+        assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+
+def test_fold_refuses_an_ungrounded_surface_overlap(tmp_path):
+    # axis: the REFERENTIAL half — a named lane must be one reserve could have chosen:
+    # reserved earlier, still live, on a different issue
+    repo = str(tmp_path)
+    live = _reserved("l1", "b1", ["alpha"], repo, issue=1001)
+    started = _started("l1")
+
+    ghost = _reserved("l2", "b1", ["alpha"], repo, issue=1002)
+    ghost["surfaceOverlap"] = ["nobody"]
+    folded = ll.fold([live, ghost])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+    same_issue = _reserved("l3", "b1", ["alpha"], repo, issue=1001)
+    same_issue["surfaceOverlap"] = ["l1"]
+    folded = ll.fold([live, same_issue])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+    after_terminal = _reserved("l4", "b1", ["alpha"], repo, issue=1002)
+    after_terminal["surfaceOverlap"] = ["l1"]
+    folded = ll.fold([live, started, _outcome("l1", outcome="handback"), after_terminal])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:reserved:surfaceOverlap"
+
+    # The grounded shape reserve actually writes folds clean.
+    grounded = _reserved("l5", "b1", ["alpha"], repo, issue=1002)
+    grounded["surfaceOverlap"] = ["l1"]
+    assert ll.fold([live, grounded])["ok"] is True
+
+
+def test_fold_refuses_empty_started_evidence(tmp_path):
+    # axis: the launcher's overlap disclosure is never an empty claim
+    reserved = _reserved("l1", "b1", ["alpha"], str(tmp_path), issue=1001)
+    started = _started("l1")
+    started["evidence"] = "   "
+    folded = ll.fold([reserved, started])
+    assert folded["ok"] is False
+    assert folded["reason"] == "fold-bad-field:started:evidence"
+    started["evidence"] = "overlaps l2; later lander rebases and stays branch-current"
+    assert ll.fold([reserved, started])["ok"] is True
 
 
 def test_reserve_lock_unavailable(tmp_path, monkeypatch):
@@ -640,6 +814,8 @@ def test_reserve_refuses_when_lock_is_held(tmp_path, monkeypatch):
 
 
 def test_concurrent_reserve_overlapping_surfaces(tmp_path, monkeypatch):
+    # Both workers race the SAME lane (issue 1), so exactly one wins the surviving
+    # same-lane refusal; the axis is the lock serializing them, not the overlap gate.
     repo = _init_repo(tmp_path / "repo")
     ledger_root = str(tmp_path / "ledger")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, ledger_root)
@@ -822,11 +998,13 @@ def test_edge5_canonical_path_overlap_same_repo(tmp_path, monkeypatch):
     pkg.mkdir()
     (pkg / "x").mkdir()
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
-    r1 = ll.reserve(repo, _reserved("l1", "b1", ["pkg/x"], repo))
+    # Distinct issues, so the detection under test is surface canonicalization and not
+    # the same-lane refusal; a canonicalized alias is what makes the overlap visible.
+    r1 = ll.reserve(repo, _reserved("l1", "b1", ["pkg/x"], repo, issue=1001))
     assert r1["ok"] is True
-    r2 = ll.reserve(repo, _reserved("l2", "b2", ["pkg/../pkg/x"], repo))
-    assert r2["ok"] is False
-    assert r2["reason"].startswith("surface-overlap:")
+    r2 = ll.reserve(repo, _reserved("l2", "b2", ["pkg/../pkg/x"], repo, issue=1002))
+    assert r2["ok"] is True
+    assert r2["warnings"] == ["surface-overlap:l1"]
 
 
 def test_edge6_symlinked_alias_surface_overlap(tmp_path, monkeypatch):
@@ -837,11 +1015,13 @@ def test_edge6_symlinked_alias_surface_overlap(tmp_path, monkeypatch):
     alias.parent.mkdir(parents=True, exist_ok=True)
     alias.symlink_to(real_dir)
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
-    r1 = ll.reserve(repo, _reserved("l1", "b1", ["real/target"], repo))
+    # Distinct issues: the symlinked alias must still resolve onto the live lane's surface,
+    # which now reads as a recorded warning rather than a refusal (#1054).
+    r1 = ll.reserve(repo, _reserved("l1", "b1", ["real/target"], repo, issue=1001))
     assert r1["ok"] is True
-    r2 = ll.reserve(repo, _reserved("l2", "b2", ["alias"], repo))
-    assert r2["ok"] is False
-    assert r2["reason"].startswith("surface-overlap:")
+    r2 = ll.reserve(repo, _reserved("l2", "b2", ["alias"], repo, issue=1002))
+    assert r2["ok"] is True
+    assert r2["warnings"] == ["surface-overlap:l1"]
 
 
 def test_edge7_record_outcome_without_started_refused(tmp_path, monkeypatch):
@@ -936,6 +1116,69 @@ def test_edge13_count_inspect_true_on_zero_park_refusal_refused_to_launch(tmp_pa
     assert "never a clean sheet" in result["inspectReason"]
 
 
+def test_count_reports_overlaps_accepted(tmp_path, monkeypatch):
+    # axis: a batch that RAN an accepted overlap reads as such, never clean-by-omission
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-overlap"
+    _declare(repo, batch, 2)
+    first = ll.reserve(repo, _reserved("l1", batch, ["pkg/a"], repo, issue=1001))
+    second = ll.reserve(repo, _reserved("l2", batch, ["pkg"], repo, issue=1002))
+    assert first["warnings"] == [] and second["warnings"] == ["surface-overlap:l1"]
+    for lid in ("l1", "l2"):
+        _append_raw(_ledger_file(repo, os.environ), _started(lid))
+        _append_raw(_ledger_file(repo, os.environ), _outcome(lid, outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["overlapsAccepted"] == 1
+    assert result["counts"]["total"] == 2
+
+
+def test_count_reports_zero_overlaps_accepted_without_one(tmp_path, monkeypatch):
+    # axis: the tally's zero leg — a disjoint batch reports 0, not a missing key
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-no-overlap"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved("l1", batch, ["pkg/a"], repo, issue=1001))
+    ll.reserve(repo, _reserved("l2", batch, ["pkg/b"], repo, issue=1002))
+    for lid in ("l1", "l2"):
+        _append_raw(_ledger_file(repo, os.environ), _started(lid))
+        _append_raw(_ledger_file(repo, os.environ), _outcome(lid, outcome="handback"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["overlapsAccepted"] == 0
+
+
+def test_count_does_not_tally_an_overlap_that_never_started(tmp_path, monkeypatch):
+    # axis: `overlapsAccepted` means RAN — a lane stamped at reserve and then refused
+    # before spawn must not read as an accepted parallel run alongside refusedToLaunch
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    batch = "b-overlap-refused"
+    _declare(repo, batch, 2)
+    ll.reserve(repo, _reserved("l1", batch, ["pkg/a"], repo, issue=1001))
+    second = ll.reserve(repo, _reserved("l2", batch, ["pkg"], repo, issue=1002))
+    assert second["warnings"] == ["surface-overlap:l1"]
+    _append_raw(_ledger_file(repo, os.environ), _started("l1"))
+    _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="handback"))
+    # l2 never spawned — refused after its reservation was stamped with the overlap.
+    _append_raw(_ledger_file(repo, os.environ), _refused("l2"))
+    result = ll.count(repo, batch)
+    assert result["resolved"] is True
+    assert result["counts"]["refusedToLaunch"] == 1
+    assert result["counts"]["overlapsAccepted"] == 0
+
+
+def test_count_indeterminate_carries_the_overlap_tally(tmp_path, monkeypatch):
+    # axis: the zeroed block a caller reads on an indeterminate batch stays complete
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
+    result = ll.count(repo, "b-nothing")
+    assert result["indeterminate"] is True
+    assert result["counts"]["overlapsAccepted"] == 0
+
+
 def test_edge14_count_refused_to_launch_only_not_inspect(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
@@ -952,12 +1195,17 @@ def test_edge14_count_refused_to_launch_only_not_inspect(tmp_path, monkeypatch):
 
 
 def test_edge15_overlap_refusal_names_blocking_launch(tmp_path, monkeypatch):
+    # The surviving refusal is the same-lane duplicate, so both records name one issue.
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
-    ll.reserve(repo, _reserved("blocker", "b1", ["plugins/superheroes/lib"], repo))
+    ll.reserve(
+        repo, _reserved("blocker", "b1", ["plugins/superheroes/lib"], repo, issue=1001),
+    )
     path = _ledger_file(repo, os.environ)
     _append_raw(_ledger_file(repo, os.environ), _started("blocker"))
-    result = ll.reserve(repo, _reserved("l2", "b2", ["plugins/superheroes"], repo))
+    result = ll.reserve(
+        repo, _reserved("l2", "b2", ["plugins/superheroes"], repo, issue=1001),
+    )
     assert result["ok"] is False
     assert result["reason"] == "surface-overlap:blocker"
     assert result["blockingLaunchId"] == "blocker"
@@ -2526,14 +2774,19 @@ def test_lane_sequential_retries_same_issue_resolve(tmp_path, monkeypatch):
 
 
 def test_lane_concurrent_same_issue_refuses(tmp_path, monkeypatch):
-    # axis: overlapping same-lane launches refuse before unresolved
+    # axis: overlapping same-lane launches refuse before unresolved.
+    # `reserve` refuses this pair outright (#1054), so the records are appended raw:
+    # this pins count's own guard, the defence in depth for records reserve never wrote.
     repo = _init_repo(tmp_path / "repo")
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-concurrent"
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=601))
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=601))
+    _append_raw(
+        _ledger_file(repo, os.environ),
+        _reserved("l2", batch, ["b"], repo, issue=601),
+    )
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-lane-concurrent:601"
@@ -2545,8 +2798,12 @@ def test_lane_concurrent_same_issue_interleaved_refuses(tmp_path, monkeypatch):
     monkeypatch.setenv(ll.LEDGER_ROOT_ENV, str(tmp_path / "ledger"))
     batch = "b-interleaved"
     _declare(repo, batch, 1)
+    # `reserve` refuses this same-issue pair outright (#1054); appending the second record
+    # raw is what still exercises count's own guard.
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=602))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=602))
+    _append_raw(
+        _ledger_file(repo, os.environ), _reserved("l2", batch, ["b"], repo, issue=602),
+    )
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
     _append_raw(_ledger_file(repo, os.environ), _outcome("l1", outcome="park"))
     _append_raw(_ledger_file(repo, os.environ), _started("l2"))
@@ -2798,9 +3055,11 @@ def test_lane_overlapping_sequential_timestamps_still_refuses_concurrent(tmp_pat
     r1 = _reserved("l1", batch, ["a"], repo, issue=801)
     r1["ts"] = 100.0
     ll.reserve(repo, r1)
+    # Appended raw: `reserve` refuses a second live launch for one issue (#1054), and the
+    # guard under test here is count's index-based one, not reserve's.
     r2 = _reserved("l2", batch, ["b"], repo, issue=801)
     r2["ts"] = 500.0
-    ll.reserve(repo, r2)
+    _append_raw(path, r2)
     s1 = _started("l1")
     s1["ts"] = 150.0
     _append_raw(path, s1)
@@ -2891,7 +3150,10 @@ def test_count_concurrency_beats_unresolved(tmp_path, monkeypatch):
     _declare(repo, batch, 1)
     ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=1101))
     _append_raw(_ledger_file(repo, os.environ), _started("l1"))
-    ll.reserve(repo, _reserved("l2", batch, ["b"], repo, issue=1101))
+    # Raw, for the same reason as the other lane-concurrency fixtures (#1054).
+    _append_raw(
+        _ledger_file(repo, os.environ), _reserved("l2", batch, ["b"], repo, issue=1101),
+    )
     result = ll.count(repo, batch)
     assert result["indeterminate"] is True
     assert result["reason"] == "batch-lane-concurrent:1101"
