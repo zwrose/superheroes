@@ -3760,11 +3760,30 @@ def _routing_names_from_copy_holder(label, root_kind, rel, anchor_pattern):
                 % (label, route_phrase)
             )
         return _routing_names_from_paren_or_backticks(pm.group(1))
+    if label == "skills/showrunner/SKILL.md frontmatter description":
+        fm = re.match(r"^---\s*\n(.*?)\n---", text, re.DOTALL)
+        if not fm:
+            pytest.fail(
+                "%s: YAML frontmatter block cannot be delimited at start of "
+                "file" % label
+            )
+        frontmatter = fm.group(1)
+        enum_pattern = r"to one of four routes \(([^)]+)\)"
+        matches = list(re.finditer(enum_pattern, frontmatter))
+        if len(matches) != 1:
+            if not matches:
+                pytest.fail(
+                    "%s: anchor not found in frontmatter — %r"
+                    % (label, enum_pattern)
+                )
+            pytest.fail(
+                "%s: expected exactly one route enumeration in frontmatter, "
+                "found %d" % (label, len(matches))
+            )
+        return _routing_names_from_paren_or_backticks(matches[0].group(1))
     m = re.search(anchor_pattern, text, re.MULTILINE)
     if not m:
         pytest.fail("%s: anchor not found — %r" % (label, anchor_pattern))
-    if label == "skills/showrunner/SKILL.md frontmatter description":
-        return _routing_names_from_paren_or_backticks(m.group(1))
     if label == "skills/configure/reference/preflight.md §E":
         region = text[m.end(): m.end() + 400]
         om = re.search(
@@ -3779,22 +3798,36 @@ def _routing_names_from_copy_holder(label, root_kind, rel, anchor_pattern):
         return _routing_names_from_paren_or_backticks(om.group(1))
     if label == "README.md Showrunner section":
         region = text[m.end(): m.end() + 600]
-        pm = re.search(r"\(([^)]+)\)", region, re.DOTALL)
-        if not pm:
+        phrase = "one of four intake routes"
+        if phrase not in region:
             pytest.fail(
-                "%s: parenthesized route list not found after section anchor"
-                % label
+                "%s: anchor phrase %r not found in bounded region"
+                % (label, phrase)
             )
-        return _routing_names_from_paren_or_backticks(pm.group(1))
+        enum_pattern = re.escape(phrase) + r"\s*\(([^)]+)\)"
+        matches = list(re.finditer(enum_pattern, region, re.DOTALL))
+        if len(matches) != 1:
+            pytest.fail(
+                "%s: expected exactly one anchored enumeration after %r, "
+                "found %d" % (label, phrase, len(matches))
+            )
+        return _routing_names_from_paren_or_backticks(matches[0].group(1))
     if label == "CONVENTIONS.md Showrunner cast bullet":
         region = text[m.start(): m.start() + 600]
-        pm = re.search(r"\(([^)]+)\)", region, re.DOTALL)
-        if not pm:
+        phrase = "one of four intake routes"
+        if phrase not in region:
             pytest.fail(
-                "%s: parenthesized route list not found in Showrunner bullet"
-                % label
+                "%s: anchor phrase %r not found in bounded region"
+                % (label, phrase)
             )
-        return _routing_names_from_paren_or_backticks(pm.group(1))
+        enum_pattern = re.escape(phrase) + r"\s*\(([^)]+)\)"
+        matches = list(re.finditer(enum_pattern, region, re.DOTALL))
+        if len(matches) != 1:
+            pytest.fail(
+                "%s: expected exactly one anchored enumeration after %r, "
+                "found %d" % (label, phrase, len(matches))
+            )
+        return _routing_names_from_paren_or_backticks(matches[0].group(1))
     pytest.fail("%s: no extraction rule for copy-holder" % label)
 
 
@@ -3803,8 +3836,9 @@ def _routing_register_path():
 
 
 def _routing_normalize(text):
-    """Compare charter spans to R6 after stripping emphasis and collapsing whitespace."""
-    return re.sub(r"\s+", " ", text.replace("*", "")).strip()
+    """Compare charter spans to R6 after stripping markup and collapsing whitespace."""
+    stripped = text.replace("*", "").replace("_", "").replace("`", "")
+    return re.sub(r"\s+", " ", stripped).strip()
 
 
 def _routing_parse_r6_entry_text():
@@ -4021,9 +4055,12 @@ def test_r6_route_spans_in_showrunner_routing_block():
     assert judgment_norm in block_norm, (
         "showrunner routing block missing R6 judgment-input sentence %r" % judgment
     )
-    assert "decides no precedence" in entry, (
-        "register R6: precedence-denial clause missing from home entry — "
-        "charter pin below is no longer licensed"
+    _precedence_denial = "this register decides no precedence."
+    _precedence_count = entry.count(_precedence_denial)
+    assert _precedence_count == 1, (
+        "register R6: expected exactly one occurrence of %r in home entry, "
+        "found %d — charter pin below is no longer licensed"
+        % (_precedence_denial, _precedence_count)
     )
     # Holder-specific pin — not home-derived; bounds the register-voice tail adaptation.
     # Home bound (decides no precedence) is checked first per CONVENTIONS §11.3.
@@ -4130,6 +4167,14 @@ def test_retired_discovery_route_name_census():
 
 
 def test_charters_forbid_inverted_routing_forms():
+    """Removed routing behaviours must not creep back into either charter.
+
+    Residual: the guard treats each charter as one whitespace-collapsed stream,
+    so a forbidden phrase synthesized across a paragraph boundary (e.g. a line
+    ending in ``run`` followed by a line beginning ``discovery yourself``)
+    would be reported as a hit — a false positive — and that is accepted
+    rather than closed with block-aware markdown parsing.
+    """
     # axis: removed routing behaviours have not crept back into either charter
     inverted = list(_ROUTING_INVERTED_FORMS)
     inverted.append(_retired_discovery_route_literal())
