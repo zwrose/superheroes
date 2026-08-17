@@ -135,6 +135,12 @@ Four elements, in this order:
 3. **What accepting it means** — what the owner still carries after merging.
 4. **What is theirs to decide** — the open calls at the click, or `None`.
 
+**One standing row writes into this half by name.** When the **standing anchor-coverage row**
+fires — the diff introduces owner-perceivable new behavior that no approved decision covers — its
+flag belongs **here, in plain language**: what the new behavior is, and that no approved decision
+covers it. It is exactly what the owner is being asked to accept, so it is stated in the owner half
+and not left in the receipt alone.
+
 **Writing the slot is a read-modify-write of a body you did not author — do it safely.** Read the
 body from the repo cwd or with an explicit `-R <owner/repo>`, into a scratch file you will *not*
 push from directly; check the read's exit status and that the file is non-empty and still carries

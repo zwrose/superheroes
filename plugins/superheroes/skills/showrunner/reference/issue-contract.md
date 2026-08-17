@@ -4,6 +4,8 @@
 - [The three-slot skeleton](#the-three-slot-skeleton)
 - [The Anchor slot](#the-anchor-slot)
 - [The build-ready block](#the-build-ready-block)
+- [Anchor resolution](#anchor-resolution)
+- [The standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row)
 - [The DoD bar](#the-dod-bar)
 - [Currency](#currency)
 - [The standing NFR vet row](#the-standing-nfr-vet-row)
@@ -78,9 +80,9 @@ longer fence stays fenced.
 
 ### Shape, not resolution
 
-What is checked at **build-ready marking** is that the header **declares** exactly one
-recognized kind; whether that anchor **resolves** is a **different, later check owned by
-another work item**.
+What is checked at **build-ready marking** is that the header **declares** exactly one recognized
+kind. Whether that anchor **resolves** is a **different, later check** — it runs at build intake,
+and its home is [Anchor resolution](#anchor-resolution) below.
 
 ## The build-ready block
 
@@ -119,6 +121,66 @@ reading the JSON result from stdout.
 
 **Empty What or DoD** are **reported but never blocking** at filing — they are graded at vet,
 not refused at build-ready marking.
+
+## Anchor resolution
+
+Recording an anchor and **resolving** one are two different acts at two different times. The
+build-ready block above grades the Anchor's **shape** at filing. This section is the **resolution**
+test the **builder** applies at **build intake**, before any spend — the second of the three
+layers. Its failure face is a **stop**, and the advisor's repair is the other half of that path.
+
+**The three per-kind tests.** An Anchor carries exactly one anchor of its declared kind, and each
+kind resolves by its own test:
+
+- **Spec-section anchor.** It resolves when the spec's owner approval is recorded (`status: approved` with its `approved:` date), the cited section exists in the current body, and no substantive-class Amendments entry numbered greater than the anchor's `as-of amendment #N` names the cited section among its touched sections. Wording-class entries never stale an anchor. Entries are numbered by their order of addition to the log, oldest = 1 — the number is positional, not a field — so same-day amendments stay ordered, and the cursor test compares entry numbers, never dates.
+- **Receipt anchor.** It resolves when the link is live.
+- **Ruling anchor.** It resolves when the dated, owner-attributed record is reachable where the ruling was made and no later owner decision supersedes it.
+
+A malformed Anchor — a header that declares no kind, an unknown kind, or more than one kind — and
+an empty Anchor **do not resolve**: they stop intake exactly as a failed per-kind test does.
+
+**The log side fails closed too.** The cursor leg reads as *no* substantive entry numbered greater
+than N — a sentence that is trivially satisfied when there is nothing to read. So it does not pass
+by default. If the spec carries no Amendments log at all, if the log cannot be read, if an entry is
+missing its class or its touched-section list, or if the anchor's `#N` is greater than the number of
+entries the log holds, the cursor leg **does not resolve** — it stops intake exactly as a named
+substantive entry would. A leg you cannot complete never resolves an anchor.
+
+**Why the cursor is a number and not a date.** The `as-of amendment #N` cursor names *how many*
+entries the Amendments log held when the anchor was cited, so the entries that could have staled it
+are exactly the ones added since — the ones **numbered greater than N**. Numbering is positional,
+by order of addition, which is what keeps two amendments made on the same day ordered with respect
+to each other. A reader who reaches for the dates instead gets the same answer most of the time and
+the wrong answer on exactly the day it matters, silently. **The comparison is on entry numbers.**
+
+**Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
+no file in the repository changes — and reports on the issue which per-kind test failed and what
+failed to resolve. The **builder never repairs its own anchor**. The **advisor repairs the route**:
+**re-anchor** on a decision that does resolve, **re-route** the work, or **park it to the owner**;
+the repair is recorded in the issue body, and the build resumes **only** on the advisor's word. A stop with
+no repair is an abandoned issue, not a safeguard working; a build that resumed without the repair
+is a process defect.
+
+**What this layer does not do.** It grades the **issue**, never the diff — the layer that inspects
+the diff is [the standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row). It adds
+**no machinery over the Amendments log**: it reads that log's entry numbers, classes, and touched
+sections as they already stand, and the log's own contract lives with the amendment machinery, not
+here.
+
+## The standing anchor-coverage vet row
+
+At **every** PR vet — the third and last anchor layer, and the **only one that inspects the diff** —
+grade whether the diff introduces **owner-perceivable new behavior that no approved decision
+covers**: no spec section and no dated owner ruling, or a citation whose **scope does not reach**
+the behavior. **The standing anchor-coverage row** is graded on every PR, exactly like the standing
+NFR row below, so a PR with no flag means the row was graded and did not fire — never that nobody
+asked.
+
+When it fires, the flag is written **in plain language** — what the new behavior is, and that no
+approved decision covers it — and it **reaches the owner in the owner half** of the PR body, not
+only in the advisor's own receipt. What the owner is being asked to accept is precisely that they
+are about to merge behavior they never approved; a flag that stops at the receipt has not reached
+the person the rule exists for.
 
 ## The DoD bar
 

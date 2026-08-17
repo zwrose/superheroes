@@ -98,6 +98,26 @@ above).
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+
+   **Record the anchor at filing.** Given an issue being routed build-ready, when it is filed, then
+   its body carries a **filled Anchor slot naming one of the three anchor kinds** — `spec-section`,
+   `receipt`, or `ruling` — recorded **at filing time**, never added afterwards. The anchor is the
+   owner-approved decision the issue is downstream of: a spec section, a receipt (a review finding, an
+   incident record, a bug report, or a gate result), or a dated owner ruling. **An issue citing none
+   of the three kinds cannot be marked build-ready** — that is the whole point of recording it here
+   rather than leaving it to be reconstructed at build time, when the decision it names may already
+   have moved.
+
+   **Notify in-flight builds when a ruling is superseded.** When you record an owner decision that
+   **supersedes an earlier ruling**, notify every in-flight build whose Anchor slot cites the
+   superseded ruling — at the moment you record the new decision, not afterwards. **The Anchor
+   citation is the reverse index:** affected work is located by its Anchor slot, so no rulings ledger
+   exists or ships. **Register-embedded copies count as citations too** — also check open epics'
+   registers for embedded copies of the superseded ruling, and amend an affected register the same way
+   any mid-flight amendment reaches its children. **Record the notice where the build will see it**
+   — on that build's issue or PR, never only in a channel message that the build's session cannot
+   read. A build that merges downstream of a reversed ruling without that notice is a **process
+   defect**, not a builder defect.
    When an issue being filed is a **register-consuming child** — an epic child of a package that
    has a register, or a single-issue child standing in for one under FR-36 — run the register-check
    against the filed body **before filing**, whether or not the body contains a quoted block; a body
@@ -138,6 +158,18 @@ above).
    When marking an issue **build-ready**, run the issue-contract check against the issue body
    and **decline the marking** when it reports a refusal — the check is advisory and the
    decision is the advisor's; micro work never reaches this check. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+
+   **Repair a builder's anchor stop.** A build stops before any spend when its cited anchor does not
+   resolve, and reports what failed on the issue. That report is yours to repair, and **stop, report, and
+   repair are one path graded end to end on the issue** — an intake stop produces no PR, so the
+   issue is the only surface on which the whole path is readable; a stop with no repair is an
+   abandoned issue, not a safeguard working. Three repairs, and exactly one of them applies: **re-anchor** the issue on a
+   decision that does resolve; **re-route** the work when the anchor's failure means it was routed
+   wrong; or **park it to the owner** when neither is yours to decide. **Record which you did in the
+   issue body** — never only in a comment — together with what failed to resolve, so the next reader
+   finds a repaired issue rather than a contradicted one. **A builder never repairs its own anchor**,
+   and a build that resumed without your repair is a process defect. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
    At an epic **package read's verification pass**, re-run the register-check per
    **register-consuming child** across **both** directions, whether or not each body contains a
@@ -244,6 +276,14 @@ above).
      matches the work's current state, and a build-ready issue's Anchor link resolves to the
      approved decision in one hop). **A stale What or DoD fails the spot-check even when the
      anchor link resolves.** Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   - **The standing anchor-coverage row** — at **every** vet, check whether the diff introduces
+     **owner-perceivable new behavior that no approved decision covers**: no spec section and no dated
+     owner ruling, or a citation whose scope does not reach the behavior. This is a **standing row**,
+     graded on every PR, and it is the **only anchor layer that inspects the diff** — the other two
+     grade the issue. When it fires, the verdict **carries the flag in plain language** — what the new
+     behavior is, and that no approved decision covers it — and that flag **reaches the owner in the
+     owner half**, not only in your receipt. Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
    - **The standing NFR row** — at **every** child PR vet in a spec package, grade the three
      package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
