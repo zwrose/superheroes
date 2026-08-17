@@ -3032,6 +3032,7 @@ def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_pa
     assert rnd == reached_round
     out = RD._advance_orchestrator_fulfilled_locked(
         d, state, phase, rnd, attempt, config, git=_fake_git(_gitdir(tmp_path)))
+    assert out["ok"] is True
     assert "folded" not in out
     assert out["notFolded"]["reason"] == "round-ceiling"
     assert out["notFolded"]["phase"] == phase
@@ -3058,6 +3059,7 @@ def test_advance_owner_gate_parks_honestly_above_round_ceiling(tmp_path, adapter
     config = state.get("config") or {}
     out = RD._advance_owner_gate(d, state, phase, rnd, attempt, config,
                                  git=_fake_git(_gitdir(tmp_path)))
+    assert out["ok"] is True
     assert "folded" not in out
     assert out["notFolded"]["reason"] == "round-ceiling"
     assert out["terminal"] == "halted"
@@ -3073,6 +3075,7 @@ def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
     pend = state["pending"]
     phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
     out = RD._advance_locked(d, state, git=_fake_git(_gitdir(tmp_path)))
+    assert out["ok"] is True
     assert "folded" not in out
     assert out["notFolded"]["reason"] == "round-ceiling"
     assert out["terminal"] == "halted"
@@ -3113,27 +3116,73 @@ def _submit_assign_name(fn_node, ast_mod, call_node):
     return None
 
 
+def _walk_own_scope(node, ast_mod):
+    """Walk *node* and descendants without entering nested function or lambda bodies."""
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast_mod.FunctionDef, ast_mod.AsyncFunctionDef, ast_mod.Lambda)):
+            continue
+        yield from _walk_own_scope(child, ast_mod)
+
+
+def _own_scope_nodes(fn_node, ast_mod):
+    for stmt in fn_node.body:
+        if isinstance(stmt, (ast_mod.FunctionDef, ast_mod.AsyncFunctionDef, ast_mod.Lambda)):
+            continue
+        yield from _walk_own_scope(stmt, ast_mod)
+
+
+def _is_fold_landed_get_call(node, ast_mod, var_name):
+    if not isinstance(node, ast_mod.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast_mod.Attribute) and func.attr == "get"
+            and isinstance(func.value, ast_mod.Name) and func.value.id == var_name
+            and node.args and isinstance(node.args[0], ast_mod.Constant)
+            and node.args[0].value == "foldLanded")
+
+
+def _is_fold_landed_guard_test(test, ast_mod, var_name):
+    if isinstance(test, ast_mod.UnaryOp) and isinstance(test.op, ast_mod.Not):
+        if _is_fold_landed_get_call(test.operand, ast_mod, var_name):
+            return True
+    if (isinstance(test, ast_mod.Compare) and len(test.ops) == 1
+            and isinstance(test.ops[0], ast_mod.IsNot)
+            and _is_fold_landed_get_call(test.left, ast_mod, var_name)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast_mod.Constant)
+            and test.comparators[0].value is True):
+        return True
+    return False
+
+
+def _branch_returns(branch_body, ast_mod):
+    for stmt in branch_body:
+        for node in _walk_own_scope(stmt, ast_mod):
+            if isinstance(node, ast_mod.Return):
+                return True
+    return False
+
+
 def _reads_fold_landed_guard(fn_node, ast_mod, var_name):
-    for node in ast_mod.walk(fn_node):
+    for node in _own_scope_nodes(fn_node, ast_mod):
         if not isinstance(node, ast_mod.If):
             continue
-        test = node.test
-        if not (isinstance(test, ast_mod.UnaryOp) and isinstance(test.op, ast_mod.Not)):
+        if not _is_fold_landed_guard_test(node.test, ast_mod, var_name):
             continue
-        operand = test.operand
-        if not isinstance(operand, ast_mod.Call):
-            continue
-        func = operand.func
-        if (isinstance(func, ast_mod.Attribute) and func.attr == "get"
-                and isinstance(func.value, ast_mod.Name) and func.value.id == var_name
-                and operand.args and isinstance(operand.args[0], ast_mod.Constant)
-                and operand.args[0].value == "foldLanded"):
+        if _branch_returns(node.body, ast_mod):
             return True
     return False
 
 
-def compute_cmd_submit_fold_guard_gaps():
-    tree, ast_mod = _round_driver_ast()
+def compute_cmd_submit_fold_guard_gaps(source=None, allowlist=None):
+    if source is None:
+        tree, ast_mod = _round_driver_ast()
+    else:
+        ast_mod = ast
+        tree = ast.parse(source)
+    if allowlist is None:
+        allowlist = _CMD_SUBMIT_FOLD_GUARD_ALLOWLIST
     func_index = _function_index(tree, ast_mod)
     visitor = _CmdSubmitCallVisitor()
     visitor.visit(tree)
@@ -3144,13 +3193,13 @@ def compute_cmd_submit_fold_guard_gaps():
             unguarded.append("<module>")
             continue
         callers.add(fn_name)
-        if fn_name in _CMD_SUBMIT_FOLD_GUARD_ALLOWLIST:
+        if fn_name in allowlist:
             continue
         fn_node = func_index[fn_name]
         var = _submit_assign_name(fn_node, ast_mod, call)
         if not var or not _reads_fold_landed_guard(fn_node, ast_mod, var):
             unguarded.append(fn_name)
-    stale = sorted(name for name in _CMD_SUBMIT_FOLD_GUARD_ALLOWLIST if name not in callers)
+    stale = sorted(name for name in allowlist if name not in callers)
     return sorted(set(unguarded)), stale
 
 
@@ -3165,3 +3214,62 @@ def test_cmd_submit_fold_landed_caller_census():
     unguarded, stale = compute_cmd_submit_fold_guard_gaps()
     assert stale == [], "stale cmd_submit exemptions: %s" % stale
     assert unguarded == [], "unguarded cmd_submit callers: %s" % unguarded
+
+
+def test_fold_guard_census_rejects_noop_guard():
+    source = """
+def bad_noop(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if not folded.get("foldLanded"):
+        pass
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "bad_noop" in unguarded
+
+
+def test_fold_guard_census_rejects_nested_guard():
+    source = """
+def bad_nested(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    def inner():
+        if not folded.get("foldLanded"):
+            return None
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "bad_nested" in unguarded
+
+
+def test_fold_guard_census_rejects_missing_guard():
+    source = """
+def unguarded_caller(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "unguarded_caller" in unguarded
+
+
+def test_fold_guard_census_accepts_not_get_guard_with_return():
+    source = """
+def good_not_get(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if not folded.get("foldLanded"):
+        return {"ok": False}
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert unguarded == []
+
+
+def test_fold_guard_census_accepts_is_not_true_guard_with_return():
+    source = """
+def good_is_not_true(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if folded.get("foldLanded") is not True:
+        return {"ok": False}
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert unguarded == []

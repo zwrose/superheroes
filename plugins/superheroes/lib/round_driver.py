@@ -3752,7 +3752,9 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             if state.get("terminal"):
                 fail = _terminal_receipt_gate(session_dir, state)
                 if fail:
-                    return _receipt_fault_response(fail)
+                    resp = _receipt_fault_response(fail)
+                    resp["foldLanded"] = True
+                    return resp
             # foldLanded marks a landed fold; its absence is the fail-closed default that covers
             # every future early return above the commit.
             return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step"),
@@ -3814,6 +3816,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                 ("duplicate submit replay; %s" % fault) if is_duplicate else fault)
             if is_duplicate:
                 resp["duplicate"] = True
+                resp["foldLanded"] = True
             return resp
 
     # duplicate detection (an already-accepted submit re-sent — its state hash is now stale, but the

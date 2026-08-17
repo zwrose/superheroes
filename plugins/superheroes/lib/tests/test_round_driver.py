@@ -2208,6 +2208,14 @@ def test_terminal_phase_answer_receipt_fault_on_persisted_fault(tmp_path, path):
     assert resp["reason"] == "receipt-fault", resp
 
 
+def test_terminating_submit_receipt_fault_after_fold_lands_carries_foldLanded(tmp_path):
+    """A fold that commits then fails the terminal receipt gate must still answer foldLanded."""
+    _args, s = _drive_capturing_terminating_submit(str(tmp_path), plant_fault=True)
+    assert s["ok"] is False
+    assert s["reason"] == "receipt-fault"
+    assert s.get("foldLanded") is True
+
+
 def test_duplicate_terminating_submit_fault_preserves_duplicate_flag_and_exits_nonzero(tmp_path):
     """The duplicate-submit replay at a persisted fault answers receipt-fault with the duplicate flag
     preserved (in the response AND the detail for honesty), and the CLI exits nonzero."""
@@ -5416,7 +5424,6 @@ def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
     # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
     assert "Round ceiling 10 reached" in detail
     assert "round 11 had already begun" in detail
-    assert "had already begun" in detail
     assert "not begun" not in detail
 
 
@@ -5445,7 +5452,6 @@ def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
     # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
     assert "Round ceiling 10 reached" in detail
     assert "round 11 had already begun" in detail
-    assert "had already begun" in detail
     assert "not begun" not in detail
 
 
