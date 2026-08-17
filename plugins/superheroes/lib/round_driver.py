@@ -4254,12 +4254,17 @@ def _disclose_order_vendor_provenance_gaps(state, gaps):
     rec = state["rounds"].get(rnd_key) or {}
     prior = rec.get("orderVendorProvenanceGaps")
     merged = list(prior) if isinstance(prior, list) else []
-    seen = {(row.get("seat"), row.get("occurrence"))
+    # Keyed on PHASE too. While the collector was panel-only, `(seat, occurrence)` was unique
+    # within a round; now that every read-only phase can contribute, two phases in one round can
+    # carry the same seat key — a configured panel dimension may be named anything, including a
+    # fixed reviewer seat name — and a phase-blind key silently drops the second phase's row.
+    # Dropping a disclosure is the one thing this collector must never do.
+    seen = {(row.get("phase"), row.get("seat"), row.get("occurrence"))
             for row in merged if isinstance(row, dict)}
     for row in gaps:
         if not isinstance(row, dict):
             continue
-        key = (row.get("seat"), row.get("occurrence"))
+        key = (row.get("phase"), row.get("seat"), row.get("occurrence"))
         if key in seen:
             continue
         merged.append(row)
@@ -4766,7 +4771,7 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         if phase in _READ_ONLY_CHANNEL_PHASES and not _seat_is_engine(row):
             if not _vendor_is_resolved(row):
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence,
-                                    "vendorSource": row.get("vendorSource")})
+                                    "phase": phase, "vendorSource": row.get("vendorSource")})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload, row)
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
@@ -5775,7 +5780,7 @@ _ORCHESTRATOR_FULFILLED_USE_SEAT_PATH = object()
 
 
 def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, seat_key,
-                                     occurrence, payload):
+                                     occurrence, payload, session_id):
     """The durable `seat-result/1` record an orchestrator-fulfilled fold stores (#1037).
 
     Same envelope shape the seat path stores, built from the ACCEPTED bare payload rather than from
@@ -5797,7 +5802,7 @@ def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, se
     row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
     return {
         "schema": round_records.SEAT_RESULT_SCHEMA,
-        "session": _meta_session_id(session_dir),
+        "session": session_id,
         "round": rnd,
         "phase": phase,
         "seat": seat_key,
@@ -5875,12 +5880,27 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
                   and prior.get("artifactHash") == _sha256(_canonical(payload)))
     if replay:
         stored, serr = round_records.read_json(record_path)
+        # The stored envelope must be INTERNALLY sound as well as ours: a declared `payloadSha256`
+        # is the record's own claim about itself, so comparing only that declaration to the bare
+        # payload's hash accepts a record whose `payload` was edited underneath an unchanged
+        # declaration — the torn-write case `round_records.validate_landing` covers on the seat
+        # path. Recompute from the stored payload, and pin the full identity (schema, session,
+        # round, phase), not just the slot.
+        recomputed = (round_records.payload_sha256(stored.get("payload"))
+                      if isinstance(stored, dict) and isinstance(stored.get("payload"), dict)
+                      else None)
         replay = bool(serr is None and isinstance(stored, dict)
+                      and stored.get("schema") == round_records.SEAT_RESULT_SCHEMA
                       and stored.get("fulfilledBy") == "orchestrator"
+                      and stored.get("session") == _meta_session_id(session_dir)
+                      and stored.get("phase") == phase
+                      and stored.get("round") == rnd
                       and stored.get("seat") == seat_key
                       and stored.get("occurrence") == occurrence
                       and stored.get("attempt") == attempt
-                      and stored.get("payloadSha256") == round_records.payload_sha256(payload))
+                      and recomputed is not None
+                      and stored.get("payloadSha256") == recomputed
+                      and recomputed == round_records.payload_sha256(payload))
     record = None
     if not replay:
         # One artifact per slot — the seat path's invariant, now enforced on the bare-vs-record pair
@@ -5906,13 +5926,18 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         # seat record. This path does not route through that validation, so it refuses here rather
         # than committing an envelope whose `session` is null and whose provenance therefore
         # reconstructs nothing.
-        if not _meta_session_id(session_dir):
+        # Read ONCE and carry that exact value into the envelope. Validating the id and then
+        # letting the builder re-read `meta.json` leaves a window where the file (skill-owned, so
+        # not ours to assume stable) changes between the two reads and the guard passes while the
+        # committed envelope carries a different — or null — session.
+        session_id = _meta_session_id(session_dir)
+        if not session_id:
             return _refuse_cmd(session_dir, "advance", "bootstrap-required", phase=phase, rnd=rnd,
                                attempt=attempt, seat=seat_key,
                                detail="no session id in meta.json — refusing to write a durable "
                                       "seat record that could not carry its session provenance")
         envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
-                                                    seat_key, occurrence, payload)
+                                                    seat_key, occurrence, payload, session_id)
         record = {
             "storePath": record_path,
             "envelope": envelope,

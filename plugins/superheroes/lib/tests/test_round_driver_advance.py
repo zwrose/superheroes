@@ -1313,6 +1313,56 @@ def test_replay_does_not_wave_through_a_foreign_record(tmp_path, adapters):
     assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
 
 
+def test_replay_rejects_a_record_whose_payload_was_edited_under_its_declared_hash(tmp_path,
+                                                                                  adapters):
+    """axis: the stored envelope's INTERNAL soundness, not just its declaration.
+
+    `payloadSha256` is the record's own claim about itself. Trusting it while never recomputing
+    from `payload` accepts a record edited underneath an unchanged declaration — the torn-write
+    case the seat path covers — and the fold would then succeed while the record it points at
+    contradicts the folded state."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"] is True
+    folded = _state(d)
+    folded["step"] = RD.P_VERIFY
+    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
+                         "payload": {"command": "none"}}
+    RD.save_state(d, folded)
+    record, err = RR.read_json(_verify_store_path(d))
+    assert err is None
+    record["payload"] = {"result": "fail"}          # declaration left untouched on purpose
+    RR.atomic_write_json(_verify_store_path(d), record)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
+
+
+def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
+    """axis: that no disclosure is DROPPED by deduplication once the collector spans phases.
+
+    A panel dimension may be configured with any name, including a fixed reviewer seat's. While the
+    collector was panel-only, `(seat, occurrence)` was unique within a round; spanning phases makes
+    it collide, and a dropped row means a fallback folded with no receipt."""
+    state = {"round": 1, "rounds": {}}
+    RD._disclose_order_vendor_provenance_gaps(state, [
+        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_PANEL, "vendorSource": None},
+    ])
+    RD._disclose_order_vendor_provenance_gaps(state, [
+        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_GAPSWEEP,
+         "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
+    ])
+    rows = state["rounds"]["1"]["orderVendorProvenanceGaps"]
+    assert len(rows) == 2, rows
+    assert {r["phase"] for r in rows} == {RD.P_PANEL, RD.P_GAPSWEEP}
+    # A/B: a genuine repeat of the SAME phase+slot is still deduplicated.
+    RD._disclose_order_vendor_provenance_gaps(state, [
+        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_GAPSWEEP,
+         "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
+    ])
+    assert len(state["rounds"]["1"]["orderVendorProvenanceGaps"]) == 2
+
+
 def test_advance_refuses_landing_ambiguous_when_payload_and_record_both_present(tmp_path, adapters):
     """Two claims for one slot refuse — the seat path's invariant, on the bare-vs-record pair.
 

@@ -143,8 +143,10 @@ durable `seat-result/1` record in the same commit**, so both fold paths leave th
 reconstructable per-seat provenance. Named refusals:
 `orchestrator-payload-missing`, `orchestrator-payload-unreadable`, `landing-ambiguous` (a bare
 payload beside a durable seat record — two claims for one slot; the shape guard's fault is reported
-first when the payload is also malformed), and the shape guard's own fault.
-`manifest-anchor-unanchored` stays reserved for seat phases.
+first when the payload is also malformed; recover by deleting whichever artifact is not the one you
+meant), `bootstrap-required` (no session id in `meta.json` — the record could not carry its session
+provenance, so nothing is folded; recover by restoring the session id, which `next` mints), and the
+shape guard's own fault. `manifest-anchor-unanchored` stays reserved for seat phases.
 
 **Refusal tokens when paths interleave.** One token can be returned by more than one command — the
 token names the seam, not the direction.
