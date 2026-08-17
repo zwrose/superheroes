@@ -194,7 +194,9 @@ above).
    later act than route selection: an issue routed to `discovery` has nothing to lane yet.
    **`micro` never reaches a builder** — it is your own hard-line edit above, typed in this session
    and recorded in the PR, and probing-worthy micro work re-routes rather than being typed.
-   Then **draft the
+   **Only `build-ready` produces a builder launch.** `discovery` goes to the discovery front door;
+   `detective` goes to the detective with a named diagnosis budget; `micro` stays in this session as
+   your own hard-line edit. For a `build-ready` issue — and only then — **draft the
    launch prompt** the builder begins from: **the workhorse command + the issue pointer, nothing
    else.** Everything durable belongs in the issue at routing time — scope and owner decisions,
    process constraints (test right-sizing, E2E policy), and launch context (local export paths,

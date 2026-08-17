@@ -25,12 +25,16 @@ are gone with them; no lib/*.js copy-holders remain):
   copy-holders: skills/workhorse/SKILL.md (operative resolution bullets, log-side paragraph,
   stop), skills/showrunner/SKILL.md (filing, repair, notice and standing-row clauses),
   skills/showrunner/reference/vet-receipt.md (owner-half delivery clause))
-- Four-route drift (R6 register → two charters) (home: docs/superheroes/front-half-sdlc-core-6181ee/register.md R6;
-  copy-holders: skills/showrunner/SKILL.md routing block, skills/workhorse/SKILL.md §1 intake)
+- Four-route drift (R6 register → two charters + five prose/registry copies) (home:
+  docs/superheroes/front-half-sdlc-core-6181ee/register.md R6; copy-holders: skills/showrunner/SKILL.md
+  routing block + frontmatter description, skills/workhorse/SKILL.md §1 intake,
+  skills/configure/reference/preflight.md §E, README.md Showrunner section, CONVENTIONS.md Showrunner
+  cast bullet, eval/skills/registry.json requiredPhrases)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
 """
+import json
 import os
 import re
 
@@ -3662,6 +3666,137 @@ _ROUTING_INVERTED_FORMS = (
     "the builder runs discovery with the owner first",
 )
 
+# Copy-holder enumeration anchors — one row per hand-maintained route-name list outside the
+# two charter bodies. root: "plugin" = PLUGIN-relative path; "repo" = repository root.
+# Extraction normalizes per holder (strip backticks where present) before list compare.
+_ROUTING_COPY_HOLDER_SPECS = (
+    (
+        "skills/showrunner/SKILL.md frontmatter description",
+        "skills/showrunner/SKILL.md",
+        "plugin",
+        r"to one of four routes \(([^)]+)\)",
+    ),
+    (
+        "skills/configure/reference/preflight.md §E",
+        "skills/configure/reference/preflight.md",
+        "plugin",
+        r"## E — Board wiring for the issue being ripped",
+    ),
+    (
+        "README.md Showrunner section",
+        "README.md",
+        "repo",
+        r"## Showrunner — the advisor session",
+    ),
+    (
+        "CONVENTIONS.md Showrunner cast bullet",
+        "CONVENTIONS.md",
+        "repo",
+        r"- \*\*Showrunner\*\* — the advisor session",
+    ),
+    (
+        "eval/skills/registry.json requiredPhrases",
+        "eval/skills/registry.json",
+        "repo",
+        r'"superheroes/showrunner"',
+    ),
+)
+
+
+def _routing_repo_root():
+    return os.path.normpath(os.path.join(PLUGIN, "..", ".."))
+
+
+def _routing_holder_path(root_kind, rel):
+    if root_kind == "plugin":
+        return os.path.join(PLUGIN, rel)
+    return os.path.join(_routing_repo_root(), rel)
+
+
+def _routing_names_from_paren_or_backticks(fragment):
+    """Normalize holder fragments — backticks are stripped per holder, not uniform."""
+    if "`" in fragment:
+        names = re.findall(r"`([^`]+)`", fragment)
+        if names:
+            return names
+    parts = [p.strip().strip("`") for p in fragment.split(",")]
+    return [p for p in parts if p]
+
+
+def _routing_names_from_copy_holder(label, root_kind, rel, anchor_pattern):
+    path = _routing_holder_path(root_kind, rel)
+    try:
+        text = open(path, encoding="utf-8", errors="replace").read()
+    except OSError as exc:
+        pytest.fail(
+            "%s: cannot read copy-holder at %s — %s" % (label, path, exc)
+        )
+    if label == "eval/skills/registry.json requiredPhrases":
+        m = re.search(anchor_pattern, text)
+        if not m:
+            pytest.fail(
+                "%s: anchor not found — %r" % (label, anchor_pattern)
+            )
+        try:
+            registry = json.loads(text)
+        except json.JSONDecodeError as exc:
+            pytest.fail("%s: invalid JSON at %s — %s" % (label, path, exc))
+        phrases = registry.get("requiredPhrases", {}).get(
+            "superheroes/showrunner", []
+        )
+        route_phrase = next(
+            (p for p in phrases if "four routes" in p),
+            None,
+        )
+        if route_phrase is None:
+            pytest.fail(
+                "%s: requiredPhrases missing four-routes phrase for "
+                "superheroes/showrunner" % label
+            )
+        pm = re.search(r"\(([^)]+)\)", route_phrase)
+        if not pm:
+            pytest.fail(
+                "%s: four-routes phrase missing parenthesized enumeration: %r"
+                % (label, route_phrase)
+            )
+        return _routing_names_from_paren_or_backticks(pm.group(1))
+    m = re.search(anchor_pattern, text, re.MULTILINE)
+    if not m:
+        pytest.fail("%s: anchor not found — %r" % (label, anchor_pattern))
+    if label == "skills/showrunner/SKILL.md frontmatter description":
+        return _routing_names_from_paren_or_backticks(m.group(1))
+    if label == "skills/configure/reference/preflight.md §E":
+        region = text[m.end(): m.end() + 400]
+        om = re.search(
+            r"one of ((?:`[^`]+`(?:,\s*)?)+)",
+            region,
+            re.DOTALL,
+        )
+        if not om:
+            pytest.fail(
+                "%s: route enumeration not found after §E anchor" % label
+            )
+        return _routing_names_from_paren_or_backticks(om.group(1))
+    if label == "README.md Showrunner section":
+        region = text[m.end(): m.end() + 600]
+        pm = re.search(r"\(([^)]+)\)", region, re.DOTALL)
+        if not pm:
+            pytest.fail(
+                "%s: parenthesized route list not found after section anchor"
+                % label
+            )
+        return _routing_names_from_paren_or_backticks(pm.group(1))
+    if label == "CONVENTIONS.md Showrunner cast bullet":
+        region = text[m.start(): m.start() + 600]
+        pm = re.search(r"\(([^)]+)\)", region, re.DOTALL)
+        if not pm:
+            pytest.fail(
+                "%s: parenthesized route list not found in Showrunner bullet"
+                % label
+            )
+        return _routing_names_from_paren_or_backticks(pm.group(1))
+    pytest.fail("%s: no extraction rule for copy-holder" % label)
+
 
 def _routing_register_path():
     return os.path.normpath(os.path.join(PLUGIN, _ROUTING_REGISTER_REL))
@@ -3769,7 +3904,7 @@ def _showrunner_routing_block():
         "showrunner/SKILL.md: routing block start not found (moved or reworded?)"
     )
     end_m = re.search(
-        r"^\s+Then \*\*draft the",
+        r"\*\*Only `build-ready` produces a builder launch",
         text[start_m.start():],
         re.MULTILINE,
     )
@@ -3849,7 +3984,7 @@ def _retired_discovery_route_literal():
 
 
 def _routing_census_paths():
-    repo_root = os.path.normpath(os.path.join(PLUGIN, "..", ".."))
+    repo_root = _routing_repo_root()
     readme = os.path.join(repo_root, "README.md")
     conventions = os.path.join(repo_root, "CONVENTIONS.md")
     return [readme, conventions] + _collect_plugin_source_paths(PLUGIN)
@@ -3886,7 +4021,12 @@ def test_r6_route_spans_in_showrunner_routing_block():
     assert judgment_norm in block_norm, (
         "showrunner routing block missing R6 judgment-input sentence %r" % judgment
     )
+    assert "decides no precedence" in entry, (
+        "register R6: precedence-denial clause missing from home entry — "
+        "charter pin below is no longer licensed"
+    )
     # Holder-specific pin — not home-derived; bounds the register-voice tail adaptation.
+    # Home bound (decides no precedence) is checked first per CONVENTIONS §11.3.
     pin_norm = _routing_normalize(_ROUTING_PRECEDENCE_DENIAL_PIN)
     assert pin_norm in block_norm, (
         "showrunner routing block missing precedence-denial pin %r"
@@ -3919,10 +4059,6 @@ def test_route_names_enumerated_in_order_in_both_charters():
         % (expected, workhorse_names)
     )
     workhorse_bullets = _workhorse_route_bullet_names()
-    assert len(workhorse_bullets) == 4, (
-        "workhorse §1 route-bullet list drift — expected four bullets, found %d: %r"
-        % (len(workhorse_bullets), workhorse_bullets)
-    )
     bullet_drift = [
         name
         for name in expected
@@ -3933,6 +4069,18 @@ def test_route_names_enumerated_in_order_in_both_charters():
         "in bullets; problems for %r in %r"
         % (bullet_drift, workhorse_bullets)
     )
+
+
+def test_route_names_enumerated_in_order_in_copy_holders():
+    # axis: completeness and order of route-name enumeration in prose/registry copies
+    entry = _routing_parse_r6_entry_text()
+    expected = _routing_route_names_from_r6(entry)
+    for label, rel, root_kind, anchor in _ROUTING_COPY_HOLDER_SPECS:
+        found = _routing_names_from_copy_holder(label, root_kind, rel, anchor)
+        assert found == expected, (
+            "%s: route-name list drift — expected %r, found %r"
+            % (label, expected, found)
+        )
 
 
 def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
@@ -3954,13 +4102,19 @@ def test_census_excludes_pycache_but_catches_retired_route_literal(tmp_path):
     assert str(stale_pyc) not in paths
     assert str(stale_py) in paths
 
-    scanned = []
-    for path in paths:
-        with open(path, encoding="utf-8") as fh:
-            for lineno, line in enumerate(fh, start=1):
-                if literal in line:
-                    scanned.append((path, lineno))
-    assert scanned == [(str(stale_py), 1)]
+    # _scan_paths_for_literal rel paths are PLUGIN-relative (..-heavy on tmp_path trees).
+    hits = _scan_paths_for_literal(paths, literal)
+    stale_hits = [
+        (rel, lineno)
+        for rel, lineno in hits
+        if rel.endswith("stale_hit.py") or rel.endswith(os.path.join("lib", "stale_hit.py"))
+    ]
+    assert stale_hits, (
+        "expected _scan_paths_for_literal to report stale_hit.py, got hits %r" % hits
+    )
+    assert stale_hits[0][1] == 1, (
+        "expected literal on line 1 of stale_hit.py, got %r" % stale_hits
+    )
 
 
 def test_retired_discovery_route_name_census():
@@ -3986,10 +4140,15 @@ def test_charters_forbid_inverted_routing_forms():
         text_norm = _routing_normalize(text)
         for form, form_norm in zip(inverted, inverted_norm):
             if form_norm.lower() in text_norm.lower():
+                # Whole-text match is the failure; line number is diagnostic only.
+                diag_line = None
+                first_token = re.sub(r"\*+", "", form_norm.split()[0]).lower()
                 for lineno, line in enumerate(text.splitlines(), start=1):
-                    line_norm = _routing_normalize(line)
-                    if form_norm.lower() in line_norm.lower():
-                        hits.append((rel, lineno, form, line.strip()))
+                    line_norm = _routing_normalize(line).lower()
+                    if first_token in line_norm:
+                        diag_line = lineno
+                        break
+                hits.append((rel, diag_line, form))
     assert not hits, (
         "inverted routing form(s) found in charter(s): %r" % hits
     )
