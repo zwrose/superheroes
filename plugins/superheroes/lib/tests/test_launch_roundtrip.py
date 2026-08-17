@@ -96,9 +96,12 @@ def _kill_process_group_and_wait(pid, timeout=3.0):
 
 
 def _run_launch(repo, log_dir, premise, checks, monkeypatch, **kwargs):
+    # The lane defaults to the premise's own issue: `reserve` refuses a second LIVE launch
+    # for one issue (#1054), so scenarios sharing one repo must each carry their own lane.
+    default_issue = premise.get("issue", 656) if isinstance(premise, dict) else 656
     return L.launch_build(
         repo,
-        656,
+        kwargs.pop("issue", default_issue),
         premise,
         checks,
         log_dir,
@@ -115,10 +118,10 @@ def _run_launch(repo, log_dir, premise, checks, monkeypatch, **kwargs):
 # --- Part 2 scenario runners (return launch_id) -----------------------------
 
 
-def _scenario_preflight_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_preflight_refusal(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     checks = _all_checks()
     checks["engine-auth"] = {"state": "fail", "reason": "no auth"}
-    premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id)
+    premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue)
     result = _run_launch(
         repo, log_dir, premise, checks, monkeypatch,
         spawn_fn=_make_spawn_fn("sleep"),
@@ -132,8 +135,8 @@ def _scenario_preflight_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
     return launch_id
 
 
-def _scenario_premise_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
-    premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id)
+def _scenario_premise_refusal(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
+    premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue)
     del premise["baseCommit"]
     result = _run_launch(repo, log_dir, premise, _all_checks(), monkeypatch)
     assert result["ok"] is False
@@ -145,8 +148,8 @@ def _scenario_premise_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
     return launch_id
 
 
-def _scenario_compose_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
-    premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id)
+def _scenario_compose_refusal(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
+    premise = _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue)
     result = _run_launch(
         repo, log_dir, premise, _all_checks(), monkeypatch, model="__nope__",
     )
@@ -160,14 +163,14 @@ def _scenario_compose_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
     return launch_id
 
 
-def _scenario_spawn_oserror_exhausted(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_spawn_oserror_exhausted(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = _run_launch(
         repo,
         log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
         _all_checks(),
         monkeypatch,
         spawn_fn=always_oserror,
@@ -185,7 +188,7 @@ def _scenario_spawn_oserror_exhausted(repo, log_dir, surfaces, batch_id, monkeyp
     return launch_id
 
 
-def _scenario_started_append_failure(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_started_append_failure(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     real_append = L._append_under_lock
     calls = {"n": 0}
 
@@ -203,7 +206,7 @@ def _scenario_started_append_failure(repo, log_dir, surfaces, batch_id, monkeypa
         result = _run_launch(
             repo,
             log_dir,
-            _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+            _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
             _all_checks(),
             monkeypatch,
             spawn_fn=_make_spawn_fn("sleep"),
@@ -231,11 +234,11 @@ def _scenario_started_append_failure(repo, log_dir, surfaces, batch_id, monkeypa
     return launch_id
 
 
-def _scenario_settle_nonzero_exit(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_settle_nonzero_exit(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     result = _run_launch(
         repo,
         log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
         _all_checks(),
         monkeypatch,
         spawn_fn=_make_spawn_fn("exit1"),
@@ -256,11 +259,11 @@ def _scenario_settle_nonzero_exit(repo, log_dir, surfaces, batch_id, monkeypatch
     return launch_id
 
 
-def _scenario_settle_exit_zero(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_settle_exit_zero(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     result = _run_launch(
         repo,
         log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
         _all_checks(),
         monkeypatch,
         spawn_fn=_make_spawn_fn("exit0"),
@@ -281,14 +284,14 @@ def _scenario_settle_exit_zero(repo, log_dir, surfaces, batch_id, monkeypatch):
     return launch_id
 
 
-def _scenario_deadline_before_spawn(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_deadline_before_spawn(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     def always_oserror(argv, repo_root, out_fh, err_fh, child_env):
         raise OSError("spawn failed")
 
     result = _run_launch(
         repo,
         log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
         _all_checks(),
         monkeypatch,
         spawn_fn=always_oserror,
@@ -306,7 +309,7 @@ def _scenario_deadline_before_spawn(repo, log_dir, surfaces, batch_id, monkeypat
     return launch_id
 
 
-def _scenario_deadline_after_spawn(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_deadline_after_spawn(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     child_pid = {"pid": None}
     clock = {"monotonic": 1000.0}
     clock_advanced = {"n": 0}
@@ -339,7 +342,7 @@ def _scenario_deadline_after_spawn(repo, log_dir, surfaces, batch_id, monkeypatc
         result = _run_launch(
             repo,
             log_dir,
-            _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+            _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
             _all_checks(),
             monkeypatch,
             spawn_fn=capture_spawn,
@@ -364,11 +367,11 @@ def _scenario_deadline_after_spawn(repo, log_dir, surfaces, batch_id, monkeypatc
         L.time = real_time
 
 
-def _scenario_live_child_refuses_then_handback(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_live_child_refuses_then_handback(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
     result = _run_launch(
         repo,
         log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
         _all_checks(),
         monkeypatch,
         spawn_fn=_make_spawn_fn("sleep"),
@@ -404,11 +407,12 @@ def _scenario_live_child_refuses_then_handback(repo, log_dir, surfaces, batch_id
     return launch_id
 
 
-def _scenario_surface_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeypatch):
+def _scenario_same_lane_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
+    """Both launches carry one issue, so the surviving same-lane refusal fires (#1054)."""
     first = _run_launch(
         repo,
         log_dir,
-        _valid_premise(repo, surfaces=surfaces, batchId=batch_id),
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
         _all_checks(),
         monkeypatch,
         spawn_fn=_make_spawn_fn("sleep"),
@@ -422,7 +426,9 @@ def _scenario_surface_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeyp
         second = _run_launch(
             repo,
             log_dir,
-            _valid_premise(repo, surfaces=overlap_surfaces, batchId=batch_id),
+            _valid_premise(
+                repo, surfaces=overlap_surfaces, batchId=batch_id, issue=issue,
+            ),
             _all_checks(),
             monkeypatch,
             spawn_fn=_make_spawn_fn("sleep"),
@@ -441,6 +447,54 @@ def _scenario_surface_overlap_refusal(repo, log_dir, surfaces, batch_id, monkeyp
     return first_id
 
 
+def _scenario_surface_overlap_warning(repo, log_dir, surfaces, batch_id, monkeypatch, issue=656):
+    """A DIFFERENT lane overlapping a live one launches, warned and recorded (#1054)."""
+    first = _run_launch(
+        repo,
+        log_dir,
+        _valid_premise(repo, surfaces=surfaces, batchId=batch_id, issue=issue),
+        _all_checks(),
+        monkeypatch,
+        spawn_fn=_make_spawn_fn("sleep"),
+        settle_seconds=0.1,
+    )
+    assert first["ok"] is True
+    first_id = first["launchId"]
+    pids = [first["pid"]]
+    try:
+        second = _run_launch(
+            repo,
+            log_dir,
+            _valid_premise(
+                repo, surfaces=[surfaces[0]], batchId=batch_id, issue=issue + 1,
+            ),
+            _all_checks(),
+            monkeypatch,
+            spawn_fn=_make_spawn_fn("sleep"),
+            settle_seconds=0.1,
+        )
+        assert second["ok"] is True, second.get("reason")
+        assert second["warnings"] == ["surface-overlap:%s" % first_id]
+        pids.append(second["pid"])
+        second_id = second["launchId"]
+        _, folded = _assert_p1(repo)
+        records = _read_ledger(repo)["records"]
+        assert _events_for_launch(records, second_id) == ["reserved", "started"]
+        assert folded["launches"][second_id]["surfaceOverlap"] == [first_id]
+        started = [
+            r for r in records
+            if r.get("event") == "started" and r["launchId"] == second_id
+        ]
+        assert started[0]["evidence"].startswith("overlaps %s;" % first_id)
+        assert "branch-current" in started[0]["evidence"]
+        _assert_terminal(folded, first_id, terminal=False)
+        _assert_terminal(folded, second_id, terminal=False)
+    finally:
+        for pid in pids:
+            _kill_child(pid)
+    return first_id
+
+
 PART2_SCENARIOS = [
     _scenario_preflight_refusal,
     _scenario_premise_refusal,
@@ -452,7 +506,8 @@ PART2_SCENARIOS = [
     _scenario_deadline_before_spawn,
     _scenario_deadline_after_spawn,
     _scenario_live_child_refuses_then_handback,
-    _scenario_surface_overlap_refusal,
+    _scenario_same_lane_overlap_refusal,
+    _scenario_surface_overlap_warning,
 ]
 
 
@@ -473,7 +528,8 @@ PART2_SCENARIOS = [
         "deadline-before-spawn",
         "deadline-after-spawn",
         "live-child-refuses-then-handback",
-        "surface-overlap-refusal",
+        "same-lane-overlap-refusal",
+        "surface-overlap-warning",
     ],
 )
 def test_roundtrip_scenario(tmp_path, monkeypatch, scenario_fn):
@@ -585,7 +641,11 @@ def test_interleaved_scenarios_fold_clean(tmp_path, monkeypatch, seed):
         for idx, scenario_fn in enumerate(order):
             surfaces = ["plugins/superheroes/rt/%d" % idx]
             batch_id = "batch-rt-%d" % idx
-            scenario_fn(repo, log_dir, surfaces, batch_id, monkeypatch)
+            # Its own lane per scenario — `reserve` refuses a second LIVE launch for one
+            # issue (#1054), and several scenarios deliberately leave their lane running.
+            # Spaced by 10 so the overlap-warning scenario's second lane (issue + 1) never
+            # lands on a neighbour.
+            scenario_fn(repo, log_dir, surfaces, batch_id, monkeypatch, issue=700 + idx * 10)
             read_result = _read_ledger(repo)
             for rec in read_result["records"]:
                 if rec.get("event") == "started" and rec.get("launchId"):
@@ -600,11 +660,15 @@ def test_interleaved_scenarios_fold_clean(tmp_path, monkeypatch, seed):
         reserved_count = sum(
             1 for r in read_result["records"] if r.get("event") == "reserved"
         )
-        assert reserved_count == len(PART2_SCENARIOS)
+        # One reserved record per scenario, plus one: the overlap-WARNING scenario's second
+        # lane now launches instead of being refused, so it reserves too (#1054).
+        assert reserved_count == len(PART2_SCENARIOS) + 1
         terminal_count = sum(
             1 for info in folded["launches"].values() if info["terminal"]
         )
-        assert terminal_count == len(PART2_SCENARIOS) - 1
+        # Three lanes are deliberately left live: the same-lane-refusal scenario's first
+        # launch, and both of the warning scenario's.
+        assert terminal_count == reserved_count - 3
     finally:
         for pid in pids:
             _kill_child(pid)
