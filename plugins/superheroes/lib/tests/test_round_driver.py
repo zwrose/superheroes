@@ -175,7 +175,8 @@ def test_submit_duplicate_is_idempotent(tmp_path):
     first = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
     assert first["ok"] is True and not first.get("duplicate")
     dup = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], art)
-    assert dup == {"ok": True, "duplicate": True}
+    # foldLanded marks a landed fold; duplicate replay is one of the two honest fold returns.
+    assert dup["ok"] is True and dup.get("duplicate") is True and dup.get("foldLanded") is True
 
 
 # --- #845 panel seat-key guard ------------------------------------------------
