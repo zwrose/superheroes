@@ -18,6 +18,8 @@ import os
 import re
 import subprocess
 import sys
+import datetime
+import glob
 
 import jsonschema
 import pytest
@@ -282,13 +284,36 @@ def _set_gate_file(path, review, run_id="test-run"):
     return DD.set_gate(path, review, expected_hash=DD.content_hash(text), run_id=run_id)
 
 
+def _approved_key_lines(text):
+    lines, end = DD._frontmatter_bounds(text, "test")
+    return [lines[i] for i in range(1, end) if re.match(r"^approved:", lines[i])]
+
+
+def _write_spec_with_frontmatter(tmp_path, extra_fm_lines="", body_extra=""):
+    fm = DD.frontmatter("spec", WI, size="medium", created="2026-06-14", updated="2026-06-14")
+    block = DD.render_frontmatter(fm)
+    if extra_fm_lines:
+        block = block.replace("gates:", extra_fm_lines + "gates:", 1)
+    p = tmp_path / "spec.md"
+    p.write_text(
+        block + "\n# Title\n\nWe will discuss gates: and review: here.\n" + body_extra,
+        encoding="utf-8")
+    return str(p)
+
+
 def test_set_gate_passed_derives_approved_and_revalidates(tmp_path):
     p = _write_spec(tmp_path)
-    assert _set_gate_file(p, "passed") == {"ok": True, "review": "passed", "status": "approved", "runId": "test-run"}
+    today = datetime.date.today().isoformat()
+    result = _set_gate_file(p, "passed")
+    assert result == {
+        "ok": True, "review": "passed", "status": "approved",
+        "runId": "test-run", "approved": today,
+    }
     assert DD.read_gate(p) == "passed"
     parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
     jsonschema.validate(parsed, SCHEMA)  # still schema-valid after the in-place edit
     assert parsed["gates"] == {"review": "passed"} and parsed["status"] == "approved"
+    assert parsed["approved"] == today
 
 
 def test_set_gate_changes_requested_derives_in_review(tmp_path):
@@ -296,6 +321,168 @@ def test_set_gate_changes_requested_derives_in_review(tmp_path):
     _set_gate_file(p, "changes-requested")
     parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
     assert parsed["gates"]["review"] == "changes-requested" and parsed["status"] == "in-review"
+
+
+def test_approved_write_on_passed(tmp_path):
+    p = _write_spec(tmp_path)
+    today = datetime.date.today().isoformat()
+    result = _set_gate_file(p, "passed")
+    assert result["approved"] == today
+    parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
+    jsonschema.validate(parsed, SCHEMA, format_checker=jsonschema.FormatChecker())
+    assert parsed["approved"] == today
+    assert parsed["status"] == "approved"
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == [f'approved: "{today}"']
+
+
+def test_approved_clear_on_changes_requested(tmp_path):
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    result = _set_gate_file(p, "changes-requested")
+    assert "approved" not in result
+    parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
+    assert parsed["status"] == "in-review"
+    assert "approved" not in parsed
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == []
+
+
+def test_approved_clear_on_pending(tmp_path):
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    result = _set_gate_file(p, "pending")
+    assert "approved" not in result
+    parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
+    assert parsed["status"] == "draft"
+    assert "approved" not in parsed
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == []
+
+
+def test_approved_preserve_on_repassed(tmp_path):
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    text = open(p, encoding="utf-8").read()
+    text = text.replace(
+        f'approved: "{datetime.date.today().isoformat()}"',
+        'approved: "2026-08-07"',
+        1)
+    open(p, "w", encoding="utf-8").write(text)
+    result = _set_gate_file(p, "passed")
+    assert result["approved"] == "2026-08-07"
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == ['approved: "2026-08-07"']
+
+
+def test_approved_gates_only_insertion(tmp_path):
+    fm = DD.frontmatter("spec", WI, size="medium", created="2026-06-14", updated="2026-06-14")
+    block = DD.render_frontmatter(fm)
+    block = block.replace("status: draft\n", "")
+    p = tmp_path / "spec.md"
+    p.write_text(block + "\n# t\n", encoding="utf-8")
+    _set_gate_file(str(p), "passed")
+    lines = open(p, encoding="utf-8").read().split("\n")
+    gates_i = next(i for i, ln in enumerate(lines) if ln.startswith("gates:"))
+    assert lines[gates_i + 1] == f'approved: "{datetime.date.today().isoformat()}"'
+
+
+def test_approved_displaced_line_normalized(tmp_path):
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    text = open(p, encoding="utf-8").read()
+    text = text.replace(
+        f'approved: "{datetime.date.today().isoformat()}"',
+        'approved: "2026-08-07"',
+        1)
+    text = text.replace(
+        'status: approved\napproved: "2026-08-07"\ngates: {review: passed}',
+        'status: approved\ngates: {review: passed}\napproved: "2026-08-07"',
+        1)
+    open(p, "w", encoding="utf-8").write(text)
+    _set_gate_file(p, "passed")
+    lines_text = open(p, encoding="utf-8").read()
+    lines, end = DD._frontmatter_bounds(lines_text, p)
+    approved_lines = [lines[i] for i in range(1, end) if lines[i].startswith("approved:")]
+    assert approved_lines == ['approved: "2026-08-07"']
+    status_i = next(i for i in range(1, end) if lines[i].startswith("status:"))
+    assert lines[status_i + 1] == 'approved: "2026-08-07"'
+
+
+def test_approved_duplicate_same_date_collapsed(tmp_path):
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    text = open(p, encoding="utf-8").read()
+    text = text.replace(
+        f'approved: "{datetime.date.today().isoformat()}"',
+        'approved: "2026-08-07"',
+        1)
+    text = text.replace(
+        'approved: "2026-08-07"\n',
+        'approved: "2026-08-07"\napproved: "2026-08-07"\n',
+        1)
+    open(p, "w", encoding="utf-8").write(text)
+    _set_gate_file(p, "passed")
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == ['approved: "2026-08-07"']
+
+
+def test_approved_duplicate_different_dates_use_today(tmp_path):
+    p = _write_spec(tmp_path)
+    _set_gate_file(p, "passed")
+    text = open(p, encoding="utf-8").read()
+    text = text.replace(
+        f'approved: "{datetime.date.today().isoformat()}"\n',
+        'approved: "2026-06-01"\napproved: "2026-06-14"\n',
+        1)
+    open(p, "w", encoding="utf-8").write(text)
+    today = datetime.date.today().isoformat()
+    _set_gate_file(p, "passed")
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == [f'approved: "{today}"']
+
+
+def test_approved_malformed_replaced_with_today(tmp_path):
+    p = _write_spec_with_frontmatter(tmp_path, extra_fm_lines='approved: 2026-08-07\n')
+    today = datetime.date.today().isoformat()
+    _set_gate_file(p, "passed")
+    parsed = _parse_frontmatter(open(p, encoding="utf-8").read())
+    jsonschema.validate(parsed, SCHEMA, format_checker=jsonschema.FormatChecker())
+    assert parsed["approved"] == today
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == [f'approved: "{today}"']
+
+
+def test_approved_body_decoy_untouched(tmp_path):
+    p = _write_spec_with_frontmatter(tmp_path, body_extra="\napproved: \"1999-01-01\"\n")
+    _set_gate_file(p, "passed")
+    body = open(p, encoding="utf-8").read().split("---", 2)[2]
+    assert 'approved: "1999-01-01"' in body
+    assert _approved_key_lines(open(p, encoding="utf-8").read()) == [
+        f'approved: "{datetime.date.today().isoformat()}"']
+
+
+def test_approved_frontmatter_roundtrip(tmp_path):
+    fm = DD.frontmatter(
+        "spec", WI, size="medium", review="passed", approved="2026-06-14",
+        status="approved", created="2026-06-14", updated="2026-06-14")
+    out = DD.render_frontmatter(fm)
+    parsed = _parse_frontmatter(out)
+    jsonschema.validate(parsed, SCHEMA)
+    assert parsed == fm
+    lines = out.split("\n")
+    status_i = next(i for i, ln in enumerate(lines) if ln.startswith("status:"))
+    assert lines[status_i + 1] == 'approved: "2026-06-14"'
+
+
+def test_approved_frontmatter_coherence_guard():
+    with pytest.raises(ValueError):
+        DD.frontmatter("spec", WI, size="medium", approved="2026-06-14")
+    with pytest.raises(ValueError):
+        DD.frontmatter("spec", WI, size="medium", review="passed", status="approved")
+
+
+def test_approved_live_doc_conformance():
+    paths = sorted(glob.glob(os.path.join(_REPO_ROOT, "docs/superheroes/*/spec.md")))
+    assert len(paths) >= 2
+    for path in paths:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        parsed = _parse_frontmatter(text)
+        jsonschema.validate(parsed, SCHEMA)
 
 
 def test_set_gate_rejects_non_review_state(tmp_path):

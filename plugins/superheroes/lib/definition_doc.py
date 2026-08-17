@@ -147,7 +147,7 @@ def resolve_write_path(work_item, doc_type, *, root, cwd=None, store_root=None):
 
 def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
                 created=None, updated=None, status="draft", review="pending",
-                allow_orphan=False):
+                approved=None, allow_orphan=False):
     """Build the §3.1 frontmatter dict, enforcing the parent-linkage invariant.
 
     `spec` must have a null parent; `plan` must parent a `spec`; `tasks` must
@@ -162,13 +162,17 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
     """
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
+    if approved is not None and review != "passed":
+        raise ValueError("approved may be set only when gates.review is passed (§3.1)")
+    if review == "passed" and approved is None:
+        raise ValueError("gates.review passed requires an approved date (§3.1)")
     if allow_orphan and doc_type == "tasks" and parent is None:
         parent_obj = None
     else:
         expected_parent = _PARENT_DOCTYPE[doc_type]
         parent_obj = _normalize_parent(parent, expected_parent, doc_type)
     today = datetime.date.today().isoformat()
-    return {
+    fm = {
         "superheroes": "doc",
         "schemaVersion": SCHEMA_VERSION,
         "docType": doc_type,
@@ -182,6 +186,9 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
         "created": created or today,
         "updated": updated or today,
     }
+    if approved is not None:
+        fm["approved"] = approved
+    return fm
 
 
 def _normalize_parent(parent, expected_doctype, doc_type):
@@ -228,12 +235,16 @@ def render_frontmatter(fm):
         f"parent: {parent_str}",
         f"size: {fm['size']}",
         f"status: {fm['status']}",
+    ]
+    if fm.get("approved") is not None:
+        lines.append(f'approved: "{fm["approved"]}"')
+    lines.extend([
         f"gates: {{review: {fm['gates']['review']}}}",
         f'producedBy: "{fm["producedBy"]}"',
         f'created: "{fm["created"]}"',
         f'updated: "{fm["updated"]}"',
         "---",
-    ]
+    ])
     return "\n".join(lines) + "\n"
 
 
@@ -245,6 +256,8 @@ _STATUS_FOR_REVIEW = {"passed": "approved", "changes-requested": "in-review", "p
 _GATES_RE = re.compile(r"^gates:\s*\{\s*review:\s*([a-z-]+)\s*\}\s*$")
 _STATUS_RE = re.compile(r"^status:\s*[a-z-]+\s*$")
 _UPDATED_RE = re.compile(r'^updated:\s*".*"\s*$')
+_APPROVED_KEY_RE = re.compile(r"^approved:\s*(.*)\s*$")
+_APPROVED_CANONICAL_RE = re.compile(r'^approved:\s*"(\d{4}-\d{2}-\d{2})"\s*$')
 
 
 def _frontmatter_bounds(text, path):
@@ -257,6 +270,41 @@ def _frontmatter_bounds(text, path):
     except ValueError:
         raise ValueError(f"{path}: unterminated frontmatter (no closing '---')")
     return lines, end
+
+
+def _apply_approved_pass(lines, end, review, current_review):
+    """Second pass: sole writer of the `approved:` frontmatter line (§3.1)."""
+    approved_indices = [i for i in range(1, end) if _APPROVED_KEY_RE.match(lines[i])]
+    kept_date = None
+    if review == "passed" and current_review == "passed" and approved_indices:
+        dates = []
+        all_canonical = True
+        for i in approved_indices:
+            m = _APPROVED_CANONICAL_RE.match(lines[i])
+            if not m:
+                all_canonical = False
+                break
+            dates.append(m.group(1))
+        if all_canonical and len(set(dates)) == 1:
+            kept_date = dates[0]
+    for i in sorted(approved_indices, reverse=True):
+        del lines[i]
+        end -= 1
+    if review != "passed":
+        return None
+    date = kept_date or datetime.date.today().isoformat()
+    insert_at = None
+    for i in range(1, end):
+        if _STATUS_RE.match(lines[i]):
+            insert_at = i + 1
+            break
+    if insert_at is None:
+        for i in range(1, end):
+            if _GATES_RE.match(lines[i]):
+                insert_at = i + 1
+                break
+    lines.insert(insert_at, f'approved: "{date}"')
+    return date
 
 
 def read_frontmatter(path):
@@ -351,8 +399,11 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
     status = _STATUS_FOR_REVIEW[review]
     today = datetime.date.today().isoformat()
     found = False
+    current_review = None
     for i in range(1, end):
-        if _GATES_RE.match(lines[i]):
+        m = _GATES_RE.match(lines[i])
+        if m:
+            current_review = m.group(1)
             lines[i] = f"gates: {{review: {review}}}"
             found = True
         elif _STATUS_RE.match(lines[i]):
@@ -361,10 +412,13 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
             lines[i] = f'updated: "{today}"'
     if not found:
         raise ValueError(f"{path}: no 'gates: {{review: …}}' line to update")
+    approved_date = _apply_approved_pass(lines, end, review, current_review)
     result = _atomic_replace(path, "\n".join(lines))
     if not result.get("ok"):
         return result
     out = {"ok": True, "review": review, "status": status, "runId": run_id}
+    if approved_date is not None:
+        out["approved"] = approved_date
     if lease:
         out["lease"] = lease
     return out

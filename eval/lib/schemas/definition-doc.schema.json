@@ -27,6 +27,7 @@
     },
     "size": { "enum": ["small", "medium", "large"] },
     "status": { "enum": ["draft", "in-review", "approved"] },
+    "approved": { "type": "string", "format": "date" },
     "gates": {
       "type": "object",
       "additionalProperties": false,
