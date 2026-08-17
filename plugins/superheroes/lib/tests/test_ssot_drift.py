@@ -20,6 +20,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
+- Register-check vocabulary                              (home: register_check.py)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -2630,3 +2631,491 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         % (missing_conv, extra_conv)
     )
     assert list(issue_contract.SLOTS) == home_slots
+
+
+# --- Cluster: register-check vocabulary (register_check → copy-holders) ---
+#
+# Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
+# - skills/showrunner/reference/register-check.md ## Vocabulary (drift-tested)
+# - skills/showrunner/reference/register-check.md ## The result contract Results table
+# - CONVENTIONS.md §11.2 worked example 4 inline vocabulary prose
+#
+# Drift-tested labels guarded in the vocabulary section: Schema:, Results:, Finding kinds:,
+# Undecided reasons:, Exit codes:, Result fields:, Finding fields:.
+
+
+_REGISTER_CHECK_DOC = "skills/showrunner/reference/register-check.md"
+
+
+def _register_check_string_constants_by_prefix(prefix):
+    """Module-level string constants named PREFIX_* — scoped to vocabulary prefixes only."""
+    import register_check
+
+    derived = set()
+    for name in dir(register_check):
+        if not name.startswith(prefix):
+            continue
+        val = getattr(register_check, name)
+        if isinstance(val, str) and val:
+            derived.add(val)
+    return derived
+
+
+def _register_check_vocabulary_section(doc):
+    """The drift-tested vocabulary section in register-check.md."""
+    headings = re.findall(
+        r"^## Vocabulary \(drift-tested\)\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    assert len(headings) == 1, (
+        "register-check.md: expected exactly one "
+        "## Vocabulary (drift-tested) heading, found %d"
+        % len(headings)
+    )
+    m = re.search(
+        r"^## Vocabulary \(drift-tested\)\s*\n(.*?)(?:\n## |\Z)",
+        doc,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "register-check.md: ## Vocabulary (drift-tested) section not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _register_check_tokens_under_label(section, label):
+    """Inline-code bullet tokens under a **Label:** block — order preserved."""
+    pattern = (
+        r"\*\*%s\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+        % re.escape(label)
+    )
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    assert len(matches) == 1, (
+        "register-check.md: expected exactly one **%s:** label, found %d"
+        % (label, len(matches))
+    )
+    tokens = re.findall(r"^- `([^`]+)`", matches[0].group(1), re.MULTILINE)
+    assert tokens, (
+        "register-check.md: **%s:** bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+        % label
+    )
+    return tokens
+
+
+def _register_check_schema_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return set(_register_check_tokens_under_label(section, "Schema:"))
+
+
+def _register_check_results_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return set(_register_check_tokens_under_label(section, "Results:"))
+
+
+def _register_check_finding_kinds_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return set(_register_check_tokens_under_label(section, "Finding kinds:"))
+
+
+def _register_check_undecided_reasons_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return set(_register_check_tokens_under_label(section, "Undecided reasons:"))
+
+
+def _register_check_exit_codes_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    pattern = r"\*\*Exit codes:\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    assert len(matches) == 1, (
+        "register-check.md: expected exactly one **Exit codes:** label, found %d"
+        % len(matches)
+    )
+    pairs = re.findall(
+        r"^- `(\d+)` — (\w+)",
+        matches[0].group(1),
+        re.MULTILINE,
+    )
+    assert pairs, (
+        "register-check.md: **Exit codes:** bullet list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return {int(code): word for code, word in pairs}
+
+
+def _register_check_result_fields_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_tokens_under_label(section, "Result fields:")
+
+
+def _register_check_finding_fields_from_doc(doc):
+    section = _register_check_vocabulary_section(doc)
+    return _register_check_tokens_under_label(section, "Finding fields:")
+
+
+def _register_check_results_table_from_doc(doc):
+    """Result tokens and exit-code mapping from ## The result contract Results table."""
+    m = re.search(
+        r"^## The result contract\s*\n(.*?)(?:\n## |\Z)",
+        doc,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "register-check.md: ## The result contract section not found "
+        "(moved or reworded?)"
+    )
+    section = m.group(1)
+    table_m = re.search(
+        r"\*\*Results:\*\*\s*\n\n\| Result \| Exit code \| Meaning \|\n"
+        r"\| --- \| --- \| --- \|\n(.*?)(?:\n\n|\Z)",
+        section,
+        re.DOTALL,
+    )
+    assert table_m, (
+        "register-check.md: **Results:** table not found in ## The result contract "
+        "(moved or reformatted?)"
+    )
+    rows = re.findall(
+        r"^\| `(\w+)` \| (\d+) \|",
+        table_m.group(1),
+        re.MULTILINE,
+    )
+    assert len(rows) == 3, (
+        "register-check.md: **Results:** table row count drift — expected 3 rows, "
+        "found %d (table reformatted?)"
+        % len(rows)
+    )
+    return {int(exit_code): result for result, exit_code in rows}
+
+
+def _register_check_worked_example_from_conventions():
+    """Worked example 4 prose block from CONVENTIONS §11.2."""
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"\*Worked example 4 — the register-check vocabulary\.\* (.*?)\n\n",
+        text,
+        re.DOTALL,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: register-check worked example 4 not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _register_check_inline_tokens_from_conventions(prose, label_pattern):
+    """Inline backtick tokens from a worked-example 4 enumeration phrase."""
+    m = re.search(label_pattern, prose)
+    assert m, (
+        "CONVENTIONS.md §11: register-check %s enumeration not found "
+        "(moved or reworded?)"
+        % label_pattern
+    )
+    tokens = re.findall(r"`([^`]+)`", m.group(1))
+    assert tokens, (
+        "CONVENTIONS.md §11: register-check inline list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return tokens
+
+
+def _register_check_undecided_reasons_from_conventions():
+    """Undecided-reason tokens and count word from CONVENTIONS §11.2 worked example 4."""
+    import register_check
+
+    prose = _register_check_worked_example_from_conventions()
+    m = re.search(
+        r"the (\w+) undecided-reason tokens \(([^)]+)\)",
+        prose,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: register-check undecided-reason list not found "
+        "(moved or reworded?)"
+    )
+    count_word = m.group(1).lower()
+    assert count_word in _NUMBER_WORDS, (
+        "CONVENTIONS.md §11 uses unknown undecided-reason count word %r" % count_word
+    )
+    # axis: the prose count word (seven, eight, …) must match len(UNDECIDED_REASONS).
+    assert _NUMBER_WORDS[count_word] == len(register_check.UNDECIDED_REASONS), (
+        "CONVENTIONS.md §11 undecided-reason count word %r (%d) drift from "
+        "len(register_check.UNDECIDED_REASONS) (%d)"
+        % (
+            count_word,
+            _NUMBER_WORDS[count_word],
+            len(register_check.UNDECIDED_REASONS),
+        )
+    )
+    tokens = re.findall(r"`([^`]+)`", m.group(2))
+    assert tokens, (
+        "CONVENTIONS.md §11: undecided-reason token list parsed to zero tokens "
+        "(regex drift or empty list?)"
+    )
+    return set(tokens)
+
+
+def _register_check_exit_codes_from_home():
+    import register_check
+
+    return {
+        register_check.EXIT_PASS: register_check.RESULT_PASS,
+        register_check.EXIT_FAIL: register_check.RESULT_FAIL,
+        register_check.EXIT_UNDECIDED: register_check.RESULT_UNDECIDED,
+    }
+
+
+def test_register_check_schema_in_register_check_doc():
+    """§11: register-check.md restates register_check.SCHEMA."""
+    import register_check
+
+    home = {register_check.SCHEMA}
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_schema_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Schema vocabulary drift from register_check.SCHEMA — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_results_in_register_check_doc():
+    """§11: register-check.md restates register_check.RESULTS."""
+    import register_check
+
+    home = set(register_check.RESULTS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_results_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Results vocabulary drift from register_check.RESULTS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_finding_kinds_in_register_check_doc():
+    """§11: register-check.md restates register_check.FINDING_KINDS."""
+    import register_check
+
+    home = set(register_check.FINDING_KINDS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_finding_kinds_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Finding kinds vocabulary drift from "
+        "register_check.FINDING_KINDS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_undecided_reasons_in_register_check_doc():
+    """§11: register-check.md restates register_check.UNDECIDED_REASONS."""
+    import register_check
+
+    home = set(register_check.UNDECIDED_REASONS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_undecided_reasons_from_doc(doc)
+    missing_from_doc = sorted(home - doc_tokens)
+    extra_in_doc = sorted(doc_tokens - home)
+    assert not missing_from_doc and not extra_in_doc, (
+        "register-check.md Undecided reasons vocabulary drift from "
+        "register_check.UNDECIDED_REASONS — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_from_doc, extra_in_doc)
+    )
+
+
+def test_register_check_exit_codes_in_register_check_doc():
+    """§11: register-check.md restates register_check exit-code mapping."""
+    home = _register_check_exit_codes_from_home()
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_mapping = _register_check_exit_codes_from_doc(doc)
+    missing_from_doc = sorted(
+        code for code in home if code not in doc_mapping
+    )
+    extra_in_doc = sorted(
+        code for code in doc_mapping if code not in home
+    )
+    value_mismatches = sorted(
+        code for code in home
+        if code in doc_mapping and doc_mapping[code] != home[code]
+    )
+    assert (
+        not missing_from_doc
+        and not extra_in_doc
+        and not value_mismatches
+    ), (
+        "register-check.md Exit codes mapping drift from register_check "
+        "EXIT_*/RESULT_* — missing from doc: %r; present in doc but not in "
+        "home: %r; value mismatches: %r"
+        % (missing_from_doc, extra_in_doc, value_mismatches)
+    )
+
+
+def test_register_check_result_fields_in_register_check_doc():
+    """§11: register-check.md restates register_check.RESULT_FIELDS in order."""
+    import register_check
+
+    home = list(register_check.RESULT_FIELDS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_result_fields_from_doc(doc)
+    assert doc_tokens == home, (
+        "register-check.md Result fields drift from register_check.RESULT_FIELDS — "
+        "doc: %r; home: %r"
+        % (doc_tokens, home)
+    )
+
+
+def test_register_check_finding_fields_in_register_check_doc():
+    """§11: register-check.md restates register_check.FINDING_FIELDS in order."""
+    import register_check
+
+    home = list(register_check.FINDING_FIELDS)
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_tokens = _register_check_finding_fields_from_doc(doc)
+    assert doc_tokens == home, (
+        "register-check.md Finding fields drift from register_check.FINDING_FIELDS — "
+        "doc: %r; home: %r"
+        % (doc_tokens, home)
+    )
+
+
+def test_register_check_results_table_in_register_check_doc():
+    """§11: register-check.md Results table restates register_check result/exit mapping."""
+    home = _register_check_exit_codes_from_home()
+    doc = _read(_REGISTER_CHECK_DOC)
+    doc_mapping = _register_check_results_table_from_doc(doc)
+    missing_codes = sorted(set(home.keys()) - set(doc_mapping.keys()))
+    extra_codes = sorted(set(doc_mapping.keys()) - set(home.keys()))
+    wrong_results = sorted(
+        code
+        for code in home
+        if code in doc_mapping and doc_mapping[code] != home[code]
+    )
+    assert (
+        not missing_codes and not extra_codes and not wrong_results
+    ), (
+        "register-check.md Results table drift from register_check exit mapping — "
+        "missing exit codes: %r; extra exit codes: %r; wrong result tokens: %r"
+        % (missing_codes, extra_codes, wrong_results)
+    )
+
+
+def test_register_check_vocabulary_in_conventions():
+    """§11: CONVENTIONS §11.2 worked example 4 restates register_check vocabulary."""
+    import register_check
+
+    prose = _register_check_worked_example_from_conventions()
+    home_results = set(register_check.RESULTS)
+    home_kinds = set(register_check.FINDING_KINDS)
+    home_undecided = set(register_check.UNDECIDED_REASONS)
+    home_exit = _register_check_exit_codes_from_home()
+    home_schema = {register_check.SCHEMA}
+
+    doc_results = set(
+        _register_check_inline_tokens_from_conventions(
+            prose,
+            r"The three result tokens \(([^)]+)\)",
+        )
+    )
+    doc_kinds = set(
+        _register_check_inline_tokens_from_conventions(
+            prose,
+            r"the three finding-kind tokens \(([^)]+)\)",
+        )
+    )
+    doc_undecided = _register_check_undecided_reasons_from_conventions()
+    doc_exit_codes = {
+        int(token)
+        for token in _register_check_inline_tokens_from_conventions(
+            prose,
+            r"the three exit codes\s*\(([^)]+)\)",
+        )
+    }
+    doc_schema = set(
+        _register_check_inline_tokens_from_conventions(
+            prose,
+            r"the schema token \(([^)]+)\)",
+        )
+    )
+
+    missing_results = sorted(home_results - doc_results)
+    extra_results = sorted(doc_results - home_results)
+    assert not missing_results and not extra_results, (
+        "CONVENTIONS.md §11 register-check result vocabulary drift — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_results, extra_results)
+    )
+
+    missing_kinds = sorted(home_kinds - doc_kinds)
+    extra_kinds = sorted(doc_kinds - home_kinds)
+    assert not missing_kinds and not extra_kinds, (
+        "CONVENTIONS.md §11 register-check finding-kind vocabulary drift — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_kinds, extra_kinds)
+    )
+
+    missing_undecided = sorted(home_undecided - doc_undecided)
+    extra_undecided = sorted(doc_undecided - home_undecided)
+    assert not missing_undecided and not extra_undecided, (
+        "CONVENTIONS.md §11 register-check undecided-reason vocabulary drift — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_undecided, extra_undecided)
+    )
+
+    missing_codes = sorted(set(home_exit.keys()) - doc_exit_codes)
+    extra_codes = sorted(doc_exit_codes - set(home_exit.keys()))
+    assert not missing_codes and not extra_codes, (
+        "CONVENTIONS.md §11 register-check exit-code vocabulary drift — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_codes, extra_codes)
+    )
+
+    missing_schema = sorted(home_schema - doc_schema)
+    extra_schema = sorted(doc_schema - home_schema)
+    assert not missing_schema and not extra_schema, (
+        "CONVENTIONS.md §11 register-check schema vocabulary drift — "
+        "missing from doc: %r; present in doc but not in home: %r"
+        % (missing_schema, extra_schema)
+    )
+
+
+def test_register_check_vocabulary_completeness():
+    """Every register_check RESULT_*/KIND_*/UNDECIDED_* constant is in its frozenset."""
+    import register_check
+
+    derived_results = _register_check_string_constants_by_prefix("RESULT_")
+    derived_kinds = _register_check_string_constants_by_prefix("KIND_")
+    derived_undecided = _register_check_string_constants_by_prefix("UNDECIDED_")
+    home_results = set(register_check.RESULTS)
+    home_kinds = set(register_check.FINDING_KINDS)
+    home_undecided = set(register_check.UNDECIDED_REASONS)
+    missing_results = sorted(derived_results - home_results)
+    extra_results = sorted(home_results - derived_results)
+    missing_kinds = sorted(derived_kinds - home_kinds)
+    extra_kinds = sorted(home_kinds - derived_kinds)
+    missing_undecided = sorted(derived_undecided - home_undecided)
+    extra_undecided = sorted(home_undecided - derived_undecided)
+    assert not missing_results and not extra_results, (
+        "register_check RESULT_* constants drift from register_check.RESULTS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_results, extra_results)
+    )
+    assert not missing_kinds and not extra_kinds, (
+        "register_check KIND_* constants drift from register_check.FINDING_KINDS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_kinds, extra_kinds)
+    )
+    assert not missing_undecided and not extra_undecided, (
+        "register_check UNDECIDED_* constants drift from "
+        "register_check.UNDECIDED_REASONS — "
+        "missing from frozenset: %r; in frozenset but not derived: %r"
+        % (missing_undecided, extra_undecided)
+    )

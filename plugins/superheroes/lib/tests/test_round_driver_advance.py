@@ -1139,6 +1139,244 @@ def test_advance_malformed_verify_payload_does_not_fallback_to_seat_record(tmp_p
     assert _state(d)["rounds"]["1"].get("verifyResult") is None
 
 
+# --- orchestrator-fulfilled folds leave a durable record (#1037) --------------
+
+def _verify_store_path(session_dir, rnd=1, attempt=0):
+    return RR.store_path(session_dir, rnd, RD.P_VERIFY, RR.storage_key("verify"), attempt)
+
+
+def _at_run_verify(tmp_path, session_dir):
+    """Drive a fresh session to a pending `run-verify` with no orders manifest."""
+    _record_all_panel_seats(session_dir)
+    assert _advance(session_dir, tmp_path)["ok"] is True
+    _pending_at_run_verify(session_dir)
+
+
+def test_orchestrator_fulfilled_fold_writes_the_durable_seat_record(tmp_path, adapters):
+    """The bare-payload fold stores a `seat-result/1` for the slot — #960's first residual.
+
+    The reconstruction assertion is the point: the folded `verifyResult` is readable from the STORE
+    RECORD alone, with no reference to the state it folded into and no bare payload in hand."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    assert not os.path.exists(_verify_store_path(d))                              # A/B
+    _write_verify_payload(d, {"result": "pass"})
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert _state(d)["rounds"]["1"]["verifyResult"] == "pass"
+
+    record, err = RR.read_json(_verify_store_path(d))
+    assert err is None, err
+    assert record["schema"] == RR.SEAT_RESULT_SCHEMA
+    assert record["phase"] == RD.P_VERIFY and record["seat"] == "verify"
+    assert record["round"] == 1 and record["attempt"] == 0 and record["occurrence"] == 0
+    assert record["payload"] == {"result": "pass"}
+    assert record["payloadSha256"] == RR.payload_sha256({"result": "pass"})
+    # No orders manifest and no anchor exist for an orchestrator-fulfilled phase, so the record may
+    # only carry the `not-emitted` literal — the one claim `_anchor_check` accepts unanchored.
+    assert record["orderSha256"] == RR.NOT_EMITTED
+    assert record["manifestSha256"] == RR.NOT_EMITTED
+    assert record["fulfilledBy"] == "orchestrator"
+    # reconstructed from the record alone
+    assert record["payload"]["result"] == "pass"
+
+
+def test_orchestrator_fulfilled_fold_writes_record_and_receipt_on_a_terminal_verify(
+        tmp_path, adapters):
+    """A verify `fail` folds to a terminal halt: `round-receipt.json` AND the seat record land."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "fail"})
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out.get("terminal") == "halted", out
+    assert os.path.exists(os.path.join(d, RD.RECEIPT_FILE))
+    record, err = RR.read_json(_verify_store_path(d))
+    assert err is None, err
+    assert record["payload"] == {"result": "fail"}
+
+
+def test_orchestrator_fulfilled_record_and_journal_reconcile_clean(tmp_path, adapters):
+    """Record and journal identity agree after the fold — `reconcile` sees no two-commit remnant.
+
+    SCOPE, stated because the name it used to carry over-claimed: a clean `reconcile` after a
+    SUCCESSFUL run would also result from three separate sequential commits, so this proves
+    consistency, not atomicity. The atomicity itself is asserted structurally by
+    `test_durable_record_rides_the_folds_own_commit_intent` below, which inspects the single commit
+    the fold builds rather than its aftermath."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"] is True
+    rec = RR.reconcile(d, 1, RD.P_VERIFY, RD._journal_record_identities(d, 1, RD.P_VERIFY))
+    assert rec["reappend"] == []
+    assert rec["journalOrphan"] == []
+    # Non-vacuity: both lists above are empty because the PAIR landed, not because neither half did.
+    identities = RD._journal_record_identities(d, 1, RD.P_VERIFY)
+    assert any(i.get("seat") == "verify" for i in identities), identities
+    assert os.path.exists(_verify_store_path(d))
+
+
+def test_durable_record_rides_the_folds_own_commit_intent(tmp_path, adapters, monkeypatch):
+    """ONE sealed intent carries the state advance, the record, and the record's journal identity.
+
+    axis: ATOMICITY — that the three writes share a single commit. Asserting their presence after a
+    successful run cannot show this (three sequential commits leave the same aftermath), so this
+    inspects the commit object the fold actually builds, before it runs.
+    """
+    seen = []
+    real_begin = RD.round_commit.begin
+
+    def spy(session_dir, kind, **kw):
+        commit = real_begin(session_dir, kind, **kw)
+        seen.append((kind, commit))
+        return commit
+
+    monkeypatch.setattr(RD.round_commit, "begin", spy)
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    seen.clear()          # drop setup's own commits — only the verify fold is under inspection
+    assert _advance(d, tmp_path)["ok"] is True
+
+    accepts = [c for kind, c in seen if kind == "submit-accept"]
+    assert len(accepts) == 1, [k for k, _ in seen]
+    parts = accepts[0]._parts
+    targets = [p.get("target") for p in parts if p.get("type") == "replace-file"]
+    journals = [p for p in parts if p.get("type") == "journal-append"]
+    assert any(t.endswith(RD.STATE_FILE) for t in targets), targets
+    assert any("run-verify" in (t or "") for t in targets), targets
+    assert any((j.get("entry") or {}).get("outcome") == "recorded" for j in journals), journals
+
+
+def test_orchestrator_fold_refuses_to_write_a_record_with_no_session_id(tmp_path, adapters):
+    """A record whose `session` would be null reconstructs nothing — refuse, don't commit it.
+
+    axis: that the fold REFUSES, not that the envelope merely ends up with a null field. The seat
+    path enforces the same precondition as `bootstrap-required` inside `validate_landing`; this
+    path does not route through that validation, so it owes its own check."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    meta = os.path.join(d, RR.META_FILE)
+    with open(meta, encoding="utf-8") as fh:
+        saved = fh.read()
+    with open(meta, "w", encoding="utf-8") as fh:
+        fh.write("{}")                                   # a meta.json carrying no session id
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "bootstrap-required", out
+    assert not os.path.exists(_verify_store_path(d)), "a refusal must leave nothing behind"
+    assert _state(d)["rounds"]["1"].get("verifyResult") is None
+
+    with open(meta, "w", encoding="utf-8") as fh:        # A/B — the same setup with the id back
+        fh.write(saved)
+    assert _advance(d, tmp_path)["ok"] is True
+    assert os.path.exists(_verify_store_path(d))
+
+
+def test_landing_ambiguity_probe_fails_closed_on_a_dangling_record_symlink(tmp_path, adapters):
+    """axis: the EXISTENCE probe's fail direction. `os.path.exists` follows symlinks and answers
+    False for a dangling one, which would fold the bare payload over an unknown store state."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    record_path = _verify_store_path(d)
+    os.makedirs(os.path.dirname(record_path), exist_ok=True)
+    os.symlink(os.path.join(os.path.dirname(record_path), "no-such-record.json"), record_path)
+    assert not os.path.exists(record_path), "fixture must be a DANGLING symlink"
+    assert os.path.lexists(record_path)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
+    assert _state(d)["rounds"]["1"].get("verifyResult") is None
+
+
+def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
+    """axis: that no disclosure is DROPPED by deduplication once the collector spans phases.
+
+    A panel dimension may be configured with any name, including a fixed reviewer seat's. While the
+    collector was panel-only, `(seat, occurrence)` was unique within a round; spanning phases makes
+    it collide, and a dropped row means a fallback folded with no receipt."""
+    state = {"round": 1, "rounds": {}}
+    RD._disclose_order_vendor_provenance_gaps(state, [
+        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_PANEL, "vendorSource": None},
+    ])
+    RD._disclose_order_vendor_provenance_gaps(state, [
+        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_GAPSWEEP,
+         "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
+    ])
+    rows = state["rounds"]["1"]["orderVendorProvenanceGaps"]
+    assert len(rows) == 2, rows
+    assert {r["phase"] for r in rows} == {RD.P_PANEL, RD.P_GAPSWEEP}
+    # A/B: a genuine repeat of the SAME phase+slot is still deduplicated.
+    RD._disclose_order_vendor_provenance_gaps(state, [
+        {"seat": "gap-sweep", "occurrence": 0, "phase": RD.P_GAPSWEEP,
+         "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
+    ])
+    assert len(state["rounds"]["1"]["orderVendorProvenanceGaps"]) == 2
+
+
+def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(tmp_path, adapters):
+    """The refusal does not exempt the record this path itself wrote.
+
+    axis: that the invariant is UNCONDITIONAL. An earlier revision carried a `replay` escape hatch
+    so a post-fold re-entry would re-fold idempotently; it was removed because recognising "this
+    record is mine" duplicates the already-folded judgment `cmd_submit`'s duplicate contract owns,
+    and the two disagreed differently on every review round. The re-entry it protected could not
+    make progress anyway — a duplicate `submit` returns before `pending` is cleared — so the loud
+    refusal is both the ratified behaviour and the honest one.
+    """
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"] is True                       # A/B: the fold itself works
+    folded = _state(d)
+    folded["step"] = RD.P_VERIFY
+    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
+                         "payload": {"command": "none"}}
+    RD.save_state(d, folded)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
+    # exactly one durable record, and it still reconstructs the folded result.
+    records = [e for e in RD.read_journal(d)
+               if e.get("outcome") == "recorded" and e.get("phase") == RD.P_VERIFY]
+    assert len(records) == 1, records
+    stored, err = RR.read_json(_verify_store_path(d))
+    assert err is None and stored["payload"] == {"result": "pass"}
+
+
+def test_advance_refuses_landing_ambiguous_when_payload_and_record_both_present(tmp_path, adapters):
+    """Two claims for one slot refuse — the seat path's invariant, on the bare-vs-record pair.
+
+    A/B is the whole point of the fixture: the SAME setup minus one artifact folds either way, so
+    the refusal cannot be an artifact of a precondition that was never satisfiable."""
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _land_and_record(d, "verify", payload={"result": "pass", "command": "none", "exit": 0})
+    _write_verify_payload(d, {"result": "pass"})
+    before = RD.state_hash(_state(d))
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
+    assert RD.state_hash(_state(d)) == before, "a refusal must not move the state"
+    assert _pending(d)["phase"] == RD.P_VERIFY
+    assert _state(d)["rounds"]["1"].get("verifyResult") is None
+
+
+def test_landing_ambiguous_ab_each_artifact_alone_still_folds(tmp_path, adapters):
+    """The A/B halves of the refusal above: record alone folds; bare payload alone folds."""
+    record_only = _session(tmp_path, name="record-only")
+    _at_run_verify(tmp_path, record_only)
+    _land_and_record(record_only, "verify",
+                     payload={"result": "pass", "command": "none", "exit": 0})
+    assert _advance(record_only, tmp_path)["ok"] is True
+    assert _state(record_only)["rounds"]["1"]["verifyResult"] == "pass"
+
+    payload_only = _session(tmp_path, name="payload-only")
+    _at_run_verify(tmp_path, payload_only)
+    _write_verify_payload(payload_only, {"result": "pass"})
+    assert _advance(payload_only, tmp_path)["ok"] is True
+    assert _state(payload_only)["rounds"]["1"]["verifyResult"] == "pass"
+
+
 def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):
     """Config seatMap fallback when a submitted panel empties state seats (#723 + #960)."""
     seeded_vendor = "codex"
@@ -1160,19 +1398,34 @@ def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, 
     assert state["seatMap"]["seats"] == {}
     assert state["config"]["seatMap"]["seats"] == partial["seats"]
 
+    # Reach the next panel dispatch through the SUPPORTED re-arm — the #174 confirmation re-arm,
+    # which is how a fresh full panel is actually scheduled — rather than hand-setting
+    # `step`/`pending`/`lastAccepted` (PR #1028 rework finding 24). A hand-set state can emit a
+    # dispatch the driver would never have emitted, and the seat-map fallback assertion below would
+    # then prove nothing about the live path.
     rnd = initial_pend["round"]
-    state["step"] = RD.P_PANEL
+    state["confirmations"] = 0
+    state["surfacedSinceLastPanel"] = ["Critical"]      # a Critical under budget owes one panel
+    state["fullPanelRan"] = False
+    state["findings"] = []
+    state["auditRounds"] = [{"round": rnd, "outcomes": [{"identity": "x", "ruling": "discharged"}]}]
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": ["x"]}
+    state["_changedSubjects"] = ["Code"]
     state["pending"] = None
-    state["lastAccepted"] = {"phase": RD.P_PANEL, "round": rnd, "attempt": 0,
-                             "artifactHash": "abc"}
+    RD._settle_delta(state, state["config"])
+    assert state.get("terminal") is None, "the re-arm must not certify"
+    assert state["step"] == RD.P_PANEL
+    assert any(dd["kind"] == "confirmation-rearm" for dd in state["decisions"])
+    assert state["round"] == rnd + 1
     RD.save_state(d, state)
 
     next_out = RD.cmd_next(d)
     assert next_out["ok"] is True, next_out
     fresh_pend = _pending(d)
     assert fresh_pend["phase"].startswith("dispatch-"), fresh_pend
-    assert fresh_pend["attempt"] != initial_attempt, (
-        "must emit a fresh attempt, not re-read the pre-submit manifest")
+    assert (fresh_pend["round"], fresh_pend["attempt"]) != (rnd, initial_attempt), (
+        "must emit a fresh dispatch, not re-read the pre-submit manifest")
+    assert (fresh_pend["round"], fresh_pend["attempt"]) == (rnd + 1, 0), fresh_pend
 
     manifest_path = RD._orders_manifest_path(
         d, fresh_pend["round"], fresh_pend["phase"], fresh_pend["attempt"])

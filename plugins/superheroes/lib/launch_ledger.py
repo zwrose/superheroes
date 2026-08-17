@@ -869,6 +869,26 @@ def _validate_boundary_block(block, slot, generation):
 
 
 def _validate_reserved_optional_fields(rec):
+    if "surfaceOverlap" in rec:
+        # The live lanes this launch's premise surfaces overlapped at reserve time (#1054).
+        # Overlap is a recorded, disclosed warning rather than a refusal — landing order is
+        # the merge train's problem, not the gate's. The field is written ONLY when the
+        # overlap is real: an empty list would read as "checked, none found" on a record
+        # that a pre-#1054 writer would simply have omitted, so it is refused here rather
+        # than folded as an ambiguous signal. Ids carry the same shape as `launchId` itself.
+        # Sorted and duplicate-free is the shape `reserve` writes, so a record that is not
+        # is not one this ledger produced; and a launch never overlaps itself.
+        overlap = rec["surfaceOverlap"]
+        if not isinstance(overlap, list) or not overlap:
+            return "fold-bad-field:reserved:surfaceOverlap"
+        for entry in overlap:
+            if not isinstance(entry, str) or not entry.strip():
+                return "fold-bad-field:reserved:surfaceOverlap"
+            if entry == rec.get("launchId"):
+                return "fold-bad-field:reserved:surfaceOverlap"
+        if overlap != sorted(set(overlap)):
+            return "fold-bad-field:reserved:surfaceOverlap"
+
     if "worktree" in rec:
         worktree = rec["worktree"]
         if not isinstance(worktree, str) or not worktree.strip():
@@ -1005,6 +1025,14 @@ def _validate_event_fields(rec):
             return "fold-bad-field:started:attempt"
         if not isinstance(pid, int) or isinstance(pid, bool) or pid < 2:
             return "fold-bad-field:started:pid"
+        # Optional disclosure the launcher stamps when the lane launched over a recorded
+        # surface overlap (#1054), so a ledger reader sees the accepted overlap and the
+        # landing order without the advisor's context. Absent on lanes that overlapped
+        # nothing; never empty when present.
+        if "evidence" in rec:
+            evidence = rec["evidence"]
+            if not isinstance(evidence, str) or not evidence.strip():
+                return "fold-bad-field:started:evidence"
     elif event == "retry":
         attempt = rec["attempt"]
         if not isinstance(attempt, int) or isinstance(attempt, bool) or attempt < 1:
@@ -1063,6 +1091,28 @@ def fold(records):
                     "launches": {},
                     "batchDeclarations": batch_declarations,
                 }
+            # Referential half of the surfaceOverlap grammar (#1054). `_validate_event_fields`
+            # checks the field's SHAPE; only here does the reader hold the prior launches and
+            # their state at this record's index, which is what makes "this lane overlapped
+            # THOSE lanes" a checkable claim rather than a decoration. Every named id must be
+            # a launch reserved EARLIER that was still LIVE and on a DIFFERENT issue — exactly
+            # what `reserve` selects from. What is still not re-derived is the surface
+            # comparison itself: the recorded surfaces are canonicalized against a repo root
+            # this reader does not have, so a fabricated record naming a genuinely live
+            # different-issue lane it did not overlap still folds (accepted residual).
+            for overlapped_id in rec.get("surfaceOverlap") or []:
+                prior = launches.get(overlapped_id)
+                if (
+                    prior is None
+                    or prior.get("terminal")
+                    or prior.get("issue") == rec.get("issue")
+                ):
+                    return {
+                        "ok": False,
+                        "reason": "fold-bad-field:reserved:surfaceOverlap",
+                        "launches": {},
+                        "batchDeclarations": batch_declarations,
+                    }
             launches[launch_id] = {
                 "batchId": rec["batchId"],
                 "issue": rec["issue"],
@@ -1088,6 +1138,10 @@ def fold(records):
                 "worktree": rec.get("worktree"),
                 "sessionId": rec.get("sessionId"),
                 "configDir": rec.get("configDir"),
+                # The live lanes this launch overlapped when it reserved (#1054). None on a
+                # lane that overlapped nothing and on every pre-#1054 record — the two are
+                # deliberately indistinguishable, because neither ran over an overlap.
+                "surfaceOverlap": rec.get("surfaceOverlap"),
             }
             continue
 
@@ -1289,10 +1343,24 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
             return {"ok": False, "reason": norm["reason"], "path": None}
 
         new_surfaces = norm["surfaces"]
+        # Surface overlap with a live lane for a DIFFERENT issue is a recorded, disclosed
+        # warning, not a refusal (#1054): the gate never prevented a real collision, and
+        # the one overlap it sequenced still cost a rework round because the base moved.
+        # Overlap is a LANDING-ORDER problem the merge train already owns.
+        #
+        # The SAME-LANE DUPLICATE stays a hard refusal, and it is keyed on the ISSUE alone,
+        # never on surfaces: two live launches for one issue are duplicate autonomous work
+        # whether or not their premises happen to name overlapping paths. Keying it on
+        # overlap too would leave a hole `count` cannot close — its `batch-lane-concurrent`
+        # guard is scoped to ONE batch, so a same-issue duplicate reserved under a different
+        # batch id would never be caught anywhere. The reason string is deliberately
+        # unchanged (`surface-overlap:<launchId>`) so existing readers keep working.
+        overlapped = []
+        new_issue = record.get("issue")
         for live_id in live_launches(read_result["records"]):
             info = folded["launches"][live_id]
             existing = info.get("surfaces") or []
-            if surfaces_overlap(new_surfaces, existing):
+            if info.get("issue") == new_issue:
                 return {
                     "ok": False,
                     "reason": "surface-overlap:%s" % live_id,
@@ -1300,9 +1368,17 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
                     "blockingSurfaces": list(existing),
                     "path": None,
                 }
+            if surfaces_overlap(new_surfaces, existing):
+                overlapped.append(live_id)
+        overlapped = sorted(set(overlapped))
 
         to_write = dict(record)
         to_write["surfaces"] = new_surfaces
+        if overlapped:
+            to_write["surfaceOverlap"] = overlapped
+        else:
+            # A caller-supplied value would be a claim the ledger did not measure.
+            to_write.pop("surfaceOverlap", None)
         # General guard: refuse any record the reader would reject after append.
         # The explicit launch-id checks above are the named, specific refusals.
         folded_with_new = fold(read_result["records"] + [to_write])
@@ -1314,7 +1390,12 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
             }
         if not append(repo_root, to_write, env=env):
             return {"ok": False, "reason": "ledger-append-failed", "path": None}
-        return {"ok": True, "reason": None, "path": lp["path"]}
+        return {
+            "ok": True,
+            "reason": None,
+            "path": lp["path"],
+            "warnings": ["surface-overlap:%s" % lid for lid in overlapped],
+        }
     finally:
         _release_lock(lock_path)
 
@@ -1416,6 +1497,12 @@ def _validate_started_repair(started_repair):
         return False
     if not isinstance(err_path, str):
         return False
+    # Optional, and non-empty when present — the same shape a first-attempt `started`
+    # record's disclosure carries (#1054), so a repaired record can preserve it.
+    if "evidence" in started_repair:
+        evidence = started_repair["evidence"]
+        if not isinstance(evidence, str) or not evidence.strip():
+            return False
     return True
 
 
@@ -1540,6 +1627,12 @@ def terminalize(repo_root, launch_id, *, child_ever_spawned=False, reason=None, 
                     "errPath": started_repair["errPath"],
                     "repaired": True,
                 }
+                # A repaired record stands in for the one whose append failed, so it must
+                # carry that record's overlap disclosure too — otherwise a lane that
+                # launched over an accepted overlap loses the evidence precisely on the
+                # path where the ledger was already having trouble (#1054).
+                if started_repair.get("evidence"):
+                    started_record["evidence"] = started_repair["evidence"]
                 folded_repair = fold(records + [started_record])
                 if not folded_repair["ok"]:
                     return {
@@ -1903,6 +1996,7 @@ def _count_indeterminate(batch_id, reason):
             "refusal": 0,
             "died": 0,
             "refusedToLaunch": 0,
+            "overlapsAccepted": 0,
             "total": 0,
         },
         "amendments": _zero_amendments(),
@@ -1995,6 +2089,11 @@ def count(repo_root, batch_id, env=None):
         "refusal": 0,
         "died": 0,
         "refusedToLaunch": 0,
+        # Lanes that RAN over a recorded surface overlap (#1054). Keyed on lanes like every
+        # other tally in this block, so it is comparable with `total`: a lane whose retries
+        # each overlapped counts once. A batch that accepted overlaps reads as such rather
+        # than as clean-by-omission — the friction the old refusal left unrecorded.
+        "overlapsAccepted": 0,
         "total": 0,
     }
     attempt_outcomes = _zero_attempt_outcomes()
@@ -2014,6 +2113,17 @@ def count(repo_root, batch_id, env=None):
             label = _attempt_outcome_label(folded["launches"][launch_id])
             if label in attempt_outcomes:
                 attempt_outcomes[label] += 1
+
+        # RAN, not merely reserved: a lane can be stamped with an overlap at reserve and
+        # then refused before spawn (the post-reserve slot gate, a log-dir failure, a
+        # deadline). Counting that as an accepted overlap would report a parallel run that
+        # never happened, next to the `refusedToLaunch` that says it did not.
+        if any(
+            folded["launches"][lid].get("surfaceOverlap")
+            and folded["launches"][lid].get("started")
+            for lid in ordered
+        ):
+            counts["overlapsAccepted"] += 1
 
         final_info = folded["launches"][ordered[-1]]
         counts["total"] += 1

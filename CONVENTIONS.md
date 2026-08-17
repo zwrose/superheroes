@@ -1012,6 +1012,17 @@ drift-tested against the module by `lib/tests/test_ssot_drift.py`; that reader *
 closed** — if it parses nothing (heading renamed, block reformatted) it raises rather than
 passing vacuously.
 
+*Worked example 4 — the register-check vocabulary.* The three result tokens (`pass`, `fail`,
+`undecided`), the three finding-kind tokens (`text-drift`, `missing-quote`, `unknown-entry`),
+the eight undecided-reason tokens (`register-unreadable`, `body-unreadable`, `register-empty`,
+`register-malformed`, `body-malformed`, `child-unrecognized`, `usage`, `internal-error`), the three exit codes
+(`0`, `1`, `2`), and the schema token (`register-check/1`) are a cross-boundary fact: they are
+stated in `plugins/superheroes/lib/register_check.py` and restated in
+`plugins/superheroes/skills/showrunner/reference/register-check.md`. The authoritative home is
+the Python module. The reference doc's `## Vocabulary (drift-tested)` section is drift-tested
+against the module by `lib/tests/test_ssot_drift.py`; that reader **fails closed** — if it parses
+nothing (heading renamed, list reformatted) it raises rather than passing vacuously.
+
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the
 enumerating drift test must name every known copy-holder (a comment listing them), and

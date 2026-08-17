@@ -367,6 +367,138 @@ def test_seat_channel_folds_the_vendor_fact_on_every_read_only_phase(phase, vend
     assert RD._seat_channel(phase, {"vendor": vendor}) == expected, (phase, vendor)
 
 
+@pytest.mark.parametrize("phase", sorted(RD._READ_ONLY_CHANNEL_PHASES))
+def test_a_defaulted_vendor_folds_to_stdout_on_every_read_only_phase(phase):
+    """`vendorSource: "defaulted"` is NOT positive host evidence — the #1037 rider's census row.
+
+    `_reviewer_engine_vendor` falls back to the literal `"claude"` when the engine-preference read
+    raises, so by VALUE the row is indistinguishable from a configured claude seat. Read as host
+    evidence it hands the seat the landing-path write contract — which a seat the orchestrator
+    actually dispatched on an engine forfeits on (#1043 confirmation-round finding 11).
+
+    Bite axis: the pair below is the whole point — same vendor string, opposite channel, decided
+    only by the marker. An implementation that ignores `vendorSource` returns `CHANNEL_FILE` for
+    both and fails the defaulted half.
+    """
+    defaulted = {"vendor": "claude", "vendorSource": RD.VENDOR_SOURCE_DEFAULTED}
+    configured = {"vendor": "claude", "vendorSource": RD.VENDOR_SOURCE_CONFIGURED}
+    assert RD._seat_channel(phase, defaulted) == RD.CHANNEL_STDOUT, phase
+    assert RD._seat_channel(phase, configured) == RD.CHANNEL_FILE, phase   # A/B
+    # An unmarked row keeps its pre-#1037 reading: absence of the marker is not a defaulted claim.
+    assert RD._seat_channel(phase, {"vendor": "claude"}) == RD.CHANNEL_FILE, phase
+
+
+def test_reviewer_engine_vendor_marks_a_refused_read_as_defaulted(monkeypatch, tmp_path):
+    """The PRODUCTION failure path is a refusal RETURN, not an exception.
+
+    `engine_pref.load_engine_prefs` documents "Never raises" — an unreadable/refused core.md comes
+    back as `refusal_engine_prefs(readError=…)`. A marker keyed only on `except` would never fire
+    here, leaving the whole rider inert while every test that monkeypatched a *raise* still passed.
+    So this drives the real return shape, produced by `engine_pref` itself rather than hand-built.
+    """
+    refusal = RD.engine_pref.refusal_engine_prefs("core.md unreadable")
+    assert refusal.get("readError"), "fixture must be the real refusal shape"
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: refusal)
+    assert RD._reviewer_engine_vendor(str(tmp_path)) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
+
+
+def test_a_genuinely_absent_config_is_configured_not_defaulted(monkeypatch, tmp_path):
+    """A/B on the distinction `readError` draws: absent config is not a failed read.
+
+    `degenerate_engine_prefs()` is "nothing configured", whose documented defaults ARE the
+    configuration. Marking it `defaulted` would push every greenfield reviewer seat onto the stdout
+    channel and disclose a provenance gap that does not exist."""
+    degenerate = RD.engine_pref.degenerate_engine_prefs()
+    assert degenerate.get("readError") is None, "fixture must be the real absent-config shape"
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: degenerate)
+    vendor, source = RD._reviewer_engine_vendor(str(tmp_path))
+    assert source == RD.VENDOR_SOURCE_CONFIGURED, (vendor, source)
+
+
+def test_reviewer_engine_vendor_still_degrades_if_the_loader_violates_its_contract(monkeypatch,
+                                                                                   tmp_path):
+    """Belt-and-braces only: the `except` arms are not the primary signal (see the test above)."""
+    def boom(_root):
+        raise RuntimeError("engine prefs unreadable")
+
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", boom)
+    assert RD._reviewer_engine_vendor(str(tmp_path)) == ("claude", RD.VENDOR_SOURCE_DEFAULTED)
+
+
+def test_a_configured_engine_vendor_keeps_the_configured_marker(monkeypatch, tmp_path):
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {"effort": {}})
+    monkeypatch.setattr(RD.engine_pref, "resolve_engine", lambda _role, _prefs: "codex")
+    assert RD._reviewer_engine_vendor(str(tmp_path)) == ("codex", RD.VENDOR_SOURCE_CONFIGURED)
+
+
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
+def test_reviewer_phase_transport_row_carries_the_vendor_source(monkeypatch, phase, tmp_path):
+    """The marker reaches the transport row — the seam `_seat_channel` and the gap collector read."""
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
+                        lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
+    state = {"config": {}, "seatMap": {}, "pending": {}, "round": 1, "rounds": {}}
+    row = RD._seat_transport_row(state, phase, "verifier", 0, {}, {}, str(tmp_path))
+    assert row["vendor"] == "claude"
+    assert row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED
+    assert RD._seat_channel(phase, row) == RD.CHANNEL_STDOUT
+
+
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
+def test_a_defaulted_reviewer_vendor_is_disclosed_not_merely_made_safe(tmp_path, monkeypatch,
+                                                                       phase):
+    """Safe is not the same as silent — the defaulted fallback owes a receipt (#1037 rider).
+
+    The collector used to be panel-scoped, so a reviewer-phase fallback folded safely to stdout and
+    disclosed NOTHING. It now derives from the same predicate the channel folds on, so the
+    disclosure cannot lag the fold."""
+    session_dir = str(tmp_path / ("disc-" + phase))
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
+                                    "fixerVendor": "claude", "verifyCommand": "none",
+                                    "seatMap": _mixed_seat_map()})
+    assert out["ok"], out
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    rnd_key = str(state["round"])
+    state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)   # clear round-1
+
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs",
+                        lambda _root: RD.engine_pref.refusal_engine_prefs("core.md unreadable"))
+    seat = _seat_for(phase)
+    RD._emit_orders_manifest(session_dir, state, state["round"], phase, 0, [seat],
+                             journal_cmd="next", pending_payload=_payload_for(phase), seat_map={})
+    gaps = (state["rounds"].get(rnd_key) or {}).get("orderVendorProvenanceGaps")
+    assert gaps, "a defaulted reviewer vendor must be disclosed, not silently made safe"
+    row = next(g for g in gaps if g.get("seat") == seat)
+    assert row["vendorSource"] == RD.VENDOR_SOURCE_DEFAULTED, row
+
+
+@pytest.mark.parametrize("phase", [RD.P_VERIFIERS, RD.P_GAPSWEEP, RD.P_SCOPED])
+def test_a_configured_reviewer_vendor_is_not_disclosed_as_a_gap(tmp_path, monkeypatch, phase):
+    """A/B for the disclosure above: a vendor the driver really RESOLVED is not a gap.
+
+    Without this the test above would pass against a collector that discloses every reviewer seat
+    unconditionally — which would make the channel say one thing and the receipt another."""
+    session_dir = str(tmp_path / ("ok-" + phase))
+    os.makedirs(session_dir, exist_ok=True)
+    out = RD.cmd_next(session_dir, {"leg": "code", "vendors": ["claude", "codex"], "diff": DIFF,
+                                    "fixerVendor": "claude", "verifyCommand": "none",
+                                    "seatMap": _mixed_seat_map()})
+    assert out["ok"], out
+    ok, state = RD.load_state(session_dir)
+    assert ok, state
+    rnd_key = str(state["round"])
+    state["rounds"].setdefault(rnd_key, {}).pop("orderVendorProvenanceGaps", None)
+
+    monkeypatch.setattr(RD.engine_pref, "load_engine_prefs", lambda _root: {})
+    monkeypatch.setattr(RD.engine_pref, "resolve_engine", lambda _role, _prefs: "claude")
+    seat = _seat_for(phase)
+    RD._emit_orders_manifest(session_dir, state, state["round"], phase, 0, [seat],
+                             journal_cmd="next", pending_payload=_payload_for(phase), seat_map={})
+    gaps = (state["rounds"].get(rnd_key) or {}).get("orderVendorProvenanceGaps") or []
+    assert not any(g.get("seat") == seat for g in gaps), gaps
+
+
 @pytest.mark.parametrize("vendor", _TRUTH_TABLE_VENDORS)
 def test_seat_channel_fixer_folds_on_the_same_table_but_never_via_the_read_only_exclusion(vendor):
     """`P_FIXER` is deliberately excluded from the READ-ONLY fold — pinned across the same vendor

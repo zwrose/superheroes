@@ -313,6 +313,23 @@ def test_fence_tilde_inside_backtick_fence_decoy_reports_anchor_slot_missing():
     assert result["declaredKinds"] == []
 
 
+def test_fenced_trailing_text_closer_decoy_slot_header_stays_missing():
+    body = (
+        "```\n"
+        "```still-code\n"
+        "Anchor (spec-section): decoy after fake closer\n"
+        "```\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
+    assert result["declaredKinds"] == []
+
+
 def test_fence_empty_markdown_fence_reports_anchor_slot_empty():
     body = (
         "Anchor (receipt):\n"
@@ -417,6 +434,103 @@ def test_realistic_whole_body_fixture():
         },
         "advisory": True,
     }
+
+
+# --- 7. Indented-code-block header guard (WO-940-R2-E1) ---------------------
+
+
+def test_indent4_fence_around_indent4_anchor_header_reports_anchor_slot_missing():
+    body = (
+        "    ```\n"
+        "    Anchor (spec-section): decoy inside indent-4 fence\n"
+        "    ```\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
+
+
+def test_bare_indent4_anchor_header_reports_anchor_slot_missing():
+    body = (
+        "    Anchor (spec-section): not a live header\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
+
+
+def test_indent3_anchor_header_still_filled_indent4_anchor_header_missing():
+    body_indent3 = (
+        "   Anchor (spec-section): front-half-sdlc-core-6181ee · section · as-of #0\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result3 = _check(body_indent3)
+    assert result3["ok"] is True
+    assert result3["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_FILLED
+
+    body_indent4 = (
+        "    Anchor (spec-section): not a live header\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result4 = _check(body_indent4)
+    assert result4["ok"] is False
+    assert result4["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result4["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
+
+
+def test_tab_indented_anchor_header_reports_anchor_slot_missing():
+    body = (
+        "\tAnchor (spec-section): not a live header\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
+
+
+def test_indent4_slot_content_preserves_filled_anchor():
+    body = (
+        "Anchor (spec-section): live header\n"
+        "    nested list item under anchor\n"
+        "    second indented content line\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is True
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_FILLED
+    assert result["anchorKind"] == ic.KIND_SPEC_SECTION
+
+
+def test_unterminated_fence_before_anchor_header_reports_anchor_slot_missing():
+    body = (
+        "```\n"
+        "still inside fence\n"
+        "Anchor (spec-section): swallowed header\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
 
 
 def test_vocabulary_constants():
