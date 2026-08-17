@@ -9,6 +9,13 @@ import mode_migrate as mm
 import mode_registry as mr
 import store_core as sc
 
+# The expected classification, written out rather than read from the constants under test.
+# Deriving these from mm._DEFINITION_DOCS / mm._WORK_ITEM_RECORDS would make every bucketing
+# assertion below pass under a coordinated narrowing of both the constant and its home of record
+# (review probe 8, issue #935).
+_EXPECTED_DEFINITION_DOCS = ("spec.md", "plan.md", "tasks.md")
+_EXPECTED_WORK_ITEM_RECORDS = ("findings.md",)
+
 
 def _init_repo(d, remote=None):
     subprocess.run(["git", "-C", str(d), "init", "-q"], check=True)
@@ -156,12 +163,12 @@ def test_preview_buckets_every_definition_doc_basename_by_name(tmp_path):
         sc.atomic_write(os.path.join(ddir, name), name + " body\n")
     m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
     pv = mm.preview(m)
-    for name in mm._DEFINITION_DOCS:
+    for name in _EXPECTED_DEFINITION_DOCS:
         src = os.path.join(ddir, name)
         assert src in pv["definitionDocs"], name
         assert src not in pv["workItemRecords"], name
         assert src not in pv["calibration"], name
-    for name in mm._WORK_ITEM_RECORDS:
+    for name in _EXPECTED_WORK_ITEM_RECORDS:
         src = os.path.join(ddir, name)
         assert src in pv["workItemRecords"], name
         assert src not in pv["definitionDocs"], name
@@ -220,6 +227,18 @@ def test_definition_docs_constant_tracks_definition_doc_doc_types():
     dd = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(dd)
     assert set(mm._DEFINITION_DOCS) == {t + ".md" for t in dd.DOC_TYPES}
+
+
+def test_expected_definition_docs_match_the_home_of_record():
+    # Third leg of the coordinated-narrow guard: _EXPECTED_* (test-owned literal) vs DOC_TYPES
+    # (home of record) vs _DEFINITION_DOCS (classification set). Narrowing any two of the three
+    # leaves the third disagreeing.
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(mm.__file__)), "definition_doc.py")
+    spec = importlib.util.spec_from_file_location("definition_doc_mm_test_expected", path)
+    dd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dd)
+    assert set(_EXPECTED_DEFINITION_DOCS) == {t + ".md" for t in dd.DOC_TYPES}
 
 
 def test_preview_lists_calibration_and_defdocs(tmp_path):

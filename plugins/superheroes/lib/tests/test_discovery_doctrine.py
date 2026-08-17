@@ -4,6 +4,17 @@ Enforces: (1) the old spec-only exit vocabulary is gone from architect-discovery
 (2) the new doctrine clauses are present section-scoped in discovery, architect-spec,
 and showrunner duty-1; (3) a light-weight spec is the same artifact class as a full spec.
 """
+# What this file does and does not guard (owner ruling 21-d, issue #935).
+#
+# Every assertion here rests on a MECHANICAL fact about the document: a tag-delimited block, a
+# fenced code block, a parsed table cell, a fixed literal that is present or absent, a count.
+#
+# The charter's MEANING is guarded by review, not by CI. Guards that tried to decide whether prose
+# said the right thing — a negation regex over handoff messages, a disposition vocabulary sourced
+# from an editable template, substring checks wearing structural labels — were removed rather than
+# patched: three review rounds showed each one could be evaded by prose that satisfied the letter
+# and inverted the sense. Do not reintroduce that class. If a doctrine claim can only be checked by
+# judging what a sentence means, it belongs to the review panel.
 import importlib.util
 import json
 import os
@@ -76,20 +87,26 @@ _BANNED_DISCOVERY_STRINGS = [
         "the draft rides the park note",
         "retired two-artifact park phrasing",
     ),
+    (
+        "canonical `docs/superheroes/<work-item>/spec.md` path",
+        "in-repo-only draft path, retired by A1",
+    ),
+    (
+        "at its canonical `spec.md` path",
+        "mode-blind draft-path phrasing, retired by A1",
+    ),
 ]
 
 _DISCOVERY_HARD_GATE_CLAUSES = [
+    "do NOT author the spec, write any code, mint a work-item, or hand off until you have presented the framing (the **what**) and the owner has explicitly approved it.",
+    "never approve on your own behalf",
     "hands back with no approved spec",
-    "the draft stays on disk at its canonical `spec.md` path with `status: draft`",
+    "the draft stays on disk at the spec path `resolve-write --doc spec` reports, with `status: draft`",
     "the park note carries that path, never a second copy",
 ]
 
 _EXIT_B_HEADING = "### Exit B — the findings record"
 _STEP8_HEADING = "### 8. Owner review & final approval (terminal gate)"
-
-_INDEPENDENCE_NEGATION_RE = re.compile(
-    r"(?i)\b(not|never|without|no)\b[^.]{0,60}(independent|review)"
-)
 
 _DISCOVERY_SECTION_CLAUSES = {
     "## The one front door": [
@@ -153,7 +170,7 @@ _DISCOVERY_SECTION_CLAUSES = {
         "Both inputs must hold for `light`",
         "An override is valid only when stated, and one stated sentence is enough",
         "The 10-line bar is a guideline, never a gate.",
-        "item parks (Exit C) with the draft left at its canonical `spec.md` path, `status: draft`",
+        "item parks (Exit C) with the draft left at the spec path `resolve-write --doc spec` reports, `status: draft`,",
     ],
     "### 8. Owner review & final approval (terminal gate)": [
         "How you ask depends on the weight called in step 7.",
@@ -200,6 +217,7 @@ _DUTY1_CLAUSES = [
 ]
 
 _PLACEHOLDER_BODIES = frozenset({"N/A", "None", "TBD", "-", "—"})
+_PLACEHOLDER_CELLS = frozenset({"n/a", "none", "tbd", "todo", "-", "—", "?"})
 _PLACEHOLDER_BODY_RE = re.compile(r"^\{\{.*\}\}$", re.DOTALL)
 
 _WEIGHT_SECTION = "### 7. The weight call, then review at that weight"
@@ -243,30 +261,35 @@ def _normalized(text):
     return re.sub(r"\s+", " ", text.replace("*", "")).strip()
 
 
-def _expect_assertion_error(fn, *, match):
-    """Require fn() to raise AssertionError matching `match`.
+def _expect_error(fn, exc_type, *, match):
+    """Require fn() to raise exc_type matching `match`.
 
-    `pytest.raises(AssertionError)` is not enough for a bite-proof: a detector that
-    regresses into `pytest.skip` raises `Skipped`, which derives from BaseException,
-    so pytest.raises declines it and the whole test is reported SKIPPED — green. This
-    helper catches BaseException and turns anything that is not a matching
-    AssertionError into a failure, so a detector that stopped biting is always red.
+    `pytest.raises(exc_type)` is not enough for a bite-proof: a detector that regresses
+    into `pytest.skip` raises `Skipped`, which derives from BaseException, so
+    pytest.raises declines it and the whole test is reported SKIPPED — green. This
+    helper catches BaseException and turns anything that is not a matching exc_type into
+    a failure, so a detector that stopped biting is always red.
     """
+    exc_name = exc_type.__name__
     try:
         fn()
-    except AssertionError as exc:
+    except exc_type as exc:
         if not re.search(match, str(exc)):
             raise AssertionError(
-                "detector raised AssertionError but message %r does not match %r"
-                % (str(exc), match)
+                "detector raised %s but message %r does not match %r"
+                % (exc_name, str(exc), match)
             ) from None
         return exc
     except BaseException as exc:  # noqa: BLE001 — Skipped is a BaseException, and that is the point
         raise AssertionError(
-            "detector did not bite: expected AssertionError, got %s: %s"
-            % (type(exc).__name__, exc)
+            "detector did not bite: expected %s, got %s: %s"
+            % (exc_name, type(exc).__name__, exc)
         ) from None
     raise AssertionError("detector did not bite: no exception raised")
+
+
+def _expect_assertion_error(fn, *, match):
+    return _expect_error(fn, AssertionError, match=match)
 
 
 def _read_spec_template():
@@ -349,6 +372,13 @@ def _parse_markdown_table(section_text):
         raise RuntimeError("no markdown table found in section")
     if len(table_lines) < 2:
         raise RuntimeError("markdown table has no header row")
+    separator_cells = [
+        cell.strip() for cell in table_lines[1].strip("|").split("|")
+    ]
+    separator_re = re.compile(r"^:?-{3,}:?$")
+    for cell in separator_cells:
+        if not separator_re.match(cell):
+            raise RuntimeError("markdown table has no separator row")
     headers = [cell.strip() for cell in table_lines[0].strip("|").split("|")]
     rows = []
     for table_line in table_lines[2:]:
@@ -376,18 +406,6 @@ def _template_coverage_areas():
     return areas
 
 
-def _template_coverage_dispositions():
-    section_text = _text_section_raw(_read_spec_template(), "## Coverage")
-    before_table = section_text.split("| Area |", 1)[0]
-    dispositions = re.findall(r"`([^`]+)`\s*→", before_table)
-    if len(dispositions) != 3:
-        raise RuntimeError(
-            "templates/spec.md Coverage intro has %d disposition tokens, expected 3"
-            % len(dispositions)
-        )
-    return dispositions
-
-
 def _fixture_coverage_section():
     fixture_text = open(_LIGHT_SPEC_FIXTURE, encoding="utf-8").read()
     return _text_section_raw(fixture_text, "## Coverage")
@@ -412,7 +430,7 @@ def _assert_coverage_table_rows_match_areas(table_text, expected_areas):
         )
 
 
-def _assert_coverage_dispositions_real(table_text, disposition_vocab):
+def _assert_coverage_cells_are_real(table_text):
     rows = _parse_markdown_table(table_text)
     placeholder_re = re.compile(r"\{\{.*\}\}")
     for row in rows:
@@ -425,10 +443,10 @@ def _assert_coverage_dispositions_real(table_text, disposition_vocab):
                 "coverage row %r Disposition is a template placeholder: %r"
                 % (row["Area"], disposition)
             )
-        if disposition not in disposition_vocab:
+        if disposition.casefold() in _PLACEHOLDER_CELLS:
             raise AssertionError(
-                "coverage row %r Disposition %r not in template vocabulary %r"
-                % (row["Area"], disposition, disposition_vocab)
+                "coverage row %r Disposition is a placeholder token: %r"
+                % (row["Area"], disposition)
             )
         if not where:
             raise AssertionError(
@@ -437,6 +455,11 @@ def _assert_coverage_dispositions_real(table_text, disposition_vocab):
         if placeholder_re.search(where):
             raise AssertionError(
                 "coverage row %r Where / why is a template placeholder: %r"
+                % (row["Area"], where)
+            )
+        if where.casefold() in _PLACEHOLDER_CELLS:
+            raise AssertionError(
+                "coverage row %r Where / why is a placeholder token: %r"
                 % (row["Area"], where)
             )
 
@@ -512,6 +535,37 @@ def _logical_shell_lines(block):
     return logical
 
 
+def _extract_or_fail_closed_body(line):
+    """Return brace-matched body of || { ... } group, or None if not fail-closed."""
+    idx = line.find("|| {")
+    if idx == -1:
+        return None
+    brace_start = line.index("{", idx)
+    depth = 0
+    for i in range(brace_start, len(line)):
+        if line[i] == "{":
+            depth += 1
+        elif line[i] == "}":
+            depth -= 1
+            if depth == 0:
+                return line[brace_start + 1:i]
+    return None
+
+
+def _body_has_exit_1_statement(body):
+    for piece in body.split(";"):
+        if piece.strip() == "exit 1":
+            return True
+    return False
+
+
+def _line_is_fail_closed(line):
+    body = _extract_or_fail_closed_body(line)
+    if body is None:
+        return False
+    return _body_has_exit_1_statement(body)
+
+
 def _assert_exit_b_fail_closed(block):
     lines = _logical_shell_lines(block)
     mint_lines = [ln for ln in lines if "mint --title" in ln]
@@ -523,7 +577,7 @@ def _assert_exit_b_fail_closed(block):
             "expected exactly one mint --title line, found %d" % len(mint_lines)
         )
     mint_line = mint_lines[0]
-    if "|| {" not in mint_line or "exit 1" not in mint_line:
+    if not _line_is_fail_closed(mint_line):
         raise AssertionError(
             "mint line is not fail-closed: %r" % mint_line
         )
@@ -533,7 +587,7 @@ def _assert_exit_b_fail_closed(block):
             "expected exactly one resolve-write line, found %d" % len(resolve_lines)
         )
     resolve_line = resolve_lines[0]
-    if "|| {" not in resolve_line or "exit 1" not in resolve_line:
+    if not _line_is_fail_closed(resolve_line):
         raise AssertionError(
             "resolve-write line is not fail-closed: %r" % resolve_line
         )
@@ -541,7 +595,7 @@ def _assert_exit_b_fail_closed(block):
     if not nonempty_lines:
         raise AssertionError("missing [ -n \"$WORK_ITEM\" ] non-empty check")
     nonempty_line = nonempty_lines[0]
-    if "|| {" not in nonempty_line or "exit 1" not in nonempty_line:
+    if not _line_is_fail_closed(nonempty_line):
         raise AssertionError(
             "work-item non-empty check is not fail-closed: %r" % nonempty_line
         )
@@ -601,58 +655,6 @@ def _extract_handoff_messages(step8_text):
             "expected exactly 3 handoff messages, found %d" % len(messages)
         )
     return messages
-
-
-def _assert_step8_handoff_messages_name_review(step8_text):
-    messages = _extract_handoff_messages(step8_text)
-    light_msgs = [m for m in messages if "At `light` weight:" in m]
-    full_msgs = [
-        m for m in messages
-        if "At `full` weight:" in m and "overridden" not in m
-    ]
-    down_msgs = [m for m in messages if "overridden" in m]
-
-    if len(light_msgs) != 1:
-        raise AssertionError(
-            "expected one light-weight handoff, found %d" % len(light_msgs)
-        )
-    if len(full_msgs) != 1:
-        raise AssertionError(
-            "expected one full-weight handoff, found %d" % len(full_msgs)
-        )
-    if len(down_msgs) != 1:
-        raise AssertionError(
-            "expected one overridden-down handoff, found %d" % len(down_msgs)
-        )
-
-    light = light_msgs[0]
-    full = full_msgs[0]
-    down = down_msgs[0]
-
-    if "one independent reviewer" not in light:
-        raise AssertionError("light handoff missing one independent reviewer")
-    if "review-spec" in light:
-        raise AssertionError("light handoff must not mention review-spec")
-    if "review-spec" not in full or "panel" not in full:
-        raise AssertionError("full handoff missing review-spec panel wording")
-    if "one independent reviewer" in full:
-        raise AssertionError(
-            "full handoff must not mention one independent reviewer"
-        )
-    if "called down" not in down or "light weight" not in down:
-        raise AssertionError("overridden-down handoff missing called-down wording")
-    if "one independent reviewer" not in down:
-        raise AssertionError(
-            "overridden-down handoff missing one independent reviewer"
-        )
-
-
-def _assert_step8_handoff_messages_never_negate(step8_text):
-    for message in _extract_handoff_messages(step8_text):
-        if _INDEPENDENCE_NEGATION_RE.search(message):
-            raise AssertionError(
-                "handoff message negates independent review: %r" % message
-            )
 
 
 def _extract_table_row(section_text, row_label):
@@ -877,6 +879,32 @@ def test_discovery_charter_hard_gate_clauses_present():
     _assert_clauses_in_text(block, _DISCOVERY_HARD_GATE_CLAUSES, _DISCOVERY_CHARTER)
 
 
+def test_census_tables_are_populated():
+    expected_discovery_keys = {
+        "## The one front door",
+        "## The three exits",
+        "### Exit B — the findings record",
+        "### Exit C — the park note",
+        "### 2. The consent gate — investigation spend is the owner's to authorize",
+        "### 3. Requirements dialogue (one question at a time)",
+        "### 7. The weight call, then review at that weight",
+        "### 8. Owner review & final approval (terminal gate)",
+    }
+    assert set(_DISCOVERY_SECTION_CLAUSES) == expected_discovery_keys
+    expected_architect_spec_keys = {"## Weight never changes the artifact class"}
+    assert set(_ARCHITECT_SPEC_SECTION_CLAUSES) == expected_architect_spec_keys
+    for clauses in _DISCOVERY_SECTION_CLAUSES.values():
+        assert len(clauses) >= 3
+    for clauses in _ARCHITECT_SPEC_SECTION_CLAUSES.values():
+        assert len(clauses) >= 3
+    assert _BANNED_DISCOVERY_STRINGS
+    assert len(_DISCOVERY_HARD_GATE_CLAUSES) >= 5
+    assert _DUTY1_CLAUSES
+    assert len(_DUTY1_CLAUSES) >= 8
+    assert _LIGHT_SPEC_MUST_OMIT
+    assert _LIGHT_SPEC_MUST_KEEP
+
+
 # --- 1b. Section-scoped presence, architect-discovery ----------------------
 
 
@@ -998,8 +1026,7 @@ def test_light_spec_coverage_table_rows_match_template_areas():
 
 
 def test_light_spec_coverage_dispositions_are_real():
-    vocab = _template_coverage_dispositions()
-    _assert_coverage_dispositions_real(_fixture_coverage_section(), vocab)
+    _assert_coverage_cells_are_real(_fixture_coverage_section())
 
 
 def test_light_spec_must_omit_headings_exist_in_template():
@@ -1018,14 +1045,10 @@ def test_exit_b_command_block_is_fail_closed():
     _assert_exit_b_fail_closed(block)
 
 
-def test_step8_handoff_messages_name_their_review():
+def test_step8_has_exactly_three_handoff_messages():
     step8 = _extract_step_block(_DISCOVERY_CHARTER, 8)
-    _assert_step8_handoff_messages_name_review(step8)
-
-
-def test_step8_handoff_messages_never_negate_independence():
-    step8 = _extract_step_block(_DISCOVERY_CHARTER, 8)
-    _assert_step8_handoff_messages_never_negate(step8)
+    messages = _extract_handoff_messages(step8)
+    assert len(messages) == 3
 
 
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
@@ -1053,8 +1076,11 @@ def test_negative_hard_gate_duplicate_open_raises():
         "content",
         "</HARD-GATE>",
     ])
-    with pytest.raises(RuntimeError, match="<HARD-GATE>"):
-        _extract_hard_gate_block(synthetic)
+    _expect_error(
+        lambda: _extract_hard_gate_block(synthetic),
+        RuntimeError,
+        match="<HARD-GATE>",
+    )
 
 
 def test_negative_hard_gate_missing_close_raises():
@@ -1062,8 +1088,11 @@ def test_negative_hard_gate_missing_close_raises():
         "<HARD-GATE>",
         "content without close tag",
     ])
-    with pytest.raises(RuntimeError, match="</HARD-GATE>"):
-        _extract_hard_gate_block(synthetic)
+    _expect_error(
+        lambda: _extract_hard_gate_block(synthetic),
+        RuntimeError,
+        match="</HARD-GATE>",
+    )
 
 
 def test_negative_banned_string_detected_in_synthetic():
@@ -1129,8 +1158,11 @@ def test_negative_duty1_duplicate_start_boundary_raises():
         "1. **Think at the project level.** (duplicate)",
         "2. **Board hygiene — file and wire.**",
     ])
-    with pytest.raises(RuntimeError, match="duty-1 start"):
-        _extract_duty1_block(synthetic)
+    _expect_error(
+        lambda: _extract_duty1_block(synthetic),
+        RuntimeError,
+        match="duty-1 start",
+    )
 
 
 def test_negative_duty1_missing_start_boundary_raises():
@@ -1138,8 +1170,11 @@ def test_negative_duty1_missing_start_boundary_raises():
         "Preamble without the duty-1 start marker.",
         "2. **Board hygiene — file and wire.**",
     ])
-    with pytest.raises(RuntimeError, match="duty-1 start"):
-        _extract_duty1_block(synthetic)
+    _expect_error(
+        lambda: _extract_duty1_block(synthetic),
+        RuntimeError,
+        match="duty-1 start",
+    )
 
 
 def test_negative_fixture_headings_not_subset_of_template():
@@ -1356,8 +1391,11 @@ def test_negative_weight_table_absent_raises():
             return synthetic_text
         return _read_plugin(rel)
 
-    with pytest.raises(RuntimeError, match="no markdown table found"):
-        _assert_weight_table_rows(synthetic_path, read_text)
+    _expect_error(
+        lambda: _assert_weight_table_rows(synthetic_path, read_text),
+        RuntimeError,
+        match="no markdown table found",
+    )
 
 
 def _synthetic_coverage_table(rows):
@@ -1371,9 +1409,8 @@ def _synthetic_coverage_table(rows):
 
 def _canonical_coverage_rows():
     areas = _template_coverage_areas()
-    vocab = _template_coverage_dispositions()
     return [
-        f"| {area} | {vocab[0]} | reason for {area} |"
+        f"| {area} | Specify | reason for {area} |"
         for area in areas
     ]
 
@@ -1444,9 +1481,8 @@ def test_negative_coverage_blank_disposition_fails():
     rows = _canonical_coverage_rows()
     rows[0] = rows[0].replace("Specify", "   ", 1)
     table = _synthetic_coverage_table(rows)
-    vocab = _template_coverage_dispositions()
     _expect_assertion_error(
-        lambda: _assert_coverage_dispositions_real(table, vocab),
+        lambda: _assert_coverage_cells_are_real(table),
         match="blank Disposition",
     )
 
@@ -1455,10 +1491,9 @@ def test_negative_coverage_tbd_disposition_fails():
     rows = _canonical_coverage_rows()
     rows[0] = rows[0].replace("Specify", "TBD", 1)
     table = _synthetic_coverage_table(rows)
-    vocab = _template_coverage_dispositions()
     _expect_assertion_error(
-        lambda: _assert_coverage_dispositions_real(table, vocab),
-        match="not in template vocabulary",
+        lambda: _assert_coverage_cells_are_real(table),
+        match="is a placeholder token",
     )
 
 
@@ -1466,9 +1501,8 @@ def test_negative_coverage_placeholder_disposition_fails():
     rows = _canonical_coverage_rows()
     rows[0] = rows[0].replace("Specify", "{{Specify}}", 1)
     table = _synthetic_coverage_table(rows)
-    vocab = _template_coverage_dispositions()
     _expect_assertion_error(
-        lambda: _assert_coverage_dispositions_real(table, vocab),
+        lambda: _assert_coverage_cells_are_real(table),
         match="template placeholder",
     )
 
@@ -1498,9 +1532,8 @@ def test_negative_coverage_blank_where_fails():
     rows = _canonical_coverage_rows()
     rows[0] = re.sub(r"\| reason for .* \|$", "|  |", rows[0])
     table = _synthetic_coverage_table(rows)
-    vocab = _template_coverage_dispositions()
     _expect_assertion_error(
-        lambda: _assert_coverage_dispositions_real(table, vocab),
+        lambda: _assert_coverage_cells_are_real(table),
         match="blank Where / why",
     )
 
@@ -1537,37 +1570,14 @@ def test_negative_exit_b_nonempty_after_resolve_fails():
     )
 
 
-def test_negative_step8_handoff_messages_swapped_fail():
-    canonical = _canonical_step8_messages()
-    messages = [
-        "> *At `light` weight:* through `review-spec`'s panel.",
-        "> *At `full` weight:* read by one independent reviewer.",
-        canonical[2],
-    ]
-    step8 = _synthetic_step8_text(messages)
-    _expect_assertion_error(
-        lambda: _assert_step8_handoff_messages_name_review(step8),
-        match="light handoff",
-    )
-
-
-def test_negative_step8_light_message_negates_independence_fails():
-    messages = _canonical_step8_messages()
-    messages[0] = (
-        "> *At `light` weight:* but not read by one independent reviewer."
-    )
-    step8 = _synthetic_step8_text(messages)
-    _expect_assertion_error(
-        lambda: _assert_step8_handoff_messages_never_negate(step8),
-        match="negates independent review",
-    )
-
-
 def test_negative_step8_third_message_deleted_raises():
     messages = _canonical_step8_messages()[:2]
     step8 = _synthetic_step8_text(messages)
-    with pytest.raises(RuntimeError, match="expected exactly 3 handoff messages"):
-        _extract_handoff_messages(step8)
+    _expect_error(
+        lambda: _extract_handoff_messages(step8),
+        RuntimeError,
+        match="expected exactly 3 handoff messages",
+    )
 
 
 def test_negative_step8_fourth_message_added_raises():
@@ -1575,8 +1585,11 @@ def test_negative_step8_fourth_message_added_raises():
         "> *At `light` weight:* extra fourth message.",
     ]
     step8 = _synthetic_step8_text(messages)
-    with pytest.raises(RuntimeError, match="expected exactly 3 handoff messages"):
-        _extract_handoff_messages(step8)
+    _expect_error(
+        lambda: _extract_handoff_messages(step8),
+        RuntimeError,
+        match="expected exactly 3 handoff messages",
+    )
 
 
 def test_negative_set_gate_without_gates_line_fails(tmp_path):
