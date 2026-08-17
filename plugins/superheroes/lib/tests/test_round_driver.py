@@ -1331,6 +1331,50 @@ def test_stale_accept_risk_menu_refused_at_submit_chokepoint(tmp_path):
     assert reloaded.get("terminal") is None
 
 
+def test_stale_accept_risk_flag_is_not_advertised_in_the_stall_menu():
+    """The MENU reads the persisted snapshot, not the cached flag (#1037 rider).
+
+    The chokepoint already refused this state (the two tests above); what shipped dishonest was the
+    display — a menu offering `accept-the-disclosed-risk` and `acceptRiskEligible: true` for a
+    choice the fold would then refuse. Same source for both, so they cannot disagree."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = True          # cached under a broader (prior) rule
+    state["_stallTargets"] = []                  # …with nothing in the snapshot to justify it
+    state["_stallChoices"] = ["accept-the-disclosed-risk", "hold"]
+    state["step"] = RD.P_STALL
+    action = RD._advance(state, state["config"])
+    assert action["phase"] == RD.P_STALL, action
+    assert action["payload"]["acceptRiskEligible"] is False
+    assert "accept-the-disclosed-risk" not in action["payload"]["choices"]
+    assert "hold" in action["payload"]["choices"]
+    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_INELIGIBLE
+
+
+def test_qualifying_snapshot_still_advertises_accept_risk_in_the_stall_menu():
+    """A/B for the test above: a real CONFIRMED-with-evidence snapshot still offers the choice."""
+    state, ident, _ = _stall_target_state()
+    RD._handle_stall(state, state["config"], {"reason": "audit-stall",
+                                              "detail": "x", "stalledIdentities": [ident]})
+    assert state["_stallTargets"], "the fixture must leave a qualifying snapshot"
+    action = RD._advance(state, state["config"])
+    assert action["phase"] == RD.P_STALL, action
+    assert action["payload"]["acceptRiskEligible"] is True
+    assert "accept-the-disclosed-risk" in action["payload"]["choices"]
+    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_ELIGIBLE
+
+
+def test_stall_policy_class_ignores_the_cached_flag_without_a_snapshot():
+    """Gate policy resolves on the snapshot too — the classifier and the fold agree by construction."""
+    state = RD.new_state(_cfg())
+    state["selfRecovered"] = True
+    state["_acceptRiskEligible"] = True
+    state["_stallTargets"] = [{"verdict": "PLAUSIBLE", "evidence": "ran"}]   # not CONFIRMED
+    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_INELIGIBLE
+    state["_stallTargets"] = [{"verdict": "CONFIRMED", "evidence": "ran"}]   # A/B
+    assert RD._stall_policy_class(state) == RD.review_gate_policy.STALL_CLASS_ELIGIBLE
+
+
 def test_accept_risk_submit_authorized_when_eligible(tmp_path):
     """accept-the-disclosed-risk with a qualifying snapshot is still accepted at submit."""
     d = str(tmp_path)

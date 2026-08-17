@@ -1235,8 +1235,19 @@ def _advance(state, config):
     elif step == P_STALL:
         # The stall menu is the audit-stall TERMINAL only (a tradeoff/judgment blocker routes to
         # present-judgment, never here — #507 R2a). No judgment findings ride this payload.
-        payload = {"choices": list(state.get("_stallChoices") or STALL_CHOICES),
-                   "acceptRiskEligible": bool(state.get("_acceptRiskEligible"))}
+        #
+        # Both fields are advertised from the PERSISTED `_stallTargets` snapshot, the same source
+        # the submit chokepoint (`stall-accept-risk-not-eligible`) and the fold already re-check
+        # against — never from the cached `_acceptRiskEligible` boolean, which a prior version may
+        # have written under a broader rule. The chokepoint was already honest; this makes the
+        # DISPLAY honest too, so the menu can no longer offer a choice the fold will refuse.
+        # axis: the SOURCE the menu advertises from. Asserting the flag's value would pass against
+        # a menu still reading the cached boolean whenever the two happen to agree.
+        eligible = _stall_targets_accept_risk_eligible(state)
+        choices = list(state.get("_stallChoices") or STALL_CHOICES)
+        if not eligible:
+            choices = [c for c in choices if c != ACCEPT_RISK_CHOICE]
+        payload = {"choices": choices, "acceptRiskEligible": eligible}
     return {"action": step, "round": rnd, "phase": step, "payload": payload}
 
 
@@ -3033,17 +3044,28 @@ def build_receipt(state, session_dir=None):
                 % (rkey, ", ".join(roi)))
         ovg = rrec.get("orderVendorProvenanceGaps")
         if ovg:
+            # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
+            # can come from an absent seat-map entry OR from a DEFAULTED engine-preference read,
+            # and those have different recoveries. Naming the seat map for both would send an
+            # operator to the wrong file, so each row says which it was.
             seats = []
             for row in ovg:
                 if not isinstance(row, dict):
                     continue
                 seat = row.get("seat")
-                if isinstance(seat, str) and seat:
-                    seats.append(seat)
+                if not (isinstance(seat, str) and seat):
+                    continue
+                label = seat
+                phase_name = row.get("phase")
+                if isinstance(phase_name, str) and phase_name:
+                    label = "%s@%s" % (label, phase_name)
+                if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
+                    label = "%s (vendor defaulted — engine preferences unreadable)" % label
+                seats.append(label)
             if seats:
                 degraded.append(
                     "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
-                    "vendor in the seat map" % (rkey, ", ".join(seats)))
+                    "vendor" % (rkey, ", ".join(seats)))
         prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
@@ -3513,7 +3535,7 @@ def _next_response(pending, expected_hash):
 
 
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-               _pending_policy_applied=None):
+               _pending_policy_applied=None, _durable_record=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
     advance. Stale/mismatched → rejected {ok: false} (exit 0). An exact duplicate of an
     already-accepted submit → idempotent {ok: true, duplicate: true}.
@@ -3529,7 +3551,16 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     different bookkeeping (the record layer's roster/completeness proof vs. a caller-supplied
     artifact) and mixing them within one session silently certifies a phase whose seats were never
     recorded. The fence is per-SESSION rather than the work order's per-PHASE wording: strictly
-    stronger, and it never permits anything the per-phase rule forbids."""
+    stronger, and it never permits anything the per-phase rule forbids.
+
+    `_durable_record` (library-only, like `_via_advance`) is
+    `{"storePath": str, "envelope": dict, "journal": dict}` — the orchestrator-fulfilled fold's
+    durable seat record (#1037), added to THIS fold's commit so the record and the state advance
+    land atomically. Every early return above the commit leaves it unwritten, which is the correct
+    reading in each case: nothing folded, so there is no fold to reconstruct. In particular the
+    DUPLICATE return leaves it unwritten — its one caller reaches this only after refusing
+    `landing-ambiguous` on any record already in the slot, so a duplicate there means the record
+    exists already, never that one is owed."""
     try:
         with round_records.session_lock(session_dir):
             sidecar_target = _sidecar_target_for_recover(session_dir)
@@ -3573,7 +3604,20 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 c = round_commit.begin(session_dir, "submit-accept")
                 c.add_replace_file(os.path.join(session_dir, STATE_FILE),
                                    _canonical(state).encode("utf-8"))
+                # axis: ATOMICITY with the fold — that the record cannot land without the state
+                # advance, or the advance without the record. Asserting the record merely exists
+                # after a successful fold would pass against a second, separate commit.
+                if _durable_record is not None:
+                    c.add_replace_file(
+                        _durable_record["storePath"],
+                        round_records.canonical(_durable_record["envelope"]).encode("utf-8"))
                 c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
+                if _durable_record is not None:
+                    # The record and its journal identity ride the SAME commit, so `reconcile`
+                    # never sees this slot as a two-commit-window remnant (neither `reappend`
+                    # nor `journalOrphan`).
+                    c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE),
+                                         _durable_record["journal"])
                 if orphan_journal is not None:
                     c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), orphan_journal)
                 c.run()
@@ -4126,8 +4170,25 @@ CHANNEL_STDOUT = "stdout"
 _READ_ONLY_CHANNEL_PHASES = frozenset(round_orders.ORDER_PHASES) - {P_FIXER}
 
 
+VENDOR_SOURCE_CONFIGURED = "configured"
+VENDOR_SOURCE_DEFAULTED = "defaulted"
+
+
 def _vendor_is_resolved(row):
-    """True when the transport row carries a non-empty vendor string — the channel is knowable."""
+    """True when the row carries a vendor the driver actually RESOLVED — the channel is knowable.
+
+    A non-empty vendor string is necessary but not sufficient (#1037 rider): a reviewer-phase row
+    whose engine-preference read raised falls back to the literal `"claude"`, which is
+    indistinguishable from a configured claude seat by its value alone. `vendorSource` carries that
+    distinction, and a DEFAULTED vendor is treated exactly like an absent one — it is a guess the
+    driver made, not evidence about the seat. Reading it the other way is what handed an
+    engine-dispatched seat the landing-path WRITE contract, which a sandboxed engine forfeits on.
+    """
+    # axis: the SOURCE of the vendor claim, not its value. A `vendor == "claude"` check bites on
+    # the value and cannot tell a configured claude seat from a defaulted one — which is exactly the
+    # pair that must fold to opposite channels.
+    if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
+        return False
     vendor = row.get("vendor")
     return isinstance(vendor, str) and bool(vendor.strip())
 
@@ -4158,12 +4219,33 @@ def _seat_channel(phase, row):
 
 
 def _reviewer_engine_vendor(repo_root):
-    """Reviewer-role engine for single-seat reviewer phases (verifiers, gap-sweep, scoped)."""
+    """`(vendor, source)` for single-seat reviewer phases (verifiers, gap-sweep, scoped).
+
+    `source` is the marker `_vendor_is_resolved` reads: `configured` when the preference read
+    answered from real configuration, `defaulted` when it did not and the all-claude stand-in
+    below was used instead. Returning the bare string lost that distinction — a defaulted
+    `"claude"` read as positive host evidence, and the seat was handed the write contract even
+    when the orchestrator dispatched it on a real engine (a forfeit).
+
+    **The failure path is a RETURN VALUE, not an exception.** `engine_pref.load_engine_prefs`
+    documents "Never raises": an unreadable / refused core.md comes back as
+    `refusal_engine_prefs(read_error)` — every role forced to claude, carrying `readError`. Keying
+    this marker on `except` alone would therefore never fire on the path that actually produces the
+    stand-in, leaving the whole rider inert. `readError` is that path's own marker, and it is what
+    separates a refusal from `degenerate_engine_prefs()` (a genuinely absent config, whose
+    documented defaults ARE the configuration). The `except` arms below stay as belt-and-braces
+    for a contract violation, not as the primary signal."""
     try:
         prefs = engine_pref.load_engine_prefs(repo_root)
-        return engine_pref.resolve_engine("review", prefs)
     except Exception:  # noqa: BLE001 — transport must degrade, never refuse render
-        return "claude"
+        return "claude", VENDOR_SOURCE_DEFAULTED
+    source = (VENDOR_SOURCE_DEFAULTED
+              if isinstance(prefs, dict) and prefs.get("readError") is not None
+              else VENDOR_SOURCE_CONFIGURED)
+    try:
+        return engine_pref.resolve_engine("review", prefs), source
+    except Exception:  # noqa: BLE001 — same degradation, and the vendor is then a stand-in
+        return "claude", VENDOR_SOURCE_DEFAULTED
 
 
 def _effective_seat_map(state):
@@ -4184,12 +4266,17 @@ def _disclose_order_vendor_provenance_gaps(state, gaps):
     rec = state["rounds"].get(rnd_key) or {}
     prior = rec.get("orderVendorProvenanceGaps")
     merged = list(prior) if isinstance(prior, list) else []
-    seen = {(row.get("seat"), row.get("occurrence"))
+    # Keyed on PHASE too. While the collector was panel-only, `(seat, occurrence)` was unique
+    # within a round; now that every read-only phase can contribute, two phases in one round can
+    # carry the same seat key — a configured panel dimension may be named anything, including a
+    # fixed reviewer seat name — and a phase-blind key silently drops the second phase's row.
+    # Dropping a disclosure is the one thing this collector must never do.
+    seen = {(row.get("phase"), row.get("seat"), row.get("occurrence"))
             for row in merged if isinstance(row, dict)}
     for row in gaps:
         if not isinstance(row, dict):
             continue
-        key = (row.get("seat"), row.get("occurrence"))
+        key = (row.get("phase"), row.get("seat"), row.get("occurrence"))
         if key in seen:
             continue
         merged.append(row)
@@ -4218,7 +4305,8 @@ def _seat_transport_row(state, phase, seat_key, occurrence, config, pending_payl
         # Synthesis is Claude-only ($SYNTH_MODEL); never route through external reviewer engines.
         return {"vendor": "claude", "model": None, "engine": None}
     if phase in (P_VERIFIERS, P_GAPSWEEP, P_SCOPED):
-        return {"vendor": _reviewer_engine_vendor(repo_root), "model": None, "engine": None}
+        vendor, source = _reviewer_engine_vendor(repo_root)
+        return {"vendor": vendor, "model": None, "engine": None, "vendorSource": source}
     return {"vendor": None, "model": None, "engine": None}
 
 
@@ -4685,10 +4773,17 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root,
                                   seat_map=seat_map)
         skey = round_records.storage_key(seat_key, occurrence)
-        if phase == P_PANEL and not _seat_is_engine(row):
-            vendor = row.get("vendor")
-            if vendor is None or (isinstance(vendor, str) and not vendor.strip()):
-                vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence})
+        # The disclosure derives from the SAME predicate `_seat_channel` folds on, so a channel that
+        # fell back to stdout for want of vendor evidence can never do so silently. Previously
+        # panel-only and keyed on an empty vendor string; a DEFAULTED reviewer vendor (#1037 rider)
+        # is a gap by the same reasoning and was invisible under both halves of that condition.
+        # axis: that a fallback fold is DISCLOSED, not that the fold is safe. Safety is
+        # `_seat_channel`'s job and is checked separately; a safe fold with no receipt is the
+        # silence this collector exists to prevent.
+        if phase in _READ_ONLY_CHANNEL_PHASES and not _seat_is_engine(row):
+            if not _vendor_is_resolved(row):
+                vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence,
+                                    "phase": phase, "vendorSource": row.get("vendorSource")})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload, row)
         resource_reason = _shipped_resource_refusal(context.get("placeholders"))
@@ -5431,7 +5526,11 @@ def _judgment_policy_rows(state):
 
 
 def _stall_policy_class(state):
-    if state.get("_acceptRiskEligible"):
+    """The stall class gate policy resolves against — from the PERSISTED stall-target snapshot.
+
+    Same source as the submit chokepoint and the fold, so the policy that picks a resolution can
+    never classify a state as accept-risk-eligible that the fold will then refuse."""
+    if _stall_targets_accept_risk_eligible(state):
         return review_gate_policy.STALL_CLASS_ELIGIBLE
     return review_gate_policy.STALL_CLASS_INELIGIBLE
 
@@ -5692,12 +5791,77 @@ def _attach_dispatch_manifest_disclosure(session_dir, response, rnd, phase, atte
 _ORCHESTRATOR_FULFILLED_USE_SEAT_PATH = object()
 
 
+def _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt, seat_key,
+                                     occurrence, payload, session_id):
+    """The durable `seat-result/1` record an orchestrator-fulfilled fold stores (#1037).
+
+    Same envelope shape the seat path stores, built from the ACCEPTED bare payload rather than from
+    a landing envelope: an orchestrator-fulfilled phase emits no orders manifest and no anchor, so
+    the order/manifest hashes carry the `not-emitted` literal — the one claim `_anchor_check`
+    accepts when there is nothing to check it against. Inventing real-looking hashes here would be
+    a claim nobody verified.
+
+    `fulfilledBy` is the provenance the pre-#1037 fold had nowhere to put: a reader of the store
+    record alone can tell an orchestrator-fulfilled fold from a seat-written one, which is the
+    reconstructability the bare-payload path was missing at vet.
+    """
+    cfg = state.get("config") or {}
+    repo_root = cfg.get("repoRoot") or os.getcwd()
+    pending = ((state.get("pending") or {}).get("payload")
+               if isinstance(state.get("pending"), dict) else {})
+    # One home for the vendor fact. For an orchestrator-fulfilled phase this resolves to None —
+    # no seat was dispatched — and None is the honest record; naming a vendor would invent one.
+    row = _seat_transport_row(state, phase, seat_key, occurrence, cfg, pending, repo_root)
+    return {
+        "schema": round_records.SEAT_RESULT_SCHEMA,
+        "session": session_id,
+        "round": rnd,
+        "phase": phase,
+        "seat": seat_key,
+        "attempt": attempt,
+        "occurrence": occurrence,
+        "vendor": row["vendor"],
+        "model": row["model"],
+        "dispatchRef": None,
+        "orderSha256": round_records.NOT_EMITTED,
+        "manifestSha256": round_records.NOT_EMITTED,
+        "recordedAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        "payloadSha256": round_records.payload_sha256(payload),
+        "payload": payload,
+        "fulfilledBy": "orchestrator",
+    }
+
+
 def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt, config,
                                            git=None, broke=None):
     """Fold an orchestrator-fulfilled phase from its host-seat bare payload when present.
 
     When the bare payload is absent, decline so the caller can fold through the durable
-    seat-record path. A bare payload that is present but malformed refuses without fallback."""
+    seat-record path. A bare payload that is present but malformed refuses without fallback.
+
+    #1037 closes the two design residuals #960 shipped disclosed:
+
+    * The fold WRITES the durable `seat-result/1` record for the slot, in the SAME commit as the
+      fold, so a `verifyResult` folded this way reconstructs from the store record alone — exactly
+      as one folded through the seat path does. Same commit is the whole point: a fold with no
+      record, or a record with no fold, is the reconstructability gap in a new shape.
+    * A bare payload beside a durable seat record is TWO claims for one slot, and the pre-#1037
+      precedence resolved it by fiat (bare wins, silently). It now refuses `landing-ambiguous` —
+      the same reason, on the same invariant ("one artifact per slot"), that the seat path already
+      refuses in `round_records._read_landing_envelope`.
+
+    The refusal is UNCONDITIONAL, including on a re-entry after this path's own fold committed. An
+    earlier revision carried a `replay` escape hatch that tried to recognise "the record in this
+    slot is one I wrote" from `lastAccepted` plus the record's contents, so such a re-entry would
+    re-fold idempotently. It was removed: that predicate re-derives, at `advance` time, the
+    already-folded judgment `cmd_submit`'s duplicate contract owns, and the two disagreed in a new
+    way on every review round (a foreign record waved through; a record edited under its own
+    declared hash; a MISSING record reported `ok` because `cmd_submit` returned `duplicate` before
+    the commit that would have written it). It also had no user: the re-entry it protected cannot
+    make progress anyway, because a duplicate `submit` returns before `_cmd_submit_prepare` clears
+    `state["pending"]`, so the following `next` re-emits the same step. A loud
+    `landing-ambiguous` — delete whichever artifact is not the one you meant — is both the ratified
+    behaviour and the honest one."""
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
@@ -5719,13 +5883,58 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
         return _refuse_cmd(session_dir, "advance", "orchestrator-payload-unreadable",
                            phase=phase, rnd=rnd, attempt=attempt, seat=seat_key, path=path,
                            detail=perr)
-    # Both a bare payload and a durable seat record may exist — the bare payload wins (no double fold).
     fault = _adapters().orchestrator_payload_fault(phase, payload)
     if fault:
         return _refuse_cmd(session_dir, "advance", fault, phase=phase, rnd=rnd, attempt=attempt,
                            seat=seat_key)
+    occurrence = 0
+    record_path = round_records.store_path(session_dir, rnd, phase, skey, attempt)
+    # One artifact per slot — the seat path's invariant, now enforced on the bare-vs-record pair
+    # too. Placed AFTER the shape guard so a malformed payload keeps its own, more actionable
+    # reason (#960's fixture): both refuse, neither folds, and the state hash is untouched.
+    #
+    # axis: that a SECOND claim for the slot REFUSES the fold — not that the fold prefers one
+    # artifact over the other. A precedence rule (either direction) folds one claim and
+    # silently discards the other, which is the residual this replaces, not a fix for it.
+    #
+    # `_store_file_exists`, not `os.path.exists`: the same fail-closed existence probe the
+    # record-submit fence uses. `os.path.exists` follows symlinks and answers False for a
+    # DANGLING one (and on some permission errors), which would fold the bare payload over an
+    # unknown store state — the fail-open direction this guard exists to close.
+    if _store_file_exists(record_path):
+        return _refuse_cmd(
+            session_dir, "advance", "landing-ambiguous", phase=phase, rnd=rnd, attempt=attempt,
+            seat=seat_key, path=path, storePath=record_path,
+            detail="both a host-seat bare payload (%s) and a durable seat record (%s) are "
+                   "present for this slot" % (path, record_path))
+    # A record must be bound to a live session id — the same precondition
+    # `round_records.validate_landing` enforces as `bootstrap-required` before accepting any
+    # seat record. This path does not route through that validation, so it refuses here rather
+    # than committing an envelope whose `session` is null and whose provenance therefore
+    # reconstructs nothing.
+    # Read ONCE and carry that exact value into the envelope. Validating the id and then
+    # letting the builder re-read `meta.json` leaves a window where the file (skill-owned, so
+    # not ours to assume stable) changes between the two reads and the guard passes while the
+    # committed envelope carries a different — or null — session.
+    session_id = _meta_session_id(session_dir)
+    if not session_id:
+        return _refuse_cmd(session_dir, "advance", "bootstrap-required", phase=phase, rnd=rnd,
+                           attempt=attempt, seat=seat_key,
+                           detail="no session id in meta.json — refusing to write a durable "
+                                  "seat record that could not carry its session provenance")
+    envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
+                                                seat_key, occurrence, payload, session_id)
+    record = {
+        "storePath": record_path,
+        "envelope": envelope,
+        "journal": _journal_entry_for_commit(
+            session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
+            seat=seat_key, occurrence=occurrence,
+            payloadSha256=envelope["payloadSha256"], superseded=False,
+            **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
+    }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
-                        _via_advance=True)
+                        _via_advance=True, _durable_record=record)
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
