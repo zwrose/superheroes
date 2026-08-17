@@ -311,13 +311,16 @@ explicit confirm before doing anything. First preview, then (on confirm) execute
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
-# present the calibration + definition documents it lists, and the collaborator-visibility note;
+# present the calibration + definition documents + work-item records it lists, and the
+# collaborator-visibility note;
 # on the owner's explicit confirm:
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global>
 ```
 
-- **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns) and
-  **every definition document**. A flip into the repo newly publishes all of it to collaborators —
+- **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns),
+  **every definition document**, and **every other work-item record** the preview lists under
+  `workItemRecords` — a discovery's findings record is one, and it moves with its folder without
+  being a definition document. A flip into the repo newly publishes all of it to collaborators —
   say so. Machine-local bookkeeping (the mode record, in-progress run state) is updated in place, not
   relocated.
 - **In-flight work (UFR-3):** if a piece of work is mid-flight (its documents would move underneath

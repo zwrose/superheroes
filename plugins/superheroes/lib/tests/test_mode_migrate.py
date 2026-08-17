@@ -69,7 +69,7 @@ def test_plan_enumerates_calibration_and_defdocs_and_marks_bookkeeping_not_moved
     assert m.remote_key == sc.derive_identifiers(str(tmp_path))["remote_hash"]
 
 
-def test_plan_enumerates_findings_md_with_spec_and_preview_lists_both(tmp_path):
+def test_plan_moves_findings_md_and_preview_buckets_it_as_a_work_item_record(tmp_path):
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")
     mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
@@ -86,7 +86,47 @@ def test_plan_enumerates_findings_md_with_spec_and_preview_lists_both(tmp_path):
     assert findings_src in moved
     pv = mm.preview(m)
     assert spec_src in pv["definitionDocs"]
-    assert findings_src in pv["definitionDocs"]
+    assert findings_src in pv["workItemRecords"]
+    assert findings_src not in pv["definitionDocs"]
+    assert findings_src not in pv["calibration"]
+
+
+def test_preview_buckets_are_disjoint_and_cover_every_moved_file(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec\n")
+    sc.atomic_write(os.path.join(ddir, "plan.md"), "plan\n")
+    sc.atomic_write(os.path.join(ddir, "tasks.md"), "tasks\n")
+    sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    cal, defs, records = pv["calibration"], pv["definitionDocs"], pv["workItemRecords"]
+    assert not (set(cal) & set(defs))
+    assert not (set(cal) & set(records))
+    assert not (set(defs) & set(records))
+    assert set(cal) | set(defs) | set(records) == {f["src"] for f in m.files}
+
+
+def test_calibration_bucket_excludes_every_work_item_doc(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec\n")
+    sc.atomic_write(os.path.join(ddir, "plan.md"), "plan\n")
+    sc.atomic_write(os.path.join(ddir, "tasks.md"), "tasks\n")
+    sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    work_item_basenames = {"spec.md", "plan.md", "tasks.md", "findings.md"}
+    for path in pv["calibration"]:
+        assert os.path.basename(path) not in work_item_basenames
 
 
 def test_plan_refuses_when_not_interactive(tmp_path):

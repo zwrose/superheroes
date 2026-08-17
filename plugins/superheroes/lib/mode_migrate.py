@@ -30,8 +30,17 @@ import store_core      # noqa: E402  (sibling)
 _JOURNAL = mode_registry.MIGRATION_JOURNAL
 _REBIND = mode_registry.REBIND_KIND
 _CAL_BASENAMES_PRESERVE = ("core.md", "patterns.md")  # plus any <plugin>.md layer
-# Per-work-item documents a storage-mode flip moves (not limited to definition-docs).
-_DEF_DOCS = ("spec.md", "plan.md", "tasks.md", "findings.md")
+# The definition-doc basenames — the three docs that carry §3.1 frontmatter and gates.
+# This is the *classification* set: it answers "is this a definition-doc?", nothing else.
+_DEFINITION_DOCS = ("spec.md", "plan.md", "tasks.md")
+# Per-work-item files that are NOT definition-docs but still live in the work-item folder.
+# A findings record (Exit B of discovery) carries the owner's ratification and no gates —
+# it must move with the folder, and it must never be *labelled* a definition-doc (§3.3).
+_WORK_ITEM_RECORDS = ("findings.md",)
+# Everything a storage-mode flip relocates out of a work-item folder. This is the *movement*
+# set; keep it the union, so a new work-item file is moved by being added to one of the two
+# sets above rather than to a third place.
+_WORK_ITEM_DOCS = _DEFINITION_DOCS + _WORK_ITEM_RECORDS
 
 
 class Migration:
@@ -146,7 +155,7 @@ def _enumerate(src_cal_dir, dst_cal_dir, src_docs_base, dst_docs_base):
             wdir = os.path.join(src_docs_base, wi)
             if not os.path.isdir(wdir):
                 continue
-            for doc in _DEF_DOCS:
+            for doc in _WORK_ITEM_DOCS:
                 p = os.path.join(wdir, doc)
                 if os.path.isfile(p):
                     files.append({"src": p,
@@ -174,15 +183,26 @@ def plan(cwd, target_mode, *, root=None, interactive):
 
 def _is_calibration(path):
     b = os.path.basename(path)
-    return b in _CAL_BASENAMES_PRESERVE or (b.endswith(".md") and b not in _DEF_DOCS)
+    return b in _CAL_BASENAMES_PRESERVE or (b.endswith(".md") and b not in _WORK_ITEM_DOCS)
+
+
+def _is_definition_doc(path):
+    return os.path.basename(path) in _DEFINITION_DOCS
 
 
 def preview(migration):
     """The plain-language 'exactly what will move' summary FR-10 requires before any confirm.
-    Enumerates calibration AND definition-docs, with a one-line collaborator-visibility disclosure."""
-    calibration, def_docs = [], []
+    Enumerates calibration, definition-docs, and non-definition-doc work-item records, with a
+    one-line collaborator-visibility disclosure."""
+    calibration, def_docs, work_item_records = [], [], []
     for f in migration.files:
-        (calibration if _is_calibration(f["src"]) else def_docs).append(f["src"])
+        src = f["src"]
+        if _is_calibration(src):
+            calibration.append(src)
+        elif _is_definition_doc(src):
+            def_docs.append(src)
+        else:
+            work_item_records.append(src)
     if migration.target == mode_registry.IN_REPO:
         disclosure = ("Switching to repo-shared publishes the calibration AND every definition "
                       "document into the repo — visible to collaborators.")
@@ -190,7 +210,8 @@ def preview(migration):
         disclosure = ("Switching to out-of-repo moves the calibration and definition documents "
                       "out of the repo — the repo stays pristine.")
     return {"target": migration.target, "calibration": calibration,
-            "definitionDocs": def_docs, "disclosure": disclosure}
+            "definitionDocs": def_docs, "workItemRecords": work_item_records,
+            "disclosure": disclosure}
 
 
 # --------------------------------------------------------------------------- execute

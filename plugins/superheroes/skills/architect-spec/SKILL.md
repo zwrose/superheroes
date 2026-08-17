@@ -131,7 +131,11 @@ class**. Four equivalences hold, always:
 2. **Same home.** Both land at the `spec` definition-doc path for their work-item, resolved the
    same way (`definition_doc.py resolve-write --doc spec`). **There is no light home.**
 3. **Same anchor power.** An issue's Anchor slot may cite a section of either, and the citation
-   resolves by the same test. **A light spec is not a weaker citation.**
+   resolves by the same test. **A light spec is not a weaker citation.** One half of that test —
+   the **dated approval** an anchor resolves against — is recorded by hand today rather than
+   written by the approval path, and closing that gap is
+   [#1062](https://github.com/zwrose/superheroes/issues/1062)'s work, not this skill's. Until it
+   lands, this equivalence holds by convention on the date and mechanically on everything else.
 4. **Same owner approval authority.** Both are approved by the owner, recorded through the same
    `set-gate` call. **There is no lighter approval.**
 

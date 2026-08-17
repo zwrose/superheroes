@@ -34,8 +34,11 @@ gates cannot be self-approved — you may *record the owner's* explicit approval
 **The two other exits are not loopholes in that gate — they are the other two ways a
 discovery legitimately ends** (see **The three exits**). Each closes by writing its own
 durable artifact, which is why **Exit B mints the work-item and places its record** and
-why **Exit C hands back with no spec at all**. What is never permitted on any exit is
-fabricating a spec, or approving one on the owner's behalf.
+why **Exit C hands back with no approved spec**. Where a draft was already written before
+the park — step 7's unweighable draft is the usual case — **the draft rides the park note,
+explicitly marked unapproved**, and is neither discarded nor treated as an artifact anything
+may anchor to. What is never permitted on any exit is fabricating a spec, or approving one on
+the owner's behalf.
 </HARD-GATE>
 
 ## The one front door
@@ -83,7 +86,8 @@ with what is there."
    ROOT=$(git rev-parse --show-toplevel)
    WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>")
    SPEC=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" resolve-write \
-     --doc spec --work-item "$WORK_ITEM" --root "$ROOT")
+     --doc spec --work-item "$WORK_ITEM" --root "$ROOT") \
+     || { echo "the-architect: cannot resolve the work-item folder (see message above) — not writing the findings record." >&2; exit 1; }
    FINDINGS="$(dirname "$SPEC")/findings.md"
    ```
 
@@ -373,17 +377,26 @@ what did not run.
 
 ### 8. Owner review & final approval (terminal gate)
 
-Ask the owner to review the written spec. **Tell them the truth about whether an
-automated review ran** — never claim a review that didn't happen:
+Ask the owner to review the written spec. **Tell them the truth about which review ran** —
+never claim a review that didn't happen, and never offer them a spec that had none. The
+message follows the weight called in step 7:
 
-> *If `review-spec` ran (step 7):* "Spec written to
-> `docs/superheroes/<work-item>/spec.md` and through automated review. Please review
-> it and tell me if you want any changes before it goes to the build."
+> *At `light` weight:* "Spec written to `docs/superheroes/<work-item>/spec.md` and read by
+> one independent reviewer. Please review it and tell me if you want any changes before it
+> goes to the build."
 >
-> *If `review-spec` was unavailable:* "Spec written to
-> `docs/superheroes/<work-item>/spec.md`. Automated spec-review isn't set up on this
-> project, so it's coming straight to you — please review it and tell me if you want
-> any changes before it goes to the build."
+> *At `full` weight:* "Spec written to `docs/superheroes/<work-item>/spec.md` and through
+> `review-spec`'s panel. Please review it and tell me if you want any changes before it
+> goes to the build."
+>
+> *At `full` weight, overridden down because the panel could not run:* "Spec written to
+> `docs/superheroes/<work-item>/spec.md`. `review-spec`'s panel isn't available on this
+> project, so this was called down to light weight and read by one independent reviewer
+> instead. Please review it and tell me if you want any changes before it goes to the build."
+
+**There is no fourth message.** `review-spec` being unavailable is not a reason to hand the
+owner an unreviewed spec at either weight — step 7 rules that out, and a draft that can reach
+neither review path **parks (Exit C)** rather than arriving here.
 
 **How you ask depends on the weight called in step 7.** On `light`, ask **in-channel** — put it
 in the conversation and record the answer when it comes. On `full`, agree a **scheduled owner
