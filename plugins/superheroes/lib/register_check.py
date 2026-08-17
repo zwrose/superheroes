@@ -11,6 +11,8 @@ import json
 import re
 import sys
 
+import md_fence
+
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
 
 SCHEMA = "register-check/1"
@@ -29,6 +31,7 @@ UNDECIDED_REGISTER_UNREADABLE = "register-unreadable"
 UNDECIDED_BODY_UNREADABLE = "body-unreadable"
 UNDECIDED_REGISTER_EMPTY = "register-empty"
 UNDECIDED_REGISTER_MALFORMED = "register-malformed"
+UNDECIDED_BODY_MALFORMED = "body-malformed"
 UNDECIDED_CHILD_UNRECOGNIZED = "child-unrecognized"
 UNDECIDED_USAGE = "usage"
 UNDECIDED_INTERNAL_ERROR = "internal-error"
@@ -37,6 +40,7 @@ UNDECIDED_REASONS = frozenset({
     UNDECIDED_BODY_UNREADABLE,
     UNDECIDED_REGISTER_EMPTY,
     UNDECIDED_REGISTER_MALFORMED,
+    UNDECIDED_BODY_MALFORMED,
     UNDECIDED_CHILD_UNRECOGNIZED,
     UNDECIDED_USAGE,
     UNDECIDED_INTERNAL_ERROR,
@@ -67,32 +71,6 @@ def _read_lines(path):
     if text.endswith("\n"):
         lines = lines[:-1]
     return [line[:-1] if line.endswith("\r") else line for line in lines]
-
-
-def _parse_fence_marker(line):
-    """If `line` is a fence marker, return (marker_char, run_length). Else None."""
-    stripped = line.strip()
-    if not stripped:
-        return None
-    if stripped[0] == "`":
-        run = 0
-        for ch in stripped:
-            if ch == "`":
-                run += 1
-            else:
-                break
-        if run >= 3:
-            return ("`", run)
-    elif stripped[0] == "~":
-        run = 0
-        for ch in stripped:
-            if ch == "~":
-                run += 1
-            else:
-                break
-        if run >= 3:
-            return ("~", run)
-    return None
 
 
 def _is_italic_metadata_line(line):
@@ -126,18 +104,6 @@ def _trailer_stop_line(line):
     if line.startswith("#"):
         return True
     return False
-
-
-def _advance_past_fence(lines, i, in_fence, fence_char, fence_len):
-    line = lines[i]
-    marker = _parse_fence_marker(line)
-    if in_fence:
-        if marker is not None and marker[0] == fence_char and marker[1] >= fence_len:
-            return i + 1, False, None, 0
-        return i + 1, True, fence_char, fence_len
-    if marker is not None:
-        return i + 1, True, marker[0], marker[1]
-    return i + 1, False, None, 0
 
 
 def _make_finding(kind, entry, line, column, expected, actual, detail):
@@ -202,32 +168,25 @@ def _quotable_has_substance(quotable):
 
 def parse_register_lines(lines):
     """Parse register lines into ordered entries or a malformed/empty error."""
+    fence_scan = md_fence.scan(lines)
+    inert = fence_scan.inert
+    if fence_scan.unterminated_opener_line is not None:
+        return None, UNDECIDED_REGISTER_MALFORMED, fence_scan.unterminated_opener_line, (
+            "unterminated code fence — entries after this line were not parsed"
+        )
+
     entries = []
     seen_ids = set()
-    in_fence = False
-    fence_char = None
-    fence_len = 0
-    fence_opener_line = None
     i = 0
     n = len(lines)
 
     while i < n:
-        line = lines[i]
-        line_no = i + 1
-        if in_fence:
-            i, in_fence, fence_char, fence_len = _advance_past_fence(
-                lines, i, in_fence, fence_char, fence_len
-            )
-            continue
-
-        fence_marker = _parse_fence_marker(line)
-        if fence_marker is not None:
-            in_fence = True
-            fence_opener_line = line_no
-            fence_char = fence_marker[0]
-            fence_len = fence_marker[1]
+        if inert[i]:
             i += 1
             continue
+
+        line = lines[i]
+        line_no = i + 1
 
         consumers_match = CONSUMERS_LINE_RE.match(line)
         if consumers_match and not entries:
@@ -247,20 +206,10 @@ def parse_register_lines(lines):
             quotable = [line]
             i += 1
             while i < n:
-                if in_fence:
-                    i, in_fence, fence_char, fence_len = _advance_past_fence(
-                        lines, i, in_fence, fence_char, fence_len
-                    )
-                    continue
-                inner = lines[i]
-                inner_fence = _parse_fence_marker(inner)
-                if inner_fence is not None:
-                    in_fence = True
-                    fence_opener_line = i + 1
-                    fence_char = inner_fence[0]
-                    fence_len = inner_fence[1]
+                if inert[i]:
                     i += 1
                     continue
+                inner = lines[i]
                 if _quotable_stop_line(inner):
                     break
                 quotable.append(inner)
@@ -271,20 +220,10 @@ def parse_register_lines(lines):
                 )
             consumers_lines = []
             while i < n:
-                if in_fence:
-                    i, in_fence, fence_char, fence_len = _advance_past_fence(
-                        lines, i, in_fence, fence_char, fence_len
-                    )
-                    continue
-                inner = lines[i]
-                inner_fence = _parse_fence_marker(inner)
-                if inner_fence is not None:
-                    in_fence = True
-                    fence_opener_line = i + 1
-                    fence_char = inner_fence[0]
-                    fence_len = inner_fence[1]
+                if inert[i]:
                     i += 1
                     continue
+                inner = lines[i]
                 if _trailer_stop_line(inner):
                     break
                 cons = CONSUMERS_LINE_RE.match(inner)
@@ -306,10 +245,6 @@ def parse_register_lines(lines):
             continue
         i += 1
 
-    if in_fence:
-        return None, UNDECIDED_REGISTER_MALFORMED, fence_opener_line, (
-            "unterminated code fence — entries after this line were not parsed"
-        )
     if not entries:
         return None, UNDECIDED_REGISTER_EMPTY, None, "register contains no entries"
     return entries, None, None, None
@@ -333,42 +268,24 @@ def _unprefix_blockquote(line):
 
 def parse_quoted_blocks(lines):
     """Return quoted register blocks in body order: list of (entry_id, lines)."""
+    fence_scan = md_fence.scan(lines)
+    inert = fence_scan.inert
     blocks = []
-    in_fence = False
-    fence_char = None
-    fence_len = 0
     i = 0
     n = len(lines)
 
     while i < n:
-        line = lines[i]
-        fence_marker = _parse_fence_marker(line)
-        # axis: blockquotes inside fenced regions are ignored — fences are inert in the body scanner.
-        if in_fence:
-            if (
-                fence_marker is not None
-                and fence_marker[0] == fence_char
-                and fence_marker[1] >= fence_len
-            ):
-                in_fence = False
-                fence_char = None
-                fence_len = 0
-            i += 1
-            continue
-        if fence_marker is not None:
-            in_fence = True
-            fence_char = fence_marker[0]
-            fence_len = fence_marker[1]
+        if inert[i]:
             i += 1
             continue
 
+        line = lines[i]
         if line.startswith(">"):
             raw_block = []
             while i < n:
-                current = lines[i]
-                current_fence = _parse_fence_marker(current)
-                if current_fence is not None:
+                if inert[i]:
                     break
+                current = lines[i]
                 if not current.startswith(">"):
                     break
                 raw_block.append(current)
@@ -560,6 +477,19 @@ def check_body(register_path, body_path, child, allow_no_required_entries=False)
         return _undecided(
             UNDECIDED_BODY_UNREADABLE,
             "body file is missing or not valid UTF-8",
+            child=child,
+            register_path=register_path,
+            body_path=body_path,
+        )
+
+    body_scan = md_fence.scan(body_lines)
+    if body_scan.unterminated_opener_line is not None:
+        return _undecided(
+            UNDECIDED_BODY_MALFORMED,
+            (
+                f"body line {body_scan.unterminated_opener_line}: "
+                "unterminated code fence — quotes after this line were not parsed"
+            ),
             child=child,
             register_path=register_path,
             body_path=body_path,

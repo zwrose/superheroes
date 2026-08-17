@@ -313,6 +313,23 @@ def test_fence_tilde_inside_backtick_fence_decoy_reports_anchor_slot_missing():
     assert result["declaredKinds"] == []
 
 
+def test_fenced_trailing_text_closer_decoy_slot_header_stays_missing():
+    body = (
+        "```\n"
+        "```still-code\n"
+        "Anchor (spec-section): decoy after fake closer\n"
+        "```\n"
+        "What: scope\n"
+        "DoD:\n"
+        "- outcome\n"
+    )
+    result = _check(body)
+    assert result["ok"] is False
+    assert result["reason"] == ic.REFUSAL_ANCHOR_SLOT_MISSING
+    assert result["slots"][ic.SLOT_ANCHOR] == ic.SLOT_STATUS_MISSING
+    assert result["declaredKinds"] == []
+
+
 def test_fence_empty_markdown_fence_reports_anchor_slot_empty():
     body = (
         "Anchor (receipt):\n"

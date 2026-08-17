@@ -20,6 +20,8 @@ import json
 import re
 import sys
 
+import md_fence
+
 # --- vocabulary: ONE authoritative home (CONVENTIONS §11) --------------------
 
 SLOT_ANCHOR = "Anchor"
@@ -143,72 +145,34 @@ def _content_has_word_char(text):
     return bool(re.search(r"[A-Za-z0-9]", cleaned))
 
 
-def _parse_fence_marker(line):
-    """If `line` is a fence marker, return (marker_char, run_length). Else None."""
-    stripped = line.strip()
-    if not stripped:
-        return None
-    if stripped[0] == "`":
-        run = 0
-        for ch in stripped:
-            if ch == "`":
-                run += 1
-            else:
-                break
-        if run >= 3:
-            return ("`", run)
-    elif stripped[0] == "~":
-        run = 0
-        for ch in stripped:
-            if ch == "~":
-                run += 1
-            else:
-                break
-        if run >= 3:
-            return ("~", run)
-    return None
-
-
 def _parse_slots(body):
     """Return slot statuses, per-slot content, and Anchor declared kind tokens."""
     slots_content = {slot: [] for slot in SLOTS}
     found = {slot: False for slot in SLOTS}
     current_slot = None
     anchor_declared_kinds = []
-    in_fence = False
-    fence_char = None
-    fence_len = 0
+    lines = body.splitlines()
+    scan = md_fence.scan(lines)
 
-    for line in body.splitlines():
-        # axis: slot headers inside fenced blocks are ignored — only unfenced lines open or continue slots.
-        fence_marker = _parse_fence_marker(line)
-        if in_fence:
-            if (
-                fence_marker is not None
-                and fence_marker[0] == fence_char
-                and fence_marker[1] >= fence_len
-            ):
-                in_fence = False
-                fence_char = None
-                fence_len = 0
-            elif current_slot is not None:
+    for line, kind in zip(lines, scan.kinds):
+        # axis: slot headers inside fenced blocks are ignored — md_fence.scan kinds gate header parsing.
+        if kind == md_fence.KIND_OPENER:
+            continue
+        if kind == md_fence.KIND_CLOSER:
+            continue
+        if kind == md_fence.KIND_CONTENT:
+            if current_slot is not None:
                 slots_content[current_slot].append(line)
             continue
-        if fence_marker is not None:
-            in_fence = True
-            fence_char = fence_marker[0]
-            fence_len = fence_marker[1]
+        slot, rest, declared = _parse_slot_header(line)
+        if slot is not None:
+            current_slot = slot
+            found[slot] = True
+            if slot == SLOT_ANCHOR:
+                anchor_declared_kinds = declared
+            if rest:
+                slots_content[slot].append(rest)
             continue
-        if not in_fence:
-            slot, rest, declared = _parse_slot_header(line)
-            if slot is not None:
-                current_slot = slot
-                found[slot] = True
-                if slot == SLOT_ANCHOR:
-                    anchor_declared_kinds = declared
-                if rest:
-                    slots_content[slot].append(rest)
-                continue
         if current_slot is not None:
             slots_content[current_slot].append(line)
 

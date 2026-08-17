@@ -361,11 +361,23 @@ def test_boundary_matching_c10_not_c1(tmp_path):
     assert result["requiredEntries"] == []
 
 
-def test_boundary_child_unrecognized_c09(tmp_path):
+def test_boundary_child_unrecognized_c1_against_c10_consumers(tmp_path):
+    register = _minimal_register(
+        tmp_path,
+        "**R1 — Entry.**\n*Consumers:* C10\n",
+    )
+    body = tmp_path / "body.md"
+    body.write_text("> **R1 — Entry.**\n", encoding="utf-8")
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
+
+
+def test_boundary_child_unrecognized_c10_against_c1_consumers(tmp_path):
     register = _tiny_register(tmp_path)
     body = tmp_path / "body.md"
     body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
-    result = _check(register, body, "C09")
+    result = _check(register, body, "C10")
     assert result["result"] == rc.RESULT_UNDECIDED
     assert result["reason"] == rc.UNDECIDED_CHILD_UNRECOGNIZED
 
@@ -382,17 +394,36 @@ def test_boundary_child_unrecognized_detective_child(tmp_path):
 # --- fences -----------------------------------------------------------------
 
 
-def test_fenced_decoy_missing_quote(tmp_path):
+def test_blockquote_without_entry_header_not_collected(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text(
+        "> Some ordinary quoted prose.\n"
+        "> Continuing the paragraph.\n",
+        encoding="utf-8",
+    )
+    result = _check(register, body, "C1")
+    assert result["quotedEntries"] == []
+    assert result["result"] == rc.RESULT_FAIL
+    assert result["findings"][0]["kind"] == rc.KIND_MISSING_QUOTE
+    assert result["findings"][0]["entry"] == "R1"
+    assert all(f["kind"] != rc.KIND_UNKNOWN_ENTRY for f in result["findings"])
+
+
+def test_fenced_example_does_not_satisfy_required_quote(tmp_path):
     register = _tiny_register(tmp_path)
     body = tmp_path / "body.md"
     body.write_text(
         "```\n"
         "> **R1 — One line entry.**\n"
+        "```still-code\n"
+        "more lines\n"
         "```\n",
         encoding="utf-8",
     )
     result = _check(register, body, "C1")
     assert result["result"] == rc.RESULT_FAIL
+    assert result["quotedEntries"] == []
     assert result["findings"][0]["kind"] == rc.KIND_MISSING_QUOTE
 
 
@@ -515,6 +546,21 @@ def test_malformed_empty_quotable_text(tmp_path):
     assert "empty quotable text" in result["detail"]
 
 
+def test_malformed_body_unterminated_fence(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text(
+        "```\n"
+        "fence content\n",
+        encoding="utf-8",
+    )
+    result = _check(register, body, "C1")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_BODY_MALFORMED
+    assert "body line 1:" in result["detail"]
+    assert "unterminated code fence" in result["detail"]
+
+
 def test_malformed_unterminated_fence(tmp_path):
     register = _minimal_register(
         tmp_path,
@@ -610,6 +656,15 @@ def test_entry_without_consumers_not_required(tmp_path):
 
 
 # --- CLI seam ---------------------------------------------------------------
+
+
+def test_check_body_blank_child_guard(tmp_path):
+    register = _tiny_register(tmp_path)
+    body = tmp_path / "body.md"
+    body.write_text("x\n", encoding="utf-8")
+    result = rc.check_body(str(register), str(body), "   ")
+    assert result["result"] == rc.RESULT_UNDECIDED
+    assert result["reason"] == rc.UNDECIDED_USAGE
 
 
 def test_cli_passing_pair(tmp_path):
@@ -768,9 +823,18 @@ def test_emitted_objects_use_authoritative_field_sets(tmp_path):
 
 
 def test_deterministic_stdout(tmp_path):
-    register = _tiny_register(tmp_path)
+    register = _minimal_register(
+        tmp_path,
+        "**R1 — Required entry.**\n*Consumers:* C1\n"
+        "**R2 — Also required.**\n*Consumers:* C1\n",
+    )
     body = tmp_path / "body.md"
-    body.write_text("> **R1 — One line entry.**\n", encoding="utf-8")
+    body.write_text(
+        "> **R1 — Required entry.X**\n"
+        "\n"
+        "> **R99 — Unknown.**\n",
+        encoding="utf-8",
+    )
     code1, out1, _err1 = _run_cli(
         "--register", str(register),
         "--body-file", str(body),
@@ -781,8 +845,13 @@ def test_deterministic_stdout(tmp_path):
         "--body-file", str(body),
         "--child", "C1",
     )
-    assert code1 == code2 == rc.EXIT_PASS
+    assert code1 == code2 == rc.EXIT_FAIL
     assert out1 == out2
+    payload = json.loads(out1.strip())
+    kinds = [f["kind"] for f in payload["findings"]]
+    assert rc.KIND_TEXT_DRIFT in kinds
+    assert rc.KIND_UNKNOWN_ENTRY in kinds
+    assert rc.KIND_MISSING_QUOTE in kinds
 
 
 def test_vocabulary_constants():
@@ -802,6 +871,7 @@ def test_vocabulary_constants():
         rc.UNDECIDED_BODY_UNREADABLE,
         rc.UNDECIDED_REGISTER_EMPTY,
         rc.UNDECIDED_REGISTER_MALFORMED,
+        rc.UNDECIDED_BODY_MALFORMED,
         rc.UNDECIDED_CHILD_UNRECOGNIZED,
         rc.UNDECIDED_USAGE,
         rc.UNDECIDED_INTERNAL_ERROR,
