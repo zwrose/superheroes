@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.30.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.29.1...superheroes-v0.30.0) (2026-08-17)
+
+
+### Features
+
+* **superheroes:** orchestrator-fulfilled run-verify fold writes its seat record and refuses landing-ambiguous ([#1059](https://github.com/zwrose/superheroes/issues/1059)) ([1e679c6](https://github.com/zwrose/superheroes/commit/1e679c63418591cd0e2b40b7c7e59bbf6c90adb4))
+* **superheroes:** surface overlap becomes a recorded, disclosed warning ([#1058](https://github.com/zwrose/superheroes/issues/1058)) ([9a4415b](https://github.com/zwrose/superheroes/commit/9a4415b3ee6b601363a540a5ef797d4cdbdd6b13))
+* **superheroes:** the exact-text checker — one script, three invocation points (seam child 2) ([#1056](https://github.com/zwrose/superheroes/issues/1056)) ([325fa4c](https://github.com/zwrose/superheroes/commit/325fa4c965402b15bebfde8022923eafd4b6266d))
+
+
+### Bug Fixes
+
+* **superheroes:** seat_map compose --pins accepts a string vendor shorthand and refuses other shapes by name ([#1057](https://github.com/zwrose/superheroes/issues/1057)) ([1a983cf](https://github.com/zwrose/superheroes/commit/1a983cf4078dc0844482e650a3a19559b7babba0))
+
+
+### Chores
+
+* **superheroes:** hygiene trio — safe gh body read-modify-write, pycache_prefix on the local gate, 0o000 fixtures hand their mode back ([#1053](https://github.com/zwrose/superheroes/issues/1053)) ([f53563a](https://github.com/zwrose/superheroes/commit/f53563a6a62c8c9dddf767c9c49be9cfb47cea94))
+
 ## [0.29.1](https://github.com/zwrose/superheroes/compare/superheroes-v0.29.0...superheroes-v0.29.1) (2026-08-16)
 
 
