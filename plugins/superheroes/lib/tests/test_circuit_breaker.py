@@ -523,25 +523,25 @@ def test_check_round_ceiling_none_ceiling_never_halts():
 def test_check_round_ceiling_non_int_ceiling_fail_open():
     res = check_round_ceiling(10, "10")
     assert res["halt"] is False
-    assert res["detail"] == "no round ceiling"
+    assert res["detail"] == "malformed round ceiling"
 
 
 def test_check_round_ceiling_bool_ceiling_fail_open():
     res = check_round_ceiling(10, True)
     assert res["halt"] is False
-    assert res["detail"] == "no round ceiling"
+    assert res["detail"] == "malformed round ceiling"
 
 
 def test_check_round_ceiling_non_int_round_count_fail_open():
     res = check_round_ceiling("10", 10)
     assert res["halt"] is False
-    assert res["detail"] == "no round ceiling"
+    assert res["detail"] == "malformed round count"
 
 
 def test_check_round_ceiling_bool_round_count_fail_open():
     res = check_round_ceiling(True, 10)
     assert res["halt"] is False
-    assert res["detail"] == "no round ceiling"
+    assert res["detail"] == "malformed round count"
 
 
 def test_resolve_round_ceiling_never_raises_on_bad_max_rounds():

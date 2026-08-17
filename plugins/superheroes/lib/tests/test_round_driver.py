@@ -5226,15 +5226,69 @@ def _rearm_forever_seams():
 
 def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
     """DoD headline: clean audits + fresh blocker every review round halts at the ceiling."""
-    receipt = RD.run_loop(_rearm_forever_seams(), _cfg(maxRoundsAbsolute=10, maxRounds=7))
+    ceiling = 10
+    receipt = RD.run_loop(_rearm_forever_seams(),
+                          _cfg(maxRoundsAbsolute=ceiling, maxRounds=7))
     assert receipt["verdict"] == "halted"
     assert receipt["certificationShape"] is None
     detail = " ".join(d["detail"] for d in receipt["decisions"] if d["kind"] == "round-ceiling")
     assert CB.ROUND_CEILING_REASON == "round-ceiling"
     assert "round-ceiling" in [d["kind"] for d in receipt["decisions"]]
-    assert "10" in detail, detail
+    reached = max(r["round"] for r in receipt["rounds"])
+    assert reached == ceiling
+    assert str(ceiling) in detail, detail
     assert "ceiling" in detail.lower(), detail
+    assert reached != ceiling + 1
     assert receipt.get("scriptRan", {}).get("invocations", 999) < RD._RUN_LOOP_GUARD
+
+
+def test_clean_rearm_forever_halts_at_distinct_ceiling(tmp_path):
+    """Round reached and ceiling value are asserted independently — not conflated by substring."""
+    ceiling = 11
+    receipt = RD.run_loop(_rearm_forever_seams(),
+                          _cfg(maxRoundsAbsolute=ceiling, maxRounds=7))
+    reached = max(r["round"] for r in receipt["rounds"])
+    assert reached == ceiling
+    detail = next(d["detail"] for d in receipt["decisions"] if d["kind"] == "round-ceiling")
+    assert str(ceiling) in detail
+    assert str(reached) in detail
+    assert reached != ceiling - 1
+
+
+def test_big_diff_ceiling_halt_merges_verified_carry_findings():
+    """A1: big-diff settle at ceiling halts after merging _verifiedCarry panel findings."""
+    panel_finding = {"title": "panel-verified", "severity": "Important", "file": "f.py", "line": 1}
+    gap_finding = {"title": "gap-candidate", "severity": "Important", "file": "g.py", "line": 2}
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, diff=_big_diff(25)))
+    state["round"] = 10
+    state["findings"] = [gap_finding]
+    state["_verifiedCarry"] = [panel_finding]
+    state["fullPanelRan"] = True
+    RD._after_findings_settled(state, state["config"])
+    assert state["terminal"] == "halted"
+    assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
+    titles = {f.get("title") for f in state["findings"]}
+    assert "panel-verified" in titles
+    assert "gap-candidate" in titles
+    receipt = RD.build_receipt(state)
+    receipt_titles = {f.get("title") for f in receipt["findings"]}
+    assert "panel-verified" in receipt_titles
+
+
+def test_delta_at_ceiling_challenged_principle_parks_over_ceiling(monkeypatch):
+    """A2: challenged-principle park wins over ceiling halt; delta round is still recorded."""
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=10))
+    state["round"] = 10
+    state["findings"] = []
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": []}
+    monkeypatch.setattr(
+        RD, "_challenged_recurring_halt",
+        lambda s, c: {"halt": True, "reason": "challenged-principle-recurring",
+                      "detail": "test challenged"})
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "cannot-certify"
+    assert not any(d["kind"] == "round-ceiling" for d in state["decisions"])
+    assert any(r.get("kind") == "delta" and r.get("round") == 10 for r in state["_records"])
 
 
 def test_round_nine_below_ceiling_does_not_halt_on_ceiling():
@@ -5279,6 +5333,22 @@ def test_panel_settle_at_ceiling_halts_not_certifies():
     assert any(d["kind"] == "round-ceiling" for d in state["decisions"])
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "round-ceiling")
     assert "10" in detail and "ceiling" in detail.lower()
+
+
+def test_seed_resume_at_ceiling_runs_round(tmp_path):
+    """C1: records seeding round 10 with ceiling 10 resumes and runs — no halt at seed time."""
+    records = tmp_path / "round-records.json"
+    seed = [
+        {"schemaVersion": 2, "round": 9, "kind": "baseline",
+         "dimensions": {"code-reviewer": {"status": "run", "confidence": "high",
+                                            "tier": "reviewer-deep", "findings": []}},
+         "findings": [], "coverageDecisions": []},
+    ]
+    records.write_text(json.dumps(seed))
+    state = RD.new_state(_cfg(recordsPath=str(records), maxRoundsAbsolute=10))
+    assert state.get("terminal") is None
+    assert state["round"] == 10
+    assert not any(d["kind"] == "round-ceiling" for d in state["decisions"])
 
 
 def test_seed_resume_above_ceiling_halts_without_assigning_round(tmp_path):
@@ -5330,6 +5400,34 @@ def test_max_rounds_absolute_cli_structured_refusal(tmp_path, capsys):
     assert out == {"ok": False, "reason": CB.CEILING_BELOW_CAP_REFUSAL, "value": 5}
 
 
+def test_max_rounds_absolute_not_fresh_state_refuses(tmp_path, capsys):
+    """B1: --max-rounds-absolute on non-fresh state refuses with the named token."""
+    d = str(tmp_path)
+    rc, out = _cli_next_json(d, ["--max-rounds", "7"] + _guard_argv(d), capsys)
+    assert rc == 0 and out["ok"]
+    rc2, out2 = _cli_next_json(
+        d, ["--max-rounds-absolute", "20"] + _guard_argv(d, fresh=False), capsys)
+    assert rc2 == 1
+    assert out2 == {"ok": False, "reason": "max-rounds-absolute-not-fresh-state", "value": 20}
+
+
+def test_max_rounds_absolute_fresh_with_max_rounds_loads(tmp_path, capsys):
+    """B1: fresh session with --max-rounds 12 --max-rounds-absolute 12 loads."""
+    d = str(tmp_path)
+    rc, out = _cli_next_json(
+        d, ["--max-rounds", "12", "--max-rounds-absolute", "12"] + _guard_argv(d), capsys)
+    assert rc == 0
+    assert out["ok"] is True
+
+
+def test_run_loop_parks_on_ceiling_refusal():
+    """B2: run_loop with ceiling below maxRounds returns parked receipt; never raises."""
+    receipt = RD.run_loop(_seams(), _cfg(maxRounds=7, maxRoundsAbsolute=5))
+    assert receipt["verdict"] == "cannot-certify"
+    assert receipt["certification"]["shape"] is None
+    assert receipt["certification"]["reason"] == CB.CEILING_BELOW_CAP_REFUSAL
+
+
 def test_persisted_config_without_max_rounds_absolute_resolves_default_ceiling():
     """Persisted config predating #1030 resolves the default ceiling — never ceiling-less."""
     cfg = dict(RD.new_state(_cfg())["config"])
@@ -5343,8 +5441,9 @@ def _round_counter_mutation_sites():
     with open(path, encoding="utf-8") as fh:
         lines = fh.readlines()
     sites = []
+    mut_re = re.compile(r'state\[["\']round["\']\]\s*(?:=|\+=|-=)')
     for i, line in enumerate(lines):
-        if not re.search(r'state\["round"\]\s*(=|\+=)', line):
+        if not mut_re.search(line):
             continue
         func = None
         for j in range(i, -1, -1):

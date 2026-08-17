@@ -70,12 +70,15 @@ Certification after any fix requires that **one** full `reviewer-deep` confirmat
 doc-panel round is a full-document, full-panel spend with no cheap scoped tier, so **any open
 blocking finding** (Critical **or** Important) re-arms the one further confirmation, not only a
 Critical or cross-cutting rework — no scoped-round tier for new Importants, no scoped-verify
-certify at the confirmation cap. **Two caps, not one (#518):** the overall round cap is **7**
+certify at the confirmation cap. **Three caps, not two (#518, #1030):** the overall round cap is **7**
 (`--max-rounds 7`, the same cap every leg runs, enforced by `loop_state.decide` /
 `circuit_breaker`), and **at that cap an open blocking finding always parks** (verdict REVISE,
 certification withheld) — a document has no stronger downstream reviewer than the owner, so the
 gate never scoped-certifies a blocker the way code review may; a spec that reaches a clean
-full-deep confirmation at the cap still certifies. The **confirmation-panel budget is separate**: at most **two** full panels
+full-deep confirmation at the cap still certifies. A **hard round ceiling** (`maxRoundsAbsolute`,
+default **10**, reason token `round-ceiling`, terminal `halted` with certification withheld) binds
+before the cap whenever `maxRounds` exceeds the ceiling — the unconditional cost backstop, enforced
+in the same `circuit_breaker` module. The **confirmation-panel budget is separate**: at most **two** full panels
 per loop (`MAX_CONFIRMATIONS = 2` in `review_round_policy`); on the `spec_loop_plan` document-review
 path a doc-mode confirmation that reaches that budget parks too, rather than scoped-certifying.
 FR-8's any-open-blocker trigger sits on top of the shared cross-cutting/unknown-surface trigger

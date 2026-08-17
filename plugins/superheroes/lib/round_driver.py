@@ -1015,8 +1015,9 @@ def _seed_resume(state, cfg):
     qualifying = sum(1 for r in records
                      if r.get("kind") == "confirmation" and review_loop_plan._confirmation_qualifies(r))
     state["confirmations"] = qualifying
-    if _ceiling_halt(state, cfg, prospective_round=resume_round):
-        return
+    if resume_round > _round_ceiling(cfg):
+        if _ceiling_halt(state, cfg, prospective_round=resume_round):
+            return
     state["round"] = resume_round
     state["step"] = P_PANEL
     state["fullPanelRan"] = False
@@ -2044,13 +2045,13 @@ def _after_findings_settled(state, config):
     verify+synthesis, so when the delta settle is armed it must re-settle the delta (audit breaker +
     #174 confirmation re-arm) rather than the round-1 fix/terminal path. Either way the gap/verify
     carry is merged back first."""
-    if _ceiling_halt(state, config):
-        return
     # merge any gap-sweep / verify carry back in.
     if state.get("_verifiedCarry") is not None:
         carry = state.pop("_verifiedCarry")
         state["findings"] = (carry or []) + (state.get("findings") or [])
         state.pop("_gapMerge", None)
+    if _ceiling_halt(state, config):
+        return
     if state.get("_settleDelta"):
         _settle_delta(state, config)
         return
@@ -2579,8 +2580,6 @@ def _settle_delta(state, config):
     fix leg; else the converged decision (with the #174 confirmation re-arm)."""
     state.pop("_settleDelta", None)
     state.pop("_postAudit", None)
-    if _ceiling_halt(state, config):
-        return
     outcome = state.get("_auditOutcome") or {"notDischarged": [], "discharged": []}
     max_rounds = config.get("maxRounds", 7)
     # Record this delta round in the in-memory ledger and run the challenged-coverage breaker BEFORE
@@ -2600,6 +2599,8 @@ def _settle_delta(state, config):
     challenged = _challenged_recurring_halt(state, config)
     if challenged:
         _park_cannot_certify(state, challenged.get("detail"))
+        return
+    if _ceiling_halt(state, config):
         return
     breaker = circuit_breaker.check_audit_breaker(state["auditRounds"], max_rounds)
     new_blocking = _blocking(state.get("findings") or [])
@@ -3426,7 +3427,13 @@ def run_loop(seams, config=None):
     review_panel_shell.reviewPanel. Returns the driver receipt (validate_receipt-shaped)."""
     if not isinstance(seams, dict):
         raise ValueError("run_loop requires a seams dict")
-    state = new_state(config)
+    try:
+        state = new_state(config)
+    except RoundCeilingRefusal as refusal:
+        state = new_state()
+        _park_cannot_certify(state, refusal.reason)
+        state["_scriptRan"] = {"invocations": 0, "byPhase": {}}
+        return build_receipt(state)
     if state.get("_resumeCorrupt"):
         # A corrupt/mangled resume state fails closed — never certify off unreadable memory.
         _park_cannot_certify(state, state["_resumeCorrupt"])
@@ -6755,6 +6762,12 @@ def _dispatch(args):
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
         if args.max_rounds_absolute is not None:
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False,
+                                             "reason": "max-rounds-absolute-not-fresh-state",
+                                             "value": args.max_rounds_absolute}) + "\n")
+                return 1
             overrides["maxRoundsAbsolute"] = args.max_rounds_absolute
             try:
                 _default_config(dict(overrides))

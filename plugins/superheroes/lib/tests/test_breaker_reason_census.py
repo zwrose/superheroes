@@ -41,6 +41,13 @@ _CIRCUIT_BREAKER_EMITTED = frozenset({
     "max-iterations", "no-net-progress", "challenged-principle-recurring", "recurring-finding",
 })
 
+_REACHABLE_BY_CONSUMER = {
+    ("round_driver.py", "_challenged_recurring_halt"): frozenset({"challenged-principle-recurring"}),
+    ("round_driver.py", "_settle_delta"): frozenset({
+        "max-iterations", "audit-stall", cb.ROUND_CEILING_REASON,
+    }),
+}
+
 
 def _lib_py_paths():
     return sorted(
@@ -98,17 +105,43 @@ def _handled_reasons_for_consumer(filename, function, compared_literals):
     return compared_literals
 
 
-def compute_unhandled_reasons(reason_set):
-    """Return BREAKER_REASONS members with no consumer arm in ``reason_set``."""
-    handled = set()
+def _reachable_reasons_for_consumer(filename, function):
+    key = (filename, function)
+    if key in _REACHABLE_BY_CONSUMER:
+        return _REACHABLE_BY_CONSUMER[key]
+    if filename == "review_loop_plan.py":
+        return _CIRCUIT_BREAKER_EMITTED | {cb.ROUND_CEILING_REASON}
+    return frozenset()
+
+
+def compute_consumer_gaps(reason_set):
+    """Return {(fname, func): set of unhandled reasons} for consumers with per-consumer gaps."""
+    gaps = {}
     for (fname, func), literals in _consumer_sites().items():
-        handled |= _handled_reasons_for_consumer(fname, func, literals)
-    return reason_set - handled
+        handled = _handled_reasons_for_consumer(fname, func, literals)
+        reachable = _reachable_reasons_for_consumer(fname, func)
+        unhandled = (reachable & reason_set) - handled
+        if unhandled:
+            gaps[(fname, func)] = unhandled
+    return gaps
+
+
+def compute_unhandled_reasons(reason_set):
+    """Return BREAKER_REASONS members unhandled at any consumer that can reach them."""
+    unhandled = set()
+    for reason in reason_set:
+        if reason not in cb.BREAKER_REASONS:
+            unhandled.add(reason)
+    for consumer, gap in compute_consumer_gaps(reason_set).items():
+        unhandled |= gap
+    return unhandled
 
 
 def test_every_breaker_reason_is_handled_at_every_consumer():
-    unhandled = compute_unhandled_reasons(cb.BREAKER_REASONS)
-    assert unhandled == set(), "unhandled breaker reasons: %s" % sorted(unhandled)
+    gaps = compute_consumer_gaps(cb.BREAKER_REASONS)
+    assert gaps == {}, "unhandled breaker reasons per consumer: %s" % {
+        "%s:%s" % (k[0], k[1]): sorted(v) for k, v in gaps.items()
+    }
 
 
 def test_synthetic_reason_is_reported_unhandled():

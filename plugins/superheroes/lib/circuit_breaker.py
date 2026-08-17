@@ -72,8 +72,12 @@ def resolve_round_ceiling(max_rounds, named=None):
 
 def check_round_ceiling(round_count, ceiling):
     """Unconditional round ceiling — halts regardless of the latest round's findings."""
-    if ceiling is None or not _usable_int(ceiling) or not _usable_int(round_count):
+    if ceiling is None:
         return {"halt": False, "reason": None, "detail": "no round ceiling"}
+    if not _usable_int(ceiling):
+        return {"halt": False, "reason": None, "detail": "malformed round ceiling"}
+    if not _usable_int(round_count):
+        return {"halt": False, "reason": None, "detail": "malformed round count"}
     if round_count >= ceiling:
         return {
             "halt": True,
