@@ -2727,10 +2727,17 @@ def _ceiling_blocks_loaded(state, config):
     terminal (including pending idempotent re-emit) is left unchanged. Returns True when it parked."""
     if state.get("terminal"):
         return False
-    brk = circuit_breaker.check_round_ceiling(state["round"], _round_ceiling(config))
+    ceiling = _round_ceiling(config)
+    brk = circuit_breaker.check_round_ceiling(state["round"], ceiling)
     if not brk.get("halt"):
         return False
-    detail = "%s (refused at: %s)" % (brk.get("detail"), "resumed-state")
+    rnd = state["round"]
+    detail = (
+        "Round ceiling %s reached: round %s had already begun and is halted. "
+        "Certification is withheld unconditionally regardless of the completed round's findings "
+        "(not a max-iterations cap halt)." % (ceiling, rnd)
+    )
+    detail = "%s (refused at: %s)" % (detail, "resumed-state")
     _park_round_ceiling(state, detail)
     return True
 
@@ -3746,7 +3753,10 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                 fail = _terminal_receipt_gate(session_dir, state)
                 if fail:
                     return _receipt_fault_response(fail)
-            return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
+            # foldLanded marks a landed fold; its absence is the fail-closed default that covers
+            # every future early return above the commit.
+            return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step"),
+                    "foldLanded": True}
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "submit", held)
 
@@ -3813,7 +3823,9 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": prior.get("round"), "attempt": attempt,
                                       "outcome": "duplicate"})
-        return {"ok": True, "duplicate": True}
+        # foldLanded marks a landed fold; its absence is the fail-closed default that covers
+        # every future early return above the commit.
+        return {"ok": True, "duplicate": True, "foldLanded": True}
 
     pending = state.get("pending")
     if not pending:
@@ -5822,6 +5834,46 @@ def _resolve_owner_gate_policy(phase, state, config):
             "resolution": resolution}
 
 
+def _advance_not_folded(session_dir, phase, rnd, attempt, git=None, broke=None,
+                        durable_record_owed=False):
+    """Honest advance receipt when cmd_submit answered ok but no fold committed."""
+    ok_pre, state_pre = load_state(session_dir)
+    decision_kind = None
+    if ok_pre and state_pre is not None:
+        decisions = state_pre.get("decisions")
+        if isinstance(decisions, list) and decisions:
+            last = decisions[-1]
+            if isinstance(last, dict):
+                decision_kind = last.get("kind")
+    _journal_event(session_dir, "advance", "not-folded", phase=phase, round=rnd,
+                   attempt=attempt, reason=decision_kind)
+    ok_loaded, state = load_state(session_dir)
+    if not ok_loaded or state is None:
+        reason, fault, detail = _state_load_fault(session_dir)
+        return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
+    fault = _terminal_receipt_gate(session_dir, state)
+    if fault:
+        return _receipt_fault_response(fault)
+    side = _publish_sidecar(session_dir, state, git=git)
+    if side.get("reason"):
+        return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                           detail=side.get("detail"))
+    response = {"ok": True,
+                "notFolded": {"phase": phase, "round": rnd, "attempt": attempt,
+                              "reason": decision_kind},
+                "terminal": state.get("terminal"),
+                "sidecar": side.get("path"),
+                "brokeLock": broke}
+    if durable_record_owed:
+        response["durableRecord"] = {
+            "written": False,
+            "reason": "no fold committed — the round-ceiling halt returned above the fold "
+                      "commit, so the seat record that lands in the fold's commit was never "
+                      "written",
+        }
+    return response
+
+
 def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=None, broke=None):
     """Fold an owner gate through cmd_submit when calibration pre-authorizes it."""
     resolved = _resolve_owner_gate_policy(phase, state, config)
@@ -5839,6 +5891,8 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
+    if not folded.get("foldLanded"):
+        return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke)
     ok_folded, state = load_state(session_dir)
     if not ok_folded or state is None:
         reason, fault, detail = _state_load_fault(session_dir)
@@ -6069,6 +6123,9 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
+    if not folded.get("foldLanded"):
+        return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke,
+                                   durable_record_owed=True)
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
     nxt = cmd_next(session_dir)
     if not nxt.get("ok"):
@@ -6204,6 +6261,11 @@ def _advance_locked(session_dir, state, git=None, broke=None):
             session_dir,
             _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                         attempt=attempt, detail=folded.get("reason")),
+            rnd, phase, attempt, manifest_disc)
+    if not folded.get("foldLanded"):
+        return _attach_dispatch_manifest_disclosure(
+            session_dir,
+            _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke),
             rnd, phase, attempt, manifest_disc)
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
     # The `advanced` journal row has no partner artifact — it is a log-only row and stays outside

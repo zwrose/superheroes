@@ -186,3 +186,30 @@ def test_under_handling_allowlist_is_explicit():
         assert key in sites, "%s must appear in the consumer census" % (key,)
         assert entry["handles"], "%s allow-list must name handled reasons" % (key,)
         assert entry["reason"].strip(), "%s allow-list must state why" % (key,)
+
+
+def test_allowlisted_consumer_handled_set_is_derived_from_source_not_the_allowlist():
+    """Allowlisted consumers derive handled from source literals, not the allowlist entry.
+
+    Guards _handled_reasons_for_consumer: restoring its allowlist early-return makes this red."""
+    multi_handle_entries = [
+        (key, entry)
+        for key, entry in _UNDER_HANDLING_ALLOWLIST.items()
+        if len(entry["handles"]) >= 2
+    ]
+    assert multi_handle_entries, (
+        "_UNDER_HANDLING_ALLOWLIST must contain at least one entry with >=2 handles"
+    )
+    key, entry = multi_handle_entries[0]
+    filename, function = key
+    handles = set(entry["handles"])
+    dropped = sorted(handles)[0]
+    compared = handles - {dropped}
+    mod = sys.modules[__name__]
+    with patch.object(mod, "_consumer_sites", return_value={key: compared}):
+        gaps = compute_consumer_gaps(cb.BREAKER_REASONS)
+    assert gaps, "compute_consumer_gaps returned empty dict for %s:%s" % (filename, function)
+    assert key in gaps, "consumer %s:%s missing from gaps: %r" % (filename, function, gaps)
+    assert gaps[key] == {dropped}, (
+        "expected gap %r for %s:%s, got %r" % (dropped, filename, function, gaps[key])
+    )
