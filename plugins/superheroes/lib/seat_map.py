@@ -161,12 +161,44 @@ def same_family_degradations(seat_map: dict, author_family: str | None) -> list[
     return out
 
 
+def normalize_pins(pins):
+    """The one chokepoint every pin map passes through (#1039).
+
+    Invariant: **every value in the returned map is a dict**, so no pin value shape can reach a
+    resolver as a non-dict and raise. A bare string pin is EXACTLY the object pin
+    ``{"vendor": <string>}`` — the documented shorthand, resolved down the identical honorability
+    path (including a padded or empty vendor, which stays as unhonorable as the object form).
+    Any other value shape — null, number, bool, list — is named, never crashed on.
+
+    Returns ``(normalized, errors)``; ``errors`` are refusal tokens: ``pins-invalid`` when the pin
+    map itself is not an object, ``pins-invalid:<seat>`` per unusable seat value. Never raises.
+    """
+    # bite-axis: pin-value shape — dict passes through, str becomes {"vendor": str}, every other
+    # shape is refused by name (the axis is REFUSAL, not the resolved seat).
+    if pins is None:
+        return {}, []
+    if not isinstance(pins, dict):
+        return {}, ["pins-invalid"]
+    normalized: dict = {}
+    errors: list[str] = []
+    for seat, pin in pins.items():
+        if isinstance(pin, dict):
+            normalized[seat] = pin
+        elif isinstance(pin, str):
+            normalized[seat] = {"vendor": pin}
+        else:
+            errors.append("pins-invalid:%s" % seat)
+    return normalized, errors
+
+
 def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
     """Pin-constrained needed set: {vendor: [[model, effort], ...]}. Claude is never probed."""
     roster = tuple(roster) if roster else PANEL_ROSTER
     tiers_map = dict(DEFAULT_TIER_BY_SEAT)
     if tier_by_seat:
         tiers_map.update(tier_by_seat)
+
+    pins, _pin_errors = normalize_pins(pins)  # #1039: string shorthand in, unusable shapes out
 
     reachable: dict[str, set[tuple]] = {v: set() for v in configured_vendors}
 
@@ -189,7 +221,7 @@ def reachable_configs(configured_vendors, pins, roster=None, tier_by_seat=None):
 
     for seat in roster:
         tier = _tier_for(seat)
-        pin = (pins or {}).get(seat) if isinstance(pins, dict) else None
+        pin = pins.get(seat)
         if isinstance(pin, dict) and isinstance(pin.get("vendor"), str) and pin["vendor"].strip():
             v = pin["vendor"].strip()
             if v == "claude":
@@ -260,7 +292,11 @@ def build(
     if tier_by_seat:
         tiers.update(tier_by_seat)
 
-    pins = pins or {}
+    # bite-axis: unusable pin shape stays LOUD — a library caller gets a named degradation and a
+    # rotated seat, never the traceback that a non-dict pin value used to raise (#1039).
+    pins, pin_errors = normalize_pins(pins)
+    for token in pin_errors:
+        degradations.append({"constraint": "pin", "reason": token})
 
     def _tier_for(seat: str) -> str:
         if seat in tiers:
@@ -868,6 +904,13 @@ def main(argv):
                 pins = json.loads(args.pins)
             except json.JSONDecodeError as e:
                 print(str(e), file=sys.stderr)
+                return 1
+            # bite-axis: REFUSAL by name — an unusable pin shape exits non-zero naming the seat,
+            # never a traceback and never a silently-dropped pin (#1039).
+            pins, pin_errors = normalize_pins(pins)
+            if pin_errors:
+                for token in pin_errors:
+                    print(token, file=sys.stderr)
                 return 1
 
         if args.live_vendors is not None and args.probe_mode != "cache-only":
