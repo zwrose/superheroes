@@ -5412,6 +5412,12 @@ def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
     assert reloaded["terminal"] == "halted"
     assert reloaded["certification"]["shape"] is None
     assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-ceiling")
+    # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
+    assert "Round ceiling 10 reached" in detail
+    assert "round 11 had already begun" in detail
+    assert "had already begun" in detail
+    assert "not begun" not in detail
 
 
 def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
@@ -5435,6 +5441,12 @@ def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
     assert reloaded["terminal"] == "halted"
     assert reloaded["certification"]["shape"] is None
     assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+    detail = next(dec["detail"] for dec in reloaded["decisions"] if dec["kind"] == "round-ceiling")
+    # axis: loaded-state park detail names ceiling and round reached separately — not boundary "not begun" wording
+    assert "Round ceiling 10 reached" in detail
+    assert "round 11 had already begun" in detail
+    assert "had already begun" in detail
+    assert "not begun" not in detail
 
 
 def test_loaded_state_at_ceiling_runs_on_cmd_next(tmp_path):
