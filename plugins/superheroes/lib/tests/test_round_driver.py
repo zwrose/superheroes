@@ -16,6 +16,7 @@ the driver receipt + its validator.
 """
 import importlib.util
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -5269,6 +5270,12 @@ def test_load_accepts_ceiling_at_or_above_max_rounds():
     assert cfg2["maxRoundsAbsolute"] == 7
 
 
+def test_new_state_unnamed_ceiling_below_max_rounds_loads_flat_default():
+    """maxRounds=20 with no named ceiling loads; flat default ceiling binds below the cap."""
+    state = RD.new_state(_cfg(maxRounds=20))
+    assert state["config"]["maxRoundsAbsolute"] == CB.DEFAULT_MAX_ROUNDS_ABSOLUTE
+
+
 def test_max_rounds_absolute_cli_structured_refusal(tmp_path, capsys):
     """CLI --max-rounds-absolute below maxRounds emits the structured refusal shape."""
     d = str(tmp_path)
@@ -5294,9 +5301,9 @@ def test_round_counter_mutation_sites_census():
     sites = [(i + 1, line.strip()) for i, line in enumerate(lines)
              if re.search(r'state\["round"\]\s*(=|\+=)', line)]
     assert sites == [
-        (1021, 'state["round"] = resume_round'),
-        (2399, 'state["round"] += 1'),
-        (2676, 'state["round"] += 1'),
+        (1020, 'state["round"] = resume_round'),
+        (2398, 'state["round"] += 1'),
+        (2675, 'state["round"] += 1'),
     ]
 
 
@@ -5311,59 +5318,66 @@ def _delta_settle_state_for_breaker(monkeypatch, breaker_result):
     return state
 
 
-@pytest.mark.parametrize("reason", sorted(CB.BREAKER_REASONS))
-def test_settle_delta_every_breaker_reason_does_not_fall_through(reason, monkeypatch):
-    """Every BREAKER_REASONS member halting in _settle_delta must not route to the fixer."""
-    if reason == CB.ROUND_CEILING_REASON:
-        state = RD.new_state(_cfg(maxRoundsAbsolute=10))
-        state["round"] = 10
-        state["findings"] = []
-        state["auditRounds"] = []
-        state["_auditOutcome"] = {"notDischarged": [], "discharged": []}
-        RD._settle_delta(state, state["config"])
-    elif reason == "challenged-principle-recurring":
-        state = RD.new_state(_cfg(maxRounds=10, maxRoundsAbsolute=10))
-        state["round"] = 3
-        state["findings"] = [dict(_CHALLENGED_FINDING)]
-        state["_records"] = [
-            {"round": 1, "findings": [dict(_CHALLENGED_FINDING)],
-             "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
-                                              "tier": RD.DEEP, "findings": []}}},
-            {"round": 2, "findings": [dict(_CHALLENGED_FINDING)],
-             "coverageDecisions": [{"classKey": "Test::coverage::x", "challengedBy": "owner"}],
-             "dimensions": {"test-reviewer": {"status": "run", "confidence": "high",
-                                              "tier": RD.DEEP, "findings": []}}},
-        ]
-        state["auditRounds"] = []
-        state["_auditOutcome"] = {"notDischarged": [], "discharged": []}
-        RD._settle_delta(state, state["config"])
-    elif reason == "audit-stall":
-        state = _delta_settle_state_for_breaker(monkeypatch, {
-            "halt": True, "reason": "audit-stall", "detail": "stalled",
-            "stalledIdentities": ["x"],
-        })
-        state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
-                                   "file": "f.py", "line": 1}]
-        RD._settle_delta(state, state["config"])
-    elif reason == "max-iterations":
-        state = _delta_settle_state_for_breaker(monkeypatch, {
-            "halt": True, "reason": "max-iterations", "detail": "cap",
-            "stalledIdentities": [],
-        })
-        RD._settle_delta(state, state["config"])
-    else:
-        state = _delta_settle_state_for_breaker(monkeypatch, {
-            "halt": True, "reason": reason, "detail": "synthetic halt for %s" % reason,
-            "stalledIdentities": [],
-        })
-        RD._settle_delta(state, state["config"])
+def _audit_breaker_emitted_reasons():
+    source = inspect.getsource(CB.check_audit_breaker)
+    return set(re.findall(r'"reason": "([^"]+)"', source))
+
+
+_SETTLE_DELTA_CLAIMED = frozenset({
+    "max-iterations",
+    "audit-stall",
+    CB.ROUND_CEILING_REASON,
+})
+_SETTLE_DELTA_UNREACHABLE = frozenset({
+    "no-net-progress",
+    "recurring-finding",
+    "challenged-principle-recurring",
+})
+
+
+def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
+    """Each BREAKER_REASONS member at _settle_delta is reachable-and-claimed or unreachable."""
+    audit_emitted = _audit_breaker_emitted_reasons()
+    for reason in _SETTLE_DELTA_UNREACHABLE:
+        assert reason not in audit_emitted, reason
+
+    # max-iterations — parks or certifies; never routes to the fixer.
+    state = _delta_settle_state_for_breaker(monkeypatch, {
+        "halt": True, "reason": "max-iterations", "detail": "cap",
+        "stalledIdentities": [],
+    })
+    RD._settle_delta(state, state["config"])
     assert state["step"] != RD.P_FIXER
-    assert (state.get("terminal") is not None
-            or state["step"] in (RD.P_STALL, RD.P_PANEL, RD.P_TERMINAL))
+    assert state["terminal"] in (
+        "converged", "capped-with-open-critical", "capped-with-open-blocker",
+    )
+
+    # audit-stall — _handle_stall self-recovery legitimately routes to the fixer.
+    state = _delta_settle_state_for_breaker(monkeypatch, {
+        "halt": True, "reason": "audit-stall", "detail": "stalled",
+        "stalledIdentities": ["x"],
+    })
+    state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
+                               "file": "f.py", "line": 1}]
+    RD._settle_delta(state, state["config"])
+    assert state["step"] == RD.P_FIXER
+    assert any(d["kind"] == "self-recovery" for d in state["decisions"])
+
+    # round-ceiling — claimed before the switch by check_round_ceiling.
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10))
+    state["round"] = 10
+    state["findings"] = []
+    state["auditRounds"] = []
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": []}
+    RD._settle_delta(state, state["config"])
+    assert state["terminal"] == "halted"
+    assert state["step"] != RD.P_FIXER
 
 
 def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
-    """A synthetic unregistered halting reason hits the fail-closed park."""
+    """Unregistered halt reasons park fail-closed; census covers BREAKER_REASONS exactly."""
+    assert _SETTLE_DELTA_CLAIMED | _SETTLE_DELTA_UNREACHABLE == CB.BREAKER_REASONS
+
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "synthetic-unregistered-reason", "detail": "unhandled",
         "stalledIdentities": [],
@@ -5372,3 +5386,5 @@ def test_settle_delta_unregistered_halt_reason_parks_fail_closed(monkeypatch):
     assert state["terminal"] == "cannot-certify"
     assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
     assert state["step"] != RD.P_FIXER
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert "synthetic-unregistered-reason" in detail

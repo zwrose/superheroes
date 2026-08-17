@@ -479,10 +479,19 @@ def test_resolve_round_ceiling_unnamed_default_ceiling():
     assert refusal is None
 
 
-def test_resolve_round_ceiling_unnamed_refuses_when_cap_exceeds_default():
+def test_resolve_round_ceiling_unnamed_below_cap_returns_flat_default():
     ceiling, refusal = resolve_round_ceiling(12)
-    assert ceiling is None
-    assert refusal == CEILING_BELOW_CAP_REFUSAL
+    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert refusal is None
+
+
+def test_resolve_round_ceiling_named_below_cap_still_refuses_when_unnamed_accepts():
+    unnamed_ceiling, unnamed_refusal = resolve_round_ceiling(12)
+    assert unnamed_ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert unnamed_refusal is None
+    named_ceiling, named_refusal = resolve_round_ceiling(12, named=5)
+    assert named_ceiling is None
+    assert named_refusal == CEILING_BELOW_CAP_REFUSAL
 
 
 def test_breaker_reasons_closed_set_matches_source_literals():

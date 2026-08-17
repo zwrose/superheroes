@@ -877,7 +877,7 @@ def _default_config(overrides=None):
         "verifyCommand": "none",
         "maxRounds": 7,
         # Hard round ceiling (default circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE) — owner-tunable
-        # like maxRounds. An effective ceiling below maxRounds refuses at load.
+        # like maxRounds. A named ceiling below maxRounds refuses at load; unnamed uses the flat default.
         "maxRoundsAbsolute": None,
         "dimensions": list(DIMENSIONS),
         # Optional resume/records seam (#507 WO-D). When `recordsPath` is set the driver reads it
@@ -914,14 +914,13 @@ def _round_ceiling(config):
     """Return the resolved unconditional round ceiling for this session.
 
     Persisted state from before #1030 may lack ``maxRoundsAbsolute`` on ``config``; in that case
-    re-resolve from ``maxRounds`` so the default ceiling still applies — a resumed session never
-    runs ceiling-less."""
+    re-resolve from ``maxRounds`` with an unnamed ceiling so the flat default still applies — a
+    resumed session never runs ceiling-less."""
     ceiling = config.get("maxRoundsAbsolute")
     if isinstance(ceiling, int) and not isinstance(ceiling, bool):
         return ceiling
-    resolved, _refusal = circuit_breaker.resolve_round_ceiling(
-        config.get("maxRounds", 7), None)
-    return resolved
+    ceiling, _ = circuit_breaker.resolve_round_ceiling(config.get("maxRounds", 7), None)
+    return ceiling
 
 
 def new_state(config=None):

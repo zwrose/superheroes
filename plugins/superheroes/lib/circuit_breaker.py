@@ -60,14 +60,14 @@ def resolve_round_ceiling(max_rounds, named=None):
     """Resolve the unconditional round ceiling for the review loop. Never raises."""
     cap = _effective_max_rounds(max_rounds)
     if named is None:
-        ceiling = DEFAULT_MAX_ROUNDS_ABSOLUTE
-    elif not _positive_usable_int(named):
+        # Unnamed: unconditional cost backstop — default 10 below a configured cap of 20 is not
+        # incoherent; the ceiling binds first and the run halts at round 10 (stricter than the cap).
+        return DEFAULT_MAX_ROUNDS_ABSOLUTE, None
+    if not _positive_usable_int(named):
         return None, CEILING_INVALID_REFUSAL
-    else:
-        ceiling = named
-    if ceiling < cap:
+    if named < cap:
         return None, CEILING_BELOW_CAP_REFUSAL
-    return ceiling, None
+    return named, None
 
 
 def check_round_ceiling(round_count, ceiling):
