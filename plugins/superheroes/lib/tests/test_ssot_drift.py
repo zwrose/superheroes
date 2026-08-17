@@ -3216,6 +3216,19 @@ def _assert_literal_exactly_once_if_reachable(literal, rel):
     _assert_literal_exactly_once(literal, rel)
 
 
+def _assert_literal_exactly_once_across_holders(literal, rels):
+    """Check every holder; skip only if *no* holder was reachable, naming the unreachable ones."""
+    unreachable = []
+    for rel in rels:
+        path = os.path.normpath(os.path.join(PLUGIN, rel))
+        if not os.path.isfile(path):
+            unreachable.append(path)
+            continue
+        _assert_literal_exactly_once(literal, rel)
+    if len(unreachable) == len(rels):
+        pytest.skip("no copy-holder reachable: %s" % ", ".join(unreachable))
+
+
 def test_negative_assert_literal_exactly_once_absent():
     with pytest.raises(
         AssertionError,
@@ -3264,11 +3277,24 @@ def test_r7_park_surface_exactly_once_in_plugin_copy_holders():
 
 def test_r5_weight_vocabulary_exactly_once_in_in_repo_copy_holders():
     """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated in-repo copy-holder."""
-    for rel in _R5_IN_REPO_COPY_HOLDERS:
-        _assert_literal_exactly_once_if_reachable(R5_WEIGHT_VOCABULARY, rel)
+    _assert_literal_exactly_once_across_holders(
+        R5_WEIGHT_VOCABULARY, _R5_IN_REPO_COPY_HOLDERS
+    )
 
 
 def test_r7_park_surface_exactly_once_in_in_repo_copy_holders():
     """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated in-repo copy-holder."""
-    for rel in _R7_IN_REPO_COPY_HOLDERS:
-        _assert_literal_exactly_once_if_reachable(R7_PARK_SURFACE, rel)
+    _assert_literal_exactly_once_across_holders(
+        R7_PARK_SURFACE, _R7_IN_REPO_COPY_HOLDERS
+    )
+
+
+def test_negative_assert_literal_across_holders_checks_past_an_unreachable_one():
+    with pytest.raises(
+        AssertionError,
+        match=r"skills/architect-discovery/SKILL\.md: expected exactly one occurrence",
+    ):
+        _assert_literal_exactly_once_across_holders(
+            "a literal no holder contains",
+            ("does/not/exist.md", "skills/architect-discovery/SKILL.md"),
+        )

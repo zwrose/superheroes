@@ -54,3 +54,17 @@ never lands in a project's `docs/superheroes/` tree during ordinary use.
 
 Full unhappy-path coverage, glossary terms, open questions, and non-functional bars —
 this sample exists only to exercise the four equivalence labels.
+
+## Coverage
+
+| Area | Disposition | Where / why |
+| --- | --- | --- |
+| Empty & first-run | Specify | FR-1 requires a real approved small spec fixture |
+| Invalid & malformed input | N-A | No user input paths; fixture is static test data |
+| Boundaries & limits | Defer-to-build | FR-2 exercises set_gate on a temp copy only |
+| Errors & failures | N-A | Fixture tests read approved frontmatter; no runtime errors |
+| Access & permissions | N-A | Committed fixture is world-readable in the plugin bundle |
+| Duplicates & double-actions | N-A | Tests copy once per case; no duplicate-write surface |
+| Conflicting / simultaneous use | N-A | Conformance tests run serially against one file |
+| Misuse & abuse | N-A | Fixture is not exposed as a runtime API |
+| Reach (i18n / a11y) | N-A | English-only markdown; no UI surface |

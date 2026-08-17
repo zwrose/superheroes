@@ -64,6 +64,19 @@ _BANNED_DISCOVERY_STRINGS = [
         "Discovery is done — hand back",
         "single-exit handback phrase",
     ),
+    (
+        "hands back with no spec at all",
+        "retired park-without-spec phrasing",
+    ),
+    (
+        "coming straight to you",
+        "bypass owner review phrasing removed in #935",
+    ),
+]
+
+_DISCOVERY_HARD_GATE_CLAUSES = [
+    "hands back with no approved spec",
+    "the draft rides the park note",
 ]
 
 _DISCOVERY_SECTION_CLAUSES = {
@@ -86,6 +99,7 @@ _DISCOVERY_SECTION_CLAUSES = {
         "that no spec is being written, and why",
         "The ratification is the owner's, never yours",
         "Report the exit to the advisor",
+        "not writing the findings record.",
     ],
     "### Exit C — the park note": [
         R7_PARK_SURFACE,
@@ -129,6 +143,10 @@ _DISCOVERY_SECTION_CLAUSES = {
         "How you ask depends on the weight called in step 7.",
         "Exit A is done — report and hand back.",
         "Report the exit to the advisor",
+        "At `light` weight:",
+        "At `full` weight:",
+        "There is no fourth message.",
+        "never offer them a spec that had none",
     ],
 }
 
@@ -144,6 +162,8 @@ _ARCHITECT_SPEC_SECTION_CLAUSES = {
         "There is no lighter approval.",
         "Empty sections are omitted, never filled.",
         "A heading with nothing",
+        "is recorded by hand today rather than",
+        "1062",
     ],
 }
 
@@ -173,7 +193,6 @@ _LIGHT_SPEC_MUST_OMIT = frozenset({
     "## Assumptions & dependencies",
     "## Open questions",
     "## Glossary",
-    "## Coverage",
 })
 
 _LIGHT_SPEC_MUST_KEEP = frozenset({
@@ -181,6 +200,7 @@ _LIGHT_SPEC_MUST_KEEP = frozenset({
     "## Who it's for",
     "## Functional requirements",
     "## Definition of done / success",
+    "## Coverage",
 })
 
 
@@ -301,6 +321,16 @@ def _assert_weight_table_rows(rel, read_text=None):
         raise AssertionError(
             f"{rel}: full row must not contain one independent review seat phrase"
         )
+
+
+def _assert_clauses_present(text, clauses, label):
+    """Fail if any required clause is absent from the whole file."""
+    normalized = _normalized(text)
+    for clause in clauses:
+        if _normalized(clause) not in normalized:
+            raise AssertionError(
+                f"{label}: required clause missing: {clause!r}"
+            )
 
 
 def _check_banned_absent(text, banned_strings, label):
@@ -460,6 +490,11 @@ def test_discovery_charter_banned_strings_absent():
     _check_banned_absent(text, _BANNED_DISCOVERY_STRINGS, _DISCOVERY_CHARTER)
 
 
+def test_discovery_charter_hard_gate_clauses_present():
+    text = _read_plugin(_DISCOVERY_CHARTER)
+    _assert_clauses_present(text, _DISCOVERY_HARD_GATE_CLAUSES, _DISCOVERY_CHARTER)
+
+
 # --- 1b. Section-scoped presence, architect-discovery ----------------------
 
 
@@ -516,8 +551,10 @@ def test_light_spec_same_home(tmp_path):
     work_item = fm["workItem"]
     work_dir = DD.work_item_dir(work_item, root=str(tmp_path))
     assert os.path.basename(work_dir) == work_item
+    expected_dir = os.path.join(str(tmp_path), "docs", "superheroes", work_item)
+    assert work_dir == expected_dir
     spec_path = DD.doc_path(work_item, "spec", root=str(tmp_path))
-    expected_spec = os.path.join(work_dir, "spec.md")
+    expected_spec = os.path.join(expected_dir, "spec.md")
     assert spec_path == expected_spec
     plan_path = DD.doc_path(work_item, "plan", root=str(tmp_path))
     tasks_path = DD.doc_path(work_item, "tasks", root=str(tmp_path))
@@ -574,6 +611,16 @@ def test_light_spec_empty_sections_omitted_not_filled():
 
 
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
+
+
+def test_negative_hard_gate_clause_missing_in_synthetic():
+    synthetic = "Some charter text without the hard-gate clauses."
+    with pytest.raises(AssertionError, match="required clause missing"):
+        _assert_clauses_present(
+            synthetic,
+            _DISCOVERY_HARD_GATE_CLAUSES,
+            "synthetic",
+        )
 
 
 def test_negative_banned_string_detected_in_synthetic():
@@ -685,6 +732,8 @@ def test_negative_fixture_kept_omitted_heading():
         "## Who it's for",
         "## Functional requirements",
         "## Definition of done / success",
+        "## Coverage",
+        "| Area | Disposition | Where / why |",
         "## Glossary",
     ])
     template_text = "\n".join([
@@ -692,6 +741,7 @@ def test_negative_fixture_kept_omitted_heading():
         "## Who it's for",
         "## Functional requirements",
         "## Definition of done / success",
+        "## Coverage",
         "## Glossary",
     ])
     with pytest.raises(AssertionError, match="must omit light-spec template headings"):
@@ -731,13 +781,23 @@ def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
         )
 
 
-def _synthetic_weight_section(*, swap_rows=False, classification_rule=None, include_table=True):
+def _synthetic_weight_section(
+    *,
+    swap_rows=False,
+    corrupt_full_row_only=False,
+    classification_rule=None,
+    include_table=True,
+):
     light_review = "one independent review seat"
     light_vet = "light vet"
     light_owner = "in-channel"
     full_review = "review-spec panel"
     full_vet = "full spec vet"
     full_owner = "scheduled owner review"
+    if corrupt_full_row_only:
+        full_review = "placeholder review"
+        full_vet = "placeholder vet"
+        full_owner = "placeholder approval"
     if swap_rows:
         light_review, full_review = full_review, light_review
         light_vet, full_vet = full_vet, light_vet
@@ -769,6 +829,19 @@ def test_negative_weight_table_swapped_rows_fail():
         return _read_plugin(rel)
 
     with pytest.raises(AssertionError, match="light row"):
+        _assert_weight_table_rows(synthetic_path, read_text)
+
+
+def test_negative_weight_table_full_row_corrupted_fails():
+    synthetic_path = "synthetic/weight-full-corrupt.md"
+    synthetic_text = _synthetic_weight_section(corrupt_full_row_only=True)
+
+    def read_text(rel):
+        if rel == synthetic_path:
+            return synthetic_text
+        return _read_plugin(rel)
+
+    with pytest.raises(AssertionError, match="full row missing phrase"):
         _assert_weight_table_rows(synthetic_path, read_text)
 
 
@@ -814,12 +887,12 @@ def test_negative_weight_table_absent_raises():
 def test_negative_set_gate_without_gates_line_fails(tmp_path):
     import shutil
 
-    dest = tmp_path / "no-gates.md"
+    dest = tmp_path / "stripped.md"
     shutil.copy2(_LIGHT_SPEC_FIXTURE, dest)
     text = dest.read_text(encoding="utf-8")
     text_no_gates = re.sub(r"^gates:.*\n", "", text, flags=re.MULTILINE)
     dest.write_text(text_no_gates, encoding="utf-8")
-    with pytest.raises(ValueError, match="gates"):
+    with pytest.raises(ValueError, match=r"no 'gates: \{review: …\}' line to update"):
         DD.set_gate(
             str(dest),
             "passed",
