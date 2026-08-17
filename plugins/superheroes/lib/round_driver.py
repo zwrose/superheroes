@@ -2720,6 +2720,21 @@ def _ceiling_blocks(state, config, next_round, refused_at):
     return True
 
 
+def _ceiling_blocks_loaded(state, config):
+    """Persisted-state entry guard: a loaded non-terminal state already above the ceiling must park.
+
+    Equality is allowed (`round == ceiling` runs); park only when `round > ceiling`. A stored
+    terminal (including pending idempotent re-emit) is left unchanged. Returns True when it parked."""
+    if state.get("terminal"):
+        return False
+    brk = circuit_breaker.check_round_ceiling(state["round"], _round_ceiling(config))
+    if not brk.get("halt"):
+        return False
+    detail = "%s (refused at: %s)" % (brk.get("detail"), "resumed-state")
+    _park_round_ceiling(state, detail)
+    return True
+
+
 def _advance_round(state, config, *, reason):
     """The ONE writer of `state["round"]` on the advance path (#1030, owner ruling 19-c).
 
@@ -3535,6 +3550,20 @@ def _cmd_next_locked(session_dir, config_overrides=None):
             return {"ok": False, "reason": refusal.reason, "value": refusal.value}
     else:
         state = loaded
+        if _ceiling_blocks_loaded(state, state["config"]):
+            pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
+                       "attempt": 0,
+                       "payload": {"verdict": state["terminal"],
+                                   "certification": state.get("certification")}}
+            state["pending"] = pending
+            save_state(session_dir, state)
+            _journal_append(session_dir, {"cmd": "next", "phase": P_TERMINAL,
+                                          "round": state["round"], "attempt": 0,
+                                          "outcome": "loaded-ceiling-park"})
+            fail = _terminal_receipt_gate(session_dir, state)
+            if fail:
+                return _receipt_fault_response(fail)
+            return _next_response(pending, state_hash(state))
     if state.get("pending"):
         # idempotent re-emit: the state is unchanged since the pending was persisted, so the hash
         # recomputed here equals the one the first `next` returned (the hash is NEVER stored in the
@@ -3733,6 +3762,19 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "attempt": attempt, "outcome": "no-state"})
         return {"ok": False, "reason": "no loop-state.json — call next first"}
     state = loaded
+    if _ceiling_blocks_loaded(state, state["config"]):
+        pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
+                   "attempt": 0,
+                   "payload": {"verdict": state["terminal"],
+                               "certification": state.get("certification")}}
+        state["pending"] = pending
+        save_state(session_dir, state)
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": state["round"],
+                                      "attempt": attempt, "outcome": "loaded-ceiling-park"})
+        fault = _terminal_receipt_gate(session_dir, state)
+        if fault:
+            return _receipt_fault_response(fault)
+        return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
     if not _via_advance and state.get("_advanceUsed"):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": (state.get("pending") or {}).get("round"),

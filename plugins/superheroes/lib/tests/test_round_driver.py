@@ -5202,6 +5202,7 @@ CB = _load("circuit_breaker")
 def _rearm_forever_seams():
     """Every review round surfaces one fresh Important blocker; audits stay clean."""
     seq = {"n": 0}
+    leg_rnds = {"fix": [], "verify": []}
 
     def reviewer(dim, tier, rnd, ctx):
         if dim == "gap-sweep":
@@ -5220,16 +5221,24 @@ def _rearm_forever_seams():
 
     def fix_step(batch, rnd, payload):
         fix_n["n"] += 1
+        leg_rnds["fix"].append(rnd)
         return {"fixes": [], "headDiff": _headf_ns(fix_n["n"]), "changedSubjects": ["Code"]}
 
-    return _seams(reviewer=reviewer, fix_step=fix_step)
+    def verify_runner(cmd, rnd):
+        leg_rnds["verify"].append(rnd)
+        return "pass"
+
+    seams = _seams(reviewer=reviewer, fix_step=fix_step, verify_runner=verify_runner)
+    seams["_legRnds"] = leg_rnds
+    return seams
 
 
 def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
     """DoD headline: clean audits + fresh blocker every review round halts at the ceiling."""
     # axis: the ROUND BOUNDARY — a round above the ceiling never begins (not: the ceiling round's findings)
     ceiling = 4
-    receipt = RD.run_loop(_rearm_forever_seams(),
+    seams = _rearm_forever_seams()
+    receipt = RD.run_loop(seams,
                           _cfg(maxRoundsAbsolute=ceiling, maxRounds=ceiling))
     assert receipt["verdict"] == "halted"
     assert receipt["certificationShape"] is None
@@ -5241,6 +5250,10 @@ def test_clean_rearm_forever_halts_at_round_ceiling(tmp_path):
     assert "rounds reached 4" in detail
     assert "round 5 not begun" in detail
     assert receipt.get("scriptRan", {}).get("invocations", 999) < RD._RUN_LOOP_GUARD
+    leg_rnds = seams["_legRnds"]
+    # axis: the ceiling round runs to completion — fixer and verify both ran at the ceiling before park
+    assert ceiling in leg_rnds["fix"]
+    assert ceiling in leg_rnds["verify"]
 
 
 def test_clean_rearm_forever_halts_at_distinct_ceiling(tmp_path):
@@ -5378,6 +5391,91 @@ def test_seed_resume_above_ceiling_halts_without_assigning_round(tmp_path):
     detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "round-ceiling")
     assert "rounds reached 10" in detail
     assert "round 11 not begun" in detail
+
+
+def test_loaded_state_above_ceiling_halts_on_cmd_next(tmp_path):
+    """A persisted non-terminal state above the ceiling parks on cmd_next — no certification."""
+    # axis: persisted state at round ceiling+1 halts on cmd_next with round-ceiling, no certification
+    d = str(tmp_path)
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
+    state["round"] = 11
+    state["findings"] = []
+    state["fullPanelRan"] = True
+    state["step"] = RD.P_PANEL
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    assert n["phase"] == RD.P_TERMINAL
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded["terminal"] == "halted"
+    assert reloaded["certification"]["shape"] is None
+    assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+
+
+def test_loaded_state_above_ceiling_halts_on_cmd_submit(tmp_path):
+    """A persisted non-terminal state above the ceiling parks on cmd_submit — no certification."""
+    # axis: persisted state at round ceiling+1 halts on cmd_submit with round-ceiling, no certification
+    d = str(tmp_path)
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
+    state["round"] = 11
+    state["findings"] = []
+    state["fullPanelRan"] = True
+    state["step"] = RD.P_PANEL
+    state["pending"] = {"action": RD.P_PANEL, "round": 11, "phase": RD.P_PANEL, "attempt": 0,
+                        "payload": {}}
+    RD.save_state(d, state)
+    h = RD.state_hash(state)
+    out = RD.cmd_submit(d, RD.P_PANEL, 0, h, {"seats": {}})
+    assert out["ok"] is True
+    assert out["nextStep"] == RD.P_TERMINAL
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded["terminal"] == "halted"
+    assert reloaded["certification"]["shape"] is None
+    assert any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+
+
+def test_loaded_state_at_ceiling_runs_on_cmd_next(tmp_path):
+    """A persisted state at round == ceiling is not parked on cmd_next entry."""
+    # axis: persisted state at round == ceiling runs — equality is allowed
+    d = str(tmp_path)
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
+    state["round"] = 10
+    state["findings"] = []
+    state["fullPanelRan"] = True
+    state["step"] = RD.P_PANEL
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    assert n["phase"] != RD.P_TERMINAL
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded.get("terminal") is None
+    assert not any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
+
+
+def test_loaded_terminal_above_ceiling_re_emits_unchanged(tmp_path):
+    """A stored terminal above the ceiling re-emits unchanged — the loaded-state guard does not clobber."""
+    # axis: already-terminal persisted state above ceiling re-emits its stored terminal unchanged
+    d = str(tmp_path)
+    state = RD.new_state(_cfg(maxRoundsAbsolute=10, maxRounds=7))
+    state["round"] = 11
+    state["terminal"] = "converged"
+    state["certification"] = {"shape": "full-panel-confirmed-degraded", "reason": "stored"}
+    state["step"] = RD.P_TERMINAL
+    state["pending"] = {"action": RD.P_TERMINAL, "round": 11, "phase": RD.P_TERMINAL, "attempt": 0,
+                        "payload": {"verdict": "converged", "certification": state["certification"]}}
+    state["decisions"] = [{"kind": "converged", "detail": "stored"}]
+    RD.save_state(d, state)
+    n = RD.cmd_next(d)
+    assert n["ok"]
+    assert n["phase"] == RD.P_TERMINAL
+    ok, reloaded = RD.load_state(d)
+    assert ok
+    assert reloaded["terminal"] == "converged"
+    assert reloaded["certification"]["shape"] == "full-panel-confirmed-degraded"
+    assert not any(dec["kind"] == "round-ceiling" for dec in reloaded["decisions"])
 
 
 def test_load_refusal_when_ceiling_below_max_rounds():

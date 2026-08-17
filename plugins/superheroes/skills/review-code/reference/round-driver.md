@@ -576,8 +576,9 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
   clean round resets the window; criteria 1 (round cap with an open finding) and 3 are unchanged,
   and a separate hard ceiling bounds the round counter — **no session's round counter exceeds the
-  ceiling without a terminal halt**; the counter is advanced through a single writer that asks the
-  ceiling before every advance, so a round above the ceiling can never begin. A policy **naming** a
+  ceiling without a terminal halt**; the counter is written only by `_advance_round` and
+  `_seed_resume`, each of which asks the ceiling before writing, and a loaded persisted state above
+  the ceiling is guarded at command entry too — so a round above the ceiling can never begin. A policy **naming** a
   ceiling below `maxRounds` refuses at load; an unnamed one takes the flat default and simply binds
   first.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.

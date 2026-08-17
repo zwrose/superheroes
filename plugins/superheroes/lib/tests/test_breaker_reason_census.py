@@ -91,8 +91,6 @@ def _consumer_sites():
 
 
 def _handled_reasons_for_consumer(filename, function, compared_literals):
-    if (filename, function) in _UNDER_HANDLING_ALLOWLIST:
-        return _UNDER_HANDLING_ALLOWLIST[(filename, function)]["handles"]
     if filename == "review_loop_plan.py":
         # Explicit arms plus the final else for check_circuit_breaker halts only; round-ceiling must
         # be explicit — it is not emitted by this decider's breaker call.
