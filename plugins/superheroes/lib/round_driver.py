@@ -3044,17 +3044,28 @@ def build_receipt(state, session_dir=None):
                 % (rkey, ", ".join(roi)))
         ovg = rrec.get("orderVendorProvenanceGaps")
         if ovg:
+            # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
+            # can come from an absent seat-map entry OR from a DEFAULTED engine-preference read,
+            # and those have different recoveries. Naming the seat map for both would send an
+            # operator to the wrong file, so each row says which it was.
             seats = []
             for row in ovg:
                 if not isinstance(row, dict):
                     continue
                 seat = row.get("seat")
-                if isinstance(seat, str) and seat:
-                    seats.append(seat)
+                if not (isinstance(seat, str) and seat):
+                    continue
+                label = seat
+                phase_name = row.get("phase")
+                if isinstance(phase_name, str) and phase_name:
+                    label = "%s@%s" % (label, phase_name)
+                if row.get("vendorSource") == VENDOR_SOURCE_DEFAULTED:
+                    label = "%s (vendor defaulted — engine preferences unreadable)" % label
+                seats.append(label)
             if seats:
                 degraded.append(
                     "order-vendor-provenance-gap (round %s): seat(s) %s emitted without a resolved "
-                    "vendor in the seat map" % (rkey, ", ".join(seats)))
+                    "vendor" % (rkey, ", ".join(seats)))
         prov_by_phase = _normalize_adapter_provenance(rrec.get("adapterProvenance"))
         for phase_name, prov in prov_by_phase.items():
             if not isinstance(prov, dict):
@@ -3546,9 +3557,10 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     `{"storePath": str, "envelope": dict, "journal": dict}` — the orchestrator-fulfilled fold's
     durable seat record (#1037), added to THIS fold's commit so the record and the state advance
     land atomically. Every early return above the commit leaves it unwritten, which is the correct
-    reading in each case: nothing folded, so there is no fold to reconstruct. Its ONE caller
-    (`_advance_orchestrator_fulfilled_locked`) passes None on a replay, where the record this
-    argument would write already exists."""
+    reading in each case: nothing folded, so there is no fold to reconstruct. In particular the
+    DUPLICATE return leaves it unwritten — its one caller reaches this only after refusing
+    `landing-ambiguous` on any record already in the slot, so a duplicate there means the record
+    exists already, never that one is owed."""
     try:
         with round_records.session_lock(session_dir):
             sidecar_target = _sidecar_target_for_recover(session_dir)
@@ -5836,7 +5848,20 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     * A bare payload beside a durable seat record is TWO claims for one slot, and the pre-#1037
       precedence resolved it by fiat (bare wins, silently). It now refuses `landing-ambiguous` —
       the same reason, on the same invariant ("one artifact per slot"), that the seat path already
-      refuses in `round_records._read_landing_envelope`."""
+      refuses in `round_records._read_landing_envelope`.
+
+    The refusal is UNCONDITIONAL, including on a re-entry after this path's own fold committed. An
+    earlier revision carried a `replay` escape hatch that tried to recognise "the record in this
+    slot is one I wrote" from `lastAccepted` plus the record's contents, so such a re-entry would
+    re-fold idempotently. It was removed: that predicate re-derives, at `advance` time, the
+    already-folded judgment `cmd_submit`'s duplicate contract owns, and the two disagreed in a new
+    way on every review round (a foreign record waved through; a record edited under its own
+    declared hash; a MISSING record reported `ok` because `cmd_submit` returned `duplicate` before
+    the commit that would have written it). It also had no user: the re-entry it protected cannot
+    make progress anyway, because a duplicate `submit` returns before `_cmd_submit_prepare` clears
+    `state["pending"]`, so the following `next` re-emits the same step. A loud
+    `landing-ambiguous` — delete whichever artifact is not the one you meant — is both the ratified
+    behaviour and the honest one."""
     roster, refusal = _roster_of(session_dir, state, "advance", phase, rnd, attempt)
     if refusal is not None:
         return refusal
@@ -5864,89 +5889,50 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
                            seat=seat_key)
     occurrence = 0
     record_path = round_records.store_path(session_dir, rnd, phase, skey, attempt)
-    # A RE-ENTRY after this same fold already committed is a replay, not a second claim: the record
-    # on disk is one THIS path wrote, so it is not evidence of a competing artifact.
+    # One artifact per slot — the seat path's invariant, now enforced on the bare-vs-record pair
+    # too. Placed AFTER the shape guard so a malformed payload keeps its own, more actionable
+    # reason (#960's fixture): both refuse, neither folds, and the state hash is untouched.
     #
-    # The predicate is deliberately narrow, because every field it drops is a way for a FOREIGN
-    # record to be waved through as "ours": `round` (a `lastAccepted` from another round whose
-    # phase/attempt happen to match), the artifact hash (a bare payload that CHANGED under us), and
-    # the record's OWN provenance — a seat-written, superseded, or corrupt record sitting in the
-    # slot is a genuine ambiguity even when `lastAccepted` matches. So the record must also read
-    # back as one this path wrote, for this payload.
-    prior = state.get("lastAccepted")
-    replay = bool(isinstance(prior, dict) and prior.get("phase") == phase
-                  and prior.get("round") == rnd
-                  and prior.get("attempt") == attempt
-                  and prior.get("artifactHash") == _sha256(_canonical(payload)))
-    if replay:
-        stored, serr = round_records.read_json(record_path)
-        # The stored envelope must be INTERNALLY sound as well as ours: a declared `payloadSha256`
-        # is the record's own claim about itself, so comparing only that declaration to the bare
-        # payload's hash accepts a record whose `payload` was edited underneath an unchanged
-        # declaration — the torn-write case `round_records.validate_landing` covers on the seat
-        # path. Recompute from the stored payload, and pin the full identity (schema, session,
-        # round, phase), not just the slot.
-        recomputed = (round_records.payload_sha256(stored.get("payload"))
-                      if isinstance(stored, dict) and isinstance(stored.get("payload"), dict)
-                      else None)
-        replay = bool(serr is None and isinstance(stored, dict)
-                      and stored.get("schema") == round_records.SEAT_RESULT_SCHEMA
-                      and stored.get("fulfilledBy") == "orchestrator"
-                      and stored.get("session") == _meta_session_id(session_dir)
-                      and stored.get("phase") == phase
-                      and stored.get("round") == rnd
-                      and stored.get("seat") == seat_key
-                      and stored.get("occurrence") == occurrence
-                      and stored.get("attempt") == attempt
-                      and recomputed is not None
-                      and stored.get("payloadSha256") == recomputed
-                      and recomputed == round_records.payload_sha256(payload))
-    record = None
-    if not replay:
-        # One artifact per slot — the seat path's invariant, now enforced on the bare-vs-record pair
-        # too. Placed AFTER the shape guard so a malformed payload keeps its own, more actionable
-        # reason (#960's fixture): both refuse, neither folds, and the state hash is untouched.
-        #
-        # axis: that a SECOND claim for the slot REFUSES the fold — not that the fold prefers one
-        # artifact over the other. A precedence rule (either direction) folds one claim and
-        # silently discards the other, which is the residual this replaces, not a fix for it.
-        #
-        # `_store_file_exists`, not `os.path.exists`: the same fail-closed existence probe the
-        # record-submit fence uses. `os.path.exists` follows symlinks and answers False for a
-        # DANGLING one (and on some permission errors), which would fold the bare payload over an
-        # unknown store state — the fail-open direction this guard exists to close.
-        if _store_file_exists(record_path):
-            return _refuse_cmd(
-                session_dir, "advance", "landing-ambiguous", phase=phase, rnd=rnd, attempt=attempt,
-                seat=seat_key, path=path, storePath=record_path,
-                detail="both a host-seat bare payload (%s) and a durable seat record (%s) are "
-                       "present for this slot" % (path, record_path))
-        # A record must be bound to a live session id — the same precondition
-        # `round_records.validate_landing` enforces as `bootstrap-required` before accepting any
-        # seat record. This path does not route through that validation, so it refuses here rather
-        # than committing an envelope whose `session` is null and whose provenance therefore
-        # reconstructs nothing.
-        # Read ONCE and carry that exact value into the envelope. Validating the id and then
-        # letting the builder re-read `meta.json` leaves a window where the file (skill-owned, so
-        # not ours to assume stable) changes between the two reads and the guard passes while the
-        # committed envelope carries a different — or null — session.
-        session_id = _meta_session_id(session_dir)
-        if not session_id:
-            return _refuse_cmd(session_dir, "advance", "bootstrap-required", phase=phase, rnd=rnd,
-                               attempt=attempt, seat=seat_key,
-                               detail="no session id in meta.json — refusing to write a durable "
-                                      "seat record that could not carry its session provenance")
-        envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
-                                                    seat_key, occurrence, payload, session_id)
-        record = {
-            "storePath": record_path,
-            "envelope": envelope,
-            "journal": _journal_entry_for_commit(
-                session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
-                seat=seat_key, occurrence=occurrence,
-                payloadSha256=envelope["payloadSha256"], superseded=False,
-                **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
-        }
+    # axis: that a SECOND claim for the slot REFUSES the fold — not that the fold prefers one
+    # artifact over the other. A precedence rule (either direction) folds one claim and
+    # silently discards the other, which is the residual this replaces, not a fix for it.
+    #
+    # `_store_file_exists`, not `os.path.exists`: the same fail-closed existence probe the
+    # record-submit fence uses. `os.path.exists` follows symlinks and answers False for a
+    # DANGLING one (and on some permission errors), which would fold the bare payload over an
+    # unknown store state — the fail-open direction this guard exists to close.
+    if _store_file_exists(record_path):
+        return _refuse_cmd(
+            session_dir, "advance", "landing-ambiguous", phase=phase, rnd=rnd, attempt=attempt,
+            seat=seat_key, path=path, storePath=record_path,
+            detail="both a host-seat bare payload (%s) and a durable seat record (%s) are "
+                   "present for this slot" % (path, record_path))
+    # A record must be bound to a live session id — the same precondition
+    # `round_records.validate_landing` enforces as `bootstrap-required` before accepting any
+    # seat record. This path does not route through that validation, so it refuses here rather
+    # than committing an envelope whose `session` is null and whose provenance therefore
+    # reconstructs nothing.
+    # Read ONCE and carry that exact value into the envelope. Validating the id and then
+    # letting the builder re-read `meta.json` leaves a window where the file (skill-owned, so
+    # not ours to assume stable) changes between the two reads and the guard passes while the
+    # committed envelope carries a different — or null — session.
+    session_id = _meta_session_id(session_dir)
+    if not session_id:
+        return _refuse_cmd(session_dir, "advance", "bootstrap-required", phase=phase, rnd=rnd,
+                           attempt=attempt, seat=seat_key,
+                           detail="no session id in meta.json — refusing to write a durable "
+                                  "seat record that could not carry its session provenance")
+    envelope = _orchestrator_fulfilled_envelope(session_dir, state, phase, rnd, attempt,
+                                                seat_key, occurrence, payload, session_id)
+    record = {
+        "storePath": record_path,
+        "envelope": envelope,
+        "journal": _journal_entry_for_commit(
+            session_dir, "advance", "recorded", phase=phase, round=rnd, attempt=attempt,
+            seat=seat_key, occurrence=occurrence,
+            payloadSha256=envelope["payloadSha256"], superseded=False,
+            **_journal_identity_fields(phase, seat_key, occurrence, attempt)),
+    }
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
                         _via_advance=True, _durable_record=record)
     if not folded.get("ok"):

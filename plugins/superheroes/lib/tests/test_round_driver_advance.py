@@ -1290,54 +1290,6 @@ def test_landing_ambiguity_probe_fails_closed_on_a_dangling_record_symlink(tmp_p
     assert _state(d)["rounds"]["1"].get("verifyResult") is None
 
 
-def test_replay_does_not_wave_through_a_foreign_record(tmp_path, adapters):
-    """A record this path did not write is a genuine ambiguity even when `lastAccepted` matches.
-
-    axis: that the replay escape hatch is bound to the record's OWN provenance, not only to state.
-    Keyed on `lastAccepted` alone, any record sitting in the slot would be waved through."""
-    d = _session(tmp_path)
-    _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
-    assert _advance(d, tmp_path)["ok"] is True                       # A/B: the real replay setup
-    folded = _state(d)
-    folded["step"] = RD.P_VERIFY
-    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
-                         "payload": {"command": "none"}}
-    RD.save_state(d, folded)
-    # Swap our own record for a seat-written one: same slot, same payload, different provenance.
-    record, err = RR.read_json(_verify_store_path(d))
-    assert err is None and record["fulfilledBy"] == "orchestrator"
-    record.pop("fulfilledBy")
-    RR.atomic_write_json(_verify_store_path(d), record)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
-
-
-def test_replay_rejects_a_record_whose_payload_was_edited_under_its_declared_hash(tmp_path,
-                                                                                  adapters):
-    """axis: the stored envelope's INTERNAL soundness, not just its declaration.
-
-    `payloadSha256` is the record's own claim about itself. Trusting it while never recomputing
-    from `payload` accepts a record edited underneath an unchanged declaration — the torn-write
-    case the seat path covers — and the fold would then succeed while the record it points at
-    contradicts the folded state."""
-    d = _session(tmp_path)
-    _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
-    assert _advance(d, tmp_path)["ok"] is True
-    folded = _state(d)
-    folded["step"] = RD.P_VERIFY
-    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
-                         "payload": {"command": "none"}}
-    RD.save_state(d, folded)
-    record, err = RR.read_json(_verify_store_path(d))
-    assert err is None
-    record["payload"] = {"result": "fail"}          # declaration left untouched on purpose
-    RR.atomic_write_json(_verify_store_path(d), record)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
-
-
 def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
     """axis: that no disclosure is DROPPED by deduplication once the collector spans phases.
 
@@ -1361,6 +1313,35 @@ def test_vendor_gap_rows_from_two_phases_do_not_collide(tmp_path, adapters):
          "vendorSource": RD.VENDOR_SOURCE_DEFAULTED},
     ])
     assert len(state["rounds"]["1"]["orderVendorProvenanceGaps"]) == 2
+
+
+def test_re_entry_after_its_own_fold_refuses_landing_ambiguous_unconditionally(tmp_path, adapters):
+    """The refusal does not exempt the record this path itself wrote.
+
+    axis: that the invariant is UNCONDITIONAL. An earlier revision carried a `replay` escape hatch
+    so a post-fold re-entry would re-fold idempotently; it was removed because recognising "this
+    record is mine" duplicates the already-folded judgment `cmd_submit`'s duplicate contract owns,
+    and the two disagreed differently on every review round. The re-entry it protected could not
+    make progress anyway — a duplicate `submit` returns before `pending` is cleared — so the loud
+    refusal is both the ratified behaviour and the honest one.
+    """
+    d = _session(tmp_path)
+    _at_run_verify(tmp_path, d)
+    _write_verify_payload(d, {"result": "pass"})
+    assert _advance(d, tmp_path)["ok"] is True                       # A/B: the fold itself works
+    folded = _state(d)
+    folded["step"] = RD.P_VERIFY
+    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
+                         "payload": {"command": "none"}}
+    RD.save_state(d, folded)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "landing-ambiguous", out
+    # exactly one durable record, and it still reconstructs the folded result.
+    records = [e for e in RD.read_journal(d)
+               if e.get("outcome") == "recorded" and e.get("phase") == RD.P_VERIFY]
+    assert len(records) == 1, records
+    stored, err = RR.read_json(_verify_store_path(d))
+    assert err is None and stored["payload"] == {"result": "pass"}
 
 
 def test_advance_refuses_landing_ambiguous_when_payload_and_record_both_present(tmp_path, adapters):
@@ -1394,43 +1375,6 @@ def test_landing_ambiguous_ab_each_artifact_alone_still_folds(tmp_path, adapters
     _write_verify_payload(payload_only, {"result": "pass"})
     assert _advance(payload_only, tmp_path)["ok"] is True
     assert _state(payload_only)["rounds"]["1"]["verifyResult"] == "pass"
-
-
-def test_advance_replay_does_not_refuse_on_the_record_its_own_fold_wrote(tmp_path, adapters):
-    """A re-entry after this fold committed is a replay, not a second claim.
-
-    What this pins, exactly: the ambiguity refusal must NOT fire on the record this path itself
-    wrote, and the fold must not be applied twice.
-
-    What it does NOT claim — the honest limit: `cmd_submit` answers a replay `duplicate` and
-    returns BEFORE `_cmd_submit_prepare` clears `state["pending"]`, so the following `cmd_next`
-    re-emits the same pending step. That stale-pending-after-duplicate behaviour is `cmd_submit`'s
-    long-standing contract for every phase and both fold paths — it predates this change and is
-    unaltered by it — so it is recorded as a follow-up rather than silently implied to be fixed
-    here. This test therefore asserts recovery-without-corruption, not loop progress."""
-    d = _session(tmp_path)
-    _at_run_verify(tmp_path, d)
-    _write_verify_payload(d, {"result": "pass"})
-    assert _advance(d, tmp_path)["ok"] is True
-    folded = _state(d)
-    assert os.path.exists(_verify_store_path(d))
-    # Replay the pre-`next` state: the fold is committed (`lastAccepted`), `pending` still names it.
-    folded["step"] = RD.P_VERIFY
-    folded["pending"] = {"action": RD.P_VERIFY, "round": 1, "phase": RD.P_VERIFY, "attempt": 0,
-                         "payload": {"command": "none"}}
-    RD.save_state(d, folded)
-    out = _advance(d, tmp_path)
-    assert out["ok"] is True, out
-    assert out.get("reason") != "landing-ambiguous"
-    assert _state(d)["rounds"]["1"]["verifyResult"] == "pass"
-    # not folded twice: exactly one `advanced` journal event for this slot per real fold.
-    folds = [e for e in RD.read_journal(d)
-             if e.get("outcome") == "advanced" and e.get("phase") == RD.P_VERIFY
-             and e.get("round") == 1 and e.get("attempt") == 0]
-    assert len(folds) == 2, folds   # the original fold + this replay's no-op re-entry
-    records = [e for e in RD.read_journal(d)
-               if e.get("outcome") == "recorded" and e.get("phase") == RD.P_VERIFY]
-    assert len(records) == 1, "the replay must not write a SECOND durable record"
 
 
 def test_emitted_order_resolves_host_seat_vendor_from_config_seat_map(tmp_path, adapters):
