@@ -6,6 +6,8 @@ else that parks). Direction 2 — a synthetic unregistered member is reported un
 """
 import os
 import re
+import sys
+from unittest.mock import patch
 
 import circuit_breaker as cb
 
@@ -147,6 +149,20 @@ def test_synthetic_reason_is_reported_unhandled():
     synthetic = cb.BREAKER_REASONS | {"synthetic-unregistered-reason"}
     unhandled = compute_unhandled_reasons(synthetic)
     assert "synthetic-unregistered-reason" in unhandled
+
+
+def test_unregistered_consumer_is_reported_as_gap():
+    # axis: an unknown consumer that switches on breaker reasons is a census failure, not a pass
+    synthetic_key = ("synthetic_consumer.py", "_switches_on_reason")
+    augmented = dict(_consumer_sites())
+    augmented[synthetic_key] = {"max-iterations"}
+    mod = sys.modules[__name__]
+    with patch.object(mod, "_consumer_sites", return_value=augmented):
+        gaps = compute_consumer_gaps(cb.BREAKER_REASONS)
+    assert synthetic_key in gaps
+    assert gaps[synthetic_key] == set(cb.BREAKER_REASONS)
+    registered_key = ("round_driver.py", "_challenged_recurring_halt")
+    assert registered_key not in gaps
 
 
 def test_review_loop_plan_names_round_ceiling_and_parks():

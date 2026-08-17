@@ -5453,29 +5453,43 @@ def _round_slice_is_round_key(node):
             and node.slice.value == "round")
 
 
+_MODULE_SCOPE = "<module>"
+
+
 def _round_counter_mutation_sites():
     """Return (enclosing function name, lineno) for every state['round'] write in round_driver."""
     path = os.path.join(_LIB, "round_driver.py")
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=path)
     sites = []
-    for node in ast.walk(tree):
+
+    def record_write(assign_node, enclosing):
+        if isinstance(assign_node, ast.Assign):
+            targets = assign_node.targets
+        elif isinstance(assign_node, (ast.AugAssign, ast.AnnAssign)):
+            targets = [assign_node.target]
+        else:
+            return
+        for target in targets:
+            if isinstance(target, ast.Subscript) and _round_slice_is_round_key(target):
+                sites.append((enclosing, assign_node.lineno))
+            elif isinstance(target, (ast.Tuple, ast.List)):
+                for elt in target.elts:
+                    if isinstance(elt, ast.Subscript) and _round_slice_is_round_key(elt):
+                        sites.append((enclosing, assign_node.lineno))
+
+    def visit(node, enclosing):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            func_name = node.name
-            for child in ast.walk(node):
-                if isinstance(child, ast.Assign):
-                    targets = child.targets
-                elif isinstance(child, (ast.AugAssign, ast.AnnAssign)):
-                    targets = [child.target]
-                else:
-                    continue
-                for target in targets:
-                    if isinstance(target, ast.Subscript) and _round_slice_is_round_key(target):
-                        sites.append((func_name, child.lineno))
-                    elif isinstance(target, (ast.Tuple, ast.List)):
-                        for elt in target.elts:
-                            if isinstance(elt, ast.Subscript) and _round_slice_is_round_key(elt):
-                                sites.append((func_name, child.lineno))
+            for child in node.body:
+                visit(child, node.name)
+            return
+        if isinstance(node, (ast.Assign, ast.AugAssign, ast.AnnAssign)):
+            record_write(node, enclosing)
+        for child in ast.iter_child_nodes(node):
+            visit(child, enclosing)
+
+    for child in tree.body:
+        visit(child, _MODULE_SCOPE)
     return sites
 
 
