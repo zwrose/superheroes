@@ -1028,13 +1028,16 @@ nothing (heading renamed, list reformatted) it raises rather than passing vacuou
 `plugins/superheroes/skills/workhorse/SKILL.md` §1, where the builder applies them at intake, and
 they are stated in full in
 `plugins/superheroes/skills/showrunner/reference/issue-contract.md` under `## Anchor resolution`,
-which is the authoritative home. The two copies are drift-tested by `lib/tests/test_ssot_drift.py`,
-which compares them **whitespace-normalized** — so re-wrapping a charter paragraph is free while
-dropping a qualifier is not — and which additionally asserts that the **inverted forms are absent**.
-That second half is what makes the guard bite: a presence-only check for both "numbered greater
-than N" and "date" happily passes prose reading *"use date comparison instead of entries numbered
-greater than N."* A presence sentinel proves a phrase is there, never that the sentence around it
-still says the right thing.
+which is the authoritative home. A third copy-holder,
+`plugins/superheroes/skills/showrunner/reference/vet-receipt.md`, carries the owner-half delivery
+clause for the standing anchor-coverage row. The three copy-holders are drift-tested by
+`lib/tests/test_ssot_drift.py`, which compares the resolution bullets **whitespace-normalized** —
+so re-wrapping a charter paragraph is free while dropping a qualifier is not — and which applies
+the same normalization to **clause checks** as well as bullet equality. It additionally asserts that
+the **inverted forms are absent**. That second half is what makes the guard bite: a presence-only
+check for both "numbered greater than N" and "date" happily passes prose reading *"use date comparison
+instead of entries numbered greater than N."* A presence sentinel proves a phrase is there, never
+that the sentence around it still says the right thing.
 
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the

@@ -160,13 +160,22 @@ dispatch. Each kind has its own test:
 A malformed Anchor — a header that declares no kind, an unknown kind, or more than one kind — and
 an empty Anchor **do not resolve**: they stop intake exactly as a failed per-kind test does.
 
+**The log side fails closed too.** The cursor leg reads as *no* substantive entry numbered greater
+than N — a sentence that is trivially satisfied when there is nothing to read. So it does not pass
+by default. If the spec carries no Amendments log at all, if the log cannot be read, if an entry is
+missing its class or its touched-section list, or if the anchor's `#N` is greater than the number of
+entries the log holds, the cursor leg **does not resolve** — it stops intake exactly as a named
+substantive entry would. A leg you cannot complete never resolves an anchor.
+
 **On any failure, stop before any spend and report.** No file in the repository changes — the stop
 comes before the brief, before the worktree edits, and before every dispatch. Report on the issue,
 where the advisor will find it, naming **which per-kind test failed** and **what failed to
 resolve**. **You never repair the anchor yourself:** re-anchoring, re-routing, and parking to the
 owner are the advisor's repair, and the build resumes only on the advisor's word. This is the same
 fail-closed direction as the register-check above — a check you cannot complete blocks, it never
-falls open.
+falls open — but it is **not the same terminal**: the register-check parks; this one hands the issue
+back and waits. **Post the report on the issue**, so it outlives this session and the advisor finds
+it without being told to look.
 
 This layer grades the **issue**, never the diff. The layer that inspects the diff is the advisor's
 standing anchor-coverage row at vet. And it adds **no machinery over the Amendments log** — it

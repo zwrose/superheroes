@@ -100,8 +100,10 @@ above).
    citation is the reverse index:** affected work is located by its Anchor slot, so no rulings ledger
    exists or ships. **Register-embedded copies count as citations too** — also check open epics'
    registers for embedded copies of the superseded ruling, and amend an affected register the same way
-   any mid-flight amendment reaches its children. A build that merges downstream of a reversed ruling
-   without that notice is a **process defect**, not a builder defect.
+   any mid-flight amendment reaches its children. **Record the notice where the build will see it**
+   — on that build's issue or PR, never only in a channel message that the build's session cannot
+   read. A build that merges downstream of a reversed ruling without that notice is a **process
+   defect**, not a builder defect.
    When an issue being filed is a **register-consuming child** — an epic child of a package that
    has a register, or a single-issue child standing in for one under FR-36 — run the register-check
    against the filed body **before filing**, whether or not the body contains a quoted block; a body
@@ -145,9 +147,10 @@ above).
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
 
    **Repair a builder's anchor stop.** A build stops before any spend when its cited anchor does not
-   resolve, and reports what failed on the issue. That report is yours to repair, and **stop, report,
-   and repair are one path graded end to end** — a stop with no repair is an abandoned issue, not a
-   safeguard working. Three repairs, and exactly one of them applies: **re-anchor** the issue on a
+   resolve, and reports what failed on the issue. That report is yours to repair, and **stop, report, and
+   repair are one path graded end to end on the issue** — an intake stop produces no PR, so the
+   issue is the only surface on which the whole path is readable; a stop with no repair is an
+   abandoned issue, not a safeguard working. Three repairs, and exactly one of them applies: **re-anchor** the issue on a
    decision that does resolve; **re-route** the work when the anchor's failure means it was routed
    wrong; or **park it to the owner** when neither is yours to decide. **Record which you did in the
    issue body** — never only in a comment — together with what failed to resolve, so the next reader

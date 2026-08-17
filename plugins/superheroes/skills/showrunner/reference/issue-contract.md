@@ -139,6 +139,13 @@ kind resolves by its own test:
 A malformed Anchor — a header that declares no kind, an unknown kind, or more than one kind — and
 an empty Anchor **do not resolve**: they stop intake exactly as a failed per-kind test does.
 
+**The log side fails closed too.** The cursor leg reads as *no* substantive entry numbered greater
+than N — a sentence that is trivially satisfied when there is nothing to read. So it does not pass
+by default. If the spec carries no Amendments log at all, if the log cannot be read, if an entry is
+missing its class or its touched-section list, or if the anchor's `#N` is greater than the number of
+entries the log holds, the cursor leg **does not resolve** — it stops intake exactly as a named
+substantive entry would. A leg you cannot complete never resolves an anchor.
+
 **Why the cursor is a number and not a date.** The `as-of amendment #N` cursor names *how many*
 entries the Amendments log held when the anchor was cited, so the entries that could have staled it
 are exactly the ones added since — the ones **numbered greater than N**. Numbering is positional,
@@ -150,7 +157,7 @@ the wrong answer on exactly the day it matters, silently. **The comparison is on
 no file in the repository changes — and reports on the issue which per-kind test failed and what
 failed to resolve. The **builder never repairs its own anchor**. The **advisor repairs the route**:
 **re-anchor** on a decision that does resolve, **re-route** the work, or **park it to the owner**;
-the repair is recorded in the issue body, and the build resumes on the advisor's word. A stop with
+the repair is recorded in the issue body, and the build resumes **only** on the advisor's word. A stop with
 no repair is an abandoned issue, not a safeguard working; a build that resumed without the repair
 is a process defect.
 
