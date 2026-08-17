@@ -268,7 +268,7 @@ _STATUS_FOR_REVIEW = {"passed": "approved", "changes-requested": "in-review", "p
 _GATES_RE = re.compile(r"^gates:\s*\{\s*review:\s*([a-z-]+)\s*\}\s*$")
 _STATUS_RE = re.compile(r"^status:\s*[a-z-]+\s*$")
 _UPDATED_RE = re.compile(r'^updated:\s*".*"\s*$')
-_APPROVED_KEY_RE = re.compile(r"^approved:\s*(.*)\s*$")
+_APPROVED_KEY_RE = re.compile(r"^(?:approved|'approved'|\"approved\")[ \t]*:")
 _APPROVED_CANONICAL_RE = re.compile(r'^approved:\s*"(\d{4}-\d{2}-\d{2})"\s*$')
 
 
@@ -305,6 +305,8 @@ def _apply_approved_pass(lines, end, review, current_review):
             except ValueError:
                 all_canonical = False
                 break
+            # Cross-version guard: permissive fromisoformat (3.11+) can admit values the
+            # regex matched but that are not canonical YYYY-MM-DD.
             if parsed.isoformat() != captured:
                 all_canonical = False
                 break
