@@ -27,6 +27,69 @@ BLOCKING = {"Critical", "Important"}
 # build legs can never disagree on what blocks.
 _NON_BLOCKING = frozenset({"minor", "nit"})
 
+DEFAULT_MAX_ROUNDS_ABSOLUTE = 10
+ROUND_CEILING_REASON = "round-ceiling"
+
+# The CLOSED set of halt reasons any breaker decision in this module can carry. A consumer that
+# switches on `reason` iterates THIS set; a member added here without a consumer arm must fail loud.
+BREAKER_REASONS = frozenset({
+    "max-iterations", "no-net-progress", "challenged-principle-recurring",
+    "recurring-finding", "audit-stall", ROUND_CEILING_REASON,
+})
+
+CEILING_BELOW_CAP_REFUSAL = "max-rounds-absolute-below-max-rounds"
+CEILING_INVALID_REFUSAL = "max-rounds-absolute-invalid"
+
+
+def _usable_int(value):
+    """True when value is a non-bool int."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _positive_usable_int(value):
+    return _usable_int(value) and value >= 1
+
+
+def _effective_max_rounds(max_rounds):
+    if _positive_usable_int(max_rounds):
+        return max_rounds
+    return 7
+
+
+def resolve_round_ceiling(max_rounds, named=None):
+    """Resolve the unconditional round ceiling for the review loop. Never raises."""
+    cap = _effective_max_rounds(max_rounds)
+    if named is None:
+        ceiling = DEFAULT_MAX_ROUNDS_ABSOLUTE
+    elif not _positive_usable_int(named):
+        return None, CEILING_INVALID_REFUSAL
+    else:
+        ceiling = named
+    if ceiling < cap:
+        return None, CEILING_BELOW_CAP_REFUSAL
+    return ceiling, None
+
+
+def check_round_ceiling(round_count, ceiling):
+    """Unconditional round ceiling — halts regardless of the latest round's findings."""
+    if ceiling is None or not _usable_int(ceiling) or not _usable_int(round_count):
+        return {"halt": False, "reason": None, "detail": "no round ceiling"}
+    if round_count >= ceiling:
+        return {
+            "halt": True,
+            "reason": ROUND_CEILING_REASON,
+            "detail": (
+                f"Round ceiling {ceiling} reached at round {round_count}; certification is withheld "
+                f"unconditionally regardless of this round's findings (not a max-iterations cap halt)."
+            ),
+        }
+    return {
+        "halt": False,
+        "reason": None,
+        "detail": f"Round {round_count} is below the round ceiling of {ceiling}.",
+    }
+
+
 def is_blocking(severity):
     return str("" if severity is None else severity).strip().lower() not in _NON_BLOCKING
 
