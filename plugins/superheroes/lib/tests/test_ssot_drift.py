@@ -20,6 +20,8 @@ are gone with them; no lib/*.js copy-holders remain):
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
+- R5 weight vocabulary + R7 park surface (pinned literals) (copy-holders: architect-discovery,
+  showrunner SKILL.md)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -2630,3 +2632,64 @@ def test_issue_contract_vocabulary_in_issue_contract_doc():
         % (missing_conv, extra_conv)
     )
     assert list(issue_contract.SLOTS) == home_slots
+
+
+# --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
+
+# The epic register is the home of record for these sentences, but lib/tests/ ships inside
+# the plugin to projects that do not carry the register file — so we pin the literals here
+# and assert every copy-holder matches the pin byte-for-byte. Two copies drifting together
+# to the same wrong sentence would still pass an equality check between copies; the pin is
+# the anchor.
+R5_WEIGHT_VOCABULARY = (
+    "A weight call names `light` or `full`, states its measurables (gradable-line count "
+    "for a spec draft; child count and register-entry count for a package read), names a "
+    "round ceiling when it governs a read loop, and may be overridden in either direction "
+    "by one stated sentence; the numeric bars are guidelines, never gates."
+)
+
+R7_PARK_SURFACE = (
+    "A park lands the full park note — what was elicited or found so far, explicitly "
+    "marked unapproved — on the owner's reading surface at park time: in the advisor's "
+    "delivery message when the owner is present, else as the opening item of the "
+    "advisor's next delivery message; a durable copy lands as a comment on the parked "
+    "item's issue or PR, and the durable copy is for the record — it is never required "
+    "owner reading."
+)
+
+_R5_COPY_HOLDERS = (
+    "skills/architect-discovery/SKILL.md",
+    "skills/showrunner/SKILL.md",
+)
+
+_R7_COPY_HOLDERS = (
+    "skills/architect-discovery/SKILL.md",
+    "skills/showrunner/SKILL.md",
+)
+
+
+def _assert_literal_exactly_once(literal, rel):
+    text = _read(rel)
+    count = text.count(literal)
+    if count == 0:
+        raise AssertionError(
+            "%s: expected exactly one occurrence of pinned literal, found 0"
+            % rel
+        )
+    if count > 1:
+        raise AssertionError(
+            "%s: expected exactly one occurrence of pinned literal, found %d"
+            % (rel, count)
+        )
+
+
+def test_r5_weight_vocabulary_exactly_once_in_copy_holders():
+    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated copy-holder."""
+    for rel in _R5_COPY_HOLDERS:
+        _assert_literal_exactly_once(R5_WEIGHT_VOCABULARY, rel)
+
+
+def test_r7_park_surface_exactly_once_in_copy_holders():
+    """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated copy-holder."""
+    for rel in _R7_COPY_HOLDERS:
+        _assert_literal_exactly_once(R7_PARK_SURFACE, rel)

@@ -121,8 +121,10 @@ a fix**.
 
 **Turns fuzzy intent into an owner-approved spec.** the-architect owns the *what*, in plain
 language — never the *how*, which stays the builder's, spelled out in the build brief. It
-runs Discovery (eliciting requirements with you, no jargon) through to an owner-approved
-spec.
+runs Discovery (eliciting requirements with you, no jargon) through to one of three endings — an
+owner-approved
+spec. When an investigation finds nothing to specify, Discovery says so in a findings record you
+ratify; when it stops before an answer, it leaves a park note rather than silence.
 
 | Command | Use it to… |
 | --- | --- |
