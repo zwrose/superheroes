@@ -69,7 +69,10 @@ are matched **exactly** — `Anchor (RECEIPT):` is `anchor-kind-unrecognized`, n
 anchor.
 
 A slot header inside a fenced code block is not a slot header — so a body that only shows the
-skeleton in an example does not accidentally satisfy it. A fence closes only on a matching
+skeleton in an example does not accidentally satisfy it. A slot header indented four or more
+columns is not a slot header — CommonMark renders it as an indented code block, so a body whose
+only `Anchor` line sits at indent 4 reports the anchor slot missing. Indentation is measured
+in columns; a tab advances to the next multiple of four. A fence closes only on a matching
 marker of the same character and at least the opening length, so a nested example inside a
 longer fence stays fenced.
 
