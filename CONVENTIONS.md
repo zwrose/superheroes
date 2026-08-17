@@ -280,6 +280,7 @@ workItem: <work-item>                  # the frozen identity from §6.1
 issue: <github-issue-number | null>    # linked once an issue exists; NOT the path segment
 size: small | medium | large           # work-item sizing (see §6.4)
 status: draft | in-review | approved   # DERIVED, human-facing: approved iff gates.review == passed
+approved: <date>                       # PRESENT IFF approved; written ONLY by the approval path
 gates: { review: pending | passed | changes-requested }   # AUTHORITATIVE review state for THIS doc
 producedBy: the-architect@<version>
 created: <date>
@@ -290,6 +291,14 @@ updated: <date>
 - **`gates.review` is the authoritative review outcome** for the spec;
   **`status` is derived** from it (`approved` iff `gates.review == passed`) and is for
   humans. Code reads `gates.review`.
+- **`approved` records when the owner's approval was granted** and is present iff
+  `gates.review == passed` — it appears and disappears with the derived `approved`
+  status. Its single writer is the approval path: `definition_doc.set_gate` stamps it
+  when the gate flips to `passed`, clears it when the gate leaves `passed`, and never
+  re-dates a doc that is already approved (a date typed by hand before this contract
+  existed is accepted as it stands). No skill and no hand edit writes the field; that
+  is what makes the date machine-produced and therefore trustworthy to anything that
+  resolves against it.
 - There is no `parent` field: v1's `plan`→`spec`/`tasks`→`plan` chain existed to link
   sibling definition-docs; with only one doc type left, there is nothing to link to.
 
