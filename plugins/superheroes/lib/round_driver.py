@@ -1015,9 +1015,8 @@ def _seed_resume(state, cfg):
     qualifying = sum(1 for r in records
                      if r.get("kind") == "confirmation" and review_loop_plan._confirmation_qualifies(r))
     state["confirmations"] = qualifying
-    if resume_round > _round_ceiling(cfg):
-        if _ceiling_halt(state, cfg, prospective_round=resume_round):
-            return
+    if _ceiling_blocks(state, cfg, resume_round, "resume-seed"):
+        return
     state["round"] = resume_round
     state["step"] = P_PANEL
     state["fullPanelRan"] = False
@@ -2050,8 +2049,6 @@ def _after_findings_settled(state, config):
         carry = state.pop("_verifiedCarry")
         state["findings"] = (carry or []) + (state.get("findings") or [])
         state.pop("_gapMerge", None)
-    if _ceiling_halt(state, config):
-        return
     if state.get("_settleDelta"):
         _settle_delta(state, config)
         return
@@ -2406,8 +2403,9 @@ def _fold_verify(state, config, artifact):
         return
     # advance to the next (delta) round. The diff the just-finished round's panel/audit saw is the
     # `reviewed` side of the next split_fix_surface; the fixer's head diff is the `head` side.
+    if not _advance_round(state, config, reason="post-verify-advance"):
+        return
     state["_priorReviewedDiff"] = state.get("reviewedDiff")
-    state["round"] += 1
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     _enter_delta_round(state, config)
 
@@ -2600,8 +2598,6 @@ def _settle_delta(state, config):
     if challenged:
         _park_cannot_certify(state, challenged.get("detail"))
         return
-    if _ceiling_halt(state, config):
-        return
     breaker = circuit_breaker.check_audit_breaker(state["auditRounds"], max_rounds)
     new_blocking = _blocking(state.get("findings") or [])
 
@@ -2684,7 +2680,8 @@ def _settle_delta(state, config):
         return
     if followup.get("rearm"):
         _decision(state, "confirmation-rearm", followup.get("reason"))
-        state["round"] += 1
+        if not _advance_round(state, config, reason="confirmation-rearm"):
+            return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
         state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
@@ -2708,15 +2705,33 @@ def _batch_severity_is_critical(state, target_id):
     return False
 
 
-def _ceiling_halt(state, config, prospective_round=None):
-    """Ask the unconditional round ceiling; park loud when ``round >= ceiling``."""
-    brk = circuit_breaker.check_round_ceiling(
-        prospective_round if prospective_round is not None else state["round"],
-        _round_ceiling(config))
-    if brk.get("halt"):
-        _park_round_ceiling(state, brk.get("detail"))
-        return True
-    return False
+def _ceiling_blocks(state, config, next_round, refused_at):
+    """The ONE round-ceiling predicate. Parks loud when `next_round` would exceed the ceiling.
+
+    Bites on the ROUND BOUNDARY: it asks whether the round about to BEGIN is allowed, never
+    whether the round just finished was. Returns True when it parked (caller returns at once)."""
+    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
+    if not brk.get("halt"):
+        return False
+    detail = brk.get("detail")
+    if refused_at:
+        detail = "%s (refused at: %s)" % (detail, refused_at)
+    _park_round_ceiling(state, detail)
+    return True
+
+
+def _advance_round(state, config, *, reason):
+    """The ONE writer of `state["round"]` on the advance path (#1030, owner ruling 19-c).
+
+    The ceiling is a BOUNDARY, not a settle-path terminal: the round at the ceiling completes,
+    and the loop then refuses to begin the next one. Returns True when the counter advanced,
+    False when it parked `round-ceiling` — a False return means the caller must return
+    immediately without any further state mutation."""
+    next_round = state["round"] + 1
+    if _ceiling_blocks(state, config, next_round, reason):
+        return False
+    state["round"] = next_round
+    return True
 
 
 def _park_round_ceiling(state, detail):

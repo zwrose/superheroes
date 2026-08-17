@@ -561,7 +561,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 - **One invisible self-recovery** — audit-stall triggers a single fixer escalation (journaled); never offered as an owner menu item.
 - **Three-choice stall menu** — `one-more-round` (offerable once per session; not a terminal — re-enters the fix leg), `accept-the-disclosed-risk` (stalled CONFIRMED-with-evidence audit target only), `hold` (terminal `held`). Reached only from the audit-stall path after self-recovery.
 - **Capped-with-open-Critical park** — confirmation budget exhausted with a Critical still owed.
-- **Round-ceiling halt** — a hard round ceiling (default 10, config `maxRoundsAbsolute`) halts **regardless of the latest round's contents**; terminal `halted` with certification **withheld**; reason token `round-ceiling` (**distinct from** `max-iterations`); the receipt states the ceiling and the round reached.
+- **Round-ceiling halt** — a hard bound on the round counter (default 10, config `maxRoundsAbsolute`): the round **at** the ceiling **runs to completion**, then the loop **refuses to begin** the next round — unconditional in that **no finding state can buy another round**, not in that it preempts the current round's own terminal; terminal `halted` with certification **withheld**; reason token `round-ceiling` (**distinct from** `max-iterations`, whose ratified meaning — the cap reached *with an open finding* — is unchanged); the receipt states the **ceiling** and the **rounds reached**, and names the round not begun.
 
 ## Invariants
 
@@ -575,9 +575,11 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
   `circuit_breaker.py "$SESSION_DIR" 7` call inside the loop; the driver owns stall/self-recovery.
   Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
   clean round resets the window; criteria 1 (round cap with an open finding) and 3 are unchanged,
-  and a separate hard ceiling bounds the round counter unconditionally — **no session's round
-  counter exceeds the ceiling without a terminal halt**. A policy **naming** a ceiling below
-  `maxRounds` refuses at load; an unnamed one takes the flat default and simply binds first.
+  and a separate hard ceiling bounds the round counter — **no session's round counter exceeds the
+  ceiling without a terminal halt**; the counter is advanced through a single writer that asks the
+  ceiling before every advance, so a round above the ceiling can never begin. A policy **naming** a
+  ceiling below `maxRounds` refuses at load; an unnamed one takes the flat default and simply binds
+  first.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.
 - Fail-closed everywhere: junk in → conservative out; never certify on silence.
 - Base guard on every CLI `next`: pinned resolvable base, matching checkout/repo (PR mode), and a

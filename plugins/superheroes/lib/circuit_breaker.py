@@ -70,27 +70,28 @@ def resolve_round_ceiling(max_rounds, named=None):
     return named, None
 
 
-def check_round_ceiling(round_count, ceiling):
-    """Unconditional round ceiling — halts regardless of the latest round's findings."""
+def check_round_ceiling(next_round, ceiling):
+    """Unconditional round ceiling — boundary on the round about to begin, not the round just finished."""
     if ceiling is None:
         return {"halt": False, "reason": None, "detail": "no round ceiling"}
     if not _usable_int(ceiling):
         return {"halt": False, "reason": None, "detail": "malformed round ceiling"}
-    if not _usable_int(round_count):
+    if not _usable_int(next_round):
         return {"halt": False, "reason": None, "detail": "malformed round count"}
-    if round_count >= ceiling:
+    if next_round > ceiling:
         return {
             "halt": True,
             "reason": ROUND_CEILING_REASON,
             "detail": (
-                f"Round ceiling {ceiling} reached at round {round_count}; certification is withheld "
-                f"unconditionally regardless of this round's findings (not a max-iterations cap halt)."
+                f"Round ceiling {ceiling} reached: rounds reached {next_round - 1}, "
+                f"round {next_round} not begun. Certification is withheld unconditionally regardless of the "
+                f"completed round's findings (not a max-iterations cap halt)."
             ),
         }
     return {
         "halt": False,
         "reason": None,
-        "detail": f"Round {round_count} is below the round ceiling of {ceiling}.",
+        "detail": f"Round {next_round} is within the round ceiling of {ceiling}.",
     }
 
 

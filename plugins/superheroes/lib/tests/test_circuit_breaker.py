@@ -413,22 +413,22 @@ def _reason_literals_from_source():
     return set(re.findall(r'"reason": "([^"]+)"', source))
 
 
-def test_check_round_ceiling_halts_at_ceiling():
+def test_check_round_ceiling_does_not_halt_at_ceiling_boundary():
     res = check_round_ceiling(10, 10)
-    assert res["halt"] is True
-    assert res["reason"] == ROUND_CEILING_REASON
-
-
-def test_check_round_ceiling_does_not_halt_below_ceiling():
-    res = check_round_ceiling(9, 10)
     assert res["halt"] is False
     assert res["reason"] is None
 
 
-def test_check_round_ceiling_halt_detail_names_ceiling_and_round():
-    res = check_round_ceiling(12, 10)
-    assert "10" in res["detail"]
-    assert "12" in res["detail"]
+def test_check_round_ceiling_halts_one_above_ceiling():
+    res = check_round_ceiling(11, 10)
+    assert res["halt"] is True
+    assert res["reason"] == ROUND_CEILING_REASON
+
+
+def test_check_round_ceiling_halt_detail_names_reached_and_refused_rounds():
+    res = check_round_ceiling(11, 10)
+    assert "rounds reached 10" in res["detail"]
+    assert "round 11 not begun" in res["detail"]
     assert "not a max-iterations cap halt" in res["detail"]
 
 
