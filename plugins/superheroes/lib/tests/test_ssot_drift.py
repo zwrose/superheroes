@@ -21,6 +21,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
 - Register-check vocabulary                              (home: register_check.py)
+- Anchor invariant clauses + inversions       (home: skills/showrunner/reference/issue-contract.md)
 
 The reviewer-roster and docs-location clusters live in their topical sibling guards
 (test_dispatch_tables.py, test_definition_doc.py).
@@ -3118,4 +3119,244 @@ def test_register_check_vocabulary_completeness():
         "register_check.UNDECIDED_REASONS — "
         "missing from frozenset: %r; in frozenset but not derived: %r"
         % (missing_undecided, extra_undecided)
+    )
+
+
+# --- Cluster: anchor invariant (issue-contract.md → the two charters) --------
+
+
+_ANCHOR_BULLET_PREFIXES = (
+    "- **Spec-section anchor.**",
+    "- **Receipt anchor.**",
+    "- **Ruling anchor.**",
+)
+
+_ANCHOR_CURSOR_CLAUSES = (
+    "numbered greater than the anchor's",
+    "the cursor test compares entry numbers, never dates",
+    "Wording-class entries never stale an anchor",
+)
+
+_ANCHOR_INVERTED_FORMS = (
+    "numbered less than",
+    "earlier than the anchor's",
+    "compare the amendment dates",
+    "by date rather than by number",
+    "wording-class entries stale an anchor",
+)
+
+_ANCHOR_SURFACES = (
+    "skills/workhorse/SKILL.md",
+    "skills/showrunner/SKILL.md",
+    "skills/showrunner/reference/issue-contract.md",
+)
+
+
+def _anchor_whitespace_normalize(text):
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _anchor_extract_bullet(text, prefix):
+    """One top-level `- **...` bullet from prefix to blank line or sibling bullet."""
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith(prefix):
+            start = i
+            break
+    assert start is not None, (
+        "anchor bullet %r not found in surface (moved or reworded?)" % prefix
+    )
+    collected = [lines[start]]
+    for j in range(start + 1, len(lines)):
+        if lines[j].strip() == "":
+            break
+        if re.match(r"^- \*\*", lines[j]):
+            break
+        collected.append(lines[j])
+    return _anchor_whitespace_normalize("\n".join(collected))
+
+
+def _anchor_resolution_bullets(rel):
+    text = _read(rel)
+    bullets = [_anchor_extract_bullet(text, prefix) for prefix in _ANCHOR_BULLET_PREFIXES]
+    assert len(bullets) == 3, (
+        "%s: expected exactly three anchor-resolution bullets, found %d"
+        % (rel, len(bullets))
+    )
+    return bullets
+
+
+def _workhorse_intake_anchor_section():
+    text = _read("skills/workhorse/SKILL.md")
+    m = re.search(
+        r"(^\*\*Confirm the Anchor resolves before any spend\.\*\*.*?)"
+        r"(?=^\*\*Launch-prompt discipline\.\*\*)",
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "workhorse/SKILL.md: anchor intake section not found (moved or reworded?)"
+    )
+    span = m.group(1)
+    assert span.strip(), "workhorse/SKILL.md: anchor intake section is empty"
+    return span
+
+
+def _issue_contract_section(heading):
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    m = re.search(
+        r"^%s\s*\n(.*?)(?=^## |\Z)" % re.escape(heading),
+        text,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "issue-contract.md: section %r not found (moved or reworded?)" % heading
+    )
+    span = heading + "\n" + m.group(1)
+    assert span.strip(), (
+        "issue-contract.md: section %r is empty (moved or reworded?)" % heading
+    )
+    return span
+
+
+def _showrunner_anchor_coverage_bullet():
+    text = _read("skills/showrunner/SKILL.md")
+    lines = text.splitlines()
+    start = None
+    for i, line in enumerate(lines):
+        if line.startswith("   - **The standing anchor-coverage row**"):
+            start = i
+            break
+    assert start is not None, (
+        "showrunner/SKILL.md: standing anchor-coverage row bullet not found "
+        "(moved or reworded?)"
+    )
+    collected = [lines[start]]
+    for j in range(start + 1, len(lines)):
+        if lines[j].startswith("   - "):
+            break
+        collected.append(lines[j])
+    bullet = "\n".join(collected)
+    assert bullet.strip(), (
+        "showrunner/SKILL.md: standing anchor-coverage row bullet is empty"
+    )
+    return bullet
+
+
+def test_anchor_resolution_bullets_match_between_home_and_workhorse():
+    # axis: whitespace-normalized equality of the three resolution bullets across copies
+    workhorse = _anchor_resolution_bullets("skills/workhorse/SKILL.md")
+    home = _anchor_resolution_bullets(
+        "skills/showrunner/reference/issue-contract.md"
+    )
+    for i, (w, h) in enumerate(zip(workhorse, home)):
+        if w != h:
+            pytest.fail(
+                "anchor resolution bullet index %d differs — workhorse: %r; home: %r"
+                % (i, w, h)
+            )
+
+
+def test_anchor_cursor_rule_clauses_present_in_both_copies():
+    # axis: synchronized-deletion guard — clauses must appear in both charter copies
+    workhorse = _read("skills/workhorse/SKILL.md")
+    home = _read("skills/showrunner/reference/issue-contract.md")
+    for clause in _ANCHOR_CURSOR_CLAUSES:
+        assert clause in workhorse, (
+            "workhorse/SKILL.md missing cursor clause %r (moved or reworded?)" % clause
+        )
+        assert clause in home, (
+            "issue-contract.md missing cursor clause %r (moved or reworded?)" % clause
+        )
+
+
+def test_anchor_doctrine_forbids_inverted_cursor_forms():
+    # axis: inverted cursor forms must be absent from all three surfaces
+    for rel in _ANCHOR_SURFACES:
+        text = _read(rel).lower()
+        for inverted in _ANCHOR_INVERTED_FORMS:
+            assert inverted not in text, (
+                "%s contains inverted cursor form %r" % (rel, inverted)
+            )
+
+
+def test_anchor_stop_and_repair_is_two_sided():
+    # axis: builder and advisor repair halves must both appear where required
+    intake = _workhorse_intake_anchor_section()
+    assert "stop before any spend" in intake, (
+        "workhorse intake missing stop-before-spend clause (moved or reworded?)"
+    )
+    assert "You never repair the anchor yourself" in intake, (
+        "workhorse intake missing never-repair clause (moved or reworded?)"
+    )
+
+    showrunner = _read("skills/showrunner/SKILL.md")
+    for phrase in (
+        "re-anchor",
+        "re-route",
+        "park it to the owner",
+        "A builder never repairs its own anchor",
+    ):
+        assert phrase in showrunner, (
+            "showrunner/SKILL.md missing advisor repair phrase %r "
+            "(moved or reworded?)" % phrase
+        )
+
+    home_resolution = _issue_contract_section("## Anchor resolution")
+    assert "stops before any spend" in home_resolution, (
+        "issue-contract.md ## Anchor resolution missing stop-before-spend clause "
+        "(moved or reworded?)"
+    )
+    assert "builder never repairs its own anchor" in home_resolution, (
+        "issue-contract.md ## Anchor resolution missing never-repair clause "
+        "(moved or reworded?)"
+    )
+    for phrase in ("re-anchor", "re-route", "park it to the owner"):
+        assert phrase in home_resolution, (
+            "issue-contract.md ## Anchor resolution missing %r "
+            "(moved or reworded?)" % phrase
+        )
+
+
+def test_standing_anchor_coverage_row_is_standing_not_conditional():
+    # axis: every-PR grading — conditional vet wording is the silent-omission failure
+    bullet = _showrunner_anchor_coverage_bullet()
+    assert "at **every** vet" in bullet, (
+        "showrunner duty-4 bullet missing at-every-vet clause (moved or reworded?)"
+    )
+    assert "only anchor layer that inspects the diff" in bullet, (
+        "showrunner duty-4 bullet missing diff-inspection clause (moved or reworded?)"
+    )
+
+    home_section = _issue_contract_section("## The standing anchor-coverage vet row")
+    assert "graded on every PR" in home_section, (
+        "issue-contract.md standing anchor-coverage section missing "
+        "graded-on-every-PR clause (moved or reworded?)"
+    )
+
+
+def test_anchor_recorded_at_filing_clause_in_showrunner_charter():
+    # axis: anchor recorded at filing, never retrofitted
+    showrunner = _read("skills/showrunner/SKILL.md")
+    assert "recorded **at filing time**, never added afterwards" in showrunner, (
+        "showrunner/SKILL.md missing at-filing-time clause (moved or reworded?)"
+    )
+    assert "cannot be marked build-ready" in showrunner, (
+        "showrunner/SKILL.md missing cannot-be-build-ready clause (moved or reworded?)"
+    )
+
+
+def test_superseded_ruling_notice_duty_in_showrunner_charter():
+    # axis: superseded-ruling notice duty and reverse-index doctrine
+    showrunner = _read("skills/showrunner/SKILL.md")
+    showrunner_norm = _anchor_whitespace_normalize(showrunner)
+    assert "The Anchor citation is the reverse index" in showrunner_norm, (
+        "showrunner/SKILL.md missing reverse-index clause (moved or reworded?)"
+    )
+    assert "no rulings ledger" in showrunner, (
+        "showrunner/SKILL.md missing no-rulings-ledger clause (moved or reworded?)"
+    )
+    assert "registers for embedded copies" in showrunner, (
+        "showrunner/SKILL.md missing embedded-copy register clause (moved or reworded?)"
     )
