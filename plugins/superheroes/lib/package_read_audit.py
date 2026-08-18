@@ -101,9 +101,12 @@ REFUSAL_FINDING_MALFORMED = "finding-malformed"
 REFUSAL_FINDING_DUPLICATE = "finding-duplicate"
 REFUSAL_FINDING_UNKNOWN = "finding-unknown"
 REFUSAL_VERIFICATION_DUPLICATE = "verification-duplicate"
+REFUSAL_DISPOSITION_NOT_ALLOWED_FOR_LENS = "disposition-not-allowed-for-lens"
+REFUSAL_EVIDENCE_EMPTY = "evidence-empty"
 REFUSAL_DISPOSITION_UNRECOGNIZED = "disposition-unrecognized"
 REFUSAL_OUTCOME_UNRECOGNIZED = "outcome-unrecognized"
 REFUSAL_SYNC_CHECK_MALFORMED = "sync-check-malformed"
+REFUSAL_SYNC_CHECK_DUPLICATE = "sync-check-duplicate"
 REFUSAL_SYNC_RESULT_UNRECOGNIZED = "sync-result-unrecognized"
 REFUSAL_WEIGHT_UNRECOGNIZED = "weight-unrecognized"
 REFUSAL_CEILING_INVALID = "ceiling-invalid"
@@ -128,9 +131,12 @@ REFUSAL_REASONS = frozenset({
     REFUSAL_FINDING_DUPLICATE,
     REFUSAL_FINDING_UNKNOWN,
     REFUSAL_VERIFICATION_DUPLICATE,
+    REFUSAL_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+    REFUSAL_EVIDENCE_EMPTY,
     REFUSAL_DISPOSITION_UNRECOGNIZED,
     REFUSAL_OUTCOME_UNRECOGNIZED,
     REFUSAL_SYNC_CHECK_MALFORMED,
+    REFUSAL_SYNC_CHECK_DUPLICATE,
     REFUSAL_SYNC_RESULT_UNRECOGNIZED,
     REFUSAL_WEIGHT_UNRECOGNIZED,
     REFUSAL_CEILING_INVALID,
@@ -161,15 +167,27 @@ NONCONFORMITY_ROUND_MISSING = "round-missing"
 NONCONFORMITY_ELEMENT_MISSING = "element-missing"
 NONCONFORMITY_FINDING_UNVERIFIED = "finding-unverified"
 NONCONFORMITY_DISPOSITION_MISMATCH = "disposition-mismatch"
+NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS = "disposition-not-allowed-for-lens"
+NONCONFORMITY_REFUTATION_EVIDENCE_MISSING = "refutation-evidence-missing"
 NONCONFORMITY_SYNC_CHECK_MISSING = "sync-check-missing"
+NONCONFORMITY_SYNC_CHECK_INCOMPLETE = "sync-check-incomplete"
 NONCONFORMITY_SYNC_CHECK_FAILED = "sync-check-failed"
 NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_ROUND_MISSING,
     NONCONFORMITY_ELEMENT_MISSING,
     NONCONFORMITY_FINDING_UNVERIFIED,
     NONCONFORMITY_DISPOSITION_MISMATCH,
+    NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+    NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
     NONCONFORMITY_SYNC_CHECK_MISSING,
+    NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
     NONCONFORMITY_SYNC_CHECK_FAILED,
+})
+
+SPEC_CONTRADICTION_DISPOSITIONS = frozenset({
+    DISPOSITION_PACKAGE_FIX,
+    DISPOSITION_SPEC_AMENDMENT,
+    DISPOSITION_REFUTATION,
 })
 
 EXIT_RECORDED = 0
@@ -360,6 +378,28 @@ def _verified_findings(verifications):
     return verified
 
 
+def _disposition_allowed_for_lens(lens, disposition):
+    if disposition == DISPOSITION_DECLINED_EXTENSION:
+        return lens != LENS_SPEC_CONTRADICTION
+    if lens == LENS_SPEC_CONTRADICTION:
+        return disposition in SPEC_CONTRADICTION_DISPOSITIONS
+    return disposition in DISPOSITIONS
+
+
+def _distinct_sync_check_children(sync_checks):
+    return {check.get("child") for check in sync_checks if check.get("child")}
+
+
+def _sync_checks_complete(invocation, sync_checks):
+    expected = invocation.get("measurables", {}).get("children")
+    if expected is None:
+        return False
+    children = _distinct_sync_check_children(sync_checks)
+    if len(children) != expected:
+        return False
+    return all(check.get("result") == SYNC_RESULT_PASS for check in sync_checks)
+
+
 def _declined_extension_ids(rounds):
     declined = set()
     for rnd in rounds:
@@ -390,11 +430,13 @@ def _summarize_invocation(inv_id, invocation, rounds, verifications):
 
     converged = (
         bool(rounds_sorted)
+        and bool(verifications)
         and highest_mechanical_only
         and all(
             verified.get(fid, {}).get("outcome") == OUTCOME_VERIFIED
             for fid in finding_ids
         )
+        and _sync_checks_complete(invocation, sync_checks)
     )
     ceiling = invocation.get("ceiling", 0)
     ceiling_reached = bool(rounds_sorted) and highest_round == ceiling
@@ -416,6 +458,46 @@ def _summarize_invocation(inv_id, invocation, rounds, verifications):
 
 def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
     findings = []
+
+    if invocation.get("cause") is None:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation is missing cause",
+        })
+    if invocation.get("weight") is None:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation is missing weight",
+        })
+    measurables = invocation.get("measurables")
+    if measurables is None or measurables.get("children") is None:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation is missing measurables.children",
+        })
+    if measurables is None or measurables.get("registerEntries") is None:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation is missing measurables.registerEntries",
+        })
+    if invocation.get("ceiling") is None:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation is missing ceiling",
+        })
+    seats = invocation.get("seats")
+    if not seats:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation is missing seats",
+        })
+
     if not rounds:
         findings.append({
             "kind": NONCONFORMITY_ROUND_MISSING,
@@ -428,6 +510,10 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
     declined_named = _declined_extension_ids(rounds)
     sync_checks = _all_sync_checks(verifications)
     has_verification = bool(verifications)
+    finding_lenses = {}
+    for rnd in rounds:
+        for item in rnd.get("findings", []):
+            finding_lenses[item.get("finding")] = item.get("lens")
 
     for rnd in rounds:
         round_no = rnd.get("round")
@@ -483,12 +569,55 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
                 ),
             })
 
+    for fid, item in verified.items():
+        lens = finding_lenses.get(fid)
+        disposition = item.get("disposition")
+        if lens is not None and disposition is not None:
+            if not _disposition_allowed_for_lens(lens, disposition):
+                findings.append({
+                    "kind": NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+                    "invocation": inv_id,
+                    "detail": (
+                        "finding %s with lens %r has disposition %r"
+                        % (fid, lens, disposition)
+                    ),
+                })
+
+    for fid, item in verified.items():
+        if item.get("disposition") == DISPOSITION_REFUTATION:
+            evidence = item.get("evidence")
+            if not evidence or not str(evidence).strip():
+                findings.append({
+                    "kind": NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
+                    "invocation": inv_id,
+                    "detail": (
+                        "finding %s has disposition refutation but no evidence"
+                        % fid
+                    ),
+                })
+
     if has_verification and not sync_checks:
         findings.append({
             "kind": NONCONFORMITY_SYNC_CHECK_MISSING,
             "invocation": inv_id,
             "detail": "invocation has verification records but no sync-check entries",
         })
+    elif has_verification:
+        expected_children = invocation.get("measurables", {}).get("children")
+        distinct_children = _distinct_sync_check_children(sync_checks)
+        if (
+            expected_children is not None
+            and len(distinct_children) < expected_children
+        ):
+            findings.append({
+                "kind": NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
+                "invocation": inv_id,
+                "detail": (
+                    "sync-check covers %d distinct children but measurables.children "
+                    "is %d"
+                    % (len(distinct_children), expected_children)
+                ),
+            })
 
     for check in sync_checks:
         if check.get("result") != SYNC_RESULT_PASS:
@@ -565,14 +694,14 @@ def _parse_colon_triple(value, name):
 
 
 def _known_findings_for_invocation(records, inv_id):
-    known = set()
+    known = {}
     for record in records:
         if record.get("kind") != RECORD_KIND_ROUND:
             continue
         if record.get("invocation") != inv_id:
             continue
         for item in record.get("findings", []):
-            known.add(item["finding"])
+            known[item["finding"]] = item["lens"]
     return known
 
 
@@ -588,16 +717,20 @@ def _recorded_finding_ids(records, inv_id):
     return ids
 
 
-def _verified_finding_ids(records, inv_id):
-    ids = set()
+def _latest_verified_finding_ids(records, inv_id):
+    latest = {}
     for record in records:
         if record.get("kind") != RECORD_KIND_VERIFICATION:
             continue
         if record.get("invocation") != inv_id:
             continue
         for item in record.get("findings", []):
-            ids.add(item["finding"])
-    return ids
+            latest[item["finding"]] = item
+    return {
+        fid
+        for fid, item in latest.items()
+        if item.get("outcome") == OUTCOME_VERIFIED
+    }
 
 
 def _invocation_ids(records):
@@ -871,7 +1004,7 @@ def verb_record_round(
     )
 
 
-def verb_record_verification(trail, invocation, findings, sync_checks):
+def verb_record_verification(trail, invocation, findings, sync_checks, evidence_items):
     records, reason, detail = _load_trail(trail)
     if records is None:
         return _refuse(reason, detail, trail=trail, invocation=invocation)
@@ -893,7 +1026,32 @@ def verb_record_verification(trail, invocation, findings, sync_checks):
         )
 
     known_round = _known_findings_for_invocation(records, invocation)
-    already_verified = _verified_finding_ids(records, invocation)
+    already_verified = _latest_verified_finding_ids(records, invocation)
+    evidence_by_finding = {}
+    for evidence in evidence_items:
+        fid, text, err = _parse_colon_pair(evidence, "evidence")
+        if err is not None:
+            return _refuse(
+                REFUSAL_FINDING_MALFORMED,
+                err,
+                trail=trail,
+                invocation=invocation,
+            )
+        if fid not in known_round:
+            return _refuse(
+                REFUSAL_FINDING_UNKNOWN,
+                "evidence finding %r was not recorded in a round" % fid,
+                trail=trail,
+                invocation=invocation,
+            )
+        if not text.strip():
+            return _refuse(
+                REFUSAL_EVIDENCE_EMPTY,
+                "evidence for finding %r is empty" % fid,
+                trail=trail,
+                invocation=invocation,
+            )
+        evidence_by_finding[fid] = text
 
     finding_objs = []
     for finding in findings:
@@ -926,6 +1084,24 @@ def verb_record_verification(trail, invocation, findings, sync_checks):
                 trail=trail,
                 invocation=invocation,
             )
+        lens = known_round[fid]
+        if not _disposition_allowed_for_lens(lens, disposition):
+            return _refuse(
+                REFUSAL_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+                (
+                    "disposition %r is not allowed for finding %r with lens %r"
+                    % (disposition, fid, lens)
+                ),
+                trail=trail,
+                invocation=invocation,
+            )
+        if disposition == DISPOSITION_REFUTATION and fid not in evidence_by_finding:
+            return _refuse(
+                REFUSAL_EVIDENCE_EMPTY,
+                "refutation for finding %r requires --evidence" % fid,
+                trail=trail,
+                invocation=invocation,
+            )
         if fid in already_verified:
             return _refuse(
                 REFUSAL_VERIFICATION_DUPLICATE,
@@ -934,13 +1110,17 @@ def verb_record_verification(trail, invocation, findings, sync_checks):
                 invocation=invocation,
             )
         already_verified.add(fid)
-        finding_objs.append({
+        item = {
             "finding": fid,
             "disposition": disposition,
             "outcome": outcome,
-        })
+        }
+        if fid in evidence_by_finding:
+            item["evidence"] = evidence_by_finding[fid]
+        finding_objs.append(item)
 
     sync_objs = []
+    seen_children = set()
     for sync_check in sync_checks:
         child, result, err = _parse_colon_pair(sync_check, "sync-check")
         if err is not None:
@@ -957,6 +1137,14 @@ def verb_record_verification(trail, invocation, findings, sync_checks):
                 trail=trail,
                 invocation=invocation,
             )
+        if child in seen_children:
+            return _refuse(
+                REFUSAL_SYNC_CHECK_DUPLICATE,
+                "sync-check child %r is named more than once" % child,
+                trail=trail,
+                invocation=invocation,
+            )
+        seen_children.add(child)
         sync_objs.append({"child": child, "result": result})
 
     record = {
@@ -1311,6 +1499,7 @@ def _main_record_verification(argv):
     parser.add_argument("--trail", required=True)
     parser.add_argument("--invocation", required=True)
     parser.add_argument("--finding", action="append", default=[])
+    parser.add_argument("--evidence", action="append", default=[])
     parser.add_argument("--sync-check", action="append", default=[])
     try:
         args = parser.parse_args(argv)
@@ -1328,6 +1517,7 @@ def _main_record_verification(argv):
             args.invocation,
             args.finding,
             args.sync_check,
+            args.evidence,
         )
     except Exception as exc:
         result = _refuse(

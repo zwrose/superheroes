@@ -402,9 +402,12 @@ checked against it.
 - `finding-duplicate`
 - `finding-unknown`
 - `verification-duplicate`
+- `disposition-not-allowed-for-lens`
+- `evidence-empty`
 - `disposition-unrecognized`
 - `outcome-unrecognized`
 - `sync-check-malformed`
+- `sync-check-duplicate`
 - `sync-result-unrecognized`
 - `weight-unrecognized`
 - `ceiling-invalid`
@@ -419,7 +422,10 @@ checked against it.
 - `element-missing`
 - `finding-unverified`
 - `disposition-mismatch`
+- `disposition-not-allowed-for-lens`
+- `refutation-evidence-missing`
 - `sync-check-missing`
+- `sync-check-incomplete`
 - `sync-check-failed`
 
 **Undecided reasons:**
@@ -434,6 +440,8 @@ checked against it.
 
 **Exit codes:**
 
-- `0` — conforming
-- `1` — nonconforming
-- `2` — undecided
+- `0` — recorded — write verbs
+- `1` — refused — write verbs
+- `0` — conforming — the check verb
+- `1` — nonconforming — the check verb
+- `2` — undecided — the check verb

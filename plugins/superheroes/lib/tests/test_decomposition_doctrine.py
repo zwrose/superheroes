@@ -105,25 +105,6 @@ _TRIGGERED_FIELDS_HEADING = (
     "## Triggered fields — the artifacts raise them, not your memory"
 )
 
-# Bold labels in decomposition.md vocabulary — Results: splits across WRITE_RESULTS and CHECK_RESULTS.
-_VOCAB_LABEL_CONSTANTS = {
-    "Lenses:": "LENSES",
-    "Part statuses:": "PART_STATUSES",
-    "Control-probe reads:": "CONTROL_PROBE_READS",
-    "Weights:": "WEIGHTS",
-    "Dispositions:": "DISPOSITIONS",
-    "Verification outcomes:": "OUTCOMES",
-    "Sync-check results:": "SYNC_RESULTS",
-    "Record kinds:": "RECORD_KINDS",
-    "Nonconformity kinds:": "NONCONFORMITY_KINDS",
-    "Refusal reasons:": "REFUSAL_REASONS",
-    "Undecided reasons:": "UNDECIDED_REASONS",
-}
-
-_VOCAB_RESULTS_LABEL = "Results:"
-
-_VOCAB_IGNORED_LABELS = frozenset({"Schema:", "Exit codes:"})
-
 _CONTENTS_ROW_RE = re.compile(r"^- \[(.+?)\]\(#([^)]*)\)\s*$")
 
 
@@ -310,79 +291,6 @@ def _vocabulary_section_text(text):
     return section
 
 
-def _parse_vocabulary_section(section_text):
-    """Parse bold-label bullet lists; fail closed on missing or unrecognized labels."""
-    label_pattern = re.compile(r"^\*\*([^*]+)\*\*\s*$", re.MULTILINE)
-    matches = list(label_pattern.finditer(section_text))
-    if not matches:
-        raise RuntimeError("vocabulary section has no **Label:** headings")
-    parsed = {}
-    for idx, match in enumerate(matches):
-        label = match.group(1).strip()
-        if (
-            label not in _VOCAB_LABEL_CONSTANTS
-            and label not in _VOCAB_IGNORED_LABELS
-            and label != _VOCAB_RESULTS_LABEL
-        ):
-            raise RuntimeError(f"unrecognized vocabulary label: {label!r}")
-        start = match.end()
-        end = matches[idx + 1].start() if idx + 1 < len(matches) else len(section_text)
-        block = section_text[start:end]
-        tokens = re.findall(r"^- `([^`]+)`", block, re.MULTILINE)
-        if label in _VOCAB_IGNORED_LABELS:
-            continue
-        if not tokens:
-            raise RuntimeError(f"vocabulary label {label!r} parsed to zero tokens")
-        parsed[label] = set(tokens)
-    return parsed
-
-
-def _results_tokens_from_parsed(parsed):
-    """Split **Results:** tokens into write and check sets using module membership."""
-    results = parsed.get(_VOCAB_RESULTS_LABEL)
-    if results is None:
-        raise RuntimeError("Results: label missing from vocabulary section")
-    write = {t for t in results if t in PRA.WRITE_RESULTS}
-    check = {t for t in results if t in PRA.CHECK_RESULTS}
-    unknown = results - write - check
-    if unknown:
-        raise RuntimeError(
-            f"Results: tokens not in WRITE_RESULTS or CHECK_RESULTS: {sorted(unknown)!r}"
-        )
-    if write != set(PRA.WRITE_RESULTS):
-        raise AssertionError(
-            "Results: write tokens %r do not match WRITE_RESULTS %r"
-            % (sorted(write), sorted(PRA.WRITE_RESULTS))
-        )
-    if check != set(PRA.CHECK_RESULTS):
-        raise AssertionError(
-            "Results: check tokens %r do not match CHECK_RESULTS %r"
-            % (sorted(check), sorted(PRA.CHECK_RESULTS))
-        )
-
-
-def _assert_label_tokens(label, tokens):
-    const_name = _VOCAB_LABEL_CONSTANTS[label]
-    expected = set(getattr(PRA, const_name))
-    actual = set(tokens)
-    if actual != expected:
-        missing = expected - actual
-        extra = actual - expected
-        raise AssertionError(
-            f"vocabulary {label!r} drift: missing {sorted(missing)!r}, extra {sorted(extra)!r}"
-        )
-
-
-def _assert_vocabulary_agreement(text):
-    section = _vocabulary_section_text(text)
-    parsed = _parse_vocabulary_section(section)
-    for label, const_name in _VOCAB_LABEL_CONSTANTS.items():
-        if label not in parsed:
-            raise AssertionError(f"vocabulary section missing label {label!r}")
-        _assert_label_tokens(label, parsed[label])
-    _results_tokens_from_parsed(parsed)
-
-
 def _parse_triggered_fields_table(section_text):
     table_lines = []
     in_table = False
@@ -497,9 +405,10 @@ def test_decomposition_worked_example_subsection_present():
         )
 
 
-def test_vocabulary_agreement_with_package_read_audit():
+def test_vocabulary_section_exists():
+    # Token-level vocabulary guard: test_ssot_drift.py::test_package_read_audit_vocabulary_in_decomposition_doc
     text = _read_plugin(_DECOMPOSITION_REF)
-    _assert_vocabulary_agreement(text)
+    _vocabulary_section_text(text)
 
 
 def test_vet_receipt_register_trigger_row():
@@ -582,34 +491,6 @@ def test_negative_contents_missing_heading_link():
             lambda rel: synthetic,
         ),
         match="Contents missing entries",
-    )
-
-
-def test_negative_vocabulary_token_added():
-    lenses = set(PRA.LENSES)
-    lenses.add("extra-lens-token")
-    _expect_assertion_error(
-        lambda: _assert_label_tokens("Lenses:", lenses),
-        match=r"vocabulary 'Lenses:'",
-    )
-
-
-def test_negative_vocabulary_token_removed():
-    lenses = set(PRA.LENSES)
-    lenses.remove("collisions")
-    _expect_assertion_error(
-        lambda: _assert_label_tokens("Lenses:", lenses),
-        match=r"vocabulary 'Lenses:'",
-    )
-
-
-def test_negative_vocabulary_renamed_heading_raises():
-    section = _vocabulary_section_text(_read_plugin(_DECOMPOSITION_REF))
-    renamed = section.replace("**Lenses:**", "**Lens tokens:**", 1)
-    _expect_error(
-        lambda: _parse_vocabulary_section(renamed),
-        RuntimeError,
-        match="unrecognized vocabulary label",
     )
 
 

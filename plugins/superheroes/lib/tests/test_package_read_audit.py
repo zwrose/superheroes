@@ -10,7 +10,7 @@ import package_read_audit as pra
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _MODULE = os.path.join(os.path.dirname(_HERE), "package_read_audit.py")
-_PYTHON = "/usr/bin/python3"
+_PYTHON = sys.executable
 _PYFLAGS = ["-B", "-X", "pycache_prefix=/private/tmp/superheroes-pyc"]
 
 
@@ -60,9 +60,10 @@ def _open_default(tmp_path, trail=None, invocation="inv-1", ceiling=3, seats=Non
         "--register-entries", "1",
         "--ceiling", str(ceiling),
         "--seat", seats[0],
-        *(
-            ["--seat", seat] for seat in seats[1:]
-        ),
+        *[
+            arg for seat in seats[1:]
+            for arg in ("--seat", seat)
+        ],
     )
     assert code == pra.EXIT_RECORDED, out
     payload = json.loads(out.strip())
@@ -114,11 +115,14 @@ def _record_verification(
     invocation="inv-1",
     findings=None,
     sync_checks=None,
+    evidence=None,
 ):
     if findings is None:
         findings = []
     if sync_checks is None:
         sync_checks = []
+    if evidence is None:
+        evidence = []
     args = [
         "record-verification",
         "--trail", str(trail),
@@ -126,6 +130,8 @@ def _record_verification(
     ]
     for finding in findings:
         args.extend(["--finding", finding])
+    for item in evidence:
+        args.extend(["--evidence", item])
     for sync_check in sync_checks:
         args.extend(["--sync-check", sync_check])
     return _run_cli(*args)
@@ -256,6 +262,49 @@ def test_round_trip_conforming(tmp_path):
     assert summary["parkOwed"] is False
 
 
+def test_round_trip_converged_below_ceiling(tmp_path):
+    trail, _ = _open_default(tmp_path, ceiling=3)
+    _record_round(
+        trail,
+        round_no=1,
+        findings=["f-1:register-drift"],
+        parts=["pkg:unreviewed"],
+    )
+    _record_round(
+        trail,
+        round_no=2,
+        mechanical_only=True,
+        parts=["pkg:reviewed"],
+    )
+    _record_verification(
+        trail,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING
+    summary = json.loads(out.strip())["invocations"][0]
+    assert summary["converged"] is True
+    assert summary["ceilingReached"] is False
+    assert summary["parkOwed"] is False
+
+
+def test_round_trip_unconverged_below_ceiling(tmp_path):
+    trail, _ = _open_default(tmp_path, ceiling=3)
+    _record_round(
+        trail,
+        round_no=1,
+        findings=["f-1:collisions"],
+        parts=["pkg:unreviewed"],
+    )
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING
+    summary = json.loads(out.strip())["invocations"][0]
+    assert summary["converged"] is False
+    assert summary["ceilingReached"] is False
+    assert summary["parkOwed"] is False
+
+
 def test_park_owed_is_conforming(tmp_path):
     trail, _ = _open_default(tmp_path, ceiling=1)
     _record_round(
@@ -267,7 +316,7 @@ def test_park_owed_is_conforming(tmp_path):
     _record_verification(
         trail,
         findings=["f-1:package-fix:failed"],
-        sync_checks=["c1:pass"],
+        sync_checks=["c1:pass", "c2:pass"],
     )
     code, out, _err = _run_cli("check", "--trail", str(trail))
     assert code == pra.EXIT_CONFORMING
@@ -470,7 +519,8 @@ def test_refusal_verification_duplicate(tmp_path):
     before = _trail_bytes(trail)
     code, out, _err = _record_verification(
         trail,
-        findings=["f-1:refutation:verified"],
+        findings=["f-1:spec-amendment:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
     )
     _assert_refusal_no_append(trail, before, code, out, pra.REFUSAL_VERIFICATION_DUPLICATE)
 
@@ -810,7 +860,7 @@ def test_nonconformity_sync_check_failed(tmp_path):
     _record_verification(
         trail,
         findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:fail"],
+        sync_checks=["c1:fail", "c2:pass"],
     )
     code, out, _err = _run_cli("check", "--trail", str(trail))
     payload = json.loads(out.strip())
@@ -819,6 +869,224 @@ def test_nonconformity_sync_check_failed(tmp_path):
         item["kind"] == pra.NONCONFORMITY_SYNC_CHECK_FAILED
         for item in payload["findings"]
     )
+
+
+def test_nonconformity_sync_check_incomplete(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _record_verification(
+        trail,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass"],
+    )
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_SYNC_CHECK_INCOMPLETE
+        for item in payload["findings"]
+    )
+
+
+def test_nonconformity_disposition_not_allowed_for_lens_hand_appended(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:spec-contradiction"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{
+            "finding": "f-1",
+            "disposition": "declined-extension",
+            "outcome": "verified",
+        }],
+        "syncChecks": [{"child": "c1", "result": "pass"}, {"child": "c2", "result": "pass"}],
+    })
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS
+        for item in payload["findings"]
+    )
+
+
+def test_nonconformity_refutation_evidence_missing(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{
+            "finding": "f-1",
+            "disposition": "refutation",
+            "outcome": "verified",
+        }],
+        "syncChecks": [{"child": "c1", "result": "pass"}, {"child": "c2", "result": "pass"}],
+    })
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_REFUTATION_EVIDENCE_MISSING
+        for item in payload["findings"]
+    )
+
+
+def test_nonconformity_element_missing_invocation_cause(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail)
+    text = trail.read_text(encoding="utf-8")
+    text = text.replace('"cause": "initial read"', '"cause": null', 1)
+    trail.write_text(text, encoding="utf-8")
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and "cause" in item["detail"]
+        for item in payload["findings"]
+    )
+
+
+def test_converged_false_without_verification_record(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, mechanical_only=True)
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING
+    payload = json.loads(out.strip())
+    summary = payload["invocations"][0]
+    assert summary["converged"] is False
+    assert payload["findings"] == []
+
+
+def test_failed_then_verified_converges(tmp_path):
+    trail, _ = _open_default(tmp_path, ceiling=2)
+    _record_round(trail, round_no=1, findings=["f-1:collisions"])
+    _record_verification(
+        trail,
+        findings=["f-1:package-fix:failed"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    _record_round(trail, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
+    _record_verification(
+        trail,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING
+    summary = json.loads(out.strip())["invocations"][0]
+    assert summary["converged"] is True
+
+
+def test_refusal_disposition_not_allowed_for_lens(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(
+        trail,
+        findings=["f-1:spec-contradiction"],
+        declined=["f-1"],
+    )
+    before = _trail_bytes(trail)
+    code, out, _err = _record_verification(
+        trail,
+        findings=["f-1:declined-extension:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    _assert_refusal_no_append(
+        trail,
+        before,
+        code,
+        out,
+        pra.REFUSAL_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+    )
+
+
+def test_refusal_evidence_empty(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    before = _trail_bytes(trail)
+    code, out, _err = _record_verification(
+        trail,
+        findings=["f-1:refutation:verified"],
+        evidence=["f-1: "],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    _assert_refusal_no_append(trail, before, code, out, pra.REFUSAL_EVIDENCE_EMPTY)
+
+
+def test_refusal_sync_check_duplicate(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    before = _trail_bytes(trail)
+    code, out, _err = _record_verification(
+        trail,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass", "c1:pass"],
+    )
+    _assert_refusal_no_append(trail, before, code, out, pra.REFUSAL_SYNC_CHECK_DUPLICATE)
+
+
+def test_refutation_with_evidence_happy_path(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    code, out, _err = _record_verification(
+        trail,
+        findings=["f-1:refutation:verified"],
+        evidence=["f-1:spec section 4 covers this case"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    assert code == pra.EXIT_RECORDED
+    payload = json.loads(out.strip())
+    assert payload["record"]["findings"][0]["evidence"] == "spec section 4 covers this case"
+
+
+def test_open_multi_seat(tmp_path):
+    trail, payload = _open_default(tmp_path, seats=["alpha", "beta", "gamma"])
+    assert payload["record"]["seats"] == ["alpha", "beta", "gamma"]
+
+
+def test_check_groups_multiple_invocations(tmp_path):
+    trail, _ = _open_default(tmp_path, invocation="inv-1")
+    _record_round(trail, invocation="inv-1")
+    _run_cli(
+        "open",
+        "--trail", str(trail),
+        "--invocation", "inv-2",
+        "--cause", "re-read",
+        "--weight", pra.WEIGHT_LIGHT,
+        "--children", "2",
+        "--register-entries", "1",
+        "--ceiling", "2",
+        "--seat", "seat-b",
+    )
+    _record_round(trail, invocation="inv-2", round_no=1)
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING
+    payload = json.loads(out.strip())
+    inv_ids = [item["invocation"] for item in payload["invocations"]]
+    assert inv_ids == ["inv-1", "inv-2"]
+
+
+def test_check_invocation_filter_selects_one(tmp_path):
+    trail, _ = _open_default(tmp_path, invocation="inv-1")
+    _record_round(trail, invocation="inv-1")
+    _run_cli(
+        "open",
+        "--trail", str(trail),
+        "--invocation", "inv-2",
+        "--cause", "re-read",
+        "--weight", pra.WEIGHT_LIGHT,
+        "--children", "2",
+        "--register-entries", "1",
+        "--ceiling", "2",
+        "--seat", "seat-b",
+    )
+    _record_round(trail, invocation="inv-2", round_no=1)
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "inv-2",
+    )
+    payload = json.loads(out.strip())
+    assert [item["invocation"] for item in payload["invocations"]] == ["inv-2"]
 
 
 # --- undecided reasons ------------------------------------------------------
@@ -981,13 +1249,30 @@ def test_help_exits_zero_without_json(args):
 # --- vocabulary drift guards ------------------------------------------------
 
 
+def _string_constants_by_prefix(prefix, aggregate_name):
+    derived = set()
+    for name in dir(pra):
+        if not name.startswith(prefix) or name == aggregate_name:
+            continue
+        val = getattr(pra, name)
+        if isinstance(val, str):
+            derived.add(val)
+    return derived
+
+
 def test_refusal_reasons_complete():
-    assert pra.REFUSAL_REASONS
+    assert pra.REFUSAL_REASONS == _string_constants_by_prefix(
+        "REFUSAL_", "REFUSAL_REASONS",
+    )
 
 
 def test_nonconformity_kinds_complete():
-    assert pra.NONCONFORMITY_KINDS
+    assert pra.NONCONFORMITY_KINDS == _string_constants_by_prefix(
+        "NONCONFORMITY_", "NONCONFORMITY_KINDS",
+    )
 
 
 def test_undecided_reasons_complete():
-    assert pra.UNDECIDED_REASONS
+    assert pra.UNDECIDED_REASONS == _string_constants_by_prefix(
+        "UNDECIDED_", "UNDECIDED_REASONS",
+    )

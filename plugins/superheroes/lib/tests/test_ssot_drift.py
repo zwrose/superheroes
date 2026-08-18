@@ -3147,22 +3147,64 @@ def test_register_check_vocabulary_completeness():
 
 _PACKAGE_READ_AUDIT_DOC = "skills/showrunner/reference/decomposition.md"
 
-_PACKAGE_READ_AUDIT_KNOWN_LABELS = frozenset({
-    "Schema",
-    "Results",
-    "Lenses",
-    "Part statuses",
-    "Control-probe reads",
-    "Weights",
-    "Dispositions",
-    "Verification outcomes",
-    "Sync-check results",
-    "Record kinds",
-    "Refusal reasons",
-    "Nonconformity kinds",
-    "Undecided reasons",
-    "Exit codes",
+_PACKAGE_READ_AUDIT_EXIT_CODE_CONSTANTS = frozenset({
+    "EXIT_RECORDED",
+    "EXIT_REFUSED",
+    "EXIT_CONFORMING",
+    "EXIT_NONCONFORMING",
+    "EXIT_UNDECIDED",
 })
+
+_PACKAGE_READ_AUDIT_CONSTANT_TO_LABEL = {
+    "RECORD_KINDS": "Record kinds",
+    "LENSES": "Lenses",
+    "PART_STATUSES": "Part statuses",
+    "CONTROL_PROBE_READS": "Control-probe reads",
+    "WEIGHTS": "Weights",
+    "DISPOSITIONS": "Dispositions",
+    "SPEC_CONTRADICTION_DISPOSITIONS": "Dispositions",
+    "OUTCOMES": "Verification outcomes",
+    "SYNC_RESULTS": "Sync-check results",
+    "WRITE_RESULTS": "Results",
+    "CHECK_RESULTS": "Results",
+    "REFUSAL_REASONS": "Refusal reasons",
+    "NONCONFORMITY_KINDS": "Nonconformity kinds",
+    "UNDECIDED_REASONS": "Undecided reasons",
+    "SCHEMA": "Schema",
+    "EXIT_RECORDED": "Exit codes",
+    "EXIT_REFUSED": "Exit codes",
+    "EXIT_CONFORMING": "Exit codes",
+    "EXIT_NONCONFORMING": "Exit codes",
+    "EXIT_UNDECIDED": "Exit codes",
+}
+
+
+def _package_read_audit_reflective_constants():
+    """Every public frozenset-of-strings constant, SCHEMA, and exit-code int."""
+    import package_read_audit
+
+    discovered = {}
+    for name, value in vars(package_read_audit).items():
+        if name.startswith("_"):
+            continue
+        if isinstance(value, frozenset) and value and all(
+            isinstance(item, str) for item in value
+        ):
+            discovered[name] = value
+    discovered["SCHEMA"] = package_read_audit.SCHEMA
+    for name in _PACKAGE_READ_AUDIT_EXIT_CODE_CONSTANTS:
+        discovered[name] = getattr(package_read_audit, name)
+    return discovered
+
+
+def _package_read_audit_assert_mapping_total():
+    discovered = _package_read_audit_reflective_constants()
+    unmapped = sorted(set(discovered) - set(_PACKAGE_READ_AUDIT_CONSTANT_TO_LABEL))
+    assert not unmapped, (
+        "package_read_audit constant(s) missing from "
+        "_PACKAGE_READ_AUDIT_CONSTANT_TO_LABEL: %r" % unmapped
+    )
+    return discovered
 
 
 def _package_read_audit_vocabulary_section(doc):
@@ -3192,19 +3234,12 @@ def _package_read_audit_vocabulary_section(doc):
 
 
 def _package_read_audit_labels_in_section(section):
-    """Bold labels under the vocabulary section — fails closed on zero or unknown labels."""
+    """Bold labels under the vocabulary section — fails closed on zero labels."""
     labels = re.findall(r"^\*\*([^*]+):\*\*", section, re.MULTILINE)
     if not labels:
         raise AssertionError(
             "decomposition.md: vocabulary section parsed to zero labels "
             "(heading present but empty?)"
-        )
-    unknown = set(labels) - _PACKAGE_READ_AUDIT_KNOWN_LABELS
-    if unknown:
-        raise AssertionError(
-            "decomposition.md: unrecognized vocabulary label(s) %r "
-            "(reader drift or new label not registered in drift test?)"
-            % sorted(unknown)
         )
     return labels
 
@@ -3300,17 +3335,19 @@ def _package_read_audit_exit_codes_from_doc(doc):
             "decomposition.md: **Exit codes:** bullet list parsed to zero tokens "
             "(regex drift or empty list?)"
         )
-    return {int(code): word for code, word in pairs}
+    return frozenset((int(code), word) for code, word in pairs)
 
 
 def _package_read_audit_exit_codes_from_home():
     import package_read_audit
 
-    return {
-        package_read_audit.EXIT_CONFORMING: package_read_audit.RESULT_CONFORMING,
-        package_read_audit.EXIT_NONCONFORMING: package_read_audit.RESULT_NONCONFORMING,
-        package_read_audit.EXIT_UNDECIDED: package_read_audit.RESULT_UNDECIDED,
-    }
+    return frozenset({
+        (package_read_audit.EXIT_RECORDED, package_read_audit.RESULT_RECORDED),
+        (package_read_audit.EXIT_REFUSED, package_read_audit.RESULT_REFUSED),
+        (package_read_audit.EXIT_CONFORMING, package_read_audit.RESULT_CONFORMING),
+        (package_read_audit.EXIT_NONCONFORMING, package_read_audit.RESULT_NONCONFORMING),
+        (package_read_audit.EXIT_UNDECIDED, package_read_audit.RESULT_UNDECIDED),
+    })
 
 
 def _package_read_audit_synthetic_vocabulary_doc():
@@ -3412,17 +3449,20 @@ def _package_read_audit_synthetic_vocabulary_doc():
         "",
         "**Exit codes:**",
         "",
-        "- `0` — conforming",
-        "- `1` — nonconforming",
-        "- `2` — undecided",
+        "- `0` — recorded — write verbs",
+        "- `1` — refused — write verbs",
+        "- `0` — conforming — the check verb",
+        "- `1` — nonconforming — the check verb",
+        "- `2` — undecided — the check verb",
     ])
     return "\n".join(lines) + "\n"
 
 
 def test_package_read_audit_vocabulary_in_decomposition_doc():
-    """§11: decomposition.md restates package_read_audit.py vocabulary on every registry axis."""
+    """§11: decomposition.md restates every package_read_audit.py public token constant."""
     import package_read_audit
 
+    discovered = _package_read_audit_assert_mapping_total()
     doc = _read(_PACKAGE_READ_AUDIT_DOC)
 
     home_schema = {package_read_audit.SCHEMA}
@@ -3449,21 +3489,18 @@ def test_package_read_audit_vocabulary_in_decomposition_doc():
         % (home_check - doc_check, doc_check - home_check)
     )
 
-    comparisons = (
-        ("Lenses", package_read_audit.LENSES),
-        ("Part statuses", package_read_audit.PART_STATUSES),
-        ("Control-probe reads", package_read_audit.CONTROL_PROBE_READS),
-        ("Weights", package_read_audit.WEIGHTS),
-        ("Dispositions", package_read_audit.DISPOSITIONS),
-        ("Verification outcomes", package_read_audit.OUTCOMES),
-        ("Sync-check results", package_read_audit.SYNC_RESULTS),
-        ("Record kinds", package_read_audit.RECORD_KINDS),
-        ("Refusal reasons", package_read_audit.REFUSAL_REASONS),
-        ("Nonconformity kinds", package_read_audit.NONCONFORMITY_KINDS),
-        ("Undecided reasons", package_read_audit.UNDECIDED_REASONS),
-    )
-    for label, home_set in comparisons:
-        home = set(home_set)
+    label_to_constants = {}
+    for const_name, label in _PACKAGE_READ_AUDIT_CONSTANT_TO_LABEL.items():
+        label_to_constants.setdefault(label, []).append(const_name)
+
+    for label, const_names in label_to_constants.items():
+        if label in ("Schema", "Results", "Exit codes"):
+            continue
+        home = set()
+        for const_name in const_names:
+            value = discovered[const_name]
+            if isinstance(value, frozenset):
+                home.update(value)
         doc_tokens = _package_read_audit_labeled_set_from_doc(doc, label)
         assert doc_tokens == home, (
             "decomposition.md %s vocabulary drift from package_read_audit — "
@@ -3476,10 +3513,7 @@ def test_package_read_audit_vocabulary_in_decomposition_doc():
     assert doc_exit == home_exit, (
         "decomposition.md Exit codes mapping drift from package_read_audit — "
         "missing from doc: %r; extra in doc: %r"
-        % (
-            {k: home_exit[k] for k in home_exit if k not in doc_exit},
-            {k: doc_exit[k] for k in doc_exit if k not in home_exit},
-        )
+        % (home_exit - doc_exit, doc_exit - home_exit)
     )
 
 
