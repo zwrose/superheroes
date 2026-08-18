@@ -1396,12 +1396,16 @@ def _owner_half_register_from_home():
 
 def _assert_omission_floor_matches_home(copy_text, label, home):
     row_terms, markers = _omission_floor_expectations_from_home(home)
-    if label in _OMISSION_FLOOR_ENUMERATION_PINS:
-        pin_norm = _anchor_whitespace_normalize(_OMISSION_FLOOR_ENUMERATION_PINS[label])
-        copy_norm = _anchor_whitespace_normalize(copy_text)
-        assert pin_norm in copy_norm, (
-            "%s: three-row omission-floor enumeration drifted" % label
-        )
+    assert label in _OMISSION_FLOOR_ENUMERATION_PINS, (
+        "%s: copy-holder passed with no enumeration pin registered — "
+        "add an entry to _OMISSION_FLOOR_ENUMERATION_PINS alongside the caller's copy-holder list"
+        % label
+    )
+    pin_norm = _anchor_whitespace_normalize(_OMISSION_FLOOR_ENUMERATION_PINS[label])
+    copy_norm = _anchor_whitespace_normalize(copy_text)
+    assert pin_norm in copy_norm, (
+        "%s: three-row omission-floor enumeration drifted" % label
+    )
     lower = copy_text.lower()
     missing = []
     for i, terms in enumerate(row_terms, 1):
