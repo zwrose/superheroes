@@ -9,6 +9,13 @@ import mode_migrate as mm
 import mode_registry as mr
 import store_core as sc
 
+# The expected classification, written out rather than read from the constants under test.
+# Deriving these from mm._DEFINITION_DOCS / mm._WORK_ITEM_RECORDS would make every bucketing
+# assertion below pass under a coordinated narrowing of both the constant and its home of record
+# (review probe 8, issue #935).
+_EXPECTED_DEFINITION_DOCS = ("spec.md", "plan.md", "tasks.md")
+_EXPECTED_WORK_ITEM_RECORDS = ("findings.md",)
+
 
 def _init_repo(d, remote=None):
     subprocess.run(["git", "-C", str(d), "init", "-q"], check=True)
@@ -69,6 +76,67 @@ def test_plan_enumerates_calibration_and_defdocs_and_marks_bookkeeping_not_moved
     assert m.remote_key == sc.derive_identifiers(str(tmp_path))["remote_hash"]
 
 
+def test_plan_moves_findings_md_and_preview_buckets_it_as_a_work_item_record(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec body\n")
+    sc.atomic_write(os.path.join(ddir, "findings.md"), "owner ratification\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    moved = {f["src"] for f in m.files}
+    spec_src = os.path.join(ddir, "spec.md")
+    findings_src = os.path.join(ddir, "findings.md")
+    assert spec_src in moved
+    assert findings_src in moved
+    pv = mm.preview(m)
+    assert spec_src in pv["definitionDocs"]
+    assert findings_src in pv["workItemRecords"]
+    assert findings_src not in pv["definitionDocs"]
+    assert findings_src not in pv["calibration"]
+
+
+def test_preview_buckets_are_disjoint_and_cover_every_moved_file(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec\n")
+    sc.atomic_write(os.path.join(ddir, "plan.md"), "plan\n")
+    sc.atomic_write(os.path.join(ddir, "tasks.md"), "tasks\n")
+    sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    cal, defs, records = pv["calibration"], pv["definitionDocs"], pv["workItemRecords"]
+    assert not (set(cal) & set(defs))
+    assert not (set(cal) & set(records))
+    assert not (set(defs) & set(records))
+    assert set(cal) | set(defs) | set(records) == {f["src"] for f in m.files}
+
+
+def test_calibration_bucket_excludes_every_work_item_doc(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    sc.atomic_write(os.path.join(ddir, "spec.md"), "spec\n")
+    sc.atomic_write(os.path.join(ddir, "plan.md"), "plan\n")
+    sc.atomic_write(os.path.join(ddir, "tasks.md"), "tasks\n")
+    sc.atomic_write(os.path.join(ddir, "findings.md"), "findings\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    assert pv["calibration"], "calibration bucket empty — the exclusion assertion would be vacuous"
+    work_item_basenames = {"spec.md", "plan.md", "tasks.md", "findings.md"}
+    for path in pv["calibration"]:
+        assert os.path.basename(path) not in work_item_basenames
+
+
 def test_plan_refuses_when_not_interactive(tmp_path):
     _init_repo(tmp_path, "git@github.com:o/r.git")
     root = str(tmp_path / "store")
@@ -79,6 +147,98 @@ def test_plan_refuses_when_not_interactive(tmp_path):
 
 
 # --------------------------------------------------------------------------- A4 preview
+
+
+def test_preview_buckets_every_definition_doc_basename_by_name(tmp_path):
+    # Narrowing _is_definition_doc to spec.md alone must go red here: each of the three
+    # definition-doc basenames is asserted into definitionDocs by name, and findings.md is
+    # asserted out of it.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
+        sc.atomic_write(os.path.join(ddir, name), name + " body\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    for name in _EXPECTED_DEFINITION_DOCS:
+        src = os.path.join(ddir, name)
+        assert src in pv["definitionDocs"], name
+        assert src not in pv["workItemRecords"], name
+        assert src not in pv["calibration"], name
+    for name in _EXPECTED_WORK_ITEM_RECORDS:
+        src = os.path.join(ddir, name)
+        assert src in pv["workItemRecords"], name
+        assert src not in pv["definitionDocs"], name
+        assert src not in pv["calibration"], name
+
+
+def test_preview_disclosure_names_every_non_empty_bucket(tmp_path):
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
+        sc.atomic_write(os.path.join(ddir, name), name + " body\n")
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, interactive=True)
+    pv = mm.preview(m)
+    disc = pv["disclosure"].lower()
+    if pv["workItemRecords"]:
+        assert "work-item record" in disc
+    if pv["definitionDocs"]:
+        assert "definition document" in disc
+    if pv["calibration"]:
+        assert "calibration" in disc
+
+    mr.write_registry(str(tmp_path), mr.GLOBAL, "rk", root=root)
+    gdir = os.path.join(mr.project_store_dir(str(tmp_path), root), "config")
+    os.makedirs(gdir, exist_ok=True)
+    sc.atomic_write(os.path.join(gdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": "x"},
+                                        "confirmed", "2026-06-27", "2026-06-27"))
+    sc.atomic_write(os.path.join(gdir, "review-crew.md"), "<!-- review-crew: v1 -->\nbody\n")
+    gdocs = os.path.join(mr.project_store_dir(str(tmp_path), root), "docs", "wi")
+    os.makedirs(gdocs, exist_ok=True)
+    for name in ("spec.md", "plan.md", "tasks.md", "findings.md"):
+        sc.atomic_write(os.path.join(gdocs, name), name + " body\n")
+    m = mm.plan(str(tmp_path), mr.IN_REPO, root=root, interactive=True)
+    pv = mm.preview(m)
+    disc = pv["disclosure"].lower()
+    if pv["workItemRecords"]:
+        assert "work-item record" in disc
+    if pv["definitionDocs"]:
+        assert "definition document" in disc
+    if pv["calibration"]:
+        assert "calibration" in disc
+
+
+def test_definition_docs_constant_tracks_definition_doc_doc_types():
+    # _DEFINITION_DOCS is the *classification* set; DOC_TYPES is its home. A new definition-doc
+    # type that is not added here would be silently bucketed as a work-item record.
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(mm.__file__)), "definition_doc.py")
+    spec = importlib.util.spec_from_file_location("definition_doc_mm_test", path)
+    dd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dd)
+    assert set(mm._DEFINITION_DOCS) == {t + ".md" for t in dd.DOC_TYPES}
+
+
+def test_expected_definition_docs_match_the_home_of_record():
+    # Third leg of the coordinated-narrow guard: _EXPECTED_* (test-owned literal) vs DOC_TYPES
+    # (home of record) vs _DEFINITION_DOCS (classification set). Narrowing any two of the three
+    # leaves the third disagreeing.
+    import importlib.util
+    path = os.path.join(os.path.dirname(os.path.abspath(mm.__file__)), "definition_doc.py")
+    spec = importlib.util.spec_from_file_location("definition_doc_mm_test_expected", path)
+    dd = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(dd)
+    assert set(_EXPECTED_DEFINITION_DOCS) == {t + ".md" for t in dd.DOC_TYPES}
 
 
 def test_preview_lists_calibration_and_defdocs(tmp_path):

@@ -74,9 +74,10 @@ still produced by The Architect.
 `skills/detective/SKILL.md` — this is a pointer, not a restatement):
 
 - **Showrunner** — the advisor session: project-level, long-lived, typically one per
-  project. Sizes and routes incoming work (build-ready vs. needs-discovery), decomposes
-  big asks into small mergeable issues, drafts the builder's launch prompt (command + issue
-  pointer; durable build context lives in the issue), vets every PR from its artifacts against the
+  project. Routes incoming work to one of four intake routes (discovery, detective,
+  build-ready, micro), decomposes big asks into small mergeable issues, drafts the builder's
+  launch prompt (command + issue pointer; durable build context lives in the issue), vets every
+  PR from its artifacts against the
   issue/spec and the build brief, owns board hygiene and release coordination, keeps
   durable memory. **Never builds.** The never-delegable act is the **approval** — the gate
   click, the release cut, the publish decision. **Merge-command execution** is delegable, but
@@ -359,6 +360,14 @@ judgment, not the deterministic check's.
 > tool) is a first-class Discovery activity: Discovery hands the owner a design prompt
 > built from the requirements, the owner creates the design there, and its **handoff
 > output** (not a reinterpretation) is referenced in the `spec`.
+
+**Discovery's non-definition-doc artifacts.** A discovery that ends without a spec still lands a
+durable artifact (FR-13 of the front-half spec). A **findings record** is `findings.md` in the
+**same work-item folder** the spec would occupy — resolved the same way in both storage modes, so
+it needs no resolver of its own. It is **not** a definition-doc: it carries no §3.1 frontmatter,
+no gates, and no entry in `definition_doc.py`'s `DOC_TYPES`; the owner's ratification is recorded
+in its prose. A **park note** has no repo home at all — it lands on the owner's reading surface,
+with its durable copy as a comment on the parked item's issue or PR.
 
 ---
 
