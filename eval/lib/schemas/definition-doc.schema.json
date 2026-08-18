@@ -5,6 +5,9 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["superheroes", "schemaVersion", "docType", "workItem", "issue", "parent", "size", "status", "gates", "producedBy", "created", "updated"],
+  "if": {"properties": {"gates": {"properties": {"review": {"const": "passed"}}, "required": ["review"]}}, "required": ["gates"]},
+  "then": {"required": ["approved"]},
+  "else": {"not": {"required": ["approved"]}},
   "properties": {
     "superheroes": { "const": "doc" },
     "schemaVersion": { "type": "integer", "minimum": 1 },
@@ -27,6 +30,7 @@
     },
     "size": { "enum": ["small", "medium", "large"] },
     "status": { "enum": ["draft", "in-review", "approved"] },
+    "approved": { "type": "string", "format": "date" },
     "gates": {
       "type": "object",
       "additionalProperties": false,
