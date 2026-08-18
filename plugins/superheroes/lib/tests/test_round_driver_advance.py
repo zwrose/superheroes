@@ -3138,7 +3138,9 @@ def _is_fold_landed_get_call(node, ast_mod, var_name):
     func = node.func
     return (isinstance(func, ast_mod.Attribute) and func.attr == "get"
             and isinstance(func.value, ast_mod.Name) and func.value.id == var_name
-            and node.args and isinstance(node.args[0], ast_mod.Constant)
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast_mod.Constant)
             and node.args[0].value == "foldLanded")
 
 
@@ -3204,12 +3206,23 @@ def compute_cmd_submit_fold_guard_gaps(source=None, allowlist=None):
 
 
 def test_cmd_submit_fold_landed_caller_census():
-    """Every cmd_submit caller must read foldLanded before treating the answer as a landed fold.
+    """Shape census: every non-exempt cmd_submit caller must guard foldLanded in its own scope.
 
-    Fail closed:
+    Catches (fail closed):
+    - A caller with no foldLanded guard at all.
+    - A guard hidden in a nested function or lambda rather than the caller's own scope.
+    - A guard that does not return from the caller (noop body).
+    - A .get("foldLanded", <default>) call — arity > 1 or a keyword arg is not a guard
+      (fail-open at runtime when the key is absent).
     - A caller that is neither exempt nor guarded fails the census.
     - An exemption entry naming a function that no longer calls cmd_submit fails the census
       (stale exemptions must not rot into a silent hole).
+
+    Does not claim (deliberately out of scope; dominance analysis is separate routed work):
+    - A guard placed after the work it should protect (late guard).
+    - A conditional or elif bypass that skips the guard.
+    - A try/except fallthrough past an unlanded fold.
+    - Any deliberately mis-written guard — this is shape census, not control-flow dominance.
     """
     unguarded, stale = compute_cmd_submit_fold_guard_gaps()
     assert stale == [], "stale cmd_submit exemptions: %s" % stale
@@ -3226,6 +3239,18 @@ def bad_noop(session_dir):
 """
     unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
     assert "bad_noop" in unguarded
+
+
+def test_fold_guard_census_rejects_get_with_default():
+    source = """
+def get_default_true(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if not folded.get("foldLanded", True):
+        return {"ok": False}
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "get_default_true" in unguarded
 
 
 def test_fold_guard_census_rejects_nested_guard():

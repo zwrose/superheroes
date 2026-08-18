@@ -2237,6 +2237,18 @@ def test_duplicate_terminating_submit_fault_preserves_duplicate_flag_and_exits_n
     assert rc == 1
 
 
+def test_duplicate_terminating_submit_fault_carries_foldLanded(tmp_path):
+    """The fold landed before the gate faulted, so the duplicate replay must still mark foldLanded —
+    deleting the assignment must go red here."""
+    d = str(tmp_path)
+    args, first = _drive_capturing_terminating_submit(d, plant_fault=True)
+    assert first["ok"] is False and first["reason"] == "receipt-fault"
+    dup = RD.cmd_submit(d, *args)
+    assert dup["ok"] is False
+    assert dup["duplicate"] is True
+    assert dup.get("foldLanded") is True
+
+
 def test_changed_subjects_accumulate_across_delta_rounds_for_crosscut():
     """#507 R2 residual-5: cross-cutting rework accumulates across MULTIPLE post-panel delta fixes.
     Three delta fixes of one subject each cumulate to 3 distinct subjects → cross-cutting, even

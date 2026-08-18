@@ -3685,7 +3685,16 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     reading in each case: nothing folded, so there is no fold to reconstruct. In particular the
     DUPLICATE return leaves it unwritten — its one caller reaches this only after refusing
     `landing-ambiguous` on any record already in the slot, so a duplicate there means the record
-    exists already, never that one is owed."""
+    exists already, never that one is owed.
+
+    `foldLanded` is authoritative on `ok: true` answers: present means the fold landed; absent on
+    an `ok: true` answer means it did not. On `ok: false` answers the marker is not a landed/not-
+    landed signal. On the `commit-cleanup-failed` path (`round_commit.run()` fsyncs its `DONE`
+    marker — the fold is durable — and then cleanup raises) the answer carries no marker even though
+    the fold landed. Callers must not read its absence there as not-landed evidence. Today all
+    three `advance` callers check `ok` before consulting the marker, so the ambiguity is
+    unreachable; the caller/callee refusal contract is being routed as separate work and is
+    deliberately not changed here."""
     try:
         with round_records.session_lock(session_dir):
             sidecar_target = _sidecar_target_for_recover(session_dir)
@@ -3755,8 +3764,9 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                     resp = _receipt_fault_response(fail)
                     resp["foldLanded"] = True
                     return resp
-            # foldLanded marks a landed fold; its absence is the fail-closed default that covers
-            # every future early return above the commit.
+            # foldLanded marks a landed fold. It is authoritative on `ok: true` answers; its absence
+            # there is the fail-closed default covering every future early return above the commit.
+            # On an `ok: false` answer absence proves nothing — see the docstring's foldLanded note.
             return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step"),
                     "foldLanded": True}
     except round_records.SessionLockHeld as held:
@@ -3826,8 +3836,9 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": prior.get("round"), "attempt": attempt,
                                       "outcome": "duplicate"})
-        # foldLanded marks a landed fold; its absence is the fail-closed default that covers
-        # every future early return above the commit.
+        # foldLanded marks a landed fold. It is authoritative on `ok: true` answers; its absence
+        # there is the fail-closed default covering every future early return above the commit.
+        # On an `ok: false` answer absence proves nothing — see the docstring's foldLanded note.
         return {"ok": True, "duplicate": True, "foldLanded": True}
 
     pending = state.get("pending")
