@@ -666,14 +666,64 @@ def test_nonconformity_round_missing(tmp_path):
     assert payload["findings"][0]["kind"] == pra.NONCONFORMITY_ROUND_MISSING
 
 
-def test_nonconformity_element_missing(tmp_path):
+def test_nonconformity_element_missing_lenses(tmp_path):
     trail, _ = _open_default(tmp_path)
     _hand_append_record(trail, {
         "kind": "round",
         "invocation": "inv-1",
         "round": 1,
         "lenses": [],
+        "parts": [{"part": "slice-a", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING
+    findings = json.loads(out.strip())["findings"]
+    kinds = {item["kind"] for item in findings}
+    assert pra.NONCONFORMITY_ELEMENT_MISSING in kinds
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and "lenses" in item["detail"]
+        for item in findings
+    )
+
+
+def test_nonconformity_element_missing_parts(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
         "parts": [],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING
+    findings = json.loads(out.strip())["findings"]
+    kinds = {item["kind"] for item in findings}
+    assert pra.NONCONFORMITY_ELEMENT_MISSING in kinds
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and "parts" in item["detail"]
+        for item in findings
+    )
+
+
+def test_nonconformity_element_missing_control_probe(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "slice-a", "status": "unreviewed"}],
         "controlProbe": None,
         "findings": [],
         "declinedExtension": [],
@@ -681,8 +731,14 @@ def test_nonconformity_element_missing(tmp_path):
     })
     code, out, _err = _run_cli("check", "--trail", str(trail))
     assert code == pra.EXIT_NONCONFORMING
-    kinds = {item["kind"] for item in json.loads(out.strip())["findings"]}
+    findings = json.loads(out.strip())["findings"]
+    kinds = {item["kind"] for item in findings}
     assert pra.NONCONFORMITY_ELEMENT_MISSING in kinds
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and "controlProbe" in item["detail"]
+        for item in findings
+    )
 
 
 def test_nonconformity_finding_unverified(tmp_path):
