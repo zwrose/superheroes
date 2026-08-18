@@ -155,7 +155,7 @@ the same JSON **object** shape hand `submit` takes for that gate: `{"disposition
 `present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
 the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
 ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
-`stall-accept-risk-not-eligible`). The resolution is journalled as **owner-supplied**: the
+`stall-choice-missing`, `stall-accept-risk-not-eligible`). The resolution is journalled as **owner-supplied**: the
 `policyApplied` record carries `source: "owner-supplied"` (calibration-resolved carries
 `source: "gate-policy"`) plus `artifactSha256` naming the artifact folded, on the fold's own commit.
 

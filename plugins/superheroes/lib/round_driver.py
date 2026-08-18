@@ -179,6 +179,7 @@ RETIRED_STALL_CHOICES = round_phases.RETIRED_STALL_CHOICES
 RETIRED_STALL_CHOICE_PREFIX = round_phases.RETIRED_STALL_CHOICE_PREFIX
 STALL_CHOICE_NOT_OFFERED_PREFIX = "stall-choice-not-offered:"
 STALL_ACCEPT_RISK_NOT_ELIGIBLE = "stall-accept-risk-not-eligible"
+STALL_CHOICE_MISSING = "stall-choice-missing"
 JUDGMENT_DISPOSITIONS = round_phases.JUDGMENT_DISPOSITIONS
 
 BASE_GUARD_CHECKED = "checked-stat-bound"
@@ -3952,6 +3953,11 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                           "round": pending.get("round"), "attempt": attempt,
                                           "outcome": "stall-choice-not-offered"})
             return {"ok": False, "reason": reason}
+        if not isinstance(choice, str):
+            _journal_append(session_dir, {"cmd": "submit", "phase": phase,
+                                          "round": pending.get("round"), "attempt": attempt,
+                                          "outcome": STALL_CHOICE_MISSING})
+            return {"ok": False, "reason": STALL_CHOICE_MISSING}
         if choice == ACCEPT_RISK_CHOICE and not _stall_targets_accept_risk_eligible(state):
             _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                           "round": pending.get("round"), "attempt": attempt,
@@ -5879,12 +5885,13 @@ def _resolve_owner_gate_policy(phase, state, config):
 def _advance_fold_failure(session_dir, folded, phase, rnd, attempt):
     """Convert a non-ok cmd_submit answer into advance's refusal."""
     reason = folded.get("reason")
-    if reason == "receipt-fault":
-        return _refuse_cmd(session_dir, "advance", "receipt-fault", fault=FAULT_INTERNAL,
-                           detail=folded.get("detail"), phase=phase, rnd=rnd, attempt=attempt)
     extra = {}
     if folded.get("foldLanded"):
         extra["foldLanded"] = True
+    if reason == "receipt-fault":
+        return _refuse_cmd(session_dir, "advance", "receipt-fault", fault=FAULT_INTERNAL,
+                           detail=folded.get("detail"), phase=phase, rnd=rnd, attempt=attempt,
+                           **extra)
     return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                        attempt=attempt, detail=reason, **extra)
 

@@ -2348,6 +2348,44 @@ def test_advance_owner_artifact_runs_stall_chokepoint(tmp_path, adapters):
     assert out["ok"] is True, out
 
 
+@pytest.mark.parametrize("bad_artifact", [
+    pytest.param({}, id="absent"),
+    pytest.param({"choice": None}, id="null"),
+    pytest.param({"choice": 5}, id="non-string"),
+])
+def test_advance_owner_artifact_missing_choice_refused_not_folded(tmp_path, adapters, bad_artifact):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-missing-choice")
+    _set_advance_used(d)
+    out = _advance(d, tmp_path,
+                   owner_artifact_path=_write_owner_artifact(tmp_path, bad_artifact, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == RD.STALL_CHOICE_MISSING
+    assert not _state(d).get("terminal")
+    assert _state(d)["pending"]["phase"] == RD.P_STALL
+    good = {"choice": RD.HOLD_CHOICE}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, good, "good.json"))
+    assert out["ok"] is True, out
+
+
+def test_advance_owner_artifact_retired_choice_still_wins(tmp_path, adapters):
+    retired = RD.RETIRED_STALL_CHOICES[0]
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-retired-choice")
+    _set_advance_used(d)
+    bad = {"choice": retired}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "%s%s" % (RD.RETIRED_STALL_CHOICE_PREFIX, retired)
+
+
+def test_advance_owner_artifact_off_menu_choice_still_wins(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-off-menu-choice")
+    _set_advance_used(d)
+    bad = {"choice": "not-on-menu"}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "%snot-on-menu" % RD.STALL_CHOICE_NOT_OFFERED_PREFIX
+
+
 def test_advance_owner_artifact_terminal_refusal(tmp_path, adapters):
     gitdir = _gitdir(tmp_path, "owner-artifact-terminal")
     d = _session(tmp_path, name="owner-artifact-terminal")
@@ -3313,6 +3351,7 @@ def test_advance_owner_gate_propagates_receipt_fault_and_exits_nonzero(tmp_path,
     out = _advance(d, tmp_path)
     assert out["ok"] is False and out["reason"] == "receipt-fault"
     assert out["reason"] != "fold-refused"
+    assert out.get("foldLanded") is True
     rc = RD.main(["advance", "--session-dir", d])
     assert rc == 1
 
