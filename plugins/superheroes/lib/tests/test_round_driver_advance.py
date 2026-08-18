@@ -3212,8 +3212,14 @@ def test_cmd_submit_fold_landed_caller_census():
     - A caller with no foldLanded guard at all.
     - A guard hidden in a nested function or lambda rather than the caller's own scope.
     - A guard that does not return from the caller (noop body).
-    - A .get("foldLanded", <default>) call — arity > 1 or a keyword arg is not a guard
-      (fail-open at runtime when the key is absent).
+    - A .get("foldLanded") call must be the canonical one-argument spelling
+      `<var>.get("foldLanded")`; any explicit default or keyword argument is not a guard by
+      rule. The rule exists because `.get("foldLanded", True)` fails open at runtime — an absent
+      key yields the truthy default and the guard never fires — and the census deliberately
+      enforces the canonical spelling rather than trying to classify defaults by truthiness.
+      This is stricter than runtime semantics: `.get("foldLanded", False)` is fail-closed and
+      would be safe, and a keyword form raises TypeError rather than failing open; both are
+      rejected anyway because the census enforces spelling, not semantics.
     - A caller that is neither exempt nor guarded fails the census.
     - An exemption entry naming a function that no longer calls cmd_submit fails the census
       (stale exemptions must not rot into a silent hole).
