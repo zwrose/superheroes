@@ -1609,9 +1609,10 @@ def test_negative_set_gate_without_gates_line_fails(tmp_path):
         )
 
 
-# Pre-existing schema gap: docs/superheroes/front-half-sdlc-core-6181ee/spec.md carries
-# approved: and fails the same validation — fixture mirrors real artifact practice.
-def test_light_spec_fixture_schema_approved_exemption():
+# The schema requires approved: exactly when gates.review is passed (CONVENTIONS §3.1);
+# the fixture carries both, mirroring real artifact practice
+# (docs/superheroes/front-half-sdlc-core-6181ee/spec.md).
+def test_light_spec_fixture_schema_approved_required():
     jsonschema = pytest.importorskip("jsonschema")
     yaml = pytest.importorskip("yaml")
 
@@ -1626,9 +1627,10 @@ def test_light_spec_fixture_schema_approved_exemption():
     end = lines.index("---", 1)
     fm = yaml.safe_load("\n".join(lines[1:end]))
     assert "approved" in fm
+    assert fm.get("gates", {}).get("review") == "passed"
+
+    jsonschema.validate(fm, schema)
 
     fm_without_approved = {key: value for key, value in fm.items() if key != "approved"}
-    jsonschema.validate(fm_without_approved, schema)
-
     with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(fm, schema)
+        jsonschema.validate(fm_without_approved, schema)

@@ -44,7 +44,8 @@ VALID = {
         "superheroes": "doc", "schemaVersion": 1, "docType": "tasks",
         "workItem": "add-toggle-abc123", "issue": 42,
         "parent": {"workItem": "add-toggle-abc123", "docType": "plan"},
-        "size": "medium", "status": "approved", "gates": {"review": "passed"},
+        "size": "medium", "status": "approved", "approved": "2026-06-14",
+        "gates": {"review": "passed"},
         "producedBy": "the-architect@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
     "checkpoint.schema.json": {
         "schemaVersion": 2, "workItem": "add-toggle-abc123", "issue": 42, "size": "medium",
@@ -92,6 +93,39 @@ def test_definition_doc_rejects_malformed_workitem():
     bad = dict(VALID["definition-doc.schema.json"], workItem="add-toggle-zzzzzz")  # suffix not 6 hex
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(bad, _load("definition-doc.schema.json"))
+
+
+def test_definition_doc_rejects_malformed_approved_date():
+    bad = dict(VALID["definition-doc.schema.json"], approved="not-a-date")
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            bad, _load("definition-doc.schema.json"),
+            format_checker=jsonschema.FormatChecker())
+
+
+def test_definition_doc_draft_without_approved_is_valid():
+    draft = dict(VALID["definition-doc.schema.json"],
+                 status="draft", gates={"review": "pending"})
+    del draft["approved"]
+    jsonschema.validate(draft, _load("definition-doc.schema.json"))
+
+
+def test_definition_doc_passed_without_approved_is_rejected():
+    bad = dict(VALID["definition-doc.schema.json"])
+    del bad["approved"]
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            bad, _load("definition-doc.schema.json"),
+            format_checker=jsonschema.FormatChecker())
+
+
+def test_definition_doc_pending_with_approved_is_rejected():
+    bad = dict(VALID["definition-doc.schema.json"],
+               status="draft", gates={"review": "pending"})
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(
+            bad, _load("definition-doc.schema.json"),
+            format_checker=jsonschema.FormatChecker())
 
 
 # The §6.1 work-item slug pattern is duplicated across every schema that carries a
