@@ -125,6 +125,10 @@ _DISCOVERY_SECTION_CLAUSES = {
     "### Exit B — the findings record": [
         "findings.md",
         "lib/definition_doc.py\" mint --title",
+        'WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>") \\ || { echo "the-architect: cannot mint the work-item (see message above) — not writing the findings record." >&2; exit 1; } [ -n "$WORK_ITEM" ] \\ || { echo "the-architect: mint returned an empty work-item — not writing the findings record." >&2; exit 1; }',
+        '|| { echo "the-architect: cannot mint the work-item (see message above) — not writing the findings record." >&2; exit 1; }',
+        '|| { echo "the-architect: mint returned an empty work-item — not writing the findings record." >&2; exit 1; }',
+        '|| { echo "the-architect: cannot resolve the work-item folder (see message above) — not writing the findings record." >&2; exit 1; }',
         "Take its directory; never write to the",
         "no frontmatter block, no gates",
         "that no spec is being written, and why",
@@ -475,22 +479,22 @@ def test_census_tables_are_populated():
     assert len(_DISCOVERY_HARD_GATE_CLAUSES) >= 5
     assert _DUTY1_CLAUSES
     assert len(_DUTY1_CLAUSES) >= 8
-    assert _DOCS_BASE_LITERAL
 
 
 def test_discovery_charter_names_the_docs_path_exactly_once():
-    """T2/A3: every resolver-path site must name what `resolve-write --doc spec` reports.
+    """T2/A3: the architect-discovery charter must name what `resolve-write --doc spec` reports once.
 
     The one licensed occurrence is step 1's "any existing `docs/superheroes/` specs" reading
-    instruction. A second occurrence is a hardcoded path re-entering a resolver-path site —
-    the A1 regression, in whatever wording it comes back as.
+    instruction. A second occurrence is a hardcoded path re-entering the charter — the A1
+    regression, in whatever wording it comes back as. Sibling resolver-path sites (for example
+    architect-spec) are not censused by this test.
     """
     text = _read_plugin(_DISCOVERY_CHARTER)
     count = text.count(_DOCS_BASE_LITERAL)
     assert count == 1, (
         "%s: literal %r occurs %d times, expected exactly 1 (step 1's reading instruction). "
-        "A resolver-path site must name the path `resolve-write --doc spec` reports, never a "
-        "hardcoded one." % (_DISCOVERY_CHARTER, _DOCS_BASE_LITERAL, count)
+        "The architect-discovery charter must name the path `resolve-write --doc spec` reports, "
+        "never a hardcoded one." % (_DISCOVERY_CHARTER, _DOCS_BASE_LITERAL, count)
     )
 
 
@@ -780,41 +784,24 @@ def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
     )
 
 
-def _synthetic_weight_section(
-    *,
-    swap_rows=False,
-    corrupt_full_row_only=False,
-    classification_rule=None,
-    include_table=True,
-):
+def _synthetic_weight_section(*, classification_rule=None):
     light_review = "one independent review seat"
     light_vet = "light vet"
     light_owner = "in-channel"
     full_review = "review-spec panel"
     full_vet = "full spec vet"
     full_owner = "scheduled owner review"
-    if corrupt_full_row_only:
-        full_review = "placeholder review"
-        full_vet = "placeholder vet"
-        full_owner = "placeholder approval"
-    if swap_rows:
-        light_review, full_review = full_review, light_review
-        light_vet, full_vet = full_vet, light_vet
-        light_owner, full_owner = full_owner, light_owner
     rule = classification_rule or "Both inputs must hold for `light`"
     lines = [
         _WEIGHT_SECTION,
         "",
         rule,
         "",
+        "| Weight | Review | Vet | Owner approval |",
+        "| --- | --- | --- | --- |",
+        f"| `light` | {light_review} | {light_vet} | {light_owner} |",
+        f"| `full` | {full_review} | {full_vet} | {full_owner} |",
     ]
-    if include_table:
-        lines.extend([
-            "| Weight | Review | Vet | Owner approval |",
-            "| --- | --- | --- | --- |",
-            f"| `light` | {light_review} | {light_vet} | {light_owner} |",
-            f"| `full` | {full_review} | {full_vet} | {full_owner} |",
-        ])
     return "\n".join(lines)
 
 

@@ -1207,6 +1207,32 @@ _VET_RECEIPT_MARKERS = frozenset({
 # forcing a decision about whether it propagates. Never relax this to a subset check.
 _SECTION_10_7_MARKERS = _FLOOR_MARKERS | _VET_RECEIPT_MARKERS
 
+# Hard-line sentence pin: §10.7's missing-marker rule names both floor markers byte-for-byte.
+_SECTION_10_7_MISSING_MARKER_SENTENCE = (
+    "A **missing** `<!-- superheroes:build-record -->` boundary marker or a **missing**\n"
+    "`<!-- superheroes:degradations -->` section is **itself** a review finding — same\n"
+    "**Important** / `tradeoff` / author-resolved shape as the DoD-table check, not a silent\n"
+    "pass."
+)
+
+# Contiguous literal-agreement pins: each copy-holder's three-row omission-floor enumeration.
+_OMISSION_FLOOR_ENUMERATION_PINS = {
+    "rubric/review-discipline.md (Ship-phase honesty)": (
+        "(1) every **deferred** DoD row; (2) every **blocking or important** review finding that was\n"
+        "  **not fixed**, whatever its disposition is called; (3) every **disclosed degradation**."
+    ),
+    "skills/workhorse/SKILL.md §11": (
+        "(1) every\n"
+        "  **deferred** DoD row; (2) every **blocking or important** review finding that was **not fixed**,\n"
+        "  whatever its disposition is called; (3) every **disclosed degradation**."
+    ),
+    "skills/review-code/SKILL.md step 8": (
+        "enumerate (1) each deferred DoD row, (2) each blocking or important dispositions-table "
+        "finding not fixed (by severity, not disposition label), and (3) each disclosed degradation "
+        "under `<!-- superheroes:degradations -->` (bullets, or **None** when empty)"
+    ),
+}
+
 
 def _omission_floor_expectations_from_home(home):
     """Parse §10.7's three floor rows and missing-marker rule from the home, validate the
@@ -1243,10 +1269,18 @@ def _omission_floor_expectations_from_home(home):
         "A **missing** `<!-- superheroes:build-record -->`" in home
         and "review finding" in home
     ), "§10.7 missing-marker-as-finding rule not found"
-    for marker in _FLOOR_MARKERS:
-        assert marker in home, (
-            "§10.7 missing-marker rule no longer names floor marker %r" % marker
-        )
+    home_norm = _anchor_whitespace_normalize(home)
+    sentence_norm = _anchor_whitespace_normalize(_SECTION_10_7_MISSING_MARKER_SENTENCE)
+    assert sentence_norm in home_norm, (
+        "§10.7 missing-marker sentence drift — _SECTION_10_7_MISSING_MARKER_SENTENCE "
+        "not found in home (reworded?)"
+    )
+    floor_from_sentence = re.findall(
+        r"(<!-- superheroes:[^>]+ -->)", _SECTION_10_7_MISSING_MARKER_SENTENCE
+    )
+    assert set(floor_from_sentence) == set(_FLOOR_MARKERS), (
+        "the floor family must be derived from the home, not reclassified in the test"
+    )
     assert re.search(
         r"marker absence and \*\*None\*\* are different states",
         home,
@@ -1362,6 +1396,12 @@ def _owner_half_register_from_home():
 
 def _assert_omission_floor_matches_home(copy_text, label, home):
     row_terms, markers = _omission_floor_expectations_from_home(home)
+    if label in _OMISSION_FLOOR_ENUMERATION_PINS:
+        pin_norm = _anchor_whitespace_normalize(_OMISSION_FLOOR_ENUMERATION_PINS[label])
+        copy_norm = _anchor_whitespace_normalize(copy_text)
+        assert pin_norm in copy_norm, (
+            "%s: three-row omission-floor enumeration drifted" % label
+        )
     lower = copy_text.lower()
     missing = []
     for i, terms in enumerate(row_terms, 1):
@@ -3894,6 +3934,14 @@ def _routing_inverted_normalize(text):
     Strips emphasis and backticks so a banned phrase is caught however it is emphasised."""
     stripped = text.replace("*", "").replace("_", "").replace("`", "")
     return re.sub(r"\s+", " ", stripped).strip()
+
+
+def test_routing_normalize_preserves_backticks_inverted_normalize_strips_them():
+    """Pin the backtick-sensitive vs backtick-blind split between routing normalizers."""
+    sample = "use `resolve-write --doc spec` here"
+    assert "`" in _routing_normalize(sample)
+    assert "`" not in _routing_inverted_normalize(sample)
+    assert _routing_normalize(sample.replace("`", "")) == _routing_inverted_normalize(sample)
 
 
 def _routing_parse_r6_entry_text():

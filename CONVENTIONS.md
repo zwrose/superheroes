@@ -880,8 +880,7 @@ pass. An empty degradation list is only clean when the section body is the liter
 floor — `rubric/review-discipline.md` (Ship-phase honesty), `skills/workhorse/SKILL.md`
 §11, and `skills/review-code/SKILL.md` step 8 — restates it as an inline enumerated
 triple in order after the omission-floor anchor, using one accepted marker shape across
-all three rows (the accepted shapes are defined in
-`plugins/superheroes/lib/tests/test_ssot_drift.py`); that enumerated shape is what makes per-row drift
+all three rows; that enumerated shape is what makes per-row drift
 mechanically detectable rather than a judgment call, because a copy that merges the three
 rows into prose can silently lose one.
 

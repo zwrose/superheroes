@@ -237,9 +237,13 @@ the substance, which is what prompted the ruling.
 Mechanical guards over prose are scoped to the **byte-literal floor** — four kept classes and nothing
 beyond them. **Cross-doc literal-agreement pins**, **hard-line sentence pins**, **register-quote
 checks**, and **cardinality floors** over those censuses stay in class; they enforce what a
-byte-for-byte read can enforce without interpreting meaning. **Structural parsers**, **extractors**,
-**table checks**, and **message/meaning guards** are **out of class** — permanently. Prose *meaning*
-and *structure* are review's job, not CI's.
+byte-for-byte read can enforce without interpreting meaning. A **literal census** — the presence or
+absence of a set of pinned literals — is what a cardinality floor floors; that is the census
+"those censuses" names. An **extractor whose only job is bounding one of those pins to its home
+block is part of the pin, not a separate class** — it stays, and it is disclosed as such. What is
+out of class is an extractor that parses document structure or judges what prose means. **Structural
+parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
+Prose *meaning* and *structure* are review's job, not CI's.
 
 That line is where the ruling lands: out-of-class guards burned review rounds the real findings needed
 (owner ruling 2026-08-17, recorded on issue #695 — [comment
@@ -248,7 +252,11 @@ That line is where the ruling lands: out-of-class guards burned review rounds th
 **The bar cap** is a bar being set, so you know the disposition is legitimate when you use it. A
 review finding that demands a guard outside the kept classes, or an adversarial-evasion finding
 against a guard that is inside them, is **declined as out-of-class by citing this ruling — never
-patched.** You are not dodging a finding when you cite the ruling; you are applying a recorded bar.
+patched.** A declined finding is still recorded in the dispositions table with the citation —
+declining is a disposition, never a silent drop. The cap bars **building the out-of-class guard the
+finding demands**; it does not bar ordinary maintenance of a guard that is already in class —
+repairing a pin whose literal or count has drifted is exactly the upkeep the kept classes exist
+for. You are not dodging a finding when you cite the ruling; you are applying a recorded bar.
 
 **Named-failure-first:** no new prose guard ships without a **field failure it would have caught**,
 named in its issue. A guard with no named failure is speculation dressed as automation.
