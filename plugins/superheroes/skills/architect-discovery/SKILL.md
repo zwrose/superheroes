@@ -289,6 +289,9 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   Connectivity & timing failures (dropped network, timeouts, duplicate requests at
   the wire) are **defer-to-build**: capture only the owner-visible *promise* ("a
   dropped connection never loses their work").
+- **Non-functional needs** are captured as **outcomes with a measurable bar** ("a
+  page they wait on responds within 2 seconds", "only the owner can see their
+  data"), never as mechanisms.
 
 #### The elicitation test (FR-19)
 
@@ -340,10 +343,6 @@ different failures are **not** graded the same way:
   the next discovery asks it. That growth is why the six happy-path dimensions are
   described as the **initial** seed list everywhere they appear — the list is designed
   to get longer, and a surface that presents it as closed is wrong.
-
-- **Non-functional needs** are captured as **outcomes with a measurable bar** ("a
-  page they wait on responds within 2 seconds", "only the owner can see their
-  data"), never as mechanisms.
 
 ### 4. UI/UX when relevant (hand the owner a Claude Design prompt)
 

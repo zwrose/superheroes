@@ -95,4 +95,5 @@ Neither replaces the other.
 
 This file does not define how an amendment is classified, what ceremony each class carries, how
 amendments propagate to in-flight children, or how the log is validated — that machinery lives
-elsewhere. Refer to the log's format as the shared contract states it and stop there.
+elsewhere. For the log's entry format, see the `## Amendments` section of the spec template
+(`templates/spec.md`) — and stop there.

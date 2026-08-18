@@ -86,12 +86,12 @@ constraint (limit, format).}}
        - Conflicting / simultaneous use (multi-user): two people edit the same thing?
        - Misuse & abuse (sensitive features): could someone abuse this — what to prevent?
        - Reach (if in scope): other languages/currencies/timezones? keyboard + screen-reader?
-       - Wording & tone: what words, labels, and voice should the owner see — ask the owner?
-       - Workflow shape: what steps does the owner follow — ask the owner?
-       - Placement & prominence: where does this live in the product — ask the owner?
-       - Limits & defaults: what caps, defaults, and starting values matter — ask the owner?
-       - Tier & access boundaries: what tiers or roles change what they see — ask the owner?
-       - Visibility & disclosure: what is shown vs hidden, and when — ask the owner?
+       - Wording & tone: what words should the product use when talking to them about this, and how should it sound?
+       - Workflow shape: what order should the steps happen in, and does anything have to come before something else?
+       - Placement & prominence: where should this live in the product, and how much should it stand out?
+       - Limits & defaults: if they don't choose, what happens — and what's a sensible ceiling?
+       - Tier & access boundaries: should this work differently depending on who they are or what they pay for?
+       - Visibility & disclosure: who else can see this, and what should the product tell them about that?
      Each row also takes a Show-it? call (Yes / No; — only when Disposition is N-A).
      Defer-to-build promise: for connectivity & timing failures (dropped network, timeouts,
      duplicate requests at the wire), state only the OWNER-VISIBLE PROMISE here (e.g. "a
