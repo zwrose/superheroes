@@ -77,14 +77,6 @@ _AMENDMENTS_H2_HEADINGS = [
     "Reciprocal seams — one contract, two homes",
 ]
 
-_LENS_TOKENS = [
-    "spec-contradiction",
-    "register-drift",
-    "coverage-exactly-once",
-    "collisions",
-    "dod-adequacy",
-]
-
 _AUDIT_TRAIL_ELEMENTS = [
     "The weight call (its measurables and ceiling)",
     "Each re-read invocation's cause and ceiling",
@@ -383,7 +375,7 @@ def test_amendments_contents_and_headings():
 
 def test_decomposition_lens_tokens_present():
     text = _read_plugin(_DECOMPOSITION_REF)
-    for token in _LENS_TOKENS:
+    for token in PRA.LENSES:
         if f"`{token}`" not in text:
             raise AssertionError(f"{_DECOMPOSITION_REF}: lens token {token!r} missing")
 

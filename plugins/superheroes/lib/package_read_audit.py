@@ -208,6 +208,11 @@ INVOCATION_SUMMARY_FIELDS = (
     "findingsRecorded", "syncChecks", "converged", "ceilingReached", "parkOwed",
 )
 
+# Projection readings for trail-ordered invocation records (#937).
+READING_LATEST_WINS = "latest-wins"
+READING_EVERY_RECORD = "every-record"
+READING_POSITION = "position"
+
 
 def _read_lines(path):
     try:
@@ -358,26 +363,6 @@ def _group_records(records):
     return invocations, rounds_by_inv, verifications_by_inv
 
 
-def _invocation_finding_ids(rounds):
-    ids = []
-    seen = set()
-    for rnd in rounds:
-        for item in rnd.get("findings", []):
-            fid = item.get("finding")
-            if fid not in seen:
-                ids.append(fid)
-                seen.add(fid)
-    return ids
-
-
-def _verified_findings(verifications):
-    verified = {}
-    for ver in verifications:
-        for item in ver.get("findings", []):
-            verified[item["finding"]] = item
-    return verified
-
-
 def _disposition_allowed_for_lens(lens, disposition):
     if disposition == DISPOSITION_DECLINED_EXTENSION:
         return lens != LENS_SPEC_CONTRADICTION
@@ -386,77 +371,152 @@ def _disposition_allowed_for_lens(lens, disposition):
     return disposition in DISPOSITIONS
 
 
-def _distinct_sync_check_children(sync_checks):
-    return {check.get("child") for check in sync_checks if check.get("child")}
+def _invocation_trail_records(records, inv_id):
+    """Return round and verification records for one invocation in trail order."""
+    trail_records = []
+    for record in records:
+        if record.get("invocation") != inv_id:
+            continue
+        if record.get("kind") in (RECORD_KIND_ROUND, RECORD_KIND_VERIFICATION):
+            trail_records.append(record)
+    return trail_records
 
 
-def _sync_checks_complete(invocation, sync_checks):
-    expected = invocation.get("measurables", {}).get("children")
-    if expected is None:
-        return False
-    children = _distinct_sync_check_children(sync_checks)
-    if len(children) != expected:
-        return False
-    return all(check.get("result") == SYNC_RESULT_PASS for check in sync_checks)
+def _project_invocation(records):
+    """Project trail-ordered invocation records into a single read model.
 
-
-def _declined_extension_ids(rounds):
-    declined = set()
-    for rnd in rounds:
-        for fid in rnd.get("declinedExtension", []):
-            declined.add(fid)
-    return declined
-
-
-def _all_sync_checks(verifications):
-    checks = []
-    for ver in verifications:
-        checks.extend(ver.get("syncChecks", []))
-    return checks
-
-
-def _summarize_invocation(inv_id, invocation, rounds, verifications):
-    rounds_sorted = sorted(rounds, key=lambda r: r.get("round", 0))
-    finding_ids = _invocation_finding_ids(rounds_sorted)
-    verified = _verified_findings(verifications)
-    sync_checks = _all_sync_checks(verifications)
-
+    Three readings apply to different questions (see module vocabulary):
+    - READING_LATEST_WINS: finding outcome/disposition and per-child sync-check
+      result — the last record in trail order wins.
+    - READING_EVERY_RECORD: legality of each verification item as written.
+    - READING_POSITION: whether verification covers the current round state
+      (latest verification record appears after the highest-numbered round).
+    """
+    rounds = []
+    verifications = []
+    finding_ids = []
+    finding_ids_seen = set()
+    finding_lenses = {}
+    declined_extension = set()
+    latest_outcomes = {}
+    latest_sync_by_child = {}
     highest_round = 0
     highest_mechanical_only = False
-    if rounds_sorted:
-        highest = rounds_sorted[-1]
-        highest_round = highest.get("round", 0)
-        highest_mechanical_only = bool(highest.get("mechanicalOnly"))
+    highest_round_trail_index = -1
+    latest_verification_trail_index = -1
+
+    for trail_index, record in enumerate(records):
+        kind = record.get("kind")
+        if kind == RECORD_KIND_ROUND:
+            rounds.append(record)
+            round_no = record.get("round", 0)
+            if round_no >= highest_round:
+                highest_round = round_no
+                highest_mechanical_only = bool(record.get("mechanicalOnly"))
+                highest_round_trail_index = trail_index
+            for item in record.get("findings", []):
+                fid = item.get("finding")
+                if fid not in finding_ids_seen:
+                    finding_ids.append(fid)
+                    finding_ids_seen.add(fid)
+                finding_lenses[fid] = item.get("lens")
+            for fid in record.get("declinedExtension", []):
+                declined_extension.add(fid)
+        elif kind == RECORD_KIND_VERIFICATION:
+            verifications.append(record)
+            latest_verification_trail_index = trail_index
+            for item in record.get("findings", []):
+                latest_outcomes[item["finding"]] = item
+            for check in record.get("syncChecks", []):
+                child = check.get("child")
+                if child:
+                    latest_sync_by_child[child] = check
+
+    rounds_sorted = sorted(rounds, key=lambda r: r.get("round", 0))
+    verification_covers_current_state = (
+        latest_verification_trail_index > highest_round_trail_index
+    )
+
+    return {
+        "reading_latest_wins": READING_LATEST_WINS,
+        "reading_every_record": READING_EVERY_RECORD,
+        "reading_position": READING_POSITION,
+        "rounds": rounds_sorted,
+        "verifications": verifications,
+        "finding_ids": finding_ids,
+        "finding_lenses": finding_lenses,
+        "declined_extension": declined_extension,
+        "latest_outcomes": latest_outcomes,
+        "latest_sync_by_child": latest_sync_by_child,
+        "highest_round": highest_round,
+        "highest_mechanical_only": highest_mechanical_only,
+        "has_verification": bool(verifications),
+        "verification_covers_current_state": verification_covers_current_state,
+    }
+
+
+def _measurables_children(invocation):
+    measurables = invocation.get("measurables")
+    if not isinstance(measurables, dict):
+        return None
+    return measurables.get("children")
+
+
+def _sync_checks_complete(invocation, latest_sync_by_child):
+    expected = _measurables_children(invocation)
+    if expected is None:
+        return False
+    if len(latest_sync_by_child) != expected:
+        return False
+    return all(
+        check.get("result") == SYNC_RESULT_PASS
+        for check in latest_sync_by_child.values()
+    )
+
+
+def _summarize_invocation(inv_id, invocation, projection):
+    rounds_sorted = projection["rounds"]
+    finding_ids = projection["finding_ids"]
+    latest_outcomes = projection["latest_outcomes"]
+    latest_sync_by_child = projection["latest_sync_by_child"]
 
     converged = (
         bool(rounds_sorted)
-        and bool(verifications)
-        and highest_mechanical_only
+        and projection["has_verification"]
+        and projection["verification_covers_current_state"]
+        and projection["highest_mechanical_only"]
         and all(
-            verified.get(fid, {}).get("outcome") == OUTCOME_VERIFIED
+            latest_outcomes.get(fid, {}).get("outcome") == OUTCOME_VERIFIED
             for fid in finding_ids
         )
-        and _sync_checks_complete(invocation, sync_checks)
+        and _sync_checks_complete(invocation, latest_sync_by_child)
     )
     ceiling = invocation.get("ceiling", 0)
+    highest_round = projection["highest_round"]
     ceiling_reached = bool(rounds_sorted) and highest_round == ceiling
     park_owed = ceiling_reached and not converged
+
+    seats_val = invocation.get("seats")
+    if isinstance(seats_val, list):
+        seats = list(seats_val)
+    else:
+        seats = []
 
     return {
         "invocation": inv_id,
         "weight": invocation.get("weight"),
         "ceiling": ceiling,
-        "seats": list(invocation.get("seats", [])),
+        "seats": seats,
         "roundsRecorded": len(rounds_sorted),
         "findingsRecorded": len(finding_ids),
-        "syncChecks": list(sync_checks),
+        "syncChecks": list(latest_sync_by_child.values()),
         "converged": converged,
         "ceilingReached": ceiling_reached,
         "parkOwed": park_owed,
     }
 
 
-def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
+def _nonconformities_for_invocation(inv_id, invocation, projection):
     findings = []
 
     if invocation.get("cause") is None:
@@ -472,13 +532,13 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
             "detail": "invocation is missing weight",
         })
     measurables = invocation.get("measurables")
-    if measurables is None or measurables.get("children") is None:
+    if not isinstance(measurables, dict) or measurables.get("children") is None:
         findings.append({
             "kind": NONCONFORMITY_ELEMENT_MISSING,
             "invocation": inv_id,
             "detail": "invocation is missing measurables.children",
         })
-    if measurables is None or measurables.get("registerEntries") is None:
+    if not isinstance(measurables, dict) or measurables.get("registerEntries") is None:
         findings.append({
             "kind": NONCONFORMITY_ELEMENT_MISSING,
             "invocation": inv_id,
@@ -491,13 +551,14 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
             "detail": "invocation is missing ceiling",
         })
     seats = invocation.get("seats")
-    if not seats:
+    if not isinstance(seats, list) or not seats:
         findings.append({
             "kind": NONCONFORMITY_ELEMENT_MISSING,
             "invocation": inv_id,
             "detail": "invocation is missing seats",
         })
 
+    rounds = projection["rounds"]
     if not rounds:
         findings.append({
             "kind": NONCONFORMITY_ROUND_MISSING,
@@ -506,14 +567,11 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
         })
         return findings
 
-    verified = _verified_findings(verifications)
-    declined_named = _declined_extension_ids(rounds)
-    sync_checks = _all_sync_checks(verifications)
-    has_verification = bool(verifications)
-    finding_lenses = {}
-    for rnd in rounds:
-        for item in rnd.get("findings", []):
-            finding_lenses[item.get("finding")] = item.get("lens")
+    latest_outcomes = projection["latest_outcomes"]
+    declined_named = projection["declined_extension"]
+    latest_sync_by_child = projection["latest_sync_by_child"]
+    has_verification = projection["has_verification"]
+    finding_lenses = projection["finding_lenses"]
 
     for rnd in rounds:
         round_no = rnd.get("round")
@@ -536,16 +594,17 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
                 "detail": "round %s is missing controlProbe" % round_no,
             })
 
-    for fid in _invocation_finding_ids(rounds):
-        if fid not in verified:
-            findings.append({
-                "kind": NONCONFORMITY_FINDING_UNVERIFIED,
-                "invocation": inv_id,
-                "detail": "finding %s has no verification record" % fid,
-            })
+    if has_verification:
+        for fid in projection["finding_ids"]:
+            if fid not in latest_outcomes:
+                findings.append({
+                    "kind": NONCONFORMITY_FINDING_UNVERIFIED,
+                    "invocation": inv_id,
+                    "detail": "finding %s has no verification record" % fid,
+                })
 
     for fid in declined_named:
-        item = verified.get(fid)
+        item = latest_outcomes.get(fid)
         if item is None:
             continue
         if item.get("disposition") != DISPOSITION_DECLINED_EXTENSION:
@@ -558,7 +617,7 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
                 ),
             })
 
-    for fid, item in verified.items():
+    for fid, item in latest_outcomes.items():
         if item.get("disposition") == DISPOSITION_DECLINED_EXTENSION and fid not in declined_named:
             findings.append({
                 "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
@@ -569,64 +628,64 @@ def _nonconformities_for_invocation(inv_id, invocation, rounds, verifications):
                 ),
             })
 
-    for fid, item in verified.items():
-        lens = finding_lenses.get(fid)
-        disposition = item.get("disposition")
-        if lens is not None and disposition is not None:
-            if not _disposition_allowed_for_lens(lens, disposition):
-                findings.append({
-                    "kind": NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
-                    "invocation": inv_id,
-                    "detail": (
-                        "finding %s with lens %r has disposition %r"
-                        % (fid, lens, disposition)
-                    ),
-                })
+    for ver in projection["verifications"]:
+        for item in ver.get("findings", []):
+            fid = item.get("finding")
+            lens = finding_lenses.get(fid)
+            disposition = item.get("disposition")
+            if lens is not None and disposition is not None:
+                if not _disposition_allowed_for_lens(lens, disposition):
+                    findings.append({
+                        "kind": NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+                        "invocation": inv_id,
+                        "detail": (
+                            "finding %s with lens %r has disposition %r"
+                            % (fid, lens, disposition)
+                        ),
+                    })
 
-    for fid, item in verified.items():
-        if item.get("disposition") == DISPOSITION_REFUTATION:
-            evidence = item.get("evidence")
-            if not evidence or not str(evidence).strip():
-                findings.append({
-                    "kind": NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
-                    "invocation": inv_id,
-                    "detail": (
-                        "finding %s has disposition refutation but no evidence"
-                        % fid
-                    ),
-                })
+    for ver in projection["verifications"]:
+        for item in ver.get("findings", []):
+            if item.get("disposition") == DISPOSITION_REFUTATION:
+                evidence = item.get("evidence")
+                if not evidence or not str(evidence).strip():
+                    findings.append({
+                        "kind": NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
+                        "invocation": inv_id,
+                        "detail": (
+                            "finding %s has disposition refutation but no evidence"
+                            % item.get("finding")
+                        ),
+                    })
 
-    if has_verification and not sync_checks:
+    if has_verification and not latest_sync_by_child:
         findings.append({
             "kind": NONCONFORMITY_SYNC_CHECK_MISSING,
             "invocation": inv_id,
             "detail": "invocation has verification records but no sync-check entries",
         })
     elif has_verification:
-        expected_children = invocation.get("measurables", {}).get("children")
-        distinct_children = _distinct_sync_check_children(sync_checks)
-        if (
-            expected_children is not None
-            and len(distinct_children) < expected_children
-        ):
+        expected_children = _measurables_children(invocation)
+        distinct_count = len(latest_sync_by_child)
+        if expected_children is not None and distinct_count != expected_children:
             findings.append({
                 "kind": NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
                 "invocation": inv_id,
                 "detail": (
                     "sync-check covers %d distinct children but measurables.children "
                     "is %d"
-                    % (len(distinct_children), expected_children)
+                    % (distinct_count, expected_children)
                 ),
             })
 
-    for check in sync_checks:
+    for child, check in latest_sync_by_child.items():
         if check.get("result") != SYNC_RESULT_PASS:
             findings.append({
                 "kind": NONCONFORMITY_SYNC_CHECK_FAILED,
                 "invocation": inv_id,
                 "detail": (
                     "sync-check for child %s has result %r"
-                    % (check.get("child"), check.get("result"))
+                    % (child, check.get("result"))
                 ),
             })
 
@@ -1233,11 +1292,11 @@ def verb_check(trail, invocation_filter=None):
     findings = []
     for inv_id in inv_ids:
         invocation = invocations[inv_id]
-        rounds = rounds_by_inv.get(inv_id, [])
-        verifications = verifications_by_inv.get(inv_id, [])
-        summaries.append(_summarize_invocation(inv_id, invocation, rounds, verifications))
+        trail_records = _invocation_trail_records(records, inv_id)
+        projection = _project_invocation(trail_records)
+        summaries.append(_summarize_invocation(inv_id, invocation, projection))
         findings.extend(_nonconformities_for_invocation(
-            inv_id, invocation, rounds, verifications,
+            inv_id, invocation, projection,
         ))
 
     if invocation_filter is None and records and not invocations:
