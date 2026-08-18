@@ -2,9 +2,9 @@
 
 Copy-holder:
   - plugins/superheroes/skills/review-code/reference/round-driver.md
-Authoritative home (module constants — never retyped as literals in this test):
-  - round_driver.OWNER_ARTIFACT_*_REFUSAL
-  - round_driver.POLICY_APPLIED_SOURCE_*
+Authoritative home (derived at runtime — never retyped as literals in this test):
+  - round_driver.OWNER_ARTIFACT_*_REFUSAL module constants
+  - round_driver.POLICY_APPLIED_SOURCE_* module constants
 """
 import os
 import re
@@ -35,18 +35,20 @@ def _parse_fenced_text_block(text, after_marker):
 
 
 def _owner_artifact_refusal_causes():
-    return frozenset({
-        RD.OWNER_ARTIFACT_TERMINAL_REFUSAL,
-        RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL,
-        RD.OWNER_ARTIFACT_SHAPE_REFUSAL,
-    })
+    """Every ``OWNER_ARTIFACT_*_REFUSAL`` string constant on ``round_driver``."""
+    return frozenset(
+        val for name, val in vars(RD).items()
+        if name.startswith("OWNER_ARTIFACT_") and name.endswith("_REFUSAL")
+        and isinstance(val, str)
+    )
 
 
 def _policy_applied_sources():
-    return frozenset({
-        RD.POLICY_APPLIED_SOURCE_GATE_POLICY,
-        RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED,
-    })
+    """Every ``POLICY_APPLIED_SOURCE_*`` string constant on ``round_driver``."""
+    return frozenset(
+        val for name, val in vars(RD).items()
+        if name.startswith("POLICY_APPLIED_SOURCE_") and isinstance(val, str)
+    )
 
 
 def test_owner_artifact_refusal_causes_match_docs():
