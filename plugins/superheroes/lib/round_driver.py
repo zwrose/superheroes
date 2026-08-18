@@ -3660,7 +3660,7 @@ def _next_response(pending, expected_hash):
 
 
 def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-               _pending_policy_applied=None, _durable_record=None):
+               _pending_policy_applied=None, _durable_record=None, _policy_journal_entry=None):
     """Validate the echo (phase/attempt/hash must match the pending step), fold the artifact, and
     advance. Stale/mismatched → rejected {ok: false} (exit 0). An exact duplicate of an
     already-accepted submit → idempotent {ok: true, duplicate: true}.
@@ -3687,14 +3687,17 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     `landing-ambiguous` on any record already in the slot, so a duplicate there means the record
     exists already, never that one is owed.
 
+    `_policy_journal_entry` (library-only, like `_durable_record`) is an `advanced` journal row
+    written by owner-gate `advance` — appended to THIS fold's `submit-accept` commit after the
+    `accepted` row. A provenance row written by a second commit can be lost while the fold is
+    already durable, and no retry can repair it.
+
     `foldLanded` is authoritative on `ok: true` answers: present means the fold landed; absent on
     an `ok: true` answer means it did not. On `ok: false` answers the marker is not a landed/not-
-    landed signal. On the `commit-cleanup-failed` path (`round_commit.run()` fsyncs its `DONE`
-    marker — the fold is durable — and then cleanup raises) the answer carries no marker even though
-    the fold landed. Callers must not read its absence there as not-landed evidence. Today all
-    three `advance` callers check `ok` before consulting the marker, so the ambiguity is
-    unreachable; the caller/callee refusal contract is being routed as separate work and is
-    deliberately not changed here."""
+    landed signal except on the `commit-cleanup-failed` path: `round_commit.run()` fsyncs its
+    `DONE` marker — the fold is durable — and then cleanup raises, and the answer carries
+    `foldLanded: True`. Callers must not read its absence on other `ok: false` answers as not-landed
+    evidence."""
     try:
         with round_records.session_lock(session_dir):
             sidecar_target = _sidecar_target_for_recover(session_dir)
@@ -3754,10 +3757,21 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
                                          _durable_record["journal"])
                 if orphan_journal is not None:
                     c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), orphan_journal)
+                if _policy_journal_entry is not None:
+                    c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE),
+                                         _policy_journal_entry)
                 c.run()
             except round_commit.CommitRefused as exc:
+                extra = {}
+                if exc.reason == "commit-cleanup-failed":
+                    # submit-accept only: run() fsyncs DONE before _cleanup_commit can raise, so the
+                    # fold is durable here. Do NOT generalize — recover() can also raise
+                    # commit-cleanup-failed while deleting an unsealed commit (no fold landed), but
+                    # cmd_submit's recover goes through _commit_recover_or_refuse which rewrites that
+                    # to commit-recovery-failed, and begin() only raises invalid-commit-id.
+                    extra["foldLanded"] = True
                 return _commit_refused_response(session_dir, "submit", exc, phase=phase,
-                                              rnd=round_no, attempt=attempt)
+                                                rnd=round_no, attempt=attempt, **extra)
             if state.get("terminal"):
                 fail = _terminal_receipt_gate(session_dir, state)
                 if fail:
@@ -5848,6 +5862,19 @@ def _resolve_owner_gate_policy(phase, state, config):
             "resolution": resolution}
 
 
+def _advance_fold_failure(session_dir, folded, phase, rnd, attempt):
+    """Convert a non-ok cmd_submit answer into advance's refusal."""
+    reason = folded.get("reason")
+    if reason == "receipt-fault":
+        return _refuse_cmd(session_dir, "advance", "receipt-fault", fault=FAULT_INTERNAL,
+                           detail=folded.get("detail"), phase=phase, rnd=rnd, attempt=attempt)
+    extra = {}
+    if folded.get("foldLanded"):
+        extra["foldLanded"] = True
+    return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
+                       attempt=attempt, detail=reason, **extra)
+
+
 def _advance_not_folded(session_dir, phase, rnd, attempt, git=None, broke=None,
                         durable_record_owed=False):
     """Honest advance receipt when cmd_submit answered ok but no fold committed."""
@@ -5899,30 +5926,17 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     if archive_refused is not None:
         return _commit_refused_response(session_dir, "advance", archive_refused, phase=phase,
                                         rnd=rnd, attempt=attempt)
-    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), resolved["artifact"],
-                        _via_advance=True,
-                        _pending_policy_applied=resolved["policyApplied"])
-    if not folded.get("ok"):
-        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
-                           attempt=attempt, detail=folded.get("reason"))
-    if not folded.get("foldLanded"):
-        return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke)
-    ok_folded, state = load_state(session_dir)
-    if not ok_folded or state is None:
-        reason, fault, detail = _state_load_fault(session_dir)
-        return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
     journal_entry = _journal_entry_for_commit(session_dir, "advance", "advanced",
                                               phase=phase, round=rnd, attempt=attempt,
                                               policyApplied=resolved["policyApplied"])
-    try:
-        c = round_commit.begin(session_dir, "advance-policy-applied")
-        c.add_replace_file(os.path.join(session_dir, STATE_FILE),
-                           _canonical(state).encode("utf-8"))
-        c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), journal_entry)
-        c.run()
-    except round_commit.CommitRefused as exc:
-        return _commit_refused_response(session_dir, "advance", exc, phase=phase,
-                                        rnd=rnd, attempt=attempt)
+    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), resolved["artifact"],
+                        _via_advance=True,
+                        _pending_policy_applied=resolved["policyApplied"],
+                        _policy_journal_entry=journal_entry)
+    if not folded.get("ok"):
+        return _advance_fold_failure(session_dir, folded, phase, rnd, attempt)
+    if not folded.get("foldLanded"):
+        return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke)
     nxt = cmd_next(session_dir)
     if not nxt.get("ok"):
         return nxt
@@ -6135,8 +6149,7 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     folded = cmd_submit(session_dir, phase, attempt, state_hash(state), payload,
                         _via_advance=True, _durable_record=record)
     if not folded.get("ok"):
-        return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
-                           attempt=attempt, detail=folded.get("reason"))
+        return _advance_fold_failure(session_dir, folded, phase, rnd, attempt)
     if not folded.get("foldLanded"):
         return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke,
                                    durable_record_owed=True)
@@ -6273,8 +6286,7 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     if not folded.get("ok"):
         return _attach_dispatch_manifest_disclosure(
             session_dir,
-            _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
-                        attempt=attempt, detail=folded.get("reason")),
+            _advance_fold_failure(session_dir, folded, phase, rnd, attempt),
             rnd, phase, attempt, manifest_disc)
     if not folded.get("foldLanded"):
         return _attach_dispatch_manifest_disclosure(
