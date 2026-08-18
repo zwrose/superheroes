@@ -649,6 +649,87 @@ def test_approved_live_doc_conformance():
         assert ("approved" in parsed) == (parsed["gates"]["review"] == "passed"), path
 
 
+def _spec_block(tmp_path, mutate, body="\n# Title\n"):
+    """Write a spec whose rendered frontmatter block has been hand-mutated; return the Path."""
+    fm = DD.frontmatter("spec", WI, size="medium", created="2026-06-14", updated="2026-06-14")
+    p = tmp_path / "spec.md"
+    p.write_text(mutate(DD.render_frontmatter(fm)) + body, encoding="utf-8")
+    return p
+
+
+def test_set_gate_refuses_unrewritten_managed_key(tmp_path):
+    # Axis: refusal — a surviving non-canonical top-level managed key blocks success outright,
+    # and the doc is left byte-identical rather than silently disagreeing with the result.
+    p = _write_spec_with_frontmatter(
+        tmp_path, extra_fm_lines='"approved": "2026-08-07"\n"status": draft\n')
+    before = open(p, "rb").read()
+    result = _set_gate_file(p, "passed")
+    assert result["ok"] is False
+    assert result["reason"] == "unrewritten-managed-key"
+    # the `"approved":` spelling is removed by the approved pass; the `"status":` one survives
+    assert '"status"' in result["detail"]
+    assert open(p, "rb").read() == before
+
+
+def test_set_gate_nested_managed_keys_do_not_refuse(tmp_path):
+    # Axis: the refusal is top-level-only — an indented managed key belongs to its parent field.
+    # (`approved` has its own nested test above; this pins the rule per-field, not per-example.)
+    nested = 'metadata:\n  status: draft\n  gates: {review: whatever}\n  updated: not-a-date\n'
+    p = _write_spec_with_frontmatter(tmp_path, extra_fm_lines=nested)
+    result = _set_gate_file(p, "passed")
+    assert result["ok"] is True
+    text = open(p, encoding="utf-8").read()
+    assert "  status: draft" in text
+    assert "  gates: {review: whatever}" in text
+    assert "  updated: not-a-date" in text
+    assert DD.read_gate(p) == "passed"
+
+
+def test_set_gate_body_managed_key_does_not_refuse(tmp_path):
+    # Axis: a managed key below the closing fence is not set_gate's to own.
+    p = _write_spec_with_frontmatter(tmp_path, body_extra='\n"status": draft\n')
+    result = _set_gate_file(p, "passed")
+    assert result["ok"] is True
+    body = open(p, encoding="utf-8").read().split("---", 2)[2]
+    assert '"status": draft' in body
+
+
+def test_set_gate_noncanonical_gates_key_refuses_by_name(tmp_path):
+    # Axis: refusal — the not-found branch names the reason instead of raising.
+    p = _spec_block(tmp_path, lambda b: b.replace(
+        "gates: {review: pending}", '"gates": {review: pending}', 1))
+    before = p.read_bytes()
+    result = _set_gate_file(str(p), "passed")
+    assert result["ok"] is False
+    assert result["reason"] == "unrewritten-managed-key"
+    assert '"gates"' in result["detail"]
+    assert p.read_bytes() == before
+
+
+def test_set_gate_without_any_gates_key_still_raises(tmp_path):
+    # Axis: the refusal does not swallow the existing not-found raise when nothing offends.
+    p = _spec_block(tmp_path, lambda b: b.replace("gates: {review: pending}\n", "", 1))
+    with pytest.raises(ValueError, match=re.escape("no 'gates: {review: …}' line to update")):
+        _set_gate_file(str(p), "passed")
+
+
+def test_set_gate_refuses_key_shifted_past_stale_bound(tmp_path):
+    # Axis: refusal survives the `approved` insertion that shifts the LAST frontmatter line past
+    # the pre-pass bound — checked against the stale `end`, this doc would pass silently.
+    def mutate(block):
+        assert block.endswith("---\n")
+        return block[:-len("---\n")] + '"status": draft\n---\n'
+
+    p = _spec_block(tmp_path, mutate)
+    lines = p.read_text(encoding="utf-8").split("\n")
+    assert lines[lines.index("---", 1) - 1] == '"status": draft'  # last frontmatter line
+    before = p.read_bytes()
+    result = _set_gate_file(str(p), "passed")
+    assert result["ok"] is False
+    assert result["reason"] == "unrewritten-managed-key"
+    assert p.read_bytes() == before
+
+
 def test_set_gate_rejects_non_review_state(tmp_path):
     with pytest.raises(ValueError):  # 'approved' is a status, not a review state
         _set_gate_file(_write_spec(tmp_path), "approved")

@@ -270,6 +270,48 @@ _STATUS_RE = re.compile(r"^status:\s*[a-z-]+\s*$")
 _UPDATED_RE = re.compile(r'^updated:\s*".*"\s*$')
 _APPROVED_KEY_RE = re.compile(r"^(?:approved|'approved'|\"approved\")[ \t]*:")
 _APPROVED_CANONICAL_RE = re.compile(r'^approved:\s*"(\d{4}-\d{2}-\d{2})"\s*$')
+# The closed set of frontmatter fields `set_gate` rewrites, and the canonical line forms this
+# module writes for them — reused (never restated) as the definition of "canonical", so a change
+# to a writer's shape moves the check with it.
+_MANAGED_FIELDS = ("status", "gates", "updated", "approved")
+_MANAGED_KEY_RE = re.compile(
+    r"^((?:%s)|'(?:%s)'|\"(?:%s)\")[ \t]*:" % ((("|".join(_MANAGED_FIELDS)),) * 3))
+_CANONICAL_LINE_RES = (_STATUS_RE, _GATES_RE, _UPDATED_RE, _APPROVED_CANONICAL_RE)
+
+
+def _unrewritten_managed_keys(lines, end):
+    """Return [(index, key-as-written)] for managed-field keys left in non-canonical form.
+
+    Axis: refusal — `set_gate` must never report success while a top-level managed key it did
+    not rewrite survives in the frontmatter, because the doc would then disagree with the
+    result the caller was handed.
+
+    Detects, within `lines[1:end]` (the `---`-fenced frontmatter only): a key token that is one
+    of the four managed fields — `status`, `gates`, `updated`, `approved` — written at the top
+    level with **no leading whitespace**, bare or `'single'`- or `"double"`-quoted, with optional
+    spaces/tabs before the colon, on a line matching none of this module's canonical forms.
+
+    Does NOT detect: keys nested inside block or flow mappings (any indented key belongs to its
+    parent field, not to `set_gate`), keys spanning multiple lines, YAML anchors or aliases,
+    escaped or unicode-escaped spellings, and managed keys in the document body below the
+    closing fence. This is a closed-variant line scan, not a YAML reader.
+    """
+    offenders = []
+    for i in range(1, end):
+        m = _MANAGED_KEY_RE.match(lines[i])
+        if m and not any(rx.match(lines[i]) for rx in _CANONICAL_LINE_RES):
+            offenders.append((i, m.group(1)))
+    return offenders
+
+
+def _unrewritten_managed_key_refusal(offenders):
+    """The named refusal for `_unrewritten_managed_keys` hits — 1-based line numbers, as written."""
+    detail = ", ".join("%s (line %d)" % (key, i + 1) for i, key in offenders)
+    return {
+        "ok": False,
+        "reason": "unrewritten-managed-key",
+        "detail": "frontmatter key(s) not rewritten to canonical form: " + detail,
+    }
 
 
 def _frontmatter_bounds(text, path):
@@ -437,9 +479,22 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
         elif _UPDATED_RE.match(lines[i]):
             lines[i] = f'updated: "{today}"'
     if not found:
+        # A doc whose only `gates` key is non-canonical never sets `found`: refuse by name
+        # rather than raise, so the caller gets the reason. Nothing was written either way.
+        offenders = _unrewritten_managed_keys(lines, end)
+        if offenders:
+            return _unrewritten_managed_key_refusal(offenders)
         raise ValueError(f"{path}: no 'gates: {{review: …}}' line to update")
     approved_date = _apply_approved_pass(lines, end, review, current_review)
-    result = _atomic_replace(path, "\n".join(lines))
+    prospective = "\n".join(lines)
+    # Verify the PROSPECTIVE state (an `approved` spelling the pass already deleted is not an
+    # offender), and recompute the bound: `_apply_approved_pass` deletes and inserts lines but
+    # decrements only its own local `end`, so the one bound above is stale here.
+    _, prospective_end = _frontmatter_bounds(prospective, path)
+    offenders = _unrewritten_managed_keys(lines, prospective_end)
+    if offenders:
+        return _unrewritten_managed_key_refusal(offenders)
+    result = _atomic_replace(path, prospective)
     if not result.get("ok"):
         return result
     out = {"ok": True, "review": review, "status": status, "runId": run_id}
