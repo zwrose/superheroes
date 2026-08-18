@@ -61,10 +61,9 @@ Every Amendments-log entry carries four things a reader can find in it:
 The number is **positional, not a stored field** — an entry never carries its own number, so
 renumbering cannot drift.
 
-**Who reads that order:** an issue's anchor cursor cites a spec section `as-of amendment #N`. N
-is resolved by counting entries in the log in order — the count at citation time, not a field on
-any single entry. A substantive-class entry numbered greater than the anchor's N that names the
-cited section among its touched sections stale the anchor; wording-class entries never do.
+An issue's anchor cursor cites a spec section `as-of amendment #N`; **N is resolved by counting
+entries in the log in order** — which is why the ordering rule above matters. The resolution test
+itself lives in `skills/showrunner/reference/issue-contract.md`.
 
 **Example entry** (rendered the way an approved spec's Amendments section carries them):
 
@@ -89,9 +88,8 @@ than stale-but-unchallenged.
 
 A **substantive** amendment does everything the wording path does, **plus** the touched parts of
 the package re-enter the read loop **before the amended text is injected** into children. The
-re-read's ceiling, cause, and park are the package-read contract's — see
-`skills/showrunner/reference/decomposition.md`; do not restate the loop, the convergence rule, or
-the ceiling park here.
+re-read's ceiling, cause, and park are the package-read contract's — the read loop, the convergence
+rule, and the ceiling park live in `skills/showrunner/reference/decomposition.md`.
 
 **Trigger and ordering only:**
 
@@ -131,5 +129,4 @@ Where one side is a **single-issue spec**, that side's home is **the child's iss
 quotes the entry verbatim and stands in for the missing register — so "both homes" means either
 two registers, or one register and one stand-in issue body.
 
-The seam's own recording rules live in `skills/showrunner/reference/decomposition.md`; cite that
-file rather than restating them here.
+The seam's own recording rules live in `skills/showrunner/reference/decomposition.md`.

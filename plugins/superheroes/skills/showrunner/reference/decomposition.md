@@ -142,10 +142,8 @@ against).
 
 ### The weight call
 
-The advisor calls the read's weight — `light` or `full` — using the vocabulary defined in the
-showrunner charter's duty 1; cite that charter rather than restating the vocabulary sentence here.
-
-What this section adds is the package-read specifics: the **measurables are the child count and the
+The advisor calls the read's weight — `light` or `full` — using the vocabulary whose home is the
+showrunner charter's duty 1. This section adds only the package-read specifics: the **measurables are the child count and the
 register-entry count**, the call **names a round ceiling**, and the advisor **may override in either
 direction with one stated sentence**. The numbers are guidelines; nothing here is a gate.
 
@@ -240,8 +238,7 @@ python3 -B "$ROOT_DIR/lib/package_read_audit.py" check \
 
 A read invocation that fails to converge within the ceiling named at its invocation **parks to the
 owner with the children unfiled and the open findings named**. The park's surface — where the note
-lands, and the durable copy — is the showrunner charter's duty 1; cite that charter, do not restate
-it here.
+lands, and the durable copy — is defined in the showrunner charter's duty 1.
 
 `check`'s `parkOwed` is the mechanical face of this rule. A trail honestly recording an
 unconverged read at its ceiling is a **conforming** trail reporting a park.
@@ -309,9 +306,8 @@ and no separate decomposition sitting.
 The **in-channel fast continuation**: the advisor proposes the single child issue **in the same
 conversation**, and the owner approves it **there**.
 
-**Closure folds into that PR's vet** — the applicable closure elements are graded there. The element
-list is the closure reference's, not this file's; cite that reference and do not enumerate the
-elements here.
+**Closure folds into that PR's vet** — the applicable closure elements are graded there. The closure
+receipt's element list belongs to the closure contract and is not enumerated here.
 
 **The owner's merge decision doubles as delivery acceptance only when the handback names it as such
 in so many words — an explicit line, never an inference.** A single-issue spec still ends with an
@@ -385,6 +381,35 @@ checked against it.
 - `round`
 - `verification`
 
+**Refusal reasons:**
+
+- `trail-unreadable`
+- `trail-missing`
+- `trail-malformed`
+- `invocation-duplicate`
+- `invocation-unknown`
+- `round-duplicate`
+- `round-exceeds-ceiling`
+- `round-invalid`
+- `lens-unrecognized`
+- `part-malformed`
+- `part-status-unrecognized`
+- `control-probe-unrecognized`
+- `finding-malformed`
+- `finding-duplicate`
+- `finding-unknown`
+- `verification-duplicate`
+- `disposition-unrecognized`
+- `outcome-unrecognized`
+- `sync-check-malformed`
+- `sync-result-unrecognized`
+- `weight-unrecognized`
+- `ceiling-invalid`
+- `measurable-invalid`
+- `seats-missing`
+- `usage`
+- `internal-error`
+
 **Nonconformity kinds:**
 
 - `round-missing`
@@ -393,6 +418,16 @@ checked against it.
 - `disposition-mismatch`
 - `sync-check-missing`
 - `sync-check-failed`
+
+**Undecided reasons:**
+
+- `trail-unreadable`
+- `trail-missing`
+- `trail-empty`
+- `trail-malformed`
+- `invocation-unknown`
+- `usage`
+- `internal-error`
 
 **Exit codes:**
 
