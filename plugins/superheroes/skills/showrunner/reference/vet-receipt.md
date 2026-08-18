@@ -100,6 +100,7 @@ are never holding the inventory in working memory.
 | the issue carries a **lane call** | the lane-call backstop, **both directions** |
 | a **prior receipt on this PR is being corrected** | a dated correction, **edited in place** — never a superseding comment |
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
+| the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 
 The last row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
 the path. Each pending item's **proposing ordinal** is what makes its age inspectable — a subtraction
