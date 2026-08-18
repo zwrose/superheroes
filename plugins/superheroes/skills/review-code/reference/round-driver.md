@@ -552,7 +552,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
 | `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, or the seat map disclosed same-family self-review. |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
-| `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
+| `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 
 **Terminals the orchestrator must surface honestly:**
 
@@ -561,6 +561,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 - **One invisible self-recovery** — audit-stall triggers a single fixer escalation (journaled); never offered as an owner menu item.
 - **Three-choice stall menu** — `one-more-round` (offerable once per session; not a terminal — re-enters the fix leg), `accept-the-disclosed-risk` (stalled CONFIRMED-with-evidence audit target only), `hold` (terminal `held`). Reached only from the audit-stall path after self-recovery.
 - **Capped-with-open-Critical park** — confirmation budget exhausted with a Critical still owed.
+- **Round-ceiling halt** — a hard bound on the round counter (default 10, config `maxRoundsAbsolute`): the round **at** the ceiling **runs to completion**, then the loop **refuses to begin** the next round — unconditional in that **no finding state can buy another round**, not in that it preempts the current round's own terminal; terminal `halted` with certification **withheld**; reason token `round-ceiling` (**distinct from** `max-iterations`, whose ratified meaning — the cap reached *with an open finding* — is unchanged); the receipt states the **ceiling** and the **rounds reached**, and names the round not begun. A fold answer from `cmd_submit` carries `foldLanded` only when a fold actually committed; an `advance` whose nested submit parked at the ceiling answers `notFolded` with the terminal halt rather than a `folded` receipt, and the durable seat record is either written in the fold's commit or its absence is stated on the receipt.
 
 ## Invariants
 
@@ -573,7 +574,15 @@ Pinned by `test_round_driver.py` (ported from the retired `test_code_loop_plan.p
 - Audit-keyed stall breaker (`circuit_breaker.check_audit_breaker`) — not the old per-finding
   `circuit_breaker.py "$SESSION_DIR" 7` call inside the loop; the driver owns stall/self-recovery.
   Criterion 2 (`audit-stall`) evaluates the **last two** audit rounds only — an honestly-folded
-  clean round resets the window; criterion 1 (round cap with an open finding) is unchanged.
+  clean round resets the window; criteria 1 (round cap with an open finding) and 3 are unchanged,
+  and a separate hard ceiling bounds the round counter — **no session's round counter exceeds the
+  ceiling without a terminal halt**; the counter is written only by `_advance_round` and
+  `_seed_resume`, each of which asks the ceiling before writing, and a loaded persisted state above
+  the ceiling is guarded at command entry too — so a round above the ceiling can never begin. Callers
+  of `advance` must not treat `ok: true` from a nested `cmd_submit` as a landed fold unless
+  `foldLanded` is set; the `notFolded` receipt names why. A policy **naming** a
+  ceiling below `maxRounds` refuses at load; an unnamed one takes the flat default and simply binds
+  first.
 - `REDISPATCH_BUDGET` reads `loop_plan_common.REDISPATCH_BUDGET` only — never a local literal.
 - Fail-closed everywhere: junk in → conservative out; never certify on silence.
 - Base guard on every CLI `next`: pinned resolvable base, matching checkout/repo (PR mode), and a

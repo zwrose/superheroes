@@ -390,3 +390,167 @@ def test_round_not_discharged_outcome_without_identity_is_malformed():
     ]}
     result = _round_not_discharged(round_rec)
     assert result == [{_MALFORMED_OUTCOME}]
+
+
+# --- round ceiling (#1030) ----------------------------------------------------
+
+import re
+import inspect
+
+from circuit_breaker import (
+    BREAKER_REASONS,
+    CEILING_BELOW_CAP_REFUSAL,
+    CEILING_INVALID_REFUSAL,
+    DEFAULT_MAX_ROUNDS_ABSOLUTE,
+    ROUND_CEILING_REASON,
+    check_round_ceiling,
+    resolve_round_ceiling,
+)
+
+
+def _reason_literals_from_source():
+    source = inspect.getsource(__import__("circuit_breaker"))
+    return set(re.findall(r'"reason": "([^"]+)"', source))
+
+
+def test_check_round_ceiling_does_not_halt_at_ceiling_boundary():
+    res = check_round_ceiling(10, 10)
+    assert res["halt"] is False
+    assert res["reason"] is None
+
+
+def test_check_round_ceiling_halts_one_above_ceiling():
+    res = check_round_ceiling(11, 10)
+    assert res["halt"] is True
+    assert res["reason"] == ROUND_CEILING_REASON
+
+
+def test_check_round_ceiling_halt_detail_names_reached_and_refused_rounds():
+    res = check_round_ceiling(11, 10)
+    assert "rounds reached 10" in res["detail"]
+    assert "round 11 not begun" in res["detail"]
+    assert "not a max-iterations cap halt" in res["detail"]
+
+
+def test_resolve_round_ceiling_named_above_cap():
+    ceiling, refusal = resolve_round_ceiling(7, named=12)
+    assert ceiling == 12
+    assert refusal is None
+
+
+def test_resolve_round_ceiling_named_equal_to_cap():
+    ceiling, refusal = resolve_round_ceiling(10, named=10)
+    assert ceiling == 10
+    assert refusal is None
+
+
+def test_resolve_round_ceiling_named_below_cap_refuses():
+    ceiling, refusal = resolve_round_ceiling(7, named=5)
+    assert ceiling is None
+    assert refusal == CEILING_BELOW_CAP_REFUSAL
+
+
+def test_resolve_round_ceiling_named_string_refuses():
+    ceiling, refusal = resolve_round_ceiling(7, named="10")
+    assert ceiling is None
+    assert refusal == CEILING_INVALID_REFUSAL
+
+
+def test_resolve_round_ceiling_named_bool_refuses():
+    ceiling, refusal = resolve_round_ceiling(7, named=True)
+    assert ceiling is None
+    assert refusal == CEILING_INVALID_REFUSAL
+
+
+def test_resolve_round_ceiling_named_zero_refuses():
+    ceiling, refusal = resolve_round_ceiling(7, named=0)
+    assert ceiling is None
+    assert refusal == CEILING_INVALID_REFUSAL
+
+
+def test_resolve_round_ceiling_named_negative_refuses():
+    ceiling, refusal = resolve_round_ceiling(7, named=-1)
+    assert ceiling is None
+    assert refusal == CEILING_INVALID_REFUSAL
+
+
+def test_resolve_round_ceiling_unnamed_default_ceiling():
+    ceiling, refusal = resolve_round_ceiling(7)
+    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert refusal is None
+
+
+def test_resolve_round_ceiling_unnamed_below_cap_returns_flat_default():
+    ceiling, refusal = resolve_round_ceiling(12)
+    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert refusal is None
+
+
+def test_resolve_round_ceiling_named_below_cap_still_refuses_when_unnamed_accepts():
+    unnamed_ceiling, unnamed_refusal = resolve_round_ceiling(12)
+    assert unnamed_ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert unnamed_refusal is None
+    named_ceiling, named_refusal = resolve_round_ceiling(12, named=5)
+    assert named_ceiling is None
+    assert named_refusal == CEILING_BELOW_CAP_REFUSAL
+
+
+def test_breaker_reasons_closed_set_matches_source_literals():
+    emitted = _reason_literals_from_source()
+    expected = emitted | {ROUND_CEILING_REASON}
+    assert BREAKER_REASONS == expected
+    assert expected == BREAKER_REASONS
+
+
+def test_check_circuit_breaker_does_not_halt_clean_at_ten_rounds():
+    rounds = [rnd(i, []) for i in range(1, 11)]
+    res = check_circuit_breaker(rounds, 7)
+    assert res["halt"] is False
+
+
+def test_check_audit_breaker_does_not_halt_clean_at_ten_rounds():
+    rounds = [a_round(i, [dis(f"f::{i}")]) for i in range(1, 11)]
+    res = check_audit_breaker(rounds, 7)
+    assert res["halt"] is False
+
+
+def test_check_round_ceiling_none_ceiling_never_halts():
+    res = check_round_ceiling(100, None)
+    assert res["halt"] is False
+    assert res["detail"] == "no round ceiling"
+
+
+def test_check_round_ceiling_non_int_ceiling_fail_open():
+    res = check_round_ceiling(10, "10")
+    assert res["halt"] is False
+    assert res["detail"] == "malformed round ceiling"
+
+
+def test_check_round_ceiling_bool_ceiling_fail_open():
+    res = check_round_ceiling(10, True)
+    assert res["halt"] is False
+    assert res["detail"] == "malformed round ceiling"
+
+
+def test_check_round_ceiling_non_int_round_count_fail_open():
+    res = check_round_ceiling("10", 10)
+    assert res["halt"] is False
+    assert res["detail"] == "malformed round count"
+
+
+def test_check_round_ceiling_bool_round_count_fail_open():
+    res = check_round_ceiling(True, 10)
+    assert res["halt"] is False
+    assert res["detail"] == "malformed round count"
+
+
+def test_resolve_round_ceiling_never_raises_on_bad_max_rounds():
+    ceiling, refusal = resolve_round_ceiling(True)
+    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert refusal is None
+    ceiling, refusal = resolve_round_ceiling(None)
+    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert refusal is None
+    ceiling, refusal = resolve_round_ceiling("bad")
+    assert ceiling == DEFAULT_MAX_ROUNDS_ABSOLUTE
+    assert refusal is None

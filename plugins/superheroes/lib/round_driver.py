@@ -322,6 +322,17 @@ def state_hash(state):
     return _sha256(_canonical(state))
 
 
+class RoundCeilingRefusal(ValueError):
+    """The one load-time refusal for an invalid ``maxRoundsAbsolute`` vs ``maxRounds`` pairing.
+
+    Raised only from ``_default_config`` — the single config load point — when
+    ``circuit_breaker.resolve_round_ceiling`` refuses the named ceiling."""
+    def __init__(self, reason, value=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.value = value
+
+
 class JournalFaultUnrecordable(Exception):
     """Last-resort fail-loud (#507 WO-FIX-RECOVERY): the journal append failed AND the durable fault
     marker that would have made finalization park ALSO could not be written. There is NO silent tier
@@ -865,6 +876,9 @@ def _default_config(overrides=None):
         "fixerVendor": None,  # UNKNOWN by default — auditor independence must DEGRADE, not assume claude (#608)
         "verifyCommand": "none",
         "maxRounds": 7,
+        # Hard round ceiling (default circuit_breaker.DEFAULT_MAX_ROUNDS_ABSOLUTE) — owner-tunable
+        # like maxRounds. A named ceiling below maxRounds refuses at load; unnamed uses the flat default.
+        "maxRoundsAbsolute": None,
         "dimensions": list(DIMENSIONS),
         # Optional resume/records seam (#507 WO-D). When `recordsPath` is set the driver reads it
         # ONCE at new_state to resume at round N+1 from the durable seeds (review_loop_plan's
@@ -888,7 +902,25 @@ def _default_config(overrides=None):
     cfg["code"] = cfg.get("leg") != "panel"
     if not isinstance(cfg.get("dimensions"), list) or not cfg["dimensions"]:
         cfg["dimensions"] = list(DIMENSIONS)
+    ceiling, refusal = circuit_breaker.resolve_round_ceiling(
+        cfg["maxRounds"], cfg.get("maxRoundsAbsolute"))
+    if refusal is not None:
+        raise RoundCeilingRefusal(refusal, cfg.get("maxRoundsAbsolute"))
+    cfg["maxRoundsAbsolute"] = ceiling
     return cfg
+
+
+def _round_ceiling(config):
+    """Return the resolved unconditional round ceiling for this session.
+
+    Persisted state from before #1030 may lack ``maxRoundsAbsolute`` on ``config``; in that case
+    re-resolve from ``maxRounds`` with an unnamed ceiling so the flat default still applies — a
+    resumed session never runs ceiling-less."""
+    ceiling = config.get("maxRoundsAbsolute")
+    if isinstance(ceiling, int) and not isinstance(ceiling, bool):
+        return ceiling
+    ceiling, _ = circuit_breaker.resolve_round_ceiling(config.get("maxRounds", 7), None)
+    return ceiling
 
 
 def new_state(config=None):
@@ -983,6 +1015,8 @@ def _seed_resume(state, cfg):
     qualifying = sum(1 for r in records
                      if r.get("kind") == "confirmation" and review_loop_plan._confirmation_qualifies(r))
     state["confirmations"] = qualifying
+    if _ceiling_blocks(state, cfg, resume_round, "resume-seed"):
+        return
     state["round"] = resume_round
     state["step"] = P_PANEL
     state["fullPanelRan"] = False
@@ -2369,8 +2403,9 @@ def _fold_verify(state, config, artifact):
         return
     # advance to the next (delta) round. The diff the just-finished round's panel/audit saw is the
     # `reviewed` side of the next split_fix_surface; the fixer's head diff is the `head` side.
+    if not _advance_round(state, config, reason="post-verify-advance"):
+        return
     state["_priorReviewedDiff"] = state.get("reviewedDiff")
-    state["round"] += 1
     state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
     _enter_delta_round(state, config)
 
@@ -2594,6 +2629,11 @@ def _settle_delta(state, config):
             return
         _terminal_converged(state, config, full_panel=False, note=breaker.get("detail"))
         return
+    if breaker.get("halt"):
+        _park_cannot_certify(
+            state, "unhandled circuit-breaker halt (%s) — cannot certify"
+            % (breaker.get("reason") or "<missing-reason>",))
+        return
 
     # a scoped-finder / new-issue blocking finding OR a not-discharged audit means the round still
     # has work — fix it. #507 v4: the next fix batch is the UNION of the unresolved audit targets and
@@ -2640,7 +2680,8 @@ def _settle_delta(state, config):
         return
     if followup.get("rearm"):
         _decision(state, "confirmation-rearm", followup.get("reason"))
-        state["round"] += 1
+        if not _advance_round(state, config, reason="confirmation-rearm"):
+            return
         state["fullPanelRan"] = False
         _record_round(state, "roundKind", "confirmation")
         state["reviewedDiff"] = state.get("headDiff") or state.get("reviewedDiff")
@@ -2662,6 +2703,64 @@ def _batch_severity_is_critical(state, target_id):
                 and circuit_breaker.is_critical(f.get("severity")):
             return True
     return False
+
+
+def _ceiling_blocks(state, config, next_round, refused_at):
+    """The ONE round-ceiling predicate. Parks loud when `next_round` would exceed the ceiling.
+
+    Bites on the ROUND BOUNDARY: it asks whether the round about to BEGIN is allowed, never
+    whether the round just finished was. Returns True when it parked (caller returns at once)."""
+    brk = circuit_breaker.check_round_ceiling(next_round, _round_ceiling(config))
+    if not brk.get("halt"):
+        return False
+    detail = brk.get("detail")
+    if refused_at:
+        detail = "%s (refused at: %s)" % (detail, refused_at)
+    _park_round_ceiling(state, detail)
+    return True
+
+
+def _ceiling_blocks_loaded(state, config):
+    """Persisted-state entry guard: a loaded non-terminal state already above the ceiling must park.
+
+    Equality is allowed (`round == ceiling` runs); park only when `round > ceiling`. A stored
+    terminal (including pending idempotent re-emit) is left unchanged. Returns True when it parked."""
+    if state.get("terminal"):
+        return False
+    ceiling = _round_ceiling(config)
+    brk = circuit_breaker.check_round_ceiling(state["round"], ceiling)
+    if not brk.get("halt"):
+        return False
+    rnd = state["round"]
+    detail = (
+        "Round ceiling %s reached: round %s had already begun and is halted. "
+        "Certification is withheld unconditionally regardless of the completed round's findings "
+        "(not a max-iterations cap halt)." % (ceiling, rnd)
+    )
+    detail = "%s (refused at: %s)" % (detail, "resumed-state")
+    _park_round_ceiling(state, detail)
+    return True
+
+
+def _advance_round(state, config, *, reason):
+    """The ONE writer of `state["round"]` on the advance path (#1030, owner ruling 19-c).
+
+    The ceiling is a BOUNDARY, not a settle-path terminal: the round at the ceiling completes,
+    and the loop then refuses to begin the next one. Returns True when the counter advanced,
+    False when it parked `round-ceiling` — a False return means the caller must return
+    immediately without any further state mutation."""
+    next_round = state["round"] + 1
+    if _ceiling_blocks(state, config, next_round, reason):
+        return False
+    state["round"] = next_round
+    return True
+
+
+def _park_round_ceiling(state, detail):
+    state["terminal"] = "halted"
+    state["certification"] = {"shape": None, "reason": detail or "round ceiling reached"}
+    _decision(state, "round-ceiling", detail)
+    state["step"] = P_TERMINAL
 
 
 def _park_capped(state, detail):
@@ -3365,7 +3464,13 @@ def run_loop(seams, config=None):
     review_panel_shell.reviewPanel. Returns the driver receipt (validate_receipt-shaped)."""
     if not isinstance(seams, dict):
         raise ValueError("run_loop requires a seams dict")
-    state = new_state(config)
+    try:
+        state = new_state(config)
+    except RoundCeilingRefusal as refusal:
+        state = new_state()
+        _park_cannot_certify(state, refusal.reason)
+        state["_scriptRan"] = {"invocations": 0, "byPhase": {}}
+        return build_receipt(state)
     if state.get("_resumeCorrupt"):
         # A corrupt/mangled resume state fails closed — never certify off unreadable memory.
         _park_cannot_certify(state, state["_resumeCorrupt"])
@@ -3443,9 +3548,29 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                                           "reason": mint_reason})
             return {"ok": False, "reason": "session-id-unmintable", "detail": mint_reason}
         _bootstrap_review_session_marker(session_dir)
-        state = new_state(config_overrides)
+        try:
+            state = new_state(config_overrides)
+        except RoundCeilingRefusal as refusal:
+            _journal_append(session_dir, {"cmd": "next", "phase": None, "round": None,
+                                          "attempt": None, "outcome": "refused-round-ceiling",
+                                          "reason": refusal.reason})
+            return {"ok": False, "reason": refusal.reason, "value": refusal.value}
     else:
         state = loaded
+        if _ceiling_blocks_loaded(state, state["config"]):
+            pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
+                       "attempt": 0,
+                       "payload": {"verdict": state["terminal"],
+                                   "certification": state.get("certification")}}
+            state["pending"] = pending
+            save_state(session_dir, state)
+            _journal_append(session_dir, {"cmd": "next", "phase": P_TERMINAL,
+                                          "round": state["round"], "attempt": 0,
+                                          "outcome": "loaded-ceiling-park"})
+            fail = _terminal_receipt_gate(session_dir, state)
+            if fail:
+                return _receipt_fault_response(fail)
+            return _next_response(pending, state_hash(state))
     if state.get("pending"):
         # idempotent re-emit: the state is unchanged since the pending was persisted, so the hash
         # recomputed here equals the one the first `next` returned (the hash is NEVER stored in the
@@ -3560,7 +3685,16 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
     reading in each case: nothing folded, so there is no fold to reconstruct. In particular the
     DUPLICATE return leaves it unwritten — its one caller reaches this only after refusing
     `landing-ambiguous` on any record already in the slot, so a duplicate there means the record
-    exists already, never that one is owed."""
+    exists already, never that one is owed.
+
+    `foldLanded` is authoritative on `ok: true` answers: present means the fold landed; absent on
+    an `ok: true` answer means it did not. On `ok: false` answers the marker is not a landed/not-
+    landed signal. On the `commit-cleanup-failed` path (`round_commit.run()` fsyncs its `DONE`
+    marker — the fold is durable — and then cleanup raises) the answer carries no marker even though
+    the fold landed. Callers must not read its absence there as not-landed evidence. Today all
+    three `advance` callers check `ok` before consulting the marker, so the ambiguity is
+    unreachable; the caller/callee refusal contract is being routed as separate work and is
+    deliberately not changed here."""
     try:
         with round_records.session_lock(session_dir):
             sidecar_target = _sidecar_target_for_recover(session_dir)
@@ -3627,8 +3761,14 @@ def cmd_submit(session_dir, phase, attempt, state_hash_arg, artifact, _via_advan
             if state.get("terminal"):
                 fail = _terminal_receipt_gate(session_dir, state)
                 if fail:
-                    return _receipt_fault_response(fail)
-            return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step")}
+                    resp = _receipt_fault_response(fail)
+                    resp["foldLanded"] = True
+                    return resp
+            # foldLanded marks a landed fold. It is authoritative on `ok: true` answers; its absence
+            # there is the fail-closed default covering every future early return above the commit.
+            # On an `ok: false` answer absence proves nothing — see the docstring's foldLanded note.
+            return {"ok": True, "round": round_no, "phase": phase, "nextStep": state.get("step"),
+                    "foldLanded": True}
     except round_records.SessionLockHeld as held:
         return _lock_held_refusal(session_dir, "submit", held)
 
@@ -3644,6 +3784,19 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                                       "attempt": attempt, "outcome": "no-state"})
         return {"ok": False, "reason": "no loop-state.json — call next first"}
     state = loaded
+    if _ceiling_blocks_loaded(state, state["config"]):
+        pending = {"action": P_TERMINAL, "round": state["round"], "phase": P_TERMINAL,
+                   "attempt": 0,
+                   "payload": {"verdict": state["terminal"],
+                               "certification": state.get("certification")}}
+        state["pending"] = pending
+        save_state(session_dir, state)
+        _journal_append(session_dir, {"cmd": "submit", "phase": phase, "round": state["round"],
+                                      "attempt": attempt, "outcome": "loaded-ceiling-park"})
+        fault = _terminal_receipt_gate(session_dir, state)
+        if fault:
+            return _receipt_fault_response(fault)
+        return {"ok": True, "round": state["round"], "phase": phase, "nextStep": P_TERMINAL}
     if not _via_advance and state.get("_advanceUsed"):
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": (state.get("pending") or {}).get("round"),
@@ -3673,6 +3826,7 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
                 ("duplicate submit replay; %s" % fault) if is_duplicate else fault)
             if is_duplicate:
                 resp["duplicate"] = True
+                resp["foldLanded"] = True
             return resp
 
     # duplicate detection (an already-accepted submit re-sent — its state hash is now stale, but the
@@ -3682,7 +3836,10 @@ def _cmd_submit_prepare(session_dir, phase, attempt, state_hash_arg, artifact, _
         _journal_append(session_dir, {"cmd": "submit", "phase": phase,
                                       "round": prior.get("round"), "attempt": attempt,
                                       "outcome": "duplicate"})
-        return {"ok": True, "duplicate": True}
+        # foldLanded marks a landed fold. It is authoritative on `ok: true` answers; its absence
+        # there is the fail-closed default covering every future early return above the commit.
+        # On an `ok: false` answer absence proves nothing — see the docstring's foldLanded note.
+        return {"ok": True, "duplicate": True, "foldLanded": True}
 
     pending = state.get("pending")
     if not pending:
@@ -5691,6 +5848,46 @@ def _resolve_owner_gate_policy(phase, state, config):
             "resolution": resolution}
 
 
+def _advance_not_folded(session_dir, phase, rnd, attempt, git=None, broke=None,
+                        durable_record_owed=False):
+    """Honest advance receipt when cmd_submit answered ok but no fold committed."""
+    ok_pre, state_pre = load_state(session_dir)
+    decision_kind = None
+    if ok_pre and state_pre is not None:
+        decisions = state_pre.get("decisions")
+        if isinstance(decisions, list) and decisions:
+            last = decisions[-1]
+            if isinstance(last, dict):
+                decision_kind = last.get("kind")
+    _journal_event(session_dir, "advance", "not-folded", phase=phase, round=rnd,
+                   attempt=attempt, reason=decision_kind)
+    ok_loaded, state = load_state(session_dir)
+    if not ok_loaded or state is None:
+        reason, fault, detail = _state_load_fault(session_dir)
+        return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
+    fault = _terminal_receipt_gate(session_dir, state)
+    if fault:
+        return _receipt_fault_response(fault)
+    side = _publish_sidecar(session_dir, state, git=git)
+    if side.get("reason"):
+        return _refuse_cmd(session_dir, "advance", side["reason"], fault=FAULT_INTERNAL,
+                           detail=side.get("detail"))
+    response = {"ok": True,
+                "notFolded": {"phase": phase, "round": rnd, "attempt": attempt,
+                              "reason": decision_kind},
+                "terminal": state.get("terminal"),
+                "sidecar": side.get("path"),
+                "brokeLock": broke}
+    if durable_record_owed:
+        response["durableRecord"] = {
+            "written": False,
+            "reason": "no fold committed — the round-ceiling halt returned above the fold "
+                      "commit, so the seat record that lands in the fold's commit was never "
+                      "written",
+        }
+    return response
+
+
 def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=None, broke=None):
     """Fold an owner gate through cmd_submit when calibration pre-authorizes it."""
     resolved = _resolve_owner_gate_policy(phase, state, config)
@@ -5708,6 +5905,8 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
+    if not folded.get("foldLanded"):
+        return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke)
     ok_folded, state = load_state(session_dir)
     if not ok_folded or state is None:
         reason, fault, detail = _state_load_fault(session_dir)
@@ -5938,6 +6137,9 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     if not folded.get("ok"):
         return _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                            attempt=attempt, detail=folded.get("reason"))
+    if not folded.get("foldLanded"):
+        return _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke,
+                                   durable_record_owed=True)
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
     nxt = cmd_next(session_dir)
     if not nxt.get("ok"):
@@ -6073,6 +6275,11 @@ def _advance_locked(session_dir, state, git=None, broke=None):
             session_dir,
             _refuse_cmd(session_dir, "advance", "fold-refused", phase=phase, rnd=rnd,
                         attempt=attempt, detail=folded.get("reason")),
+            rnd, phase, attempt, manifest_disc)
+    if not folded.get("foldLanded"):
+        return _attach_dispatch_manifest_disclosure(
+            session_dir,
+            _advance_not_folded(session_dir, phase, rnd, attempt, git=git, broke=broke),
             rnd, phase, attempt, manifest_disc)
     _journal_event(session_dir, "advance", "advanced", phase=phase, round=rnd, attempt=attempt)
     # The `advanced` journal row has no partner artifact — it is a log-only row and stays outside
@@ -6554,6 +6761,11 @@ def build_parser():
                                    "state → fails loud (nonzero), never a silent default")
     cli_contract.add_argument(pn, "--verify-command", contract="free-text", default=None)
     cli_contract.add_argument(pn, "--max-rounds", contract="integer", default=None, type=int)
+    cli_contract.add_argument(pn, "--max-rounds-absolute", contract="integer", default=None,
+                              type=int,
+                              help="hard round ceiling (fresh state only): owner-tunable like "
+                                   "--max-rounds; an effective ceiling below maxRounds refuses "
+                                   "at load")
     cli_contract.add_argument(pn, "--diff-path", contract="free-text", default=None,
                               help="round-1 reviewed diff (fresh state only)")
     cli_contract.add_argument(pn, "--repo-root", contract="repo-root", default=None,
@@ -6682,6 +6894,20 @@ def _dispatch(args):
             overrides["verifyCommand"] = args.verify_command
         if args.max_rounds is not None:
             overrides["maxRounds"] = args.max_rounds
+        if args.max_rounds_absolute is not None:
+            st_ok, st = load_state(args.session_dir)
+            if not (st_ok and st is None):
+                sys.stdout.write(json.dumps({"ok": False,
+                                             "reason": "max-rounds-absolute-not-fresh-state",
+                                             "value": args.max_rounds_absolute}) + "\n")
+                return 1
+            overrides["maxRoundsAbsolute"] = args.max_rounds_absolute
+            try:
+                _default_config(dict(overrides))
+            except RoundCeilingRefusal as refusal:
+                sys.stdout.write(json.dumps({"ok": False, "reason": refusal.reason,
+                                             "value": args.max_rounds_absolute}) + "\n")
+                return 1
         st_ok, st = load_state(args.session_dir)
         if st_ok:
             fresh = st is None
