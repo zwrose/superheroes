@@ -21,6 +21,8 @@ are gone with them; no lib/*.js copy-holders remain):
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
 - Register-check vocabulary                              (home: register_check.py)
+- R5 weight vocabulary + R7 park surface (pinned literals) (home: epic register when
+  reachable; copy-holders: architect-discovery, showrunner SKILL.md, epic children)
 - Anchor invariant clauses + inversions       (home: skills/showrunner/reference/issue-contract.md;
   copy-holders: skills/workhorse/SKILL.md (operative resolution bullets, log-side paragraph,
   stop), skills/showrunner/SKILL.md (filing, repair, notice and standing-row clauses),
@@ -3122,6 +3124,208 @@ def test_register_check_vocabulary_completeness():
         "register_check.UNDECIDED_REASONS — "
         "missing from frozenset: %r; in frozenset but not derived: %r"
         % (missing_undecided, extra_undecided)
+    )
+# --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
+
+# The epic register is the home of record for these sentences. lib/tests/ ships inside the
+# plugin to projects that do not carry the register, so the literals are pinned here; the
+# pin is validated against the home whenever the home is reachable, so a register edit in
+# this repo turns the guard red instead of leaving two copies agreeing about the wrong text.
+_EPIC_REGISTER_REL = os.path.normpath(
+    os.path.join("..", "..", "docs", "superheroes",
+                 "front-half-sdlc-core-6181ee", "register.md")
+)
+
+R5_WEIGHT_VOCABULARY = (
+    "A weight call names `light` or `full`, states its measurables (gradable-line count "
+    "for a spec draft; child count and register-entry count for a package read), names a "
+    "round ceiling when it governs a read loop, and may be overridden in either direction "
+    "by one stated sentence; the numeric bars are guidelines, never gates."
+)
+
+R7_PARK_SURFACE = (
+    "A park lands the full park note — what was elicited or found so far, explicitly "
+    "marked unapproved — on the owner's reading surface at park time: in the advisor's "
+    "delivery message when the owner is present, else as the opening item of the "
+    "advisor's next delivery message; a durable copy lands as a comment on the parked "
+    "item's issue or PR, and the durable copy is for the record — it is never required "
+    "owner reading."
+)
+
+_R5_PLUGIN_COPY_HOLDERS = (
+    "skills/architect-discovery/SKILL.md",
+    "skills/showrunner/SKILL.md",
+)
+
+_R7_PLUGIN_COPY_HOLDERS = (
+    "skills/architect-discovery/SKILL.md",
+    "skills/showrunner/SKILL.md",
+)
+
+# §11.2: every known in-repo copy-holder outside the plugin for R5. A child doc that stops
+# quoting an entry is a real failure, not a stale test — the register's Consumers line
+# decides who must quote it.
+_R5_IN_REPO_COPY_HOLDERS = (
+    _EPIC_REGISTER_REL,
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c4-discovery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c6-epic-machinery.md")
+    ),
+)
+
+# §11.2: every known in-repo copy-holder outside the plugin for R7. A child doc that stops
+# quoting an entry is a real failure, not a stale test — the register's Consumers line
+# decides who must quote it.
+_R7_IN_REPO_COPY_HOLDERS = (
+    _EPIC_REGISTER_REL,
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c4-discovery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c6-epic-machinery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c7-closure.md")
+    ),
+)
+
+
+def _assert_literal_exactly_once(literal, rel, text=None):
+    if text is None:
+        text = _read(rel)
+    count = text.count(literal)
+    if count == 0:
+        raise AssertionError(
+            "%s: expected exactly one occurrence of pinned literal, found 0"
+            % rel
+        )
+    if count > 1:
+        raise AssertionError(
+            "%s: expected exactly one occurrence of pinned literal, found %d"
+            % (rel, count)
+        )
+
+
+def _assert_literal_exactly_once_if_reachable(literal, rel):
+    path = os.path.normpath(os.path.join(PLUGIN, rel))
+    if not os.path.isfile(path):
+        pytest.skip(path)
+    _assert_literal_exactly_once(literal, rel)
+
+
+def _assert_literal_exactly_once_across_holders(literal, rels):
+    """Check every holder; skip only if *no* holder was reachable, naming the unreachable ones."""
+    unreachable = []
+    for rel in rels:
+        path = os.path.normpath(os.path.join(PLUGIN, rel))
+        if not os.path.isfile(path):
+            unreachable.append(path)
+            continue
+        _assert_literal_exactly_once(literal, rel)
+    if len(unreachable) == len(rels):
+        pytest.skip("no copy-holder reachable: %s" % ", ".join(unreachable))
+
+
+def test_negative_assert_literal_exactly_once_absent():
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic\.md: expected exactly one occurrence of pinned literal, found 0",
+    ):
+        _assert_literal_exactly_once(
+            "probe literal",
+            "synthetic.md",
+            text="no probe here",
+        )
+
+
+def test_negative_assert_literal_exactly_once_duplicated():
+    literal = "probe literal"
+    duplicated = literal + " " + literal
+    with pytest.raises(
+        AssertionError,
+        match=r"synthetic\.md: expected exactly one occurrence of pinned literal, found 2",
+    ):
+        _assert_literal_exactly_once(literal, "synthetic.md", text=duplicated)
+
+
+def test_r5_pinned_literal_exactly_once_in_epic_register_when_reachable():
+    """§11.2: pinned R5 literal is byte-exact in the epic register when the home is reachable."""
+    _assert_literal_exactly_once_if_reachable(
+        R5_WEIGHT_VOCABULARY, _EPIC_REGISTER_REL
+    )
+
+
+def test_r7_pinned_literal_exactly_once_in_epic_register_when_reachable():
+    """§11.2: pinned R7 literal is byte-exact in the epic register when the home is reachable."""
+    _assert_literal_exactly_once_if_reachable(R7_PARK_SURFACE, _EPIC_REGISTER_REL)
+
+
+def test_r5_weight_vocabulary_exactly_once_in_plugin_copy_holders():
+    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated plugin copy-holder."""
+    for rel in _R5_PLUGIN_COPY_HOLDERS:
+        _assert_literal_exactly_once(R5_WEIGHT_VOCABULARY, rel)
+
+
+def test_r7_park_surface_exactly_once_in_plugin_copy_holders():
+    """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated plugin copy-holder."""
+    for rel in _R7_PLUGIN_COPY_HOLDERS:
+        _assert_literal_exactly_once(R7_PARK_SURFACE, rel)
+
+
+def test_r5_weight_vocabulary_exactly_once_in_in_repo_copy_holders():
+    """§11.2: R5 weight-call vocabulary is byte-identical in every enumerated in-repo copy-holder."""
+    _assert_literal_exactly_once_across_holders(
+        R5_WEIGHT_VOCABULARY, _R5_IN_REPO_COPY_HOLDERS
+    )
+
+
+def test_r7_park_surface_exactly_once_in_in_repo_copy_holders():
+    """§11.2: R7 park-surface vocabulary is byte-identical in every enumerated in-repo copy-holder."""
+    _assert_literal_exactly_once_across_holders(
+        R7_PARK_SURFACE, _R7_IN_REPO_COPY_HOLDERS
+    )
+
+
+def _expect_assertion_error(fn, *, match):
+    """Require fn() to raise AssertionError matching `match`.
+
+    `pytest.raises(AssertionError)` is not enough for a bite-proof: a detector that
+    regresses into `pytest.skip` raises `Skipped`, which derives from BaseException,
+    so pytest.raises declines it and the whole test is reported SKIPPED — green. This
+    helper catches BaseException and turns anything that is not a matching
+    AssertionError into a failure, so a detector that stopped biting is always red.
+    """
+    try:
+        fn()
+    except AssertionError as exc:
+        if not re.search(match, str(exc)):
+            raise AssertionError(
+                "detector raised AssertionError but message %r does not match %r"
+                % (str(exc), match)
+            ) from None
+        return exc
+    except BaseException as exc:  # noqa: BLE001 — Skipped is a BaseException, and that is the point
+        raise AssertionError(
+            "detector did not bite: expected AssertionError, got %s: %s"
+            % (type(exc).__name__, exc)
+        ) from None
+    raise AssertionError("detector did not bite: no exception raised")
+
+
+def test_negative_assert_literal_across_holders_checks_past_an_unreachable_one():
+    _expect_assertion_error(
+        lambda: _assert_literal_exactly_once_across_holders(
+            "a literal no holder contains",
+            ("does/not/exist.md", "skills/architect-discovery/SKILL.md"),
+        ),
+        match=r"skills/architect-discovery/SKILL\.md: expected exactly one occurrence",
     )
 
 
