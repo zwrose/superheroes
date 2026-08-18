@@ -825,8 +825,33 @@ def test_record_path_folds_after_fence_refusal(tmp_path):
     assert out["folded"]["phase"] == round_driver.P_PANEL
 
 
-_OWNER_ARTIFACT_CENSUS_PHASES = tuple(round_orders.ORDER_PHASES) + (RP.P_VERIFY,) + tuple(
-    round_driver.OWNER_GATE_PHASES)
+_OWNER_ARTIFACT_SEAT_PHASES = tuple(round_orders.ORDER_PHASES) + (RP.P_VERIFY,)
+_OWNER_ARTIFACT_GATE_PHASES = (RP.P_JUDGMENT, RP.P_STALL)
+_OWNER_ARTIFACT_CENSUS_PHASES = _OWNER_ARTIFACT_SEAT_PHASES + _OWNER_ARTIFACT_GATE_PHASES
+
+
+def test_owner_gate_phases_membership_census():
+    """`OWNER_GATE_PHASES` membership is pinned independently of the driver's tuple.
+
+    This constant decides which phases accept a hand-supplied artifact, so its membership is
+    pinned independently — widening it is a fence change that must be argued for, not slipped in.
+    """
+    assert set(round_driver.OWNER_GATE_PHASES) == {RP.P_JUDGMENT, RP.P_STALL}
+
+
+def test_owner_artifact_census_completeness():
+    """Every foldable pending phase appears in exactly one owner-artifact census arm.
+
+    `terminal` is excluded because it is not a foldable pending phase. A new phase must be
+    added to one arm deliberately.
+    """
+    seat_phases = set(_OWNER_ARTIFACT_SEAT_PHASES)
+    gate_phases = set(_OWNER_ARTIFACT_GATE_PHASES)
+    foldable = set(RP.ALL_PHASES) - {RP.P_TERMINAL}
+    overlap = seat_phases & gate_phases
+    unclassified = foldable ^ (seat_phases | gate_phases)
+    assert not overlap, "phases in both arms: %s" % sorted(overlap)
+    assert not unclassified, "unclassified phases: %s" % sorted(unclassified)
 
 
 def _park_owner_gate_for_census(session_dir, phase):
@@ -860,35 +885,35 @@ def _owner_artifact_path_for_phase(session_dir, phase, tmp_path):
     return str(path)
 
 
-def test_owner_artifact_seat_phase_fence_census(tmp_path):
-    """Every non-owner-gate phase refuses advance --owner-artifact with advance-submit-interleaved."""
-    phases = _OWNER_ARTIFACT_CENSUS_PHASES
-    assert len(phases) >= 9
-    owner_gates = set(round_driver.OWNER_GATE_PHASES)
-    seat_refused = []
-    owner_gate_not_interleaved = []
+@pytest.mark.parametrize("phase", _OWNER_ARTIFACT_CENSUS_PHASES)
+def test_owner_artifact_seat_phase_fence_census(tmp_path, phase):
+    """Seat phases refuse advance --owner-artifact with advance-submit-interleaved; gate phases do not.
+
+    Seat and gate arms are derived from `round_orders` and `round_phases` — never from
+    `round_driver.OWNER_GATE_PHASES`.
+    """
+    assert len(_OWNER_ARTIFACT_CENSUS_PHASES) >= 9
+    assert _OWNER_ARTIFACT_SEAT_PHASES
+    assert _OWNER_ARTIFACT_GATE_PHASES
+    seat_phases = set(_OWNER_ARTIFACT_SEAT_PHASES)
+    gate_phases = set(_OWNER_ARTIFACT_GATE_PHASES)
     panel_findings = _census_panel_findings()
-    for phase in phases:
-        session_dir, gitdir, head_path = _bootstrap(
-            tmp_path, name="owner-artifact-census-%s" % phase)
-        if phase in owner_gates:
-            _park_owner_gate_for_census(session_dir, phase)
-        else:
-            pend = _drive_census_phase(session_dir, gitdir, head_path, phase, panel_findings)
-            _install_census_records(session_dir, gitdir, head_path, pend, panel_findings,
-                                    "advance_used")
-        state = _state(session_dir)
-        state["_advanceUsed"] = True
-        round_driver.save_state(session_dir, state)
-        artifact_path = _owner_artifact_path_for_phase(session_dir, phase, tmp_path)
-        out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
-                                       owner_artifact_path=artifact_path)
-        if phase in owner_gates:
-            assert out.get("reason") != "advance-submit-interleaved", (phase, out)
-            owner_gate_not_interleaved.append(phase)
-        else:
-            assert out.get("ok") is False and out.get("reason") == "advance-submit-interleaved", (
-                phase, out)
-            seat_refused.append(phase)
-    assert seat_refused
-    assert owner_gate_not_interleaved
+    session_dir, gitdir, head_path = _bootstrap(
+        tmp_path, name="owner-artifact-census-%s" % phase)
+    if phase in gate_phases:
+        _park_owner_gate_for_census(session_dir, phase)
+    else:
+        pend = _drive_census_phase(session_dir, gitdir, head_path, phase, panel_findings)
+        _install_census_records(session_dir, gitdir, head_path, pend, panel_findings,
+                                "advance_used")
+    state = _state(session_dir)
+    state["_advanceUsed"] = True
+    round_driver.save_state(session_dir, state)
+    artifact_path = _owner_artifact_path_for_phase(session_dir, phase, tmp_path)
+    out = round_driver.cmd_advance(session_dir, git=_fake_git(gitdir),
+                                   owner_artifact_path=artifact_path)
+    if phase in gate_phases:
+        assert out.get("reason") != "advance-submit-interleaved", (phase, out)
+    else:
+        assert out.get("ok") is False and out.get("reason") == "advance-submit-interleaved", (
+            phase, out)
