@@ -220,13 +220,16 @@ is nonconforming:
 - The parts each round read with their unreviewed-at-entry status
 - The findings declined further extension under the unchanged-text rule
 - Each fix's verification outcome
+- A recorded verification pass (an invocation with rounds and none is nonconforming)
 
 The per-round receipt is **machine-written, not reconstructed from a session log**:
 `lib/package_read_audit.py` appends the invocation record, each round's record (lenses run, the
 parts read with their unreviewed-at-entry status, the control probe's engagement read, the findings
 raised, the findings declined further extension, and whether the round was mechanical-only), and the
 verification record (each finding's disposition and outcome, and the sync-check result per child);
-its `check` verb reads the trail back and reports `conforming`, `nonconforming`, or `undecided`.
+its `check` verb reads the trail back and reports `conforming`, `nonconforming`, or `undecided` —
+`conforming` means the trail is complete and well-formed: every element recorded, every record's
+values in vocabulary and of the right type. Convergence and the park call are the advisor's recorded judgment — the tool records them and checks nothing was left unrecorded; it never re-decides them.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -240,8 +243,8 @@ A read invocation that fails to converge within the ceiling named at its invocat
 owner with the children unfiled and the open findings named**. The park's surface — where the note
 lands, and the durable copy — is defined in the showrunner charter's duty 1.
 
-`check`'s `parkOwed` is the mechanical face of this rule. A trail honestly recording an
-unconverged read at its ceiling is a **conforming** trail reporting a park.
+The trail records the park — the rounds run, what each asserted, the open findings — and `check`
+confirms that record is complete; it does not decide that a park is owed.
 
 ## Re-entry after a substantive amendment
 
@@ -427,6 +430,7 @@ checked against it.
 - `sync-check-missing`
 - `sync-check-incomplete`
 - `sync-check-failed`
+- `record-value-invalid`
 
 **Undecided reasons:**
 

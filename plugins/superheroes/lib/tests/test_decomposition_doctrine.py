@@ -86,7 +86,13 @@ _AUDIT_TRAIL_ELEMENTS = [
     "The parts each round read with their unreviewed-at-entry status",
     "The findings declined further extension under the unchanged-text rule",
     "Each fix's verification outcome",
+    "A recorded verification pass (an invocation with rounds and none is nonconforming)",
 ]
+
+_LEDGER_READING_SENTENCE = (
+    "Convergence and the park call are the advisor's recorded judgment — the tool records them "
+    "and checks nothing was left unrecorded; it never re-decides them."
+)
 
 _WORKED_EXAMPLE_HEADING = (
     "### Worked example — splitting a criterion that spans two children"
@@ -387,6 +393,19 @@ def test_decomposition_audit_trail_elements_present():
             raise AssertionError(
                 f"{_DECOMPOSITION_REF}: audit-trail element missing: {element!r}"
             )
+
+
+def test_decomposition_audit_trail_ledger_reading_not_judge():
+    text = _read_plugin(_DECOMPOSITION_REF)
+    for token in ("parkOwed", "ceilingReached"):
+        if token in text:
+            raise AssertionError(
+                f"{_DECOMPOSITION_REF}: judge-reading token {token!r} must not appear"
+            )
+    if _LEDGER_READING_SENTENCE not in text:
+        raise AssertionError(
+            f"{_DECOMPOSITION_REF}: ledger-reading sentence missing"
+        )
 
 
 def test_decomposition_worked_example_subsection_present():
