@@ -439,6 +439,7 @@ def _assert_coverage_cells_are_real(table_text):
     for row in rows:
         disposition = row["Disposition"].strip("`").strip()
         where = row["Where / why"].strip()
+        show_it = row["Show-it?"].strip("`").strip()
         if not disposition:
             raise AssertionError("coverage row %r has blank Disposition" % row["Area"])
         if placeholder_re.search(disposition):
@@ -450,6 +451,24 @@ def _assert_coverage_cells_are_real(table_text):
             raise AssertionError(
                 "coverage row %r Disposition is a placeholder token: %r"
                 % (row["Area"], disposition)
+            )
+        if not show_it:
+            raise AssertionError("coverage row %r has blank Show-it?" % row["Area"])
+        if placeholder_re.search(show_it):
+            raise AssertionError(
+                "coverage row %r Show-it? is a template placeholder: %r"
+                % (row["Area"], show_it)
+            )
+        if show_it == "—":
+            if disposition != "N-A":
+                raise AssertionError(
+                    "coverage row %r Show-it? is em dash but Disposition is not N-A: %r"
+                    % (row["Area"], disposition)
+                )
+        elif show_it.casefold() in _PLACEHOLDER_CELLS:
+            raise AssertionError(
+                "coverage row %r Show-it? is a placeholder token: %r"
+                % (row["Area"], show_it)
             )
         if not where:
             raise AssertionError(
@@ -1480,6 +1499,46 @@ def _canonical_step8_messages():
         "> *At `full` weight, overridden down because the panel could not run:* "
         "called down to light weight and read by one independent reviewer.",
     ]
+
+
+def test_negative_coverage_placeholder_show_it_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("| Yes |", "| {{Yes}} |", 1)
+    table = _synthetic_coverage_table(rows)
+    _expect_assertion_error(
+        lambda: _assert_coverage_cells_are_real(table),
+        match="Show-it\\? is a template placeholder",
+    )
+
+
+def test_negative_coverage_tbd_show_it_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("| Yes |", "| TBD |", 1)
+    table = _synthetic_coverage_table(rows)
+    _expect_assertion_error(
+        lambda: _assert_coverage_cells_are_real(table),
+        match="Show-it\\? is a placeholder token",
+    )
+
+
+def test_negative_coverage_em_dash_show_it_non_na_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("| Specify | Yes |", "| Specify | — |", 1)
+    table = _synthetic_coverage_table(rows)
+    _expect_assertion_error(
+        lambda: _assert_coverage_cells_are_real(table),
+        match="Show-it\\? is em dash but Disposition is not N-A",
+    )
+
+
+def test_negative_coverage_blank_show_it_fails():
+    rows = _canonical_coverage_rows()
+    rows[0] = rows[0].replace("| Yes |", "|  |", 1)
+    table = _synthetic_coverage_table(rows)
+    _expect_assertion_error(
+        lambda: _assert_coverage_cells_are_real(table),
+        match="blank Show-it\\?",
+    )
 
 
 def test_negative_coverage_blank_disposition_fails():

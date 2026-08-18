@@ -40,6 +40,10 @@ A touch that cannot obtain the re-stamp **records the re-read, states that the r
 outstanding, and names who owes it** — it does not skip the re-read, and it does not quietly
 proceed as though the re-stamp happened.
 
+While a consolidation re-stamp is outstanding, **every subsequent touch restates it** — the debt
+rides forward, unchanged, until the owner stamps the consolidated body, and only the owner's stamp
+clears it.
+
 Entries are counted **since the last full approval**, not since the spec was created.
 
 The advisor's job on the touch after five is to **schedule the owner's re-stamp** — only the
@@ -54,8 +58,8 @@ Annexes are an attractive place to smuggle a decision the owner never made, beca
 reads as detail rather than as a decision. That is exactly why the rule is absolute rather than a
 matter of degree.
 
-An annex introducing a new opinion is a **named review-spec finding class** (review-spec wires the
-seat; this file carries the rule).
+An annex introducing a new opinion is a **named review-spec finding class** — this file carries the
+rule; `review-spec/reference/spec-detail.md` carries how a seat applies it.
 
 **Elaboration, not decision.** Examples, edge-case walkthroughs, and worked scenarios that follow
 from a decision the core already states are annex material. A sentence that would change what a

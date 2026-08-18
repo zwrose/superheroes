@@ -113,7 +113,8 @@ above).
    superseded ruling — at the moment you record the new decision, not afterwards. **The Anchor
    citation is the reverse index:** affected work is located by its Anchor slot, so no rulings ledger
    exists or ships. A surface that has accumulated rulings may be **absorbed into a spec** by
-   **recorded advisor judgment**, written down when made — **no mechanical trigger** causes
+   **recorded advisor judgment**, written down when made, and still lands as an owner-stamped
+   amendment to the spec that absorbs it — **no mechanical trigger** causes
    absorption; there is no count, age, or threshold, and none may be introduced. When a spec
    reaches five amendments since its last full approval, the **next touch** carries a consolidation
    re-read and the **owner's** re-stamp — you schedule the re-stamp because only the owner can give

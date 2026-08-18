@@ -538,7 +538,8 @@ Agents flag departures from these — the spec contract (CONVENTIONS §3.2):
 
 - **EARS functional requirements** — `When`/`While`/`Where`/`If-Then` + "the system shall …", one behavior each, no "and/or" chaining.
 - **An acceptance criterion on every functional requirement** — Given-When-Then for a flow, a pass/fail rule for a constraint. A requirement with none is too vague to keep.
-- **Dispositions table (`## Coverage`)** — fifteen rows: nine unhappy-path areas (empty/first-run through reach) plus six initial happy-path dimensions (wording & tone through visibility & disclosure); each row has `Disposition` (Specify / Defer-to-build / N-A) and `Show-it?` (Yes / No; `—` only when N-A).
+- **`## Amendments` section** — always present; zero state is `_No amendments since the last full approval._`
+- **Dispositions table (`## Coverage`)** — currently nine unhappy-path areas (empty/first-run through reach) plus initially six happy-path dimensions (wording & tone through visibility & disclosure), a list the learning loop grows; each row has `Disposition` (Specify / Defer-to-build / N-A) and `Show-it?` (Yes / No; `—` only when N-A).
 - **No vague/unmeasurable words** — replaced by a concrete behavior or fit-criterion.
 - **No technical *how*** — no libraries/schemas/APIs/frameworks; that stays with the build.
 - **NFRs as outcomes with a fit-criterion**, UI/UX referencing the Claude Design handoff, plus definition of done / assumptions / constraints / out-of-scope.

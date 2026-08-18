@@ -73,7 +73,8 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      record each area's disposition in the Dispositions table (`## Coverage`) at the end — not as
      an inline tag list inside the unhappy-paths section.
    - **The Dispositions table (`## Coverage`)** is one merged table: all nine unhappy-path
-     coverage areas plus the initially-six happy-path dimensions (fifteen rows total), four
+     coverage areas plus the initially-six happy-path dimensions (currently fifteen rows; the
+     dimension list grows with the learning loop), four
      columns (`Area | Disposition | Show-it? | Where / why`), `Disposition` ∈ {Specify,
      Defer-to-build, N-A}, and `Show-it?` ∈ {Yes, No} (literal `—` only on N-A rows).
    - **`## Amendments` is always rendered**, even when empty — its zero state is the single line

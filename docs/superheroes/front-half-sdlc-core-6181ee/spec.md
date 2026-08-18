@@ -90,8 +90,9 @@ contains yet?*
 
 **FR-6.** When the advisor routes work to `discovery`, the advisor shall not assign a
 discovery size, lane, or review weight at routing — a discovery's size, eventual lane, and
-review weight are unknowable at intake; for work routed `build-ready` or `micro`, the lane
-and presentation calls attach at routing per ruling P6, unchanged.
+review weight are unknowable at intake; `micro` is the only route knowable as small up front;
+for work routed `build-ready` or `micro`, the lane and presentation calls attach at routing
+per ruling P6 [cite: plugins/superheroes/skills/showrunner/SKILL.md § The call is made at routing, not at handback (ruling P6).], unchanged.
   - *Acceptance (rule):* when routed to `discovery`, routing records the route and the
     anchor, nothing more; review weight first appears on the spec draft (FR-16); for
     `build-ready` and `micro`, lane and presentation calls attach at routing per ruling P6.

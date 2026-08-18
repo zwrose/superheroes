@@ -92,6 +92,7 @@ constraint (limit, format).}}
        - Limits & defaults: if they don't choose, what happens — and what's a sensible ceiling?
        - Tier & access boundaries: should this work differently depending on who they are or what they pay for?
        - Visibility & disclosure: who else can see this, and what should the product tell them about that?
+     The six happy-path dimensions above are the initial seed list; the learning loop adds to it.
      Each row also takes a Show-it? call (Yes / No; — only when Disposition is N-A).
      Defer-to-build promise: for connectivity & timing failures (dropped network, timeouts,
      duplicate requests at the wire), state only the OWNER-VISIBLE PROMISE here (e.g. "a
@@ -161,10 +162,12 @@ same language. Omit if there are no terms worth pinning.}}
 
 ## Amendments
 
-Records every post-approval change to this spec: one entry per amendment, carrying its **date**,
-the **owner stamp**, its **class** (`wording` or `substantive`), and the **section names it
-touched**. Entries are listed oldest first; an entry's number is its position in that order
-(oldest = 1), not a written field.
+<!-- AUTHOR GUIDANCE (amendments log) — DELETE this whole comment before delivering.
+
+  Records every post-approval change to this spec: one entry per amendment, carrying its **date**,
+  the **owner stamp**, its **class** (`wording` or `substantive`), and the **section names it
+  touched**. Entries are listed oldest first; an entry's number is its position in that order
+  (oldest = 1), not a written field. -->
 
 _No amendments since the last full approval._
 

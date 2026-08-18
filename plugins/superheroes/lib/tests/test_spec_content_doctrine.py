@@ -80,6 +80,8 @@ _DOCTRINE_SURFACES = [
 
 # Axis: each guard bites when a doctrine clause is removed from, or reworded out of,
 # the section that owns it.
+# banned_string: bites when the banned substring reappears on any doctrine surface.
+# register_pin: bites when the pinned register literal is absent or not exactly once.
 #
 # Tuple fields: (id, surface, section, literal, kind)
 # kind: literal | table_header | coverage_rows | section_exists | section_order |
@@ -300,6 +302,13 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
+        "architect-spec-coverage-row-composition",
+        _ARCHITECT_SPEC_CHARTER,
+        "## Flow",
+        "currently fifteen rows",
+        "literal",
+    ),
+    (
         "architect-spec-spec-content-pointer",
         _ARCHITECT_SPEC_CHARTER,
         "",
@@ -307,6 +316,13 @@ _CLAUSE_ENTRIES = [
         "pointer_literal",
     ),
     # D. showrunner/SKILL.md
+    (
+        "showrunner-spec-content-pointer",
+        _SHOWRUNNER_CHARTER,
+        "",
+        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md",
+        "pointer_literal",
+    ),
     (
         "showrunner-absorption-judgment",
         _SHOWRUNNER_CHARTER,
@@ -457,10 +473,17 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
+        "review-spec-amendments-section",
+        _REVIEW_SPEC_CHARTER,
+        "## Spec-Content Requirements (Opinionated)",
+        "`## Amendments` section",
+        "literal",
+    ),
+    (
         "review-spec-fifteen-rows",
         _REVIEW_SPEC_CHARTER,
         "## Spec-Content Requirements (Opinionated)",
-        "fifteen rows: nine unhappy-path areas",
+        "currently nine unhappy-path areas",
         "literal",
     ),
     (
@@ -510,6 +533,95 @@ _CLAUSE_ENTRIES = [
 ]
 
 
+_CLAUSE_IDS = frozenset({
+    "architect-spec-amendments-exception",
+    "architect-spec-coverage-row-composition",
+    "architect-spec-spec-content-pointer",
+    "banned-old-coverage-header",
+    "banned-shared-contract",
+    "discovery-coverage-tables-match",
+    "discovery-fr19-admission-rule",
+    "discovery-fr19-exclude-design-handoff",
+    "discovery-fr19-exclude-limits",
+    "discovery-fr19-exclude-mechanisms",
+    "discovery-fr19-exclude-mirror-facts",
+    "discovery-fr19-exclude-test-obligations",
+    "discovery-fr19-exclude-vacuous-quality",
+    "discovery-fr19-only-admission-rule",
+    "discovery-fr20-defer-new-ruling",
+    "discovery-fr20-show-it-handback",
+    "discovery-fr20-specify-builder-defect",
+    "discovery-fr21-asked-and-deferred",
+    "discovery-fr21-growth-duty",
+    "discovery-fr21-never-asked",
+    "register-r4-pin",
+    "review-spec-amendments-section",
+    "review-spec-both-axes",
+    "review-spec-coherence-annex",
+    "review-spec-detail-annex-opinion-section",
+    "review-spec-detail-annex-recognition-test",
+    "review-spec-fifteen-rows",
+    "showrunner-absorption-judgment",
+    "showrunner-absorption-no-trigger",
+    "showrunner-consolidation-five",
+    "showrunner-consolidation-next-touch",
+    "showrunner-consolidation-owner-restamp",
+    "showrunner-spec-content-pointer",
+    "spec-content-amendments-never-deleted-reason",
+    "spec-content-amendments-never-deleted-rule",
+    "spec-content-fr23-cannot-substitute",
+    "spec-content-fr23-five-amendments",
+    "spec-content-fr23-guideline-not-tripline",
+    "spec-content-fr23-next-touch",
+    "spec-content-fr23-nothing-blocks",
+    "spec-content-fr23-owner-restamp",
+    "spec-content-fr23-records-who-owes",
+    "spec-content-fr24-elaborates-decisions",
+    "spec-content-fr24-elaborates-never-opinion",
+    "spec-content-fr24-named-finding-class",
+    "spec-content-fr25-no-count-age-size",
+    "spec-content-fr25-no-mechanical-trigger",
+    "spec-content-fr25-no-rulings-ledger",
+    "spec-content-fr25-recorded-judgment",
+    "template-amendments-before-coverage",
+    "template-amendments-entry-fields",
+    "template-amendments-entry-fields-class",
+    "template-amendments-entry-fields-owner-stamp",
+    "template-amendments-entry-fields-sections-touched",
+    "template-amendments-numbered-by-position",
+    "template-amendments-oldest-first",
+    "template-amendments-section",
+    "template-amendments-zero-state",
+    "template-coverage-fifteen-rows",
+    "template-coverage-header",
+    "template-coverage-initial-seed",
+    "template-coverage-show-it-handback",
+})
+
+
+def _expect_error(fn, exc_type, *, match):
+    exc_name = exc_type.__name__
+    try:
+        fn()
+    except exc_type as exc:
+        if not re.search(match, str(exc)):
+            raise AssertionError(
+                "detector raised %s but message %r does not match %r"
+                % (exc_name, str(exc), match)
+            ) from None
+        return exc
+    except BaseException as exc:  # noqa: BLE001
+        raise AssertionError(
+            "detector did not bite: expected %s, got %s: %s"
+            % (exc_name, type(exc).__name__, exc)
+        ) from None
+    raise AssertionError("detector did not bite: no exception raised")
+
+
+def _expect_assertion_error(fn, *, match):
+    return _expect_error(fn, AssertionError, match=match)
+
+
 def _read_plugin(rel):
     path = rel if os.path.isabs(rel) else os.path.join(_PLUGIN_ROOT, rel)
     with open(path, encoding="utf-8") as fh:
@@ -551,6 +663,33 @@ def _file_section_raw(rel, heading, read_text=None):
             end = i
             break
     return "\n".join(lines[start:end])
+
+
+def _bold_paragraph_raw(rel, marker, read_text=None):
+    """Return the single paragraph starting at marker, not subsequent paragraphs."""
+    if read_text is None:
+        read_text = _read_plugin
+    text = read_text(rel)
+    lines = text.splitlines()
+    indices = [i for i, line in enumerate(lines) if marker in line]
+    if len(indices) == 0:
+        raise AssertionError(f"{rel}: bold marker {marker!r} not found")
+    if len(indices) > 1:
+        raise AssertionError(
+            f"{rel}: bold marker {marker!r} appears {len(indices)} times"
+        )
+    start = indices[0]
+    collected = [lines[start]]
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if re.match(r"^\d+\.\s+\*\*", line.strip()):
+            break
+        if line.strip() and not line.startswith("   "):
+            break
+        if re.match(r"^   [A-Z][a-z]", line) and not line.strip().startswith("**"):
+            break
+        collected.append(line)
+    return "\n".join(collected)
 
 
 def _bold_section_raw(rel, marker, read_text=None):
@@ -624,8 +763,10 @@ def _template_coverage_areas():
     return _coverage_area_names_from_rows(rows)
 
 
-def _assert_coverage_rows_in_order(rel, heading):
-    section_text = _file_section_raw(rel, heading)
+def _assert_coverage_rows_in_order(rel, heading, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    section_text = _file_section_raw(rel, heading, read_text)
     rows = _parse_markdown_table(section_text)
     areas = _coverage_area_names_from_rows(rows)
     expected = list(_EXPECTED_COVERAGE_AREAS)
@@ -654,11 +795,13 @@ def _discovery_coverage_areas():
     return areas
 
 
-def _assert_literal_in_section(rel, heading, literal, *, bold=False):
+def _assert_literal_in_section(rel, heading, literal, *, bold=False, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
     if bold:
-        section_text = _bold_section_raw(rel, heading)
+        section_text = _bold_paragraph_raw(rel, heading, read_text)
     else:
-        section_text = _file_section_raw(rel, heading)
+        section_text = _file_section_raw(rel, heading, read_text)
     normalized = _normalized(section_text)
     if _normalized(literal) not in normalized:
         raise AssertionError(
@@ -666,20 +809,28 @@ def _assert_literal_in_section(rel, heading, literal, *, bold=False):
         )
 
 
-def _assert_table_header_in_section(rel, heading, header):
-    section_text = _file_section_raw(rel, heading)
+def _assert_table_header_in_section(rel, heading, header, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    section_text = _file_section_raw(rel, heading, read_text)
     if header not in section_text:
         raise AssertionError(
             f"{rel}: table header missing from section {heading!r}: {header!r}"
         )
 
 
-def _assert_section_exists(rel, heading):
-    text = _read_plugin(rel)
-    if heading not in text.splitlines() and f"{heading}\n" not in text:
-        lines = text.splitlines()
-        if heading not in [line.strip() for line in lines]:
-            raise AssertionError(f"{rel}: section {heading!r} not found")
+def _assert_section_exists(rel, heading, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    if not heading.startswith("## "):
+        raise AssertionError(
+            f"section_exists guard expects H2 heading, got {heading!r}"
+        )
+    name = heading[3:]
+    pattern = re.compile(rf"^## {re.escape(name)}\s*$", re.MULTILINE)
+    text = read_text(rel)
+    if not pattern.search(text):
+        raise AssertionError(f"{rel}: section {heading!r} not found")
 
 
 def _h2_heading_indices(text):
@@ -691,8 +842,10 @@ def _h2_heading_indices(text):
     return indices
 
 
-def _assert_section_order(rel, first_heading, second_heading):
-    text = _read_plugin(rel)
+def _assert_section_order(rel, first_heading, second_heading, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    text = read_text(rel)
     headings = _h2_heading_indices(text)
     first_matches = [i for h, i in headings if h == first_heading]
     second_matches = [i for h, i in headings if h == second_heading]
@@ -727,6 +880,21 @@ def _assert_coverage_tables_equal():
 def _assert_register_r4():
     path = os.path.normpath(os.path.join(_PLUGIN_ROOT, _EPIC_REGISTER_REL))
     if not os.path.isfile(path):
+        in_repo_register = os.path.normpath(
+            os.path.join(
+                _REPO_ROOT,
+                "docs",
+                "superheroes",
+                "front-half-sdlc-core-6181ee",
+                "register.md",
+            )
+        )
+        if os.path.isfile(in_repo_register):
+            raise AssertionError(
+                "register file missing at plugin-relative path %r while "
+                "superheroes source register exists at %r"
+                % (path, in_repo_register)
+            )
         pytest.skip(path)
     text = _read_plugin(_EPIC_REGISTER_REL)
     if text.count(R4_AMENDMENT_CLASSES) != 1:
@@ -744,10 +912,6 @@ def _assert_pointer_literal(rel, pointer):
     if pointer + "`" not in text:
         raise AssertionError(
             f"{rel}: plugin-relative pointer missing: {pointer!r}"
-        )
-    if _POINTER_SUFFIX not in pointer:
-        raise AssertionError(
-            f"{rel}: pointer does not name {_POINTER_SUFFIX!r}: {pointer!r}"
         )
     path = os.path.join(_PLUGIN_ROOT, _POINTER_SUFFIX)
     if not os.path.isfile(path):
@@ -807,4 +971,232 @@ def test_clause_present(entry):
 
 
 def test_clause_table_populated():
-    assert len(_CLAUSE_ENTRIES) >= 36
+    assert {entry[0] for entry in _CLAUSE_ENTRIES} == _CLAUSE_IDS
+
+
+# --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
+
+
+def test_negative_literal_in_section_fails():
+    synthetic = "\n".join([
+        "## Consolidation re-read (FR-23)",
+        "body without the pinned clause",
+    ])
+
+    def read_text(rel):
+        if rel == _SPEC_CONTENT_REF:
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_literal_in_section(
+            _SPEC_CONTENT_REF,
+            "## Consolidation re-read (FR-23)",
+            "five amendments since its last full approval",
+            read_text=read_text,
+        ),
+        match="clause missing",
+    )
+
+
+def test_negative_literal_bold_paragraph_fails():
+    marker = "**Notify in-flight builds when a ruling is superseded.**"
+    synthetic = "\n".join([
+        "1. **Duty.**",
+        f"   {marker} When you record an owner decision.",
+        "   When an issue being filed is a register-consuming child —",
+        "   duplicate recorded advisor judgment here without the absorption grant.",
+        "2. **Next duty.**",
+    ])
+
+    def read_text(rel):
+        if rel == _SHOWRUNNER_CHARTER:
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_literal_in_section(
+            _SHOWRUNNER_CHARTER,
+            marker,
+            "recorded advisor judgment",
+            bold=True,
+            read_text=read_text,
+        ),
+        match="clause missing",
+    )
+
+
+def test_negative_table_header_missing_fails():
+    synthetic = "\n".join([
+        "## Coverage",
+        "| Area | Disposition | Where / why |",
+        "| --- | --- | --- |",
+        "| Empty & first-run | Specify | reason |",
+    ])
+
+    def read_text(rel):
+        if rel == "templates/spec.md":
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_table_header_in_section(
+            "templates/spec.md",
+            "## Coverage",
+            _COVERAGE_TABLE_HEADER,
+            read_text,
+        ),
+        match="table header missing",
+    )
+
+
+def test_negative_coverage_rows_count_fails():
+    synthetic = "\n".join([
+        "## Coverage",
+        _COVERAGE_TABLE_HEADER,
+        "| --- | --- | --- | --- |",
+        "| Empty & first-run | Specify | Yes | reason |",
+    ])
+
+    def read_text(rel):
+        if rel == "templates/spec.md":
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_coverage_rows_in_order("templates/spec.md", "## Coverage", read_text),
+        match="coverage table has 1 rows",
+    )
+
+
+def test_negative_section_exists_h2_only_fails():
+    synthetic = "\n".join([
+        "# Title",
+        "### Amendments",
+        "_No amendments since the last full approval._",
+    ])
+
+    def read_text(rel):
+        if rel == "templates/spec.md":
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_section_exists("templates/spec.md", "## Amendments", read_text),
+        match="section '## Amendments' not found",
+    )
+
+
+def test_negative_section_order_fails():
+    synthetic = "\n".join([
+        "## Coverage",
+        "table",
+        "## Amendments",
+        "log",
+    ])
+
+    def read_text(rel):
+        if rel == "templates/spec.md":
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_section_order(
+            "templates/spec.md",
+            "## Amendments",
+            "## Coverage",
+            read_text,
+        ),
+        match="must appear before",
+    )
+
+
+def test_negative_coverage_tables_equal_fails():
+    template_areas = _template_coverage_areas()
+
+    def fake_discovery_areas():
+        return template_areas[:-1]
+
+    _expect_assertion_error(
+        lambda: _assert_coverage_tables_equal_with(
+            discovery_areas_fn=fake_discovery_areas,
+        ),
+        match="do not match template areas",
+    )
+
+
+def _assert_coverage_tables_equal_with(*, discovery_areas_fn=None):
+    template_areas = _template_coverage_areas()
+    if discovery_areas_fn is None:
+        discovery_areas = _discovery_coverage_areas()
+    else:
+        discovery_areas = discovery_areas_fn()
+    if discovery_areas != template_areas:
+        raise AssertionError(
+            "discovery coverage checklist areas %r do not match template areas %r"
+            % (discovery_areas, template_areas)
+        )
+
+
+def test_negative_register_r4_missing_literal_fails():
+    path = os.path.normpath(os.path.join(_PLUGIN_ROOT, _EPIC_REGISTER_REL))
+    if not os.path.isfile(path):
+        pytest.skip("register file absent in this checkout")
+    text = _read_plugin(_EPIC_REGISTER_REL)
+    synthetic = text.replace(R4_AMENDMENT_CLASSES, "altered R4 wording")
+    _expect_assertion_error(
+        lambda: _assert_register_r4_with_text(synthetic),
+        match="found 0 times, expected 1",
+    )
+
+
+def _assert_register_r4_with_text(text):
+    if text.count(R4_AMENDMENT_CLASSES) != 1:
+        raise AssertionError(
+            "register R4 pinned literal found %d times, expected 1"
+            % text.count(R4_AMENDMENT_CLASSES)
+        )
+
+
+def test_negative_pointer_literal_missing_fails():
+    _expect_assertion_error(
+        lambda: _assert_pointer_literal(
+            _ARCHITECT_SPEC_CHARTER,
+            "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/missing/spec-content.md",
+        ),
+        match="plugin-relative pointer missing",
+    )
+
+
+def test_negative_banned_in_file_fails():
+    rel = "templates/spec.md"
+    text = _read_plugin(rel) + "\n" + _BANNED_SHARED_CONTRACT
+    _expect_assertion_error(
+        lambda: _assert_banned_in_file_with_text(rel, text, _BANNED_SHARED_CONTRACT),
+        match="banned string found",
+    )
+
+
+def _assert_banned_in_file_with_text(rel, text, banned):
+    if banned in text:
+        raise AssertionError(f"{rel}: banned string found: {banned!r}")
+
+
+def test_negative_banned_across_surfaces_fails():
+    _expect_assertion_error(
+        lambda: _assert_banned_across_surfaces_with(
+            _BANNED_SHARED_CONTRACT,
+            inject_rel="templates/spec.md",
+        ),
+        match="banned string found",
+    )
+
+
+def _assert_banned_across_surfaces_with(banned, *, inject_rel):
+    for path in _DOCTRINE_SURFACES:
+        rel = os.path.relpath(path, _PLUGIN_ROOT)
+        text = _read_plugin(rel)
+        if rel == inject_rel:
+            text = text + "\n" + banned
+        if banned in text:
+            raise AssertionError(f"{rel}: banned string found: {banned!r}")
