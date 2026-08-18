@@ -2946,3 +2946,361 @@ def test_receipt_state_writes_census_red_on_post_fold_probe_write():
     assert probe_key in receipt_keys
     bad = _functions_assigning_state_key(probed_tree, ast_mod, probe_key) & post_fold_callers
     assert bad == {"_advance_owner_gate"}, bad
+
+
+# =============================================================================================
+# round-ceiling advance park — honest notFolded receipts (#1030, ruling 23-b)
+# =============================================================================================
+
+_CEILING_FIXTURE_CEILING = 10
+_CEILING_FIXTURE_REACHED = 11
+
+
+def _above_ceiling_state_baseline(state, reached_round):
+    state["round"] = reached_round
+    state["findings"] = []
+    state["fullPanelRan"] = True
+    state["_advanceUsed"] = True
+    return state
+
+
+def _above_ceiling_orchestrator_session(tmp_path, adapters,
+                                        ceiling=_CEILING_FIXTURE_CEILING,
+                                        reached_round=_CEILING_FIXTURE_REACHED):
+    d = _session(tmp_path, name="ceil-orch",
+                 maxRoundsAbsolute=ceiling, maxRounds=7)
+    state = _state(d)
+    _above_ceiling_state_baseline(state, reached_round)
+    state["step"] = RD.P_VERIFY
+    state["pending"] = {"action": RD.P_VERIFY, "round": reached_round, "phase": RD.P_VERIFY,
+                        "attempt": 0, "payload": {"command": "none"}}
+    RD.save_state(d, state)
+    _write_verify_payload(d, {"result": "pass"})
+    return d
+
+
+def _above_ceiling_owner_gate_session(tmp_path, adapters, phase=RD.P_JUDGMENT,
+                                      ceiling=_CEILING_FIXTURE_CEILING,
+                                      reached_round=_CEILING_FIXTURE_REACHED):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="ceil-owner")
+    state = _state(d)
+    state["round"] = reached_round
+    state["pending"]["round"] = reached_round
+    RD.save_state(d, state)
+    return d
+
+
+def _above_ceiling_panel_session(tmp_path, adapters,
+                                 ceiling=_CEILING_FIXTURE_CEILING,
+                                 reached_round=_CEILING_FIXTURE_REACHED):
+    d = _session(tmp_path, name="ceil-panel",
+                 maxRoundsAbsolute=ceiling, maxRounds=7)
+    state = _state(d)
+    _above_ceiling_state_baseline(state, reached_round)
+    state["step"] = RD.P_PANEL
+    state["pending"] = {"action": RD.P_PANEL, "round": reached_round, "phase": RD.P_PANEL,
+                        "attempt": 0, "payload": {}}
+    RD.save_state(d, state)
+    _record_all_panel_seats(d)
+    return d
+
+
+def _advance_rows_for_step(session_dir, phase, rnd, attempt):
+    return [e for e in _journal(session_dir)
+            if e.get("cmd") == "advance" and e.get("phase") == phase
+            and e.get("round") == rnd and e.get("attempt") == attempt]
+
+
+def test_orchestrator_fulfilled_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
+    """Loaded state above the ceiling parks through _advance_orchestrator_fulfilled_locked honestly."""
+    ceiling = _CEILING_FIXTURE_CEILING
+    reached_round = _CEILING_FIXTURE_REACHED
+    assert reached_round == ceiling + 1, "fixture must distinguish ceiling from round reached"
+    d = _above_ceiling_orchestrator_session(tmp_path, adapters, ceiling=ceiling,
+                                            reached_round=reached_round)
+    state = _state(d)
+    pend = state["pending"]
+    phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
+    last_accepted_before = copy.deepcopy(state.get("lastAccepted"))
+    config = state.get("config") or {}
+    assert config["maxRoundsAbsolute"] == ceiling
+    assert rnd == reached_round
+    out = RD._advance_orchestrator_fulfilled_locked(
+        d, state, phase, rnd, attempt, config, git=_fake_git(_gitdir(tmp_path)))
+    assert out["ok"] is True
+    assert "folded" not in out
+    assert out["notFolded"]["reason"] == "round-ceiling"
+    assert out["notFolded"]["phase"] == phase
+    assert out["notFolded"]["round"] == rnd
+    assert out["notFolded"]["attempt"] == attempt
+    assert out["terminal"] == "halted"
+    reloaded = _state(d)
+    assert reloaded["certification"]["shape"] is None
+    rows = _advance_rows_for_step(d, phase, rnd, attempt)
+    assert not any(r.get("outcome") == "advanced" for r in rows)
+    assert any(r.get("outcome") == "not-folded" for r in rows)
+    assert reloaded.get("lastAccepted") == last_accepted_before
+    assert out["durableRecord"]["written"] is False
+    assert out["durableRecord"]["reason"].strip()
+    assert not os.path.exists(_verify_store_path(d, rnd=rnd))
+
+
+def test_advance_owner_gate_parks_honestly_above_round_ceiling(tmp_path, adapters):
+    """Loaded state above the ceiling parks through _advance_owner_gate without a folded receipt."""
+    d = _above_ceiling_owner_gate_session(tmp_path, adapters)
+    state = _state(d)
+    pend = state["pending"]
+    phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
+    config = state.get("config") or {}
+    out = RD._advance_owner_gate(d, state, phase, rnd, attempt, config,
+                                 git=_fake_git(_gitdir(tmp_path)))
+    assert out["ok"] is True
+    assert "folded" not in out
+    assert out["notFolded"]["reason"] == "round-ceiling"
+    assert out["terminal"] == "halted"
+    assert "durableRecord" not in out
+    rows = _advance_rows_for_step(d, phase, rnd, attempt)
+    assert not any(r.get("outcome") == "advanced" for r in rows)
+
+
+def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
+    """Loaded state above the ceiling parks through _advance_locked without a folded receipt."""
+    d = _above_ceiling_panel_session(tmp_path, adapters)
+    state = _state(d)
+    pend = state["pending"]
+    phase, rnd, attempt = pend["phase"], pend["round"], pend["attempt"]
+    out = RD._advance_locked(d, state, git=_fake_git(_gitdir(tmp_path)))
+    assert out["ok"] is True
+    assert "folded" not in out
+    assert out["notFolded"]["reason"] == "round-ceiling"
+    assert out["terminal"] == "halted"
+    assert "durableRecord" not in out
+    rows = _advance_rows_for_step(d, phase, rnd, attempt)
+    assert not any(r.get("outcome") == "advanced" for r in rows)
+
+
+# --- cmd_submit foldLanded caller census ---------------------------------------
+
+_CMD_SUBMIT_FOLD_GUARD_ALLOWLIST = {
+    "_dispatch": "CLI hand path returns the answer verbatim without interpreting fold semantics",
+}
+
+
+class _CmdSubmitCallVisitor(ast.NodeVisitor):
+    def __init__(self):
+        self.current_fn = None
+        self.sites = []
+
+    def visit_FunctionDef(self, node):
+        prev = self.current_fn
+        self.current_fn = node.name
+        self.generic_visit(node)
+        self.current_fn = prev
+
+    def visit_Call(self, node):
+        if isinstance(node.func, ast.Name) and node.func.id == "cmd_submit":
+            self.sites.append((self.current_fn, node))
+        self.generic_visit(node)
+
+
+def _submit_assign_name(fn_node, ast_mod, call_node):
+    for node in ast_mod.walk(fn_node):
+        if isinstance(node, ast_mod.Assign) and node.value is call_node:
+            if len(node.targets) == 1 and isinstance(node.targets[0], ast_mod.Name):
+                return node.targets[0].id
+    return None
+
+
+def _walk_own_scope(node, ast_mod):
+    """Walk *node* and descendants without entering nested function or lambda bodies."""
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, (ast_mod.FunctionDef, ast_mod.AsyncFunctionDef, ast_mod.Lambda)):
+            continue
+        yield from _walk_own_scope(child, ast_mod)
+
+
+def _own_scope_nodes(fn_node, ast_mod):
+    for stmt in fn_node.body:
+        if isinstance(stmt, (ast_mod.FunctionDef, ast_mod.AsyncFunctionDef, ast_mod.Lambda)):
+            continue
+        yield from _walk_own_scope(stmt, ast_mod)
+
+
+def _is_fold_landed_get_call(node, ast_mod, var_name):
+    if not isinstance(node, ast_mod.Call):
+        return False
+    func = node.func
+    return (isinstance(func, ast_mod.Attribute) and func.attr == "get"
+            and isinstance(func.value, ast_mod.Name) and func.value.id == var_name
+            and len(node.args) == 1
+            and not node.keywords
+            and isinstance(node.args[0], ast_mod.Constant)
+            and node.args[0].value == "foldLanded")
+
+
+def _is_fold_landed_guard_test(test, ast_mod, var_name):
+    if isinstance(test, ast_mod.UnaryOp) and isinstance(test.op, ast_mod.Not):
+        if _is_fold_landed_get_call(test.operand, ast_mod, var_name):
+            return True
+    if (isinstance(test, ast_mod.Compare) and len(test.ops) == 1
+            and isinstance(test.ops[0], ast_mod.IsNot)
+            and _is_fold_landed_get_call(test.left, ast_mod, var_name)
+            and len(test.comparators) == 1
+            and isinstance(test.comparators[0], ast_mod.Constant)
+            and test.comparators[0].value is True):
+        return True
+    return False
+
+
+def _branch_returns(branch_body, ast_mod):
+    for stmt in branch_body:
+        for node in _walk_own_scope(stmt, ast_mod):
+            if isinstance(node, ast_mod.Return):
+                return True
+    return False
+
+
+def _reads_fold_landed_guard(fn_node, ast_mod, var_name):
+    for node in _own_scope_nodes(fn_node, ast_mod):
+        if not isinstance(node, ast_mod.If):
+            continue
+        if not _is_fold_landed_guard_test(node.test, ast_mod, var_name):
+            continue
+        if _branch_returns(node.body, ast_mod):
+            return True
+    return False
+
+
+def compute_cmd_submit_fold_guard_gaps(source=None, allowlist=None):
+    if source is None:
+        tree, ast_mod = _round_driver_ast()
+    else:
+        ast_mod = ast
+        tree = ast.parse(source)
+    if allowlist is None:
+        allowlist = _CMD_SUBMIT_FOLD_GUARD_ALLOWLIST
+    func_index = _function_index(tree, ast_mod)
+    visitor = _CmdSubmitCallVisitor()
+    visitor.visit(tree)
+    callers = set()
+    unguarded = []
+    for fn_name, call in visitor.sites:
+        if fn_name is None:
+            unguarded.append("<module>")
+            continue
+        callers.add(fn_name)
+        if fn_name in allowlist:
+            continue
+        fn_node = func_index[fn_name]
+        var = _submit_assign_name(fn_node, ast_mod, call)
+        if not var or not _reads_fold_landed_guard(fn_node, ast_mod, var):
+            unguarded.append(fn_name)
+    stale = sorted(name for name in allowlist if name not in callers)
+    return sorted(set(unguarded)), stale
+
+
+def test_cmd_submit_fold_landed_caller_census():
+    """Shape census: every non-exempt cmd_submit caller must guard foldLanded in its own scope.
+
+    Catches (fail closed):
+    - A caller with no foldLanded guard at all.
+    - A guard hidden in a nested function or lambda rather than the caller's own scope.
+    - A guard that does not return from the caller (noop body).
+    - A .get("foldLanded") call must be the canonical one-argument spelling
+      `<var>.get("foldLanded")`; any explicit default or keyword argument is not a guard by
+      rule. The rule exists because `.get("foldLanded", True)` fails open at runtime — an absent
+      key yields the truthy default and the guard never fires — and the census deliberately
+      enforces the canonical spelling rather than trying to classify defaults by truthiness.
+      This is stricter than runtime semantics: `.get("foldLanded", False)` is fail-closed and
+      would be safe, and a keyword form raises TypeError rather than failing open; both are
+      rejected anyway because the census enforces spelling, not semantics.
+    - A caller that is neither exempt nor guarded fails the census.
+    - An exemption entry naming a function that no longer calls cmd_submit fails the census
+      (stale exemptions must not rot into a silent hole).
+
+    Does not claim (deliberately out of scope; dominance analysis is separate routed work):
+    - A guard placed after the work it should protect (late guard).
+    - A conditional or elif bypass that skips the guard.
+    - A try/except fallthrough past an unlanded fold.
+    - Any deliberately mis-written guard — this is shape census, not control-flow dominance.
+    """
+    unguarded, stale = compute_cmd_submit_fold_guard_gaps()
+    assert stale == [], "stale cmd_submit exemptions: %s" % stale
+    assert unguarded == [], "unguarded cmd_submit callers: %s" % unguarded
+
+
+def test_fold_guard_census_rejects_noop_guard():
+    source = """
+def bad_noop(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if not folded.get("foldLanded"):
+        pass
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "bad_noop" in unguarded
+
+
+def test_fold_guard_census_rejects_get_with_default():
+    source = """
+def get_default_true(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if not folded.get("foldLanded", True):
+        return {"ok": False}
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "get_default_true" in unguarded
+
+
+def test_fold_guard_census_rejects_nested_guard():
+    source = """
+def bad_nested(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    def inner():
+        if not folded.get("foldLanded"):
+            return None
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "bad_nested" in unguarded
+
+
+def test_fold_guard_census_rejects_missing_guard():
+    source = """
+def unguarded_caller(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert "unguarded_caller" in unguarded
+
+
+def test_fold_guard_census_accepts_not_get_guard_with_return():
+    source = """
+def good_not_get(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if not folded.get("foldLanded"):
+        return {"ok": False}
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert unguarded == []
+
+
+def test_fold_guard_census_accepts_is_not_true_guard_with_return():
+    source = """
+def good_is_not_true(session_dir):
+    folded = cmd_submit(session_dir, "p", 0, "h", {})
+    if folded.get("foldLanded") is not True:
+        return {"ok": False}
+    _journal_event(session_dir, "advanced")
+"""
+    unguarded, _stale = compute_cmd_submit_fold_guard_gaps(source=source, allowlist=set())
+    assert unguarded == []

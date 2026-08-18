@@ -27,6 +27,74 @@ BLOCKING = {"Critical", "Important"}
 # build legs can never disagree on what blocks.
 _NON_BLOCKING = frozenset({"minor", "nit"})
 
+DEFAULT_MAX_ROUNDS_ABSOLUTE = 10
+ROUND_CEILING_REASON = "round-ceiling"
+
+# The CLOSED set of halt reasons any breaker decision in this module can carry. A consumer that
+# switches on `reason` iterates THIS set; a member added here without a consumer arm must fail loud.
+BREAKER_REASONS = frozenset({
+    "max-iterations", "no-net-progress", "challenged-principle-recurring",
+    "recurring-finding", "audit-stall", ROUND_CEILING_REASON,
+})
+
+CEILING_BELOW_CAP_REFUSAL = "max-rounds-absolute-below-max-rounds"
+CEILING_INVALID_REFUSAL = "max-rounds-absolute-invalid"
+
+
+def _usable_int(value):
+    """True when value is a non-bool int."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _positive_usable_int(value):
+    return _usable_int(value) and value >= 1
+
+
+def _effective_max_rounds(max_rounds):
+    if _positive_usable_int(max_rounds):
+        return max_rounds
+    return 7
+
+
+def resolve_round_ceiling(max_rounds, named=None):
+    """Resolve the unconditional round ceiling for the review loop. Never raises."""
+    cap = _effective_max_rounds(max_rounds)
+    if named is None:
+        # Unnamed: unconditional cost backstop — default 10 below a configured cap of 20 is not
+        # incoherent; the ceiling binds first and the run halts at round 10 (stricter than the cap).
+        return DEFAULT_MAX_ROUNDS_ABSOLUTE, None
+    if not _positive_usable_int(named):
+        return None, CEILING_INVALID_REFUSAL
+    if named < cap:
+        return None, CEILING_BELOW_CAP_REFUSAL
+    return named, None
+
+
+def check_round_ceiling(next_round, ceiling):
+    """Unconditional round ceiling — boundary on the round about to begin, not the round just finished."""
+    if ceiling is None:
+        return {"halt": False, "reason": None, "detail": "no round ceiling"}
+    if not _usable_int(ceiling):
+        return {"halt": False, "reason": None, "detail": "malformed round ceiling"}
+    if not _usable_int(next_round):
+        return {"halt": False, "reason": None, "detail": "malformed round count"}
+    if next_round > ceiling:
+        return {
+            "halt": True,
+            "reason": ROUND_CEILING_REASON,
+            "detail": (
+                f"Round ceiling {ceiling} reached: rounds reached {next_round - 1}, "
+                f"round {next_round} not begun. Certification is withheld unconditionally regardless of the "
+                f"completed round's findings (not a max-iterations cap halt)."
+            ),
+        }
+    return {
+        "halt": False,
+        "reason": None,
+        "detail": f"Round {next_round} is within the round ceiling of {ceiling}.",
+    }
+
+
 def is_blocking(severity):
     return str("" if severity is None else severity).strip().lower() not in _NON_BLOCKING
 
