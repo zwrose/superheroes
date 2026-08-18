@@ -1,13 +1,12 @@
 """Drift guards for showrunner decomposition doctrine (issue #937).
 
-Enforces: pinned sentences in both doctrine homes; reference-file structure and vocabulary
-agreement with package_read_audit; vet-receipt register-row trigger; section-scoped copies in
-the showrunner charter duties 3 and 4.
+Enforces: pinned sentences in both doctrine homes; reference-file structure; vet-receipt
+register-row trigger; section-scoped copies in the showrunner charter duties 3 and 4.
 """
 # What this file does and does not guard (issue #937).
 #
 # Every assertion rests on a MECHANICAL fact: a literal present or absent, a parsed heading, a
-# table row, a backticked token set, a constant imported from package_read_audit.py.
+# table row, or a backticked token set.
 #
 # The doctrine's MEANING is guarded by review, not by CI. Do not assert whether prose says the
 # right thing — no negation regexes, no paragraph heuristics, no substring checks wearing
