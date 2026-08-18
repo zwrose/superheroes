@@ -126,9 +126,7 @@ _DISCOVERY_SECTION_CLAUSES = {
         "findings.md",
         "lib/definition_doc.py\" mint --title",
         'WORK_ITEM=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" mint --title "<title>") \\ || { echo "the-architect: cannot mint the work-item (see message above) — not writing the findings record." >&2; exit 1; } [ -n "$WORK_ITEM" ] \\ || { echo "the-architect: mint returned an empty work-item — not writing the findings record." >&2; exit 1; }',
-        '|| { echo "the-architect: cannot mint the work-item (see message above) — not writing the findings record." >&2; exit 1; }',
-        '|| { echo "the-architect: mint returned an empty work-item — not writing the findings record." >&2; exit 1; }',
-        '|| { echo "the-architect: cannot resolve the work-item folder (see message above) — not writing the findings record." >&2; exit 1; }',
+        'SPEC=$(python3 -B "$ROOT_DIR/lib/definition_doc.py" resolve-write \\ --doc spec --work-item "$WORK_ITEM" --root "$ROOT") \\ || { echo "the-architect: cannot resolve the work-item folder (see message above) — not writing the findings record." >&2; exit 1; }',
         "Take its directory; never write to the",
         "no frontmatter block, no gates",
         "that no spec is being written, and why",
@@ -785,22 +783,11 @@ def test_negative_clause_tables_survive_normalization_rejects_bad_literals():
 
 
 def _synthetic_weight_section(*, classification_rule=None):
-    light_review = "one independent review seat"
-    light_vet = "light vet"
-    light_owner = "in-channel"
-    full_review = "review-spec panel"
-    full_vet = "full spec vet"
-    full_owner = "scheduled owner review"
     rule = classification_rule or "Both inputs must hold for `light`"
     lines = [
         _WEIGHT_SECTION,
         "",
         rule,
-        "",
-        "| Weight | Review | Vet | Owner approval |",
-        "| --- | --- | --- | --- |",
-        f"| `light` | {light_review} | {light_vet} | {light_owner} |",
-        f"| `full` | {full_review} | {full_vet} | {full_owner} |",
     ]
     return "\n".join(lines)
 
