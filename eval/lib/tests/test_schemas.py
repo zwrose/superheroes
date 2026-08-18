@@ -43,7 +43,6 @@ VALID = {
     "definition-doc.schema.json": {
         "superheroes": "doc", "schemaVersion": 1, "docType": "tasks",
         "workItem": "add-toggle-abc123", "issue": 42,
-        "parent": {"workItem": "add-toggle-abc123", "docType": "plan"},
         "size": "medium", "status": "approved", "approved": "2026-06-14",
         "gates": {"review": "passed"},
         "producedBy": "the-architect@0.1.0", "created": "2026-06-14", "updated": "2026-06-14"},
@@ -129,7 +128,7 @@ def test_definition_doc_pending_with_approved_is_rejected():
 
 
 # The §6.1 work-item slug pattern is duplicated across every schema that carries a
-# work-item (4 sites). These two tests are the anti-drift guard: all sites must use the
+# work-item (3 sites). These two tests are the anti-drift guard: all sites must use the
 # SAME pattern, and that pattern must agree with what work_item_slug actually emits — so
 # no schema can silently diverge from the canonical reference impl.
 SLUG_PATTERN = r"^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$"
@@ -141,7 +140,6 @@ def _all_workitem_patterns():
     q = _load("queue.schema.json")
     return {
         "definition-doc.workItem": dd["properties"]["workItem"]["pattern"],
-        "definition-doc.parent.workItem": dd["properties"]["parent"]["oneOf"][1]["properties"]["workItem"]["pattern"],
         "checkpoint.workItem": cp["properties"]["workItem"]["pattern"],
         "queue.items.workItem": q["properties"]["items"]["items"]["properties"]["workItem"]["pattern"],
     }

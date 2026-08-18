@@ -91,33 +91,25 @@ def test_doc_path_rejects_unknown_doctype():
 
 def test_spec_frontmatter_validates():
     fm = DD.frontmatter("spec", WI, size="medium", created="2026-06-14", updated="2026-06-14")
+    # The schema is `additionalProperties: false` and no longer declares `parent`, so this
+    # validate() is what fails closed if the field is ever re-introduced into the emitter.
     jsonschema.validate(fm, SCHEMA)
-    assert fm["parent"] is None
     assert fm["producedBy"] == DD.produced_by()
     assert fm["producedBy"].startswith("the-architect@")
 
 
 def test_plan_and_tasks_frontmatter_validate():
-    plan = DD.frontmatter("plan", "plan-x-aaa111", size="small", parent=WI,
+    # Every docType emits a schema-valid header on its own — the header is flat, so a plan or
+    # tasks doc needs nothing from another doc to be well-formed.
+    plan = DD.frontmatter("plan", "plan-x-aaa111", size="small",
                           created="2026-06-14", updated="2026-06-14")
     jsonschema.validate(plan, SCHEMA)
-    assert plan["parent"] == {"workItem": WI, "docType": "spec"}
+    assert plan["docType"] == "plan"
 
     tasks = DD.frontmatter("tasks", "tasks-x-bbb222", size="large",
-                           parent={"workItem": "plan-x-aaa111", "docType": "plan"},
                            created="2026-06-14", updated="2026-06-14")
     jsonschema.validate(tasks, SCHEMA)
-    assert tasks["parent"]["docType"] == "plan"
-
-
-def test_frontmatter_enforces_parent_invariant():
-    with pytest.raises(ValueError):  # spec must not have a parent
-        DD.frontmatter("spec", WI, size="small", parent="something-abc123")
-    with pytest.raises(ValueError):  # plan must have a parent
-        DD.frontmatter("plan", "plan-x-aaa111", size="small")
-    with pytest.raises(ValueError):  # tasks parent must be a plan, not a spec
-        DD.frontmatter("tasks", "tasks-x-bbb222", size="small",
-                       parent={"workItem": WI, "docType": "spec"})
+    assert tasks["docType"] == "tasks"
 
 
 def test_frontmatter_with_issue_validates():
@@ -127,63 +119,35 @@ def test_frontmatter_with_issue_validates():
     assert fm["issue"] == 42
 
 
-# --- #25: quick discovery's orphan tasks doc (null parent, opt-in) ---------
+# --- #1071: the one disclosed residual of the `parent` removal -------------
 
-def test_tasks_orphan_frontmatter_allows_null_parent():
-    # Quick discovery authors a tasks doc with no plan/spec ancestor — it IS the root input
-    # artifact, so a null parent is correct (schema-valid) exactly as a spec's is.
-    fm = DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
-                        created="2026-06-14", updated="2026-06-14")
-    jsonschema.validate(fm, SCHEMA)
-    assert fm["parent"] is None
-
-
-def test_tasks_orphan_is_opt_in_only():
-    # Without allow_orphan a parent-less tasks doc still fails closed (the full path is unchanged),
-    # and allow_orphan never loosens spec/plan nor a tasks doc that WAS given a parent.
-    with pytest.raises(ValueError):
-        DD.frontmatter("tasks", "tasks-x-bbb222", size="small")
-    with pytest.raises(ValueError):
-        DD.frontmatter("plan", "plan-x-aaa111", size="small", allow_orphan=True)
-    with pytest.raises(ValueError):  # tasks given a spec parent is still rejected
-        DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
-                       parent={"workItem": WI, "docType": "spec"})
-
-
-def test_tasks_orphan_content_hash_is_present_and_deterministic(tmp_path):
-    # §6.3 content-hash (the deterministic build-branch key) requires the `parent` stable field to
-    # be PRESENT — a null parent renders + reads back as the literal "null" (present, not missing),
-    # so the hash never raises and is stable across reads (historically the quick-route
-    # build-branch key; the route is retired, the orphan-tasks contract stays guarded).
+def test_identifiers_stable_fields_still_carry_parent_vestige_marker():
+    # KNOWN, DISCLOSED RESIDUAL OF ISSUE #1071 — this test is a marker, not a contract.
+    #
+    # #1071 removed the `parent` frontmatter field from the whole definition-doc surface
+    # (schema, emitter, renderer, reader, CLI, live docs, authoring instructions), but left
+    # `identifiers.STABLE_FIELDS` deliberately untouched: CONVENTIONS §6.3 is retired (#478),
+    # `content_hash` has no live consumer, and its own tests are frozen golden values whose
+    # docstring forbids updating them to make a test pass. The consequence is the seam pinned
+    # below — `content_hash` fails closed on every header this module now emits.
+    #
+    # WHEN SOMEONE FINISHES THE REMOVAL IN identifiers.py, THIS TEST IS EXPECTED TO GO RED.
+    # Delete it then — do not "fix" it, and do not adjust the frozen golden hashes to keep it
+    # green. Its whole job is to trip the next editor instead of rotting silently.
     import identifiers
-    fm = DD.frontmatter("tasks", "tasks-x-bbb222", size="small", allow_orphan=True,
-                        created="2026-06-14", updated="2026-06-14")
-    p = tmp_path / "tasks.md"
-    p.write_text(DD.render_frontmatter(fm) + "\n# t\n### Task 1: go\n", encoding="utf-8")
-    fm1, body1 = DD.read_frontmatter(str(p))
-    fm2, body2 = DD.read_frontmatter(str(p))
-    assert fm1.get("parent") == "null"  # present as the literal, not absent
-    assert identifiers.content_hash(fm1, body1) == identifiers.content_hash(fm2, body2)
-
-
-def test_cli_frontmatter_orphan_tasks_renders_null_parent(capsys):
-    rc, out = _run_main(["frontmatter", "--doc", "tasks", "--work-item", "tasks-x-bbb222",
-                         "--size", "small", "--orphan",
-                         "--created", "2026-06-14", "--updated", "2026-06-14"], capsys)
-    assert rc == 0
-    parsed = _parse_frontmatter(out)
-    jsonschema.validate(parsed, SCHEMA)
-    assert parsed["parent"] is None and parsed["docType"] == "tasks"
+    assert "parent" in identifiers.STABLE_FIELDS
+    fm = DD.frontmatter("spec", WI, size="small", created="2026-06-14", updated="2026-06-14")
+    with pytest.raises(ValueError, match="parent"):
+        identifiers.content_hash(fm, "# t\n")
 
 
 # --- render: parse with a REAL YAML reader and re-validate -----------------
 
 ROUNDTRIP_CASES = [
-    ("spec", WI, dict(size="medium")),                                  # null parent, null issue
+    ("spec", WI, dict(size="medium")),                                  # null issue
     ("spec", WI, dict(size="small", issue=42)),                         # issue set (stays int)
-    ("plan", "plan-x-aaa111", dict(size="small", parent=WI)),           # parent flow-mapping
-    ("tasks", "tasks-x-bbb222",
-     dict(size="large", parent={"workItem": "plan-x-aaa111", "docType": "plan"})),
+    ("plan", "plan-x-aaa111", dict(size="small")),                      # the plan docType
+    ("tasks", "tasks-x-bbb222", dict(size="large")),                    # the tasks docType
 ]
 
 
@@ -244,21 +208,17 @@ def test_cli_frontmatter_roundtrips(capsys):
     assert parsed["docType"] == "spec" and parsed["workItem"] == WI
 
 
-def test_cli_frontmatter_plan_wires_parent(capsys):
-    # --parent-item must wire through to the `parent=` kwarg (the flag→kwarg glue).
-    rc, out = _run_main(["frontmatter", "--doc", "plan", "--work-item", "plan-x-aaa111",
-                         "--size", "small", "--parent-item", WI,
-                         "--created", "2026-06-14", "--updated", "2026-06-14"], capsys)
-    assert rc == 0
-    parsed = _parse_frontmatter(out)
-    assert parsed["parent"] == {"workItem": WI, "docType": "spec"}
-
-
-def test_cli_invalid_combo_exits_nonzero_via_script():
-    # The __main__ guard maps a ValueError (plan without a parent) to exit 1 + stderr.
+def test_cli_valueerror_exits_nonzero_via_script(tmp_path):
+    # The __main__ guard maps a ValueError to exit 1 + stderr. RETARGETED by #1071: the old
+    # trigger was "plan without a parent", and the parent-linkage invariant no longer exists.
+    # The guard itself does, so it keeps a live trigger — a frontmatter block with no
+    # parseable `gates:` line, which read_gate raises ValueError on.
+    d = tmp_path / "docs" / "superheroes" / WI
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("---\nsuperheroes: doc\n---\n# t\n", encoding="utf-8")
     proc = subprocess.run(
-        [sys.executable, _MODULE_PATH, "frontmatter", "--doc", "plan",
-         "--work-item", "plan-x-aaa111", "--size", "small"],
+        [sys.executable, _MODULE_PATH, "read-gate", "--doc", "spec",
+         "--work-item", WI, "--root", str(tmp_path)],
         capture_output=True, text=True)
     assert proc.returncode == 1
     assert "definition_doc error" in proc.stderr
@@ -760,16 +720,16 @@ def test_cli_set_then_read_gate(tmp_path, capsys):
     assert rc == 0 and capsys.readouterr().out.strip() == "passed"
 
 
-@pytest.mark.parametrize("doc_type,wi,parent", [
-    ("plan", "plan-x-aaa111", WI),
-    ("tasks", "tasks-x-bbb222", {"workItem": "plan-x-aaa111", "docType": "plan"}),
+@pytest.mark.parametrize("doc_type,wi", [
+    ("plan", "plan-x-aaa111"),
+    ("tasks", "tasks-x-bbb222"),
 ])
-def test_cli_set_then_read_gate_for_autonomous_doctypes(tmp_path, capsys, doc_type, wi, parent):
+def test_cli_set_then_read_gate_for_autonomous_doctypes(tmp_path, capsys, doc_type, wi):
     # Plan and Tasks are autonomous: each self-certifies its OWN gate (no owner authority,
     # unlike spec) so the next phase doesn't deadlock. That drives `set-gate --doc plan` /
     # `--doc tasks` — prove the gate CLI is doc-type-agnostic, not spec-only, and that it
     # round-trips to passed + derives an approved, schema-valid frontmatter.
-    fm = DD.frontmatter(doc_type, wi, size="small", parent=parent,
+    fm = DD.frontmatter(doc_type, wi, size="small",
                         created="2026-06-14", updated="2026-06-14")
     d = tmp_path / "docs" / "superheroes" / wi
     d.mkdir(parents=True)
