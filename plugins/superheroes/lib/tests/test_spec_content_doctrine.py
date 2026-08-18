@@ -78,15 +78,20 @@ _DOCTRINE_SURFACES = [
     os.path.join(_PLUGIN_ROOT, _REVIEW_SPEC_DETAIL),
 ]
 
-# Axis: each guard bites when a doctrine clause is removed from, or reworded out of,
-# the section that owns it.
-# banned_string: bites when the banned substring reappears on any doctrine surface.
-# register_pin: bites when the pinned register literal is absent or not exactly once.
+# Axis disclosure — each kind token names what reddens when the guarded fact drifts:
+# literal: clause removed or reworded out of its owning section.
+# literal_bold_section: clause removed from the sentence anchor within a parent block.
+# table_header: coverage table header missing from its section.
+# coverage_rows: coverage area rows missing, miscounted, or out of order.
+# section_exists: required H2 section absent.
+# section_order: two H2 sections appear in the wrong order.
+# coverage_tables_equal: discovery checklist areas diverge from the template.
+# register_r4: pinned register literal absent or not exactly once in source repo.
+# pointer_literal: charter pointer missing or its plugin-relative path does not resolve.
+# banned_file: banned substring reappears on one doctrine file.
+# banned_surfaces: banned substring reappears on any doctrine surface.
 #
 # Tuple fields: (id, surface, section, literal, kind)
-# kind: literal | table_header | coverage_rows | section_exists | section_order |
-#       coverage_tables_equal | register_r4 | pointer_literal | banned_file |
-#       banned_surfaces
 _CLAUSE_ENTRIES = [
     # A. templates/spec.md
     (
@@ -217,6 +222,13 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
+        "spec-content-fr23-carry-forward-restamp",
+        _SPEC_CONTENT_REF,
+        "## Consolidation re-read (FR-23)",
+        "every subsequent touch restates it",
+        "literal",
+    ),
+    (
         "spec-content-fr23-cannot-substitute",
         _SPEC_CONTENT_REF,
         "## Consolidation re-read (FR-23)",
@@ -326,35 +338,35 @@ _CLAUSE_ENTRIES = [
     (
         "showrunner-absorption-judgment",
         _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**",
+        "**Notify in-flight builds when a ruling is superseded.**||**absorbed into a spec**",
         "recorded advisor judgment",
         "literal_bold_section",
     ),
     (
         "showrunner-absorption-no-trigger",
         _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**",
+        "**Notify in-flight builds when a ruling is superseded.**||**no mechanical trigger**",
         "no mechanical trigger",
         "literal_bold_section",
     ),
     (
         "showrunner-consolidation-five",
         _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**",
+        "**Notify in-flight builds when a ruling is superseded.**||When a spec reaches",
         "five amendments since its last full approval",
         "literal_bold_section",
     ),
     (
         "showrunner-consolidation-next-touch",
         _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**",
+        "**Notify in-flight builds when a ruling is superseded.**||When a spec reaches",
         "next touch",
         "literal_bold_section",
     ),
     (
         "showrunner-consolidation-owner-restamp",
         _SHOWRUNNER_CHARTER,
-        "**Notify in-flight builds when a ruling is superseded.**",
+        "**Notify in-flight builds when a ruling is superseded.**||When a spec reaches",
         "the **owner's** re-stamp",
         "literal_bold_section",
     ),
@@ -480,7 +492,7 @@ _CLAUSE_ENTRIES = [
         "literal",
     ),
     (
-        "review-spec-fifteen-rows",
+        "review-spec-nine-unhappy-path-areas",
         _REVIEW_SPEC_CHARTER,
         "## Spec-Content Requirements (Opinionated)",
         "currently nine unhappy-path areas",
@@ -560,7 +572,8 @@ _CLAUSE_IDS = frozenset({
     "review-spec-coherence-annex",
     "review-spec-detail-annex-opinion-section",
     "review-spec-detail-annex-recognition-test",
-    "review-spec-fifteen-rows",
+    "review-spec-nine-unhappy-path-areas",
+    "spec-content-fr23-carry-forward-restamp",
     "showrunner-absorption-judgment",
     "showrunner-absorption-no-trigger",
     "showrunner-consolidation-five",
@@ -632,6 +645,84 @@ def _normalized(text):
     return re.sub(r"\s+", " ", text.replace("*", "")).strip()
 
 
+_SOURCE_REPO_MARKER = os.path.join(
+    _REPO_ROOT, ".claude-plugin", "marketplace.json"
+)
+
+
+def _is_superheroes_source_repo():
+    return os.path.isfile(_SOURCE_REPO_MARKER)
+
+
+def _parse_bold_section(section):
+    if "||" in section:
+        parent, anchor = section.split("||", 1)
+        return parent, anchor
+    return section, section
+
+
+def _split_sentences_in_block(block):
+    flat = " ".join(line.strip() for line in block.splitlines() if line.strip())
+    parts = re.split(
+        r"(?<=\.)\s+(?=\*\*The Anchor citation)"
+        r"|(?<=\.)\s+(?=A surface that has accumulated)"
+        r"|(?<=\.)\s+(?=When a spec reaches )"
+        r"|(?<=\.)\s+(?=\*\*Register-embedded copies)",
+        flat,
+    )
+    return [part.strip() for part in parts if part.strip()]
+
+
+def _parent_block_raw(rel, parent_marker, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    text = read_text(rel)
+    lines = text.splitlines()
+    start_indices = [i for i, line in enumerate(lines) if parent_marker in line]
+    if len(start_indices) == 0:
+        raise AssertionError(f"{rel}: parent marker {parent_marker!r} not found")
+    if len(start_indices) > 1:
+        raise AssertionError(
+            f"{rel}: parent marker {parent_marker!r} appears {len(start_indices)} times"
+        )
+    start = start_indices[0]
+    base_indent = len(lines[start]) - len(lines[start].lstrip())
+    collected = [lines[start]]
+    for i in range(start + 1, len(lines)):
+        line = lines[i]
+        if not line.strip():
+            collected.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent < base_indent:
+            break
+        stripped = line.lstrip()
+        if re.match(r"^\d+\.", stripped):
+            break
+        if stripped.startswith("When an issue being filed"):
+            break
+        collected.append(line)
+    return "\n".join(collected)
+
+
+def _scoped_sentence_raw(rel, section, read_text=None):
+    parent_marker, sentence_anchor = _parse_bold_section(section)
+    block = _parent_block_raw(rel, parent_marker, read_text)
+    sentences = _split_sentences_in_block(block)
+    matches = [s for s in sentences if sentence_anchor in s]
+    if len(matches) == 0:
+        raise AssertionError(
+            f"{rel}: sentence anchor {sentence_anchor!r} not found under "
+            f"parent {parent_marker!r}"
+        )
+    if len(matches) > 1:
+        raise AssertionError(
+            f"{rel}: sentence anchor {sentence_anchor!r} matches {len(matches)} "
+            f"sentences under parent {parent_marker!r}"
+        )
+    return matches[0]
+
+
 def _heading_level(line):
     stripped = line.strip()
     if not stripped.startswith("#"):
@@ -665,56 +756,18 @@ def _file_section_raw(rel, heading, read_text=None):
     return "\n".join(lines[start:end])
 
 
-def _bold_paragraph_raw(rel, marker, read_text=None):
-    """Return the single paragraph starting at marker, not subsequent paragraphs."""
+def _assert_literal_in_section(rel, heading, literal, *, bold=False, read_text=None):
     if read_text is None:
         read_text = _read_plugin
-    text = read_text(rel)
-    lines = text.splitlines()
-    indices = [i for i, line in enumerate(lines) if marker in line]
-    if len(indices) == 0:
-        raise AssertionError(f"{rel}: bold marker {marker!r} not found")
-    if len(indices) > 1:
+    if bold:
+        section_text = _scoped_sentence_raw(rel, heading, read_text)
+    else:
+        section_text = _file_section_raw(rel, heading, read_text)
+    normalized = _normalized(section_text)
+    if _normalized(literal) not in normalized:
         raise AssertionError(
-            f"{rel}: bold marker {marker!r} appears {len(indices)} times"
+            f"{rel}: clause missing from section {heading!r}: {literal!r}"
         )
-    start = indices[0]
-    collected = [lines[start]]
-    for i in range(start + 1, len(lines)):
-        line = lines[i]
-        if re.match(r"^\d+\.\s+\*\*", line.strip()):
-            break
-        if line.strip() and not line.startswith("   "):
-            break
-        if re.match(r"^   [A-Z][a-z]", line) and not line.strip().startswith("**"):
-            break
-        collected.append(line)
-    return "\n".join(collected)
-
-
-def _bold_section_raw(rel, marker, read_text=None):
-    if read_text is None:
-        read_text = _read_plugin
-    text = read_text(rel)
-    lines = text.splitlines()
-    indices = [i for i, line in enumerate(lines) if marker in line]
-    if len(indices) == 0:
-        raise AssertionError(f"{rel}: bold marker {marker!r} not found")
-    if len(indices) > 1:
-        raise AssertionError(
-            f"{rel}: bold marker {marker!r} appears {len(indices)} times"
-        )
-    start = indices[0]
-    end = len(lines)
-    for i in range(start + 1, len(lines)):
-        stripped = lines[i].strip()
-        if stripped.startswith("**") and stripped.endswith("**") and marker not in lines[i]:
-            end = i
-            break
-        if re.match(r"^\d+\.\s+\*\*", stripped) and i > start:
-            end = i
-            break
-    return "\n".join(lines[start:end])
 
 
 def _parse_markdown_table(section_text):
@@ -780,10 +833,13 @@ def _assert_coverage_rows_in_order(rel, heading, read_text=None):
         )
 
 
-def _discovery_coverage_areas():
+def _discovery_coverage_areas(read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
     section_text = _file_section_raw(
         _DISCOVERY_CHARTER,
         "### 3. Requirements dialogue (one question at a time)",
+        read_text,
     )
     rows = _parse_markdown_table(section_text)
     areas = []
@@ -793,20 +849,6 @@ def _discovery_coverage_areas():
             area = area[2:-2]
         areas.append(area)
     return areas
-
-
-def _assert_literal_in_section(rel, heading, literal, *, bold=False, read_text=None):
-    if read_text is None:
-        read_text = _read_plugin
-    if bold:
-        section_text = _bold_paragraph_raw(rel, heading, read_text)
-    else:
-        section_text = _file_section_raw(rel, heading, read_text)
-    normalized = _normalized(section_text)
-    if _normalized(literal) not in normalized:
-        raise AssertionError(
-            f"{rel}: clause missing from section {heading!r}: {literal!r}"
-        )
 
 
 def _assert_table_header_in_section(rel, heading, header, read_text=None):
@@ -867,9 +909,12 @@ def _assert_section_order(rel, first_heading, second_heading, read_text=None):
         )
 
 
-def _assert_coverage_tables_equal():
+def _assert_coverage_tables_equal(*, discovery_areas_fn=None, read_text=None):
     template_areas = _template_coverage_areas()
-    discovery_areas = _discovery_coverage_areas()
+    if discovery_areas_fn is None:
+        discovery_areas = _discovery_coverage_areas(read_text)
+    else:
+        discovery_areas = discovery_areas_fn()
     if discovery_areas != template_areas:
         raise AssertionError(
             "discovery coverage checklist areas %r do not match template areas %r"
@@ -877,26 +922,22 @@ def _assert_coverage_tables_equal():
         )
 
 
-def _assert_register_r4():
+def _assert_register_r4(read_text=None, isfile=None, is_source_repo=None):
+    if read_text is None:
+        read_text = _read_plugin
+    if isfile is None:
+        isfile = os.path.isfile
+    if is_source_repo is None:
+        is_source_repo = _is_superheroes_source_repo
     path = os.path.normpath(os.path.join(_PLUGIN_ROOT, _EPIC_REGISTER_REL))
-    if not os.path.isfile(path):
-        in_repo_register = os.path.normpath(
-            os.path.join(
-                _REPO_ROOT,
-                "docs",
-                "superheroes",
-                "front-half-sdlc-core-6181ee",
-                "register.md",
-            )
-        )
-        if os.path.isfile(in_repo_register):
+    if not isfile(path):
+        if is_source_repo():
             raise AssertionError(
-                "register file missing at plugin-relative path %r while "
-                "superheroes source register exists at %r"
-                % (path, in_repo_register)
+                "register file missing at plugin-relative path %r in superheroes "
+                "source repository" % path
             )
         pytest.skip(path)
-    text = _read_plugin(_EPIC_REGISTER_REL)
+    text = read_text(_EPIC_REGISTER_REL)
     if text.count(R4_AMENDMENT_CLASSES) != 1:
         raise AssertionError(
             "register R4 pinned literal found %d times, expected 1"
@@ -904,32 +945,62 @@ def _assert_register_r4():
         )
 
 
-_POINTER_SUFFIX = "skills/architect-spec/reference/spec-content.md"
+_POINTER_ROOT_PREFIX = "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/"
 
 
-def _assert_pointer_literal(rel, pointer):
-    text = _read_plugin(rel)
+def _pointer_suffix(pointer):
+    if pointer.startswith(_POINTER_ROOT_PREFIX):
+        return pointer[len(_POINTER_ROOT_PREFIX):]
+    raise AssertionError(
+        "pointer does not start with expected plugin-root prefix: %r" % pointer
+    )
+
+
+def _assert_pointer_literal(rel, pointer, read_text=None, isfile=None):
+    if read_text is None:
+        read_text = _read_plugin
+    if isfile is None:
+        isfile = os.path.isfile
+    text = read_text(rel)
     if pointer + "`" not in text:
         raise AssertionError(
             f"{rel}: plugin-relative pointer missing: {pointer!r}"
         )
-    path = os.path.join(_PLUGIN_ROOT, _POINTER_SUFFIX)
-    if not os.path.isfile(path):
+    suffix = _pointer_suffix(pointer)
+    path = os.path.join(_PLUGIN_ROOT, suffix)
+    if not isfile(path):
         raise AssertionError(
-            f"plugin-relative path does not resolve: {_POINTER_SUFFIX!r}"
+            f"plugin-relative path does not resolve: {suffix!r}"
         )
 
 
-def _assert_banned_in_file(rel, banned):
-    text = _read_plugin(rel)
-    if banned in text:
-        raise AssertionError(f"{rel}: banned string found: {banned!r}")
+def _assert_banned_in_file(rel, banned, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
+    text = read_text(rel)
+    normalized = _normalized(text)
+    if _normalized(banned) in normalized:
+        line_no = None
+        for i, line in enumerate(text.splitlines()):
+            if banned in line:
+                line_no = i + 1
+                break
+        if line_no is not None:
+            raise AssertionError(
+                f"{rel}: banned string found: {banned!r} at line {line_no}"
+            )
+        raise AssertionError(
+            f"{rel}: banned string found: {banned!r} at "
+            "line: unknown (matched only after normalization)"
+        )
 
 
-def _assert_banned_across_surfaces(banned):
+def _assert_banned_across_surfaces(banned, read_text=None):
+    if read_text is None:
+        read_text = _read_plugin
     for path in _DOCTRINE_SURFACES:
         rel = os.path.relpath(path, _PLUGIN_ROOT)
-        _assert_banned_in_file(rel, banned)
+        _assert_banned_in_file(rel, banned, read_text)
 
 
 def _run_clause_check(entry):
@@ -974,6 +1045,26 @@ def test_clause_table_populated():
     assert {entry[0] for entry in _CLAUSE_ENTRIES} == _CLAUSE_IDS
 
 
+def test_clause_entries_are_well_formed():
+    for clause_id, surface, section, literal, kind in _CLAUSE_ENTRIES:
+        if kind in {"literal", "literal_bold_section", "table_header", "banned_file"}:
+            assert literal, f"{clause_id}: {kind} entry needs a non-empty literal"
+        if kind == "section_order":
+            assert "||" in section, f"{clause_id}: section_order needs || separator"
+        if kind == "literal_bold_section":
+            assert "||" in section, (
+                f"{clause_id}: literal_bold_section needs parent||anchor section"
+            )
+        if kind in {"section_exists", "table_header", "coverage_rows", "literal"}:
+            assert section, f"{clause_id}: {kind} entry needs a section heading"
+        if kind == "pointer_literal":
+            assert literal, f"{clause_id}: pointer_literal entry needs a pointer literal"
+        if kind == "register_r4":
+            assert literal, f"{clause_id}: register_r4 entry needs a pinned literal"
+        if kind == "banned_surfaces":
+            assert literal, f"{clause_id}: banned_surfaces entry needs a banned string"
+
+
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
 
 
@@ -1000,13 +1091,16 @@ def test_negative_literal_in_section_fails():
 
 
 def test_negative_literal_bold_paragraph_fails():
-    marker = "**Notify in-flight builds when a ruling is superseded.**"
+    parent = "**Notify in-flight builds when a ruling is superseded.**"
+    section = f"{parent}||**absorbed into a spec**"
     synthetic = "\n".join([
-        "1. **Duty.**",
-        f"   {marker} When you record an owner decision.",
-        "   When an issue being filed is a register-consuming child —",
-        "   duplicate recorded advisor judgment here without the absorption grant.",
-        "2. **Next duty.**",
+        "2. **Board hygiene — file and wire.**",
+        f"   {parent} When you record an owner decision that supersedes.",
+        "   **The Anchor citation is the reverse index:** affected work is located",
+        "   by its Anchor slot; recorded advisor judgment decoy on neighbour sentence.",
+        "   A surface that has accumulated rulings may be **absorbed into a spec** by",
+        "   owner-stamped amendment only, without the judgment grant.",
+        "3. **Next duty.**",
     ])
 
     def read_text(rel):
@@ -1017,7 +1111,7 @@ def test_negative_literal_bold_paragraph_fails():
     _expect_assertion_error(
         lambda: _assert_literal_in_section(
             _SHOWRUNNER_CHARTER,
-            marker,
+            section,
             "recorded advisor judgment",
             bold=True,
             read_text=read_text,
@@ -1111,6 +1205,29 @@ def test_negative_section_order_fails():
     )
 
 
+def test_negative_coverage_rows_order_fails():
+    rows = list(_EXPECTED_COVERAGE_AREAS)
+    rows[0], rows[1] = rows[1], rows[0]
+    table_lines = [
+        "## Coverage",
+        _COVERAGE_TABLE_HEADER,
+        "| --- | --- | --- | --- |",
+    ]
+    for area in rows:
+        table_lines.append(f"| {area} | Specify | Yes | reason |")
+    synthetic = "\n".join(table_lines)
+
+    def read_text(rel):
+        if rel == "templates/spec.md":
+            return synthetic
+        return _read_plugin(rel)
+
+    _expect_assertion_error(
+        lambda: _assert_coverage_rows_in_order("templates/spec.md", "## Coverage", read_text),
+        match="do not match expected order",
+    )
+
+
 def test_negative_coverage_tables_equal_fails():
     template_areas = _template_coverage_areas()
 
@@ -1118,44 +1235,40 @@ def test_negative_coverage_tables_equal_fails():
         return template_areas[:-1]
 
     _expect_assertion_error(
-        lambda: _assert_coverage_tables_equal_with(
+        lambda: _assert_coverage_tables_equal(
             discovery_areas_fn=fake_discovery_areas,
         ),
         match="do not match template areas",
     )
 
 
-def _assert_coverage_tables_equal_with(*, discovery_areas_fn=None):
-    template_areas = _template_coverage_areas()
-    if discovery_areas_fn is None:
-        discovery_areas = _discovery_coverage_areas()
-    else:
-        discovery_areas = discovery_areas_fn()
-    if discovery_areas != template_areas:
-        raise AssertionError(
-            "discovery coverage checklist areas %r do not match template areas %r"
-            % (discovery_areas, template_areas)
-        )
-
-
 def test_negative_register_r4_missing_literal_fails():
-    path = os.path.normpath(os.path.join(_PLUGIN_ROOT, _EPIC_REGISTER_REL))
-    if not os.path.isfile(path):
-        pytest.skip("register file absent in this checkout")
-    text = _read_plugin(_EPIC_REGISTER_REL)
-    synthetic = text.replace(R4_AMENDMENT_CLASSES, "altered R4 wording")
+    def read_text(rel):
+        if rel == _EPIC_REGISTER_REL:
+            return "altered R4 wording"
+        return _read_plugin(rel)
+
     _expect_assertion_error(
-        lambda: _assert_register_r4_with_text(synthetic),
+        lambda: _assert_register_r4(read_text=read_text),
         match="found 0 times, expected 1",
     )
 
 
-def _assert_register_r4_with_text(text):
-    if text.count(R4_AMENDMENT_CLASSES) != 1:
-        raise AssertionError(
-            "register R4 pinned literal found %d times, expected 1"
-            % text.count(R4_AMENDMENT_CLASSES)
-        )
+def test_negative_register_r4_missing_file_in_source_repo_fails():
+    def isfile(candidate):
+        return False
+
+    def is_source_repo():
+        return True
+
+    _expect_assertion_error(
+        lambda: _assert_register_r4(
+            read_text=lambda rel: "",
+            isfile=isfile,
+            is_source_repo=is_source_repo,
+        ),
+        match="register file missing at plugin-relative path",
+    )
 
 
 def test_negative_pointer_literal_missing_fails():
@@ -1168,35 +1281,87 @@ def test_negative_pointer_literal_missing_fails():
     )
 
 
+def test_negative_pointer_literal_unresolvable_path_fails():
+    pointer = (
+        "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/missing/spec-content.md"
+    )
+    charter_text = _read_plugin(_ARCHITECT_SPEC_CHARTER)
+    synthetic = charter_text + f"\n`{pointer}`\n"
+
+    def read_text(rel):
+        if rel == _ARCHITECT_SPEC_CHARTER:
+            return synthetic
+        return _read_plugin(rel)
+
+    def isfile(path):
+        return path != os.path.join(_PLUGIN_ROOT, "skills/missing/spec-content.md")
+
+    _expect_assertion_error(
+        lambda: _assert_pointer_literal(
+            _ARCHITECT_SPEC_CHARTER,
+            pointer,
+            read_text=read_text,
+            isfile=isfile,
+        ),
+        match="plugin-relative path does not resolve",
+    )
+
+
 def test_negative_banned_in_file_fails():
     rel = "templates/spec.md"
     text = _read_plugin(rel) + "\n" + _BANNED_SHARED_CONTRACT
+
+    def read_text(path):
+        if path == rel:
+            return text
+        return _read_plugin(path)
+
     _expect_assertion_error(
-        lambda: _assert_banned_in_file_with_text(rel, text, _BANNED_SHARED_CONTRACT),
+        lambda: _assert_banned_in_file(rel, _BANNED_SHARED_CONTRACT, read_text),
         match="banned string found",
     )
 
 
-def _assert_banned_in_file_with_text(rel, text, banned):
-    if banned in text:
-        raise AssertionError(f"{rel}: banned string found: {banned!r}")
+def test_negative_banned_in_file_line_wrapped_fails():
+    rel = "templates/spec.md"
+    text = _read_plugin(rel) + "\nthe shared\ncontract\n"
+
+    def read_text(path):
+        if path == rel:
+            return text
+        return _read_plugin(path)
+
+    _expect_assertion_error(
+        lambda: _assert_banned_in_file(rel, _BANNED_SHARED_CONTRACT, read_text),
+        match="matched only after normalization",
+    )
+
+
+def test_negative_banned_in_file_emphasis_fails():
+    rel = "templates/spec.md"
+    text = _read_plugin(rel) + "\nthe **shared contract** evasion\n"
+
+    def read_text(path):
+        if path == rel:
+            return text
+        return _read_plugin(path)
+
+    _expect_assertion_error(
+        lambda: _assert_banned_in_file(rel, _BANNED_SHARED_CONTRACT, read_text),
+        match="banned string found",
+    )
 
 
 def test_negative_banned_across_surfaces_fails():
+    rel = "templates/spec.md"
+    injected = _read_plugin(rel) + "\n" + _BANNED_SHARED_CONTRACT
+
+    def read_text(path):
+        if path == rel:
+            return injected
+        return _read_plugin(path)
+
     _expect_assertion_error(
-        lambda: _assert_banned_across_surfaces_with(
-            _BANNED_SHARED_CONTRACT,
-            inject_rel="templates/spec.md",
-        ),
+        lambda: _assert_banned_across_surfaces(_BANNED_SHARED_CONTRACT, read_text),
         match="banned string found",
     )
-
-
-def _assert_banned_across_surfaces_with(banned, *, inject_rel):
-    for path in _DOCTRINE_SURFACES:
-        rel = os.path.relpath(path, _PLUGIN_ROOT)
-        text = _read_plugin(rel)
-        if rel == inject_rel:
-            text = text + "\n" + banned
-        if banned in text:
-            raise AssertionError(f"{rel}: banned string found: {banned!r}")

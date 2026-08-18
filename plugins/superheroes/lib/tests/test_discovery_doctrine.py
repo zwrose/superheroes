@@ -433,6 +433,9 @@ def _assert_coverage_table_rows_match_areas(table_text, expected_areas):
         )
 
 
+_SHOW_IT_VALUES = frozenset({"Yes", "No", "—"})
+
+
 def _assert_coverage_cells_are_real(table_text):
     rows = _parse_markdown_table(table_text)
     placeholder_re = re.compile(r"\{\{.*\}\}")
@@ -459,17 +462,17 @@ def _assert_coverage_cells_are_real(table_text):
                 "coverage row %r Show-it? is a template placeholder: %r"
                 % (row["Area"], show_it)
             )
+        if show_it not in _SHOW_IT_VALUES:
+            raise AssertionError(
+                "coverage row %r Show-it? must be Yes, No, or —; got %r"
+                % (row["Area"], show_it)
+            )
         if show_it == "—":
             if disposition != "N-A":
                 raise AssertionError(
                     "coverage row %r Show-it? is em dash but Disposition is not N-A: %r"
                     % (row["Area"], disposition)
                 )
-        elif show_it.casefold() in _PLACEHOLDER_CELLS:
-            raise AssertionError(
-                "coverage row %r Show-it? is a placeholder token: %r"
-                % (row["Area"], show_it)
-            )
         if not where:
             raise AssertionError(
                 "coverage row %r has blank Where / why" % row["Area"]
@@ -1517,7 +1520,7 @@ def test_negative_coverage_tbd_show_it_fails():
     table = _synthetic_coverage_table(rows)
     _expect_assertion_error(
         lambda: _assert_coverage_cells_are_real(table),
-        match="Show-it\\? is a placeholder token",
+        match="Show-it\\? must be Yes, No, or —",
     )
 
 
