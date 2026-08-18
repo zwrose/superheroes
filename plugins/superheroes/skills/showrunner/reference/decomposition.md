@@ -163,7 +163,7 @@ the round's audit record carries the probe's engagement read.
 
 ### The five lenses
 
-Each lens is one plain sentence; the audit tool records the token alongside the name:
+Each lens is one plain sentence; the trail records the token alongside the name:
 
 - **Contradiction with the spec** (`spec-contradiction`) — a child body, register entry, or slice
   boundary contradicts the owner-approved spec.
