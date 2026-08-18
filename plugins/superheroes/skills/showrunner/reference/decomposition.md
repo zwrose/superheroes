@@ -330,8 +330,11 @@ checked against it.
 
 **Results:**
 
-- `recorded`, `refused` (write verbs)
-- `conforming`, `nonconforming`, `undecided` (`check`)
+- `recorded` — write verbs
+- `refused` — write verbs
+- `conforming` — the check verb
+- `nonconforming` — the check verb
+- `undecided` — the check verb
 
 **Lenses:**
 

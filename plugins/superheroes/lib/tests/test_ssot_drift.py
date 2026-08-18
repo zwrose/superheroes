@@ -21,6 +21,7 @@ are gone with them; no lib/*.js copy-holders remain):
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
 - Register-check vocabulary                              (home: register_check.py)
+- Package-read-audit vocabulary                          (home: package_read_audit.py)
 - R5 weight vocabulary + R7 park surface (pinned literals) (home: epic register when
   reachable; copy-holders: architect-discovery, showrunner SKILL.md, epic children)
 - Anchor invariant clauses + inversions       (home: skills/showrunner/reference/issue-contract.md;
@@ -3131,6 +3132,420 @@ def test_register_check_vocabulary_completeness():
         "missing from frozenset: %r; in frozenset but not derived: %r"
         % (missing_undecided, extra_undecided)
     )
+
+
+# --- Cluster: package-read-audit vocabulary (package_read_audit → decomposition.md) ---
+#
+# Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
+# - skills/showrunner/reference/decomposition.md ## Vocabulary (drift-tested)
+#
+# Drift-tested labels guarded in the vocabulary section: Schema:, Results:, Lenses:,
+# Part statuses:, Control-probe reads:, Weights:, Dispositions:, Verification outcomes:,
+# Sync-check results:, Record kinds:, Refusal reasons:, Nonconformity kinds:,
+# Undecided reasons:, Exit codes:.
+
+
+_PACKAGE_READ_AUDIT_DOC = "skills/showrunner/reference/decomposition.md"
+
+_PACKAGE_READ_AUDIT_KNOWN_LABELS = frozenset({
+    "Schema",
+    "Results",
+    "Lenses",
+    "Part statuses",
+    "Control-probe reads",
+    "Weights",
+    "Dispositions",
+    "Verification outcomes",
+    "Sync-check results",
+    "Record kinds",
+    "Refusal reasons",
+    "Nonconformity kinds",
+    "Undecided reasons",
+    "Exit codes",
+})
+
+
+def _package_read_audit_vocabulary_section(doc):
+    """The drift-tested vocabulary section in decomposition.md — fails closed."""
+    headings = re.findall(
+        r"^## Vocabulary \(drift-tested\)\s*$",
+        doc,
+        re.MULTILINE,
+    )
+    if len(headings) != 1:
+        raise AssertionError(
+            "decomposition.md: expected exactly one "
+            "## Vocabulary (drift-tested) heading, found %d"
+            % len(headings)
+        )
+    m = re.search(
+        r"^## Vocabulary \(drift-tested\)\s*\n(.*?)(?:\n## |\Z)",
+        doc,
+        re.MULTILINE | re.DOTALL,
+    )
+    if not m:
+        raise AssertionError(
+            "decomposition.md: ## Vocabulary (drift-tested) section not found "
+            "(moved or reworded?)"
+        )
+    return m.group(1)
+
+
+def _package_read_audit_labels_in_section(section):
+    """Bold labels under the vocabulary section — fails closed on zero or unknown labels."""
+    labels = re.findall(r"^\*\*([^*]+):\*\*", section, re.MULTILINE)
+    if not labels:
+        raise AssertionError(
+            "decomposition.md: vocabulary section parsed to zero labels "
+            "(heading present but empty?)"
+        )
+    unknown = set(labels) - _PACKAGE_READ_AUDIT_KNOWN_LABELS
+    if unknown:
+        raise AssertionError(
+            "decomposition.md: unrecognized vocabulary label(s) %r "
+            "(reader drift or new label not registered in drift test?)"
+            % sorted(unknown)
+        )
+    return labels
+
+
+def _package_read_audit_tokens_under_label(section, label):
+    """Inline-code bullet tokens under a **Label:** block."""
+    pattern = (
+        r"\*\*%s:\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+        % re.escape(label)
+    )
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    if len(matches) != 1:
+        raise AssertionError(
+            "decomposition.md: expected exactly one **%s:** label, found %d"
+            % (label, len(matches))
+        )
+    tokens = re.findall(r"^- `([^`]+)`", matches[0].group(1), re.MULTILINE)
+    if not tokens:
+        raise AssertionError(
+            "decomposition.md: **%s:** bullet list parsed to zero tokens "
+            "(regex drift or empty list?)"
+            % label
+        )
+    return tokens
+
+
+def _package_read_audit_schema_from_doc(doc):
+    section = _package_read_audit_vocabulary_section(doc)
+    _package_read_audit_labels_in_section(section)
+    return set(_package_read_audit_tokens_under_label(section, "Schema"))
+
+
+def _package_read_audit_write_results_from_doc(doc):
+    section = _package_read_audit_vocabulary_section(doc)
+    _package_read_audit_labels_in_section(section)
+    pattern = r"\*\*Results:\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    if len(matches) != 1:
+        raise AssertionError(
+            "decomposition.md: expected exactly one **Results:** label, found %d"
+            % len(matches)
+        )
+    write_results = set()
+    check_results = set()
+    for line in matches[0].group(1).splitlines():
+        m = re.match(r"^- `([^`]+)` — (.+)$", line.strip())
+        if not m:
+            continue
+        token, note = m.group(1), m.group(2)
+        if "write verb" in note:
+            write_results.add(token)
+        elif "check verb" in note:
+            check_results.add(token)
+        else:
+            raise AssertionError(
+                "decomposition.md: **Results:** line %r has unrecognized annotation %r"
+                % (line, note)
+            )
+    if not write_results:
+        raise AssertionError(
+            "decomposition.md: **Results:** parsed to zero write-result tokens"
+        )
+    if not check_results:
+        raise AssertionError(
+            "decomposition.md: **Results:** parsed to zero check-result tokens"
+        )
+    return write_results, check_results
+
+
+def _package_read_audit_labeled_set_from_doc(doc, label):
+    section = _package_read_audit_vocabulary_section(doc)
+    _package_read_audit_labels_in_section(section)
+    return set(_package_read_audit_tokens_under_label(section, label))
+
+
+def _package_read_audit_exit_codes_from_doc(doc):
+    section = _package_read_audit_vocabulary_section(doc)
+    _package_read_audit_labels_in_section(section)
+    pattern = r"\*\*Exit codes:\*\*\s*\n\n(.*?)(?=\n\*\*|\n## |\Z)"
+    matches = list(re.finditer(pattern, section, re.DOTALL))
+    if len(matches) != 1:
+        raise AssertionError(
+            "decomposition.md: expected exactly one **Exit codes:** label, found %d"
+            % len(matches)
+        )
+    pairs = re.findall(
+        r"^- `(\d+)` — (\w+)",
+        matches[0].group(1),
+        re.MULTILINE,
+    )
+    if not pairs:
+        raise AssertionError(
+            "decomposition.md: **Exit codes:** bullet list parsed to zero tokens "
+            "(regex drift or empty list?)"
+        )
+    return {int(code): word for code, word in pairs}
+
+
+def _package_read_audit_exit_codes_from_home():
+    import package_read_audit
+
+    return {
+        package_read_audit.EXIT_CONFORMING: package_read_audit.RESULT_CONFORMING,
+        package_read_audit.EXIT_NONCONFORMING: package_read_audit.RESULT_NONCONFORMING,
+        package_read_audit.EXIT_UNDECIDED: package_read_audit.RESULT_UNDECIDED,
+    }
+
+
+def _package_read_audit_synthetic_vocabulary_doc():
+    """Minimal valid vocabulary block for negative-test mutation."""
+    import package_read_audit
+
+    lines = [
+        "## Vocabulary (drift-tested)",
+        "",
+        "**Schema:**",
+        "",
+        "- `%s`" % package_read_audit.SCHEMA,
+        "",
+        "**Results:**",
+        "",
+    ]
+    for token in sorted(package_read_audit.WRITE_RESULTS):
+        lines.append("- `%s` — write verbs" % token)
+    for token in sorted(package_read_audit.CHECK_RESULTS):
+        lines.append("- `%s` — the check verb" % token)
+    lines.extend([
+        "",
+        "**Lenses:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.LENSES):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Part statuses:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.PART_STATUSES):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Control-probe reads:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.CONTROL_PROBE_READS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Weights:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.WEIGHTS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Dispositions:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.DISPOSITIONS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Verification outcomes:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.OUTCOMES):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Sync-check results:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.SYNC_RESULTS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Record kinds:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.RECORD_KINDS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Refusal reasons:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.REFUSAL_REASONS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Nonconformity kinds:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.NONCONFORMITY_KINDS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Undecided reasons:**",
+        "",
+    ])
+    for token in sorted(package_read_audit.UNDECIDED_REASONS):
+        lines.append("- `%s`" % token)
+    lines.extend([
+        "",
+        "**Exit codes:**",
+        "",
+        "- `0` — conforming",
+        "- `1` — nonconforming",
+        "- `2` — undecided",
+    ])
+    return "\n".join(lines) + "\n"
+
+
+def test_package_read_audit_vocabulary_in_decomposition_doc():
+    """§11: decomposition.md restates package_read_audit.py vocabulary on every registry axis."""
+    import package_read_audit
+
+    doc = _read(_PACKAGE_READ_AUDIT_DOC)
+
+    home_schema = {package_read_audit.SCHEMA}
+    doc_schema = _package_read_audit_schema_from_doc(doc)
+    assert doc_schema == home_schema, (
+        "decomposition.md Schema vocabulary drift from package_read_audit.SCHEMA — "
+        "missing from doc: %r; extra in doc: %r"
+        % (home_schema - doc_schema, doc_schema - home_schema)
+    )
+
+    home_write = set(package_read_audit.WRITE_RESULTS)
+    home_check = set(package_read_audit.CHECK_RESULTS)
+    doc_write, doc_check = _package_read_audit_write_results_from_doc(doc)
+    assert doc_write == home_write, (
+        "decomposition.md write-result vocabulary drift from "
+        "package_read_audit.WRITE_RESULTS — "
+        "missing from doc: %r; extra in doc: %r"
+        % (home_write - doc_write, doc_write - home_write)
+    )
+    assert doc_check == home_check, (
+        "decomposition.md check-result vocabulary drift from "
+        "package_read_audit.CHECK_RESULTS — "
+        "missing from doc: %r; extra in doc: %r"
+        % (home_check - doc_check, doc_check - home_check)
+    )
+
+    comparisons = (
+        ("Lenses", package_read_audit.LENSES),
+        ("Part statuses", package_read_audit.PART_STATUSES),
+        ("Control-probe reads", package_read_audit.CONTROL_PROBE_READS),
+        ("Weights", package_read_audit.WEIGHTS),
+        ("Dispositions", package_read_audit.DISPOSITIONS),
+        ("Verification outcomes", package_read_audit.OUTCOMES),
+        ("Sync-check results", package_read_audit.SYNC_RESULTS),
+        ("Record kinds", package_read_audit.RECORD_KINDS),
+        ("Refusal reasons", package_read_audit.REFUSAL_REASONS),
+        ("Nonconformity kinds", package_read_audit.NONCONFORMITY_KINDS),
+        ("Undecided reasons", package_read_audit.UNDECIDED_REASONS),
+    )
+    for label, home_set in comparisons:
+        home = set(home_set)
+        doc_tokens = _package_read_audit_labeled_set_from_doc(doc, label)
+        assert doc_tokens == home, (
+            "decomposition.md %s vocabulary drift from package_read_audit — "
+            "missing from doc: %r; extra in doc: %r"
+            % (label, home - doc_tokens, doc_tokens - home)
+        )
+
+    home_exit = _package_read_audit_exit_codes_from_home()
+    doc_exit = _package_read_audit_exit_codes_from_doc(doc)
+    assert doc_exit == home_exit, (
+        "decomposition.md Exit codes mapping drift from package_read_audit — "
+        "missing from doc: %r; extra in doc: %r"
+        % (
+            {k: home_exit[k] for k in home_exit if k not in doc_exit},
+            {k: doc_exit[k] for k in doc_exit if k not in home_exit},
+        )
+    )
+
+
+def test_package_read_audit_vocabulary_reader_renamed_heading_raises():
+    doc = _package_read_audit_synthetic_vocabulary_doc().replace(
+        "## Vocabulary (drift-tested)",
+        "## Vocabulary (archived)",
+        1,
+    )
+    _expect_assertion_error(
+        lambda: _package_read_audit_vocabulary_section(doc),
+        match=r"decomposition\.md: expected exactly one",
+    )
+
+
+def test_package_read_audit_vocabulary_reader_empty_section_raises():
+    doc = "## Vocabulary (drift-tested)\n\nIntro only — no labels.\n"
+    _expect_assertion_error(
+        lambda: _package_read_audit_labels_in_section(
+            _package_read_audit_vocabulary_section(doc)
+        ),
+        match=r"decomposition\.md: vocabulary section parsed to zero labels",
+    )
+
+
+def test_package_read_audit_vocabulary_reader_token_added_fails():
+    import package_read_audit
+
+    doc = _package_read_audit_synthetic_vocabulary_doc()
+    doc = doc.replace(
+        "**Lenses:**\n\n",
+        "**Lenses:**\n\n- `extra-lens`\n",
+        1,
+    )
+
+    def _check():
+        doc_lenses = _package_read_audit_labeled_set_from_doc(doc, "Lenses")
+        home = set(package_read_audit.LENSES)
+        assert doc_lenses == home, (
+            "decomposition.md Lenses vocabulary drift from package_read_audit — "
+            "missing from doc: %r; extra in doc: %r"
+            % (home - doc_lenses, doc_lenses - home)
+        )
+
+    _expect_assertion_error(_check, match=r"Lenses vocabulary drift")
+
+
+def test_package_read_audit_vocabulary_reader_token_removed_fails():
+    import package_read_audit
+
+    doc = _package_read_audit_synthetic_vocabulary_doc()
+    first_lens = sorted(package_read_audit.LENSES)[0]
+    doc = doc.replace("- `%s`\n" % first_lens, "", 1)
+
+    def _check():
+        doc_lenses = _package_read_audit_labeled_set_from_doc(doc, "Lenses")
+        home = set(package_read_audit.LENSES)
+        assert doc_lenses == home, (
+            "decomposition.md Lenses vocabulary drift from package_read_audit — "
+            "missing from doc: %r; extra in doc: %r"
+            % (home - doc_lenses, doc_lenses - home)
+        )
+
+    _expect_assertion_error(_check, match=r"Lenses vocabulary drift")
+
+
 # --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
 
 # The epic register is the home of record for these sentences. lib/tests/ ships inside the
