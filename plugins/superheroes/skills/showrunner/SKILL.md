@@ -217,7 +217,7 @@ above).
    children unfiled** if it hits its ceiling unconverged. **You are the maker when you authored the
    package** — your own model family is excluded from every seat. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md` — for the
-   protocol and the audit trail's machine-written receipts.
+   protocol and the audit trail's element list.
    **A spec contradiction never resolves as a silent spec edit.** A package-read contradiction
    finding resolves as a **package fix**, an **owner-stamped spec amendment**, or a **recorded
    refutation in the audit trail** — those three, and nothing else.

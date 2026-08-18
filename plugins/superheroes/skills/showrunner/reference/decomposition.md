@@ -10,7 +10,6 @@
 - [Reciprocal cross-epic seams](#reciprocal-cross-epic-seams)
 - [The child-PR register vet row](#the-child-pr-register-vet-row)
 - [The single-issue fast path](#the-single-issue-fast-path)
-- [Vocabulary (drift-tested)](#vocabulary-drift-tested)
 
 # Epic decomposition
 
@@ -222,20 +221,10 @@ is nonconforming:
 - Each fix's verification outcome
 - A recorded verification pass (an invocation with rounds and none is nonconforming)
 
-The per-round receipt is **machine-written, not reconstructed from a session log**:
-`lib/package_read_audit.py` appends the invocation record, each round's record (lenses run, the
-parts read with their unreviewed-at-entry status, the control probe's engagement read, the findings
-raised, the findings declined further extension, and whether the round was mechanical-only), and the
-verification record (each finding's disposition and outcome, and the sync-check result per child);
-its `check` verb reads the trail back and reports `conforming`, `nonconforming`, or `undecided` —
-`conforming` means the trail is complete and well-formed: every element recorded, every record's
-values in vocabulary and of the right type. Convergence and the park call are the advisor's recorded judgment — the tool records them and checks nothing was left unrecorded; it never re-decides them.
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/package_read_audit.py" check \
-  --trail docs/superheroes/<work-item>/package-read-audit.md
-```
+The per-round receipt machinery is **pending (#1077)**. Until it lands, the advisor **writes the
+trail by hand** against the element list above. Convergence and the park call are the advisor's
+judgment, recorded in the trail; the tool (when it lands) checks completeness and well-formedness,
+never re-decides them.
 
 ### The ceiling park
 
@@ -243,8 +232,8 @@ A read invocation that fails to converge within the ceiling named at its invocat
 owner with the children unfiled and the open findings named**. The park's surface — where the note
 lands, and the durable copy — is defined in the showrunner charter's duty 1.
 
-The trail records the park — the rounds run, what each asserted, the open findings — and `check`
-confirms that record is complete; it does not decide that a park is owed.
+The trail records the park — the rounds run, what each asserted, the open findings. The park call is
+the advisor's; no tool decides that a park is owed.
 
 ## Re-entry after a substantive amendment
 
@@ -321,131 +310,3 @@ in so many words — an explicit line, never an inference.** A single-issue spec
 the missing register on the single-issue side** — reciprocity
 ([Reciprocal cross-epic seams](#reciprocal-cross-epic-seams)) and amendment propagation both read
 that issue body as that side's register home.
-
-## Vocabulary (drift-tested)
-
-The Python module `package_read_audit.py` is the authoritative home for these tokens; this list is
-checked against it.
-
-**Schema:**
-
-- `package-read-audit/1`
-
-**Results:**
-
-- `recorded` — write verbs
-- `refused` — write verbs
-- `conforming` — the check verb
-- `nonconforming` — the check verb
-- `undecided` — the check verb
-
-**Lenses:**
-
-- `spec-contradiction`
-- `register-drift`
-- `coverage-exactly-once`
-- `collisions`
-- `dod-adequacy`
-
-**Part statuses:**
-
-- `unreviewed`
-- `reviewed`
-
-**Control-probe reads:**
-
-- `engaged`
-- `not-engaged`
-- `not-applicable`
-
-**Weights:**
-
-- `light`
-- `full`
-
-**Dispositions:**
-
-- `package-fix`
-- `spec-amendment`
-- `refutation`
-- `declined-extension`
-
-**Verification outcomes:**
-
-- `verified`
-- `failed`
-
-**Sync-check results:**
-
-- `pass`
-- `fail`
-- `undecided`
-
-**Record kinds:**
-
-- `invocation`
-- `round`
-- `verification`
-
-**Refusal reasons:**
-
-- `trail-unreadable`
-- `trail-missing`
-- `trail-malformed`
-- `invocation-duplicate`
-- `invocation-unknown`
-- `round-duplicate`
-- `round-exceeds-ceiling`
-- `round-invalid`
-- `lens-unrecognized`
-- `part-malformed`
-- `part-status-unrecognized`
-- `control-probe-unrecognized`
-- `finding-malformed`
-- `finding-duplicate`
-- `finding-unknown`
-- `verification-duplicate`
-- `disposition-not-allowed-for-lens`
-- `evidence-empty`
-- `disposition-unrecognized`
-- `outcome-unrecognized`
-- `sync-check-malformed`
-- `sync-check-duplicate`
-- `sync-result-unrecognized`
-- `weight-unrecognized`
-- `ceiling-invalid`
-- `measurable-invalid`
-- `seats-missing`
-- `usage`
-- `internal-error`
-
-**Nonconformity kinds:**
-
-- `round-missing`
-- `element-missing`
-- `finding-unverified`
-- `disposition-mismatch`
-- `disposition-not-allowed-for-lens`
-- `refutation-evidence-missing`
-- `sync-check-missing`
-- `sync-check-incomplete`
-- `sync-check-failed`
-- `record-value-invalid`
-
-**Undecided reasons:**
-
-- `trail-unreadable`
-- `trail-missing`
-- `trail-empty`
-- `trail-malformed`
-- `invocation-unknown`
-- `usage`
-- `internal-error`
-
-**Exit codes:**
-
-- `0` — recorded — write verbs
-- `1` — refused — write verbs
-- `0` — conforming — the check verb
-- `1` — nonconforming — the check verb
-- `2` — undecided — the check verb

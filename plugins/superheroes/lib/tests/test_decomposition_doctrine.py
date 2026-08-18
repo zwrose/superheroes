@@ -13,18 +13,13 @@ the showrunner charter duties 3 and 4.
 # right thing — no negation regexes, no paragraph heuristics, no substring checks wearing
 # structural labels. If a claim can only be checked by judging what a sentence means, it belongs
 # to the review panel.
-import importlib.util
 import os
 import re
-import sys
 
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-_LIB = os.path.normpath(os.path.join(_HERE, ".."))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
-if _LIB not in sys.path:
-    sys.path.insert(0, _LIB)
 
 _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _DECOMPOSITION_REF = "skills/showrunner/reference/decomposition.md"
@@ -64,8 +59,15 @@ _DECOMPOSITION_H2_HEADINGS = [
     "Reciprocal cross-epic seams",
     "The child-PR register vet row",
     "The single-issue fast path",
-    "Vocabulary (drift-tested)",
 ]
+
+_LENS_TOKENS = (
+    "spec-contradiction",
+    "register-drift",
+    "coverage-exactly-once",
+    "collisions",
+    "dod-adequacy",
+)
 
 _AMENDMENTS_H2_HEADINGS = [
     "What an amendment is, and when this fires",
@@ -90,33 +92,21 @@ _AUDIT_TRAIL_ELEMENTS = [
 ]
 
 _LEDGER_READING_SENTENCE = (
-    "Convergence and the park call are the advisor's recorded judgment — the tool records them "
-    "and checks nothing was left unrecorded; it never re-decides them."
+    "Convergence and the park call are the advisor's judgment, recorded in the trail; the tool "
+    "(when it lands) checks completeness and well-formedness, never re-decides them."
 )
+
+_PENDING_SENTENCE = "The per-round receipt machinery is **pending (#1077)**."
 
 _WORKED_EXAMPLE_HEADING = (
     "### Worked example — splitting a criterion that spans two children"
 )
 
-_VOCAB_DRIFT_HEADING = "## Vocabulary (drift-tested)"
 _TRIGGERED_FIELDS_HEADING = (
     "## Triggered fields — the artifacts raise them, not your memory"
 )
 
 _CONTENTS_ROW_RE = re.compile(r"^- \[(.+?)\]\(#([^)]*)\)\s*$")
-
-
-def _load_package_read_audit():
-    path = os.path.join(_LIB, "package_read_audit.py")
-    spec = importlib.util.spec_from_file_location(
-        "package_read_audit_decomposition_test", path
-    )
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod
-
-
-PRA = _load_package_read_audit()
 
 
 def _read_plugin(rel):
@@ -268,27 +258,6 @@ def _assert_contents_covers_headings(ref_rel, pinned_headings, read_text=None):
         raise AssertionError(f"{ref_rel}: " + "; ".join(wrong_anchors))
 
 
-def _vocabulary_section_text(text):
-    lines = text.splitlines()
-    indices = [
-        i for i, line in enumerate(lines) if line.strip() == _VOCAB_DRIFT_HEADING
-    ]
-    if len(indices) != 1:
-        raise RuntimeError(
-            f"{_VOCAB_DRIFT_HEADING!r} found {len(indices)} times (expected 1)"
-        )
-    start = indices[0] + 1
-    end = len(lines)
-    for i in range(start, len(lines)):
-        if lines[i].startswith("## "):
-            end = i
-            break
-    section = "\n".join(lines[start:end])
-    if not section.strip():
-        raise RuntimeError("vocabulary section is empty")
-    return section
-
-
 def _parse_triggered_fields_table(section_text):
     table_lines = []
     in_table = False
@@ -381,7 +350,7 @@ def test_amendments_contents_and_headings():
 
 def test_decomposition_lens_tokens_present():
     text = _read_plugin(_DECOMPOSITION_REF)
-    for token in PRA.LENSES:
+    for token in _LENS_TOKENS:
         if f"`{token}`" not in text:
             raise AssertionError(f"{_DECOMPOSITION_REF}: lens token {token!r} missing")
 
@@ -402,7 +371,11 @@ def test_decomposition_audit_trail_ledger_reading_not_judge():
             raise AssertionError(
                 f"{_DECOMPOSITION_REF}: judge-reading token {token!r} must not appear"
             )
-    if _LEDGER_READING_SENTENCE not in text:
+    if _PENDING_SENTENCE not in text:
+        raise AssertionError(
+            f"{_DECOMPOSITION_REF}: pending machinery sentence missing"
+        )
+    if _normalized(_LEDGER_READING_SENTENCE) not in _normalized(text):
         raise AssertionError(
             f"{_DECOMPOSITION_REF}: ledger-reading sentence missing"
         )
@@ -414,12 +387,6 @@ def test_decomposition_worked_example_subsection_present():
         raise AssertionError(
             f"{_DECOMPOSITION_REF}: missing subsection {_WORKED_EXAMPLE_HEADING!r}"
         )
-
-
-def test_vocabulary_section_exists():
-    # Token-level vocabulary guard: test_ssot_drift.py::test_package_read_audit_vocabulary_in_decomposition_doc
-    text = _read_plugin(_DECOMPOSITION_REF)
-    _vocabulary_section_text(text)
 
 
 def test_vet_receipt_register_trigger_row():
