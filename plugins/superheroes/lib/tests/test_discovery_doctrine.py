@@ -98,6 +98,10 @@ _BANNED_DISCOVERY_STRINGS = [
     ),
 ]
 
+# The one licensed occurrence is step 1's reading instruction; a second is a hardcoded
+# resolver path re-entering the charter (the A1 regression, T2's reproduction, A3's ban).
+_DOCS_BASE_LITERAL = "docs/superheroes"
+
 _DISCOVERY_HARD_GATE_CLAUSES = [
     "do NOT author the spec, write any code, mint a work-item, or hand off until you have presented the framing (the **what**) and the owner has explicitly approved it.",
     "never approve on your own behalf",
@@ -471,6 +475,23 @@ def test_census_tables_are_populated():
     assert len(_DISCOVERY_HARD_GATE_CLAUSES) >= 5
     assert _DUTY1_CLAUSES
     assert len(_DUTY1_CLAUSES) >= 8
+    assert _DOCS_BASE_LITERAL
+
+
+def test_discovery_charter_names_the_docs_path_exactly_once():
+    """T2/A3: every resolver-path site must name what `resolve-write --doc spec` reports.
+
+    The one licensed occurrence is step 1's "any existing `docs/superheroes/` specs" reading
+    instruction. A second occurrence is a hardcoded path re-entering a resolver-path site —
+    the A1 regression, in whatever wording it comes back as.
+    """
+    text = _read_plugin(_DISCOVERY_CHARTER)
+    count = text.count(_DOCS_BASE_LITERAL)
+    assert count == 1, (
+        "%s: literal %r occurs %d times, expected exactly 1 (step 1's reading instruction). "
+        "A resolver-path site must name the path `resolve-write --doc spec` reports, never a "
+        "hardcoded one." % (_DISCOVERY_CHARTER, _DOCS_BASE_LITERAL, count)
+    )
 
 
 # --- 1b. Section-scoped presence, architect-discovery ----------------------
@@ -576,6 +597,39 @@ def test_light_spec_same_owner_approval_authority(tmp_path):
 
 
 # --- Negative tests (synthetic in-memory strings; no repo mutation) ----------
+
+
+def test_expect_error_turns_a_skipped_outcome_into_a_failure():
+    """K1: _expect_error must convert a Skipped outcome into a failure, not let it escape.
+
+    Oracle is a bare try/except on purpose: pytest.raises would DECLINE the Skipped this
+    test is about, and _expect_error cannot be its own judge.
+    """
+    def detector_that_regressed_into_a_skip():
+        pytest.skip("detector regressed into a skip instead of biting")
+
+    outcome = None
+    try:
+        _expect_error(
+            detector_that_regressed_into_a_skip,
+            AssertionError,
+            match="anything at all",
+        )
+    except AssertionError as exc:
+        outcome = ("converted", str(exc))
+    except BaseException as exc:  # noqa: BLE001 — a leaked Skipped is the failure
+        outcome = ("leaked", type(exc).__name__)
+
+    assert outcome is not None, (
+        "_expect_error returned normally on a skipping detector — it neither bit nor leaked"
+    )
+    assert outcome[0] == "converted", (
+        "_expect_error let a %s escape instead of converting it into a failure — a detector "
+        "that regressed into pytest.skip would be reported SKIPPED, i.e. green" % outcome[1]
+    )
+    assert "did not bite" in outcome[1], (
+        "_expect_error converted the skip but lost the diagnostic: %r" % outcome[1]
+    )
 
 
 def test_negative_hard_gate_clause_missing_in_synthetic():
