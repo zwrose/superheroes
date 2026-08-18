@@ -361,6 +361,14 @@ judgment, not the deterministic check's.
 > built from the requirements, the owner creates the design there, and its **handoff
 > output** (not a reinterpretation) is referenced in the `spec`.
 
+**Discovery's non-definition-doc artifacts.** A discovery that ends without a spec still lands a
+durable artifact (FR-13 of the front-half spec). A **findings record** is `findings.md` in the
+**same work-item folder** the spec would occupy — resolved the same way in both storage modes, so
+it needs no resolver of its own. It is **not** a definition-doc: it carries no §3.1 frontmatter,
+no gates, and no entry in `definition_doc.py`'s `DOC_TYPES`; the owner's ratification is recorded
+in its prose. A **park note** has no repo home at all — it lands on the owner's reading surface,
+with its durable copy as a comment on the parked item's issue or PR.
+
 ---
 
 ## 4. State tiers and stores

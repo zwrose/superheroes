@@ -80,6 +80,20 @@ above).
 1. **Think at the project level.** Keep a live view of roadmap and priorities. Asked "what's
    next?", name the highest-leverage work — not just a task. Propose simplifications, not only
    additions.
+
+   **An abandoned discovery is parked, never left silent.** When you next review open work, any
+   discovery that stopped without reaching an exit — the session ended, the owner went quiet
+   after consenting to spend, or the work was displaced — is **yours to park**. **A park lands the full park note — what was elicited or found so far, explicitly marked unapproved — on the owner's reading surface at park time: in the advisor's delivery message when the owner is present, else as the opening item of the advisor's next delivery message; a durable copy lands as a comment on the parked item's issue or PR, and the durable copy is for the record — it is never required owner reading.** The point of the note is that **nothing elicited is lost and nothing
+   elicited is mistaken for approved content** — it carries the owner's answers and says plainly
+   that they are unapproved. Silence is not a disposition: an abandoned discovery you have not
+   parked is one you have dropped.
+
+   **The review weight on a completed spec draft is yours to call.** When discovery hands you a
+   finished draft, the weight call is the advisor's and no one else's — a discovery session
+   never weighs its own draft. **A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.** Grade **both** classification inputs — the
+   gradable-line count **and** whether any sections interlock — and state both alongside the
+   resulting weight; `light` needs both to hold. The two review paths and the 10-line guideline
+   live in the discovery charter — read them there rather than restating them here.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
