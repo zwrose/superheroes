@@ -207,8 +207,10 @@ resolve it now — building on top of a bad checkout compounds every problem dow
 
 ## E — Board wiring for the issue being ripped
 
-Confirm the issue being worked exists and its route is legible (build-ready / needs-discovery /
-unrouted). This check is **read-only** — the preflight never writes to the board; wiring issues
+Confirm the issue being worked exists and its route is legible — one of `discovery`, `detective`,
+`build-ready`, `micro`. Only `build-ready` is a build; anything else, and an issue carrying no route
+at all, is routed back to the advisor rather than built. This check is **read-only** — the preflight
+never writes to the board; wiring issues
 into epics/projects is the advisor's job, never the builder's.
 
 ## The gate — go/no-go

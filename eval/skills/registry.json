@@ -87,14 +87,14 @@
     ],
     "superheroes/showrunner": [
       "run the long-lived advisor session for a superheroes project",
-      "sizes and routes incoming work (build-ready vs. needs-discovery)",
+      "routes incoming work to one of four routes (discovery, detective, build-ready, micro)",
       "vets every PR from its artifacts against the issue/spec and the build brief",
       "coordinates releases",
       "Not the builder (that is workhorse)"
     ],
     "superheroes/workhorse": [
       "Workhorse is the entry point that takes a routed issue all the way to a ready PR",
-      "needs-discovery runs discovery to an owner-approved spec first",
+      "work still needing discovery or diagnosis is routed back, never elicited in-session",
       "delegates all implementation to tiered subagents or engines under a shared contract",
       "independently re-runs every receipt they claim",
       "Not advising the project (that is showrunner)"
