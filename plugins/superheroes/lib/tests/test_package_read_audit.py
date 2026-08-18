@@ -225,6 +225,11 @@ def test_record_verification_happy_path(tmp_path):
 def test_check_happy_path(tmp_path):
     trail, _ = _open_default(tmp_path)
     _record_round(trail)
+    _record_verification(
+        trail,
+        findings=[],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
     result = pra.verb_check(str(trail))
     _assert_check_result_keys(result)
     assert result["result"] == pra.RESULT_CONFORMING
@@ -257,36 +262,11 @@ def test_round_trip_conforming(tmp_path):
     payload = json.loads(out.strip())
     assert payload["result"] == pra.RESULT_CONFORMING
     summary = payload["invocations"][0]
-    assert summary["converged"] is True
-    assert summary["ceilingReached"] is True
-    assert summary["parkOwed"] is False
-
-
-def test_round_trip_converged_below_ceiling(tmp_path):
-    trail, _ = _open_default(tmp_path, ceiling=3)
-    _record_round(
-        trail,
-        round_no=1,
-        findings=["f-1:register-drift"],
-        parts=["pkg:unreviewed"],
-    )
-    _record_round(
-        trail,
-        round_no=2,
-        mechanical_only=True,
-        parts=["pkg:reviewed"],
-    )
-    _record_verification(
-        trail,
-        findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:pass", "c2:pass"],
-    )
-    code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
-    summary = json.loads(out.strip())["invocations"][0]
-    assert summary["converged"] is True
-    assert summary["ceilingReached"] is False
-    assert summary["parkOwed"] is False
+    assert summary["roundsRecorded"] == 2
+    assert summary["findingsRecorded"] == 1
+    assert "converged" not in summary
+    assert "ceilingReached" not in summary
+    assert "parkOwed" not in summary
 
 
 def test_round_trip_unconverged_below_ceiling(tmp_path):
@@ -298,11 +278,13 @@ def test_round_trip_unconverged_below_ceiling(tmp_path):
         parts=["pkg:unreviewed"],
     )
     code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
-    summary = json.loads(out.strip())["invocations"][0]
-    assert summary["converged"] is False
-    assert summary["ceilingReached"] is False
-    assert summary["parkOwed"] is False
+    assert code == pra.EXIT_NONCONFORMING
+    payload = json.loads(out.strip())
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and "verification record" in item["detail"]
+        for item in payload["findings"]
+    )
 
 
 def test_park_owed_is_conforming(tmp_path):
@@ -321,11 +303,11 @@ def test_park_owed_is_conforming(tmp_path):
     code, out, _err = _run_cli("check", "--trail", str(trail))
     assert code == pra.EXIT_CONFORMING
     payload = json.loads(out.strip())
-    summary = payload["invocations"][0]
-    assert summary["parkOwed"] is True
-    assert summary["ceilingReached"] is True
-    assert summary["converged"] is False
     assert payload["findings"] == []
+    summary = payload["invocations"][0]
+    assert "converged" not in summary
+    assert "ceilingReached" not in summary
+    assert "parkOwed" not in summary
 
 
 # --- refusal reasons --------------------------------------------------------
@@ -989,35 +971,17 @@ def test_nonconformity_element_missing_invocation_cause(tmp_path):
     )
 
 
-def test_converged_false_without_verification_record(tmp_path):
+def test_verification_pass_missing_element(tmp_path):
     trail, _ = _open_default(tmp_path)
     _record_round(trail, mechanical_only=True)
     code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
     payload = json.loads(out.strip())
-    summary = payload["invocations"][0]
-    assert summary["converged"] is False
-    assert payload["findings"] == []
-
-
-def test_failed_then_verified_converges(tmp_path):
-    trail, _ = _open_default(tmp_path, ceiling=2)
-    _record_round(trail, round_no=1, findings=["f-1:collisions"])
-    _record_verification(
-        trail,
-        findings=["f-1:package-fix:failed"],
-        sync_checks=["c1:pass", "c2:pass"],
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and item["detail"] == "invocation has no verification record"
+        for item in payload["findings"]
     )
-    _record_round(trail, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
-    _record_verification(
-        trail,
-        findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:pass", "c2:pass"],
-    )
-    code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
-    summary = json.loads(out.strip())["invocations"][0]
-    assert summary["converged"] is True
 
 
 def test_refusal_disposition_not_allowed_for_lens(tmp_path):
@@ -1089,6 +1053,12 @@ def test_open_multi_seat(tmp_path):
 def test_check_groups_multiple_invocations(tmp_path):
     trail, _ = _open_default(tmp_path, invocation="inv-1")
     _record_round(trail, invocation="inv-1")
+    _record_verification(
+        trail,
+        invocation="inv-1",
+        findings=[],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
     _run_cli(
         "open",
         "--trail", str(trail),
@@ -1101,6 +1071,12 @@ def test_check_groups_multiple_invocations(tmp_path):
         "--seat", "seat-b",
     )
     _record_round(trail, invocation="inv-2", round_no=1)
+    _record_verification(
+        trail,
+        invocation="inv-2",
+        findings=[],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
     code, out, _err = _run_cli("check", "--trail", str(trail))
     assert code == pra.EXIT_CONFORMING
     payload = json.loads(out.strip())
@@ -1287,74 +1263,24 @@ def test_help_exits_zero_without_json(args):
     assert _stdout_has_no_json(out)
 
 
-def test_converged_false_bool_verifications_only_clause(tmp_path):
-    trail = tmp_path / "trail.md"
-    code, out, _err = _run_cli(
-        "open",
-        "--trail", str(trail),
-        "--invocation", "inv-1",
-        "--cause", "initial read",
-        "--weight", pra.WEIGHT_LIGHT,
-        "--children", "0",
-        "--register-entries", "1",
-        "--ceiling", "2",
-        "--seat", "seat-a",
-    )
-    assert code == pra.EXIT_RECORDED, out
-    _record_round(trail, mechanical_only=True)
-    code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
-    summary = json.loads(out.strip())["invocations"][0]
-    assert summary["converged"] is False
-
-
-def test_verification_before_later_round_not_converged(tmp_path):
-    trail, _ = _open_default(tmp_path, ceiling=2)
-    _record_round(trail, round_no=1, findings=["f-1:collisions"])
-    _record_verification(
-        trail,
-        findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:pass", "c2:pass"],
-    )
-    _record_round(trail, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
-    code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
-    summary = json.loads(out.strip())["invocations"][0]
-    assert summary["converged"] is False
-
-
-def test_sync_check_fail_then_pass_converges(tmp_path):
-    trail, _ = _open_default(tmp_path, ceiling=2)
-    _record_round(trail, round_no=1, findings=["f-1:collisions"])
-    _record_verification(
-        trail,
-        findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:fail", "c2:pass"],
-    )
-    _record_round(trail, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
-    _record_verification(
-        trail,
-        sync_checks=["c1:pass", "c2:pass"],
-    )
-    code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
-    summary = json.loads(out.strip())["invocations"][0]
-    assert summary["converged"] is True
-
-
-def test_mid_read_conforming_with_unverified_finding(tmp_path):
+def test_mid_read_nonconforming_with_unverified_finding(tmp_path):
     trail, _ = _open_default(tmp_path)
     _record_round(trail, findings=["f-1:collisions"])
     code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
+    assert code == pra.EXIT_NONCONFORMING
     payload = json.loads(out.strip())
-    summary = payload["invocations"][0]
-    assert summary["converged"] is False
-    assert payload["findings"] == []
-    assert not any(
+    assert any(
         item["kind"] == pra.NONCONFORMITY_FINDING_UNVERIFIED
+        and "f-1" in item["detail"]
         for item in payload["findings"]
     )
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and item["detail"] == "invocation has no verification record"
+        for item in payload["findings"]
+    )
+    summary = payload["invocations"][0]
+    assert "converged" not in summary
 
 
 def test_nonconformity_sync_check_incomplete_over_count(tmp_path):
@@ -1506,6 +1432,437 @@ def test_spec_contradiction_allowed_dispositions(tmp_path, disposition):
         evidence=evidence,
     )
     assert code == pra.EXIT_RECORDED, out
+
+
+# --- completeness bites (element-missing) -----------------------------------
+
+
+def test_completeness_bite_verification_pass_missing(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail)
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and item["detail"] == "invocation has no verification record"
+        for item in payload["findings"]
+    )
+
+
+# --- typed-value validation -------------------------------------------------
+
+
+def _trail_with_bad_value(tmp_path, replace_from, replace_to):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail)
+    text = trail.read_text(encoding="utf-8")
+    text = text.replace(replace_from, replace_to, 1)
+    trail.write_text(text, encoding="utf-8")
+    return trail
+
+
+def _assert_record_value_invalid(trail, field_path_fragment):
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and field_path_fragment in item["detail"]
+        for item in payload["findings"]
+    )
+
+
+def test_record_value_invalid_invocation_id_list(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"invocation": "inv-1"', '"invocation": ["inv-1"]')
+    _assert_record_value_invalid(trail, "invocation")
+
+
+def test_record_value_invalid_cause_empty(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"cause": "initial read"', '"cause": ""')
+    _assert_record_value_invalid(trail, "cause")
+
+
+def test_record_value_invalid_weight(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"weight": "light"', '"weight": "heavy"')
+    _assert_record_value_invalid(trail, "weight")
+
+
+def test_record_value_invalid_ceiling_zero(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"ceiling": 3', '"ceiling": 0')
+    _assert_record_value_invalid(trail, "ceiling")
+
+
+def test_record_value_invalid_ceiling_bool(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"ceiling": 3', '"ceiling": true')
+    _assert_record_value_invalid(trail, "ceiling")
+
+
+def test_record_value_invalid_measurables_not_object(tmp_path):
+    trail = _trail_with_bad_value(
+        tmp_path,
+        '"measurables": {\n  "children": 2,\n  "registerEntries": 1\n }',
+        '"measurables": "bad"',
+    )
+    _assert_record_value_invalid(trail, "measurables")
+
+
+def test_record_value_invalid_measurables_children_negative(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"children": 2', '"children": -1')
+    _assert_record_value_invalid(trail, "measurables.children")
+
+
+def test_record_value_invalid_measurables_children_bool(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"children": 2', '"children": true')
+    _assert_record_value_invalid(trail, "measurables.children")
+
+
+def test_record_value_invalid_measurables_register_entries_string(tmp_path):
+    trail = _trail_with_bad_value(tmp_path, '"registerEntries": 1', '"registerEntries": "1"')
+    _assert_record_value_invalid(trail, "measurables.registerEntries")
+
+
+def test_record_value_invalid_override_not_string(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail)
+    text = trail.read_text(encoding="utf-8")
+    text = text.replace('"override": null', '"override": 42', 1)
+    trail.write_text(text, encoding="utf-8")
+    _assert_record_value_invalid(trail, "override")
+
+
+def test_record_value_invalid_seats_empty_list(tmp_path):
+    trail = _trail_with_bad_value(
+        tmp_path,
+        '"seats": [\n  "seat-a"\n ]',
+        '"seats": []',
+    )
+    _assert_record_value_invalid(trail, "seats")
+
+
+def test_record_value_invalid_round_zero(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 0,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "round")
+
+
+def test_record_value_invalid_lenses_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": pra.LENS_COLLISIONS,
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "lenses")
+
+
+def test_record_value_invalid_parts_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": "pkg:unreviewed",
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "parts")
+
+
+def test_record_value_invalid_part_entry_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": ["bad"],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "parts[0]")
+
+
+def test_record_value_invalid_control_probe(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": "bogus",
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "controlProbe")
+
+
+def test_record_value_invalid_mechanical_only_string_refused_not_coerced(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": "false",
+    })
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and "mechanicalOnly" in item["detail"]
+        and "'false'" in item["detail"]
+        for item in payload["findings"]
+    )
+    summary = payload["invocations"][0]
+    # mechanicalOnly must not be coerced to True from string "false"
+    if summary.get("roundsAsserted"):
+        assert summary["roundsAsserted"][0]["mechanicalOnly"] == "false"
+
+
+def test_record_value_invalid_round_findings_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": "bad",
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "findings")
+
+
+def test_record_value_invalid_round_finding_entry_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": ["bad"],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "findings[0]")
+
+
+def test_record_value_invalid_declined_extension_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _hand_append_record(trail, {
+        "kind": "round",
+        "invocation": "inv-1",
+        "round": 1,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": "f-1",
+        "mechanicalOnly": False,
+    })
+    _assert_record_value_invalid(trail, "declinedExtension")
+
+
+def test_record_value_invalid_verification_findings_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": "bad",
+        "syncChecks": [{"child": "c1", "result": "pass"}],
+    })
+    _assert_record_value_invalid(trail, "findings")
+
+
+def test_record_value_invalid_verification_finding_disposition(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{"finding": "f-1", "disposition": "bogus", "outcome": "verified"}],
+        "syncChecks": [{"child": "c1", "result": "pass"}],
+    })
+    _assert_record_value_invalid(trail, "findings[0].disposition")
+
+
+def test_record_value_invalid_verification_evidence_not_string(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{
+            "finding": "f-1",
+            "disposition": "refutation",
+            "outcome": "verified",
+            "evidence": 42,
+        }],
+        "syncChecks": [{"child": "c1", "result": "pass"}],
+    })
+    _assert_record_value_invalid(trail, "findings[0].evidence")
+
+
+def test_record_value_invalid_sync_checks_scalar(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{"finding": "f-1", "disposition": "package-fix", "outcome": "verified"}],
+        "syncChecks": "bad",
+    })
+    _assert_record_value_invalid(trail, "syncChecks")
+
+
+def test_record_value_invalid_sync_check_result(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{"finding": "f-1", "disposition": "package-fix", "outcome": "verified"}],
+        "syncChecks": [{"child": "c1", "result": "bogus"}],
+    })
+    _assert_record_value_invalid(trail, "syncChecks[0].result")
+
+
+def test_record_value_invalid_absent_field_not_doubled(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail)
+    text = trail.read_text(encoding="utf-8")
+    text = text.replace('"weight": "light"', '"weight": null', 1)
+    trail.write_text(text, encoding="utf-8")
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING for item in payload["findings"])
+    assert not any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and "weight" in item["detail"]
+        for item in payload["findings"]
+    )
+
+
+def test_record_value_invalid_extra_key_allowed(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail)
+    _record_verification(
+        trail,
+        findings=[],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    text = trail.read_text(encoding="utf-8")
+    text = text.replace(
+        '"mechanicalOnly": false',
+        '"mechanicalOnly": false,\n "futureField": "ok"',
+        1,
+    )
+    trail.write_text(text, encoding="utf-8")
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING
+
+
+# --- asserted-echo and order-independence -----------------------------------
+
+
+def test_rounds_asserted_echo_mechanical_only_false(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, mechanical_only=False)
+    _record_verification(
+        trail,
+        findings=[],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING
+    summary = json.loads(out.strip())["invocations"][0]
+    assert summary["roundsAsserted"][0]["mechanicalOnly"] is False
+    assert "converged" not in summary
+    assert "ceilingReached" not in summary
+    assert "parkOwed" not in summary
+
+
+def test_check_order_independence_same_kinds(tmp_path):
+    trail_a_path = tmp_path / "a" / "trail.md"
+    trail_a_path.parent.mkdir(parents=True)
+    trail_a, _ = _open_default(tmp_path / "a", trail=trail_a_path)
+    _record_round(trail_a, round_no=1, findings=["f-1:collisions"])
+    _record_round(trail_a, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
+    _record_verification(
+        trail_a,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+
+    trail_b_path = tmp_path / "b" / "trail.md"
+    trail_b_path.parent.mkdir(parents=True)
+    trail_b, _ = _open_default(tmp_path / "b", trail=trail_b_path)
+    _record_round(trail_b, round_no=1, findings=["f-1:collisions"])
+    _record_round(trail_b, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
+    _record_verification(
+        trail_b,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    text_b = trail_b.read_text(encoding="utf-8")
+    blocks = text_b.split(pra.RECORD_MARKER)
+    invocation_block = blocks[1]
+    round1_block = blocks[2]
+    round2_block = blocks[3]
+    verification_block = blocks[4]
+    reordered = (
+        pra.TRAIL_HEADING + "\n"
+        + pra.RECORD_MARKER + invocation_block
+        + pra.RECORD_MARKER + round2_block
+        + pra.RECORD_MARKER + verification_block
+        + pra.RECORD_MARKER + round1_block
+    )
+    trail_b.write_text(reordered, encoding="utf-8")
+
+    code_a, out_a, _ = _run_cli("check", "--trail", str(trail_a))
+    code_b, out_b, _ = _run_cli("check", "--trail", str(trail_b))
+    payload_a = json.loads(out_a.strip())
+    payload_b = json.loads(out_b.strip())
+    assert code_a == code_b
+    assert payload_a["result"] == payload_b["result"]
+    kinds_a = {item["kind"] for item in payload_a["findings"]}
+    kinds_b = {item["kind"] for item in payload_b["findings"]}
+    assert kinds_a == kinds_b
 
 
 # --- vocabulary drift guards ------------------------------------------------

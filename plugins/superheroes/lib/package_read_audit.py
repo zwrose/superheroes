@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Package-read audit trail writer and conformance reader (#937).
+"""Package-read audit trail writer and completeness-and-shape reader (#937).
 
 Deterministic, stdlib-only machine module that appends structured records to a
 markdown audit trail and checks that every FR-32 audit element was recorded and
-every finding reached disposition and verification.
+every record is well-formed. It judges nothing — convergence and park calls are
+advisor-recorded assertions echoed back, never re-derived.
 """
 import argparse
 import json
@@ -172,6 +173,7 @@ NONCONFORMITY_REFUTATION_EVIDENCE_MISSING = "refutation-evidence-missing"
 NONCONFORMITY_SYNC_CHECK_MISSING = "sync-check-missing"
 NONCONFORMITY_SYNC_CHECK_INCOMPLETE = "sync-check-incomplete"
 NONCONFORMITY_SYNC_CHECK_FAILED = "sync-check-failed"
+NONCONFORMITY_RECORD_VALUE_INVALID = "record-value-invalid"
 NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_ROUND_MISSING,
     NONCONFORMITY_ELEMENT_MISSING,
@@ -182,6 +184,7 @@ NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_SYNC_CHECK_MISSING,
     NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
     NONCONFORMITY_SYNC_CHECK_FAILED,
+    NONCONFORMITY_RECORD_VALUE_INVALID,
 })
 
 SPEC_CONTRADICTION_DISPOSITIONS = frozenset({
@@ -205,13 +208,16 @@ CHECK_RESULT_FIELDS = (
 NONCONFORMITY_FIELDS = ("kind", "invocation", "detail")
 INVOCATION_SUMMARY_FIELDS = (
     "invocation", "weight", "ceiling", "seats", "roundsRecorded",
-    "findingsRecorded", "syncChecks", "converged", "ceilingReached", "parkOwed",
+    "findingsRecorded", "roundsAsserted", "syncChecks",
 )
 
-# Projection readings for trail-ordered invocation records (#937).
-READING_LATEST_WINS = "latest-wins"
-READING_EVERY_RECORD = "every-record"
-READING_POSITION = "position"
+
+def _is_actual_int(value):
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_nonneg_int(value):
+    return _is_actual_int(value) and value >= 0
 
 
 def _read_lines(path):
@@ -353,6 +359,8 @@ def _group_records(records):
     for record in records:
         kind = record["kind"]
         inv_id = record.get("invocation")
+        if not isinstance(inv_id, str):
+            continue
         if kind == RECORD_KIND_INVOCATION:
             invocations[inv_id] = record
         elif kind == RECORD_KIND_ROUND:
@@ -361,6 +369,172 @@ def _group_records(records):
             verifications_by_inv.setdefault(inv_id, []).append(record)
 
     return invocations, rounds_by_inv, verifications_by_inv
+
+
+def _invocation_id_for_finding(record):
+    inv = record.get("invocation")
+    if isinstance(inv, str) and inv:
+        return inv
+    return None
+
+
+def _validate_record_value(record):
+    """Validate field values on one parsed record. Returns (field_path, value) problems."""
+    problems = []
+    kind = record.get("kind")
+
+    inv = record.get("invocation")
+    if inv is not None:
+        if not isinstance(inv, str) or not inv:
+            problems.append(("invocation", inv))
+
+    if kind == RECORD_KIND_INVOCATION:
+        cause = record.get("cause")
+        if cause is not None:
+            if not isinstance(cause, str) or not cause:
+                problems.append(("cause", cause))
+        weight = record.get("weight")
+        if weight is not None and weight not in WEIGHTS:
+            problems.append(("weight", weight))
+        ceiling = record.get("ceiling")
+        if ceiling is not None:
+            if not _is_actual_int(ceiling) or ceiling < 1:
+                problems.append(("ceiling", ceiling))
+        measurables = record.get("measurables")
+        if measurables is not None:
+            if not isinstance(measurables, dict):
+                problems.append(("measurables", measurables))
+            else:
+                children = measurables.get("children")
+                if children is not None and not _is_nonneg_int(children):
+                    problems.append(("measurables.children", children))
+                register_entries = measurables.get("registerEntries")
+                if register_entries is not None and not _is_nonneg_int(register_entries):
+                    problems.append(("measurables.registerEntries", register_entries))
+        override = record.get("override")
+        if override is not None and not isinstance(override, str):
+            problems.append(("override", override))
+        seats = record.get("seats")
+        if seats is not None:
+            if not isinstance(seats, list) or not seats:
+                problems.append(("seats", seats))
+            else:
+                for idx, seat in enumerate(seats):
+                    if not isinstance(seat, str) or not seat:
+                        problems.append(("seats[%d]" % idx, seat))
+
+    elif kind == RECORD_KIND_ROUND:
+        round_no = record.get("round")
+        if round_no is not None:
+            if not _is_actual_int(round_no) or round_no < 1:
+                problems.append(("round", round_no))
+        lenses = record.get("lenses")
+        if lenses is not None:
+            if not isinstance(lenses, list):
+                problems.append(("lenses", lenses))
+            else:
+                for idx, lens in enumerate(lenses):
+                    if lens not in LENSES:
+                        problems.append(("lenses[%d]" % idx, lens))
+        parts = record.get("parts")
+        if parts is not None:
+            if not isinstance(parts, list):
+                problems.append(("parts", parts))
+            else:
+                for idx, part in enumerate(parts):
+                    if not isinstance(part, dict):
+                        problems.append(("parts[%d]" % idx, part))
+                    else:
+                        name = part.get("part")
+                        if name is not None and (not isinstance(name, str) or not name):
+                            problems.append(("parts[%d].part" % idx, name))
+                        status = part.get("status")
+                        if status is not None and status not in PART_STATUSES:
+                            problems.append(("parts[%d].status" % idx, status))
+        control_probe = record.get("controlProbe")
+        if control_probe is not None and control_probe not in CONTROL_PROBE_READS:
+            problems.append(("controlProbe", control_probe))
+        mechanical_only = record.get("mechanicalOnly")
+        if mechanical_only is not None and not isinstance(mechanical_only, bool):
+            problems.append(("mechanicalOnly", mechanical_only))
+        findings = record.get("findings")
+        if findings is not None:
+            if not isinstance(findings, list):
+                problems.append(("findings", findings))
+            else:
+                for idx, item in enumerate(findings):
+                    if not isinstance(item, dict):
+                        problems.append(("findings[%d]" % idx, item))
+                    else:
+                        fid = item.get("finding")
+                        if fid is not None and (not isinstance(fid, str) or not fid):
+                            problems.append(("findings[%d].finding" % idx, fid))
+                        lens = item.get("lens")
+                        if lens is not None and lens not in LENSES:
+                            problems.append(("findings[%d].lens" % idx, lens))
+        declined = record.get("declinedExtension")
+        if declined is not None:
+            if not isinstance(declined, list):
+                problems.append(("declinedExtension", declined))
+            else:
+                for idx, fid in enumerate(declined):
+                    if not isinstance(fid, str):
+                        problems.append(("declinedExtension[%d]" % idx, fid))
+
+    elif kind == RECORD_KIND_VERIFICATION:
+        findings = record.get("findings")
+        if findings is not None:
+            if not isinstance(findings, list):
+                problems.append(("findings", findings))
+            else:
+                for idx, item in enumerate(findings):
+                    if not isinstance(item, dict):
+                        problems.append(("findings[%d]" % idx, item))
+                    else:
+                        fid = item.get("finding")
+                        if fid is not None and (not isinstance(fid, str) or not fid):
+                            problems.append(("findings[%d].finding" % idx, fid))
+                        disposition = item.get("disposition")
+                        if disposition is not None and disposition not in DISPOSITIONS:
+                            problems.append(("findings[%d].disposition" % idx, disposition))
+                        outcome = item.get("outcome")
+                        if outcome is not None and outcome not in OUTCOMES:
+                            problems.append(("findings[%d].outcome" % idx, outcome))
+                        evidence = item.get("evidence")
+                        if evidence is not None and not isinstance(evidence, str):
+                            problems.append(("findings[%d].evidence" % idx, evidence))
+        sync_checks = record.get("syncChecks")
+        if sync_checks is not None:
+            if not isinstance(sync_checks, list):
+                problems.append(("syncChecks", sync_checks))
+            else:
+                for idx, check in enumerate(sync_checks):
+                    if not isinstance(check, dict):
+                        problems.append(("syncChecks[%d]" % idx, check))
+                    else:
+                        child = check.get("child")
+                        if child is not None and (not isinstance(child, str) or not child):
+                            problems.append(("syncChecks[%d].child" % idx, child))
+                        result = check.get("result")
+                        if result is not None and result not in SYNC_RESULTS:
+                            problems.append(("syncChecks[%d].result" % idx, result))
+
+    return problems
+
+
+def _record_value_findings(records):
+    findings = []
+    for trail_pos, record in enumerate(records, 1):
+        for field_path, value in _validate_record_value(record):
+            findings.append({
+                "kind": NONCONFORMITY_RECORD_VALUE_INVALID,
+                "invocation": _invocation_id_for_finding(record),
+                "detail": (
+                    "record at trail position %d: field %s has invalid value %r"
+                    % (trail_pos, field_path, value)
+                ),
+            })
+    return findings
 
 
 def _disposition_allowed_for_lens(lens, disposition):
@@ -383,118 +557,74 @@ def _invocation_trail_records(records, inv_id):
 
 
 def _project_invocation(records):
-    """Project trail-ordered invocation records into a single read model.
-
-    Three readings apply to different questions (see module vocabulary):
-    - READING_LATEST_WINS: finding outcome/disposition and per-child sync-check
-      result — the last record in trail order wins.
-    - READING_EVERY_RECORD: legality of each verification item as written.
-    - READING_POSITION: whether verification covers the current round state
-      (latest verification record appears after the highest-numbered round).
-    """
+    """Collect order-free invocation trail facts for completeness checks."""
     rounds = []
     verifications = []
     finding_ids = []
     finding_ids_seen = set()
     finding_lenses = {}
     declined_extension = set()
-    latest_outcomes = {}
-    latest_sync_by_child = {}
-    highest_round = 0
-    highest_mechanical_only = False
-    highest_round_trail_index = -1
-    latest_verification_trail_index = -1
+    sync_check_records = []
+    findings_named_in_verification = set()
+    verified_finding_ids = set()
 
-    for trail_index, record in enumerate(records):
+    for record in records:
         kind = record.get("kind")
         if kind == RECORD_KIND_ROUND:
             rounds.append(record)
-            round_no = record.get("round", 0)
-            if round_no >= highest_round:
-                highest_round = round_no
-                highest_mechanical_only = bool(record.get("mechanicalOnly"))
-                highest_round_trail_index = trail_index
             for item in record.get("findings", []):
+                if not isinstance(item, dict):
+                    continue
                 fid = item.get("finding")
                 if fid not in finding_ids_seen:
                     finding_ids.append(fid)
                     finding_ids_seen.add(fid)
                 finding_lenses[fid] = item.get("lens")
-            for fid in record.get("declinedExtension", []):
-                declined_extension.add(fid)
+            declined = record.get("declinedExtension", [])
+            if isinstance(declined, list):
+                for fid in declined:
+                    declined_extension.add(fid)
         elif kind == RECORD_KIND_VERIFICATION:
             verifications.append(record)
-            latest_verification_trail_index = trail_index
             for item in record.get("findings", []):
-                latest_outcomes[item["finding"]] = item
-            for check in record.get("syncChecks", []):
-                child = check.get("child")
-                if child:
-                    latest_sync_by_child[child] = check
+                if not isinstance(item, dict):
+                    continue
+                fid = item.get("finding")
+                if fid is not None:
+                    findings_named_in_verification.add(fid)
+                    if item.get("outcome") == OUTCOME_VERIFIED:
+                        verified_finding_ids.add(fid)
+            checks = record.get("syncChecks", [])
+            if isinstance(checks, list):
+                for check in checks:
+                    sync_check_records.append(check)
 
     rounds_sorted = sorted(rounds, key=lambda r: r.get("round", 0))
-    verification_covers_current_state = (
-        latest_verification_trail_index > highest_round_trail_index
-    )
 
     return {
-        "reading_latest_wins": READING_LATEST_WINS,
-        "reading_every_record": READING_EVERY_RECORD,
-        "reading_position": READING_POSITION,
         "rounds": rounds_sorted,
         "verifications": verifications,
         "finding_ids": finding_ids,
         "finding_lenses": finding_lenses,
         "declined_extension": declined_extension,
-        "latest_outcomes": latest_outcomes,
-        "latest_sync_by_child": latest_sync_by_child,
-        "highest_round": highest_round,
-        "highest_mechanical_only": highest_mechanical_only,
+        "sync_check_records": sync_check_records,
+        "findings_named_in_verification": findings_named_in_verification,
+        "verified_finding_ids": verified_finding_ids,
         "has_verification": bool(verifications),
-        "verification_covers_current_state": verification_covers_current_state,
     }
-
-
-def _measurables_children(invocation):
-    measurables = invocation.get("measurables")
-    if not isinstance(measurables, dict):
-        return None
-    return measurables.get("children")
-
-
-def _sync_checks_complete(invocation, latest_sync_by_child):
-    expected = _measurables_children(invocation)
-    if expected is None:
-        return False
-    if len(latest_sync_by_child) != expected:
-        return False
-    return all(
-        check.get("result") == SYNC_RESULT_PASS
-        for check in latest_sync_by_child.values()
-    )
 
 
 def _summarize_invocation(inv_id, invocation, projection):
     rounds_sorted = projection["rounds"]
     finding_ids = projection["finding_ids"]
-    latest_outcomes = projection["latest_outcomes"]
-    latest_sync_by_child = projection["latest_sync_by_child"]
 
-    converged = (
-        bool(rounds_sorted)
-        and projection["has_verification"]
-        and projection["verification_covers_current_state"]
-        and projection["highest_mechanical_only"]
-        and all(
-            latest_outcomes.get(fid, {}).get("outcome") == OUTCOME_VERIFIED
-            for fid in finding_ids
-        )
-        and _sync_checks_complete(invocation, latest_sync_by_child)
-    )
-    ceiling = invocation.get("ceiling", 0)
-    highest_round = projection["highest_round"]
-    ceiling_reached = bool(rounds_sorted) and highest_round == ceiling
-    park_owed = ceiling_reached and not converged
+    rounds_asserted = []
+    for rnd in rounds_sorted:
+        rounds_asserted.append({
+            "round": rnd.get("round"),
+            "mechanicalOnly": rnd.get("mechanicalOnly"),
+            "controlProbe": rnd.get("controlProbe"),
+        })
 
     seats_val = invocation.get("seats")
     if isinstance(seats_val, list):
@@ -505,15 +635,20 @@ def _summarize_invocation(inv_id, invocation, projection):
     return {
         "invocation": inv_id,
         "weight": invocation.get("weight"),
-        "ceiling": ceiling,
+        "ceiling": invocation.get("ceiling", 0),
         "seats": seats,
         "roundsRecorded": len(rounds_sorted),
         "findingsRecorded": len(finding_ids),
-        "syncChecks": list(latest_sync_by_child.values()),
-        "converged": converged,
-        "ceilingReached": ceiling_reached,
-        "parkOwed": park_owed,
+        "roundsAsserted": rounds_asserted,
+        "syncChecks": list(projection["sync_check_records"]),
     }
+
+
+def _measurables_children(invocation):
+    measurables = invocation.get("measurables")
+    if not isinstance(measurables, dict):
+        return None
+    return measurables.get("children")
 
 
 def _nonconformities_for_invocation(inv_id, invocation, projection):
@@ -567,11 +702,10 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
         })
         return findings
 
-    latest_outcomes = projection["latest_outcomes"]
     declined_named = projection["declined_extension"]
-    latest_sync_by_child = projection["latest_sync_by_child"]
-    has_verification = projection["has_verification"]
     finding_lenses = projection["finding_lenses"]
+    sync_check_records = projection["sync_check_records"]
+    has_verification = projection["has_verification"]
 
     for rnd in rounds:
         round_no = rnd.get("round")
@@ -594,42 +728,60 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                 "detail": "round %s is missing controlProbe" % round_no,
             })
 
-    if has_verification:
-        for fid in projection["finding_ids"]:
-            if fid not in latest_outcomes:
-                findings.append({
-                    "kind": NONCONFORMITY_FINDING_UNVERIFIED,
-                    "invocation": inv_id,
-                    "detail": "finding %s has no verification record" % fid,
-                })
+    if not has_verification:
+        findings.append({
+            "kind": NONCONFORMITY_ELEMENT_MISSING,
+            "invocation": inv_id,
+            "detail": "invocation has no verification record",
+        })
 
-    for fid in declined_named:
-        item = latest_outcomes.get(fid)
-        if item is None:
-            continue
-        if item.get("disposition") != DISPOSITION_DECLINED_EXTENSION:
+    for fid in projection["finding_ids"]:
+        if fid not in projection["findings_named_in_verification"]:
             findings.append({
-                "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
+                "kind": NONCONFORMITY_FINDING_UNVERIFIED,
                 "invocation": inv_id,
-                "detail": (
-                    "finding %s is named in declinedExtension but verification "
-                    "disposition is %r" % (fid, item.get("disposition"))
-                ),
+                "detail": "finding %s has no verification record" % fid,
             })
 
-    for fid, item in latest_outcomes.items():
-        if item.get("disposition") == DISPOSITION_DECLINED_EXTENSION and fid not in declined_named:
-            findings.append({
-                "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
-                "invocation": inv_id,
-                "detail": (
-                    "finding %s has disposition declined-extension but no round "
-                    "named it in declinedExtension" % fid
-                ),
-            })
+    mismatch_declined_not_extension = set()
+    mismatch_extension_not_declined = set()
+    for ver in projection["verifications"]:
+        for item in ver.get("findings", []):
+            if not isinstance(item, dict):
+                continue
+            fid = item.get("finding")
+            if fid in declined_named and item.get("disposition") != DISPOSITION_DECLINED_EXTENSION:
+                key = (fid, "declined-named")
+                if key not in mismatch_declined_not_extension:
+                    mismatch_declined_not_extension.add(key)
+                    findings.append({
+                        "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
+                        "invocation": inv_id,
+                        "detail": (
+                            "finding %s is named in declinedExtension but verification "
+                            "disposition is %r" % (fid, item.get("disposition"))
+                        ),
+                    })
+            if (
+                item.get("disposition") == DISPOSITION_DECLINED_EXTENSION
+                and fid not in declined_named
+            ):
+                key = (fid, "extension-not-declined")
+                if key not in mismatch_extension_not_declined:
+                    mismatch_extension_not_declined.add(key)
+                    findings.append({
+                        "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
+                        "invocation": inv_id,
+                        "detail": (
+                            "finding %s has disposition declined-extension but no round "
+                            "named it in declinedExtension" % fid
+                        ),
+                    })
 
     for ver in projection["verifications"]:
         for item in ver.get("findings", []):
+            if not isinstance(item, dict):
+                continue
             fid = item.get("finding")
             lens = finding_lenses.get(fid)
             disposition = item.get("disposition")
@@ -646,6 +798,8 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
 
     for ver in projection["verifications"]:
         for item in ver.get("findings", []):
+            if not isinstance(item, dict):
+                continue
             if item.get("disposition") == DISPOSITION_REFUTATION:
                 evidence = item.get("evidence")
                 if not evidence or not str(evidence).strip():
@@ -658,15 +812,27 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                         ),
                     })
 
-    if has_verification and not latest_sync_by_child:
+    if not sync_check_records:
+        if has_verification:
+            sync_detail = (
+                "invocation has verification records but no sync-check entries"
+            )
+        else:
+            sync_detail = "invocation has no sync-check entries"
         findings.append({
             "kind": NONCONFORMITY_SYNC_CHECK_MISSING,
             "invocation": inv_id,
-            "detail": "invocation has verification records but no sync-check entries",
+            "detail": sync_detail,
         })
-    elif has_verification:
+    else:
         expected_children = _measurables_children(invocation)
-        distinct_count = len(latest_sync_by_child)
+        distinct_children = set()
+        for check in sync_check_records:
+            if isinstance(check, dict):
+                child = check.get("child")
+                if child is not None:
+                    distinct_children.add(child)
+        distinct_count = len(distinct_children)
         if expected_children is not None and distinct_count != expected_children:
             findings.append({
                 "kind": NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
@@ -678,16 +844,24 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                 ),
             })
 
-    for child, check in latest_sync_by_child.items():
-        if check.get("result") != SYNC_RESULT_PASS:
-            findings.append({
-                "kind": NONCONFORMITY_SYNC_CHECK_FAILED,
-                "invocation": inv_id,
-                "detail": (
-                    "sync-check for child %s has result %r"
-                    % (child, check.get("result"))
-                ),
-            })
+    failed_sync_checks = set()
+    for check in sync_check_records:
+        if not isinstance(check, dict):
+            continue
+        child = check.get("child")
+        result = check.get("result")
+        if result != SYNC_RESULT_PASS:
+            key = (child, result)
+            if key not in failed_sync_checks:
+                failed_sync_checks.add(key)
+                findings.append({
+                    "kind": NONCONFORMITY_SYNC_CHECK_FAILED,
+                    "invocation": inv_id,
+                    "detail": (
+                        "sync-check for child %s has result %r"
+                        % (child, result)
+                    ),
+                })
 
     return findings
 
@@ -776,20 +950,19 @@ def _recorded_finding_ids(records, inv_id):
     return ids
 
 
-def _latest_verified_finding_ids(records, inv_id):
-    latest = {}
+def _verified_finding_ids(records, inv_id):
+    verified = set()
     for record in records:
         if record.get("kind") != RECORD_KIND_VERIFICATION:
             continue
         if record.get("invocation") != inv_id:
             continue
         for item in record.get("findings", []):
-            latest[item["finding"]] = item
-    return {
-        fid
-        for fid, item in latest.items()
-        if item.get("outcome") == OUTCOME_VERIFIED
-    }
+            if isinstance(item, dict) and item.get("outcome") == OUTCOME_VERIFIED:
+                fid = item.get("finding")
+                if fid is not None:
+                    verified.add(fid)
+    return verified
 
 
 def _invocation_ids(records):
@@ -1085,7 +1258,7 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
         )
 
     known_round = _known_findings_for_invocation(records, invocation)
-    already_verified = _latest_verified_finding_ids(records, invocation)
+    already_verified = _verified_finding_ids(records, invocation)
     evidence_by_finding = {}
     for evidence in evidence_items:
         fid, text, err = _parse_colon_pair(evidence, "evidence")
@@ -1225,6 +1398,11 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
 
 
 def verb_check(trail, invocation_filter=None):
+    """Completeness-and-shape audit over advisor-asserted package-read records.
+
+    Verifies every FR-32 element was recorded and every record is well-formed.
+    Judges nothing — convergence and park are advisor assertions echoed back.
+    """
     if not _trail_exists(trail):
         return _make_check_result(
             RESULT_UNDECIDED,
@@ -1273,6 +1451,8 @@ def verb_check(trail, invocation_filter=None):
 
     invocations, rounds_by_inv, verifications_by_inv = _group_records(records)
 
+    value_findings = _record_value_findings(records)
+
     if invocation_filter is not None:
         if invocation_filter not in invocations:
             return _make_check_result(
@@ -1289,7 +1469,7 @@ def verb_check(trail, invocation_filter=None):
         inv_ids = sorted(invocations.keys())
 
     summaries = []
-    findings = []
+    findings = list(value_findings)
     for inv_id in inv_ids:
         invocation = invocations[inv_id]
         trail_records = _invocation_trail_records(records, inv_id)
@@ -1425,7 +1605,7 @@ def main(argv=None):
         sub.add_parser("open", help="open a new invocation in the audit trail")
         sub.add_parser("record-round", help="record a review round")
         sub.add_parser("record-verification", help="record verification outcomes")
-        sub.add_parser("check", help="check trail conformance")
+        sub.add_parser("check", help="audit trail completeness and record shape")
         parser.print_help()
         return EXIT_RECORDED
 
@@ -1593,7 +1773,9 @@ def _main_record_verification(argv):
 
 
 def _main_check(argv):
-    parser = _CheckArgumentParser(description="check package-read audit trail conformance")
+    parser = _CheckArgumentParser(
+        description="audit package-read trail completeness and record shape",
+    )
     parser._usage_paths["trail"] = _peek_argv_value(argv, "--trail")
     parser.add_argument("--trail", required=True)
     parser.add_argument("--invocation", default=None)
