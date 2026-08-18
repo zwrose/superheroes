@@ -55,16 +55,26 @@ never lands in a project's `docs/superheroes/` tree during ordinary use.
 Full unhappy-path coverage, glossary terms, open questions, and non-functional bars —
 this sample exists only to exercise the four equivalence labels.
 
+## Amendments
+
+_No amendments since the last full approval._
+
 ## Coverage
 
-| Area | Disposition | Where / why |
-| --- | --- | --- |
-| Empty & first-run | Specify | FR-1 requires a real approved small spec fixture |
-| Invalid & malformed input | N-A | No user input paths; fixture is static test data |
-| Boundaries & limits | Defer-to-build | FR-2 exercises set_gate on a temp copy only |
-| Errors & failures | N-A | Fixture tests read approved frontmatter; no runtime errors |
-| Access & permissions | N-A | Committed fixture is world-readable in the plugin bundle |
-| Duplicates & double-actions | N-A | Tests copy once per case; no duplicate-write surface |
-| Conflicting / simultaneous use | N-A | Conformance tests run serially against one file |
-| Misuse & abuse | N-A | Fixture is not exposed as a runtime API |
-| Reach (i18n / a11y) | N-A | English-only markdown; no UI surface |
+| Area | Disposition | Show-it? | Where / why |
+| --- | --- | --- | --- |
+| Empty & first-run | Specify | Yes | FR-1 requires a real approved small spec fixture |
+| Invalid & malformed input | N-A | — | No user input paths; fixture is static test data |
+| Boundaries & limits | Defer-to-build | No | FR-2 exercises set_gate on a temp copy only |
+| Errors & failures | N-A | — | Fixture tests read approved frontmatter; no runtime errors |
+| Access & permissions | N-A | — | Committed fixture is world-readable in the plugin bundle |
+| Duplicates & double-actions | N-A | — | Tests copy once per case; no duplicate-write surface |
+| Conflicting / simultaneous use | N-A | — | Conformance tests run serially against one file |
+| Misuse & abuse | N-A | — | Fixture is not exposed as a runtime API |
+| Reach (i18n / a11y) | N-A | — | English-only markdown; no UI surface |
+| Wording & tone | Specify | No | Fixture prose states owner voice without placeholder tokens |
+| Workflow shape | N-A | — | Static fixture; no user workflow to model |
+| Placement & prominence | N-A | — | Fixture lives in lib/tests/fixtures; not user-facing |
+| Limits & defaults | Specify | No | Frontmatter declares size: small and omits empty sections |
+| Tier & access boundaries | N-A | — | No tiered access in this conformance sample |
+| Visibility & disclosure | N-A | — | Full fixture is readable in the plugin bundle for tests |

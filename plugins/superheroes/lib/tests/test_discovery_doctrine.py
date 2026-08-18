@@ -236,6 +236,9 @@ _LIGHT_SPEC_MUST_KEEP = frozenset({
     "## Who it's for",
     "## Functional requirements",
     "## Definition of done / success",
+    # Amendments leg: a light spec that deletes its Amendments log is rejected —
+    # missing log fails anchor resolution closed.
+    "## Amendments",
     "## Coverage",
 })
 
@@ -1219,6 +1222,7 @@ def test_negative_fixture_kept_omitted_heading():
         "## Who it's for",
         "## Functional requirements",
         "## Definition of done / success",
+        "## Amendments",
         "## Coverage",
         "| Area | Disposition | Where / why |",
         "## Glossary",
@@ -1228,6 +1232,7 @@ def test_negative_fixture_kept_omitted_heading():
         "## Who it's for",
         "## Functional requirements",
         "## Definition of done / success",
+        "## Amendments",
         "## Coverage",
         "## Glossary",
     ])
@@ -1400,8 +1405,8 @@ def test_negative_weight_table_absent_raises():
 
 def _synthetic_coverage_table(rows):
     lines = [
-        "| Area | Disposition | Where / why |",
-        "| --- | --- | --- |",
+        "| Area | Disposition | Show-it? | Where / why |",
+        "| --- | --- | --- | --- |",
     ]
     lines.extend(rows)
     return "\n".join(lines)
@@ -1410,7 +1415,7 @@ def _synthetic_coverage_table(rows):
 def _canonical_coverage_rows():
     areas = _template_coverage_areas()
     return [
-        f"| {area} | Specify | reason for {area} |"
+        f"| {area} | Specify | Yes | reason for {area} |"
         for area in areas
     ]
 

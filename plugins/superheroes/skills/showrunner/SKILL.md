@@ -112,7 +112,14 @@ above).
    **supersedes an earlier ruling**, notify every in-flight build whose Anchor slot cites the
    superseded ruling — at the moment you record the new decision, not afterwards. **The Anchor
    citation is the reverse index:** affected work is located by its Anchor slot, so no rulings ledger
-   exists or ships. **Register-embedded copies count as citations too** — also check open epics'
+   exists or ships. A surface that has accumulated rulings may be **absorbed into a spec** by
+   **recorded advisor judgment**, written down when made — **no mechanical trigger** causes
+   absorption; there is no count, age, or threshold, and none may be introduced. When a spec
+   reaches five amendments since its last full approval, the **next touch** carries a consolidation
+   re-read and the **owner's** re-stamp — you schedule the re-stamp because only the owner can give
+   it. Doctrine:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md`.
+   **Register-embedded copies count as citations too** — also check open epics'
    registers for embedded copies of the superseded ruling, and amend an affected register the same way
    any mid-flight amendment reaches its children. **Record the notice where the build will see it**
    — on that build's issue or PR, never only in a channel message that the build's session cannot

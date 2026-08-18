@@ -88,10 +88,13 @@ contains yet?*
     recorded with the route and anchor at routing time (FR-6's record); "exactly one
     route" means exactly one is chosen, never that the cases partition.
 
-**FR-6.** The advisor shall not assign a discovery size, lane, or review weight at routing;
-micro is the only route knowable as small up front.
-  - *Acceptance (rule):* routing records the route and the anchor, nothing more; review
-    weight first appears on the spec draft (FR-16).
+**FR-6.** When the advisor routes work to `discovery`, the advisor shall not assign a
+discovery size, lane, or review weight at routing — a discovery's size, eventual lane, and
+review weight are unknowable at intake; for work routed `build-ready` or `micro`, the lane
+and presentation calls attach at routing per ruling P6, unchanged.
+  - *Acceptance (rule):* when routed to `discovery`, routing records the route and the
+    anchor, nothing more; review weight first appears on the spec draft (FR-16); for
+    `build-ready` and `micro`, lane and presentation calls attach at routing per ruling P6.
 
 ### The issue contract
 
@@ -429,9 +432,9 @@ single-issue spec, per FR-36, is the one-child case of the same rule.)
 ### The builder's side of the line
 
 **FR-39.** Builds shall start only from routed issues carrying resolving anchors; the
-workhorse shall no longer run discovery inline in a build session (today its
-needs-discovery route elicits and builds in the same session
-[cite: plugins/superheroes/skills/workhorse/SKILL.md § needs-discovery]).
+workhorse shall no longer run discovery inline in a build session — work routed `discovery`
+is routed back rather than elicited in-session
+[cite: plugins/superheroes/skills/workhorse/SKILL.md § You do not elicit requirements in a build session].
   - *Acceptance:* Given work needing discovery, when it reaches a build entry point, then it
     is routed back to discovery rather than elicited in-session; the build entry point takes
     only routed, anchored issues.
@@ -671,6 +674,16 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
   rules as review-code." Sections touched: FR-32, Amendments. Substantive — a builder
   implementing the read protocol builds seat composition differently against it.
 - **2026-08-08 (owner-stamped, wording):** recorded the approval date — the owner confirmed in the advisor channel that approval was given 2026-08-07 in the discovery sitting; added the `approved:` frontmatter field. Sections touched: frontmatter, Amendments. Decides nothing a builder could build differently against.
+- **2026-08-17 (owner-stamped, wording):** FR-6 scoped to the `discovery` route — for
+  `discovery`, the advisor assigns no size, lane, or review weight at routing; for
+  `build-ready` and `micro`, lane and presentation calls attach at routing per ruling P6,
+  unchanged. Cause: owner ruling in discuss-open-decisions walk 2026-08-17 (#695,
+  collector item 29-a). Sections touched: FR-6, Amendments.
+- **2026-08-17 (owner-stamped, wording):** FR-39 citation repointed — the `needs-discovery`
+  anchor removed by #1068 now cites the workhorse charter's discovery intake rule. Cause:
+  advisor package-hygiene note on vet 136 / PR #1068 follow-up 5. This touch carried the
+  FR-23 consolidation re-read; owner re-stamp of the consolidated body is outstanding.
+  Sections touched: FR-39, Amendments.
 
 ## Coverage
 
