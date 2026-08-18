@@ -148,23 +148,45 @@ meant), `bootstrap-required` (no session id in `meta.json` — the record could 
 provenance, so nothing is folded; recover by restoring the session id, which `next` mints), and the
 shape guard's own fault. `manifest-anchor-unanchored` stays reserved for seat phases.
 
+**Owner gates on the durable-record path.** When `advance` parks at `present-judgment` or
+`present-stall-menu` because gate policy has not pre-authorized the resolution
+(`advance-judgment-park` / `advance-stall-park`), fold the owner's choice with `--owner-artifact` —
+the same JSON **object** shape hand `submit` takes for that gate: `{"dispositions": [...]}` for
+`present-judgment`, `{"choice": "<stall choice>"}` for `present-stall-menu`. The fold runs through
+the same `cmd_submit` chokepoint as every other fold (echo, state-hash, terminal-receipt gate, round
+ceiling, stall guards `stall-choice-retired:<name>`, `stall-choice-not-offered:<name>`,
+`stall-accept-risk-not-eligible`). The resolution is journalled as **owner-supplied**: the
+`policyApplied` record carries `source: "owner-supplied"` (calibration-resolved carries
+`source: "gate-policy"`) plus `artifactSha256` naming the artifact folded, on the fold's own commit.
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" advance \
+  --session-dir "$SESSION_DIR" \
+  --owner-artifact "$SESSION_DIR/round-<N>/<phase>-artifact.json"
+```
+
 **Refusal tokens when paths interleave.** One token can be returned by more than one command — the
 token names the seam, not the direction.
 
 | `reason` | condition | recovery |
 | --- | --- | --- |
+| `owner-artifact-terminal` | session already terminal and `--owner-artifact` supplied | read `terminal` from `next`; do not fold |
 | `advance-submit-interleaved` | a hand `submit` after any `advance` in this session (`_advanceUsed`) | use `advance` |
-| `advance-submit-interleaved` | an `advance` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase |
+| `advance-submit-interleaved` | an `advance` (including `--owner-artifact`) after any hand `submit` in this session (`_submitUsed`; the artifact file is never read) | compile and hand-`submit` this phase |
+| `advance-submit-interleaved` | `--owner-artifact` supplied while the pending phase is a **seat** phase (the fence is not loosened) | use plain `advance` on seat phases; on owner gates use `--owner-artifact` instead of hand `submit` on an advance-path session |
+| `owner-artifact-unreadable` | `--owner-artifact` path missing or JSON unparseable | fix or recreate the artifact file |
+| `owner-artifact-shape` | `--owner-artifact` parses but is not a JSON object | resubmit a JSON object per gate shape above |
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
 
-**No dead ends** (fold-path interlocks only — not owner-gate phases such as `present-judgment` /
-`present-stall-menu`, where `advance` may park with `advance-judgment-park` / `advance-stall-park`
-when calibration has not pre-authorized the gate). Whichever fold path a session has committed to,
-that path's fold command stays legal for the pending phase: `_submitUsed` → hand `submit`;
-`_advanceUsed` → `advance`; neither latch → `advance` when durable records are present, hand `submit`
-when they are not. `record-result` / `record-missing` are legal only on a session that has not
-hand-folded.
+**No dead ends.** Whichever fold path a session has committed to, that path's fold command stays
+legal for the pending phase: `_submitUsed` → hand `submit`; `_advanceUsed` → `advance` (including
+`advance --owner-artifact` at owner gates when gate policy parks); neither latch → `advance` when
+durable records are present, hand `submit` when they are not. Owner gates (`present-judgment`,
+`present-stall-menu`) still park with `advance-judgment-park` / `advance-stall-park` when
+calibration has not pre-authorized the resolution, but that park is **not** a dead end on an
+advance-path session — pass the owner's artifact with `advance --owner-artifact`. `record-result` /
+`record-missing` are legal only on a session that has not hand-folded.
 
 When a hand-path session (`_submitUsed`) still carries durable records at the pending slot from
 before the entry-point latch existed, hand `submit` proceeds and journals `record-orphans-ignored`
@@ -404,7 +426,10 @@ folds fail-closed to terminal `stalled`.
 When no rule matches, `advance` parks (`advance-judgment-park` / `advance-stall-park`). The refusal
 carries a `detail` cause distinct from the top-level reason so operators can tell *why* it parked.
 On the orchestrator's `next`/`submit` path you still present the gate and submit the owner's choice;
-gate policy pre-authorization is what lets `advance` fold without stopping.
+gate policy pre-authorization is what lets `advance` fold without stopping. On the `advance` path
+when policy has not pre-authorized, present the gate and fold the owner's resolution with
+`advance --owner-artifact` — the `policyApplied` record carries `source: "owner-supplied"` (vs
+`"gate-policy"` for a calibration-resolved fold).
 
 **Advance gate-policy park detail causes** (authoritative list — drift-tested against
 `round_driver.owner_gate_policy_park_detail_causes()`):
