@@ -83,7 +83,8 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - **UI/UX references the actual Claude Design handoff output** (not a rewrite).
    - Plain language throughout, **no technical *how***. Delete sections that
      genuinely don't apply (UI/UX for non-user-facing work; Glossary when there are
-     no terms). Leave **Open questions** empty (resolve or defer each before approval).
+     no terms). **Open questions** is resolved or deferred before approval, then left empty
+     or deleted — never kept with a placeholder under it.
    - **Strip the author-guidance comments.** The template carries `<!-- AUTHOR
      GUIDANCE … -->` blocks (the EARS explainer, the coverage checklist, the
      defer-promise note) — they are for you, not the owner. **Delete every one.** The
@@ -120,6 +121,33 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    and the owner's final approval; this skill stops at "spec written and
    self-reviewed."
 
+## Weight never changes the artifact class
+
+A spec reviewed at `light` weight and a spec reviewed at `full` weight are **the same artifact
+class**. Four equivalences hold, always:
+
+1. **Same template.** Both are filled from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/spec.md`.
+   **There is no light template.**
+2. **Same home.** Both land at the `spec` definition-doc path for their work-item, resolved the
+   same way (`definition_doc.py resolve-write --doc spec`). **There is no light home.**
+3. **Same anchor power.** An issue's Anchor slot may cite a section of either, and the citation
+   resolves by the same test. **A light spec is not a weaker citation.** One half of that test —
+   the **dated approval** an anchor resolves against — is recorded by hand today rather than
+   written by the approval path, and closing that gap is
+   [#1062](https://github.com/zwrose/superheroes/issues/1062)'s work, not this skill's. Until it
+   lands, this equivalence holds by convention on the date and mechanically on everything else.
+4. **Same owner approval authority.** Both are approved by the owner, recorded through the same
+   `set-gate` call. **There is no lighter approval.**
+
+What weight changes is the **process around** the artifact — how many review seats read it, how
+heavy the vet is, whether the owner's approval is asked in-channel or scheduled. It never
+changes the artifact.
+
+**Empty sections are omitted, never filled.** A light spec is shorter because it **deletes** the
+sections that genuinely do not apply — not because it keeps a heading and writes "N/A", "None",
+"TBD", "—", or a one-line restatement of the heading underneath it. **A heading with nothing
+real under it is a defect at either weight**, and deleting it is the fix.
+
 ## Rationalization table
 
 | Excuse | Reality |
@@ -131,3 +159,5 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
 | "A little tech detail clarifies it" | Tech is the build's *how*. Keep the spec to the *what*. |
 | "Owner approved the idea, I'll author straight off" | Author only from the *approved requirements*. If they weren't approved, back to `discovery`. |
 | "I'll just assert the repo does X, everyone knows it" | A load-bearing mirror-fact needs a resolving `[cite: …]` to its repo source. A fabricated repo fact is the #205 class — cite it or don't assert it. |
+| "It's a light spec, I'll use a lighter format" | Weight changes the process around the artifact, never the artifact class: same template, same home, same anchor power, same owner approval authority. |
+| "I'll keep the heading and write N/A under it" | Empty sections are omitted, never filled. A heading with nothing real under it is a defect at either weight — delete it. |
