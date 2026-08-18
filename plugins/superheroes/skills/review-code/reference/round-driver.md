@@ -179,6 +179,23 @@ token names the seam, not the direction.
 | `record-submit-interleaved` | a `record-result` / `record-missing` after any hand `submit` in this session (`_submitUsed`) | compile and hand-`submit` this phase — **not** `advance` (this session's latch refuses it) |
 | `record-submit-interleaved` | a hand `submit` for a phase that already carries durable store records at the pending `(round, phase, attempt)` on a session that has **not** hand-folded yet (**per-attempt** fence — defers when `_submitUsed` is set) | **`advance`** — **except** on a refuse-fold phase (`dispatch-synthesis`, `dispatch-gap-sweep`, `dispatch-scoped-finder`, `run-verify`, `dispatch-fixer`) whose only store record is a `seat-missing/1` envelope: there `advance` answers `assemble-refused` / `missing-seat-refuse-fold:<seat>`, and the slot must first be replaced via `record-result --supersede --expect-sha256 …` |
 
+**Owner-artifact refusal causes** (authoritative list — drift-tested against `round_driver`
+`OWNER_ARTIFACT_*_REFUSAL` constants):
+
+```text
+owner-artifact-terminal
+owner-artifact-unreadable
+owner-artifact-shape
+```
+
+**Policy-applied sources** (authoritative list — drift-tested against `round_driver`
+`POLICY_APPLIED_SOURCE_*` constants):
+
+```text
+gate-policy
+owner-supplied
+```
+
 **No dead ends.** Whichever fold path a session has committed to, that path's fold command stays
 legal for the pending phase: `_submitUsed` → hand `submit`; `_advanceUsed` → `advance` (including
 `advance --owner-artifact` at owner gates when gate policy parks); neither latch → `advance` when
