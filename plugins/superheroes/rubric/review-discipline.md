@@ -232,6 +232,27 @@ affirmatively call converged. Where the build cannot truthfully hand back, **a f
 rather than the builder's own call. Two field specimens deviated from the letter while honouring
 the substance, which is what prompted the ruling.
 
+### Mechanical guards over prose — the byte-literal floor
+
+Mechanical guards over prose are scoped to the **byte-literal floor** — four kept classes and nothing
+beyond them. **Cross-doc literal-agreement pins**, **hard-line sentence pins**, **register-quote
+checks**, and **cardinality floors** over those censuses stay in class; they enforce what a
+byte-for-byte read can enforce without interpreting meaning. **Structural parsers**, **extractors**,
+**table checks**, and **message/meaning guards** are **out of class** — permanently. Prose *meaning*
+and *structure* are review's job, not CI's.
+
+That line is where the ruling lands: out-of-class guards burned review rounds the real findings needed
+(owner ruling 2026-08-17, recorded on issue #695 — [comment
+5322427680](https://github.com/zwrose/superheroes/issues/695#issuecomment-5322427680)).
+
+**The bar cap** is a bar being set, so you know the disposition is legitimate when you use it. A
+review finding that demands a guard outside the kept classes, or an adversarial-evasion finding
+against a guard that is inside them, is **declined as out-of-class by citing this ruling — never
+patched.** You are not dodging a finding when you cite the ruling; you are applying a recorded bar.
+
+**Named-failure-first:** no new prose guard ships without a **field failure it would have caught**,
+named in its issue. A guard with no named failure is speculation dressed as automation.
+
 ## Prose-driven review (`--post`, `--review-only`)
 
 A **prose-driven review** is a sanctioned lane on the read-only paths — not a shortcut, not a
