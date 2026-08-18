@@ -189,6 +189,13 @@ _GATE_POLICY_SKIP_REASON = "pre-authorized by gate policy (calibration)"
 # Named refusal when a submit artifact lists the same judgment id with conflicting dispositions.
 JUDGMENT_DISPOSITION_COLLISION_CAUSE = "judgment-disposition-collision"
 
+POLICY_APPLIED_SOURCE_GATE_POLICY = "gate-policy"
+POLICY_APPLIED_SOURCE_OWNER_SUPPLIED = "owner-supplied"
+OWNER_ARTIFACT_TERMINAL_REFUSAL = "owner-artifact-terminal"
+OWNER_ARTIFACT_UNREADABLE_REFUSAL = "owner-artifact-unreadable"
+OWNER_ARTIFACT_SHAPE_REFUSAL = "owner-artifact-shape"
+OWNER_GATE_PHASES = (P_JUDGMENT, P_STALL)
+
 
 # --- the per-round disclosure channels (#720) -------------------------------------------------
 # Shape predicates for a channel value coming off a DURABLE record. A record is external input: a
@@ -5622,7 +5629,7 @@ def _cmd_record_missing_locked(session_dir, seat, attempt, reason, evidence_path
 
 # --- advance -------------------------------------------------------------------------------------
 
-def cmd_advance(session_dir, break_lock=False, git=None):
+def cmd_advance(session_dir, break_lock=False, git=None, owner_artifact_path=None):
     """Fold the pending phase off its DURABLE records and emit the next action.
 
     The order is the contract: lock → recover → reconcile → sweep → completeness → assemble → fold
@@ -5644,7 +5651,8 @@ def cmd_advance(session_dir, break_lock=False, git=None):
             state, refusal = _load_driver_state(session_dir, "advance")
             if refusal is not None:
                 return refusal
-            return _advance_locked(session_dir, state, git=git, broke=broke)
+            return _advance_locked(session_dir, state, git=git, broke=broke,
+                                   owner_artifact_path=owner_artifact_path)
     except round_records.SessionLockHeld as held:
         return _refuse_cmd(session_dir, "advance", "advance-locked",
                            holder={"pid": held.pid, "createdAt": held.created_at})
@@ -5736,8 +5744,14 @@ def _policy_applied_record(phase, resolution):
     action = resolution.get("action")
     if isinstance(action, dict):
         action = dict(action)
-    return {"phase": phase, "layers": layers, "matches": list(resolution.get("matches") or []),
-            "action": action}
+    return {"phase": phase, "source": POLICY_APPLIED_SOURCE_GATE_POLICY, "layers": layers,
+            "matches": list(resolution.get("matches") or []), "action": action}
+
+
+def _owner_supplied_applied_record(phase, artifact):
+    return {"phase": phase, "source": POLICY_APPLIED_SOURCE_OWNER_SUPPLIED, "layers": [],
+            "matches": [], "action": artifact,
+            "artifactSha256": _sha256(_canonical(artifact))}
 
 
 def _gate_policy_layer_archive_tag(identity):
@@ -5915,23 +5929,30 @@ def _advance_not_folded(session_dir, phase, rnd, attempt, git=None, broke=None,
     return response
 
 
-def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=None, broke=None):
+def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=None, broke=None,
+                        *, owner_artifact=None):
     """Fold an owner gate through cmd_submit when calibration pre-authorizes it."""
-    resolved = _resolve_owner_gate_policy(phase, state, config)
-    park_reason = "advance-judgment-park" if phase == P_JUDGMENT else "advance-stall-park"
-    if not resolved.get("authorized"):
-        return _refuse_cmd(session_dir, "advance", park_reason, phase=phase, rnd=rnd,
-                           attempt=attempt, detail=resolved.get("parkDetail"))
-    archive_refused = _commit_gate_policy_archive(session_dir, rnd, resolved["resolution"])
-    if archive_refused is not None:
-        return _commit_refused_response(session_dir, "advance", archive_refused, phase=phase,
-                                        rnd=rnd, attempt=attempt)
+    if owner_artifact is not None:
+        artifact = owner_artifact
+        applied = _owner_supplied_applied_record(phase, owner_artifact)
+    else:
+        resolved = _resolve_owner_gate_policy(phase, state, config)
+        park_reason = "advance-judgment-park" if phase == P_JUDGMENT else "advance-stall-park"
+        if not resolved.get("authorized"):
+            return _refuse_cmd(session_dir, "advance", park_reason, phase=phase, rnd=rnd,
+                               attempt=attempt, detail=resolved.get("parkDetail"))
+        archive_refused = _commit_gate_policy_archive(session_dir, rnd, resolved["resolution"])
+        if archive_refused is not None:
+            return _commit_refused_response(session_dir, "advance", archive_refused, phase=phase,
+                                            rnd=rnd, attempt=attempt)
+        artifact = resolved["artifact"]
+        applied = resolved["policyApplied"]
     journal_entry = _journal_entry_for_commit(session_dir, "advance", "advanced",
                                               phase=phase, round=rnd, attempt=attempt,
-                                              policyApplied=resolved["policyApplied"])
-    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), resolved["artifact"],
+                                              policyApplied=applied)
+    folded = cmd_submit(session_dir, phase, attempt, state_hash(state), artifact,
                         _via_advance=True,
-                        _pending_policy_applied=resolved["policyApplied"],
+                        _pending_policy_applied=applied,
                         _policy_journal_entry=journal_entry)
     if not folded.get("ok"):
         return _advance_fold_failure(session_dir, folded, phase, rnd, attempt)
@@ -5945,7 +5966,7 @@ def _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=Non
         reason, fault, detail = _state_load_fault(session_dir)
         return _refuse_cmd(session_dir, "advance", reason, fault=fault, detail=detail)
     response = {"ok": True, "folded": {"phase": phase, "round": rnd, "attempt": attempt},
-                "nextAction": nxt, "brokeLock": broke, "policyApplied": resolved["policyApplied"]}
+                "nextAction": nxt, "brokeLock": broke, "policyApplied": applied}
     if after.get("terminal"):
         side = _publish_sidecar(session_dir, after, git=git)
         if side.get("reason"):
@@ -6173,9 +6194,13 @@ def _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attem
     return response
 
 
-def _advance_locked(session_dir, state, git=None, broke=None):
+def _advance_locked(session_dir, state, git=None, broke=None, *, owner_artifact_path=None):
     config = state.get("config") or {}
     if state.get("terminal"):
+        if owner_artifact_path is not None:
+            return _refuse_cmd(session_dir, "advance", OWNER_ARTIFACT_TERMINAL_REFUSAL,
+                               fault=FAULT_CALLER,
+                               detail="session is already terminal — nothing can fold")
         # Idempotent on an EXISTING terminal: re-verify the on-disk receipt through the same gate
         # every terminal answer uses, then re-validate and (if stale or missing) republish the
         # sidecar. Nothing is re-folded and no receipt is re-written.
@@ -6193,9 +6218,30 @@ def _advance_locked(session_dir, state, git=None, broke=None):
     phase, rnd, attempt, refusal = _pending_of(session_dir, state, "advance")
     if refusal is not None:
         return refusal
-    if phase == P_JUDGMENT or phase == P_STALL:
+    if owner_artifact_path is not None and phase not in OWNER_GATE_PHASES:
+        return _refuse_cmd(session_dir, "advance", "advance-submit-interleaved",
+                           fault=FAULT_CALLER, phase=phase, rnd=rnd, attempt=attempt,
+                           detail="--owner-artifact is accepted only on owner gates "
+                                  "(%s, %s); pending phase %s is a seat phase whose artifact "
+                                  "must come from durable seat records"
+                                  % (P_JUDGMENT, P_STALL, phase))
+    owner_artifact = None
+    if owner_artifact_path is not None:
+        try:
+            with open(owner_artifact_path, encoding="utf-8") as fh:
+                parsed = json.load(fh)
+        except (OSError, ValueError) as exc:
+            return _refuse_cmd(session_dir, "advance", OWNER_ARTIFACT_UNREADABLE_REFUSAL,
+                               fault=FAULT_CALLER, phase=phase, rnd=rnd, attempt=attempt,
+                               detail=str(exc))
+        if not isinstance(parsed, dict):
+            return _refuse_cmd(session_dir, "advance", OWNER_ARTIFACT_SHAPE_REFUSAL,
+                               fault=FAULT_CALLER, phase=phase, rnd=rnd, attempt=attempt,
+                               detail="owner artifact must be a JSON object")
+        owner_artifact = parsed
+    if phase in OWNER_GATE_PHASES:
         return _advance_owner_gate(session_dir, state, phase, rnd, attempt, config, git=git,
-                                   broke=broke)
+                                   broke=broke, owner_artifact=owner_artifact)
     if _adapters().is_orchestrator_fulfilled(phase):
         orch = _advance_orchestrator_fulfilled_locked(session_dir, state, phase, rnd, attempt,
                                                       config, git=git, broke=broke)
@@ -6827,6 +6873,9 @@ def build_parser():
     pa = sub.add_parser("advance")
     cli_contract.add_argument(pa, "--session-dir", contract="existing-directory", required=True)
     cli_contract.add_argument(pa, "--break-lock", contract="boolean-flag")
+    cli_contract.add_argument(pa, "--owner-artifact", contract="free-text", default=None,
+                            dest="owner_artifact",
+                            help="path to an owner-gate resolution artifact (JSON object) …")
 
     pt = sub.add_parser("attest")
     cli_contract.add_argument(pt, "--session-dir", contract="existing-directory", required=True)
@@ -6970,7 +7019,8 @@ def _dispatch(args):
         out = cmd_record_missing(args.session_dir, args.seat, args.attempt, args.reason,
                                  evidence_path=args.evidence, occurrence=args.occurrence)
     elif args.cmd == "advance":
-        out = cmd_advance(args.session_dir, break_lock=args.break_lock)
+        out = cmd_advance(args.session_dir, break_lock=args.break_lock,
+                          owner_artifact_path=args.owner_artifact)
     elif args.cmd == "attest":
         out = cmd_attest(args.session_dir, args.failure, args.note)
     else:

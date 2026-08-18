@@ -1922,6 +1922,7 @@ def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
     assert out["policyApplied"]["action"] == {"dispositions": [
         {"findingClass": "judgment:important", "disposition": "skip"}]}
     assert _state(d)["terminal"] == "converged"
@@ -2060,6 +2061,7 @@ def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
     assert out["policyApplied"]["action"] == {"choice": "accept-the-disclosed-risk"}
     assert _state(d)["terminal"] == "converged"
     receipt_path = os.path.join(d, RD.RECEIPT_FILE)
@@ -2281,6 +2283,145 @@ def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):
     RD.cmd_next(submitted)
     out = _advance(submitted, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
+
+
+# =============================================================================================
+# §4c advance --owner-artifact (#1061 WO-B)
+# =============================================================================================
+
+def _write_owner_artifact(tmp_path, artifact, name="owner-artifact.json"):
+    path = str(tmp_path / name)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(artifact, fh)
+    return path
+
+
+def _judgment_dispositions_artifact(state):
+    finding = state["_judgmentFindings"][0]
+    return {"dispositions": [{"id": RD._location_id(finding),
+                              "disposition": "fix-as-suggested"}]}
+
+
+def _set_advance_used(session_dir):
+    state = _state(session_dir)
+    state["_advanceUsed"] = True
+    RD.save_state(session_dir, state)
+
+
+def test_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters):
+    repo = _repo_without_gate_policy(tmp_path)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="owner-artifact-judgment")
+    _set_advance_used(d)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    artifact = _judgment_dispositions_artifact(_state(d))
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
+        RD._canonical(artifact).encode("utf-8")).hexdigest()
+    assert _state(d)["step"] == RD.P_FIXER
+    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+
+
+def test_advance_owner_artifact_stall_closes_dead_end(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall")
+    _set_advance_used(d)
+    artifact = {"choice": RD.HOLD_CHOICE}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert _state(d)["terminal"] == "held"
+
+
+def test_advance_owner_artifact_runs_stall_chokepoint(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall-guard")
+    _set_advance_used(d)
+    bad = {"choice": "not-on-menu"}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "%snot-on-menu" % RD.STALL_CHOICE_NOT_OFFERED_PREFIX
+    assert _state(d)["pending"]["phase"] == RD.P_STALL
+    good = {"choice": RD.HOLD_CHOICE}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, good, "good.json"))
+    assert out["ok"] is True, out
+
+
+def test_advance_owner_artifact_terminal_refusal(tmp_path, adapters):
+    gitdir = _gitdir(tmp_path, "owner-artifact-terminal")
+    d = _session(tmp_path, name="owner-artifact-terminal")
+    _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
+    path = _write_owner_artifact(tmp_path, {"choice": RD.HOLD_CHOICE})
+    out = _advance(d, tmp_path, owner_artifact_path=path)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_TERMINAL_REFUSAL
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True and out.get("idempotent") is True
+
+
+def test_advance_owner_artifact_submit_used_refuses_before_io(tmp_path, adapters):
+    d = _session(tmp_path, name="owner-artifact-submit-used")
+    state = _state(d)
+    state["_submitUsed"] = True
+    state["step"] = RD.P_STALL
+    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 0,
+                        "payload": {}}
+    state["_stallChoices"] = list(RD.STALL_CHOICES)
+    RD.save_state(d, state)
+    missing = str(tmp_path / "does-not-exist.json")
+    assert not os.path.exists(missing)
+    out = _advance(d, tmp_path, owner_artifact_path=missing)
+    assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
+    assert not os.path.exists(missing)
+
+
+def test_advance_owner_artifact_seat_phase_refuses_before_io(tmp_path, adapters):
+    d = _session(tmp_path, name="owner-artifact-seat")
+    _set_advance_used(d)
+    missing = str(tmp_path / "does-not-exist-seat.json")
+    assert not os.path.exists(missing)
+    out = _advance(d, tmp_path, owner_artifact_path=missing)
+    assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
+    assert not os.path.exists(missing)
+
+
+def test_advance_owner_artifact_unreadable_missing_file(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-missing")
+    missing = str(tmp_path / "missing-owner-artifact.json")
+    out = _advance(d, tmp_path, owner_artifact_path=missing)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL
+
+
+def test_advance_owner_artifact_unreadable_invalid_json(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-bad-json")
+    path = str(tmp_path / "bad.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    out = _advance(d, tmp_path, owner_artifact_path=path)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL
+
+
+def test_advance_owner_artifact_shape_refusal_json_list(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-list")
+    path = _write_owner_artifact(tmp_path, [1, 2, 3], "list.json")
+    out = _advance(d, tmp_path, owner_artifact_path=path)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_SHAPE_REFUSAL
+
+
+def test_advance_calibration_path_policy_applied_source_gate_policy(tmp_path, adapters):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="gate-policy-source")
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
+    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
+    on_disk = _receipt_on_disk_policy_applied(d)
+    assert on_disk[-1]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
 
 
 # =============================================================================================
