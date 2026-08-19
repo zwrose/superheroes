@@ -1058,6 +1058,12 @@ check for both "numbered greater than N" and "date" happily passes prose reading
 instead of entries numbered greater than N."* A presence sentinel proves a phrase is there, never
 that the sentence around it still says the right thing.
 
+*Worked example 6 — the package-read-audit vocabulary (pending).* Not a live pair today: the
+package-read audit validator is re-scoped to #1077, so there is no module home and no doc that
+restates its tokens. When #1077 lands, its declared per-kind record schemas become the
+authoritative home, and any doc that restates those tokens is enumerated here as a copy-holder
+under the same rules as the examples above.
+
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the
 enumerating drift test must name every known copy-holder (a comment listing them), and

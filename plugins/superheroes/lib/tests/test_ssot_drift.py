@@ -3018,6 +3018,8 @@ def test_register_check_vocabulary_completeness():
         "missing from frozenset: %r; in frozenset but not derived: %r"
         % (missing_undecided, extra_undecided)
     )
+
+
 # --- Cluster: R5 weight vocabulary + R7 park surface (pinned register literals) ---
 
 # The epic register is the home of record for these sentences. lib/tests/ ships inside the
