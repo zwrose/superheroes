@@ -37,8 +37,7 @@ def _docs_root(tmp_path):
 
 def _write(root, doc, *, where=None):
     """Author a real definition-doc (default pending gate) and return its path."""
-    parent = None if doc == "spec" else WI  # plan→spec, tasks→plan (normalized by the lib)
-    fm = DD.frontmatter(doc, WI, size="small", parent=parent,
+    fm = DD.frontmatter(doc, WI, size="small",
                         created="2026-06-15", updated="2026-06-15")
     # Canonical path comes from the-architect (the layout owner); `where` (a dir) overrides for
     # the deliberately-noncanonical cases. No inline path literal — see test_canonical_path_*.

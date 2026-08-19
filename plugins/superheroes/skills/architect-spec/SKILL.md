@@ -50,7 +50,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    ```
 
 3. **Emit the §3.1 frontmatter** with the lib (a fresh spec is `status: draft`,
-   `gates.review: pending`, null parent):
+   `gates.review: pending`):
 
    ```bash
    ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -59,7 +59,7 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    ```
 
    Do not hand-write the frontmatter — the lib owns its shape and the
-   parent-linkage invariant.
+   gate/status invariants.
 
 4. **Fill the body** from `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/templates/spec.md`: replace the
    `{{frontmatter}}` line with the emitted block, set the `# {{Title}}`, and fill
@@ -152,7 +152,7 @@ real under it is a defect at either weight**, and deleting it is the fix.
 
 | Excuse | Reality |
 | --- | --- |
-| "I'll hand-write the frontmatter, it's just YAML" | The lib owns the §3.1 shape + parent invariant. Use `definition_doc.py frontmatter`. |
+| "I'll hand-write the frontmatter, it's just YAML" | The lib owns the §3.1 shape + gate/status invariants. Use `definition_doc.py frontmatter`. |
 | "I'll resolve the path from the current dir" | Pin `--root "$(git rev-parse --show-toplevel)"` — a subdir cwd would misplace the spec. |
 | "I'll re-mint the slug to be safe" | The slug is frozen at creation (§6.1). Reuse it for a revision; never re-mint. |
 | "Plain prose is fine for requirements" | Functional requirements are EARS + acceptance criteria. That's the verifiable contract. |

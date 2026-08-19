@@ -42,8 +42,6 @@ DOC_TYPES = ("spec", "plan", "tasks")
 # imported, so these pure path helpers stay import-light (no module-load dependency on the
 # policy/mode stack — the deferred-import design).
 DEFAULT_LOCATION = "docs/superheroes"
-# Each doc-type's parent referent (§3.1): plan→spec, tasks→plan, spec→none.
-_PARENT_DOCTYPE = {"spec": None, "plan": "spec", "tasks": "plan"}
 
 
 def _plugin_version():
@@ -145,20 +143,15 @@ def resolve_write_path(work_item, doc_type, *, root, cwd=None, store_root=None):
 
 # --- frontmatter (§3.1) ----------------------------------------------------
 
-def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
+def frontmatter(doc_type, work_item, *, size, issue=None,
                 created=None, updated=None, status="draft", review="pending",
-                approved=None, allow_orphan=False):
-    """Build the §3.1 frontmatter dict, enforcing the parent-linkage invariant.
+                approved=None):
+    """Build the §3.1 frontmatter dict, enforcing the review/status/approved invariants.
 
-    `spec` must have a null parent; `plan` must parent a `spec`; `tasks` must
-    parent a `plan` (§3.1). We fail closed on a mismatch rather than emit a doc
-    that violates the contract. `parent` may be passed as the work-item slug of
-    the parent (a string) or as a full `{workItem, docType}` dict.
-
-    `allow_orphan` (tasks only) permits a NULL parent — legacy support for the retired
-    quick-discovery route (#25; plan/tasks legs retired in S1 train 2, #469), kept because
-    the tasks docType survives as a shared-seam legacy. It is opt-in; a non-tasks doc, or a
-    tasks doc that is given a parent, still runs the strict validation below.
+    The §3.1 header is a FLAT field set: a definition-doc carries no linkage to
+    another doc (there is no `parent` field). We fail closed on an unknown docType,
+    and on any `status` / `gates.review` / `approved` combination the contract
+    forbids, rather than emit a doc that violates it.
     """
     if doc_type not in DOC_TYPES:
         raise ValueError(f"unknown docType {doc_type!r}; expected one of {DOC_TYPES}")
@@ -178,11 +171,6 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
             raise ValueError(f"approved must be a canonical ISO date, got {approved!r}")
         if parsed.isoformat() != approved:
             raise ValueError(f"approved must be a canonical ISO date, got {approved!r}")
-    if allow_orphan and doc_type == "tasks" and parent is None:
-        parent_obj = None
-    else:
-        expected_parent = _PARENT_DOCTYPE[doc_type]
-        parent_obj = _normalize_parent(parent, expected_parent, doc_type)
     today = datetime.date.today().isoformat()
     fm = {
         "superheroes": "doc",
@@ -190,7 +178,6 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
         "docType": doc_type,
         "workItem": work_item,
         "issue": issue,
-        "parent": parent_obj,
         "size": size,
         "status": status,
         "gates": {"review": review},
@@ -203,26 +190,6 @@ def frontmatter(doc_type, work_item, *, size, parent=None, issue=None,
     return fm
 
 
-def _normalize_parent(parent, expected_doctype, doc_type):
-    if expected_doctype is None:
-        if parent is not None:
-            raise ValueError(f"{doc_type} must have a null parent (§3.1), got {parent!r}")
-        return None
-    if parent is None:
-        raise ValueError(f"{doc_type} requires a parent {expected_doctype} (§3.1)")
-    if isinstance(parent, str):
-        return {"workItem": parent, "docType": expected_doctype}
-    if isinstance(parent, dict):
-        if parent.get("docType") != expected_doctype:
-            raise ValueError(
-                f"{doc_type} parent must be a {expected_doctype} (§3.1), "
-                f"got {parent.get('docType')!r}")
-        if not parent.get("workItem"):
-            raise ValueError(f"{doc_type} parent missing workItem (§3.1)")
-        return {"workItem": parent["workItem"], "docType": expected_doctype}
-    raise ValueError(f"parent must be a slug string or {{workItem, docType}} dict, got {parent!r}")
-
-
 def render_frontmatter(fm):
     """Render the frontmatter dict as a deterministic `---`-fenced YAML block.
 
@@ -230,11 +197,6 @@ def render_frontmatter(fm):
     YAML reader would otherwise coerce (dates → date objects; `producedBy` holds
     `@`). The constrained fields (slugs, enums) are safe bare scalars.
     """
-    parent = fm["parent"]
-    if parent is None:
-        parent_str = "null"
-    else:
-        parent_str = "{workItem: %s, docType: %s}" % (parent["workItem"], parent["docType"])
     issue = fm["issue"]
     issue_str = "null" if issue is None else str(issue)
     lines = [
@@ -244,7 +206,6 @@ def render_frontmatter(fm):
         f"docType: {fm['docType']}",
         f"workItem: {fm['workItem']}",
         f"issue: {issue_str}",
-        f"parent: {parent_str}",
         f"size: {fm['size']}",
         f"status: {fm['status']}",
     ]
@@ -270,6 +231,48 @@ _STATUS_RE = re.compile(r"^status:\s*[a-z-]+\s*$")
 _UPDATED_RE = re.compile(r'^updated:\s*".*"\s*$')
 _APPROVED_KEY_RE = re.compile(r"^(?:approved|'approved'|\"approved\")[ \t]*:")
 _APPROVED_CANONICAL_RE = re.compile(r'^approved:\s*"(\d{4}-\d{2}-\d{2})"\s*$')
+# The closed set of frontmatter fields `set_gate` rewrites, and the canonical line forms this
+# module writes for them — reused (never restated) as the definition of "canonical", so a change
+# to a writer's shape moves the check with it.
+_MANAGED_FIELDS = ("status", "gates", "updated", "approved")
+_MANAGED_KEY_RE = re.compile(
+    r"^((?:%s)|'(?:%s)'|\"(?:%s)\")[ \t]*:" % ((("|".join(_MANAGED_FIELDS)),) * 3))
+_CANONICAL_LINE_RES = (_STATUS_RE, _GATES_RE, _UPDATED_RE, _APPROVED_CANONICAL_RE)
+
+
+def _unrewritten_managed_keys(lines, end):
+    """Return [(index, key-as-written)] for managed-field keys left in non-canonical form.
+
+    Axis: refusal — `set_gate` must never report success while a top-level managed key it did
+    not rewrite survives in the frontmatter, because the doc would then disagree with the
+    result the caller was handed.
+
+    Detects, within `lines[1:end]` (the `---`-fenced frontmatter only): a key token that is one
+    of the four managed fields — `status`, `gates`, `updated`, `approved` — written at the top
+    level with **no leading whitespace**, bare or `'single'`- or `"double"`-quoted, with optional
+    spaces/tabs before the colon, on a line matching none of this module's canonical forms.
+
+    Does NOT detect: keys nested inside block or flow mappings (any indented key belongs to its
+    parent field, not to `set_gate`), keys spanning multiple lines, YAML anchors or aliases,
+    escaped or unicode-escaped spellings, and managed keys in the document body below the
+    closing fence. This is a closed-variant line scan, not a YAML reader.
+    """
+    offenders = []
+    for i in range(1, end):
+        m = _MANAGED_KEY_RE.match(lines[i])
+        if m and not any(rx.match(lines[i]) for rx in _CANONICAL_LINE_RES):
+            offenders.append((i, m.group(1)))
+    return offenders
+
+
+def _unrewritten_managed_key_refusal(offenders):
+    """The named refusal for `_unrewritten_managed_keys` hits — 1-based line numbers, as written."""
+    detail = ", ".join("%s (line %d)" % (key, i + 1) for i, key in offenders)
+    return {
+        "ok": False,
+        "reason": "unrewritten-managed-key",
+        "detail": "frontmatter key(s) not rewritten to canonical form: " + detail,
+    }
 
 
 def _frontmatter_bounds(text, path):
@@ -335,9 +338,9 @@ def _apply_approved_pass(lines, end, review, current_review):
 
 def read_frontmatter(path):
     """Parse a definition-doc's §3.1 frontmatter into (frontmatter_dict, body) — the reader paired
-    with `render_frontmatter` (the writer), co-located so the two sides change in lockstep. `parent`
-    is parsed back into its nested {workItem, docType} mapping; other fields stay scalar. This is the
-    canonical frontmatter→dict reader (e.g. for the §6.3 content-hash); callers must not re-implement it.
+    with `render_frontmatter` (the writer), co-located so the two sides change in lockstep. Every
+    §3.1 field is a scalar, and reads back as one. This is the canonical frontmatter→dict reader
+    (e.g. for the §6.3 content-hash); callers must not re-implement it.
     """
     with open(path, encoding="utf-8") as fh:
         text = fh.read()
@@ -348,11 +351,7 @@ def read_frontmatter(path):
         if not m:
             continue
         key, val = m.group(1), m.group(2).strip()
-        if key == "parent" and val.startswith("{"):
-            pm = dict(re.findall(r"(\w+):\s*([\w-]+)", val))
-            fm["parent"] = {"workItem": pm.get("workItem"), "docType": pm.get("docType")}
-        else:
-            fm[key] = val
+        fm[key] = val
     return fm, "\n".join(lines[end + 1:])
 
 
@@ -437,9 +436,22 @@ def set_gate(path, review, *, expected_hash=None, run_id=None, lease=None):
         elif _UPDATED_RE.match(lines[i]):
             lines[i] = f'updated: "{today}"'
     if not found:
+        # A doc whose only `gates` key is non-canonical never sets `found`: refuse by name
+        # rather than raise, so the caller gets the reason. Nothing was written either way.
+        offenders = _unrewritten_managed_keys(lines, end)
+        if offenders:
+            return _unrewritten_managed_key_refusal(offenders)
         raise ValueError(f"{path}: no 'gates: {{review: …}}' line to update")
     approved_date = _apply_approved_pass(lines, end, review, current_review)
-    result = _atomic_replace(path, "\n".join(lines))
+    prospective = "\n".join(lines)
+    # Verify the PROSPECTIVE state (an `approved` spelling the pass already deleted is not an
+    # offender), and recompute the bound: `_apply_approved_pass` deletes and inserts lines but
+    # decrements only its own local `end`, so the one bound above is stale here.
+    _, prospective_end = _frontmatter_bounds(prospective, path)
+    offenders = _unrewritten_managed_keys(lines, prospective_end)
+    if offenders:
+        return _unrewritten_managed_key_refusal(offenders)
+    result = _atomic_replace(path, prospective)
     if not result.get("ok"):
         return result
     out = {"ok": True, "review": review, "status": status, "runId": run_id}
@@ -474,11 +486,6 @@ def _build_parser():
     f.add_argument("--work-item", required=True)
     f.add_argument("--size", required=True, choices=["small", "medium", "large"])
     f.add_argument("--issue", type=int, default=None)
-    f.add_argument("--parent-item", default=None,
-                   help="parent work-item slug (required for plan/tasks)")
-    f.add_argument("--orphan", action="store_true",
-                   help="tasks only: emit a NULL parent for a quick-discovery tasks doc "
-                        "authored with no plan (#25); ignored if --parent-item is given")
     f.add_argument("--created", default=None)
     f.add_argument("--updated", default=None)
 
@@ -545,9 +552,8 @@ def main(argv):
         return 0
     if args.cmd == "frontmatter":
         fm = frontmatter(
-            args.doc, args.work_item, size=args.size, parent=args.parent_item,
-            issue=args.issue, created=args.created, updated=args.updated,
-            allow_orphan=getattr(args, "orphan", False))
+            args.doc, args.work_item, size=args.size,
+            issue=args.issue, created=args.created, updated=args.updated)
         sys.stdout.write(render_frontmatter(fm))
         return 0
     try:
