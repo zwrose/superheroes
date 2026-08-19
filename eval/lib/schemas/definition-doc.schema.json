@@ -4,7 +4,7 @@
   "title": "superheroes definition-doc frontmatter (CONVENTIONS §3.1)",
   "type": "object",
   "additionalProperties": false,
-  "required": ["superheroes", "schemaVersion", "docType", "workItem", "issue", "parent", "size", "status", "gates", "producedBy", "created", "updated"],
+  "required": ["superheroes", "schemaVersion", "docType", "workItem", "issue", "size", "status", "gates", "producedBy", "created", "updated"],
   "if": {"properties": {"gates": {"properties": {"review": {"const": "passed"}}, "required": ["review"]}}, "required": ["gates"]},
   "then": {"required": ["approved"]},
   "else": {"not": {"required": ["approved"]}},
@@ -14,20 +14,6 @@
     "docType": { "enum": ["spec", "plan", "tasks"] },
     "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
     "issue": { "type": ["integer", "null"] },
-    "parent": {
-      "oneOf": [
-        { "type": "null" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["workItem", "docType"],
-          "properties": {
-            "workItem": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*-[0-9a-f]{6}$" },
-            "docType": { "enum": ["spec", "plan"] }
-          }
-        }
-      ]
-    },
     "size": { "enum": ["small", "medium", "large"] },
     "status": { "enum": ["draft", "in-review", "approved"] },
     "approved": { "type": "string", "format": "date" },
