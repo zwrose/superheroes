@@ -290,21 +290,15 @@ def collect(cwd, root=None):
         if tier_gate.status == model_tier_overrides.TIERS_ROOT_UNAVAILABLE:
             import calibration_resolve
             calibration_resolve.resolve(cwd, root=root)
-            profile = None
-            tiers = model_tier_overrides.effective_tiers(None)
-            overrides = {}
-        elif (
-            tier_gate.status == model_tier_overrides.TIERS_UNREADABLE
-            and tier_gate.path is not None
-        ):
             profile = tier_gate.path
             tiers = None
             overrides = {}
             model_tier_refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
         elif model_tier_overrides.tier_gate_is_refusal(tier_gate):
             profile = tier_gate.path
-            tiers = model_tier_overrides.effective_tiers(None)
+            tiers = None
             overrides = {}
+            model_tier_refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
         else:
             profile = tier_gate.path
             tiers = tier_gate.tiers
@@ -318,6 +312,9 @@ def collect(cwd, root=None):
                 _cr = None
         if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
+        # Deliberate fall-open: unimportable calibration_resolve is an environment failure,
+        # not a statement about the project's configuration.
+        # Deliberate fall-open: other non-UnresolvableRootError exceptions are environment failures too.
         profile = None
         tiers = model_tier_overrides.effective_tiers(None)
         overrides = {}

@@ -715,3 +715,85 @@ def test_render_shows_review_gate_policy_duplicate_policy_key(tmp_path):
     assert "## Review gate policy" in screen
     assert "project overlay: refused (duplicate-policy-key:rules)" in screen
     assert "project overlay: none configured" not in screen
+
+
+def test_collect_refuses_model_tiers_when_profile_unreadable_path_known(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    import model_tier_overrides as mto
+
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    cdir = os.path.join(str(tmp_path), ".claude", "superheroes")
+    os.makedirs(cdir, exist_ok=True)
+    sc.atomic_write(os.path.join(cdir, "core.md"),
+                    core_md.render_core({"verifyCommand": "pytest", "stackTags": ["py"],
+                                         "threatModel": "single-user", "patterns": "x"},
+                                        "confirmed", "2026-06-27", "2026-06-27"))
+    profile = os.path.join(cdir, "review-crew.md")
+    sc.atomic_write(profile, "## Model tiers\nimplementer: opus\n")
+    os.chmod(profile, 0o000)
+    try:
+        data = cv.collect(str(tmp_path), root=root)
+        assert data["modelTiers"] is None
+        assert data["modelTierRefusal"] is not None
+        assert data["modelTierRefusal"]["reason"] == mto.TIER_REASON_UNREADABLE
+        assert data["modelTierOverrides"] == {}
+        assert data["modelTierProfile"] == profile
+    finally:
+        os.chmod(profile, 0o644)
+
+
+def test_collect_refuses_model_tiers_when_profile_unreadable_path_none(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    gate = mto.TierGate(None, {}, mto.TIERS_UNREADABLE, "boom", None)
+    monkeypatch.setattr(
+        cv.model_tier_overrides,
+        "effective_tiers_for_gate",
+        lambda cwd=None, root=None, profile_path=None: gate,
+    )
+    data = cv.collect(str(tmp_path))
+    assert data["modelTiers"] is None
+    assert data["modelTierRefusal"] is not None
+    assert data["modelTierRefusal"]["reason"] == mto.TIER_REASON_UNREADABLE
+    assert data["modelTierOverrides"] == {}
+    assert data["modelTierProfile"] is None
+
+
+def test_collect_refuses_model_tiers_when_root_unavailable_reprobe_succeeds(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+
+    gate = mto.TierGate(
+        None, {}, mto.TIERS_ROOT_UNAVAILABLE, "root unavailable", None,
+    )
+    monkeypatch.setattr(
+        cv.model_tier_overrides,
+        "effective_tiers_for_gate",
+        lambda cwd=None, root=None, profile_path=None: gate,
+    )
+    monkeypatch.setattr(
+        cv.model_tier_overrides,
+        "resolve_profile_path",
+        lambda cwd=None, root=None: None,
+    )
+    import calibration_resolve as cr
+    monkeypatch.setattr(cr, "resolve", lambda cwd, root=None: None)
+    data = cv.collect(str(tmp_path))
+    assert data["modelTiers"] is None
+    assert data["modelTierRefusal"] is not None
+    assert data["modelTierRefusal"]["reason"] == mto.TIER_REASON_ROOT_UNAVAILABLE
+    assert data["modelTierOverrides"] == {}
+    assert data["modelTierProfile"] is None
+
+
+def test_collect_fallopen_default_tiers_when_calibration_resolve_unimportable(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setitem(sys.modules, "calibration_resolve", None)
+    data = cv.collect(str(tmp_path))
+    assert data["modelTierProfile"] is None
+    assert data["modelTierOverrides"] == {}
+    assert data["modelTiers"]["implementer"] == "sonnet"
+    assert data["modelTierRefusal"] is None
