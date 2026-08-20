@@ -91,7 +91,11 @@ jobs:
 
       - name: Install Claude Code CLI (host manifest validation)
         # Unpinned deliberately: validate against the host consumers actually run.
-        run: npm install -g @anthropic-ai/claude-code
+        # Pinned 2026-08-18: 2.1.237 ships a broken native-binary install on the
+        # hosted runner ("claude native binary not installed", postinstall/optional-dep
+        # failure — two identical failures incl. a clean re-run). Unpin (or advance the
+        # pin) once a later release installs cleanly.
+        run: npm install -g @anthropic-ai/claude-code@2.1.236
 
       - name: Validate plugin manifests against host CLI
         env:
