@@ -3257,6 +3257,7 @@ substituted default would convert "could not exercise" into "passed".
 | `conformance-cli-cwd-invalid` | `--cwd` is not an existing directory (exit 2) |
 | `conformance-cli-now-invalid` | `--now` is missing, malformed, or not valid ISO-8601 UTC-Z (exit 2) |
 | `conformance-input-branch-unresolved` | artifacts input: branch name could not be resolved from cwd or `--branch` |
+| `conformance-input-calibration-unreadable` | pilot block input: calibration source exists but could not be read for cwd |
 | `conformance-input-cleanup-incomplete` | cleanup input: reach roots empty, slot journal path incomplete, or required identity/mint fields absent |
 | `conformance-input-live-effects-not-permitted` | cleanup, mint, or ownership-probe input: `--allow-live-effects` was not passed |
 | `conformance-input-no-artifacts-dir` | artifacts input: artifacts directory could not be resolved |

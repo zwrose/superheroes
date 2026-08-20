@@ -681,9 +681,10 @@ def _evaluate_configured_dispatch_gate(cwd, root, facts, existing):
         if existing is not None and not _facts_include_engine_preferences(facts):
             return [], None
         prefs = _candidate_engine_preferences(facts, existing)
-        tiers = model_tier_overrides.effective_tiers(
-            model_tier_overrides.resolve_profile_path(cwd, root))
-        return engine_pref.configured_dispatch_violations(prefs, tiers), None
+        tier_gate = model_tier_overrides.effective_tiers_for_gate(cwd=cwd, root=root)
+        if model_tier_overrides.tier_gate_is_refusal(tier_gate):
+            return None, model_tier_overrides.tier_gate_refusal(tier_gate)
+        return engine_pref.configured_dispatch_violations(prefs, tier_gate.tiers), None
     except Exception as exc:
         return None, gate_refusal(GATE_REASON_EVALUATION_FAILED, gate_refusal_detail(exc))
 

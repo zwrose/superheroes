@@ -107,7 +107,19 @@ def declares_slots(repo_root):
     if not isinstance(repo_root, str) or not repo_root:
         return _answer(STATE_CANNOT_TELL, CAUSE_REPO_ROOT_INVALID, None)
     try:
+        # Store-level refusal is not short-circuited here — this module performs its
+        # own, more specific candidate classification in the walk below (#913).
         info = store.resolve(repo_root, store.store_root())
+        refusal = info.get("refusal")
+        if refusal is not None and not info.get("exists"):
+            reason = refusal.get("reason")
+            if reason == store.STORE_REASON_POINTER_UNREADABLE:
+                return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
+            if reason == store.STORE_REASON_LAYER_UNREADABLE:
+                if refusal.get("source") == "profile-md":
+                    return _answer(
+                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNREADABLE,
+                        refusal.get("path"))
         path = info.get("profile") if info.get("exists") else None
     except Exception:
         return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)

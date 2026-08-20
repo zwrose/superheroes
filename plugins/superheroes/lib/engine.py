@@ -528,6 +528,9 @@ def _resolve_paths():
     cwd = os.getcwd()
     try:
         res = store.resolve(cwd, store.store_root())
+        refusal = res.get("refusal")
+        if refusal is not None:
+            raise EngineError("%s: %s" % (refusal["reason"], refusal["detail"]))
         if res["location"] == "none":
             raise EngineError("no test-pilot profile resolves here; run "
                               "test-pilot-init first")

@@ -252,3 +252,69 @@ def test_cli_resolve_bare_calibrated_returns_0_stdout_json(tmp_path, isolated_de
     assert proc.returncode == 0
     out = json.loads(proc.stdout)
     assert out["exists"] is True
+
+
+def test_candidate_profile_paths_returns_four_candidates_in_precedence_order_when_none_exist(tmp_path):
+    _init_repo(tmp_path)
+    candidates = cr.candidate_profile_paths(str(tmp_path))
+    assert len(candidates) == 4
+    assert candidates[0] == cr._unified_in_repo_layer_path(str(tmp_path))
+    assert candidates[1] == cr._legacy_in_repo(str(tmp_path))
+    assert candidates[2] == cr._unified_global_layer_path(str(tmp_path))
+    assert candidates[3] == cr._legacy_global_profile_path(str(tmp_path))
+    for path in candidates:
+        assert not os.path.exists(path)
+
+
+def test_candidate_profile_paths_agrees_with_resolve_precedence_per_position(
+    tmp_path, isolated_default_store_root, monkeypatch,
+):
+    default_store = isolated_default_store_root
+
+    def _repo(name):
+        repo = tmp_path / name
+        repo.mkdir()
+        _init_repo(repo, f"git@github.com:o/{name}.git")
+        return repo
+
+    unified_in_repo = _repo("unified-in-repo")
+    layer = unified_in_repo / ".claude" / "superheroes" / "review-crew.md"
+    layer.parent.mkdir(parents=True)
+    layer.write_text("## Focus\nx\n")
+    candidates = cr.candidate_profile_paths(str(unified_in_repo), root=default_store)
+    resolved = cr.resolve(str(unified_in_repo), root=default_store)
+    winner = resolved.get("dispatch_layer") or resolved.get("legacy_path")
+    assert winner == candidates[0]
+
+    legacy_in_repo = _repo("legacy-in-repo")
+    legacy = legacy_in_repo / ".claude" / "review-profile.md"
+    legacy.parent.mkdir(parents=True)
+    legacy.write_text("## Threat\nx\n")
+    candidates = cr.candidate_profile_paths(str(legacy_in_repo), root=default_store)
+    resolved = cr.resolve(str(legacy_in_repo), root=default_store)
+    winner = resolved.get("dispatch_layer") or resolved.get("legacy_path")
+    assert winner == candidates[1]
+
+    unified_global = _repo("unified-global")
+    _ensure_global_unified_layer(str(unified_global), default_store)
+    candidates = cr.candidate_profile_paths(str(unified_global), root=default_store)
+    resolved = cr.resolve(str(unified_global), root=default_store)
+    winner = resolved.get("dispatch_layer") or resolved.get("legacy_path")
+    assert winner == candidates[2]
+
+    legacy_global = _repo("legacy-global")
+    legacy_store = str(tmp_path / "legacy-only-store")
+    os.makedirs(legacy_store, exist_ok=True)
+    import store_core as sc
+    ident = sc.derive_identifiers(str(legacy_global))
+    entry_dir = os.path.join(legacy_store, "entries", ident["gitdir_hash"])
+    os.makedirs(entry_dir, exist_ok=True)
+    legacy_global_path = os.path.join(entry_dir, "review-profile.md")
+    with open(legacy_global_path, "w", encoding="utf-8") as fh:
+        fh.write("## Threat\nx\n")
+    sc.write_pointer(legacy_store, ident["gitdir_hash"], ident["gitdir_hash"])
+    monkeypatch.setattr(cr.review_store, "store_root", lambda: legacy_store)
+    candidates = cr.candidate_profile_paths(str(legacy_global), root=default_store)
+    resolved = cr.resolve(str(legacy_global), root=default_store)
+    winner = resolved.get("dispatch_layer") or resolved.get("legacy_path")
+    assert winner == candidates[3]

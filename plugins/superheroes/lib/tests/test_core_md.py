@@ -192,10 +192,10 @@ def test_write_refused_on_fable_external_engine_at_create(tmp_path, monkeypatch)
     store = str(tmp_path / "store")
     monkeypatch.setattr(
         mto,
-        "effective_tiers",
-        lambda profile_path: {"implementer": "fable", "reviewer": "sonnet"},
+        "effective_tiers_for_gate",
+        lambda cwd=None, root=None, profile_path=None: mto.TierGate(
+            {"implementer": "fable", "reviewer": "sonnet"}, {}, mto.TIERS_OK, None, "/fake/profile.md"),
     )
-    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
     facts = {
         "verifyCommand": "npm test",
         "stackTags": ["node"],
@@ -216,10 +216,10 @@ def test_write_refused_on_fable_external_engine_when_existing_proposes_codex(tmp
     store = str(tmp_path / "store")
     monkeypatch.setattr(
         mto,
-        "effective_tiers",
-        lambda profile_path: {"implementer": "fable", "reviewer": "sonnet"},
+        "effective_tiers_for_gate",
+        lambda cwd=None, root=None, profile_path=None: mto.TierGate(
+            {"implementer": "fable", "reviewer": "sonnet"}, {}, mto.TIERS_OK, None, "/fake/profile.md"),
     )
-    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
     initial = {
         "verifyCommand": "npm test",
         "stackTags": ["node"],
@@ -252,11 +252,10 @@ def test_write_refused_on_dispatch_gate_evaluation_failure(tmp_path, monkeypatch
     repo = str(tmp_path)
     store = str(tmp_path / "store")
 
-    def _boom(profile_path):
+    def _boom(**kwargs):
         raise RuntimeError("tier read failed")
 
-    monkeypatch.setattr(mto, "effective_tiers", _boom)
-    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
+    monkeypatch.setattr(mto, "effective_tiers_for_gate", _boom)
     facts = {
         "verifyCommand": "npm test",
         "stackTags": ["node"],
@@ -1314,10 +1313,10 @@ def test_write_refused_mode_zero_preserves_bytes(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     monkeypatch.setattr(
         mto,
-        "effective_tiers",
-        lambda profile_path: {"reviewer": "sonnet"},
+        "effective_tiers_for_gate",
+        lambda cwd=None, root=None, profile_path=None: mto.TierGate(
+            {"reviewer": "sonnet"}, {}, mto.TIERS_OK, None, "/fake/profile.md"),
     )
-    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
     core_p = _gate_core_beside(repo)
     body = _gate_valid_core_text({"implementation": "claude"})
     open(core_p, "w").write(body)
@@ -1352,10 +1351,10 @@ def test_write_refused_dangling_symlink_preserves_link(tmp_path, monkeypatch):
     store = str(tmp_path / "store")
     monkeypatch.setattr(
         mto,
-        "effective_tiers",
-        lambda profile_path: {"reviewer": "sonnet"},
+        "effective_tiers_for_gate",
+        lambda cwd=None, root=None, profile_path=None: mto.TierGate(
+            {"reviewer": "sonnet"}, {}, mto.TIERS_OK, None, "/fake/profile.md"),
     )
-    monkeypatch.setattr(mto, "resolve_profile_path", lambda cwd, root=None: "/fake/profile.md")
     core_p = _gate_core_beside(repo)
     target = "/nonexistent/wo676-preserve"
     os.symlink(target, core_p)
@@ -3204,3 +3203,35 @@ def test_review_gate_policy_for_gate_refuses_duplicate_policy_document_key(tmp_p
     assert gate.status == CM.CONFIG_POLICY_AMBIGUITY
     assert gate.overlay is None
     assert gate.detail == "duplicate-policy-key:rules"
+
+
+def test_configured_dispatch_gate_refuses_unreadable_profile(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    import model_tier_overrides as mto
+
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w").write(_gate_valid_core_text({"implementation": "codex"}))
+    profile = os.path.join(os.path.dirname(core_p), "review-crew.md")
+    open(profile, "w").write("## Model tiers\nimplementer: fable\n")
+    os.chmod(profile, 0o000)
+    try:
+        violations, err = CM._evaluate_configured_dispatch_gate(repo, store, {}, None)
+        assert violations is None
+        assert err is not None
+        assert err["reason"] == mto.TIER_REASON_UNREADABLE
+    finally:
+        os.chmod(profile, 0o644)
+
+
+def test_configured_dispatch_gate_absent_profile_uses_defaults(tmp_path):
+    repo = str(tmp_path)
+    store = str(tmp_path / "store")
+    core_p = _gate_core_beside(repo)
+    open(core_p, "w").write(_gate_valid_core_text({"implementation": "claude"}))
+    violations, err = CM._evaluate_configured_dispatch_gate(
+        repo, store, {"enginePreferences": {"implementation": "codex"}}, None)
+    assert err is None
+    assert violations == []

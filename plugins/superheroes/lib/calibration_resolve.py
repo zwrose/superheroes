@@ -74,15 +74,45 @@ def _legacy_in_repo(cwd, hero=REVIEW_CREW):
     return os.path.join(_repo_root(cwd), sub)
 
 
+def _unified_in_repo_layer_path(cwd, hero=REVIEW_CREW):
+    return os.path.join(_repo_root(cwd), ".claude", "superheroes", hero + ".md")
+
+
 def _unified_in_repo_layer(cwd, hero=REVIEW_CREW):
-    path = os.path.join(_repo_root(cwd), ".claude", "superheroes", hero + ".md")
+    path = _unified_in_repo_layer_path(cwd, hero)
     return path if os.path.isfile(path) else None
+
+
+def _unified_global_layer_path(cwd, hero=REVIEW_CREW, root=None):
+    """Path to control-plane config/<hero>.md (matches review_store._unified_global)."""
+    return os.path.join(mode_registry.project_store_dir(cwd, root), "config", hero + ".md")
 
 
 def _unified_global_layer(cwd, hero=REVIEW_CREW, root=None):
-    """Direct probe of control-plane config/<hero>.md (matches review_store._unified_global)."""
-    path = os.path.join(mode_registry.project_store_dir(cwd, root), "config", hero + ".md")
+    path = _unified_global_layer_path(cwd, hero, root)
     return path if os.path.isfile(path) else None
+
+
+def _legacy_global_profile_path(cwd, legacy_root=None):
+    legacy_root = legacy_root or review_store.store_root()
+    g = store_core.resolve_global(cwd, legacy_root, heal=False, _consumer="review_store")
+    if g is not None:
+        return os.path.join(g["dir"], review_store.FILENAMES["profile"])
+    ident = store_core.derive_identifiers(cwd)
+    return os.path.join(
+        legacy_root, "entries", ident["gitdir_hash"], review_store.FILENAMES["profile"])
+
+
+def candidate_profile_paths(cwd, hero=REVIEW_CREW, root=None):
+    """The ordered profile-source candidates resolve() considers, EXISTING OR NOT."""
+    legacy_root = review_store.store_root()
+    candidates = [
+        _unified_in_repo_layer_path(cwd, hero),
+        _legacy_in_repo(cwd, hero),
+        _unified_global_layer_path(cwd, hero, root),
+        _legacy_global_profile_path(cwd, legacy_root),
+    ]
+    return [c for c in candidates if c is not None]
 
 
 def _core_beside_layer(layer_p, cwd, root):

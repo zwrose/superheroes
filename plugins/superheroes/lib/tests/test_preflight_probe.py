@@ -683,10 +683,62 @@ def test_dispatch_calibration_invalid_utf8_tiers_returns_evaluation_failed_marke
     assert rows[0]["role"] == "*"
     assert rows[0]["engine"] is None
     assert rows[0]["model"] is None
-    assert rows[0]["readError"].startswith("dispatch-gate-evaluation-failed: UnicodeDecodeError")
+    assert rows[0]["readError"].startswith("model-tiers-unreadable:")
     _assert_read_error_payload_shape(
         rows[0]["readError"],
-        reason_prefix="dispatch-gate-evaluation-failed: UnicodeDecodeError")
+        reason_prefix="model-tiers-unreadable:")
+
+
+def test_dispatch_calibration_tiers_unreadable_returns_marker_row(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\nimplementer: opus\n")
+    os.chmod(profile, 0o000)
+    try:
+        rows = pp.dispatch_calibration(cwd=repo, root=store)
+        assert len(rows) == 1
+        assert rows[0]["role"] == "*"
+        assert rows[0]["engine"] is None
+        assert rows[0]["model"] is None
+        assert rows[0]["readError"].startswith("model-tiers-unreadable:")
+    finally:
+        os.chmod(profile, 0o644)
+
+
+def test_dispatch_calibration_tiers_unreadable_never_raises(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\n")
+    os.chmod(profile, 0o000)
+    try:
+        rows = pp.dispatch_calibration(cwd=repo, root=store)
+        assert isinstance(rows, list)
+        assert len(rows) == 1
+    finally:
+        os.chmod(profile, 0o644)
+
+
+def test_dispatch_selftest_config_tiers_unreadable(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\n")
+    os.chmod(profile, 0o000)
+    try:
+        cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+        assert cfg["tiers"] == {}
+        assert "read_error" in cfg
+        assert cfg["read_error"].startswith("model-tiers-unreadable:")
+    finally:
+        os.chmod(profile, 0o644)
 
 
 # --- configured_cross_vendor_engines -------------------------------------------------------
@@ -1679,9 +1731,9 @@ def test_absent_core_with_corrupt_tiers_blocks_go(tmp_path, monkeypatch, capsys)
     cal = payload["dispatchCalibration"]
     assert len(cal) == 1
     assert cal[0]["role"] == "*"
-    assert cal[0]["readError"].startswith("dispatch-gate-evaluation-failed: ")
+    assert cal[0]["readError"].startswith("model-tiers-unreadable: UTF-8 decode failed at ")
     _assert_read_error_payload_shape(
-        cal[0]["readError"], reason_prefix="dispatch-gate-evaluation-failed: ")
+        cal[0]["readError"], reason_prefix="model-tiers-unreadable: ")
 
 
 def test_dispatch_selftest_config_absent_core_reads_real_tiers(tmp_path):
@@ -1747,13 +1799,13 @@ def test_config_read_payload_keys_are_core_only(tmp_path, monkeypatch, capsys):
 def test_run_reads_tiers_once_per_consumer(tmp_path, monkeypatch, capsys):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     calls = []
-    real = pp.model_tier_overrides.effective_tiers
+    real = pp.model_tier_overrides.effective_tiers_for_gate
 
     def counting(*args, **kwargs):
         calls.append(1)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(pp.model_tier_overrides, "effective_tiers", counting)
+    monkeypatch.setattr(pp.model_tier_overrides, "effective_tiers_for_gate", counting)
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
     monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {

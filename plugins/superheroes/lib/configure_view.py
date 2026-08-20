@@ -282,10 +282,27 @@ def collect(cwd, root=None):
         health = store_sweep.report(root=root)["counts"]  # read-only scan
     except Exception:
         health = None
+    model_tier_refusal = None
     try:
         profile = model_tier_overrides.resolve_profile_path(cwd, root)
-        tiers = model_tier_overrides.effective_tiers(profile)
-        overrides = model_tier_overrides.load_overrides(profile)
+        tier_gate = model_tier_overrides.effective_tiers_for_gate(
+            cwd=cwd, root=root, profile_path=profile)
+        if tier_gate.status == model_tier_overrides.TIERS_ROOT_UNAVAILABLE:
+            import calibration_resolve
+            calibration_resolve.resolve(cwd, root=root)
+            profile = tier_gate.path
+            tiers = None
+            overrides = {}
+            model_tier_refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
+        elif model_tier_overrides.tier_gate_is_refusal(tier_gate):
+            profile = tier_gate.path
+            tiers = None
+            overrides = {}
+            model_tier_refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
+        else:
+            profile = tier_gate.path
+            tiers = tier_gate.tiers
+            overrides = tier_gate.overrides
     except Exception as exc:
         _cr = sys.modules.get("calibration_resolve")
         if _cr is None:
@@ -295,7 +312,12 @@ def collect(cwd, root=None):
                 _cr = None
         if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
-        profile, tiers, overrides = None, None, {}
+        # Deliberate fall-open: unimportable calibration_resolve is an environment failure,
+        # not a statement about the project's configuration.
+        # Deliberate fall-open: other non-UnresolvableRootError exceptions are environment failures too.
+        profile = None
+        tiers = model_tier_overrides.effective_tiers(None)
+        overrides = {}
     try:
         # #409: the validated engine-preference view — carries the accepted codexModels pins AND the
         # rejected `invalidCodexModels` sub-map, so a hand-edited bad pin surfaces instead of showing
@@ -320,6 +342,7 @@ def collect(cwd, root=None):
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
+            "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
             "reviewGatePolicy": review_gate}
 
@@ -470,7 +493,10 @@ def render(cwd, *, root=None):
         out.append((text or "").strip())
     out.append("")
     out.append("## Model tiers")
-    if not tiers:
+    model_tier_refusal = data.get("modelTierRefusal")
+    if model_tier_refusal:
+        out.append("refused (%s)" % core_md.gate_refusal_line(model_tier_refusal))
+    elif not tiers:
         out.append("(using built-in defaults; review-crew profile not resolved)")
     else:
         for role in model_tier_overrides.KNOWN_ROLES:

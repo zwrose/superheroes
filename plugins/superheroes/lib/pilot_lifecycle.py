@@ -301,6 +301,8 @@ def slots_dir(cwd, root=None):
     try:
         if not os.path.exists(cwd):
             return {"ok": False, "reason": REASON_ROOT_UNRESOLVED, "path": None}
+        # Calibration refusal is deliberately not consulted here: slots_dir derives
+        # from state_dir, which is always the machine-local store entry path.
         resolved = store.resolve(cwd, root or store.store_root())
     except (OSError, store_core.RepoRootUnavailable):
         return {"ok": False, "reason": REASON_ROOT_UNRESOLVED, "path": None}
