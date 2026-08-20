@@ -1509,6 +1509,18 @@ def test_validate_run_dir_trailing_separator_symlink_refused(tmp_path):
     assert detail == "run-dir-is-symlink"
 
 
+def test_validate_run_dir_setup_failed_on_makedirs_error(tmp_path, monkeypatch):
+    missing = tmp_path / "no-such-run"
+
+    def raiser(*args, **kwargs):
+        raise PermissionError("simulated")
+
+    monkeypatch.setattr(os, "makedirs", raiser)
+    ok, detail = ED._validate_run_dir(str(missing), create=True)
+    assert not ok
+    assert detail == "run-dir-setup-failed:PermissionError"
+
+
 def test_dispatch_review_creates_missing_run_dir(tmp_path):
     repo_root = _repo(tmp_path)
     run_dir = tmp_path / "fresh-run"
