@@ -751,6 +751,31 @@ def test_effective_tiers_for_gate_profile_is_dangling_symlink_refuses(tmp_path):
     assert gate.tiers is None
 
 
+def test_effective_tiers_for_gate_unsearchable_parent_directory_reports_unreadable_not_absent(
+    tmp_path,
+):
+    """Unsearchable parent directory → unreadable, not absent (os.stat outer handler)."""
+    if os.geteuid() == 0:
+        import pytest
+        pytest.skip("root ignores directory permissions")
+    parent = tmp_path / "locked"
+    parent.mkdir()
+    profile = parent / "profile.md"
+    profile.write_text(_BLOCK, encoding="utf-8")
+    parent.chmod(0o000)
+    try:
+        gate = MTO.effective_tiers_for_gate(profile_path=str(profile))
+        assert gate.status == MTO.TIERS_UNREADABLE
+        assert gate.status != MTO.TIERS_ABSENT
+        assert gate.tiers is None
+    finally:
+        try:
+            parent.chmod(0o700)
+        except OSError as exc:
+            import pytest
+            pytest.fail("could not restore parent directory mode: %s" % exc)
+
+
 def test_effective_tiers_for_gate_profile_unreadable_mode_zero_refuses(tmp_path):
     if os.geteuid() == 0:
         import pytest

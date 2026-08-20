@@ -447,6 +447,31 @@ def test_resolve_in_repo_layer_dangling_symlink_refusal(tmp_path):
     assert r["refusal"] is not None
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permissions")
+def test_classify_layer_unsearchable_parent_directory_reports_unreadable_not_absent(
+    tmp_path,
+):
+    """Unsearchable parent directory → unreadable, not absent (os.stat outer handler)."""
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    claude_dir = os.path.join(repo, ".claude")
+    os.chmod(claude_dir, 0o000)
+    try:
+        result = store.classify_layer_config_block(layer)
+        assert result.status == store.LAYER_UNREADABLE
+        assert result.status != store.LAYER_ABSENT
+        r = store.resolve(repo, root)
+        assert r["location"] == "none"
+        assert r["refusal"] is not None
+        assert r["refusal"]["reason"] == store.STORE_REASON_LAYER_UNREADABLE
+    finally:
+        try:
+            os.chmod(claude_dir, 0o700)
+        except OSError as exc:
+            pytest.fail("could not restore parent directory mode: %s" % exc)
+
+
 @pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
 def test_resolve_in_repo_layer_mode_zero_refusal(tmp_path):
     repo = _init_repo(tmp_path / "repo")
