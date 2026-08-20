@@ -368,7 +368,7 @@ reviewer is the fallback **only with disclosed degradation** (never a silent dow
 fold its findings in, or dispute each with a reason. Post the dispositions.
 
 **How it is dispatched.** Sanctioned channel: `dispatch-review --mode brief-check` — mechanics and
-recipe in `reference/dispatch-mechanics.md` (gate, `RUN_DIR` preamble, `--order-id`, continuation).
+recipe in `reference/dispatch-mechanics.md` (gate, `--order-id`, continuation).
 A hand-rolled `codex exec` is permitted **only when the runner itself is unavailable** — disclosed
 degradation in the PR body, never the normal path.
 
