@@ -849,22 +849,6 @@ def _validate_repo_root(repo_root):
     return True, os.path.realpath(root)
 
 
-def _makedirs_private(path):
-    """Create *path* and missing ancestors; every directory this call creates is 0o700."""
-    if os.path.exists(path):
-        return
-    created = []
-    walk = path
-    while walk and walk != os.path.dirname(walk):
-        if os.path.exists(walk):
-            break
-        created.append(walk)
-        walk = os.path.dirname(walk)
-    os.makedirs(path, mode=0o700, exist_ok=True)
-    for segment in created:
-        os.chmod(segment, 0o700)
-
-
 def _validate_run_dir(
     run_dir, *, create=False, forbidden_parent=None, forbidden_detail=None,
 ):
@@ -881,7 +865,7 @@ def _validate_run_dir(
         return False, forbidden_detail
     if create and not os.path.exists(path):
         try:
-            _makedirs_private(path)
+            os.makedirs(path, mode=0o700, exist_ok=True)
         except OSError as exc:
             return False, "run-dir-setup-failed:%s" % type(exc).__name__
     # Re-check after creation: a symlink swapped in between checks would otherwise
