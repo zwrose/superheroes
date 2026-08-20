@@ -678,7 +678,15 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
   `discovery`, the advisor assigns no size, lane, or review weight at routing; for
   `build-ready` and `micro`, lane and presentation calls attach at routing per ruling P6,
   unchanged. Cause: owner ruling in discuss-open-decisions walk 2026-08-17 (#695,
-  collector item 29-a). Sections touched: FR-6, Amendments.
+  collector item 29-a). Sections touched: FR-6, Amendments. Classification rationale
+  (owner-confirmed 2026-08-18, recorded so R4's reader-facing test is answerable by
+  citation): the amendment records FR-6's original intent per ruling 29-a, and no consumer
+  built against the prior unscoped reading — ruling P6's lane-at-routing behavior was
+  shipped charter text throughout, and the intake machinery (#1068) implements the amended
+  reading; four review seats independently flagged `substantive` under R4's text-alone
+  test, which this rationale answers rather than disputes. The safety condition this
+  precedent carries: an intent-clarifying amendment classifies `wording` only with a
+  verified no-consumer-built-on-the-prior-reading receipt like this one.
 - **2026-08-17 (owner-stamped, wording):** FR-39 citation repointed — the `needs-discovery`
   anchor removed by #1068 now cites the workhorse charter's discovery intake rule. Cause:
   advisor package-hygiene note on vet 136 / PR #1068 follow-up 5. This touch carried the
