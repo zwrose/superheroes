@@ -210,14 +210,21 @@ def classify_layer_config_block(path):
     return LayerResult(has_config_block(text), LAYER_OK, None)
 
 
-def _layer_refusal(path, detail):
-    return core_md.gate_refusal(STORE_REASON_LAYER_UNREADABLE, detail)
+def _layer_refusal(path, detail, *, source):
+    return dict(
+        core_md.gate_refusal(STORE_REASON_LAYER_UNREADABLE, detail),
+        path=path,
+        source=source,
+    )
 
 
 def _pointer_refusal(exc):
-    return core_md.gate_refusal(
-        STORE_REASON_POINTER_UNREADABLE,
-        exc.detail if exc.detail is not None else str(exc),
+    return dict(
+        core_md.gate_refusal(
+            STORE_REASON_POINTER_UNREADABLE,
+            exc.detail if exc.detail is not None else str(exc),
+        ),
+        path=exc.path,
     )
 
 
@@ -267,7 +274,8 @@ def resolve(cwd, root):
     if legacy_in_repo_result.status == LAYER_UNREADABLE:
         return _none_resolve(
             entry_id, machine,
-            _layer_refusal(legacy_in_repo, legacy_in_repo_result.detail))
+            _layer_refusal(
+                legacy_in_repo, legacy_in_repo_result.detail, source="profile-md"))
     if legacy_in_repo_result.status == LAYER_OK:
         return {"location": "in-repo", "exists": True, "entry_id": entry_id,
                 "profile": legacy_in_repo,
@@ -282,7 +290,8 @@ def resolve(cwd, root):
         if legacy_global_result.status == LAYER_UNREADABLE:
             return _none_resolve(
                 entry_id, machine,
-                _layer_refusal(legacy_global, legacy_global_result.detail))
+                _layer_refusal(
+                    legacy_global, legacy_global_result.detail, source="profile-md"))
         if legacy_global_result.status == LAYER_OK:
             d = _entry_dirs(g["dir"])
             return {"location": "global", "exists": True, "entry_id": g["entry_id"],
@@ -296,7 +305,8 @@ def resolve(cwd, root):
     if in_repo_layer_result.status == LAYER_UNREADABLE:
         return _none_resolve(
             entry_id, machine,
-            _layer_refusal(in_repo_layer, in_repo_layer_result.detail))
+            _layer_refusal(
+                in_repo_layer, in_repo_layer_result.detail, source="layer"))
     if in_repo_layer_result.status == LAYER_OK and in_repo_layer_result.has_block:
         return {"location": "in-repo", "exists": True, "entry_id": entry_id,
                 "profile": in_repo_layer, "profileSource": "layer",
@@ -309,7 +319,8 @@ def resolve(cwd, root):
     if global_layer_result.status == LAYER_UNREADABLE:
         return _none_resolve(
             entry_id, machine,
-            _layer_refusal(global_layer, global_layer_result.detail))
+            _layer_refusal(
+                global_layer, global_layer_result.detail, source="layer"))
     if global_layer_result.status == LAYER_OK and global_layer_result.has_block:
         e_dir = g["dir"] if g is not None else entry_dir
         e_id = g["entry_id"] if g is not None else entry_id

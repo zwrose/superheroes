@@ -555,3 +555,109 @@ def test_cli_resolve_unreadable_layer_exit_one(tmp_path):
     assert out.returncode == 1
     payload = json.loads(out.stdout)
     assert payload["refusal"] is not None
+
+
+# ---------------------------------------------------------------------------
+# #782 — structured refusal path/source fields
+# ---------------------------------------------------------------------------
+
+def test_resolve_refusal_unreadable_in_repo_layer_carries_path(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    layer = os.path.join(d, "test-pilot.md")
+    os.symlink("/no/such/layer", layer)
+    r = store.resolve(repo, root)
+    assert r["refusal"] is not None
+    assert r["refusal"]["path"] == layer
+    assert r["refusal"]["source"] == "layer"
+
+
+def test_resolve_refusal_unreadable_legacy_profile_carries_path_and_source(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    base = os.path.join(repo, ".claude", "test-pilot")
+    os.makedirs(base, exist_ok=True)
+    legacy = os.path.join(base, "profile.md")
+    os.symlink("/no/such/legacy", legacy)
+    r = store.resolve(repo, root)
+    assert r["refusal"] is not None
+    assert r["refusal"]["path"] == legacy
+    assert r["refusal"]["source"] == "profile-md"
+
+
+def test_resolve_refusal_unreadable_global_layer_carries_path(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    store.create(repo, "global", root)
+    import mode_registry
+    d = os.path.join(mode_registry.project_store_dir(repo), "config")
+    os.makedirs(d, exist_ok=True)
+    layer = os.path.join(d, "test-pilot.md")
+    os.symlink("/no/such/global-layer", layer)
+    r = store.resolve(repo, root)
+    assert r["refusal"] is not None
+    assert r["refusal"]["path"] == layer
+    assert r["refusal"]["source"] == "layer"
+
+
+def test_resolve_refusal_pointer_unreadable_carries_path(tmp_path):
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    store.create(repo, "global", root)
+    ident = store.derive_identifiers(repo)
+    pointer = os.path.join(root, "keys", ident["gitdir_hash"])
+    os.chmod(pointer, 0o000)
+    try:
+        r = store.resolve(repo, root)
+        assert r["refusal"] is not None
+        assert r["refusal"]["reason"] == store.STORE_REASON_POINTER_UNREADABLE
+        assert r["refusal"]["path"] == pointer
+    finally:
+        os.chmod(pointer, 0o644)
+
+
+def test_resolve_every_refusal_carries_path_key(tmp_path, monkeypatch):
+    """Every refusal dict includes an explicit path key (possibly None)."""
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    cases = []
+
+    repo1 = _init_repo(tmp_path / "repo-layer")
+    d1 = os.path.join(repo1, ".claude", "superheroes")
+    os.makedirs(d1, exist_ok=True)
+    layer1 = os.path.join(d1, "test-pilot.md")
+    os.symlink("/no/such/layer", layer1)
+    cases.append(store.resolve(repo1, str(tmp_path / "store1")))
+
+    repo2 = _init_repo(tmp_path / "repo-legacy")
+    base = os.path.join(repo2, ".claude", "test-pilot")
+    os.makedirs(base, exist_ok=True)
+    os.symlink("/no/such/legacy", os.path.join(base, "profile.md"))
+    cases.append(store.resolve(repo2, str(tmp_path / "store2")))
+
+    repo3 = _init_repo(tmp_path / "repo-global", remote="git@github.com:org/repo.git")
+    root3 = str(tmp_path / "store3")
+    store.create(repo3, "global", root3)
+    import mode_registry
+    d3 = os.path.join(mode_registry.project_store_dir(repo3), "config")
+    os.makedirs(d3, exist_ok=True)
+    os.symlink("/no/such/global", os.path.join(d3, "test-pilot.md"))
+    cases.append(store.resolve(repo3, root3))
+
+    repo4 = _init_repo(tmp_path / "repo-pointer", remote="git@github.com:org/repo-pointer.git")
+    root4 = str(tmp_path / "store4")
+    store.create(repo4, "global", root4)
+    ident = store.derive_identifiers(repo4)
+    pointer = os.path.join(root4, "keys", ident["gitdir_hash"])
+    os.chmod(pointer, 0o000)
+    try:
+        cases.append(store.resolve(repo4, root4))
+    finally:
+        os.chmod(pointer, 0o644)
+
+    for r in cases:
+        refusal = r["refusal"]
+        assert refusal is not None
+        assert "path" in refusal

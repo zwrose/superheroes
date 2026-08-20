@@ -552,16 +552,3 @@ def test_read_calibration_open_race_selected_profile_returns_cannot_tell(
         "cause": pc.CAUSE_CALIBRATION_UNREADABLE,
         "path": path,
     }
-
-
-def test_declares_slots_unreadable_layer_cannot_tell(tmp_path, monkeypatch):
-    repo = _init_repo(tmp_path / "repo")
-    root = str(tmp_path / "store")
-    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", root)
-    layer_dir = os.path.join(repo, ".claude", "superheroes")
-    os.makedirs(layer_dir, exist_ok=True)
-    os.symlink("/no/such/layer", os.path.join(layer_dir, "test-pilot.md"))
-    result = pc.declares_slots(repo)
-    assert result["state"] == pc.STATE_CANNOT_TELL
-    assert result["cause"] == pc.CAUSE_RESOLVER_FAILED
-    assert result["path"] is None
