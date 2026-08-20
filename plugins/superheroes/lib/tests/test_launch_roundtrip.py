@@ -28,6 +28,19 @@ def _read_ledger(repo):
     return ll.read(repo)
 
 
+def _ledger_bytes(repo):
+    path = ll.ledger_path(repo)["path"]
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _assert_single_declaration_unchanged(repo, batch, decl_index_before):
+    _, folded = _assert_p1(repo)
+    decls = folded["batchDeclarations"].get(batch, [])
+    assert len(decls) == 1
+    assert decls[0]["index"] == decl_index_before
+
+
 def _assert_p1(repo):
     """P1: reader accepts every record the writers emitted."""
     read_result = _read_ledger(repo)
@@ -583,6 +596,142 @@ def test_count_rejects_a_physically_late_declaration(tmp_path, monkeypatch):
     assert count_result["indeterminate"] is True
     assert count_result["resolved"] is False
     assert count_result["reason"] == "batch-declaration-after-reservations"
+
+
+def test_declare_batch_equal_redeclaration_preserves_ledger_before_reservation(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-idem-pre"
+    assert L.declare_batch(repo, batch, 1)["ok"]
+    before = _ledger_bytes(repo)
+    _, folded_before = _assert_p1(repo)
+    decl_index = folded_before["batchDeclarations"][batch][0]["index"]
+    redcl = L.declare_batch(repo, batch, 1)
+    assert redcl["ok"] is True
+    assert redcl.get("idempotent") is True
+    assert _ledger_bytes(repo) == before
+    _assert_single_declaration_unchanged(repo, batch, decl_index)
+
+
+def test_declare_batch_conflict_redeclaration_preserves_ledger_before_reservation(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-conflict-pre"
+    assert L.declare_batch(repo, batch, 1)["ok"]
+    before = _ledger_bytes(repo)
+    _, folded_before = _assert_p1(repo)
+    decl_index = folded_before["batchDeclarations"][batch][0]["index"]
+    conflict = L.declare_batch(repo, batch, 2)
+    assert conflict["ok"] is False
+    assert conflict["reason"] == "batch-declaration-conflict:1:2"
+    assert "idempotent" not in conflict
+    assert _ledger_bytes(repo) == before
+    _assert_single_declaration_unchanged(repo, batch, decl_index)
+
+
+def test_declare_batch_equal_redeclaration_preserves_ledger_after_reservation(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    batch = "b-idem-post"
+    assert L.declare_batch(repo, batch, 1)["ok"]
+    premise = _valid_premise(repo, batchId=batch)
+    result = _run_launch(
+        repo, log_dir, premise, _all_checks(), monkeypatch,
+        spawn_fn=_make_spawn_fn("sleep"),
+    )
+    assert result["ok"] is True
+    pid = result["pid"]
+    try:
+        before = _ledger_bytes(repo)
+        _, folded_before = _assert_p1(repo)
+        decl_index = folded_before["batchDeclarations"][batch][0]["index"]
+        redcl = L.declare_batch(repo, batch, 1)
+        assert redcl["ok"] is True
+        assert redcl.get("idempotent") is True
+        assert _ledger_bytes(repo) == before
+        _assert_single_declaration_unchanged(repo, batch, decl_index)
+    finally:
+        _kill_child(pid)
+
+
+def test_declare_batch_conflict_redeclaration_preserves_ledger_after_reservation(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    batch = "b-conflict-post"
+    assert L.declare_batch(repo, batch, 1)["ok"]
+    premise = _valid_premise(repo, batchId=batch)
+    result = _run_launch(
+        repo, log_dir, premise, _all_checks(), monkeypatch,
+        spawn_fn=_make_spawn_fn("sleep"),
+    )
+    assert result["ok"] is True
+    pid = result["pid"]
+    try:
+        before = _ledger_bytes(repo)
+        _, folded_before = _assert_p1(repo)
+        decl_index = folded_before["batchDeclarations"][batch][0]["index"]
+        conflict = L.declare_batch(repo, batch, 2)
+        assert conflict["ok"] is False
+        assert conflict["reason"] == "batch-declaration-conflict:1:2"
+        assert "idempotent" not in conflict
+        assert _ledger_bytes(repo) == before
+        _assert_single_declaration_unchanged(repo, batch, decl_index)
+    finally:
+        _kill_child(pid)
+
+
+def test_count_resolves_after_idempotent_redeclaration_mid_batch(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    log_dir = str(tmp_path / "logs")
+    batch = "b-idem-ground"
+    assert L.declare_batch(repo, batch, 2)["ok"]
+
+    premise1 = _valid_premise(repo, surfaces=["plugins/superheroes/a"], batchId=batch, issue=801)
+    first = L.launch_build(
+        repo, 801, premise1, _all_checks(), log_dir,
+        spawn_fn=_make_spawn_fn("exit1"), settle_seconds=10,
+    )
+    assert first["ok"] is False
+
+    premise2 = _valid_premise(repo, surfaces=["plugins/superheroes/b"], batchId=batch, issue=802)
+    second = L.launch_build(
+        repo, 802, premise2, _all_checks(), log_dir,
+        spawn_fn=_make_spawn_fn("sleep"), settle_seconds=0.3,
+    )
+    assert second["ok"] is True
+    pid = second["pid"]
+    try:
+        redcl = L.declare_batch(repo, batch, 2)
+        assert redcl["ok"] is True
+        assert redcl.get("idempotent") is True
+
+        count_live = ll.count(repo, batch)
+        assert count_live["indeterminate"] is True
+        assert count_live["resolved"] is False
+        assert count_live["reason"] == "batch-unresolved:%s" % second["launchId"]
+
+        _kill_process_group_and_wait(pid)
+        assert ll.record_outcome(repo, second["launchId"], "handback", "done")["ok"]
+
+        count_done = ll.count(repo, batch)
+        assert count_done["resolved"] is True
+        assert count_done["indeterminate"] is False
+        assert count_done["counts"]["total"] == 2
+        assert count_done["counts"]["park"] == 1
+        assert count_done["counts"]["handback"] == 1
+    finally:
+        _kill_child(pid)
 
 
 def test_count_never_resolves_a_batch_with_a_live_member(tmp_path, monkeypatch):
