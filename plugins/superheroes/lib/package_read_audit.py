@@ -132,6 +132,7 @@ REFUSAL_WEIGHT_UNRECOGNIZED = "weight-unrecognized"
 REFUSAL_CEILING_INVALID = "ceiling-invalid"
 REFUSAL_MEASURABLE_INVALID = "measurable-invalid"
 REFUSAL_SEATS_MISSING = "seats-missing"
+REFUSAL_RECORD_FIELD_INVALID = "record-field-invalid"
 REFUSAL_USAGE = "usage"
 REFUSAL_INTERNAL_ERROR = "internal-error"
 REFUSAL_REASONS = frozenset({
@@ -162,6 +163,7 @@ REFUSAL_REASONS = frozenset({
     REFUSAL_CEILING_INVALID,
     REFUSAL_MEASURABLE_INVALID,
     REFUSAL_SEATS_MISSING,
+    REFUSAL_RECORD_FIELD_INVALID,
     REFUSAL_USAGE,
     REFUSAL_INTERNAL_ERROR,
 })
@@ -285,9 +287,17 @@ VIOLATION_RECORD_NOT_OBJECT = "record-not-object"
 _MISSING = object()
 ENVELOPE_FIELDS = frozenset({"kind"})
 
+# Every constraint carries a `refusal`: the token a writer refuses with when a
+# record it is about to append violates it. Totality is the point -- a
+# constraint without one would fall through to `internal-error`, which claims
+# the tool broke when the caller merely passed a bad value.
+# `record-field-invalid` is the general token for a field whose failure no
+# existing token names precisely; it is deliberately one token, not a family.
+
 _COMMON_INVOCATION_FIELD = {
     "type": "string",
     "nonEmpty": True,
+    "refusal": REFUSAL_RECORD_FIELD_INVALID,
 }
 
 _INVOCATION_MEASURABLES_FIELDS = {
@@ -310,7 +320,11 @@ RECORD_SCHEMAS = {
             "seats": {
                 "type": "array",
                 "minItems": 1,
-                "items": {"type": "string", "nonEmpty": True},
+                "items": {
+                    "type": "string",
+                    "nonEmpty": True,
+                    "refusal": REFUSAL_SEATS_MISSING,
+                },
                 "refusal": REFUSAL_SEATS_MISSING,
             },
             "weight": {
@@ -326,13 +340,16 @@ RECORD_SCHEMAS = {
             "measurables": {
                 "type": "object",
                 "fields": _INVOCATION_MEASURABLES_FIELDS,
+                "refusal": REFUSAL_MEASURABLE_INVALID,
             },
             "cause": {
                 "type": "string",
                 "nonEmpty": True,
+                "refusal": REFUSAL_RECORD_FIELD_INVALID,
             },
             "override": {
                 "type": "string",
+                "refusal": REFUSAL_RECORD_FIELD_INVALID,
             },
             "invocation": _COMMON_INVOCATION_FIELD,
         },
@@ -352,6 +369,7 @@ RECORD_SCHEMAS = {
                     "enum": LENSES,
                     "refusal": REFUSAL_LENS_UNRECOGNIZED,
                 },
+                "refusal": REFUSAL_LENS_UNRECOGNIZED,
             },
             "parts": {
                 "type": "array",
@@ -362,6 +380,7 @@ RECORD_SCHEMAS = {
                         "part": {
                             "type": "string",
                             "nonEmpty": True,
+                            "refusal": REFUSAL_RECORD_FIELD_INVALID,
                         },
                         "status": {
                             "type": "string",
@@ -369,7 +388,9 @@ RECORD_SCHEMAS = {
                             "refusal": REFUSAL_PART_STATUS_UNRECOGNIZED,
                         },
                     },
+                    "refusal": REFUSAL_PART_MALFORMED,
                 },
+                "refusal": REFUSAL_PART_MALFORMED,
             },
             "controlProbe": {
                 "type": "string",
@@ -385,6 +406,7 @@ RECORD_SCHEMAS = {
                         "finding": {
                             "type": "string",
                             "nonEmpty": True,
+                            "refusal": REFUSAL_RECORD_FIELD_INVALID,
                         },
                         "lens": {
                             "type": "string",
@@ -392,16 +414,21 @@ RECORD_SCHEMAS = {
                             "refusal": REFUSAL_LENS_UNRECOGNIZED,
                         },
                     },
+                    "refusal": REFUSAL_FINDING_MALFORMED,
                 },
+                "refusal": REFUSAL_FINDING_MALFORMED,
             },
             "declinedExtension": {
                 "type": "array",
                 "items": {
                     "type": "string",
+                    "refusal": REFUSAL_FINDING_MALFORMED,
                 },
+                "refusal": REFUSAL_FINDING_MALFORMED,
             },
             "mechanicalOnly": {
                 "type": "boolean",
+                "refusal": REFUSAL_RECORD_FIELD_INVALID,
             },
             "invocation": _COMMON_INVOCATION_FIELD,
         },
@@ -418,6 +445,7 @@ RECORD_SCHEMAS = {
                         "finding": {
                             "type": "string",
                             "nonEmpty": True,
+                            "refusal": REFUSAL_RECORD_FIELD_INVALID,
                         },
                         "disposition": {
                             "type": "string",
@@ -431,9 +459,12 @@ RECORD_SCHEMAS = {
                         },
                         "evidence": {
                             "type": "string",
+                            "refusal": REFUSAL_RECORD_FIELD_INVALID,
                         },
                     },
+                    "refusal": REFUSAL_FINDING_MALFORMED,
                 },
+                "refusal": REFUSAL_FINDING_MALFORMED,
             },
             "syncChecks": {
                 "type": "array",
@@ -444,6 +475,7 @@ RECORD_SCHEMAS = {
                         "child": {
                             "type": "string",
                             "nonEmpty": True,
+                            "refusal": REFUSAL_RECORD_FIELD_INVALID,
                         },
                         "result": {
                             "type": "string",
@@ -451,7 +483,9 @@ RECORD_SCHEMAS = {
                             "refusal": REFUSAL_SYNC_RESULT_UNRECOGNIZED,
                         },
                     },
+                    "refusal": REFUSAL_SYNC_CHECK_MALFORMED,
                 },
+                "refusal": REFUSAL_SYNC_CHECK_MALFORMED,
             },
             "invocation": _COMMON_INVOCATION_FIELD,
         },
@@ -724,7 +758,9 @@ def _validate_constraint(path, constraint):
     elif type_name not in CONSTRAINT_TYPES:
         problems.append("%s has unknown type %r" % (path, type_name))
 
-    if "refusal" in constraint and constraint["refusal"] not in REFUSAL_REASONS:
+    if "refusal" not in constraint:
+        problems.append("%s is missing refusal" % path)
+    elif constraint["refusal"] not in REFUSAL_REASONS:
         problems.append(
             "%s.refusal %r is not in REFUSAL_REASONS" % (path, constraint["refusal"]),
         )
@@ -804,6 +840,10 @@ def _refusal_for_violation(violation, record):
     kind = record.get("kind")
     if not isinstance(kind, str) or kind not in RECORD_SCHEMAS:
         return REFUSAL_INTERNAL_ERROR
+    if violation["code"] == VIOLATION_UNKNOWN_FIELD:
+        # An undeclared field has no constraint to carry a token, and it is
+        # still ordinary bad input rather than a broken tool.
+        return REFUSAL_RECORD_FIELD_INVALID
     constraint = _constraint_at_path(
         RECORD_SCHEMAS[kind],
         violation["path"],
@@ -1361,16 +1401,24 @@ def _locate_invocation_findings(findings):
 
 
 def _record_value_findings(records, positions):
-    suppressed = {
-        VIOLATION_UNKNOWN_FIELD,
-    }
     findings = []
     for record, trail_pos in zip(records, positions):
         violations = _walk_record_for_kind(record)
         for violation in violations:
-            if violation["code"] in suppressed:
-                continue
             path = violation["path"] if violation["path"] else None
+            if violation["code"] == VIOLATION_UNKNOWN_FIELD:
+                findings.append(_make_nonconformity(
+                    NONCONFORMITY_RECORD_VALUE_INVALID,
+                    _invocation_id_for_finding(record),
+                    trail_pos,
+                    path,
+                    (
+                        "record at trail position %d: field %s is not declared "
+                        "for kind %r" % (trail_pos, violation["path"],
+                                         record.get("kind"))
+                    ),
+                ))
+                continue
             if violation["code"] == VIOLATION_FIELD_MISSING:
                 findings.append(_make_nonconformity(
                     NONCONFORMITY_ELEMENT_MISSING,

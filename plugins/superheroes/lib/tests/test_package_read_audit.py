@@ -1787,7 +1787,8 @@ def test_record_value_invalid_absent_field_not_doubled(tmp_path):
     )
 
 
-def test_record_value_invalid_extra_key_allowed(tmp_path):
+def test_unknown_field_is_nonconforming(tmp_path):
+    """A field no declaration mentions is reported, never silently accepted."""
     trail, _ = _open_default(tmp_path)
     _record_round(trail)
     _record_verification(
@@ -1803,7 +1804,14 @@ def test_record_value_invalid_extra_key_allowed(tmp_path):
     )
     trail.write_text(text, encoding="utf-8")
     code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_CONFORMING
+    assert code == pra.EXIT_NONCONFORMING, out
+    payload = json.loads(out.strip())
+    assert payload["result"] == pra.RESULT_NONCONFORMING, out
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and item["path"] == "futureField"
+        for item in payload["findings"]
+    ), payload["findings"]
 
 
 # --- asserted-echo and order-independence -----------------------------------
@@ -2959,11 +2967,15 @@ def _hostile_cases():
         "unknown-field-top-level",
         _sweep_mutation(pra.RECORD_KIND_INVOCATION, "bogusField", "x"),
         "unknown-field",
+        expect=pra.RESULT_NONCONFORMING,
+        path="bogusField",
     ))
     cases.append(_sweep_case(
         "unknown-field-nested",
         _sweep_mutation(pra.RECORD_KIND_ROUND, "parts[0].bogusField", "x"),
         "unknown-field",
+        expect=pra.RESULT_NONCONFORMING,
+        path="parts[0].bogusField",
     ))
 
     for kind, declaration in pra.RECORD_SCHEMAS.items():
@@ -3207,3 +3219,192 @@ def test_empty_string_bounds_nonconform_exactly_as_writers_refuse(
         assert payload["result"] == pra.RESULT_REFUSED, out
         assert payload["reason"] == structural_reason, payload
         assert payload["reason"] != declared_reason, payload
+
+
+# --- WO-H: writer/declaration round trip and refusal totality ---------------
+
+
+def _trail_records(trail):
+    lines = pra._read_lines(str(trail))
+    records, _positions, _openers, _markers, reason, detail = pra._parse_records(
+        lines,
+    )
+    assert records is not None, (reason, detail)
+    return records
+
+
+def test_writer_output_round_trips_clean(tmp_path):
+    """Every field every writer verb emits is declared.
+
+    The standing guarantee that the writers and the declaration cannot drift:
+    with unknown-field live, a field a writer emits that no declaration
+    mentions would make the writers refuse their own output. Driven through
+    the CLI so the record read back is the one a real caller appends.
+    """
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    trail, _payload = _open_default(plain)
+    code, out, _err = _record_round(
+        trail,
+        lenses=[pra.LENS_COLLISIONS, pra.LENS_DOD_ADEQUACY],
+        parts=["slice-a:unreviewed", "slice-b:reviewed"],
+        findings=["f-1:collisions", "f-2:collisions"],
+        declined=["f-2"],
+    )
+    assert code == pra.EXIT_RECORDED, out
+    code, out, _err = _record_verification(
+        trail,
+        findings=[
+            "f-1:refutation:verified",
+            "f-2:declined-extension:verified",
+        ],
+        evidence=["f-1:the register says otherwise"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    assert code == pra.EXIT_RECORDED, out
+
+    overridden = tmp_path / "overridden"
+    overridden.mkdir()
+    over_trail = overridden / "trail.md"
+    code, out, _err = _run_cli(
+        "open",
+        "--trail", str(over_trail),
+        "--invocation", "inv-2",
+        "--cause", "second read",
+        "--weight", pra.WEIGHT_FULL,
+        "--children", "0",
+        "--register-entries", "0",
+        "--ceiling", "1",
+        "--override", "owner said so",
+        "--seat", "seat-a",
+        "--seat", "seat-b",
+    )
+    assert code == pra.EXIT_RECORDED, out
+
+    records = _trail_records(trail) + _trail_records(over_trail)
+    kinds_seen = set()
+    for record in records:
+        violations = pra._walk_record_for_kind(record)
+        assert violations == [], (record, violations)
+        kinds_seen.add(record["kind"])
+    # Fail-closed floor: a round trip that inspected nothing proves nothing.
+    assert kinds_seen == set(pra.RECORD_KINDS), sorted(kinds_seen)
+    assert len(records) == 4, records
+
+    # Optional shapes the writers can emit are present in what was walked:
+    # an evidence string on one verification finding and not the other, and a
+    # populated declinedExtension.
+    round_record = [
+        record for record in records
+        if record["kind"] == pra.RECORD_KIND_ROUND
+    ][0]
+    assert round_record["declinedExtension"] == ["f-2"], round_record
+    ver_record = [
+        record for record in records
+        if record["kind"] == pra.RECORD_KIND_VERIFICATION
+    ][0]
+    evidence_present = [
+        item for item in ver_record["findings"] if "evidence" in item
+    ]
+    assert len(evidence_present) == 1, ver_record["findings"]
+
+    # An invocation opened without --override still emits the key, as null.
+    # Null on a non-required field is an absent value -- neither an unknown
+    # field nor a bad string.
+    no_override = [
+        record for record in records
+        if record["kind"] == pra.RECORD_KIND_INVOCATION
+        and record["invocation"] == "inv-1"
+    ]
+    assert len(no_override) == 1, no_override
+    assert "override" in no_override[0], no_override[0]
+    assert no_override[0]["override"] is None, no_override[0]
+
+    # End to end: the writers' own trail is conforming to the reader.
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_CONFORMING, out
+
+
+@pytest.mark.parametrize(
+    "kind,path",
+    [
+        (pra.RECORD_KIND_INVOCATION, "bogusField"),
+        (pra.RECORD_KIND_INVOCATION, "measurables.bogusField"),
+        (pra.RECORD_KIND_ROUND, "parts[0].bogusField"),
+        (pra.RECORD_KIND_ROUND, "findings[0].bogusField"),
+        (pra.RECORD_KIND_VERIFICATION, "syncChecks[0].bogusField"),
+    ],
+)
+def test_unknown_field_reported_with_its_full_path(tmp_path, kind, path):
+    """Depth is no hiding place: nested and array-item keys carry full paths."""
+    trail = tmp_path / "trail.md"
+    _write_trail(trail, _sweep_mutation(kind, path, "x"))
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING, out
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and item["path"] == path
+        for item in payload["findings"]
+    ), payload["findings"]
+
+
+_VIOLATION_CODES = (
+    pra.VIOLATION_FIELD_MISSING,
+    pra.VIOLATION_TYPE_INVALID,
+    pra.VIOLATION_ENUM_INVALID,
+    pra.VIOLATION_EMPTY_STRING,
+    pra.VIOLATION_BELOW_MINIMUM,
+    pra.VIOLATION_TOO_FEW_ITEMS,
+    pra.VIOLATION_UNKNOWN_FIELD,
+)
+
+
+def test_no_declaration_violation_projects_to_internal_error():
+    """internal-error means the tool broke; a bad value must never claim it.
+
+    Proved by enumeration over every constraint the declaration carries, not
+    by example: a constraint added later without a refusal reddens this.
+    """
+    projected = 0
+    for kind, declaration in pra.RECORD_SCHEMAS.items():
+        for path, _constraint in _iter_constraints(declaration):
+            for code in _VIOLATION_CODES:
+                reason = pra._refusal_for_violation(
+                    {"path": path, "value": "", "code": code},
+                    {"kind": kind},
+                )
+                assert reason != pra.REFUSAL_INTERNAL_ERROR, (kind, path, code)
+                assert reason in pra.REFUSAL_REASONS, (kind, path, code, reason)
+                projected += 1
+    # Fail-closed floor: an enumeration that projected nothing proves nothing.
+    assert projected >= len(_VIOLATION_CODES) * 3, projected
+
+
+def test_declaration_self_check_requires_a_refusal_on_every_constraint():
+    problems = pra._validate_constraint("test", {"type": "string"})
+    assert any("is missing refusal" in p for p in problems), problems
+
+    problems = pra._validate_constraint(
+        "test",
+        {"type": "string", "refusal": pra.REFUSAL_RECORD_FIELD_INVALID},
+    )
+    assert problems == [], problems
+
+
+def test_open_empty_cause_refuses_with_a_declared_token(tmp_path):
+    """An ordinary bad argument is refused, and never as an internal error."""
+    code, out, _err = _open_with_empty(tmp_path, cause="")
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_REFUSED, out
+    assert payload["result"] == pra.RESULT_REFUSED, out
+    assert payload["reason"] != pra.REFUSAL_INTERNAL_ERROR, payload
+    assert payload["reason"] == pra.REFUSAL_RECORD_FIELD_INVALID, payload
+    assert payload["reason"] == pra._refusal_for_violation(
+        {
+            "path": "cause",
+            "value": "",
+            "code": pra.VIOLATION_EMPTY_STRING,
+        },
+        _valid_record(pra.RECORD_KIND_INVOCATION),
+    ), payload
