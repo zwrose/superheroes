@@ -1458,21 +1458,6 @@ def test_run_dir_not_empty_unopened_refused(tmp_path):
     assert len(fake.calls) == 0
 
 
-def test_review_run_dir_inside_repo_root_refused(tmp_path):
-    repo_root = _repo(tmp_path)
-    run_dir = os.path.join(repo_root, "dispatch-run")
-    os.makedirs(run_dir)
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
-    )
-    assert res["detail"] == "run-dir-inside-repo-root"
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-
-
 def test_validate_run_dir_leaf_symlink_to_dir_refused(tmp_path):
     real_dir = tmp_path / "real"
     real_dir.mkdir()
@@ -1534,98 +1519,6 @@ def test_validate_run_dir_trailing_separator_symlink_refused(tmp_path):
     ok, detail = ED._validate_run_dir(str(link) + os.sep, create=True)
     assert not ok
     assert detail == "run-dir-is-symlink"
-
-
-def test_validate_run_dir_containment_before_create(tmp_path):
-    parent = tmp_path / "protected"
-    parent.mkdir()
-    nested = parent / "nested" / "run"
-    ok, detail = ED._validate_run_dir(
-        str(nested), create=True, forbidden_parent=str(parent),
-        forbidden_detail="inside-protected",
-    )
-    assert not ok
-    assert detail == "inside-protected"
-    assert not nested.exists()
-
-
-def test_validate_run_dir_containment_after_create_refused(tmp_path, monkeypatch):
-    protected = tmp_path / "protected"
-    protected.mkdir()
-    hijacked = protected / "evil"
-    hijacked.mkdir()
-    outside = tmp_path / "outside"
-    outside.mkdir()
-    alias = tmp_path / "alias"
-    alias.symlink_to(outside)
-    run_path = alias / "nested" / "run"
-    orig_realpath = os.path.realpath
-    post_create = {"active": False}
-    orig_makedirs = os.makedirs
-
-    def tracking_makedirs(*args, **kwargs):
-        post_create["active"] = True
-        return orig_makedirs(*args, **kwargs)
-
-    def selective_realpath(p):
-        result = orig_realpath(p)
-        if post_create["active"] and os.path.normpath(p) == os.path.normpath(str(run_path)):
-            return str(hijacked)
-        return result
-
-    monkeypatch.setattr(os, "makedirs", tracking_makedirs)
-    monkeypatch.setattr(os.path, "realpath", selective_realpath)
-    ok, detail = ED._validate_run_dir(
-        str(run_path), create=True, forbidden_parent=str(protected),
-        forbidden_detail="inside-protected",
-    )
-    assert not ok
-    assert detail == "inside-protected"
-
-
-def test_path_inside_samestat_ancestor_walk(tmp_path, monkeypatch):
-    parent = tmp_path / "parent"
-    parent.mkdir()
-    link = tmp_path / "link"
-    link.symlink_to(parent)
-    child = parent / "nested"
-    child.mkdir()
-    orig_realpath = os.path.realpath
-
-    def alias_parent_realpath(p):
-        result = orig_realpath(p)
-        if os.path.normpath(p) == os.path.normpath(str(parent)):
-            return str(link)
-        return result
-
-    monkeypatch.setattr(os.path, "realpath", alias_parent_realpath)
-    assert not child.resolve().as_posix().startswith(str(link) + os.sep)
-    assert ED._path_inside(str(parent), str(child))
-
-
-def test_path_inside_case_insensitive_alias(tmp_path):
-    parent = tmp_path / "casetestdir"
-    parent.mkdir()
-    alt_parent = _case_insensitive_alias_path(str(parent))
-    child = os.path.join(alt_parent, "nested", "run")
-    assert ED._path_inside(str(parent), child)
-
-
-def test_dispatch_review_run_dir_case_alias_inside_repo_refused(tmp_path):
-    repo_root = _repo(tmp_path)
-    alt_repo = _case_insensitive_alias_path(repo_root)
-    run_dir = os.path.join(alt_repo, "fresh-alias-run")
-    assert not os.path.exists(run_dir)
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
-    )
-    assert res["detail"] == "run-dir-inside-repo-root"
-    assert res["attempts"] == 0
-    assert len(fake.calls) == 0
-    assert not os.path.exists(run_dir)
 
 
 def test_dispatch_review_creates_missing_run_dir(tmp_path):
@@ -1691,20 +1584,6 @@ def test_dispatch_review_trailing_separator_symlink_leaf_refused(tmp_path):
     )
     assert res["detail"] == "run-dir-is-symlink"
     assert res["attempts"] == 0
-
-
-def test_dispatch_review_inside_repo_root_missing_not_created(tmp_path):
-    repo_root = _repo(tmp_path)
-    run_dir = os.path.join(repo_root, "nested", "fresh-run")
-    assert not os.path.exists(run_dir)
-    fake = FakeRunner([])
-    res = ED.dispatch_review(
-        "codex", model="sonnet", effort="high",
-        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
-        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
-    )
-    assert res["detail"] == "run-dir-inside-repo-root"
-    assert not os.path.exists(run_dir)
 
 
 def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
@@ -4674,8 +4553,6 @@ def test_review_mode_argparse_choices_match_review_modes():
      "max-wait-out-of-range:99999:allowed=0..%d" % ED.MAX_SYNC_WAIT, False, True),
     ("repo-root-absent", {"repo_root": None}, None, "review", "repo-root-absent", False, True),
     ("prompt-missing", {"prompt_path": None}, None, "review", "prompt-missing", False, True),
-    ("run-dir-inside-repo", {"run_dir": "INSIDE"}, "inside_repo", "review",
-     "run-dir-inside-repo-root", False, True),
     ("run-dir-reused", {"order_id": "wrong"}, "opened", "review", "run-dir-reused", False, True),
     ("run-dir-not-empty-unopened", {}, "stale", "review", "run-dir-not-empty-unopened", False, True),
     ("mode-brief-check-with-diff-base",
@@ -4715,11 +4592,7 @@ def test_dispatch_review_every_outcome_carries_mode(
         base_kwargs[key] = value
 
     run_suffix = "run-%s" % label
-    if setup == "inside_repo":
-        run_dir = os.path.join(repo_root, "dispatch-run")
-        os.makedirs(run_dir)
-        base_kwargs["run_dir"] = run_dir
-    elif setup == "opened":
+    if setup == "opened":
         run_dir = str(tmp_path / run_suffix)
         _manual_open_review_run(tmp_path, run_dir)
         base_kwargs["run_dir"] = run_dir

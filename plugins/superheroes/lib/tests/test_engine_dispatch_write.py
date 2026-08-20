@@ -241,16 +241,6 @@ def test_validate_linked_build_cwd_git_preflight_timeout(tmp_path, monkeypatch):
     assert res["attempts"] == 0
 
 
-def test_run_dir_inside_cwd_refused(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir = os.path.join(wt, "dispatch-run")
-    os.makedirs(run_dir)
-    fake = FakeRunner([])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
-    assert res["detail"] == "run-dir-inside-cwd"
-    assert res["attempts"] == 0
-
-
 def test_dispatch_write_symlink_leaf_refused(tmp_path):
     wt, _main = _linked_worktree(tmp_path)
     real_dir = tmp_path / "real-run"
@@ -274,16 +264,6 @@ def test_dispatch_write_run_dir_not_empty_unopened_refused(tmp_path):
     assert res["detail"] == "run-dir-not-empty-unopened"
     assert res["attempts"] == 0
     assert len(fake.calls) == 0
-
-
-def test_dispatch_write_inside_cwd_missing_not_created(tmp_path):
-    wt, _main = _linked_worktree(tmp_path)
-    run_dir = os.path.join(wt, "nested", "fresh-run")
-    assert not os.path.exists(run_dir)
-    fake = FakeRunner([])
-    res = _dispatch_write(tmp_path, fake, cwd=wt, run_dir=run_dir)
-    assert res["detail"] == "run-dir-inside-cwd"
-    assert not os.path.exists(run_dir)
 
 
 def test_dispatch_write_nested_missing_path_created(tmp_path):

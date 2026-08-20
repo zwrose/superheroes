@@ -849,9 +849,7 @@ def _validate_repo_root(repo_root):
     return True, os.path.realpath(root)
 
 
-def _validate_run_dir(
-    run_dir, *, create=False, forbidden_parent=None, forbidden_detail=None,
-):
+def _validate_run_dir(run_dir, *, create=False):
     if not run_dir:
         return False, "run-dir-absent"
     path = run_dir
@@ -859,19 +857,11 @@ def _validate_run_dir(
         path = path[:-1]
     if os.path.islink(path):
         return False, "run-dir-is-symlink"
-    if forbidden_parent is not None and _path_inside(forbidden_parent, path):
-        if forbidden_detail is None:
-            forbidden_detail = "run-dir-inside-forbidden-parent"
-        return False, forbidden_detail
     if create and not os.path.exists(path):
         try:
             os.makedirs(path, mode=0o700, exist_ok=True)
         except OSError as exc:
             return False, "run-dir-setup-failed:%s" % type(exc).__name__
-    # Re-check after creation: a symlink swapped in between checks would otherwise
-    # be followed by os.path.exists / makedirs and yield a misleading token.
-    if os.path.islink(path):
-        return False, "run-dir-is-symlink"
     if not os.path.exists(path):
         return False, "run-dir-missing"
     if not os.path.isdir(path):
@@ -879,36 +869,7 @@ def _validate_run_dir(
     real = os.path.realpath(path)
     if not os.access(real, os.W_OK):
         return False, "run-dir-not-writable"
-    # Re-check containment on the returned path: an ancestor symlink retargeted
-    # between the pre-creation gate and creation could land the run dir inside.
-    if forbidden_parent is not None and _path_inside(forbidden_parent, real):
-        if forbidden_detail is None:
-            forbidden_detail = "run-dir-inside-forbidden-parent"
-        return False, forbidden_detail
     return True, real
-
-
-def _path_inside(parent, child):
-    parent = os.path.realpath(parent)
-    child = os.path.realpath(child)
-    if child == parent or child.startswith(parent + os.sep):
-        return True
-    try:
-        parent_stat = os.stat(parent)
-    except OSError:
-        return False
-    walk = child
-    while True:
-        try:
-            if os.path.samestat(os.stat(walk), parent_stat):
-                return True
-        except OSError:
-            pass
-        parent_dir = os.path.dirname(walk)
-        if parent_dir == walk:
-            break
-        walk = parent_dir
-    return False
 
 
 def _run_dir_nonempty(run_dir_real):
@@ -2898,10 +2859,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     try:
         if run_dir is not None:
-            ok_rd, rd_detail = _validate_run_dir(
-                run_dir, create=True, forbidden_parent=repo_detail,
-                forbidden_detail="run-dir-inside-repo-root",
-            )
+            ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
             if not ok_rd:
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -3219,10 +3177,7 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             argv=argv,
         )
 
-    ok_rd, rd_detail = _validate_run_dir(
-        run_dir, create=True, forbidden_parent=cwd_real,
-        forbidden_detail="run-dir-inside-cwd",
-    )
+    ok_rd, rd_detail = _validate_run_dir(run_dir, create=True)
     if not ok_rd:
         return _write_preflight_terminal(
             {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
