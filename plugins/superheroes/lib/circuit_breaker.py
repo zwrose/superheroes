@@ -15,6 +15,7 @@ from review_memory import canonical_class_key, class_key_aliases
 from finding_identity import (
     clamp_title, normalize_title, finding_label, finding_identity,
 )
+from audits import AUDIT_RULINGS
 
 BLOCKING = {"Critical", "Important"}
 # The ONLY severities that demote a finding to non-blocking: the rubric's non-blocking tiers
@@ -247,22 +248,36 @@ _MALFORMED_OUTCOME = "<malformed-audit-outcome>"
 
 
 def _audit_outcome_aliases(outcome):
-    """Alias set for one audit outcome — the literal `identity` plus, ONLY when the outcome
-    carries dimension/taxonomy/classKey, the recurrence class-key aliases (so a retitled finding
-    that keeps its class can't dodge the stall signal, exactly like the recurring-finding check).
-    A dimension-less outcome contributes only its identity string — never the empty "::" key a
-    bare recurrence_aliases would synthesize."""
-    return _target_aliases(outcome)
+    """Alias set for one audit outcome — usable non-empty `identity` plus, ONLY when that identity
+    is present and the outcome carries dimension/taxonomy/classKey, the recurrence class-key aliases
+    (so a retitled finding that keeps its class can't dodge the stall signal). Never aliases on
+    `id`. Consumed by `_round_not_discharged` — fail-closed direction is *mark more*, so an
+    identity-less outcome yields no aliases (then `_MALFORMED_OUTCOME`). Agrees with
+    `audit_target_aliases` for every identity-bearing record; deliberately diverges for id-only
+    records."""
+    if not isinstance(outcome, dict):
+        return set()
+    aliases = set()
+    ident = outcome.get("identity")
+    if isinstance(ident, str) and ident:
+        aliases.add(ident)
+        if outcome.get("dimension") or outcome.get("taxonomy") or outcome.get("classKey"):
+            aliases |= recurrence_aliases(outcome)
+    return aliases
 
 
 def audit_target_aliases(target):
-    """Alias set for an audit target — same construction path as `_audit_outcome_aliases` so stall
-    consumers cannot disagree on which targets match `stalledIdentities`."""
+    """Alias set for an audit target. Consumed by `round_driver._stalled_open_targets` — fail-closed
+    direction is *match more*, so `id` is accepted when `identity` is absent. Agrees with
+    `_audit_outcome_aliases` for every identity-bearing record; deliberately diverges for id-only
+    records (outcomes mark `_MALFORMED_OUTCOME` via `_round_not_discharged`)."""
     return _target_aliases(target)
 
 
 def _target_aliases(record):
-    """Shared alias construction for audit outcomes and audit targets."""
+    """Alias construction for audit targets — `identity` or `id` plus optional recurrence
+    class-key aliases. Outcomes route through `_audit_outcome_aliases` instead (identity-only, no
+    `id` fall-through)."""
     if not isinstance(record, dict):
         return set()
     aliases = set()
@@ -289,7 +304,15 @@ def _round_not_discharged(round_rec):
         if not isinstance(o, dict):
             out.append({_MALFORMED_OUTCOME})
             continue
-        if o.get("ruling") in ("discharged", "discharged-but-new-issue"):
+        ident = o.get("identity")
+        if not isinstance(ident, str) or not ident:
+            out.append({_MALFORMED_OUTCOME})
+            continue
+        ruling = o.get("ruling")
+        if ruling not in AUDIT_RULINGS:
+            out.append({_MALFORMED_OUTCOME})
+            continue
+        if ruling in ("discharged", "discharged-but-new-issue"):
             continue
         aliases = _audit_outcome_aliases(o)
         out.append(aliases or {_MALFORMED_OUTCOME})

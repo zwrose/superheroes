@@ -405,8 +405,8 @@ def test_settle_delta_same_location_does_not_double_add():
 
 # --- circuit_breaker audit_target_aliases -------------------------------------
 
-def test_audit_target_aliases_matches_outcome_aliases():
-    # axis: audit_target_aliases must agree with _audit_outcome_aliases for stall matching
+def test_audit_target_aliases_agrees_with_outcome_aliases_for_identity_bearing_records():
+    # axis: identity-bearing records must agree — id-only asymmetry is tested separately
     cases = [
         ({"id": "f.py::t@L1", "identity": "f.py::t", "title": "t",
           "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1"},
@@ -421,6 +421,13 @@ def test_audit_target_aliases_matches_outcome_aliases():
     ]
     for target, outcome in cases:
         assert CB.audit_target_aliases(target) == CB._audit_outcome_aliases(outcome)
+
+
+def test_audit_target_aliases_diverges_for_id_only_record():
+    # axis: id-only records diverge — targets match more; outcomes mark malformed
+    record = {"id": "f.py::t@L1"}
+    assert CB.audit_target_aliases(record) == {"f.py::t@L1"}
+    assert CB._audit_outcome_aliases(record) == set()
 
 
 def test_stalled_critical_legacy_raw_finding_matches_line_less_identity():

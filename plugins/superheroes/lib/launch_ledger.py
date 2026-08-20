@@ -430,6 +430,13 @@ def append_under_lock(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TI
             "reason": "append-terminal-must-use-terminalize",
             "path": None,
         }
+    if isinstance(record, dict) and record.get("event") == "batch-declared":
+        # axis: door ownership — batch-declared must go through declare_batch, not here.
+        return {
+            "ok": False,
+            "reason": "append-batch-declared-must-use-declare-batch",
+            "path": None,
+        }
     lock_result = _ensure_lock_file(repo_root, env=env)
     if not lock_result["ok"]:
         return {"ok": False, "reason": lock_result["reason"], "path": None}
@@ -1054,6 +1061,15 @@ def fold(records):
     """Per-launch state machine over event records.
 
     ``retry`` on a non-terminal launch is legal whether or not ``started`` has been seen.
+
+    A well-formed batch declaration is reported and never refused: ``batchDeclarations[batchId]``
+    is an ordered list of declaration records with their ``index``, including duplicates or
+    conflicting ones. A malformed ``batch-declared`` record still refuses the whole stream
+    via ``_validate_batch_declared`` (``fold-schema:*``, ``fold-missing-field:*``,
+    ``fold-bad-field:*``). A ``fold`` refusal is ledger-global (every lane of every batch
+    goes indeterminate; recovery is deleting the file), whereas a duplicate declaration is
+    batch-local and ``count`` already localizes it. Refusal for duplicate or rogue
+    declarations lives at the doors and at ``count``, not here.
     """
     launches = {}
     batch_declarations = {}
@@ -1255,7 +1271,15 @@ def _declaration_index(records, batch_id, folded=None):
 
 def declare_batch(repo_root, batch_id, expected_launches, env=None,
                   lock_timeout=_DEFAULT_LOCK_TIMEOUT):
-    """Record expected launch cardinality for a batch before any reserve."""
+    """Record expected launch cardinality for a batch before any reserve.
+
+    First declaration appends one ``batch-declared`` record. A retry with the same
+    ``expected_launches`` is idempotent (``idempotent: True``, no append). A conflicting
+    second cardinality returns ``batch-declaration-conflict:<m>:<n>``; a ledger that
+    already has two or more declarations returns ``batch-duplicate-declaration``. Prior
+    declaration state is checked before the reservation gate so ``declare; reserve;
+    declare`` idempotents correctly.
+    """
     if not isinstance(batch_id, str) or not batch_id.strip():
         return {"ok": False, "reason": "batch-id-empty"}
     if (not isinstance(expected_launches, int) or isinstance(expected_launches, bool)
@@ -1279,6 +1303,36 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
         folded = fold(read_result["records"])
         if not folded["ok"]:
             return {"ok": False, "reason": folded["reason"]}
+
+        decls = _batch_declarations(read_result["records"], batch_id, folded=folded)
+        if len(decls) >= 2:
+            # axis: door ownership — declare_batch is the sole writer of batch-declared;
+            # conflicting or duplicate retries refuse here, not in fold.
+            return {"ok": False, "reason": "batch-duplicate-declaration"}
+        if len(decls) == 1:
+            if decls[0] == expected_launches:
+                decl_index = _declaration_index(
+                    read_result["records"], batch_id, folded=folded,
+                )
+                for launch_id, info in folded["launches"].items():
+                    if info.get("batchId") != batch_id:
+                        continue
+                    reserved_index = info.get("reservedIndex")
+                    if reserved_index is not None:
+                        if (decl_index is None
+                                or decl_index > reserved_index):
+                            # axis: declaration ordering — refuse when declaration is
+                            # indexed after a reservation, even at equal cardinality, or
+                            # when the declaration index is unknown; fails closed.
+                            return {
+                                "ok": False,
+                                "reason": "batch-declaration-after-reservations",
+                            }
+                return {"ok": True, "reason": None, "idempotent": True}
+            return {
+                "ok": False,
+                "reason": "batch-declaration-conflict:%s:%s" % (decls[0], expected_launches),
+            }
 
         for launch_id, info in folded["launches"].items():
             if info.get("batchId") == batch_id:
@@ -1305,6 +1359,13 @@ def reserve(repo_root, record, env=None, lock_timeout=_DEFAULT_LOCK_TIMEOUT):
     """Reserve a launch under lock with overlap detection."""
     if not isinstance(record, dict):
         return {"ok": False, "reason": "fold-not-an-object", "path": None}
+    if record.get("event") == "batch-declared":
+        # axis: door ownership — batch-declared must go through declare_batch, not reserve.
+        return {
+            "ok": False,
+            "reason": "reserve-batch-declared-must-use-declare-batch",
+            "path": None,
+        }
     launch_id = record.get("launchId")
     if not isinstance(launch_id, str) or not launch_id:
         return {"ok": False, "reason": "reserve-launch-id-invalid", "path": None}
@@ -2011,7 +2072,18 @@ def _count_indeterminate(batch_id, reason):
 
 
 def count(repo_root, batch_id, env=None):
-    """R1 accounting — refuses to report a resolved batch it cannot ground."""
+    """R1 accounting — refuses to report a resolved batch it cannot ground.
+
+    ``len(decls) >= 2`` yields indeterminate ``batch-duplicate-declaration``; a
+    declaration indexed after a reservation yields ``batch-declaration-after-reservations``.
+    With the three doors closed, both are reachable only from a ledger written by a
+    pre-fix build or by the raw unlocked ``append()``; this module stops new duplicates
+    being created but does not repair an existing ledger — recovery stays ledger-clear.
+
+    The public raw ``append()`` remains an unguarded writer by construction — ``declare_batch``
+    writes its declaration through it — which is why this function keeps its
+    ``batch-duplicate-declaration`` fail-closed guard.
+    """
     lp = ledger_path(repo_root, env=env)
     if not lp["ok"]:
         return _count_indeterminate(batch_id, lp["reason"])

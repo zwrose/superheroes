@@ -1525,15 +1525,106 @@ def test_edge1_declare_batch_invalid_expected(tmp_path, monkeypatch):
     assert payload["reason"] == "batch-expected-invalid"
 
 
-def test_edge2_declare_batch_duplicate_declaration(tmp_path, monkeypatch):
+def _ledger_bytes(repo):
+    path = ll.ledger_path(repo)["path"]
+    if not os.path.isfile(path):
+        return b""
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def test_edge2_declare_batch_idempotent_equal_second_resolves(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
     batch = "dup-batch"
     first = L.declare_batch(repo, batch, 1)
+    after_first = _ledger_bytes(repo)
     second = L.declare_batch(repo, batch, 1)
     assert first["ok"] is True
     assert second["ok"] is True
+    assert second.get("idempotent") is True
+    assert _ledger_bytes(repo) == after_first
     launch_id = "launch-dup"
+    ll.reserve(repo, {
+        "event": "reserved",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "batchId": batch,
+        "repoId": ll.repo_identity(repo),
+        "issue": 656,
+        "surfaces": ["plugins/superheroes/lib"],
+        "premise": {},
+        "preflight": {},
+        "argv": [],
+        "doctrineDigest": "d",
+        "model": "m",
+    })
+    ll.append(repo, {
+        "event": "started",
+        "launchId": launch_id,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+        "attempt": 1,
+        "pid": 424242,
+        "logPath": "/tmp/out",
+        "errPath": "/tmp/err",
+    })
+    assert ll.record_outcome(repo, launch_id, "handback", "done")["ok"]
+    count = L.count_batch(repo, batch)
+    assert count["indeterminate"] is False
+    assert count["resolved"] is True
+    assert count["counts"]["total"] == 1
+    assert count["counts"]["handback"] == 1
+
+
+def test_edge2_declare_batch_conflicting_second_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "conflict-batch"
+    assert L.declare_batch(repo, batch, 1)["ok"] is True
+    before = _ledger_bytes(repo)
+    second = L.declare_batch(repo, batch, 2)
+    assert second["ok"] is False
+    assert second["reason"] == "batch-declaration-conflict:1:2"
+    assert "idempotent" not in second
+    assert _ledger_bytes(repo) == before
+
+
+def test_edge2_declare_batch_cli_conflicting_second_refused(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "cli-conflict-batch"
+    assert L.declare_batch(repo, batch, 1)["ok"] is True
+    proc = subprocess.run(
+        [
+            sys.executable, _MOD, "declare-batch",
+            "--repo-root", repo, "--batch", batch, "--expected", "2",
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is False
+    assert payload["reason"] == "batch-declaration-conflict:1:2"
+    assert "idempotent" not in payload
+
+
+def test_edge2_declare_batch_duplicate_record_count_indeterminate(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "dup-record-batch"
+    assert L.declare_batch(repo, batch, 1)["ok"] is True
+    # Models corruption or a pre-fix ledger rather than a supported call.
+    ll.append(repo, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "expectedLaunches": 1,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+    })
+    launch_id = "launch-dup-rec"
     ll.reserve(repo, {
         "event": "reserved",
         "launchId": launch_id,
