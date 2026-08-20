@@ -1431,6 +1431,11 @@ def _finding_in_scope(finding, invocation_filter):
     one whose `invocation` field is absent or not a string) belongs to no
     scope, so no narrowing can exclude it without losing it. It is reported in
     every scope: never silently dropped, and never charged to a neighbour.
+
+    A record whose `invocation` is a string is attributed to that string even
+    when the id is invalid or names no invocation the trail opened: it is an
+    attribution, not an absence, and every finding about that record scopes to
+    it. `_invocation_id_for_finding` is the one place that judgment is made.
     """
     if invocation_filter is None:
         return True
@@ -1441,10 +1446,20 @@ def _finding_in_scope(finding, invocation_filter):
 
 
 def _invocation_id_for_finding(record):
+    """The invocation every finding about `record` is attributed to.
+
+    One record, one attribution: this helper answers the question once, so two
+    findings about the same record can never land in two different scopes. A
+    string `invocation` is an attribution even when the string is an invalid id
+    -- an invalid id is not an absent one -- so the record is charged to that id
+    and filters with it. Only a genuinely absent or non-string `invocation`
+    leaves the record unattributable; `_finding_in_scope` carries what that
+    means for narrowing.
+    """
     if not isinstance(record, dict):
         return None
     inv = record.get("invocation")
-    if isinstance(inv, str) and inv:
+    if isinstance(inv, str):
         return inv
     return None
 

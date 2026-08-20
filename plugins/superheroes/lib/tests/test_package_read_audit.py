@@ -1375,6 +1375,50 @@ def test_check_invocation_filter_keeps_unattributable_findings(tmp_path):
     )
 
 
+def test_empty_invocation_id_is_attributed_not_unattributable(tmp_path):
+    """One record, one attribution: an empty id is invalid, not absent.
+
+    A record whose `invocation` is `""` draws two findings -- the walk's
+    `record-value-invalid` on the field, and `invocation-unknown` for an id no
+    invocation record opened. Both are attributed to `""`, so the one record
+    lands in one scope: narrowing to the clean neighbour `inv-1` reports
+    neither. The unfiltered view is pinned in the same test, so a "fix" that
+    scopes cleanly by dropping a finding from the whole-trail view fails here.
+    """
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    _hand_append_record(trail, _orphan_round(invocation=""))
+
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING, out
+    payload = json.loads(out.strip())
+    empty_id = [
+        item for item in payload["findings"] if item["invocation"] == ""
+    ]
+    kinds = {item["kind"] for item in empty_id}
+    assert pra.NONCONFORMITY_INVOCATION_UNKNOWN in kinds, payload["findings"]
+    assert pra.NONCONFORMITY_RECORD_VALUE_INVALID in kinds, payload["findings"]
+    assert {item["path"] for item in empty_id} == {"invocation"}, empty_id
+    assert len({item["position"] for item in empty_id}) == 1, empty_id
+    assert not [
+        item for item in payload["findings"] if item["invocation"] is None
+    ], payload["findings"]
+
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "inv-1",
+    )
+    assert code == pra.EXIT_CONFORMING, out
+    payload = json.loads(out.strip())
+    assert payload["result"] == pra.RESULT_CONFORMING, out
+    assert payload["findings"] == [], payload["findings"]
+
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "",
+    )
+    assert code == pra.EXIT_UNDECIDED, out
+    payload = json.loads(out.strip())
+    assert payload["reason"] == pra.UNDECIDED_INVOCATION_UNKNOWN, out
+
+
 def test_check_invocation_filter_unknown_id_still_undecided(tmp_path):
     """Edge 6: narrowing to an id no invocation record opened is unchanged."""
     trail = _conforming_invocation(tmp_path, invocation="inv-1")
