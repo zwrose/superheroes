@@ -258,23 +258,33 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
   4. Every functional requirement is verifiable — capture **≥1 acceptance
      criterion** (a Given-When-Then scenario, or a pass/fail rule). If you can't
      write one, the requirement is too vague to keep.
-- **Run the coverage checklist** — the happy path plus the *significant* unhappy
-  paths. Probe each owner-facing area; tag it **Specify / Defer-to-build / N-A** so a
-  skip is a recorded disposition. Risk-gate: go deeper only where a failure costs
+- **Run the coverage checklist** — one row per area in the Dispositions table
+  (`## Coverage`). The first nine rows cover significant unhappy paths; the last
+  six are the **initial** happy-path seed dimensions (grown by the learning loop
+  below as discovery learns what was never asked). Probe each row; record a
+  disposition (**Specify / Defer-to-build / N-A**) and a **`Show-it?`** call
+  (**Yes / No**) alongside it — whether the owner should be **shown** this at
+  handback rather than told. Risk-gate: go deeper only where a failure costs
   money, data, safety, trust, or legal standing. One representative case per area,
   not a matrix.
 
   | Coverage area | Ask the owner |
   | --- | --- |
-  | **Empty & first-run states** | What do they see the first time, or with nothing here yet? |
+  | **Empty & first-run** | What do they see the first time, or with nothing here yet? |
   | **Invalid & malformed input** | If they enter something wrong/blank, what happens and what message? |
   | **Boundaries & limits** | Any limits that matter, and behavior right at / just past them? |
   | **Errors & failures** | When something fails (not their fault), what do they see and do? |
   | **Access & permissions** | Who may, who may not, and what does the wrong person see? |
   | **Duplicates & double-actions** | What if they submit twice or double-click? |
-  | **Conflicting / simultaneous use** *(multi-user)* | Two people change the same thing — last wins, lock, merge? |
-  | **Misuse & abuse** *(sensitive features)* | Could someone abuse this (money, private data) — what must we prevent? |
-  | **Reach** *(if in scope)* | Other languages/currencies/timezones? Keyboard + screen-reader usable? |
+  | **Conflicting / simultaneous use** | Two people change the same thing — last wins, lock, merge? |
+  | **Misuse & abuse** | Could someone abuse this (money, private data) — what must we prevent? |
+  | **Reach (i18n / a11y)** | Other languages/currencies/timezones? Keyboard + screen-reader usable? |
+  | **Wording & tone** | What words should the product use when talking to them about this, and how should it sound? |
+  | **Workflow shape** | What order should the steps happen in, and does anything have to come before something else? |
+  | **Placement & prominence** | Where should this live in the product, and how much should it stand out? |
+  | **Limits & defaults** | If they don't choose, what happens — and what's a sensible ceiling? |
+  | **Tier & access boundaries** | Should this work differently depending on who they are or what they pay for? |
+  | **Visibility & disclosure** | Who else can see this, and what should the product tell them about that? |
 
   Connectivity & timing failures (dropped network, timeouts, duplicate requests at
   the wire) are **defer-to-build**: capture only the owner-visible *promise* ("a
@@ -282,6 +292,57 @@ Refine the idea through natural dialogue, capturing requirements in **EARS** for
 - **Non-functional needs** are captured as **outcomes with a measurable bar** ("a
   page they wait on responds within 2 seconds", "only the owner can see their
   data"), never as mechanisms.
+
+#### The elicitation test (FR-19)
+
+**The admission rule.** A line earns its place in a spec by **the elicitation
+test**: *the owner was asked, and cared.* That is the **only** admission rule. A
+line does **not** earn its place because it seemed important, because it is true,
+because a template has a slot for it, or because leaving it out felt incomplete —
+**there is no author-side filter that admits a line the owner was never asked
+about.**
+
+**These six classes do not land in specs** — each fails the elicitation test:
+
+1. **Mechanisms** — how something works. That is the build's, not the spec's.
+2. **Limits the owner would not enforce** — a number nobody would defend if it were hit.
+3. **Vacuous quality lines** — "it should be reliable", "the UI should be intuitive":
+   nothing a build could be graded against.
+4. **Design-handoff transcription** — re-describing the design output in prose instead
+   of referencing it.
+5. **Test obligations** — that something will be tested. Tests are the build's contract.
+6. **Non-load-bearing mirror-facts** — repo facts the build does not rely on being true.
+
+#### Failure semantics (FR-20)
+
+When a row in `## Coverage` is violated, the consequence rides the **decision
+axis** — the disposition determines what kind of failure it is:
+
+- A violated **`Specify`** row is a **builder defect**. The owner decided; the build
+  did something else.
+- A missing **`Show-it`** presentation is a **handback omission** — the decision was
+  honored, the delivery failed to show it. It is fixed at handback, not charged to
+  the build as a defect.
+- An owner's **negative reaction to a shown `Defer-to-build` choice** creates a **new
+  ruling, never a defect**. The build was authorized to choose; the owner is now
+  choosing differently, and that is a ruling that amends the spec. **You did not do
+  anything wrong by choosing; they are deciding now.** Nobody is charged with a
+  defect for a deferred choice the owner later dislikes.
+
+#### The learning loop (FR-21)
+
+Handback findings close the loop between one discovery and the next — and two
+different failures are **not** graded the same way:
+
+- **"Asked and deferred"** — the owner was asked, and handed the choice back. If they
+  later want it different, that is a **cheap amendment**. No finding; nobody missed
+  anything.
+- **"Never asked"** — the dimension was never put in front of the owner at all. That is
+  a **finding against discovery**, and it carries a **duty**: **add that dimension to
+  the coverage checklist in this charter and to the template's Dispositions table**, so
+  the next discovery asks it. That growth is why the six happy-path dimensions are
+  described as the **initial** seed list everywhere they appear — the list is designed
+  to get longer, and a surface that presents it as closed is wrong.
 
 ### 4. UI/UX when relevant (hand the owner a Claude Design prompt)
 

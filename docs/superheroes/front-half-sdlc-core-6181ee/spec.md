@@ -87,10 +87,14 @@ contains yet?*
     recorded with the route and anchor at routing time (FR-6's record); "exactly one
     route" means exactly one is chosen, never that the cases partition.
 
-**FR-6.** The advisor shall not assign a discovery size, lane, or review weight at routing;
-micro is the only route knowable as small up front.
-  - *Acceptance (rule):* routing records the route and the anchor, nothing more; review
-    weight first appears on the spec draft (FR-16).
+**FR-6.** When the advisor routes work to `discovery`, the advisor shall not assign a
+discovery size, lane, or review weight at routing — a discovery's size, eventual lane, and
+review weight are unknowable at intake; `micro` is the only route knowable as small up front;
+for work routed `build-ready` or `micro`, the lane and presentation calls attach at routing
+per ruling P6 [cite: plugins/superheroes/skills/showrunner/SKILL.md § The call is made at routing, not at handback (ruling P6).], unchanged.
+  - *Acceptance (rule):* when routed to `discovery`, routing records the route and the
+    anchor, nothing more; review weight first appears on the spec draft (FR-16); for
+    `build-ready` and `micro`, lane and presentation calls attach at routing per ruling P6.
 
 ### The issue contract
 
@@ -428,9 +432,9 @@ single-issue spec, per FR-36, is the one-child case of the same rule.)
 ### The builder's side of the line
 
 **FR-39.** Builds shall start only from routed issues carrying resolving anchors; the
-workhorse shall no longer run discovery inline in a build session (today its
-needs-discovery route elicits and builds in the same session
-[cite: plugins/superheroes/skills/workhorse/SKILL.md § needs-discovery]).
+workhorse shall no longer run discovery inline in a build session — work routed `discovery`
+is routed back rather than elicited in-session
+[cite: plugins/superheroes/skills/workhorse/SKILL.md § You do not elicit requirements in a build session].
   - *Acceptance:* Given work needing discovery, when it reaches a build entry point, then it
     is routed back to discovery rather than elicited in-session; the build entry point takes
     only routed, anchored issues.
@@ -670,6 +674,27 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
   rules as review-code." Sections touched: FR-32, Amendments. Substantive — a builder
   implementing the read protocol builds seat composition differently against it.
 - **2026-08-08 (owner-stamped, wording):** recorded the approval date — the owner confirmed in the advisor channel that approval was given 2026-08-07 in the discovery sitting; added the `approved:` frontmatter field. Sections touched: frontmatter, Amendments. Decides nothing a builder could build differently against.
+- **2026-08-17 (owner-stamped, wording):** FR-6 scoped to the `discovery` route — for
+  `discovery`, the advisor assigns no size, lane, or review weight at routing; for
+  `build-ready` and `micro`, lane and presentation calls attach at routing per ruling P6,
+  unchanged. Cause: owner ruling in discuss-open-decisions walk 2026-08-17 (#695,
+  collector item 29-a). Sections touched: FR-6, Amendments. Classification rationale
+  (owner-confirmed 2026-08-18, recorded so R4's reader-facing test is answerable by
+  citation): the amendment records FR-6's original intent per ruling 29-a, and no consumer
+  built against the prior unscoped reading — ruling P6's lane-at-routing behavior was
+  shipped charter text throughout, and the intake machinery (#1068) implements the amended
+  reading; four review seats independently flagged `substantive` under R4's text-alone
+  test, which this rationale answers rather than disputes. The safety condition this
+  precedent carries: an intent-clarifying amendment classifies `wording` only with a
+  verified no-consumer-built-on-the-prior-reading receipt like this one.
+- **2026-08-17 (owner-stamped, wording):** FR-39 citation repointed — the `needs-discovery`
+  anchor removed by #1068 now cites the workhorse charter's discovery intake rule. Cause:
+  advisor package-hygiene note on vet 136 / PR #1068 follow-up 5. This touch carried the
+  FR-23 consolidation re-read (no contradiction found); **owner re-stamp of the
+  consolidated body given 2026-08-18 in the advisor channel** — the owner affirmed the
+  body as a whole after the re-read's result was delivered (collector item 44), recorded
+  here at the owner's word. The carried debt is cleared; the count restarts from this
+  re-stamp. Sections touched: FR-39, Amendments.
 
 ## Coverage
 

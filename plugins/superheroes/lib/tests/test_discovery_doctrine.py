@@ -569,6 +569,29 @@ def test_light_spec_same_anchor_power():
     assert re.search(r"^## ", body, re.MULTILINE), "body needs a ## heading for anchors"
 
 
+# Headings the light-spec fixture must keep for it to stand in for a real approved
+# spec. A spec whose Amendments log is deleted fails spec-section anchor resolution
+# closed (skills/workhorse/SKILL.md — the cursor leg does not resolve, it stops
+# intake), and architect-spec's omit-empty-sections rule would delete exactly that
+# section on a freshly approved spec. In class under
+# rubric/review-discipline.md § the byte-literal floor: a literal census with a
+# cardinality floor over it, no structure parsed and no prose read.
+_LIGHT_SPEC_ANCHOR_HEADINGS = (
+    "## Amendments",
+    "## Coverage",
+)
+
+
+def test_light_spec_keeps_anchor_backing_headings():
+    assert len(_LIGHT_SPEC_ANCHOR_HEADINGS) >= 2, _LIGHT_SPEC_ANCHOR_HEADINGS
+    _fm, body = DD.read_frontmatter(_LIGHT_SPEC_FIXTURE)
+    present = {line.strip() for line in body.splitlines()}
+    missing = [h for h in _LIGHT_SPEC_ANCHOR_HEADINGS if h not in present]
+    assert not missing, (
+        "light_spec_sample.md is missing anchor-backing headings: %r" % (missing,)
+    )
+
+
 def test_light_spec_same_owner_approval_authority(tmp_path):
     import shutil
 

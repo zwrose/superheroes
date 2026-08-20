@@ -16,6 +16,9 @@ linkage is machine-read, so it is emitted by the lib — never hand-written.
 If they have not, stop and return to `discovery` — do not author a spec from
 un-approved requirements.
 
+Spec content rules (consolidation, annexes, rulings, Amendments shape):
+`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/architect-spec/reference/spec-content.md`.
+
 ## Inputs (from `discovery`)
 
 The approved: **title**, **purpose**, **who it's for**, **functional requirements**
@@ -67,8 +70,15 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
    - **Functional requirements in EARS**, numbered, one behavior each, each with ≥1
      acceptance criterion (Given-When-Then for flows, rule bullets for constraints).
    - **Significant unhappy paths as If/Then EARS**, driven by the coverage checklist;
-     record each area's disposition (Specify/Defer-to-build/N-A) in the `## Coverage` table at
-     the end — not as an inline tag list inside the unhappy-paths section.
+     record each area's disposition in the Dispositions table (`## Coverage`) at the end — not as
+     an inline tag list inside the unhappy-paths section.
+   - **The Dispositions table (`## Coverage`)** is one merged table: all nine unhappy-path
+     coverage areas plus the initially-six happy-path dimensions (currently fifteen rows; the
+     dimension list grows with the learning loop), four
+     columns (`Area | Disposition | Show-it? | Where / why`), `Disposition` ∈ {Specify,
+     Defer-to-build, N-A}, and `Show-it?` ∈ {Yes, No} (literal `—` only on N-A rows).
+   - **`## Amendments` is always rendered**, even when empty — its zero state is the single line
+     `_No amendments since the last full approval._`
    - **Non-functional requirements as outcomes with a fit-criterion.**
    - **Load-bearing mirror-facts carry a `[cite: …]` citation.** A *mirror-fact* is a spec
      sentence asserting something about the EXISTING repo that the repo could contradict
@@ -108,9 +118,11 @@ dependencies**, **constraints**, **out-of-scope**, and **`size`**.
      belongs to the build's *how*? Move it out — the spec is the *what*. (A `[cite: …]`
      provenance marker is a sanctioned spec construct (CONVENTIONS §3.2), not leaked
      implementation detail — never strip or flag it as tech-leak or a path reference.)
-   - **Coverage:** does the `## Coverage` table disposition every area (Specify/Defer/N-A),
-     with each `Specify` backed by a real UFR — and are the significant unhappy paths actually
-     addressed, not just the happy path?
+   - **Coverage:** does the Dispositions table (`## Coverage`) disposition **every row** — all nine
+     unhappy-path areas and all initially-six happy-path dimensions (Specify/Defer-to-build/N-A),
+     with each `Specify` backed by a real UFR, every row carrying a `Show-it?` value — and are the
+     significant unhappy paths actually addressed, not just the happy path? Is `## Amendments`
+     present (the zero-state line counts)?
    - **Internal consistency:** do acceptance criteria and the definition of done
      match the requirements? Any section contradict another?
    - **Scope:** focused enough for one work-item, or does it need decomposition?
@@ -148,6 +160,10 @@ sections that genuinely do not apply — not because it keeps a heading and writ
 "TBD", "—", or a one-line restatement of the heading underneath it. **A heading with nothing
 real under it is a defect at either weight**, and deleting it is the fix.
 
+**Exception — `## Amendments`:** This section is always kept. Its zero state — the explicit
+no-amendments line — *is* something real, not a placeholder. Do not delete it under the
+empty-sections rule above.
+
 ## Rationalization table
 
 | Excuse | Reality |
@@ -161,3 +177,5 @@ real under it is a defect at either weight**, and deleting it is the fix.
 | "I'll just assert the repo does X, everyone knows it" | A load-bearing mirror-fact needs a resolving `[cite: …]` to its repo source. A fabricated repo fact is the #205 class — cite it or don't assert it. |
 | "It's a light spec, I'll use a lighter format" | Weight changes the process around the artifact, never the artifact class: same template, same home, same anchor power, same owner approval authority. |
 | "I'll keep the heading and write N/A under it" | Empty sections are omitted, never filled. A heading with nothing real under it is a defect at either weight — delete it. |
+| "The Amendments section is empty, I'll delete it like any empty section" | `## Amendments` is always rendered; its zero state is the explicit no-amendments line — that is real content, not an empty section. |
+| "This annex just spells out what the spec meant" | An annex elaborates decisions the core already makes; a new opinion amends the core. Annex smuggling is a named review-spec finding class. |

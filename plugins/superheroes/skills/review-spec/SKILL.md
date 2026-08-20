@@ -303,7 +303,8 @@ into the spec, don't add more.** A good spec is:
 - **Coherence** (`architecture-reviewer`): scope coherence — is this genuinely ONE
   work-item, or several bundled (should it be decomposed)? Are requirements mutually
   consistent — **no two that contradict** (cross-requirement contradiction)? Is anything
-  specified that isn't this work-item's job?
+  specified that isn't this work-item's job? Flag an **annex that introduces a new opinion**
+  — see `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-spec/reference/spec-detail.md` (Annex opinion).
 - **Safety & access** (`security-reviewer`): are the **owner-visible**
   security/privacy/access requirements captured — who may see/do what, what the wrong
   person sees, what must never leak — as outcomes, not mechanisms? Flag a sensitive
@@ -537,7 +538,8 @@ Agents flag departures from these — the spec contract (CONVENTIONS §3.2):
 
 - **EARS functional requirements** — `When`/`While`/`Where`/`If-Then` + "the system shall …", one behavior each, no "and/or" chaining.
 - **An acceptance criterion on every functional requirement** — Given-When-Then for a flow, a pass/fail rule for a constraint. A requirement with none is too vague to keep.
-- **Significant unhappy paths covered** — the coverage checklist (empty/first-run, invalid input, boundaries, errors, access, duplicates, concurrency, abuse, reach), each Specify / Defer-to-build / N-A.
+- **`## Amendments` section** — always present; zero state is `_No amendments since the last full approval._`
+- **Dispositions table (`## Coverage`)** — currently nine unhappy-path areas (empty/first-run through reach) plus initially six happy-path dimensions (wording & tone through visibility & disclosure), a list the learning loop grows; each row has `Disposition` (Specify / Defer-to-build / N-A) and `Show-it?` (Yes / No; `—` only when N-A).
 - **No vague/unmeasurable words** — replaced by a concrete behavior or fit-criterion.
 - **No technical *how*** — no libraries/schemas/APIs/frameworks; that stays with the build.
 - **NFRs as outcomes with a fit-criterion**, UI/UX referencing the Claude Design handoff, plus definition of done / assumptions / constraints / out-of-scope.

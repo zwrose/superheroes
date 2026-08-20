@@ -74,8 +74,9 @@ constraint (limit, format).}}
 ## When things go wrong (significant unhappy paths)
 
 <!-- AUTHOR GUIDANCE (coverage checklist) — DELETE before delivering. Probe each
-     owner-facing area; record each area's disposition (Specify / Defer-to-build / N-A) in the
-     `## Coverage` table at the end of the spec (not inline in this section):
+     owner-facing area and each happy-path dimension; record each row's disposition
+     (Specify / Defer-to-build / N-A) and Show-it? call in the Dispositions table
+     (`## Coverage`) at the end of the spec (not inline in this section):
        - Empty & first-run states: what do they see the first time / with nothing here yet?
        - Invalid & malformed input: wrong or blank input — what happens + what message?
        - Boundaries & limits: limits that matter, and behavior right at / just past them?
@@ -85,6 +86,14 @@ constraint (limit, format).}}
        - Conflicting / simultaneous use (multi-user): two people edit the same thing?
        - Misuse & abuse (sensitive features): could someone abuse this — what to prevent?
        - Reach (if in scope): other languages/currencies/timezones? keyboard + screen-reader?
+       - Wording & tone: what words should the product use when talking to them about this, and how should it sound?
+       - Workflow shape: what order should the steps happen in, and does anything have to come before something else?
+       - Placement & prominence: where should this live in the product, and how much should it stand out?
+       - Limits & defaults: if they don't choose, what happens — and what's a sensible ceiling?
+       - Tier & access boundaries: should this work differently depending on who they are or what they pay for?
+       - Visibility & disclosure: who else can see this, and what should the product tell them about that?
+     The six happy-path dimensions above are the initial seed list; the learning loop adds to it.
+     Each row also takes a Show-it? call (Yes / No; — only when Disposition is N-A).
      Defer-to-build promise: for connectivity & timing failures (dropped network, timeouts,
      duplicate requests at the wire), state only the OWNER-VISIBLE PROMISE here (e.g. "a
      dropped connection never loses their work or double-charges them"); the mechanism
@@ -151,23 +160,51 @@ spec — resolve or defer each item first.}}
 {{Domain terms with one agreed meaning each, so the owner and the agents speak the
 same language. Omit if there are no terms worth pinning.}}
 
+## Amendments
+
+<!-- AUTHOR GUIDANCE (amendments log) — DELETE this whole comment before delivering.
+
+  Records every post-approval change to this spec: one entry per amendment, carrying its **date**,
+  the **owner stamp**, its **class** (`wording` or `substantive`), and the **section names it
+  touched**. Entries are listed oldest first; an entry's number is its position in that order
+  (oldest = 1), not a written field. -->
+
+_No amendments since the last full approval._
+
 ## Coverage
 
-{{The coverage-checklist disposition for each owner-facing unhappy-path area — the audit record
-that every area was consciously considered, kept OUT of the requirements narrative above. This is
-a completeness record, not requirements. `Specify` → a UFR above covers it (name it); `Defer-to-build`
-→ only the owner-visible promise is stated above, the mechanism is the build's; `N-A` → not applicable,
-with a one-line why. The build reads the `Defer-to-build` rows as its handoff list. Keep every area
-row (an unconsidered area is itself a finding).}}
+{{The Dispositions table (`## Coverage`) — disposition for each owner-facing unhappy-path area
+and each happy-path dimension. The audit record that every area was consciously considered,
+kept OUT of the requirements narrative above. This is a completeness record, not requirements.
 
-| Area | Disposition | Where / why |
-| --- | --- | --- |
-| Empty & first-run | {{Specify / Defer-to-build / N-A}} | {{UFR-n, or the one-line reason}} |
-| Invalid & malformed input | {{…}} | {{…}} |
-| Boundaries & limits | {{…}} | {{…}} |
-| Errors & failures | {{…}} | {{…}} |
-| Access & permissions | {{…}} | {{…}} |
-| Duplicates & double-actions | {{…}} | {{…}} |
-| Conflicting / simultaneous use | {{…}} | {{…}} |
-| Misuse & abuse | {{…}} | {{…}} |
-| Reach (i18n / a11y) | {{…}} | {{…}} |
+Decision axis (`Disposition`): `Specify` → a UFR above covers it (name it); `Defer-to-build` →
+only the owner-visible promise is stated above, the mechanism is the build's; `N-A` → not
+applicable, with a one-line why.
+
+Presentation axis (`Show-it?`): `Yes` → the delivery must *show* this to the owner rather than
+tell them — it becomes the PR's *How to see it*; `No` → telling them suffices. A missing
+Show-it? presentation is a handback omission, not a build defect.
+
+The six happy-path dimensions below are the initial seed list; the learning loop grows this
+list when a handback review finds a dimension the owner was never asked about.
+
+The build reads the `Defer-to-build` rows as its handoff list. Keep every row (an unconsidered
+area is itself a finding).}}
+
+| Area | Disposition | Show-it? | Where / why |
+| --- | --- | --- | --- |
+| Empty & first-run | {{Specify / Defer-to-build / N-A}} | {{Yes / No / —}} | {{UFR-n, or the one-line reason}} |
+| Invalid & malformed input | {{…}} | {{…}} | {{…}} |
+| Boundaries & limits | {{…}} | {{…}} | {{…}} |
+| Errors & failures | {{…}} | {{…}} | {{…}} |
+| Access & permissions | {{…}} | {{…}} | {{…}} |
+| Duplicates & double-actions | {{…}} | {{…}} | {{…}} |
+| Conflicting / simultaneous use | {{…}} | {{…}} | {{…}} |
+| Misuse & abuse | {{…}} | {{…}} | {{…}} |
+| Reach (i18n / a11y) | {{…}} | {{…}} | {{…}} |
+| Wording & tone | {{…}} | {{…}} | {{…}} |
+| Workflow shape | {{…}} | {{…}} | {{…}} |
+| Placement & prominence | {{…}} | {{…}} | {{…}} |
+| Limits & defaults | {{…}} | {{…}} | {{…}} |
+| Tier & access boundaries | {{…}} | {{…}} | {{…}} |
+| Visibility & disclosure | {{…}} | {{…}} | {{…}} |
