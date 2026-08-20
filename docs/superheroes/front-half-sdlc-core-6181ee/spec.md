@@ -690,8 +690,11 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
 - **2026-08-17 (owner-stamped, wording):** FR-39 citation repointed — the `needs-discovery`
   anchor removed by #1068 now cites the workhorse charter's discovery intake rule. Cause:
   advisor package-hygiene note on vet 136 / PR #1068 follow-up 5. This touch carried the
-  FR-23 consolidation re-read; owner re-stamp of the consolidated body is outstanding.
-  Sections touched: FR-39, Amendments.
+  FR-23 consolidation re-read (no contradiction found); **owner re-stamp of the
+  consolidated body given 2026-08-18 in the advisor channel** — the owner affirmed the
+  body as a whole after the re-read's result was delivered (collector item 44), recorded
+  here at the owner's word. The carried debt is cleared; the count restarts from this
+  re-stamp. Sections touched: FR-39, Amendments.
 
 ## Coverage
 
