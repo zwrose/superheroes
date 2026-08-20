@@ -817,6 +817,69 @@ def test_collection_manifest_fault_pure():
     assert RD.collection_manifest_fault(None, [{"id": "a1"}]) is None
 
 
+def test_collection_manifest_fault_non_string_key_refused():
+    """A non-string manifest key is refused with the key and type named — no TypeError."""
+    targets = [{"id": "a1"}]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"z": "claude", 1: "codex"}},
+        targets,
+    )
+    assert fault is not None
+    assert "1" in fault
+    assert "int" in fault
+    assert "resubmit the same phase/attempt/state-hash with a corrected artifact" in fault
+
+
+def test_collection_manifest_fault_non_string_key_mixed_with_valid_id():
+    """A manifest mixing a valid string id and a non-string key refuses the non-string key."""
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"a1": "claude", 1: "codex"}},
+        [{"id": "a1"}],
+    )
+    assert fault is not None
+    assert "1" in fault
+    assert "int" in fault
+
+
+def test_collection_manifest_fault_colliding_identity_names_all_ids():
+    """When several targets share one identity, the refusal names every carrying id."""
+    targets = [
+        {"id": "f.py::x@L1", "identity": "f.py::x"},
+        {"id": "f.py::x@L9", "identity": "f.py::x"},
+    ]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"f.py::x": "claude"}},
+        targets,
+    )
+    assert fault is not None
+    assert "identity" in fault
+    assert "f.py::x@L1" in fault
+    assert "f.py::x@L9" in fault
+    assert "per-location" in fault
+
+
+def test_collection_manifest_fault_single_identity_wording_preserved():
+    """Exactly one target carries the identity — preserve the single-id re-key wording."""
+    targets = [{"id": "f.py::x@L1", "identity": "f.py::x"}]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"f.py::x": "claude"}},
+        targets,
+    )
+    assert fault is not None
+    assert "re-key to 'f.py::x@L1'" in fault
+    assert "per-location" not in fault
+
+
+def test_collection_manifest_fault_determinism_repeated_calls():
+    """Repeated calls name the same bad key when several bad keys exist."""
+    artifact = {"collectionManifest": {"z": "x", "a": "x"}}
+    targets = [{"id": "a1"}]
+    first = RD.collection_manifest_fault(artifact, targets)
+    for _ in range(5):
+        assert RD.collection_manifest_fault(artifact, targets) == first
+    assert first is not None and "collectionManifest key 'a'" in first
+
+
 def test_submit_audits_collection_manifest_key_refused(tmp_path):
     """A mis-keyed collectionManifest is refused at the submit chokepoint with the mistake named,
     the pending step intact, and a corrected resubmit on the same phase/attempt/state-hash accepted."""

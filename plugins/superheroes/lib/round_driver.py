@@ -2390,21 +2390,36 @@ def collection_manifest_fault(artifact, targets):
     if isinstance(targets, list):
         target_ids = {t["id"] for t in targets if isinstance(t, dict)
                       and isinstance(t.get("id"), str)}
-        identity_to_id = {}
+        identity_to_ids = {}
         for t in targets:
             if isinstance(t, dict) and isinstance(t.get("id"), str):
                 ident = t.get("identity")
                 if isinstance(ident, str) and ident:
-                    identity_to_id[ident] = t["id"]
+                    identity_to_ids.setdefault(ident, []).append(t["id"])
+        # axis: non-string manifest key — name the key and its type; never let sorted() raise.
+        non_string_keys = [k for k in manifest if not isinstance(k, str)]
+        if non_string_keys:
+            bad_key = min(non_string_keys, key=lambda k: (type(k).__name__, repr(k)))
+            return ("collectionManifest key %r is %s, not a target id string; expected "
+                    "{<target-id>: <vendor>, ...}; resubmit the same phase/attempt/state-hash with a "
+                    "corrected artifact" % (bad_key, type(bad_key).__name__))
         bad_keys = sorted(k for k in manifest if k not in target_ids)
         if bad_keys:
             bad_key = bad_keys[0]
             # axis: identity-vs-id confusion — name the mistake so the orchestrator re-keys to id.
-            if bad_key in identity_to_id:
+            if bad_key in identity_to_ids:
+                ids_for_identity = sorted(identity_to_ids[bad_key])
+                if len(ids_for_identity) == 1:
+                    return ("collectionManifest key %r is targets[].identity (driver-internal; must not "
+                            "be used as a transport key), not targets[].id — re-key to %r; valid target "
+                            "ids: %s; resubmit the same phase/attempt/state-hash with a corrected artifact"
+                            % (bad_key, ids_for_identity[0], ", ".join(sorted(target_ids))))
+                id_list = ", ".join(repr(i) for i in ids_for_identity)
                 return ("collectionManifest key %r is targets[].identity (driver-internal; must not "
-                        "be used as a transport key), not targets[].id — re-key to %r; valid target "
-                        "ids: %s; resubmit the same phase/attempt/state-hash with a corrected artifact"
-                        % (bad_key, identity_to_id[bad_key], ", ".join(sorted(target_ids))))
+                        "be used as a transport key), not targets[].id — re-key to a per-location "
+                        "target id for each location: %s; valid target ids: %s; resubmit the same "
+                        "phase/attempt/state-hash with a corrected artifact"
+                        % (bad_key, id_list, ", ".join(sorted(target_ids))))
             # axis: unknown key — refuse with the valid target-id set for recovery.
             return ("collectionManifest key %r is not an audit target of this round; valid target "
                     "ids: %s; resubmit the same phase/attempt/state-hash with a corrected artifact"
