@@ -186,6 +186,7 @@ UNDECIDED_REASONS = frozenset({
 NONCONFORMITY_ROUND_MISSING = "round-missing"
 NONCONFORMITY_ELEMENT_MISSING = "element-missing"
 NONCONFORMITY_FINDING_UNVERIFIED = "finding-unverified"
+NONCONFORMITY_FINDING_UNKNOWN = "finding-unknown"
 NONCONFORMITY_DISPOSITION_MISMATCH = "disposition-mismatch"
 NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS = "disposition-not-allowed-for-lens"
 NONCONFORMITY_REFUTATION_EVIDENCE_MISSING = "refutation-evidence-missing"
@@ -193,10 +194,13 @@ NONCONFORMITY_SYNC_CHECK_MISSING = "sync-check-missing"
 NONCONFORMITY_SYNC_CHECK_INCOMPLETE = "sync-check-incomplete"
 NONCONFORMITY_SYNC_CHECK_FAILED = "sync-check-failed"
 NONCONFORMITY_RECORD_VALUE_INVALID = "record-value-invalid"
+NONCONFORMITY_RECORD_DUPLICATE = "record-duplicate"
+NONCONFORMITY_ROUND_EXCEEDS_CEILING = "round-exceeds-ceiling"
 NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_ROUND_MISSING,
     NONCONFORMITY_ELEMENT_MISSING,
     NONCONFORMITY_FINDING_UNVERIFIED,
+    NONCONFORMITY_FINDING_UNKNOWN,
     NONCONFORMITY_DISPOSITION_MISMATCH,
     NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
     NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
@@ -204,6 +208,8 @@ NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
     NONCONFORMITY_SYNC_CHECK_FAILED,
     NONCONFORMITY_RECORD_VALUE_INVALID,
+    NONCONFORMITY_RECORD_DUPLICATE,
+    NONCONFORMITY_ROUND_EXCEEDS_CEILING,
 })
 
 SPEC_CONTRADICTION_DISPOSITIONS = frozenset({
@@ -451,6 +457,49 @@ RECORD_SCHEMAS = {
         },
     },
 }
+
+
+# Shared duplicate declarations. Writers refuse with `token`; check reports
+# `record-duplicate`. Scope is the uniqueness boundary for `identity`.
+DUPLICATE_SCOPE_TRAIL = "trail"
+DUPLICATE_SCOPE_INVOCATION = "invocation"
+DUPLICATE_SCOPE_RECORD = "record"
+
+DUPLICATE_RULES = (
+    {
+        "token": REFUSAL_INVOCATION_DUPLICATE,
+        "kind": RECORD_KIND_INVOCATION,
+        "scope": DUPLICATE_SCOPE_TRAIL,
+        "identity": "invocation",
+    },
+    {
+        "token": REFUSAL_ROUND_DUPLICATE,
+        "kind": RECORD_KIND_ROUND,
+        "scope": DUPLICATE_SCOPE_INVOCATION,
+        "identity": "round",
+    },
+    {
+        "token": REFUSAL_FINDING_DUPLICATE,
+        "kind": RECORD_KIND_ROUND,
+        "scope": DUPLICATE_SCOPE_INVOCATION,
+        "identity": "finding",
+        "collection": "findings",
+    },
+    {
+        "token": REFUSAL_VERIFICATION_DUPLICATE,
+        "kind": RECORD_KIND_VERIFICATION,
+        "scope": DUPLICATE_SCOPE_INVOCATION,
+        "identity": "finding",
+        "collection": "findings",
+    },
+    {
+        "token": REFUSAL_SYNC_CHECK_DUPLICATE,
+        "kind": RECORD_KIND_VERIFICATION,
+        "scope": DUPLICATE_SCOPE_RECORD,
+        "identity": "child",
+        "collection": "syncChecks",
+    },
+)
 
 
 def _check_value_type(value, type_name):
@@ -995,13 +1044,289 @@ def _group_records(records):
         if not isinstance(inv_id, str):
             continue
         if kind == RECORD_KIND_INVOCATION:
-            invocations[inv_id] = record
+            invocations.setdefault(inv_id, []).append(record)
         elif kind == RECORD_KIND_ROUND:
             rounds_by_inv.setdefault(inv_id, []).append(record)
         elif kind == RECORD_KIND_VERIFICATION:
             verifications_by_inv.setdefault(inv_id, []).append(record)
 
     return invocations, rounds_by_inv, verifications_by_inv
+
+
+def _invocation_group_records(grouped):
+    """Normalize one `_group_records` value to a list of invocation records.
+
+    A bare dict is a unique invocation (including a latest-wins grouping).
+    Only a list of two or more records is a duplicate group.
+    """
+    if isinstance(grouped, list):
+        return grouped
+    if grouped is None:
+        return []
+    return [grouped]
+
+
+def _stable_identity(value):
+    try:
+        hash(value)
+        return value
+    except TypeError:
+        return ("unhashable", type(value).__name__, repr(value))
+
+
+def _iter_identity_occurrences(record, rule):
+    if not isinstance(record, dict):
+        return
+    if record.get("kind") != rule["kind"]:
+        return
+    identity = rule["identity"]
+    collection = rule.get("collection")
+    if collection is None:
+        if identity not in record:
+            return
+        value = record[identity]
+        if value is None:
+            return
+        yield value, identity
+        return
+    items = record.get(collection)
+    if not isinstance(items, list):
+        return
+    for idx, item in enumerate(items):
+        if not isinstance(item, dict) or identity not in item:
+            continue
+        value = item[identity]
+        if value is None:
+            continue
+        yield value, "%s[%d].%s" % (collection, idx, identity)
+
+
+def _duplicate_group_key(record, rule, identity):
+    stable = _stable_identity(identity)
+    scope = rule["scope"]
+    if scope == DUPLICATE_SCOPE_TRAIL:
+        return stable
+    if scope == DUPLICATE_SCOPE_INVOCATION:
+        return (record.get("invocation"), stable)
+    return stable
+
+
+def _writer_duplicate_detail(rule, identity, invocation):
+    token = rule["token"]
+    if token == REFUSAL_INVOCATION_DUPLICATE:
+        return "invocation %r already exists in the trail" % identity
+    if token == REFUSAL_ROUND_DUPLICATE:
+        return "round %s is already recorded for invocation %r" % (
+            identity, invocation,
+        )
+    if token == REFUSAL_FINDING_DUPLICATE:
+        return "finding %r is already recorded for invocation %r" % (
+            identity, invocation,
+        )
+    if token == REFUSAL_VERIFICATION_DUPLICATE:
+        return "finding %r already has a verification record" % identity
+    if token == REFUSAL_SYNC_CHECK_DUPLICATE:
+        return "sync-check child %r is named more than once" % identity
+    return "%s %r is duplicated" % (rule["identity"], identity)
+
+
+def _writer_duplicate_refusal(records, candidate, trail, invocation):
+    kind = candidate.get("kind")
+    for rule in DUPLICATE_RULES:
+        if rule["kind"] != kind:
+            continue
+        incoming = [value for value, _path in _iter_identity_occurrences(
+            candidate, rule,
+        )]
+        if rule["scope"] == DUPLICATE_SCOPE_RECORD:
+            seen = set()
+            for identity in incoming:
+                key = _stable_identity(identity)
+                if key in seen:
+                    return _refuse(
+                        rule["token"],
+                        _writer_duplicate_detail(rule, identity, invocation),
+                        trail=trail,
+                        invocation=invocation,
+                    )
+                seen.add(key)
+            continue
+        existing_keys = set()
+        for rec in records:
+            for identity, _path in _iter_identity_occurrences(rec, rule):
+                existing_keys.add(_duplicate_group_key(rec, rule, identity))
+        seen_incoming = set()
+        for identity in incoming:
+            key = _duplicate_group_key(candidate, rule, identity)
+            if key in existing_keys or key in seen_incoming:
+                return _refuse(
+                    rule["token"],
+                    _writer_duplicate_detail(rule, identity, invocation),
+                    trail=trail,
+                    invocation=invocation,
+                )
+            seen_incoming.add(key)
+    return None
+
+
+def _duplicate_detail(rule, identity, positions):
+    pos_txt = ", ".join(str(p) for p in positions)
+    return "%s %r duplicated at trail positions %s" % (
+        rule["identity"], identity, pos_txt,
+    )
+
+
+def _duplicate_findings(records, positions):
+    findings = []
+    for rule in DUPLICATE_RULES:
+        groups = {}
+        for record, pos in zip(records, positions):
+            if not isinstance(record, dict):
+                continue
+            if rule["scope"] == DUPLICATE_SCOPE_RECORD:
+                inner = {}
+                inner_identity = {}
+                inner_inv = _invocation_id_for_finding(record)
+                for identity, _path in _iter_identity_occurrences(record, rule):
+                    key = _stable_identity(identity)
+                    inner.setdefault(key, []).append(pos)
+                    inner_identity[key] = identity
+                for key, pos_list in inner.items():
+                    if len(pos_list) < 2:
+                        continue
+                    groups[(pos, key)] = {
+                        "positions": pos_list,
+                        "identity": inner_identity[key],
+                        "invocation": inner_inv,
+                    }
+                continue
+            for identity, _path in _iter_identity_occurrences(record, rule):
+                key = _duplicate_group_key(record, rule, identity)
+                slot = groups.setdefault(key, {
+                    "positions": [],
+                    "identity": identity,
+                    "invocation": _invocation_id_for_finding(record),
+                })
+                slot["positions"].append(pos)
+        ordered_keys = sorted(
+            groups,
+            key=lambda k: (repr(k), min(groups[k]["positions"])),
+        )
+        for key in ordered_keys:
+            slot = groups[key]
+            pos_list = slot["positions"]
+            if len(pos_list) < 2:
+                continue
+            unique_pos = sorted(set(pos_list))
+            findings.append(_make_nonconformity(
+                NONCONFORMITY_RECORD_DUPLICATE,
+                slot["invocation"],
+                unique_pos[0],
+                rule["identity"],
+                _duplicate_detail(rule, slot["identity"], unique_pos),
+            ))
+    return findings
+
+
+def _round_exceeds_ceiling(round_no, ceiling):
+    if not _is_actual_int(round_no) or not _is_actual_int(ceiling):
+        return False
+    return round_no > ceiling
+
+
+def _round_ceiling_findings(records, positions, unique_invocations):
+    findings = []
+    pending = []
+    for record, pos in zip(records, positions):
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") != RECORD_KIND_ROUND:
+            continue
+        inv_id = record.get("invocation")
+        if inv_id not in unique_invocations:
+            continue
+        invocation = unique_invocations[inv_id]
+        if not isinstance(invocation, dict) or "ceiling" not in invocation:
+            continue
+        ceiling = invocation.get("ceiling")
+        if ceiling is None:
+            continue
+        round_no = record.get("round")
+        if _round_exceeds_ceiling(round_no, ceiling):
+            pending.append((inv_id if isinstance(inv_id, str) else None, pos, round_no, ceiling))
+    pending.sort(key=lambda item: (item[0] or "", item[1]))
+    for inv_id, pos, round_no, ceiling in pending:
+        findings.append(_make_nonconformity(
+            NONCONFORMITY_ROUND_EXCEEDS_CEILING,
+            inv_id,
+            pos,
+            "round",
+            (
+                "round %s exceeds invocation ceiling %s at trail position %d"
+                % (round_no, ceiling, pos)
+            ),
+        ))
+    return findings
+
+
+def _finding_unknown_findings(records, positions):
+    known = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") != RECORD_KIND_ROUND:
+            continue
+        inv_id = record.get("invocation")
+        items = record.get("findings")
+        if not isinstance(items, list):
+            continue
+        bucket = known.setdefault(inv_id, set())
+        for item in items:
+            if not isinstance(item, dict) or "finding" not in item:
+                continue
+            fid = item.get("finding")
+            if fid is None:
+                continue
+            bucket.add(_stable_identity(fid))
+
+    pending = []
+    for record, pos in zip(records, positions):
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") != RECORD_KIND_VERIFICATION:
+            continue
+        inv_id = record.get("invocation")
+        known_ids = known.get(inv_id, set())
+        items = record.get("findings")
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items):
+            if not isinstance(item, dict) or "finding" not in item:
+                continue
+            fid = item.get("finding")
+            if fid is None:
+                continue
+            if _stable_identity(fid) not in known_ids:
+                pending.append((
+                    inv_id if isinstance(inv_id, str) else None,
+                    pos,
+                    idx,
+                    fid,
+                ))
+    pending.sort(key=lambda item: (item[0] or "", item[1], item[2]))
+    findings = []
+    for inv_id, pos, idx, fid in pending:
+        findings.append(_make_nonconformity(
+            NONCONFORMITY_FINDING_UNKNOWN,
+            inv_id,
+            pos,
+            "findings[%d].finding" % idx,
+            (
+                "verification names finding %r which no round recorded at "
+                "trail position %d" % (fid, pos)
+            ),
+        ))
+    return findings
 
 
 def _invocation_id_for_finding(record):
@@ -1172,20 +1497,25 @@ def _summarize_invocation(inv_id, invocation, projection):
 
     seats_val = invocation.get("seats")
     if isinstance(seats_val, list):
-        seats = list(seats_val)
-    else:
-        seats = []
+        seats_val = list(seats_val)
 
     return {
         "invocation": inv_id,
         "weight": invocation.get("weight"),
-        "ceiling": invocation.get("ceiling", 0),
-        "seats": seats,
+        "ceiling": invocation.get("ceiling"),
+        "seats": seats_val,
         "roundsRecorded": len(rounds_sorted),
         "findingsRecorded": len(finding_ids),
         "roundsAsserted": rounds_asserted,
         "syncChecks": list(projection["sync_check_records"]),
     }
+
+
+def _record_position(target, records, positions):
+    for rec, pos in zip(records, positions):
+        if rec is target:
+            return pos
+    return None
 
 
 def _measurables_children(invocation):
@@ -1195,55 +1525,60 @@ def _measurables_children(invocation):
     return measurables.get("children")
 
 
-def _nonconformities_for_invocation(inv_id, invocation, projection):
+def _nonconformities_for_invocation(
+    inv_id, invocation, projection, records, positions,
+):
     findings = []
+    inv_pos = _record_position(invocation, records, positions)
+
+    def add(kind, detail, path, position=None, record=None):
+        pos = position
+        if pos is None and record is not None:
+            pos = _record_position(record, records, positions)
+        if pos is None:
+            pos = inv_pos
+        findings.append({
+            "kind": kind,
+            "invocation": inv_id,
+            "position": pos,
+            "path": path,
+            "detail": detail,
+        })
 
     if invocation.get("cause") is None:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation is missing cause",
-        })
+        add(NONCONFORMITY_ELEMENT_MISSING, "invocation is missing cause", "cause")
     if invocation.get("weight") is None:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation is missing weight",
-        })
+        add(NONCONFORMITY_ELEMENT_MISSING, "invocation is missing weight", "weight")
     measurables = invocation.get("measurables")
     if not isinstance(measurables, dict) or measurables.get("children") is None:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation is missing measurables.children",
-        })
+        add(
+            NONCONFORMITY_ELEMENT_MISSING,
+            "invocation is missing measurables.children",
+            "measurables.children",
+        )
     if not isinstance(measurables, dict) or measurables.get("registerEntries") is None:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation is missing measurables.registerEntries",
-        })
+        add(
+            NONCONFORMITY_ELEMENT_MISSING,
+            "invocation is missing measurables.registerEntries",
+            "measurables.registerEntries",
+        )
     if invocation.get("ceiling") is None:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation is missing ceiling",
-        })
+        add(
+            NONCONFORMITY_ELEMENT_MISSING,
+            "invocation is missing ceiling",
+            "ceiling",
+        )
     seats = invocation.get("seats")
     if not isinstance(seats, list) or not seats:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation is missing seats",
-        })
+        add(NONCONFORMITY_ELEMENT_MISSING, "invocation is missing seats", "seats")
 
     rounds = projection["rounds"]
     if not rounds:
-        findings.append({
-            "kind": NONCONFORMITY_ROUND_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation has no round records",
-        })
+        add(
+            NONCONFORMITY_ROUND_MISSING,
+            "invocation has no round records",
+            "round",
+        )
         return _locate_invocation_findings(findings)
 
     declined_named = projection["declined_extension"]
@@ -1254,43 +1589,58 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
     for rnd in rounds:
         round_no = rnd.get("round")
         if not rnd.get("lenses"):
-            findings.append({
-                "kind": NONCONFORMITY_ELEMENT_MISSING,
-                "invocation": inv_id,
-                "detail": "round %s is missing lenses" % round_no,
-            })
+            add(
+                NONCONFORMITY_ELEMENT_MISSING,
+                "round %s is missing lenses" % round_no,
+                "lenses",
+                record=rnd,
+            )
         if not rnd.get("parts"):
-            findings.append({
-                "kind": NONCONFORMITY_ELEMENT_MISSING,
-                "invocation": inv_id,
-                "detail": "round %s is missing parts" % round_no,
-            })
+            add(
+                NONCONFORMITY_ELEMENT_MISSING,
+                "round %s is missing parts" % round_no,
+                "parts",
+                record=rnd,
+            )
         if rnd.get("controlProbe") is None:
-            findings.append({
-                "kind": NONCONFORMITY_ELEMENT_MISSING,
-                "invocation": inv_id,
-                "detail": "round %s is missing controlProbe" % round_no,
-            })
+            add(
+                NONCONFORMITY_ELEMENT_MISSING,
+                "round %s is missing controlProbe" % round_no,
+                "controlProbe",
+                record=rnd,
+            )
 
     if not has_verification:
-        findings.append({
-            "kind": NONCONFORMITY_ELEMENT_MISSING,
-            "invocation": inv_id,
-            "detail": "invocation has no verification record",
-        })
+        add(
+            NONCONFORMITY_ELEMENT_MISSING,
+            "invocation has no verification record",
+            "findings",
+        )
 
     for fid in projection["finding_ids"]:
         if fid not in projection["findings_named_in_verification"]:
-            findings.append({
-                "kind": NONCONFORMITY_FINDING_UNVERIFIED,
-                "invocation": inv_id,
-                "detail": "finding %s has no verification record" % fid,
-            })
+            rnd_for_fid = None
+            for rnd in rounds:
+                for item in rnd.get("findings") or []:
+                    if isinstance(item, dict) and item.get("finding") == fid:
+                        rnd_for_fid = rnd
+                        break
+                if rnd_for_fid is not None:
+                    break
+            add(
+                NONCONFORMITY_FINDING_UNVERIFIED,
+                "finding %s has no verification record" % fid,
+                "finding",
+                record=rnd_for_fid,
+            )
 
     mismatch_declined_not_extension = set()
     mismatch_extension_not_declined = set()
     for ver in projection["verifications"]:
-        for item in ver.get("findings", []):
+        items = ver.get("findings", [])
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
             fid = item.get("finding")
@@ -1298,14 +1648,15 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                 key = (fid, "declined-named")
                 if key not in mismatch_declined_not_extension:
                     mismatch_declined_not_extension.add(key)
-                    findings.append({
-                        "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
-                        "invocation": inv_id,
-                        "detail": (
+                    add(
+                        NONCONFORMITY_DISPOSITION_MISMATCH,
+                        (
                             "finding %s is named in declinedExtension but verification "
                             "disposition is %r" % (fid, item.get("disposition"))
                         ),
-                    })
+                        "findings[%d].disposition" % idx,
+                        record=ver,
+                    )
             if (
                 item.get("disposition") == DISPOSITION_DECLINED_EXTENSION
                 and fid not in declined_named
@@ -1313,17 +1664,21 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                 key = (fid, "extension-not-declined")
                 if key not in mismatch_extension_not_declined:
                     mismatch_extension_not_declined.add(key)
-                    findings.append({
-                        "kind": NONCONFORMITY_DISPOSITION_MISMATCH,
-                        "invocation": inv_id,
-                        "detail": (
+                    add(
+                        NONCONFORMITY_DISPOSITION_MISMATCH,
+                        (
                             "finding %s has disposition declined-extension but no round "
                             "named it in declinedExtension" % fid
                         ),
-                    })
+                        "findings[%d].disposition" % idx,
+                        record=ver,
+                    )
 
     for ver in projection["verifications"]:
-        for item in ver.get("findings", []):
+        items = ver.get("findings", [])
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
             fid = item.get("finding")
@@ -1331,43 +1686,54 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
             disposition = item.get("disposition")
             if lens is not None and disposition is not None:
                 if not _disposition_allowed_for_lens(lens, disposition):
-                    findings.append({
-                        "kind": NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
-                        "invocation": inv_id,
-                        "detail": (
+                    add(
+                        NONCONFORMITY_DISPOSITION_NOT_ALLOWED_FOR_LENS,
+                        (
                             "finding %s with lens %r has disposition %r"
                             % (fid, lens, disposition)
                         ),
-                    })
+                        "findings[%d].disposition" % idx,
+                        record=ver,
+                    )
 
     for ver in projection["verifications"]:
-        for item in ver.get("findings", []):
+        items = ver.get("findings", [])
+        if not isinstance(items, list):
+            continue
+        for idx, item in enumerate(items):
             if not isinstance(item, dict):
                 continue
             if item.get("disposition") == DISPOSITION_REFUTATION:
                 evidence = item.get("evidence")
                 if not evidence or not str(evidence).strip():
-                    findings.append({
-                        "kind": NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
-                        "invocation": inv_id,
-                        "detail": (
+                    add(
+                        NONCONFORMITY_REFUTATION_EVIDENCE_MISSING,
+                        (
                             "finding %s has disposition refutation but no evidence"
                             % item.get("finding")
                         ),
-                    })
+                        "findings[%d].evidence" % idx,
+                        record=ver,
+                    )
 
     if not sync_check_records:
         if has_verification:
             sync_detail = (
                 "invocation has verification records but no sync-check entries"
             )
+            ver_rec = projection["verifications"][0]
+            add(
+                NONCONFORMITY_SYNC_CHECK_MISSING,
+                sync_detail,
+                "syncChecks",
+                record=ver_rec,
+            )
         else:
-            sync_detail = "invocation has no sync-check entries"
-        findings.append({
-            "kind": NONCONFORMITY_SYNC_CHECK_MISSING,
-            "invocation": inv_id,
-            "detail": sync_detail,
-        })
+            add(
+                NONCONFORMITY_SYNC_CHECK_MISSING,
+                "invocation has no sync-check entries",
+                "syncChecks",
+            )
     else:
         expected_children = _measurables_children(invocation)
         distinct_children = set()
@@ -1378,15 +1744,17 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                     distinct_children.add(child)
         distinct_count = len(distinct_children)
         if expected_children is not None and distinct_count != expected_children:
-            findings.append({
-                "kind": NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
-                "invocation": inv_id,
-                "detail": (
+            ver_rec = projection["verifications"][0] if projection["verifications"] else None
+            add(
+                NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
+                (
                     "sync-check covers %d distinct children but measurables.children "
                     "is %d"
                     % (distinct_count, expected_children)
                 ),
-            })
+                "syncChecks",
+                record=ver_rec,
+            )
 
     failed_sync_checks = set()
     for check in sync_check_records:
@@ -1398,14 +1766,23 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
             key = (child, result)
             if key not in failed_sync_checks:
                 failed_sync_checks.add(key)
-                findings.append({
-                    "kind": NONCONFORMITY_SYNC_CHECK_FAILED,
-                    "invocation": inv_id,
-                    "detail": (
+                ver_rec = None
+                for ver in projection["verifications"]:
+                    checks = ver.get("syncChecks")
+                    if not isinstance(checks, list):
+                        continue
+                    if check in checks:
+                        ver_rec = ver
+                        break
+                add(
+                    NONCONFORMITY_SYNC_CHECK_FAILED,
+                    (
                         "sync-check for child %s has result %r"
                         % (child, result)
                     ),
-                })
+                    "syncChecks",
+                    record=ver_rec,
+                )
 
     return _locate_invocation_findings(findings)
 
@@ -1494,38 +1871,12 @@ def _recorded_finding_ids(records, inv_id):
     return ids
 
 
-def _verified_finding_ids(records, inv_id):
-    verified = set()
-    for record in records:
-        if record.get("kind") != RECORD_KIND_VERIFICATION:
-            continue
-        if record.get("invocation") != inv_id:
-            continue
-        for item in record.get("findings", []):
-            if isinstance(item, dict) and item.get("outcome") == OUTCOME_VERIFIED:
-                fid = item.get("finding")
-                if fid is not None:
-                    verified.add(fid)
-    return verified
-
-
 def _invocation_ids(records):
     return {
         record["invocation"]
         for record in records
         if record.get("kind") == RECORD_KIND_INVOCATION
     }
-
-
-def _round_numbers(records, inv_id):
-    nums = set()
-    for record in records:
-        if record.get("kind") != RECORD_KIND_ROUND:
-            continue
-        if record.get("invocation") != inv_id:
-            continue
-        nums.add(record.get("round"))
-    return nums
 
 
 def _invocation_ceiling(records, inv_id):
@@ -1577,13 +1928,9 @@ def verb_open(trail, invocation, cause, weight, children, register_entries, ceil
         records, reason, detail = _load_trail(trail)
         if records is None:
             return _refuse(reason, detail, trail=trail, invocation=invocation)
-        if invocation in _invocation_ids(records):
-            return _refuse(
-                REFUSAL_INVOCATION_DUPLICATE,
-                "invocation %r already exists in the trail" % invocation,
-                trail=trail,
-                invocation=invocation,
-            )
+        dup = _writer_duplicate_refusal(records, record, trail, invocation)
+        if dup is not None:
+            return dup
     else:
         records = []
 
@@ -1655,7 +2002,6 @@ def verb_record_round(
         part_objs.append({"part": name, "status": status})
 
     finding_objs = []
-    known = _recorded_finding_ids(records, invocation)
     for finding in findings:
         fid, lens, err = _parse_colon_pair(finding, "finding")
         if err is not None:
@@ -1689,7 +2035,7 @@ def verb_record_round(
 
     round_int = record["round"]
     ceiling = _invocation_ceiling(records, invocation)
-    if round_int > ceiling:
+    if _round_exceeds_ceiling(round_int, ceiling):
         return _refuse(
             REFUSAL_ROUND_EXCEEDS_CEILING,
             "round %d exceeds invocation ceiling %d" % (round_int, ceiling),
@@ -1697,24 +2043,13 @@ def verb_record_round(
             invocation=invocation,
         )
 
-    if round_int in _round_numbers(records, invocation):
-        return _refuse(
-            REFUSAL_ROUND_DUPLICATE,
-            "round %d is already recorded for invocation %r" % (round_int, invocation),
-            trail=trail,
-            invocation=invocation,
-        )
+    dup = _writer_duplicate_refusal(records, record, trail, invocation)
+    if dup is not None:
+        return dup
 
+    known = _recorded_finding_ids(records, invocation)
     for item in finding_objs:
-        fid = item["finding"]
-        if fid in known:
-            return _refuse(
-                REFUSAL_FINDING_DUPLICATE,
-                "finding %r is already recorded for invocation %r" % (fid, invocation),
-                trail=trail,
-                invocation=invocation,
-            )
-        known.add(fid)
+        known.add(item["finding"])
 
     for fid in declined_extension:
         if fid not in known:
@@ -1770,7 +2105,6 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
         )
 
     known_round = _known_findings_for_invocation(records, invocation)
-    already_verified = _verified_finding_ids(records, invocation)
     evidence_by_finding = {}
     for evidence in evidence_items:
         fid, text, err = _parse_colon_pair(evidence, "evidence")
@@ -1871,26 +2205,10 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
                 trail=trail,
                 invocation=invocation,
             )
-        if fid in already_verified:
-            return _refuse(
-                REFUSAL_VERIFICATION_DUPLICATE,
-                "finding %r already has a verification record" % fid,
-                trail=trail,
-                invocation=invocation,
-            )
-        already_verified.add(fid)
 
-    seen_children = set()
-    for sync_obj in sync_objs:
-        child = sync_obj["child"]
-        if child in seen_children:
-            return _refuse(
-                REFUSAL_SYNC_CHECK_DUPLICATE,
-                "sync-check child %r is named more than once" % child,
-                trail=trail,
-                invocation=invocation,
-            )
-        seen_children.add(child)
+    dup = _writer_duplicate_refusal(records, record, trail, invocation)
+    if dup is not None:
+        return dup
 
     _append_record(trail, record)
     return _make_write_result(
@@ -1960,7 +2278,19 @@ def verb_check(trail, invocation_filter=None):
 
     invocations, rounds_by_inv, verifications_by_inv = _group_records(records)
 
+    unique_invocations = {}
+    for inv_id, grouped in invocations.items():
+        recs = _invocation_group_records(grouped)
+        if len(recs) == 1:
+            unique_invocations[inv_id] = recs[0]
+
     value_findings = _record_value_findings(records, positions)
+    relational_findings = []
+    relational_findings.extend(_duplicate_findings(records, positions))
+    relational_findings.extend(
+        _round_ceiling_findings(records, positions, unique_invocations),
+    )
+    relational_findings.extend(_finding_unknown_findings(records, positions))
 
     if invocation_filter is not None:
         if invocation_filter not in invocations:
@@ -1979,13 +2309,16 @@ def verb_check(trail, invocation_filter=None):
 
     summaries = []
     findings = list(value_findings)
+    findings.extend(relational_findings)
     for inv_id in inv_ids:
-        invocation = invocations[inv_id]
+        if inv_id not in unique_invocations:
+            continue
+        invocation = unique_invocations[inv_id]
         trail_records = _invocation_trail_records(records, inv_id)
         projection = _project_invocation(trail_records)
         summaries.append(_summarize_invocation(inv_id, invocation, projection))
         findings.extend(_nonconformities_for_invocation(
-            inv_id, invocation, projection,
+            inv_id, invocation, projection, records, positions,
         ))
 
     if invocation_filter is None and records and not invocations:
