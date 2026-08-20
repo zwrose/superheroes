@@ -5,6 +5,25 @@ Deterministic, stdlib-only machine module that appends structured records to a
 markdown audit trail and checks that every FR-32 audit element was recorded and
 every record is well-formed. It judges nothing — convergence and park calls are
 advisor-recorded assertions echoed back, never re-derived.
+
+Read-boundary matrix for ``package-read-audit/1``. The record-kind vocabulary is
+closed-world: an unrecognized kind is nonconforming, not "from the future". A
+future kind requires a schema version bump.
+
+| Condition                              | Result         |
+|----------------------------------------|----------------|
+| file missing                           | undecided      |
+| not UTF-8                              | undecided      |
+| no records                             | undecided      |
+| unterminated fence                     | undecided      |
+| JSON will not load                     | undecided      |
+| parsed but not an object               | nonconforming  |
+| unrecognized or non-string kind        | nonconforming  |
+| missing required field                 | nonconforming  |
+| bad value                              | nonconforming  |
+
+``undecided`` means the trail could not be read at all. Anything the
+fence-and-JSON parser loaded is judged ``conforming`` or ``nonconforming``.
 """
 import argparse
 import json
@@ -205,7 +224,7 @@ WRITE_RESULT_FIELDS = (
 CHECK_RESULT_FIELDS = (
     "schema", "result", "ok", "reason", "detail", "trail", "invocations", "findings",
 )
-NONCONFORMITY_FIELDS = ("kind", "invocation", "detail")
+NONCONFORMITY_FIELDS = ("kind", "invocation", "position", "path", "detail")
 INVOCATION_SUMMARY_FIELDS = (
     "invocation", "weight", "ceiling", "seats", "roundsRecorded",
     "findingsRecorded", "roundsAsserted", "syncChecks",
@@ -222,7 +241,10 @@ def _is_nonneg_int(value):
 
 def _in_vocab(value, vocabulary):
     """Membership that never raises on an unhashable or wrong-typed value."""
-    return value in vocabulary
+    try:
+        return value in vocabulary
+    except TypeError:
+        return False
 
 
 CONSTRAINT_TYPES = frozenset({
@@ -277,7 +299,7 @@ _INVOCATION_MEASURABLES_FIELDS = {
 
 RECORD_SCHEMAS = {
     RECORD_KIND_INVOCATION: {
-        "required": (),
+        "required": ("invocation",),
         "fields": {
             "seats": {
                 "type": "array",
@@ -310,7 +332,7 @@ RECORD_SCHEMAS = {
         },
     },
     RECORD_KIND_ROUND: {
-        "required": (),
+        "required": ("invocation", "round", "mechanicalOnly"),
         "fields": {
             "round": {
                 "type": "integer",
@@ -329,6 +351,7 @@ RECORD_SCHEMAS = {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ("part", "status"),
                     "fields": {
                         "part": {
                             "type": "string",
@@ -351,6 +374,7 @@ RECORD_SCHEMAS = {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ("finding", "lens"),
                     "fields": {
                         "finding": {
                             "type": "string",
@@ -377,12 +401,13 @@ RECORD_SCHEMAS = {
         },
     },
     RECORD_KIND_VERIFICATION: {
-        "required": (),
+        "required": ("invocation",),
         "fields": {
             "findings": {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ("finding", "disposition", "outcome"),
                     "fields": {
                         "finding": {
                             "type": "string",
@@ -408,6 +433,7 @@ RECORD_SCHEMAS = {
                 "type": "array",
                 "items": {
                     "type": "object",
+                    "required": ("child", "result"),
                     "fields": {
                         "child": {
                             "type": "string",
@@ -455,17 +481,16 @@ def _walk_envelope(record):
             "code": VIOLATION_FIELD_MISSING,
         }]
     kind = record["kind"]
-    if not isinstance(kind, str):
-        return [{
-            "path": "kind",
-            "value": kind,
-            "code": VIOLATION_TYPE_INVALID,
-        }]
     if not _in_vocab(kind, RECORD_KINDS):
+        code = (
+            VIOLATION_TYPE_INVALID
+            if not isinstance(kind, str)
+            else VIOLATION_ENUM_INVALID
+        )
         return [{
             "path": "kind",
             "value": kind,
-            "code": VIOLATION_ENUM_INVALID,
+            "code": code,
         }]
     return None
 
@@ -511,6 +536,7 @@ def _check_field_value(value, constraint, path):
 
     if "items" in constraint and _check_value_type(value, "array"):
         items_constraint = constraint["items"]
+        item_problems = []
         for idx, item in enumerate(value):
             item_path = "%s[%d]" % (path, idx)
             if (
@@ -529,7 +555,9 @@ def _check_field_value(value, constraint, path):
                     item_path,
                 )
             if item_violations:
-                return item_violations
+                item_problems.extend(item_violations)
+        if item_problems:
+            return item_problems
 
     if "fields" in constraint and _check_value_type(value, "object"):
         return _walk_object_fields(value, constraint, path)
@@ -548,6 +576,7 @@ def _walk_object_fields(obj, constraint, path_prefix):
 
     fields = constraint.get("fields", {})
     required = constraint.get("required", ())
+    problems = []
 
     for field_name in fields:
         field_path = (
@@ -557,11 +586,11 @@ def _walk_object_fields(obj, constraint, path_prefix):
         )
         if field_name not in obj:
             if field_name in required:
-                return [{
+                problems.append({
                     "path": field_path,
                     "value": _MISSING,
                     "code": VIOLATION_FIELD_MISSING,
-                }]
+                })
             continue
         value = obj[field_name]
         if value is None and field_name not in required:
@@ -572,7 +601,10 @@ def _walk_object_fields(obj, constraint, path_prefix):
             field_path,
         )
         if field_violations:
-            return field_violations
+            problems.extend(field_violations)
+
+    if problems:
+        return problems
 
     unknown = sorted(
         set(obj.keys()) - set(fields.keys()) - ENVELOPE_FIELDS,
@@ -836,21 +868,32 @@ def _append_record(path, obj, create=False):
         fh.write(block.lstrip("\n"))
 
 
+def _parse_malformed(detail):
+    return None, None, None, None, REFUSAL_TRAIL_MALFORMED, detail
+
+
 def _parse_records(lines):
     """Parse marked audit records from trail lines.
 
-    Returns (records, error_reason, error_detail) where error_reason is a
-    REFUSAL_TRAIL_MALFORMED / UNDECIDED_TRAIL_MALFORMED token on failure.
+    Returns (records, positions, opener_lines, marker_lines, error_reason,
+    error_detail). Structural refusals only: unterminated fence, unterminated
+    fenced JSON, empty fenced block, JSON that will not load. Kind and
+    objectness are not judged here. positions are 1-based trail positions
+    parallel to records; opener_lines and marker_lines are 1-based source
+    lines. On failure records is None.
     """
     fence_scan = md_fence.scan(lines)
     if fence_scan.unterminated_opener_line is not None:
-        return None, REFUSAL_TRAIL_MALFORMED, (
+        return _parse_malformed(
             "unterminated code fence at line %d" % fence_scan.unterminated_opener_line
         )
 
     inert = fence_scan.inert
     kinds = fence_scan.kinds
     records = []
+    positions = []
+    opener_lines = []
+    marker_lines = []
     i = 0
     n = len(lines)
 
@@ -864,7 +907,7 @@ def _parse_records(lines):
 
         marker_line = i + 1
         if i + 1 >= n or kinds[i + 1] != md_fence.KIND_OPENER:
-            return None, REFUSAL_TRAIL_MALFORMED, (
+            return _parse_malformed(
                 "record marker at line %d is not followed by a fenced JSON block"
                 % marker_line
             )
@@ -879,34 +922,45 @@ def _parse_records(lines):
                 json_lines.append(lines[j])
             j += 1
         if j >= n or kinds[j] != md_fence.KIND_CLOSER:
-            return None, REFUSAL_TRAIL_MALFORMED, (
+            return _parse_malformed(
                 "unterminated fenced JSON block opened at line %d" % (opener_idx + 1)
             )
 
         raw = "\n".join(json_lines).strip()
         if not raw:
-            return None, REFUSAL_TRAIL_MALFORMED, (
+            return _parse_malformed(
                 "empty fenced JSON block at line %d" % (opener_idx + 1)
             )
         try:
             payload = json.loads(raw)
         except json.JSONDecodeError as exc:
-            return None, REFUSAL_TRAIL_MALFORMED, (
+            return _parse_malformed(
                 "invalid JSON at line %d: %s" % (opener_idx + 1, exc)
             )
-        if not isinstance(payload, dict):
-            return None, REFUSAL_TRAIL_MALFORMED, (
-                "fenced JSON at line %d is not a JSON object" % (opener_idx + 1)
-            )
-        kind = payload.get("kind")
-        if not _in_vocab(kind, RECORD_KINDS):
-            return None, REFUSAL_TRAIL_MALFORMED, (
-                "record at line %d has unrecognized kind %r" % (marker_line, kind)
-            )
         records.append(payload)
+        positions.append(len(records))
+        opener_lines.append(opener_idx + 1)
+        marker_lines.append(marker_line)
         i = j + 1
 
-    return records, None, None
+    return records, positions, opener_lines, marker_lines, None, None
+
+
+def _writer_gate_records(records, opener_lines, marker_lines):
+    """Kind-and-objectness gate for the writer path. Same detail wording as before."""
+    for record, opener_line, marker_line in zip(records, opener_lines, marker_lines):
+        if not isinstance(record, dict):
+            return (
+                REFUSAL_TRAIL_MALFORMED,
+                "fenced JSON at line %d is not a JSON object" % opener_line,
+            )
+        kind = record.get("kind")
+        if not _in_vocab(kind, RECORD_KINDS):
+            return (
+                REFUSAL_TRAIL_MALFORMED,
+                "record at line %d has unrecognized kind %r" % (marker_line, kind),
+            )
+    return None, None
 
 
 def _load_trail(path):
@@ -915,9 +969,16 @@ def _load_trail(path):
     lines = _read_lines(path)
     if lines is None:
         return None, REFUSAL_TRAIL_UNREADABLE, "trail file is missing or not valid UTF-8"
-    records, reason, detail = _parse_records(lines)
+    records, _positions, opener_lines, marker_lines, reason, detail = _parse_records(
+        lines,
+    )
     if records is None:
         return None, reason, detail
+    gate_reason, gate_detail = _writer_gate_records(
+        records, opener_lines, marker_lines,
+    )
+    if gate_reason is not None:
+        return None, gate_reason, gate_detail
     return records, None, None
 
 
@@ -927,7 +988,9 @@ def _group_records(records):
     verifications_by_inv = {}
 
     for record in records:
-        kind = record["kind"]
+        if not isinstance(record, dict):
+            continue
+        kind = record.get("kind")
         inv_id = record.get("invocation")
         if not isinstance(inv_id, str):
             continue
@@ -942,32 +1005,69 @@ def _group_records(records):
 
 
 def _invocation_id_for_finding(record):
+    if not isinstance(record, dict):
+        return None
     inv = record.get("invocation")
     if isinstance(inv, str) and inv:
         return inv
     return None
 
 
-def _record_value_findings(records):
+def _make_nonconformity(kind, invocation, position, path, detail):
+    payload = dict(zip(
+        NONCONFORMITY_FIELDS,
+        (kind, invocation, position, path, detail),
+    ))
+    assert set(payload) == set(NONCONFORMITY_FIELDS)
+    return payload
+
+
+def _locate_invocation_findings(findings):
+    located = []
+    for item in findings:
+        located.append(_make_nonconformity(
+            item["kind"],
+            item["invocation"],
+            item.get("position"),
+            item.get("path"),
+            item["detail"],
+        ))
+    return located
+
+
+def _record_value_findings(records, positions):
     suppressed = {
-        VIOLATION_FIELD_MISSING,
         VIOLATION_UNKNOWN_FIELD,
-        VIOLATION_RECORD_NOT_OBJECT,
     }
     findings = []
-    for trail_pos, record in enumerate(records, 1):
+    for record, trail_pos in zip(records, positions):
         violations = _walk_record_for_kind(record)
         for violation in violations:
             if violation["code"] in suppressed:
                 continue
-            findings.append({
-                "kind": NONCONFORMITY_RECORD_VALUE_INVALID,
-                "invocation": _invocation_id_for_finding(record),
-                "detail": (
+            path = violation["path"] if violation["path"] else None
+            if violation["code"] == VIOLATION_FIELD_MISSING:
+                findings.append(_make_nonconformity(
+                    NONCONFORMITY_ELEMENT_MISSING,
+                    _invocation_id_for_finding(record),
+                    trail_pos,
+                    path,
+                    (
+                        "record at trail position %d: required field %s is missing"
+                        % (trail_pos, violation["path"])
+                    ),
+                ))
+                continue
+            findings.append(_make_nonconformity(
+                NONCONFORMITY_RECORD_VALUE_INVALID,
+                _invocation_id_for_finding(record),
+                trail_pos,
+                path,
+                (
                     "record at trail position %d: field %s has invalid value %r"
                     % (trail_pos, violation["path"], violation["value"])
                 ),
-            })
+            ))
     return findings
 
 
@@ -983,6 +1083,8 @@ def _invocation_trail_records(records, inv_id):
     """Return round and verification records for one invocation in trail order."""
     trail_records = []
     for record in records:
+        if not isinstance(record, dict):
+            continue
         if record.get("invocation") != inv_id:
             continue
         if record.get("kind") in (RECORD_KIND_ROUND, RECORD_KIND_VERIFICATION):
@@ -1033,7 +1135,7 @@ def _project_invocation(records):
                 for check in checks:
                     sync_check_records.append(check)
 
-    rounds_sorted = sorted(rounds, key=lambda r: r.get("round", 0))
+    rounds_sorted = sorted(rounds, key=_round_sort_key)
 
     return {
         "rounds": rounds_sorted,
@@ -1046,6 +1148,14 @@ def _project_invocation(records):
         "verified_finding_ids": verified_finding_ids,
         "has_verification": bool(verifications),
     }
+
+
+def _round_sort_key(record):
+    """Integer rounds order by number; every other record keeps trail order after them."""
+    n = record.get("round") if isinstance(record, dict) else None
+    if _is_actual_int(n):
+        return (0, n)
+    return (1, 0)
 
 
 def _summarize_invocation(inv_id, invocation, projection):
@@ -1134,7 +1244,7 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
             "invocation": inv_id,
             "detail": "invocation has no round records",
         })
-        return findings
+        return _locate_invocation_findings(findings)
 
     declined_named = projection["declined_extension"]
     finding_lenses = projection["finding_lenses"]
@@ -1297,7 +1407,7 @@ def _nonconformities_for_invocation(inv_id, invocation, projection):
                     ),
                 })
 
-    return findings
+    return _locate_invocation_findings(findings)
 
 
 def _make_write_result(
@@ -1823,7 +1933,9 @@ def verb_check(trail, invocation_filter=None):
             [],
         )
 
-    records, reason, detail = _parse_records(lines)
+    records, positions, _opener_lines, _marker_lines, reason, detail = _parse_records(
+        lines,
+    )
     if records is None:
         return _make_check_result(
             RESULT_UNDECIDED,
@@ -1848,7 +1960,7 @@ def verb_check(trail, invocation_filter=None):
 
     invocations, rounds_by_inv, verifications_by_inv = _group_records(records)
 
-    value_findings = _record_value_findings(records)
+    value_findings = _record_value_findings(records, positions)
 
     if invocation_filter is not None:
         if invocation_filter not in invocations:

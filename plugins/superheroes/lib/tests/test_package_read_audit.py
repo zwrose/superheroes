@@ -2339,6 +2339,26 @@ def test_read_boundary_matrix(tmp_path, case):
     assert payload["result"] == case["expected_result"]
 
 
+def _delete_key_from_kind(trail, kind, key):
+    """Remove `key` from the first marked record of `kind` (absent, not null)."""
+    text = trail.read_text(encoding="utf-8")
+    marker = pra.RECORD_MARKER + "\n```json\n"
+    start = 0
+    while True:
+        idx = text.find(marker, start)
+        if idx < 0:
+            raise AssertionError("no %r record carrying %r" % (kind, key))
+        json_start = idx + len(marker)
+        json_end = text.find("\n```", json_start)
+        obj = json.loads(text[json_start:json_end])
+        if obj.get("kind") == kind and key in obj:
+            del obj[key]
+            dumped = json.dumps(obj, sort_keys=True, indent=1)
+            trail.write_text(text[:json_start] + dumped + text[json_end:], encoding="utf-8")
+            return
+        start = json_end
+
+
 @pytest.mark.parametrize(
     "field_name,summary_key,round_field",
     [
@@ -2359,35 +2379,13 @@ def test_summary_never_manufactures_a_value(
     trail, _ = _open_default(tmp_path)
     if round_field:
         _record_round(trail)
-        text = trail.read_text(encoding="utf-8")
-        if field_name == "round":
-            text = text.replace('"round": 1', '"round": null', 1)
-        elif field_name == "mechanicalOnly":
-            text = text.replace('"mechanicalOnly": false', '"mechanicalOnly": null', 1)
-        elif field_name == "controlProbe":
-            text = text.replace(
-                '"controlProbe": "%s"' % pra.CONTROL_PROBE_ENGAGED,
-                '"controlProbe": null',
-                1,
-            )
-        trail.write_text(text, encoding="utf-8")
+        _delete_key_from_kind(trail, pra.RECORD_KIND_ROUND, field_name)
         code, out, _err = _run_cli("check", "--trail", str(trail))
         payload = json.loads(out.strip())
         summary = payload["invocations"][0]
         assert summary["roundsAsserted"][0][summary_key] is None
     else:
-        text = trail.read_text(encoding="utf-8")
-        if field_name == "ceiling":
-            text = text.replace('"ceiling": 3', '"ceiling": null', 1)
-        elif field_name == "weight":
-            text = text.replace('"weight": "light"', '"weight": null', 1)
-        elif field_name == "seats":
-            text = text.replace(
-                '"seats": [\n  "seat-a"\n ]',
-                '"seats": null',
-                1,
-            )
-        trail.write_text(text, encoding="utf-8")
+        _delete_key_from_kind(trail, pra.RECORD_KIND_INVOCATION, field_name)
         _record_round(trail)
         code, out, _err = _run_cli("check", "--trail", str(trail))
         payload = json.loads(out.strip())
