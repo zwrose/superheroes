@@ -278,17 +278,6 @@ in the PR body, never the normal path).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-# RUN_DIR — create once per seat before first dispatch-review (continuation reuses the same path)
-if [ -z "$RUN_DIR" ]; then echo "RUN_DIR required (run-dir-absent)" >&2; exit 1; fi
-mkdir -p "$(dirname "$RUN_DIR")" || { echo "cannot create RUN_DIR parent" >&2; exit 1; }
-RUN_DIR="$(cd -P "$(dirname "$RUN_DIR")" && pwd -P)/$(basename "$RUN_DIR")"
-if [ -L "$RUN_DIR" ]; then echo "RUN_DIR must be physical (run-dir-is-symlink)" >&2; exit 1; fi
-if [ -d "$RUN_DIR" ]; then
-  if [ -n "$(ls -A "$RUN_DIR" 2>/dev/null)" ]; then echo "RUN_DIR must be empty on first launch (run-dir-not-empty-unopened)" >&2; exit 1; fi
-else
-  mkdir "$RUN_DIR" || { echo "cannot create RUN_DIR" >&2; exit 1; fi
-fi
-RUN_DIR="$(cd -P "$RUN_DIR" && pwd -P)"
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 # Gate first — thread model_id / effort from the JSON
 python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
@@ -461,17 +450,13 @@ something went wrong. The block never affects `ok`, `terminal`, or `reason`.
 
 **Run-dir caller traps** — read these before you compose a dispatch:
 
-- **Trap 1 — a symlinked `--run-dir` is refused.** The refusal token is `run-dir-is-symlink`. This
-  bites constantly on macOS because `mktemp -d /tmp/...` produces exactly that (`/tmp` is a symlink to
-  `/private/tmp`). Field evidence: three codex review seats on one PR all first returned
-  `unrunnable` / `run-dir-is-symlink` with `attempts: 0` before being re-dispatched against the
-  **resolved** path. Resolve the path (or create the run directory under `/private/tmp` directly)
-  before dispatching.
+- **Trap 1 — a leaf symlink `--run-dir` is refused.** The refusal token is `run-dir-is-symlink`.
+  Only the **leaf** path component must not be a symlink; symlinked ancestors (e.g. macOS `/tmp` →
+  `/private/tmp`) are physicalized and accepted.
 - **Trap 2 — `attempts: 0` means a caller error, not an engine forfeit.** An `unrunnable` result
   carrying `attempts: 0` means **nothing was ever spawned** — the runner refused the call. **Read the
   reason before blaming the engine.** This matters because the reflex on a failed dispatch is to
-  escalate or re-dispatch against a different engine, and neither fixes a caller error. (A missing
-  run-dir leaf is handled separately and is not one of these two traps.)
+  escalate or re-dispatch against a different engine, and neither fixes a caller error.
 
 An external engine can forfeit *after* writing files — characteristically with cursor's
 **`NonRetriableError "Agent Looping Detected"`** while the engine is producing a long report, with
