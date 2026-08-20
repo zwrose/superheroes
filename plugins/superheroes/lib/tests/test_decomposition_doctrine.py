@@ -92,10 +92,15 @@ _AUDIT_TRAIL_ELEMENTS = [
 
 _LEDGER_READING_SENTENCE = (
     "Convergence and the park call are the advisor's judgment, recorded in the trail; the tool "
-    "(when it lands) checks completeness and well-formedness, never re-decides them."
+    "checks completeness and well-formedness, never re-decides them."
 )
 
-_PENDING_SENTENCE = "The per-round receipt machinery is **pending (#1077)**."
+_MACHINERY_SENTENCE = (
+    "The per-round receipts are machine-written and machine-checked: "
+    "`lib/package_read_audit.py` opens an invocation, records each round and the "
+    "verification pass, and its `check` verb audits a trail for completeness and "
+    "well-formedness."
+)
 
 _WORKED_EXAMPLE_HEADING = (
     "### Worked example — splitting a criterion that spans two children"
@@ -370,9 +375,15 @@ def test_decomposition_audit_trail_ledger_reading_not_judge():
             raise AssertionError(
                 f"{_DECOMPOSITION_REF}: judge-reading token {token!r} must not appear"
             )
-    if _PENDING_SENTENCE not in text:
+    if _normalized(_MACHINERY_SENTENCE) not in _normalized(text):
         raise AssertionError(
-            f"{_DECOMPOSITION_REF}: pending machinery sentence missing"
+            f"{_DECOMPOSITION_REF}: machinery sentence missing"
+        )
+    issue_ref = "#" + "10" + "77"
+    pending_ref = "pending (" + issue_ref + ")"
+    if pending_ref in text or issue_ref in text:
+        raise AssertionError(
+            f"{_DECOMPOSITION_REF}: pending issue reference must not appear"
         )
     if _normalized(_LEDGER_READING_SENTENCE) not in _normalized(text):
         raise AssertionError(
