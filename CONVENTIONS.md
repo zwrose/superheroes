@@ -1060,13 +1060,16 @@ that the sentence around it still says the right thing.
 
 *Worked example 6 — the package-read-audit vocabulary.* The authoritative home is
 `plugins/superheroes/lib/package_read_audit.py` — its per-kind record declarations and its result,
-refusal and nonconformity constants. This is a **Pattern 1** case by construction: the module is a
-single runtime home that every consumer reads at run time, so there is no doc that restates its
-tokens and no copy list to keep in step. `skills/showrunner/reference/decomposition.md` § The audit
-trail is the tool's named consumer and deliberately carries **prose and the invocation only** — the
-three `check` results and their exit codes — never a token list. If a doc ever restates those
-tokens it becomes a copy-holder, is enumerated here, and is compared against the module by
-`lib/tests/test_ssot_drift.py` under the same rules as the examples above.
+refusal and nonconformity constants. This is a **Pattern 1** case for every vocabulary token the
+module defines **except** the three `check` result tokens and their exit codes, which one doc
+restates. The enumerated copy-holder is
+`skills/showrunner/reference/decomposition.md` § The audit trail — it restates the three `check`
+result tokens (`conforming`, `nonconforming`, `undecided`) and their exit codes (`0`, `1`, `2`) and
+nothing else from the module vocabulary. That copy is compared against the module by
+`lib/tests/test_ssot_drift.py`; that reader **fails closed** — if it parses nothing (heading renamed,
+fence reformatted) it raises rather than passing vacuously. Any doc that restates **any further**
+token from the module becomes a copy-holder, is enumerated here, and is compared against the module
+under the same rules as the examples above.
 
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the

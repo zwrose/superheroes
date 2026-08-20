@@ -1211,7 +1211,9 @@ def test_marker_discipline_unmarked_fence_ignored(tmp_path):
         "```\n"
     )
     trail.write_text(text, encoding="utf-8")
-    records, reason, _detail = pra._parse_records(pra._read_lines(str(trail)))
+    records, _positions, _opener_lines, _marker_lines, reason, _detail = pra._parse_records(
+        pra._read_lines(str(trail)),
+    )
     assert reason is None
     assert len(records) == 1
     assert records[0]["kind"] == "invocation"
@@ -1222,7 +1224,9 @@ def test_marker_discipline_marker_without_fence_malformed(tmp_path):
     text = trail.read_text(encoding="utf-8")
     text += "\n" + pra.RECORD_MARKER + "\n"
     trail.write_text(text, encoding="utf-8")
-    records, reason, _detail = pra._parse_records(pra._read_lines(str(trail)))
+    records, _positions, _opener_lines, _marker_lines, reason, _detail = pra._parse_records(
+        pra._read_lines(str(trail)),
+    )
     assert records is None
     assert reason == pra.REFUSAL_TRAIL_MALFORMED
 
@@ -1240,7 +1244,9 @@ def test_marker_discipline_nested_fence_not_double_counted(tmp_path):
         + "````\n"
     )
     trail.write_text(text, encoding="utf-8")
-    records, reason, _detail = pra._parse_records(pra._read_lines(str(trail)))
+    records, _positions, _opener_lines, _marker_lines, reason, _detail = pra._parse_records(
+        pra._read_lines(str(trail)),
+    )
     assert reason is None
     assert len(records) == 1
     assert records[0]["kind"] == "invocation"
@@ -1996,7 +2002,7 @@ def test_bool_is_not_an_integer_and_not_a_string():
     )
 
 
-def test_check_reports_unhashable_value_instead_of_crashing(tmp_path):
+def test_check_reports_hostile_kind_and_value_as_nonconforming(tmp_path):
     trail, _ = _open_default(tmp_path)
     text = trail.read_text(encoding="utf-8")
     text = text.replace('"weight": "light"', '"weight": []', 1)
@@ -2004,8 +2010,15 @@ def test_check_reports_unhashable_value_instead_of_crashing(tmp_path):
     _hand_append_record(trail, {"kind": [], "invocation": "inv-1"})
     code, out, _err = _run_cli("check", "--trail", str(trail))
     payload = json.loads(out.strip())
-    assert code in (pra.EXIT_NONCONFORMING, pra.EXIT_UNDECIDED)
+    assert code == pra.EXIT_NONCONFORMING
+    assert payload["result"] == pra.RESULT_NONCONFORMING
     assert payload["schema"] == pra.SCHEMA
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and item["position"] == 2
+        and item["path"] == "kind"
+        for item in payload["findings"]
+    )
 
 
 @pytest.mark.parametrize(
@@ -2160,3 +2173,223 @@ def test_writer_refusals_come_from_the_declaration(
     assert code == pra.EXIT_REFUSED
     payload = json.loads(out.strip())
     assert payload["reason"] == expected_reason
+
+
+# --- read boundary and summary echo (WO-B) ----------------------------------
+
+
+def test_verification_finding_missing_outcome_is_nonconforming(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    _record_round(trail, findings=["f-1:collisions"])
+    _hand_append_record(trail, {
+        "kind": "verification",
+        "invocation": "inv-1",
+        "findings": [{"finding": "f-1", "disposition": "package-fix"}],
+        "syncChecks": [{"child": "c1", "result": "pass"}, {"child": "c2", "result": "pass"}],
+    })
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_ELEMENT_MISSING
+        and item["path"] == "findings[0].outcome"
+        for item in payload["findings"]
+    )
+
+
+def _trail_with_single_record(tmp_path, record):
+    trail = tmp_path / "trail.md"
+    trail.write_text(pra.TRAIL_HEADING + "\n", encoding="utf-8")
+    _hand_append_record(trail, record)
+    return trail
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        {
+            "label": "file missing",
+            "trail": None,
+            "setup": lambda _tmp: None,
+            "expected_result": pra.RESULT_UNDECIDED,
+            "expected_exit": pra.EXIT_UNDECIDED,
+        },
+        {
+            "label": "not UTF-8",
+            "trail": "trail",
+            "setup": lambda tmp: (
+                tmp / "trail.md"
+            ).write_bytes(b"\xff\xfe"),
+            "expected_result": pra.RESULT_UNDECIDED,
+            "expected_exit": pra.EXIT_UNDECIDED,
+        },
+        {
+            "label": "no records",
+            "trail": "trail",
+            "setup": lambda tmp: (
+                tmp / "trail.md"
+            ).write_text(pra.TRAIL_HEADING + "\n", encoding="utf-8"),
+            "expected_result": pra.RESULT_UNDECIDED,
+            "expected_exit": pra.EXIT_UNDECIDED,
+        },
+        {
+            "label": "unterminated fence",
+            "trail": "trail",
+            "setup": lambda tmp: (
+                tmp / "trail.md"
+            ).write_text(
+                pra.TRAIL_HEADING + "\n\n```json\n{}\n",
+                encoding="utf-8",
+            ),
+            "expected_result": pra.RESULT_UNDECIDED,
+            "expected_exit": pra.EXIT_UNDECIDED,
+        },
+        {
+            "label": "JSON will not load",
+            "trail": "trail",
+            "setup": lambda tmp: (
+                tmp / "trail.md"
+            ).write_text(
+                pra.TRAIL_HEADING + "\n\n"
+                + pra.RECORD_MARKER + "\n"
+                + "```json\n"
+                + "{bad json}\n"
+                + "```\n",
+                encoding="utf-8",
+            ),
+            "expected_result": pra.RESULT_UNDECIDED,
+            "expected_exit": pra.EXIT_UNDECIDED,
+        },
+        {
+            "label": "parsed but not object",
+            "trail": "trail",
+            "setup": lambda tmp: _trail_with_single_record(
+                tmp,
+                3,
+            ),
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_exit": pra.EXIT_NONCONFORMING,
+        },
+        {
+            "label": "unrecognized kind",
+            "trail": "trail",
+            "setup": lambda tmp: _trail_with_single_record(
+                tmp,
+                {"kind": "invokation", "invocation": "inv-1"},
+            ),
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_exit": pra.EXIT_NONCONFORMING,
+        },
+        {
+            "label": "non-string kind",
+            "trail": "trail",
+            "setup": lambda tmp: _trail_with_single_record(
+                tmp,
+                {"kind": [], "invocation": "inv-1"},
+            ),
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_exit": pra.EXIT_NONCONFORMING,
+        },
+        {
+            "label": "missing required field",
+            "trail": "trail",
+            "setup": lambda tmp: _trail_with_single_record(
+                tmp,
+                {
+                    "kind": "verification",
+                    "invocation": "inv-1",
+                    "findings": [{"finding": "f-1"}],
+                    "syncChecks": [],
+                },
+            ),
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_exit": pra.EXIT_NONCONFORMING,
+        },
+        {
+            "label": "bad value",
+            "trail": "trail",
+            "setup": lambda tmp: _trail_with_single_record(
+                tmp,
+                {
+                    "kind": "invocation",
+                    "invocation": "inv-1",
+                    "weight": "heavy",
+                    "cause": "x",
+                    "measurables": {"children": 1, "registerEntries": 1},
+                    "ceiling": 1,
+                    "seats": ["seat-a"],
+                },
+            ),
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_exit": pra.EXIT_NONCONFORMING,
+        },
+    ],
+    ids=lambda c: c["label"],
+)
+def test_read_boundary_matrix(tmp_path, case):
+    trail_path = tmp_path / "trail.md"
+    if case["trail"] is None:
+        missing = tmp_path / "missing.md"
+        code, out, _err = _run_cli("check", "--trail", str(missing))
+    else:
+        case["setup"](tmp_path)
+        code, out, _err = _run_cli("check", "--trail", str(trail_path))
+    payload = json.loads(out.strip())
+    assert code == case["expected_exit"]
+    assert payload["result"] == case["expected_result"]
+
+
+@pytest.mark.parametrize(
+    "field_name,summary_key,round_field",
+    [
+        ("ceiling", "ceiling", False),
+        ("weight", "weight", False),
+        ("seats", "seats", False),
+        ("round", "round", True),
+        ("mechanicalOnly", "mechanicalOnly", True),
+        ("controlProbe", "controlProbe", True),
+    ],
+)
+def test_summary_never_manufactures_a_value(
+    tmp_path,
+    field_name,
+    summary_key,
+    round_field,
+):
+    trail, _ = _open_default(tmp_path)
+    if round_field:
+        _record_round(trail)
+        text = trail.read_text(encoding="utf-8")
+        if field_name == "round":
+            text = text.replace('"round": 1', '"round": null', 1)
+        elif field_name == "mechanicalOnly":
+            text = text.replace('"mechanicalOnly": false', '"mechanicalOnly": null', 1)
+        elif field_name == "controlProbe":
+            text = text.replace(
+                '"controlProbe": "%s"' % pra.CONTROL_PROBE_ENGAGED,
+                '"controlProbe": null',
+                1,
+            )
+        trail.write_text(text, encoding="utf-8")
+        code, out, _err = _run_cli("check", "--trail", str(trail))
+        payload = json.loads(out.strip())
+        summary = payload["invocations"][0]
+        assert summary["roundsAsserted"][0][summary_key] is None
+    else:
+        text = trail.read_text(encoding="utf-8")
+        if field_name == "ceiling":
+            text = text.replace('"ceiling": 3', '"ceiling": null', 1)
+        elif field_name == "weight":
+            text = text.replace('"weight": "light"', '"weight": null', 1)
+        elif field_name == "seats":
+            text = text.replace(
+                '"seats": [\n  "seat-a"\n ]',
+                '"seats": null',
+                1,
+            )
+        trail.write_text(text, encoding="utf-8")
+        _record_round(trail)
+        code, out, _err = _run_cli("check", "--trail", str(trail))
+        payload = json.loads(out.strip())
+        summary = payload["invocations"][0]
+        assert summary[summary_key] is None
