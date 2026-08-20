@@ -21,6 +21,8 @@ are gone with them; no lib/*.js copy-holders remain):
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
 - Register-check vocabulary                              (home: register_check.py)
+- Package-read-audit vocabulary                          (home: package_read_audit.py;
+  copy-holder: skills/showrunner/reference/decomposition.md § The audit trail)
 - R5 weight vocabulary + R7 park surface (pinned literals) (home: epic register when
   reachable; copy-holders: architect-discovery, showrunner SKILL.md, epic children)
 - Anchor invariant clauses + inversions       (home: skills/showrunner/reference/issue-contract.md;
@@ -4305,4 +4307,225 @@ def test_charters_forbid_inverted_routing_forms():
                 hits.append((rel, diag_line, form))
     assert not hits, (
         "inverted routing form(s) found in charter(s): %r" % hits
+    )
+
+
+# --- Cluster: package-read-audit vocabulary (package_read_audit → decomposition.md) ---
+#
+# Copy-holders enumerated (§11.2 caveat — every known copy must be listed here):
+# - skills/showrunner/reference/decomposition.md § The audit trail (three check result tokens
+#   and exit codes only)
+# - CONVENTIONS.md §11.2 worked example 6 (enumeration of home + copy-holder)
+
+
+_DECOMPOSITION_DOC = "skills/showrunner/reference/decomposition.md"
+
+
+def _package_read_audit_audit_trail_section(doc):
+    """### The audit trail in decomposition.md."""
+    headings = re.findall(r"^### The audit trail\s*$", doc, re.MULTILINE)
+    assert len(headings) == 1, (
+        "decomposition.md: expected exactly one ### The audit trail heading, found %d"
+        % len(headings)
+    )
+    m = re.search(
+        r"^### The audit trail\s*\n(.*?)(?:\n### |\Z)",
+        doc,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert m, (
+        "decomposition.md: ### The audit trail section not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _package_read_audit_result_exit_pairs_from_doc(section):
+    """Result tokens paired with exit codes from the audit-trail prose."""
+    pairs = re.findall(
+        r"\*\*`([^`]+)`\*\* \(exit (\d+)\)",
+        section,
+    )
+    assert pairs, (
+        "decomposition.md: no **`<token>`** (exit N) pairings found in "
+        "### The audit trail (moved or reformatted?)"
+    )
+    return {token: int(exit_code) for token, exit_code in pairs}
+
+
+def _package_read_audit_check_exit_mapping_from_home():
+    import package_read_audit
+
+    return {
+        package_read_audit.RESULT_CONFORMING: package_read_audit.EXIT_CONFORMING,
+        package_read_audit.RESULT_NONCONFORMING: package_read_audit.EXIT_NONCONFORMING,
+        package_read_audit.RESULT_UNDECIDED: package_read_audit.EXIT_UNDECIDED,
+    }
+
+
+def _package_read_audit_non_result_vocabulary_from_home():
+    """Refusal, nonconformity, undecided-reason and record-kind tokens minus check results."""
+    import package_read_audit
+
+    tokens = set()
+    tokens |= set(package_read_audit.REFUSAL_REASONS)
+    tokens |= set(package_read_audit.UNDECIDED_REASONS)
+    tokens |= set(package_read_audit.NONCONFORMITY_KINDS)
+    tokens |= set(package_read_audit.RECORD_KINDS)
+    return tokens - set(package_read_audit.CHECK_RESULTS)
+
+
+# Tokens excluded from the further-token sweep: ordinary English words that also
+# appear as record-kind or reason literals — matching even token-shaped forms
+# would false-positive on audit-trail prose ("per-round", "verification pass",
+# "invocation's cause", "usage" in a CLI sense). pass/fail/light/full/verified/
+# failed/engaged live in other module families (SYNC_RESULTS, WEIGHTS, OUTCOMES,
+# CONTROL_PROBE_READS) and are outside this sweep entirely.
+_PACKAGE_READ_AUDIT_ENGLISH_WORD_EXCLUSIONS = frozenset({
+    "round",
+    "verification",
+    "invocation",
+    "usage",
+})
+
+
+def _package_read_audit_token_shaped_occurrence(token, text):
+    """Token-shaped occurrence: backticks or a standalone hyphenated identifier."""
+    if re.search(r"`" + re.escape(token) + r"`", text):
+        return True
+    if "-" in token and re.search(
+        r"(?<![\w-])" + re.escape(token) + r"(?![\w-])",
+        text,
+    ):
+        return True
+    return False
+
+
+def _package_read_audit_worked_example_6_from_conventions():
+    """Worked example 6 prose block from CONVENTIONS §11.2."""
+    text = _read("../../CONVENTIONS.md")
+    m = re.search(
+        r"\*Worked example 6 — the package-read-audit vocabulary\.\* (.*?)\n\n",
+        text,
+        re.DOTALL,
+    )
+    assert m, (
+        "CONVENTIONS.md §11: package-read-audit worked example 6 not found "
+        "(moved or reworded?)"
+    )
+    return m.group(1)
+
+
+def _package_read_audit_check_flags_from_home():
+    """`check` subcommand flags from _main_check argparse registration."""
+    text = _read("lib/package_read_audit.py")
+    m = re.search(r"def _main_check\(argv\):(.*?)(?=\ndef |\Z)", text, re.DOTALL)
+    assert m, (
+        "package_read_audit.py: _main_check not found (moved or reworded?)"
+    )
+    flags = re.findall(r'parser\.add_argument\("(--[^"]+)"', m.group(1))
+    assert flags, (
+        "package_read_audit.py: _main_check has no parser.add_argument flags "
+        "(moved or reworded?)"
+    )
+    return set(flags)
+
+
+def _package_read_audit_check_flags_from_doc(section):
+    """Flags named in the audit-trail fenced invocation and --invocation prose."""
+    fences = re.findall(r"```bash\n(.*?)```", section, re.DOTALL)
+    assert len(fences) == 1, (
+        "decomposition.md: expected exactly one ```bash fence in "
+        "### The audit trail, found %d"
+        % len(fences)
+    )
+    fence = fences[0]
+    assert " check " in fence or fence.strip().endswith(" check"), (
+        "decomposition.md: fenced invocation does not name the check subcommand "
+        "(moved or reformatted?)"
+    )
+    flags = set(re.findall(r"(--[\w-]+)", fence))
+    assert re.search(r"`--invocation(?:\s+<[^>]+>)?`", section), (
+        "decomposition.md: --invocation not named in ### The audit trail prose "
+        "(moved or reformatted?)"
+    )
+    flags.add("--invocation")
+    assert flags, (
+        "decomposition.md: fenced invocation parsed to zero flags "
+        "(regex drift or empty fence?)"
+    )
+    return flags
+
+
+def test_package_read_audit_result_tokens_in_decomposition_doc():
+    """§11: decomposition.md restates package_read_audit check results and exit codes."""
+    import package_read_audit
+
+    home_results = set(package_read_audit.CHECK_RESULTS)
+    home_mapping = _package_read_audit_check_exit_mapping_from_home()
+    doc = _read(_DECOMPOSITION_DOC)
+    section = _package_read_audit_audit_trail_section(doc)
+    doc_mapping = _package_read_audit_result_exit_pairs_from_doc(section)
+
+    missing_tokens = sorted(home_results - set(doc_mapping.keys()))
+    extra_tokens = sorted(set(doc_mapping.keys()) - home_results)
+    wrong_exits = sorted(
+        token
+        for token in home_results
+        if token in doc_mapping and doc_mapping[token] != home_mapping[token]
+    )
+    assert (
+        not missing_tokens and not extra_tokens and not wrong_exits
+    ), (
+        "decomposition.md check result/exit drift from package_read_audit "
+        "CHECK_RESULTS/EXIT_* — missing tokens: %r; extra tokens: %r; "
+        "exit mismatches: %r"
+        % (missing_tokens, extra_tokens, wrong_exits)
+    )
+
+
+def test_decomposition_doc_restates_no_further_tokens():
+    """§11: decomposition.md does not restate non-result package_read_audit tokens."""
+    sweep = _package_read_audit_non_result_vocabulary_from_home()
+    sweep -= _PACKAGE_READ_AUDIT_ENGLISH_WORD_EXCLUSIONS
+    doc = _read(_DECOMPOSITION_DOC)
+    hits = sorted(
+        token
+        for token in sweep
+        if _package_read_audit_token_shaped_occurrence(token, doc)
+    )
+    assert not hits, (
+        "decomposition.md restates package_read_audit token(s) outside the "
+        "enumerated check-result copy — add the doc to CONVENTIONS §11.2 "
+        "worked example 6 or remove the token(s): %r"
+        % hits
+    )
+
+
+def test_conventions_worked_example_6_enumerates_the_copy_holders():
+    """§11: CONVENTIONS worked example 6 names the home module and copy-holder doc."""
+    prose = _package_read_audit_worked_example_6_from_conventions()
+    assert "plugins/superheroes/lib/package_read_audit.py" in prose, (
+        "CONVENTIONS.md §11: worked example 6 missing authoritative home path "
+        "plugins/superheroes/lib/package_read_audit.py"
+    )
+    assert "skills/showrunner/reference/decomposition.md" in prose, (
+        "CONVENTIONS.md §11: worked example 6 missing enumerated copy-holder "
+        "skills/showrunner/reference/decomposition.md"
+    )
+
+
+def test_decomposition_doc_invocation_matches_the_cli():
+    """§11: decomposition.md check invocation flags match package_read_audit CLI."""
+    home_flags = _package_read_audit_check_flags_from_home()
+    doc = _read(_DECOMPOSITION_DOC)
+    section = _package_read_audit_audit_trail_section(doc)
+    doc_flags = _package_read_audit_check_flags_from_doc(section)
+    missing_from_cli = sorted(doc_flags - home_flags)
+    extra_in_doc = sorted(home_flags - doc_flags)
+    assert not missing_from_cli and not extra_in_doc, (
+        "decomposition.md check invocation drift from package_read_audit "
+        "_main_check flags — doc names flags CLI lacks: %r; CLI accepts flags "
+        "doc does not publish: %r"
+        % (missing_from_cli, extra_in_doc)
     )
