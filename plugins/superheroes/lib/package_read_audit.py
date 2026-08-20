@@ -220,6 +220,576 @@ def _is_nonneg_int(value):
     return _is_actual_int(value) and value >= 0
 
 
+def _in_vocab(value, vocabulary):
+    """Membership that never raises on an unhashable or wrong-typed value."""
+    return value in vocabulary
+
+
+CONSTRAINT_TYPES = frozenset({
+    "string",
+    "integer",
+    "boolean",
+    "object",
+    "array",
+})
+
+CONSTRAINT_KEYS = frozenset({
+    "type",
+    "enum",
+    "nonEmpty",
+    "min",
+    "minItems",
+    "items",
+    "fields",
+    "required",
+    "refusal",
+})
+
+VIOLATION_FIELD_MISSING = "field-missing"
+VIOLATION_TYPE_INVALID = "type-invalid"
+VIOLATION_ENUM_INVALID = "enum-invalid"
+VIOLATION_EMPTY_STRING = "empty-string"
+VIOLATION_BELOW_MINIMUM = "below-minimum"
+VIOLATION_TOO_FEW_ITEMS = "too-few-items"
+VIOLATION_UNKNOWN_FIELD = "unknown-field"
+VIOLATION_RECORD_NOT_OBJECT = "record-not-object"
+
+_MISSING = object()
+ENVELOPE_FIELDS = frozenset({"kind"})
+
+_COMMON_INVOCATION_FIELD = {
+    "type": "string",
+    "nonEmpty": True,
+}
+
+_INVOCATION_MEASURABLES_FIELDS = {
+    "children": {
+        "type": "integer",
+        "min": 0,
+        "refusal": REFUSAL_MEASURABLE_INVALID,
+    },
+    "registerEntries": {
+        "type": "integer",
+        "min": 0,
+        "refusal": REFUSAL_MEASURABLE_INVALID,
+    },
+}
+
+RECORD_SCHEMAS = {
+    RECORD_KIND_INVOCATION: {
+        "required": (),
+        "fields": {
+            "seats": {
+                "type": "array",
+                "minItems": 1,
+                "items": {"type": "string", "nonEmpty": True},
+                "refusal": REFUSAL_SEATS_MISSING,
+            },
+            "weight": {
+                "type": "string",
+                "enum": WEIGHTS,
+                "refusal": REFUSAL_WEIGHT_UNRECOGNIZED,
+            },
+            "ceiling": {
+                "type": "integer",
+                "min": 1,
+                "refusal": REFUSAL_CEILING_INVALID,
+            },
+            "measurables": {
+                "type": "object",
+                "fields": _INVOCATION_MEASURABLES_FIELDS,
+            },
+            "cause": {
+                "type": "string",
+                "nonEmpty": True,
+            },
+            "override": {
+                "type": "string",
+            },
+            "invocation": _COMMON_INVOCATION_FIELD,
+        },
+    },
+    RECORD_KIND_ROUND: {
+        "required": (),
+        "fields": {
+            "round": {
+                "type": "integer",
+                "min": 1,
+                "refusal": REFUSAL_ROUND_INVALID,
+            },
+            "lenses": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                    "enum": LENSES,
+                    "refusal": REFUSAL_LENS_UNRECOGNIZED,
+                },
+            },
+            "parts": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "fields": {
+                        "part": {
+                            "type": "string",
+                            "nonEmpty": True,
+                        },
+                        "status": {
+                            "type": "string",
+                            "enum": PART_STATUSES,
+                            "refusal": REFUSAL_PART_STATUS_UNRECOGNIZED,
+                        },
+                    },
+                },
+            },
+            "controlProbe": {
+                "type": "string",
+                "enum": CONTROL_PROBE_READS,
+                "refusal": REFUSAL_CONTROL_PROBE_UNRECOGNIZED,
+            },
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "fields": {
+                        "finding": {
+                            "type": "string",
+                            "nonEmpty": True,
+                        },
+                        "lens": {
+                            "type": "string",
+                            "enum": LENSES,
+                            "refusal": REFUSAL_LENS_UNRECOGNIZED,
+                        },
+                    },
+                },
+            },
+            "declinedExtension": {
+                "type": "array",
+                "items": {
+                    "type": "string",
+                },
+            },
+            "mechanicalOnly": {
+                "type": "boolean",
+            },
+            "invocation": _COMMON_INVOCATION_FIELD,
+        },
+    },
+    RECORD_KIND_VERIFICATION: {
+        "required": (),
+        "fields": {
+            "findings": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "fields": {
+                        "finding": {
+                            "type": "string",
+                            "nonEmpty": True,
+                        },
+                        "disposition": {
+                            "type": "string",
+                            "enum": DISPOSITIONS,
+                            "refusal": REFUSAL_DISPOSITION_UNRECOGNIZED,
+                        },
+                        "outcome": {
+                            "type": "string",
+                            "enum": OUTCOMES,
+                            "refusal": REFUSAL_OUTCOME_UNRECOGNIZED,
+                        },
+                        "evidence": {
+                            "type": "string",
+                        },
+                    },
+                },
+            },
+            "syncChecks": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "fields": {
+                        "child": {
+                            "type": "string",
+                            "nonEmpty": True,
+                        },
+                        "result": {
+                            "type": "string",
+                            "enum": SYNC_RESULTS,
+                            "refusal": REFUSAL_SYNC_RESULT_UNRECOGNIZED,
+                        },
+                    },
+                },
+            },
+            "invocation": _COMMON_INVOCATION_FIELD,
+        },
+    },
+}
+
+
+def _check_value_type(value, type_name):
+    if type_name == "string":
+        return isinstance(value, str)
+    if type_name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "boolean":
+        return isinstance(value, bool)
+    if type_name == "object":
+        return isinstance(value, dict)
+    if type_name == "array":
+        return isinstance(value, list)
+    return False
+
+
+def _walk_envelope(record):
+    if not isinstance(record, dict):
+        return [{
+            "path": "",
+            "value": record,
+            "code": VIOLATION_RECORD_NOT_OBJECT,
+        }]
+    if "kind" not in record:
+        return [{
+            "path": "kind",
+            "value": _MISSING,
+            "code": VIOLATION_FIELD_MISSING,
+        }]
+    kind = record["kind"]
+    if not isinstance(kind, str):
+        return [{
+            "path": "kind",
+            "value": kind,
+            "code": VIOLATION_TYPE_INVALID,
+        }]
+    if not _in_vocab(kind, RECORD_KINDS):
+        return [{
+            "path": "kind",
+            "value": kind,
+            "code": VIOLATION_ENUM_INVALID,
+        }]
+    return None
+
+
+def _check_field_value(value, constraint, path):
+    type_name = constraint.get("type")
+    if type_name and not _check_value_type(value, type_name):
+        return [{
+            "path": path,
+            "value": value,
+            "code": VIOLATION_TYPE_INVALID,
+        }]
+
+    if constraint.get("nonEmpty") and isinstance(value, str) and not value:
+        return [{
+            "path": path,
+            "value": value,
+            "code": VIOLATION_EMPTY_STRING,
+        }]
+
+    if "enum" in constraint and not _in_vocab(value, constraint["enum"]):
+        return [{
+            "path": path,
+            "value": value,
+            "code": VIOLATION_ENUM_INVALID,
+        }]
+
+    if "min" in constraint and _check_value_type(value, "integer"):
+        if value < constraint["min"]:
+            return [{
+                "path": path,
+                "value": value,
+                "code": VIOLATION_BELOW_MINIMUM,
+            }]
+
+    if "minItems" in constraint and _check_value_type(value, "array"):
+        if len(value) < constraint["minItems"]:
+            return [{
+                "path": path,
+                "value": value,
+                "code": VIOLATION_TOO_FEW_ITEMS,
+            }]
+
+    if "items" in constraint and _check_value_type(value, "array"):
+        items_constraint = constraint["items"]
+        for idx, item in enumerate(value):
+            item_path = "%s[%d]" % (path, idx)
+            if (
+                items_constraint.get("type") == "object"
+                and "fields" in items_constraint
+            ):
+                item_violations = _walk_object_fields(
+                    item,
+                    items_constraint,
+                    item_path,
+                )
+            else:
+                item_violations = _check_field_value(
+                    item,
+                    items_constraint,
+                    item_path,
+                )
+            if item_violations:
+                return item_violations
+
+    if "fields" in constraint and _check_value_type(value, "object"):
+        return _walk_object_fields(value, constraint, path)
+
+    return []
+
+
+def _walk_object_fields(obj, constraint, path_prefix):
+    if not isinstance(obj, dict):
+        field_path = path_prefix or ""
+        return [{
+            "path": field_path,
+            "value": obj,
+            "code": VIOLATION_TYPE_INVALID,
+        }]
+
+    fields = constraint.get("fields", {})
+    required = constraint.get("required", ())
+
+    for field_name in fields:
+        field_path = (
+            "%s.%s" % (path_prefix, field_name)
+            if path_prefix
+            else field_name
+        )
+        if field_name not in obj:
+            if field_name in required:
+                return [{
+                    "path": field_path,
+                    "value": _MISSING,
+                    "code": VIOLATION_FIELD_MISSING,
+                }]
+            continue
+        value = obj[field_name]
+        if value is None and field_name not in required:
+            continue
+        field_violations = _check_field_value(
+            value,
+            fields[field_name],
+            field_path,
+        )
+        if field_violations:
+            return field_violations
+
+    unknown = sorted(
+        set(obj.keys()) - set(fields.keys()) - ENVELOPE_FIELDS,
+    )
+    for field_name in unknown:
+        field_path = (
+            "%s.%s" % (path_prefix, field_name)
+            if path_prefix
+            else field_name
+        )
+        return [{
+            "path": field_path,
+            "value": obj[field_name],
+            "code": VIOLATION_UNKNOWN_FIELD,
+        }]
+
+    return []
+
+
+def _walk_record(record, declaration):
+    return _walk_object_fields(record, declaration, "")
+
+
+def _validate_declaration(path, declaration):
+    problems = []
+    if not isinstance(declaration, dict):
+        return ["%s is not a declaration object" % path]
+
+    for key in declaration:
+        if key not in ("required", "fields"):
+            problems.append("%s has unknown declaration key %r" % (path, key))
+
+    fields = declaration.get("fields")
+    if not isinstance(fields, dict):
+        problems.append("%s.fields is not a dict" % path)
+        return problems
+
+    required = declaration.get("required", ())
+    if not isinstance(required, tuple):
+        problems.append("%s.required is not a tuple" % path)
+        return problems
+
+    for req_name in required:
+        if req_name not in fields:
+            problems.append(
+                "%s.required names undeclared field %r" % (path, req_name),
+            )
+
+    for field_name, constraint in fields.items():
+        field_path = "%s.fields.%s" % (path, field_name)
+        problems.extend(_validate_constraint(field_path, constraint))
+
+    return problems
+
+
+def _validate_constraint(path, constraint):
+    problems = []
+    if not isinstance(constraint, dict):
+        return ["%s is not a constraint object" % path]
+
+    for key in constraint:
+        if key not in CONSTRAINT_KEYS:
+            problems.append("%s has unknown constraint key %r" % (path, key))
+
+    type_name = constraint.get("type")
+    if type_name is None:
+        problems.append("%s is missing type" % path)
+    elif type_name not in CONSTRAINT_TYPES:
+        problems.append("%s has unknown type %r" % (path, type_name))
+
+    if "refusal" in constraint and constraint["refusal"] not in REFUSAL_REASONS:
+        problems.append(
+            "%s.refusal %r is not in REFUSAL_REASONS" % (path, constraint["refusal"]),
+        )
+
+    if "items" in constraint:
+        problems.extend(_validate_constraint("%s.items" % path, constraint["items"]))
+
+    if "fields" in constraint:
+        nested = {
+            "required": constraint.get("required", ()),
+            "fields": constraint["fields"],
+        }
+        problems.extend(_validate_declaration(path, nested))
+
+    return problems
+
+
+def _declaration_violations():
+    problems = []
+    for kind, declaration in RECORD_SCHEMAS.items():
+        kind_path = "RECORD_SCHEMAS[%r]" % kind
+        problems.extend(_validate_declaration(kind_path, declaration))
+    return problems
+
+
+def _constraint_at_path(declaration, path):
+    if not path:
+        return declaration
+
+    segments = []
+    current = ""
+    idx = 0
+    while idx < len(path):
+        ch = path[idx]
+        if ch == ".":
+            if current:
+                segments.append(current)
+                current = ""
+            idx += 1
+            continue
+        if ch == "[":
+            if current:
+                segments.append(current)
+                current = ""
+            close = path.index("]", idx)
+            segments.append(int(path[idx + 1:close]))
+            idx = close + 1
+            continue
+        current += ch
+        idx += 1
+    if current:
+        segments.append(current)
+
+    constraint = {"fields": declaration.get("fields", {})}
+    current_constraint = None
+    for segment in segments:
+        if isinstance(segment, int):
+            if current_constraint is None:
+                return None
+            items = current_constraint.get("items")
+            if items is None:
+                return None
+            current_constraint = items
+            continue
+        if current_constraint is not None:
+            fields = current_constraint.get("fields", {})
+        else:
+            fields = constraint.get("fields", {})
+        field_constraint = fields.get(segment)
+        if field_constraint is None:
+            return None
+        current_constraint = field_constraint
+    return current_constraint
+
+
+def _refusal_for_violation(violation, record):
+    kind = record.get("kind")
+    if not isinstance(kind, str) or kind not in RECORD_SCHEMAS:
+        return REFUSAL_INTERNAL_ERROR
+    constraint = _constraint_at_path(
+        RECORD_SCHEMAS[kind],
+        violation["path"],
+    )
+    if constraint is not None and "refusal" in constraint:
+        return constraint["refusal"]
+    return REFUSAL_INTERNAL_ERROR
+
+
+def _writer_detail_for_violation(violation, record):
+    path = violation["path"]
+    value = violation["value"]
+    code = violation["code"]
+
+    if path == "seats" and code == VIOLATION_TOO_FEW_ITEMS:
+        return "at least one --seat is required"
+    if path == "weight" and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized weight %r" % value
+    if path == "ceiling":
+        return "ceiling must be an integer >= 1"
+    if path == "measurables.children":
+        if code == VIOLATION_BELOW_MINIMUM:
+            return "children must be a non-negative integer"
+        if code == VIOLATION_TYPE_INVALID:
+            return "invalid integer for children: %r" % value
+    if path == "measurables.registerEntries":
+        if code == VIOLATION_BELOW_MINIMUM:
+            return "register-entries must be a non-negative integer"
+        if code == VIOLATION_TYPE_INVALID:
+            return "invalid integer for register-entries: %r" % value
+    if path == "round":
+        return "round must be a positive integer"
+    if path.startswith("lenses[") and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized lens %r" % value
+    if path.endswith(".status") and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized part status %r" % value
+    if path == "controlProbe" and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized control-probe read %r" % value
+    if ".lens" in path and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized lens %r" % value
+    if path.endswith(".disposition") and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized disposition %r" % value
+    if path.endswith(".outcome") and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized outcome %r" % value
+    if path.endswith(".result") and code == VIOLATION_ENUM_INVALID:
+        return "unrecognized sync-check result %r" % value
+
+    return "%s has invalid value %r" % (path, value)
+
+
+def _writer_refuse_from_violations(violations, record, trail=None, invocation=None):
+    violation = violations[0]
+    return _refuse(
+        _refusal_for_violation(violation, record),
+        _writer_detail_for_violation(violation, record),
+        trail=trail,
+        invocation=invocation,
+    )
+
+
+def _walk_record_for_kind(record):
+    envelope_violations = _walk_envelope(record)
+    if envelope_violations is not None:
+        return envelope_violations
+    return _walk_record(record, RECORD_SCHEMAS[record["kind"]])
+
+
 def _read_lines(path):
     try:
         with open(path, encoding="utf-8", newline="") as fh:
@@ -329,7 +899,7 @@ def _parse_records(lines):
                 "fenced JSON at line %d is not a JSON object" % (opener_idx + 1)
             )
         kind = payload.get("kind")
-        if kind not in RECORD_KINDS:
+        if not _in_vocab(kind, RECORD_KINDS):
             return None, REFUSAL_TRAIL_MALFORMED, (
                 "record at line %d has unrecognized kind %r" % (marker_line, kind)
             )
@@ -378,160 +948,24 @@ def _invocation_id_for_finding(record):
     return None
 
 
-def _validate_record_value(record):
-    """Validate field values on one parsed record. Returns (field_path, value) problems."""
-    problems = []
-    kind = record.get("kind")
-
-    inv = record.get("invocation")
-    if inv is not None:
-        if not isinstance(inv, str) or not inv:
-            problems.append(("invocation", inv))
-
-    if kind == RECORD_KIND_INVOCATION:
-        cause = record.get("cause")
-        if cause is not None:
-            if not isinstance(cause, str) or not cause:
-                problems.append(("cause", cause))
-        weight = record.get("weight")
-        if weight is not None and weight not in WEIGHTS:
-            problems.append(("weight", weight))
-        ceiling = record.get("ceiling")
-        if ceiling is not None:
-            if not _is_actual_int(ceiling) or ceiling < 1:
-                problems.append(("ceiling", ceiling))
-        measurables = record.get("measurables")
-        if measurables is not None:
-            if not isinstance(measurables, dict):
-                problems.append(("measurables", measurables))
-            else:
-                children = measurables.get("children")
-                if children is not None and not _is_nonneg_int(children):
-                    problems.append(("measurables.children", children))
-                register_entries = measurables.get("registerEntries")
-                if register_entries is not None and not _is_nonneg_int(register_entries):
-                    problems.append(("measurables.registerEntries", register_entries))
-        override = record.get("override")
-        if override is not None and not isinstance(override, str):
-            problems.append(("override", override))
-        seats = record.get("seats")
-        if seats is not None:
-            if not isinstance(seats, list) or not seats:
-                problems.append(("seats", seats))
-            else:
-                for idx, seat in enumerate(seats):
-                    if not isinstance(seat, str) or not seat:
-                        problems.append(("seats[%d]" % idx, seat))
-
-    elif kind == RECORD_KIND_ROUND:
-        round_no = record.get("round")
-        if round_no is not None:
-            if not _is_actual_int(round_no) or round_no < 1:
-                problems.append(("round", round_no))
-        lenses = record.get("lenses")
-        if lenses is not None:
-            if not isinstance(lenses, list):
-                problems.append(("lenses", lenses))
-            else:
-                for idx, lens in enumerate(lenses):
-                    if lens not in LENSES:
-                        problems.append(("lenses[%d]" % idx, lens))
-        parts = record.get("parts")
-        if parts is not None:
-            if not isinstance(parts, list):
-                problems.append(("parts", parts))
-            else:
-                for idx, part in enumerate(parts):
-                    if not isinstance(part, dict):
-                        problems.append(("parts[%d]" % idx, part))
-                    else:
-                        name = part.get("part")
-                        if name is not None and (not isinstance(name, str) or not name):
-                            problems.append(("parts[%d].part" % idx, name))
-                        status = part.get("status")
-                        if status is not None and status not in PART_STATUSES:
-                            problems.append(("parts[%d].status" % idx, status))
-        control_probe = record.get("controlProbe")
-        if control_probe is not None and control_probe not in CONTROL_PROBE_READS:
-            problems.append(("controlProbe", control_probe))
-        mechanical_only = record.get("mechanicalOnly")
-        if mechanical_only is not None and not isinstance(mechanical_only, bool):
-            problems.append(("mechanicalOnly", mechanical_only))
-        findings = record.get("findings")
-        if findings is not None:
-            if not isinstance(findings, list):
-                problems.append(("findings", findings))
-            else:
-                for idx, item in enumerate(findings):
-                    if not isinstance(item, dict):
-                        problems.append(("findings[%d]" % idx, item))
-                    else:
-                        fid = item.get("finding")
-                        if fid is not None and (not isinstance(fid, str) or not fid):
-                            problems.append(("findings[%d].finding" % idx, fid))
-                        lens = item.get("lens")
-                        if lens is not None and lens not in LENSES:
-                            problems.append(("findings[%d].lens" % idx, lens))
-        declined = record.get("declinedExtension")
-        if declined is not None:
-            if not isinstance(declined, list):
-                problems.append(("declinedExtension", declined))
-            else:
-                for idx, fid in enumerate(declined):
-                    if not isinstance(fid, str):
-                        problems.append(("declinedExtension[%d]" % idx, fid))
-
-    elif kind == RECORD_KIND_VERIFICATION:
-        findings = record.get("findings")
-        if findings is not None:
-            if not isinstance(findings, list):
-                problems.append(("findings", findings))
-            else:
-                for idx, item in enumerate(findings):
-                    if not isinstance(item, dict):
-                        problems.append(("findings[%d]" % idx, item))
-                    else:
-                        fid = item.get("finding")
-                        if fid is not None and (not isinstance(fid, str) or not fid):
-                            problems.append(("findings[%d].finding" % idx, fid))
-                        disposition = item.get("disposition")
-                        if disposition is not None and disposition not in DISPOSITIONS:
-                            problems.append(("findings[%d].disposition" % idx, disposition))
-                        outcome = item.get("outcome")
-                        if outcome is not None and outcome not in OUTCOMES:
-                            problems.append(("findings[%d].outcome" % idx, outcome))
-                        evidence = item.get("evidence")
-                        if evidence is not None and not isinstance(evidence, str):
-                            problems.append(("findings[%d].evidence" % idx, evidence))
-        sync_checks = record.get("syncChecks")
-        if sync_checks is not None:
-            if not isinstance(sync_checks, list):
-                problems.append(("syncChecks", sync_checks))
-            else:
-                for idx, check in enumerate(sync_checks):
-                    if not isinstance(check, dict):
-                        problems.append(("syncChecks[%d]" % idx, check))
-                    else:
-                        child = check.get("child")
-                        if child is not None and (not isinstance(child, str) or not child):
-                            problems.append(("syncChecks[%d].child" % idx, child))
-                        result = check.get("result")
-                        if result is not None and result not in SYNC_RESULTS:
-                            problems.append(("syncChecks[%d].result" % idx, result))
-
-    return problems
-
-
 def _record_value_findings(records):
+    suppressed = {
+        VIOLATION_FIELD_MISSING,
+        VIOLATION_UNKNOWN_FIELD,
+        VIOLATION_RECORD_NOT_OBJECT,
+    }
     findings = []
     for trail_pos, record in enumerate(records, 1):
-        for field_path, value in _validate_record_value(record):
+        violations = _walk_record_for_kind(record)
+        for violation in violations:
+            if violation["code"] in suppressed:
+                continue
             findings.append({
                 "kind": NONCONFORMITY_RECORD_VALUE_INVALID,
                 "invocation": _invocation_id_for_finding(record),
                 "detail": (
                     "record at trail position %d: field %s has invalid value %r"
-                    % (trail_pos, field_path, value)
+                    % (trail_pos, violation["path"], violation["value"])
                 ),
             })
     return findings
@@ -541,8 +975,8 @@ def _disposition_allowed_for_lens(lens, disposition):
     if disposition == DISPOSITION_DECLINED_EXTENSION:
         return lens != LENS_SPEC_CONTRADICTION
     if lens == LENS_SPEC_CONTRADICTION:
-        return disposition in SPEC_CONTRADICTION_DISPOSITIONS
-    return disposition in DISPOSITIONS
+        return _in_vocab(disposition, SPEC_CONTRADICTION_DISPOSITIONS)
+    return _in_vocab(disposition, DISPOSITIONS)
 
 
 def _invocation_trail_records(records, inv_id):
@@ -993,50 +1427,37 @@ def _invocation_ceiling(records, inv_id):
 
 def verb_open(trail, invocation, cause, weight, children, register_entries, ceiling,
               override, seats):
-    if not seats:
-        return _refuse(
-            REFUSAL_SEATS_MISSING,
-            "at least one --seat is required",
-            trail=trail,
-            invocation=invocation,
-        )
-    if weight not in WEIGHTS:
-        return _refuse(
-            REFUSAL_WEIGHT_UNRECOGNIZED,
-            "unrecognized weight %r" % weight,
-            trail=trail,
-            invocation=invocation,
-        )
     try:
-        ceiling_int = int(ceiling)
+        children_val = int(children)
     except (TypeError, ValueError):
-        return _refuse(
-            REFUSAL_CEILING_INVALID,
-            "ceiling must be an integer >= 1",
-            trail=trail,
-            invocation=invocation,
-        )
-    if ceiling_int < 1:
-        return _refuse(
-            REFUSAL_CEILING_INVALID,
-            "ceiling must be an integer >= 1",
-            trail=trail,
-            invocation=invocation,
-        )
+        children_val = children
+    try:
+        register_val = int(register_entries)
+    except (TypeError, ValueError):
+        register_val = register_entries
+    try:
+        ceiling_val = int(ceiling)
+    except (TypeError, ValueError):
+        ceiling_val = ceiling
 
-    children_int, err = _parse_int_nonneg(children, "children")
-    if children_int is None:
-        return _refuse(
-            REFUSAL_MEASURABLE_INVALID,
-            err,
-            trail=trail,
-            invocation=invocation,
-        )
-    register_int, err = _parse_int_nonneg(register_entries, "register-entries")
-    if register_int is None:
-        return _refuse(
-            REFUSAL_MEASURABLE_INVALID,
-            err,
+    record = {
+        "kind": RECORD_KIND_INVOCATION,
+        "invocation": invocation,
+        "cause": cause,
+        "weight": weight,
+        "measurables": {
+            "children": children_val,
+            "registerEntries": register_val,
+        },
+        "ceiling": ceiling_val,
+        "override": override,
+        "seats": list(seats),
+    }
+    violations = _walk_record_for_kind(record)
+    if violations:
+        return _writer_refuse_from_violations(
+            violations,
+            record,
             trail=trail,
             invocation=invocation,
         )
@@ -1062,10 +1483,10 @@ def verb_open(trail, invocation, cause, weight, children, register_entries, ceil
         "cause": cause,
         "weight": weight,
         "measurables": {
-            "children": children_int,
-            "registerEntries": register_int,
+            "children": children_val,
+            "registerEntries": register_val,
         },
-        "ceiling": ceiling_int,
+        "ceiling": ceiling_val,
         "override": override,
         "seats": list(seats),
     }
@@ -1107,22 +1528,56 @@ def verb_record_round(
         )
 
     try:
-        round_int = int(round_no)
+        round_val = int(round_no)
     except (TypeError, ValueError):
-        return _refuse(
-            REFUSAL_ROUND_INVALID,
-            "round must be a positive integer",
-            trail=trail,
-            invocation=invocation,
-        )
-    if round_int < 1:
-        return _refuse(
-            REFUSAL_ROUND_INVALID,
-            "round must be a positive integer",
+        round_val = round_no
+
+    part_objs = []
+    for part in parts:
+        name, status, err = _parse_colon_pair(part, "part")
+        if err is not None:
+            return _refuse(
+                REFUSAL_PART_MALFORMED,
+                err,
+                trail=trail,
+                invocation=invocation,
+            )
+        part_objs.append({"part": name, "status": status})
+
+    finding_objs = []
+    known = _recorded_finding_ids(records, invocation)
+    for finding in findings:
+        fid, lens, err = _parse_colon_pair(finding, "finding")
+        if err is not None:
+            return _refuse(
+                REFUSAL_FINDING_MALFORMED,
+                err,
+                trail=trail,
+                invocation=invocation,
+            )
+        finding_objs.append({"finding": fid, "lens": lens})
+
+    record = {
+        "kind": RECORD_KIND_ROUND,
+        "invocation": invocation,
+        "round": round_val,
+        "lenses": list(lenses),
+        "parts": part_objs,
+        "controlProbe": control_probe,
+        "findings": finding_objs,
+        "declinedExtension": list(declined_extension),
+        "mechanicalOnly": bool(mechanical_only),
+    }
+    violations = _walk_record_for_kind(record)
+    if violations:
+        return _writer_refuse_from_violations(
+            violations,
+            record,
             trail=trail,
             invocation=invocation,
         )
 
+    round_int = record["round"]
     ceiling = _invocation_ceiling(records, invocation)
     if round_int > ceiling:
         return _refuse(
@@ -1140,60 +1595,8 @@ def verb_record_round(
             invocation=invocation,
         )
 
-    for lens in lenses:
-        if lens not in LENSES:
-            return _refuse(
-                REFUSAL_LENS_UNRECOGNIZED,
-                "unrecognized lens %r" % lens,
-                trail=trail,
-                invocation=invocation,
-            )
-
-    part_objs = []
-    for part in parts:
-        name, status, err = _parse_colon_pair(part, "part")
-        if err is not None:
-            return _refuse(
-                REFUSAL_PART_MALFORMED,
-                err,
-                trail=trail,
-                invocation=invocation,
-            )
-        if status not in PART_STATUSES:
-            return _refuse(
-                REFUSAL_PART_STATUS_UNRECOGNIZED,
-                "unrecognized part status %r" % status,
-                trail=trail,
-                invocation=invocation,
-            )
-        part_objs.append({"part": name, "status": status})
-
-    if control_probe not in CONTROL_PROBE_READS:
-        return _refuse(
-            REFUSAL_CONTROL_PROBE_UNRECOGNIZED,
-            "unrecognized control-probe read %r" % control_probe,
-            trail=trail,
-            invocation=invocation,
-        )
-
-    finding_objs = []
-    known = _recorded_finding_ids(records, invocation)
-    for finding in findings:
-        fid, lens, err = _parse_colon_pair(finding, "finding")
-        if err is not None:
-            return _refuse(
-                REFUSAL_FINDING_MALFORMED,
-                err,
-                trail=trail,
-                invocation=invocation,
-            )
-        if lens not in LENSES:
-            return _refuse(
-                REFUSAL_LENS_UNRECOGNIZED,
-                "unrecognized lens %r" % lens,
-                trail=trail,
-                invocation=invocation,
-            )
+    for item in finding_objs:
+        fid = item["finding"]
         if fid in known:
             return _refuse(
                 REFUSAL_FINDING_DUPLICATE,
@@ -1202,7 +1605,6 @@ def verb_record_round(
                 invocation=invocation,
             )
         known.add(fid)
-        finding_objs.append({"finding": fid, "lens": lens})
 
     for fid in declined_extension:
         if fid not in known:
@@ -1295,20 +1697,45 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
                 trail=trail,
                 invocation=invocation,
             )
-        if disposition not in DISPOSITIONS:
+        item = {
+            "finding": fid,
+            "disposition": disposition,
+            "outcome": outcome,
+        }
+        if fid in evidence_by_finding:
+            item["evidence"] = evidence_by_finding[fid]
+        finding_objs.append(item)
+
+    sync_objs = []
+    for sync_check in sync_checks:
+        child, result, err = _parse_colon_pair(sync_check, "sync-check")
+        if err is not None:
             return _refuse(
-                REFUSAL_DISPOSITION_UNRECOGNIZED,
-                "unrecognized disposition %r" % disposition,
+                REFUSAL_SYNC_CHECK_MALFORMED,
+                err,
                 trail=trail,
                 invocation=invocation,
             )
-        if outcome not in OUTCOMES:
-            return _refuse(
-                REFUSAL_OUTCOME_UNRECOGNIZED,
-                "unrecognized outcome %r" % outcome,
-                trail=trail,
-                invocation=invocation,
-            )
+        sync_objs.append({"child": child, "result": result})
+
+    record = {
+        "kind": RECORD_KIND_VERIFICATION,
+        "invocation": invocation,
+        "findings": finding_objs,
+        "syncChecks": sync_objs,
+    }
+    violations = _walk_record_for_kind(record)
+    if violations:
+        return _writer_refuse_from_violations(
+            violations,
+            record,
+            trail=trail,
+            invocation=invocation,
+        )
+
+    for item in finding_objs:
+        fid = item["finding"]
+        disposition = item["disposition"]
         if fid not in known_round:
             return _refuse(
                 REFUSAL_FINDING_UNKNOWN,
@@ -1342,33 +1769,10 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
                 invocation=invocation,
             )
         already_verified.add(fid)
-        item = {
-            "finding": fid,
-            "disposition": disposition,
-            "outcome": outcome,
-        }
-        if fid in evidence_by_finding:
-            item["evidence"] = evidence_by_finding[fid]
-        finding_objs.append(item)
 
-    sync_objs = []
     seen_children = set()
-    for sync_check in sync_checks:
-        child, result, err = _parse_colon_pair(sync_check, "sync-check")
-        if err is not None:
-            return _refuse(
-                REFUSAL_SYNC_CHECK_MALFORMED,
-                err,
-                trail=trail,
-                invocation=invocation,
-            )
-        if result not in SYNC_RESULTS:
-            return _refuse(
-                REFUSAL_SYNC_RESULT_UNRECOGNIZED,
-                "unrecognized sync-check result %r" % result,
-                trail=trail,
-                invocation=invocation,
-            )
+    for sync_obj in sync_objs:
+        child = sync_obj["child"]
         if child in seen_children:
             return _refuse(
                 REFUSAL_SYNC_CHECK_DUPLICATE,
@@ -1377,14 +1781,7 @@ def verb_record_verification(trail, invocation, findings, sync_checks, evidence_
                 invocation=invocation,
             )
         seen_children.add(child)
-        sync_objs.append({"child": child, "result": result})
 
-    record = {
-        "kind": RECORD_KIND_VERIFICATION,
-        "invocation": invocation,
-        "findings": finding_objs,
-        "syncChecks": sync_objs,
-    }
     _append_record(trail, record)
     return _make_write_result(
         RESULT_RECORDED,

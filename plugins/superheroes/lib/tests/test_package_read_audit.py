@@ -1895,3 +1895,268 @@ def test_undecided_reasons_complete():
     assert pra.UNDECIDED_REASONS == _string_constants_by_prefix(
         "UNDECIDED_", "UNDECIDED_REASONS",
     )
+
+
+# --- declaration layer (WO-A) -----------------------------------------------
+
+
+def test_declarations_are_well_formed():
+    assert pra._declaration_violations() == []
+
+
+def test_declaration_self_check_catches_a_bad_declaration():
+    problems = pra._validate_constraint(
+        "test",
+        {"bogusKey": True, "type": "string"},
+    )
+    assert any("unknown constraint key" in p for p in problems)
+
+    problems = pra._validate_constraint(
+        "test",
+        {"type": "bogus"},
+    )
+    assert any("unknown type" in p for p in problems)
+
+    problems = pra._validate_declaration(
+        "test",
+        {
+            "required": ("missing_field",),
+            "fields": {"present": {"type": "string"}},
+        },
+    )
+    assert any("required names undeclared field" in p for p in problems)
+
+    problems = pra._validate_constraint(
+        "test",
+        {"type": "string", "refusal": "not-a-real-reason"},
+    )
+    assert any("not in REFUSAL_REASONS" in p for p in problems)
+
+
+@pytest.mark.parametrize(
+    "record",
+    [
+        {"kind": "invocation", "invocation": "inv-1", "weight": []},
+        {"kind": "invocation", "invocation": "inv-1", "weight": {}},
+        {
+            "kind": "round",
+            "invocation": "inv-1",
+            "round": 1,
+            "controlProbe": [],
+        },
+        {
+            "kind": "verification",
+            "invocation": "inv-1",
+            "findings": [{
+                "finding": "f-1",
+                "disposition": {},
+                "outcome": "verified",
+            }],
+        },
+        {"kind": [], "invocation": "inv-1"},
+        {"kind": 3, "invocation": "inv-1"},
+        {"kind": None, "invocation": "inv-1"},
+        3,
+        "x",
+        [],
+    ],
+)
+def test_walker_never_raises_on_hostile_values(record):
+    if isinstance(record, dict):
+        violations = pra._walk_record_for_kind(record)
+    else:
+        violations = pra._walk_envelope(record)
+    assert isinstance(violations, list)
+    assert violations
+
+
+def test_bool_is_not_an_integer_and_not_a_string():
+    ceiling_record = {
+        "kind": pra.RECORD_KIND_INVOCATION,
+        "invocation": "inv-1",
+        "ceiling": True,
+        "weight": pra.WEIGHT_LIGHT,
+        "seats": ["seat-a"],
+        "measurables": {"children": 1, "registerEntries": 1},
+        "cause": "x",
+    }
+    violations = pra._walk_record_for_kind(ceiling_record)
+    assert any(
+        v["path"] == "ceiling"
+        and v["code"] == pra.VIOLATION_TYPE_INVALID
+        for v in violations
+    )
+
+    cause_record = dict(ceiling_record, ceiling=1, cause=True)
+    violations = pra._walk_record_for_kind(cause_record)
+    assert any(
+        v["path"] == "cause"
+        and v["code"] == pra.VIOLATION_TYPE_INVALID
+        for v in violations
+    )
+
+
+def test_check_reports_unhashable_value_instead_of_crashing(tmp_path):
+    trail, _ = _open_default(tmp_path)
+    text = trail.read_text(encoding="utf-8")
+    text = text.replace('"weight": "light"', '"weight": []', 1)
+    trail.write_text(text, encoding="utf-8")
+    _hand_append_record(trail, {"kind": [], "invocation": "inv-1"})
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code in (pra.EXIT_NONCONFORMING, pra.EXIT_UNDECIDED)
+    assert payload["schema"] == pra.SCHEMA
+
+
+@pytest.mark.parametrize(
+    "expected_reason,cli_args",
+    [
+        (
+            pra.REFUSAL_SEATS_MISSING,
+            [
+                "open",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--cause", "x",
+                "--weight", pra.WEIGHT_LIGHT,
+                "--children", "1",
+                "--register-entries", "1",
+                "--ceiling", "1",
+            ],
+        ),
+        (
+            pra.REFUSAL_WEIGHT_UNRECOGNIZED,
+            [
+                "open",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--cause", "x",
+                "--weight", "heavy",
+                "--children", "1",
+                "--register-entries", "1",
+                "--ceiling", "1",
+                "--seat", "seat-a",
+            ],
+        ),
+        (
+            pra.REFUSAL_CEILING_INVALID,
+            [
+                "open",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--cause", "x",
+                "--weight", pra.WEIGHT_LIGHT,
+                "--children", "1",
+                "--register-entries", "1",
+                "--ceiling", "0",
+                "--seat", "seat-a",
+            ],
+        ),
+        (
+            pra.REFUSAL_MEASURABLE_INVALID,
+            [
+                "open",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--cause", "x",
+                "--weight", pra.WEIGHT_LIGHT,
+                "--children", "-1",
+                "--register-entries", "1",
+                "--ceiling", "1",
+                "--seat", "seat-a",
+            ],
+        ),
+        (
+            pra.REFUSAL_ROUND_INVALID,
+            [
+                "record-round",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--round", "0",
+                "--lens", pra.LENS_COLLISIONS,
+                "--part", "pkg:unreviewed",
+                "--control-probe", pra.CONTROL_PROBE_ENGAGED,
+            ],
+        ),
+        (
+            pra.REFUSAL_LENS_UNRECOGNIZED,
+            [
+                "record-round",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--round", "1",
+                "--lens", "bogus-lens",
+                "--part", "pkg:unreviewed",
+                "--control-probe", pra.CONTROL_PROBE_ENGAGED,
+            ],
+        ),
+        (
+            pra.REFUSAL_PART_STATUS_UNRECOGNIZED,
+            [
+                "record-round",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--round", "1",
+                "--lens", pra.LENS_COLLISIONS,
+                "--part", "pkg:wip",
+                "--control-probe", pra.CONTROL_PROBE_ENGAGED,
+            ],
+        ),
+        (
+            pra.REFUSAL_CONTROL_PROBE_UNRECOGNIZED,
+            [
+                "record-round",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--round", "1",
+                "--lens", pra.LENS_COLLISIONS,
+                "--part", "pkg:unreviewed",
+                "--control-probe", "maybe",
+            ],
+        ),
+        (
+            pra.REFUSAL_DISPOSITION_UNRECOGNIZED,
+            [
+                "record-verification",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--finding", "f-1:bogus:verified",
+            ],
+        ),
+        (
+            pra.REFUSAL_OUTCOME_UNRECOGNIZED,
+            [
+                "record-verification",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--finding", "f-1:package-fix:bogus",
+            ],
+        ),
+        (
+            pra.REFUSAL_SYNC_RESULT_UNRECOGNIZED,
+            [
+                "record-verification",
+                "--trail", "TRAIL",
+                "--invocation", "inv-1",
+                "--finding", "f-1:package-fix:verified",
+                "--sync-check", "child-a:bogus",
+            ],
+        ),
+    ],
+)
+def test_writer_refusals_come_from_the_declaration(
+    tmp_path,
+    expected_reason,
+    cli_args,
+):
+    trail = tmp_path / "trail.md"
+    args = [arg if arg != "TRAIL" else str(trail) for arg in cli_args]
+    if cli_args[0] == "record-round":
+        _open_default(tmp_path, trail=trail)
+    if cli_args[0] == "record-verification":
+        trail, _ = _open_default(tmp_path, trail=trail)
+        _record_round(trail, findings=["f-1:collisions"])
+    code, out, _err = _run_cli(*args)
+    assert code == pra.EXIT_REFUSED
+    payload = json.loads(out.strip())
+    assert payload["reason"] == expected_reason

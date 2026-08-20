@@ -1058,11 +1058,15 @@ check for both "numbered greater than N" and "date" happily passes prose reading
 instead of entries numbered greater than N."* A presence sentinel proves a phrase is there, never
 that the sentence around it still says the right thing.
 
-*Worked example 6 — the package-read-audit vocabulary (pending).* Not a live pair today: the
-package-read audit validator is re-scoped to #1077, so there is no module home and no doc that
-restates its tokens. When #1077 lands, its declared per-kind record schemas become the
-authoritative home, and any doc that restates those tokens is enumerated here as a copy-holder
-under the same rules as the examples above.
+*Worked example 6 — the package-read-audit vocabulary.* The authoritative home is
+`plugins/superheroes/lib/package_read_audit.py` — its per-kind record declarations and its result,
+refusal and nonconformity constants. This is a **Pattern 1** case by construction: the module is a
+single runtime home that every consumer reads at run time, so there is no doc that restates its
+tokens and no copy list to keep in step. `skills/showrunner/reference/decomposition.md` § The audit
+trail is the tool's named consumer and deliberately carries **prose and the invocation only** — the
+three `check` results and their exit codes — never a token list. If a doc ever restates those
+tokens it becomes a copy-holder, is enumerated here, and is compared against the module by
+`lib/tests/test_ssot_drift.py` under the same rules as the examples above.
 
 **Caveat — a copy-list drift test is only as complete as the copies it enumerates.** A
 **new** copy someone adds later is invisible until it is added to the test. So the
