@@ -2804,3 +2804,406 @@ def test_summary_never_manufactures_a_value(
         payload = json.loads(out.strip())
         summary = payload["invocations"][0]
         assert summary[summary_key] is None
+
+
+# --- WO-G: duplicate-rule census, hostile sweep, empty-string pairing --------
+
+
+def _duplicate_family_tokens():
+    """The writer duplicate-refusal family, derived from the module at run time.
+
+    The family is filtered out of REFUSAL_REASONS by its `-duplicate` suffix
+    rather than listed by hand. A sixth duplicate refusal joins the family the
+    day it lands, and the census below then demands a DUPLICATE_RULES entry for
+    it without anyone remembering to edit this test.
+    """
+    return {
+        reason for reason in pra.REFUSAL_REASONS
+        if reason.endswith("-duplicate")
+    }
+
+
+_DUPLICATE_SCOPES = frozenset({
+    pra.DUPLICATE_SCOPE_TRAIL,
+    pra.DUPLICATE_SCOPE_INVOCATION,
+    pra.DUPLICATE_SCOPE_RECORD,
+})
+
+
+def test_duplicate_rules_cover_every_writer_duplicate_refusal():
+    family = _duplicate_family_tokens()
+    # Fail-closed: a derivation that collapsed to the empty set would make both
+    # directions below vacuously true.
+    assert len(family) >= 5, sorted(family)
+
+    declared = {rule["token"] for rule in pra.DUPLICATE_RULES}
+    assert family - declared == set(), sorted(family - declared)
+    assert declared - family == set(), sorted(declared - family)
+
+    for rule in pra.DUPLICATE_RULES:
+        assert rule["kind"] in pra.RECORD_KINDS, rule
+        assert rule["kind"] in pra.RECORD_SCHEMAS, rule
+        assert rule["scope"] in _DUPLICATE_SCOPES, rule
+        assert isinstance(rule["identity"], str) and rule["identity"], rule
+        collection = rule.get("collection")
+        if collection is None:
+            continue
+        fields = pra.RECORD_SCHEMAS[rule["kind"]]["fields"]
+        assert collection in fields, rule
+        assert fields[collection]["type"] == "array", rule
+
+
+def _sweep_base_records():
+    """A conforming three-record trail; every sweep case mutates one record.
+
+    The verification disposition is declined-extension because the round
+    template names f-1 in declinedExtension, which keeps declinedExtension[0]
+    populated so a generated case can reach that path.
+    """
+    return [
+        _valid_record(pra.RECORD_KIND_INVOCATION),
+        _valid_record(pra.RECORD_KIND_ROUND),
+        _ver(findings=[{
+            "finding": "f-1",
+            "disposition": pra.DISPOSITION_DECLINED_EXTENSION,
+            "outcome": pra.OUTCOME_VERIFIED,
+        }]),
+    ]
+
+
+def _sweep_mutation(kind, path, value):
+    records = _sweep_base_records()
+    for idx, record in enumerate(records):
+        if record["kind"] == kind:
+            mutated = copy.deepcopy(record)
+            _set_path(mutated, path, value)
+            records[idx] = mutated
+            return records
+    raise AssertionError("no %r record in the sweep base" % kind)
+
+
+def _duplicate_fixture(token):
+    """A trail that trips one duplicate class, or None if no fixture exists."""
+    records = _sweep_base_records()
+    if token == pra.REFUSAL_INVOCATION_DUPLICATE:
+        return records + [copy.deepcopy(records[0])]
+    if token == pra.REFUSAL_ROUND_DUPLICATE:
+        return records + [copy.deepcopy(records[1])]
+    if token == pra.REFUSAL_FINDING_DUPLICATE:
+        second_round = copy.deepcopy(records[1])
+        second_round["round"] = 2
+        return records + [second_round]
+    if token == pra.REFUSAL_VERIFICATION_DUPLICATE:
+        return records + [copy.deepcopy(records[2])]
+    if token == pra.REFUSAL_SYNC_CHECK_DUPLICATE:
+        records[2] = copy.deepcopy(records[2])
+        records[2]["syncChecks"] = [
+            {"child": "c1", "result": pra.SYNC_RESULT_PASS},
+            {"child": "c1", "result": pra.SYNC_RESULT_PASS},
+        ]
+        return records
+    return None
+
+
+def _sweep_id(*parts):
+    text = "-".join(str(part) for part in parts)
+    return text.replace("[", "_").replace("]", "").replace(".", "_")
+
+
+def _sweep_case(
+    case_id,
+    records,
+    family,
+    kind=None,
+    expect=None,
+    path=None,
+    duplicate=False,
+    token=None,
+):
+    return {
+        "id": case_id,
+        "records": records,
+        "family": family,
+        "kind": kind,
+        "expect": expect,
+        "path": path,
+        "duplicate": duplicate,
+        "token": token,
+    }
+
+
+def _hostile_cases():
+    """Hostile check fixtures, generated from RECORD_SCHEMAS and DUPLICATE_RULES.
+
+    Generated rather than hand-listed: a field or duplicate rule added later is
+    swept the day it lands, which is the omission class this whole file exists
+    to remove.
+    """
+    cases = []
+
+    unknown_kind = _sweep_base_records()
+    unknown_kind[0] = dict(unknown_kind[0], kind="invokation")
+    cases.append(_sweep_case(
+        "unknown-record-kind", unknown_kind, "kind",
+        expect=pra.RESULT_NONCONFORMING, path="kind",
+    ))
+
+    non_string_kind = _sweep_base_records()
+    non_string_kind[0] = dict(non_string_kind[0], kind=[])
+    cases.append(_sweep_case(
+        "non-string-record-kind", non_string_kind, "kind",
+        expect=pra.RESULT_NONCONFORMING, path="kind",
+    ))
+
+    cases.append(_sweep_case(
+        "unknown-field-top-level",
+        _sweep_mutation(pra.RECORD_KIND_INVOCATION, "bogusField", "x"),
+        "unknown-field",
+    ))
+    cases.append(_sweep_case(
+        "unknown-field-nested",
+        _sweep_mutation(pra.RECORD_KIND_ROUND, "parts[0].bogusField", "x"),
+        "unknown-field",
+    ))
+
+    for kind, declaration in pra.RECORD_SCHEMAS.items():
+        for path, constraint in _iter_constraints(declaration):
+            cases.append(_sweep_case(
+                _sweep_id("wrong-type", kind, path),
+                _sweep_mutation(kind, path, _wrong_type_value(constraint["type"])),
+                "wrong-type",
+                kind=kind,
+                expect=pra.RESULT_NONCONFORMING,
+                path=path,
+            ))
+
+    for kind, path in _nonempty_fields():
+        cases.append(_sweep_case(
+            _sweep_id("empty-string", kind, path),
+            _sweep_mutation(kind, path, ""),
+            "empty-string",
+            kind=kind,
+            expect=pra.RESULT_NONCONFORMING,
+            path=path,
+        ))
+
+    for rule in pra.DUPLICATE_RULES:
+        fixture = _duplicate_fixture(rule["token"])
+        assert fixture is not None, (
+            "no duplicate fixture for rule token %r; every DUPLICATE_RULES "
+            "entry owes one" % rule["token"]
+        )
+        cases.append(_sweep_case(
+            _sweep_id("duplicate", rule["token"]), fixture, "duplicate",
+            kind=rule["kind"],
+            expect=pra.RESULT_NONCONFORMING,
+            duplicate=True,
+            token=rule["token"],
+        ))
+
+    permuted_token = pra.REFUSAL_SYNC_CHECK_DUPLICATE
+    # Derived, not assumed: the permuted fixture only claims a duplicate finding
+    # while a rule still declares that class.
+    permuted_duplicate = any(
+        rule["token"] == permuted_token for rule in pra.DUPLICATE_RULES
+    )
+    for idx, order in enumerate(itertools.permutations(
+        _duplicate_fixture(permuted_token),
+    )):
+        cases.append(_sweep_case(
+            "permuted-sync-check-duplicate-%d" % idx, list(order), "permuted",
+            expect=pra.RESULT_NONCONFORMING,
+            duplicate=permuted_duplicate,
+        ))
+
+    assert cases, "the hostile sweep generated no cases"
+    return cases
+
+
+def _assert_sweep_census(cases):
+    """Fail-closed floor: a generated sweep that yields nothing is worthless."""
+    wrong_type_per_kind = {}
+    for case in cases:
+        if case["family"] != "wrong-type":
+            continue
+        wrong_type_per_kind[case["kind"]] = wrong_type_per_kind.get(
+            case["kind"], 0,
+        ) + 1
+    for kind in pra.RECORD_SCHEMAS:
+        assert wrong_type_per_kind.get(kind, 0) >= 1, (kind, wrong_type_per_kind)
+
+    nonempty = _nonempty_fields()
+    assert nonempty, "RECORD_SCHEMAS declares no nonEmpty constraint"
+    empty_cases = [case for case in cases if case["family"] == "empty-string"]
+    assert len(empty_cases) == len(nonempty), (len(empty_cases), len(nonempty))
+
+    duplicate_tokens = {
+        case["token"] for case in cases if case["family"] == "duplicate"
+    }
+    assert duplicate_tokens == {rule["token"] for rule in pra.DUPLICATE_RULES}
+
+
+_HOSTILE_CASES = _hostile_cases()
+
+
+@pytest.mark.parametrize("case", _HOSTILE_CASES, ids=lambda case: case["id"])
+def test_hostile_input_sweep(tmp_path, case):
+    _assert_sweep_census(_HOSTILE_CASES)
+
+    trail = tmp_path / "trail.md"
+    _write_trail(trail, case["records"])
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+
+    assert code in (pra.EXIT_CONFORMING, pra.EXIT_NONCONFORMING), out
+    assert code != pra.EXIT_UNDECIDED, out
+    assert payload["result"] in (
+        pra.RESULT_CONFORMING, pra.RESULT_NONCONFORMING,
+    ), out
+    assert payload["result"] != pra.RESULT_UNDECIDED, out
+    assert code == _check_exit_code(payload), out
+
+    for item in payload["findings"]:
+        position = item["position"]
+        assert isinstance(position, int) and not isinstance(position, bool), item
+        assert isinstance(item["path"], str) and item["path"], item
+
+    if case["expect"] is not None:
+        assert payload["result"] == case["expect"], payload["findings"]
+    if case["path"] is not None:
+        assert any(
+            item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+            and item["path"] == case["path"]
+            for item in payload["findings"]
+        ), payload["findings"]
+    if case["duplicate"]:
+        assert any(
+            item["kind"] == pra.NONCONFORMITY_RECORD_DUPLICATE
+            for item in payload["findings"]
+        ), payload["findings"]
+
+
+def _open_with_empty(dirpath, invocation="inv-1", cause="x", seat="seat-a"):
+    return _run_cli(
+        "open",
+        "--trail", str(dirpath / "trail.md"),
+        "--invocation", invocation,
+        "--cause", cause,
+        "--weight", pra.WEIGHT_LIGHT,
+        "--children", "1",
+        "--register-entries", "1",
+        "--ceiling", "2",
+        "--seat", seat,
+    )
+
+
+def _round_after_open(dirpath, **kwargs):
+    trail, _ = _open_default(dirpath)
+    return _record_round(trail, **kwargs)
+
+
+def _verification_after_open(dirpath, **kwargs):
+    trail, _ = _open_default(dirpath)
+    _record_round(trail, findings=["f-1:collisions"])
+    return _record_verification(trail, **kwargs)
+
+
+# nonEmpty paths a writer CLI can carry an empty value into, all the way down to
+# the declaration walk.
+_EMPTY_DRIVEN_BY_WRITER = {
+    (pra.RECORD_KIND_INVOCATION, "seats[0]"):
+        lambda d: _open_with_empty(d, seat=""),
+    (pra.RECORD_KIND_INVOCATION, "cause"):
+        lambda d: _open_with_empty(d, cause=""),
+    (pra.RECORD_KIND_INVOCATION, "invocation"):
+        lambda d: _open_with_empty(d, invocation=""),
+}
+
+# nonEmpty paths no writer CLI can carry an empty value into: the verb refuses
+# earlier, on the structural shape of the flag, so the declaration walk is never
+# reached. Each row names the reason the CLI actually gives, which keeps the
+# un-driveable set explicit and small instead of a silent skip -- and a writer
+# that later does reach the declaration reddens this test until its path moves
+# up to the driven map.
+_EMPTY_NOT_DRIVEN_BY_WRITER = {
+    (pra.RECORD_KIND_ROUND, "invocation"): (
+        lambda d: _round_after_open(d, invocation=""),
+        pra.REFUSAL_INVOCATION_UNKNOWN,
+    ),
+    (pra.RECORD_KIND_ROUND, "parts[0].part"): (
+        lambda d: _round_after_open(d, parts=[":unreviewed"]),
+        pra.REFUSAL_PART_MALFORMED,
+    ),
+    (pra.RECORD_KIND_ROUND, "findings[0].finding"): (
+        lambda d: _round_after_open(d, findings=[":collisions"]),
+        pra.REFUSAL_FINDING_MALFORMED,
+    ),
+    (pra.RECORD_KIND_VERIFICATION, "invocation"): (
+        lambda d: _verification_after_open(
+            d,
+            invocation="",
+            findings=["f-1:package-fix:verified"],
+        ),
+        pra.REFUSAL_INVOCATION_UNKNOWN,
+    ),
+    (pra.RECORD_KIND_VERIFICATION, "findings[0].finding"): (
+        lambda d: _verification_after_open(
+            d, findings=[":package-fix:verified"],
+        ),
+        pra.REFUSAL_FINDING_MALFORMED,
+    ),
+    (pra.RECORD_KIND_VERIFICATION, "syncChecks[0].child"): (
+        lambda d: _verification_after_open(d, sync_checks=[":pass"]),
+        pra.REFUSAL_SYNC_CHECK_MALFORMED,
+    ),
+}
+
+
+@pytest.mark.parametrize("kind,path", _nonempty_fields())
+def test_empty_string_bounds_nonconform_exactly_as_writers_refuse(
+    tmp_path,
+    kind,
+    path,
+):
+    """PRA-005: writer refusal and check nonconformity are one declaration."""
+    driven = set(_EMPTY_DRIVEN_BY_WRITER)
+    not_driven = set(_EMPTY_NOT_DRIVEN_BY_WRITER)
+    assert driven & not_driven == set(), sorted(driven & not_driven)
+    assert driven | not_driven == set(_nonempty_fields()), sorted(
+        set(_nonempty_fields()) ^ (driven | not_driven),
+    )
+
+    check_dir = tmp_path / "check"
+    check_dir.mkdir()
+    trail = check_dir / "trail.md"
+    _write_trail(trail, _sweep_mutation(kind, path, ""))
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING, out
+    assert payload["result"] == pra.RESULT_NONCONFORMING, out
+    assert any(
+        item["kind"] == pra.NONCONFORMITY_RECORD_VALUE_INVALID
+        and item["path"] == path
+        for item in payload["findings"]
+    ), payload["findings"]
+
+    declared_reason = pra._refusal_for_violation(
+        {"path": path, "value": "", "code": pra.VIOLATION_EMPTY_STRING},
+        _valid_record(kind),
+    )
+    writer_dir = tmp_path / "writer"
+    writer_dir.mkdir()
+    if (kind, path) in _EMPTY_DRIVEN_BY_WRITER:
+        code, out, _err = _EMPTY_DRIVEN_BY_WRITER[(kind, path)](writer_dir)
+        payload = json.loads(out.strip())
+        assert code == pra.EXIT_REFUSED, out
+        assert payload["result"] == pra.RESULT_REFUSED, out
+        assert payload["reason"] == declared_reason, payload
+    else:
+        driver, structural_reason = _EMPTY_NOT_DRIVEN_BY_WRITER[(kind, path)]
+        code, out, _err = driver(writer_dir)
+        payload = json.loads(out.strip())
+        assert code == pra.EXIT_REFUSED, out
+        assert payload["result"] == pra.RESULT_REFUSED, out
+        assert payload["reason"] == structural_reason, payload
+        assert payload["reason"] != declared_reason, payload
