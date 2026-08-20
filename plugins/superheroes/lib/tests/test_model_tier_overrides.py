@@ -715,3 +715,172 @@ def test_tier_writer_gate_readable_still_fable_on_external(tmp_path, capsys):
     out = json.loads(capsys.readouterr().out)
     assert rc == 1
     assert out["reason"] == "fable-on-external-engine"
+
+
+def _default_tiers():
+    import importlib.util
+
+    core_path = os.path.join(_HERE, "..", "model_tier.py")
+    spec = importlib.util.spec_from_file_location("model_tier_defaults", core_path)
+    core = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(core)
+    return {role: core.resolve_model(role, {}) for role in MTO.KNOWN_ROLES}
+
+
+def test_effective_tiers_for_gate_profile_absent_everywhere_returns_defaults(tmp_path, monkeypatch):
+    _chdir(monkeypatch, tmp_path)
+    gate = MTO.effective_tiers_for_gate(cwd=str(tmp_path))
+    assert gate.status == MTO.TIERS_ABSENT
+    assert gate.tiers == _default_tiers()
+    assert gate.overrides == {}
+
+
+def test_effective_tiers_for_gate_profile_is_directory_refuses(tmp_path):
+    p = tmp_path / "profile.md"
+    p.mkdir()
+    gate = MTO.effective_tiers_for_gate(profile_path=str(p))
+    assert gate.status == MTO.TIERS_UNREADABLE
+    assert gate.tiers is None
+
+
+def test_effective_tiers_for_gate_profile_is_dangling_symlink_refuses(tmp_path):
+    p = tmp_path / "profile.md"
+    p.symlink_to("/nonexistent/tier-gate-profile-dangle")
+    gate = MTO.effective_tiers_for_gate(profile_path=str(p))
+    assert gate.status == MTO.TIERS_UNREADABLE
+    assert gate.tiers is None
+
+
+def test_effective_tiers_for_gate_profile_unreadable_mode_zero_refuses(tmp_path):
+    if os.geteuid() == 0:
+        import pytest
+        pytest.skip("root can read mode 0o000 files")
+    p = tmp_path / "profile.md"
+    p.write_text(_BLOCK, encoding="utf-8")
+    p.chmod(0o000)
+    try:
+        gate = MTO.effective_tiers_for_gate(profile_path=str(p))
+        assert gate.status == MTO.TIERS_UNREADABLE
+        assert gate.tiers is None
+    finally:
+        p.chmod(0o644)
+
+
+def test_effective_tiers_for_gate_profile_invalid_utf8_refuses(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_bytes(b"\xff\xfe")
+    gate = MTO.effective_tiers_for_gate(profile_path=str(p))
+    assert gate.status == MTO.TIERS_UNREADABLE
+    assert gate.tiers is None
+
+
+def test_effective_tiers_for_gate_readable_profile_no_model_tiers_block_ok_defaults(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text("## Threat model\nsingle-user\n", encoding="utf-8")
+    gate = MTO.effective_tiers_for_gate(profile_path=str(p))
+    assert gate.status == MTO.TIERS_OK
+    assert gate.overrides == {}
+    assert gate.tiers == _default_tiers()
+
+
+def test_effective_tiers_for_gate_readable_profile_with_overrides_ok(tmp_path):
+    p = tmp_path / "profile.md"
+    p.write_text(_BLOCK, encoding="utf-8")
+    gate = MTO.effective_tiers_for_gate(profile_path=str(p))
+    assert gate.status == MTO.TIERS_OK
+    assert gate.overrides == {"reviewer-deep": "opus", "mechanical": "sonnet"}
+    assert gate.tiers["reviewer-deep"] == "opus"
+    assert gate.tiers["mechanical"] == "sonnet"
+
+
+def test_effective_tiers_for_gate_unresolvable_root_error_refuses(tmp_path, monkeypatch):
+    import calibration_resolve as cr
+
+    def _raise(*_a, **_kw):
+        raise cr.UnresolvableRootError(
+            root="/bad", cwd=str(tmp_path), hero=cr.REVIEW_CREW,
+            default_location="global", default_layer_path="/layer",
+        )
+
+    monkeypatch.setattr(cr, "candidate_profile_paths", _raise)
+    gate = MTO.effective_tiers_for_gate(cwd=str(tmp_path))
+    assert gate.status == MTO.TIERS_ROOT_UNAVAILABLE
+    assert gate.tiers is None
+
+
+def test_effective_tiers_for_gate_repo_root_unavailable_refuses(tmp_path, monkeypatch):
+    import store_core as sc
+
+    def fake(cwd, *args):
+        if args == ("rev-parse", "--show-toplevel"):
+            return sc.GitResult(None, sc.GIT_UNAVAILABLE, "FileNotFoundError: no git")
+        return sc.run_git_result(cwd, *args)
+
+    monkeypatch.setattr(sc, "run_git_result", fake)
+    gate = MTO.effective_tiers_for_gate(cwd=str(tmp_path))
+    assert gate.status == MTO.TIERS_ROOT_UNAVAILABLE
+    assert gate.tiers is None
+
+
+def test_effective_tiers_for_gate_unreadable_in_repo_does_not_fall_through_to_global(
+    tmp_path, isolated_default_store_root, monkeypatch,
+):
+    import calibration_resolve as cr
+
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = isolated_default_store_root
+    global_layer = _ensure_global_unified_layer(str(repo), default_store)
+    global_layer_path = cr._unified_global_layer_path(str(repo), root=default_store)
+    with open(global_layer_path, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\nreviewer: opus\n")
+    unreadable = repo / ".claude" / "superheroes" / "review-crew.md"
+    unreadable.parent.mkdir(parents=True)
+    unreadable.mkdir()
+    _chdir(monkeypatch, repo)
+    gate = MTO.effective_tiers_for_gate(cwd=str(repo), root=default_store)
+    assert gate.status == MTO.TIERS_UNREADABLE
+    assert gate.tiers is None
+    assert gate.path == str(unreadable)
+
+
+def test_tier_gate_refusal_unregistered_status_returns_evaluation_failed():
+    gate = MTO.TierGate(None, {}, "bogus-status", "detail", None)
+    refusal = MTO.tier_gate_refusal(gate)
+    assert refusal["reason"] == MTO.TIER_REASON_EVALUATION_FAILED
+    assert "bogus-status" in refusal["detail"]
+
+
+def test_show_cli_unreadable_profile_exits_one_with_named_reason(tmp_path, capsys):
+    p = tmp_path / "profile.md"
+    p.mkdir()
+    rc = MTO.main(["model_tier_overrides.py", "show", "--profile", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 1
+    assert out["ok"] is False
+    assert out["reason"] == MTO.TIER_REASON_UNREADABLE
+    assert out["detail"]
+    assert out["path"] == str(p)
+
+
+def test_bare_profile_cli_unreadable_profile_still_failopen_empty(tmp_path, capsys):
+    p = tmp_path / "profile.md"
+    p.mkdir()
+    rc = MTO.main(["model_tier_overrides.py", "--profile", str(p)])
+    out = json.loads(capsys.readouterr().out)
+    assert rc == 0
+    assert out == {}
+
+
+def test_tier_gate_predicates_match_status_semantics(tmp_path):
+    absent = MTO.TierGate(_default_tiers(), {}, MTO.TIERS_ABSENT, None, None)
+    ok = MTO.TierGate({}, {}, MTO.TIERS_OK, None, "/p")
+    unreadable = MTO.TierGate(None, {}, MTO.TIERS_UNREADABLE, "x", "/p")
+    assert MTO.tier_gate_is_absent(absent)
+    assert MTO.tier_gate_is_ok(ok)
+    assert not MTO.tier_gate_is_refusal(absent)
+    assert not MTO.tier_gate_is_refusal(ok)
+    assert MTO.tier_gate_is_refusal(unreadable)
+    assert MTO.tier_gate_refusal(absent) is None
+    assert MTO.tier_gate_refusal(unreadable)["reason"] == MTO.TIER_REASON_UNREADABLE

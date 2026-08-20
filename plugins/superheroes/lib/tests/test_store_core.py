@@ -663,6 +663,264 @@ def test_resolve_global_none_when_all_dangle(tmp_path):
 
 
 # ---------------------------------------------------------------------------
+# issue #782 — fail-closed pointer and entry-directory reads
+# ---------------------------------------------------------------------------
+
+def _store_root(tmp_path):
+    return str(tmp_path / "store")
+
+
+def _repo_with_remote(tmp_path):
+    return _init_repo(tmp_path / "r", remote="git@github.com:o/p.git")
+
+
+def _ident_and_hashes(repo):
+    ident = sc.derive_identifiers(repo)
+    return ident, ident["remote_hash"], ident["gitdir_hash"]
+
+
+def test_read_pointer_result_absent(tmp_path):
+    root = _store_root(tmp_path)
+    result = sc.read_pointer_result(root, "missing-key")
+    assert result.status == sc.POINTER_ABSENT
+    assert result.entry_id is None
+
+
+def test_read_pointer_result_empty_or_whitespace(tmp_path):
+    root = _store_root(tmp_path)
+    keys = os.path.join(root, "keys")
+    os.makedirs(keys)
+    for content in ("", "   ", "\n\t"):
+        key = "empty-%d" % hash(content)
+        with open(os.path.join(keys, key), "w") as fh:
+            fh.write(content)
+        result = sc.read_pointer_result(root, key)
+        assert result.status == sc.POINTER_ABSENT
+        assert result.entry_id is None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
+def test_read_pointer_result_unreadable_mode_zero(tmp_path):
+    root = _store_root(tmp_path)
+    keys = os.path.join(root, "keys")
+    os.makedirs(keys)
+    path = os.path.join(keys, "locked")
+    with open(path, "w") as fh:
+        fh.write("entry-live")
+    os.chmod(path, 0o000)
+    try:
+        result = sc.read_pointer_result(root, "locked")
+        assert result.status == sc.POINTER_UNREADABLE
+        assert result.entry_id is None
+        assert result.detail is not None
+    finally:
+        os.chmod(path, 0o644)
+
+
+def test_read_pointer_result_unreadable_when_pointer_is_directory(tmp_path):
+    root = _store_root(tmp_path)
+    os.makedirs(os.path.join(root, "keys", "isdir"))
+    result = sc.read_pointer_result(root, "isdir")
+    assert result.status == sc.POINTER_UNREADABLE
+    assert result.entry_id is None
+
+
+def test_read_pointer_result_unreadable_invalid_utf8(tmp_path):
+    root = _store_root(tmp_path)
+    keys = os.path.join(root, "keys")
+    os.makedirs(keys)
+    with open(os.path.join(keys, "bad-utf8"), "wb") as fh:
+        fh.write(b"\xff\xfeentry")
+    result = sc.read_pointer_result(root, "bad-utf8")
+    assert result.status == sc.POINTER_UNREADABLE
+    assert result.entry_id is None
+
+
+@pytest.mark.parametrize("setup", [
+    "absent",
+    "empty",
+    "directory",
+    "invalid_utf8",
+])
+def test_read_pointer_wrapper_returns_none_on_non_ok(setup, tmp_path):
+    root = _store_root(tmp_path)
+    keys = os.path.join(root, "keys")
+    os.makedirs(keys, exist_ok=True)
+    key = "k"
+    if setup == "absent":
+        pass
+    elif setup == "empty":
+        open(os.path.join(keys, key), "w").close()
+    elif setup == "directory":
+        os.makedirs(os.path.join(keys, key))
+    elif setup == "invalid_utf8":
+        with open(os.path.join(keys, key), "wb") as fh:
+            fh.write(b"\xff\xfe")
+    assert sc.read_pointer(root, key) is None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
+def test_read_pointer_wrapper_unreadable_mode_zero(tmp_path):
+    root = _store_root(tmp_path)
+    keys = os.path.join(root, "keys")
+    os.makedirs(keys)
+    path = os.path.join(keys, "locked")
+    with open(path, "w") as fh:
+        fh.write("entry-live")
+    os.chmod(path, 0o000)
+    try:
+        assert sc.read_pointer(root, "locked") is None
+    finally:
+        os.chmod(path, 0o644)
+
+
+def _make_unreadable_pointer(root, key_hash, entry_id="entry-live"):
+    keys = os.path.join(root, "keys")
+    os.makedirs(keys, exist_ok=True)
+    path = os.path.join(keys, key_hash)
+    with open(path, "w") as fh:
+        fh.write(entry_id)
+    os.chmod(path, 0o000)
+
+
+def test_resolve_global_strict_false_unreadable_pointer_no_raise(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    ident, rh, gh = _ident_and_hashes(repo)
+    eid = gh
+    os.makedirs(os.path.join(root, "entries", eid))
+    sc.write_pointer(root, gh, eid)
+    _make_unreadable_pointer(root, rh, "entry-other")
+    # fail-open: unreadable remote pointer reads as absent; gitdir pointer resolves.
+    result = sc.resolve_global(repo, root, strict=False)
+    assert result is not None
+    assert result["entry_id"] == eid
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
+def test_resolve_global_strict_true_unreadable_pointer_raises(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    ident, rh, gh = _ident_and_hashes(repo)
+    _make_unreadable_pointer(root, gh, "entry-live")
+    with pytest.raises(sc.PointerUnreadable) as excinfo:
+        sc.resolve_global(repo, root, strict=True)
+    assert excinfo.value.status == sc.POINTER_UNREADABLE
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
+def test_resolve_global_strict_true_partial_unreadable_does_not_rewrite_readable_pointer(
+        tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    ident, rh, gh = _ident_and_hashes(repo)
+    eid = gh
+    entry_dir = os.path.join(root, "entries", eid)
+    os.makedirs(entry_dir)
+    sc.write_keys_json(entry_dir, ident)
+    readable_path = os.path.join(root, "keys", gh)
+    sc.write_pointer(root, gh, eid)
+    before = open(readable_path, "rb").read()
+    _make_unreadable_pointer(root, rh, "entry-other")
+    with pytest.raises(sc.PointerUnreadable):
+        sc.resolve_global(repo, root, strict=True)
+    assert open(readable_path, "rb").read() == before
+
+
+def test_resolve_global_strict_true_missing_entry_dir_self_heals(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    ident, rh, gh = _ident_and_hashes(repo)
+    live = "entry-LIVE"
+    os.makedirs(os.path.join(root, "entries", live))
+    sc.write_pointer(root, rh, "entry-DANGLING")
+    sc.write_pointer(root, gh, live)
+    result = sc.resolve_global(repo, root, strict=True)
+    assert result is not None
+    assert result["entry_id"] == live
+    assert result["healed"] is True
+    assert sc.read_pointer(root, rh) == live
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can traverse mode 0o000 dirs")
+def test_resolve_global_strict_true_unstatable_entry_dir_raises(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    ident, rh, gh = _ident_and_hashes(repo)
+    eid = "entry-locked"
+    entries = os.path.join(root, "entries")
+    entry_dir = os.path.join(entries, eid)
+    os.makedirs(entry_dir)
+    sc.write_pointer(root, gh, eid)
+    os.chmod(entries, 0o000)
+    try:
+        with pytest.raises(sc.PointerUnreadable) as excinfo:
+            sc.resolve_global(repo, root, strict=True)
+        assert excinfo.value.status == sc.POINTER_UNREADABLE
+    finally:
+        os.chmod(entries, 0o755)
+
+
+def test_resolve_global_strict_true_entry_path_is_file_raises(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    ident, rh, gh = _ident_and_hashes(repo)
+    eid = "entry-file"
+    entries = os.path.join(root, "entries")
+    os.makedirs(entries)
+    with open(os.path.join(entries, eid), "w") as fh:
+        fh.write("not a directory")
+    sc.write_pointer(root, gh, eid)
+    with pytest.raises(sc.PointerUnreadable) as excinfo:
+        sc.resolve_global(repo, root, strict=True)
+    assert excinfo.value.status == sc.POINTER_UNREADABLE
+
+
+def test_pointer_unreadable_is_not_oserror():
+    assert not issubclass(sc.PointerUnreadable, OSError)
+
+
+def test_resolve_global_census_out_of_scope_callers_use_default_strictness():
+    """Pin the four out-of-scope resolve_global call sites to default strict=False."""
+    import ast
+    from pathlib import Path
+
+    lib = Path(__file__).resolve().parents[1]
+    expected_files = {
+        "review_store.py",
+        "mode_registry.py",
+        "core_md.py",
+        "calibration_resolve.py",
+    }
+    found = {}
+    for path in lib.glob("*.py"):
+        if path.name not in expected_files:
+            continue
+        tree = ast.parse(path.read_text())
+        calls = []
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "resolve_global":
+                calls.append(node)
+            elif (isinstance(func, ast.Attribute)
+                  and func.attr == "resolve_global"):
+                calls.append(node)
+        found[path.name] = calls
+
+    assert set(found) == expected_files
+    for name, calls in found.items():
+        assert calls, "%s has no resolve_global call" % name
+        for call in calls:
+            for kw in call.keywords:
+                if kw.arg == "strict":
+                    assert isinstance(kw.value, ast.Constant)
+                    assert kw.value.value is False, (
+                        "%s passes strict=%r" % (name, kw.value.value))
+
+
+# ---------------------------------------------------------------------------
 # pointer read/write
 # ---------------------------------------------------------------------------
 

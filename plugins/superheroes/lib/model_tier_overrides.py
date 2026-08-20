@@ -13,9 +13,11 @@ Fail-OPEN: a missing profile, missing block, malformed line, or unknown role yie
 (or drops the bad key) — the knob then uses its band defaults. A wrong/absent override is
 a cost concern, never a safety one. stdlib only.
 """
+import collections
 import json
 import os
 import re
+import stat
 import sys
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -33,6 +35,22 @@ KNOWN_ROLES = model_registry.known_roles()
 KNOWN_MODELS = model_registry.known_claude_models()
 
 _LEGACY_ROLE_ALIAS = {"fixer": "code-fixer"}
+
+TIERS_OK = "ok"
+TIERS_ABSENT = "absent"
+TIERS_UNREADABLE = "unreadable"
+TIERS_ROOT_UNAVAILABLE = "root-unavailable"
+TIER_REASON_UNREADABLE = "model-tiers-unreadable"
+TIER_REASON_ROOT_UNAVAILABLE = "calibration-root-unavailable"
+TIER_REASON_EVALUATION_FAILED = "model-tiers-evaluation-failed"
+
+TierGate = collections.namedtuple("TierGate", "tiers overrides status detail path")
+
+_TIER_GATE_USABLE_STATUSES = frozenset({TIERS_OK, TIERS_ABSENT})
+_TIER_GATE_REFUSAL_REASONS = {
+    TIERS_UNREADABLE: TIER_REASON_UNREADABLE,
+    TIERS_ROOT_UNAVAILABLE: TIER_REASON_ROOT_UNAVAILABLE,
+}
 
 _GATE_REASON_EVALUATION_FAILED_FALLBACK = "dispatch-gate-evaluation-failed"
 
@@ -248,6 +266,167 @@ def update_overrides(profile_path, set_overrides=None, clear_roles=None):
     }
 
 
+def _parse_overrides_from_text(text):
+    out = {}
+    in_block = False
+    for line in text.splitlines():
+        if _HEADING.match(line):
+            in_block = True
+            continue
+        if in_block and _NEXT_HEADING.match(line):
+            break
+        if in_block:
+            m = _ENTRY.match(line)
+            if m:
+                role = _LEGACY_ROLE_ALIAS.get(m.group(1), m.group(1))
+                if role in KNOWN_ROLES:
+                    out[role] = m.group(2)
+    return out
+
+
+def _classify_profile_path(path):
+    """Classify a single profile path for gate purposes. Never raises."""
+    import core_md
+
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return TIERS_ABSENT, None
+        except OSError as exc:
+            return TIERS_UNREADABLE, "lstat failed at %s: %s" % (path, exc)
+        return TIERS_UNREADABLE, "dangling symlink at %s" % path
+    except OSError as exc:
+        return TIERS_UNREADABLE, core_md.gate_refusal_detail(exc, at=path)
+
+    if not stat.S_ISREG(st.st_mode):
+        return TIERS_UNREADABLE, "not a regular file at %s" % path
+
+    return TIERS_OK, None
+
+
+def resolve_profile_path_for_gate(cwd=None, root=None):
+    """Resolve the review-crew profile path for gate purposes. Never raises."""
+    import calibration_resolve
+    import core_md
+    import store_core
+
+    try:
+        cwd = cwd or os.getcwd()
+        for path in calibration_resolve.candidate_profile_paths(cwd, root=root):
+            status, detail = _classify_profile_path(path)
+            if status == TIERS_ABSENT:
+                continue
+            if status == TIERS_UNREADABLE:
+                return path, TIERS_UNREADABLE, detail
+            return path, TIERS_OK, None
+        return None, TIERS_ABSENT, None
+    except calibration_resolve.UnresolvableRootError as exc:
+        return None, TIERS_ROOT_UNAVAILABLE, core_md.gate_refusal_detail(exc)
+    except store_core.RepoRootUnavailable as exc:
+        return None, TIERS_ROOT_UNAVAILABLE, core_md.gate_refusal_detail(exc)
+    except Exception as exc:
+        return None, TIERS_UNREADABLE, core_md.gate_refusal_detail(exc)
+
+
+def overrides_for_gate(profile_path):
+    """Classify and parse overrides at ``profile_path``. Never raises."""
+    import core_md
+
+    if not profile_path:
+        return TierGate(None, {}, TIERS_ABSENT, None, None)
+
+    status, detail = _classify_profile_path(profile_path)
+    if status != TIERS_OK:
+        return TierGate(None, {}, status, detail, profile_path)
+
+    try:
+        with open(profile_path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return TierGate(
+            None,
+            {},
+            TIERS_UNREADABLE,
+            core_md.gate_refusal_detail(exc, at=profile_path, verb="opening"),
+            profile_path,
+        )
+    except UnicodeDecodeError as exc:
+        return TierGate(
+            None,
+            {},
+            TIERS_UNREADABLE,
+            "UTF-8 decode failed at %s: %s" % (profile_path, exc),
+            profile_path,
+        )
+
+    overrides = _parse_overrides_from_text(text)
+    return TierGate(None, overrides, TIERS_OK, None, profile_path)
+
+
+def effective_tiers_for_gate(cwd=None, root=None, profile_path=None):
+    """Merged effective tiers with fail-closed refusal semantics. Never raises."""
+    import model_tier
+
+    if profile_path:
+        gate = overrides_for_gate(profile_path)
+        if tier_gate_is_refusal(gate):
+            return TierGate(None, gate.overrides, gate.status, gate.detail, gate.path)
+        tiers = {role: model_tier.resolve_model(role, gate.overrides) for role in KNOWN_ROLES}
+        return TierGate(tiers, gate.overrides, gate.status, gate.detail, profile_path)
+
+    path, status, detail = resolve_profile_path_for_gate(cwd=cwd, root=root)
+    if status == TIERS_ABSENT:
+        tiers = {role: model_tier.resolve_model(role, {}) for role in KNOWN_ROLES}
+        return TierGate(tiers, {}, status, detail, None)
+    if status != TIERS_OK:
+        return TierGate(None, {}, status, detail, path)
+
+    gate = overrides_for_gate(path)
+    if tier_gate_is_refusal(gate):
+        return TierGate(None, gate.overrides, gate.status, gate.detail, gate.path)
+    tiers = {role: model_tier.resolve_model(role, gate.overrides) for role in KNOWN_ROLES}
+    return TierGate(tiers, gate.overrides, TIERS_OK, None, path)
+
+
+def tier_gate_is_refusal(gate):
+    """True when ``effective_tiers_for_gate`` status refuses usable tiers."""
+    return gate.status not in _TIER_GATE_USABLE_STATUSES
+
+
+def tier_gate_is_absent(gate):
+    """True when no profile is present at the resolved gate path."""
+    return gate.status == TIERS_ABSENT
+
+
+def tier_gate_is_ok(gate):
+    """True when a readable profile was classified successfully."""
+    return gate.status == TIERS_OK
+
+
+def tier_gate_reason_for_status(status):
+    """Return the canonical refusal reason string for a registered tier-gate status."""
+    return _TIER_GATE_REFUSAL_REASONS[status]
+
+
+def tier_gate_refusal(gate):
+    """Return the ``core_md.gate_refusal`` payload for a refusal status, or ``None``."""
+    import core_md
+
+    if not tier_gate_is_refusal(gate):
+        return None
+    try:
+        reason = tier_gate_reason_for_status(gate.status)
+    except KeyError:
+        return core_md.gate_refusal(
+            TIER_REASON_EVALUATION_FAILED,
+            "unregistered tier gate status: %s" % gate.status,
+        )
+    return core_md.gate_refusal(reason, gate.detail)
+
+
 def resolve_profile_path(cwd=None, root=None):
     return _resolve_profile_path(cwd, root)
 
@@ -283,20 +462,33 @@ def main(argv):
             ap.add_argument("--set", action="append", default=[], metavar="ROLE=MODEL")
             ap.add_argument("--clear", action="append", default=[], metavar="ROLE")
         args = ap.parse_args(raw[1:])
-        profile = args.profile if args.profile is not None else _resolve_profile_path()
-        if not profile:
-            sys.stdout.write(json.dumps({"ok": False, "reason": "profile-not-resolved"}) + "\n")
-            return 1
         if cmd == "show":
+            if args.profile is not None:
+                gate = effective_tiers_for_gate(profile_path=args.profile)
+            else:
+                gate = effective_tiers_for_gate(cwd=os.getcwd())
+            refusal = tier_gate_refusal(gate)
+            if refusal is not None:
+                sys.stdout.write(json.dumps({
+                    "ok": False,
+                    "reason": refusal["reason"],
+                    "detail": refusal["detail"],
+                    "path": gate.path,
+                }) + "\n")
+                return 1
             sys.stdout.write(json.dumps({
                 "ok": True,
-                "path": profile,
-                "overrides": load_overrides(profile),
-                "effective": effective_tiers(profile),
+                "path": gate.path,
+                "overrides": gate.overrides,
+                "effective": gate.tiers,
                 "knownRoles": list(KNOWN_ROLES),
                 "knownModels": list(KNOWN_MODELS),
             }) + "\n")
             return 0
+        profile = args.profile if args.profile is not None else _resolve_profile_path()
+        if not profile:
+            sys.stdout.write(json.dumps({"ok": False, "reason": "profile-not-resolved"}) + "\n")
+            return 1
         updates = {}
         warnings = []
         for item in args.set:
