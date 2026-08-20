@@ -4360,3 +4360,21 @@ def test_r8_closure_receipt_elements_exactly_once_in_in_repo_copy_holders():
     _assert_literal_exactly_once_across_holders(
         R8_CLOSURE_RECEIPT_ELEMENTS, _R8_IN_REPO_COPY_HOLDERS
     )
+
+
+def test_r8_in_repo_copy_holder_census_drift_missing_paths():
+    """§11.2: every listed in-repo R8 copy-holder must exist when any sibling holder is reachable."""
+    reachable = []
+    missing = []
+    for rel in _R8_IN_REPO_COPY_HOLDERS:
+        path = os.path.normpath(os.path.join(PLUGIN, rel))
+        if os.path.isfile(path):
+            reachable.append(path)
+        else:
+            missing.append(path)
+    if not reachable:
+        pytest.skip("no copy-holder reachable: %s" % ", ".join(missing))
+    assert not missing, (
+        "R8 in-repo copy-holder census drift: missing path(s): %s"
+        % ", ".join(missing)
+    )
