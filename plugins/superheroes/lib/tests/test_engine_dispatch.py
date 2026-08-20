@@ -1597,6 +1597,9 @@ def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
         order_id="order-1",
     )
     records_after_first, _ = ED._journal_read(first["runDir"])
+    opened_first = [r for r in records_after_first if r.get("kind") == "run-opened"]
+    assert len(opened_first) == 1
+    assert os.path.isdir(first["runDir"])
     second = ED.dispatch_review(
         "codex", model="sonnet", effort="high",
         prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
@@ -1604,9 +1607,11 @@ def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
         order_id="order-1",
     )
     assert second["runDir"] == first["runDir"]
+    assert os.path.isdir(second["runDir"])
     records_after_second, _ = ED._journal_read(second["runDir"])
-    opened = [r for r in records_after_second if r.get("kind") == "run-opened"]
-    assert len(opened) == len([r for r in records_after_first if r.get("kind") == "run-opened"])
+    opened_second = [r for r in records_after_second if r.get("kind") == "run-opened"]
+    assert len(opened_second) == len(opened_first)
+    assert len(opened_second) == 1
 
 
 def test_dispatch_poll_missing_run_dir_refused(tmp_path):

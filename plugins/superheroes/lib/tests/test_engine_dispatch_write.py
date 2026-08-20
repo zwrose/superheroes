@@ -286,14 +286,18 @@ def test_dispatch_write_continuation_reuses_created_run_dir(tmp_path):
         tmp_path, fake, cwd=wt, run_dir=str(run_dir), max_wait=0, order_id="order-1",
     )
     records_after_first, _ = ED._journal_read(first["runDir"])
+    opened_first = [r for r in records_after_first if r.get("kind") == "run-opened"]
+    assert len(opened_first) == 1
+    assert os.path.isdir(first["runDir"])
     second = _dispatch_write(
         tmp_path, FakeRunner([]), cwd=wt, run_dir=str(run_dir), max_wait=0, order_id="order-1",
     )
     assert second["runDir"] == first["runDir"]
+    assert os.path.isdir(second["runDir"])
     records_after_second, _ = ED._journal_read(second["runDir"])
-    opened_first = [r for r in records_after_first if r.get("kind") == "run-opened"]
     opened_second = [r for r in records_after_second if r.get("kind") == "run-opened"]
     assert len(opened_second) == len(opened_first)
+    assert len(opened_second) == 1
 
 
 def test_worktree_lease_held_no_spawn(tmp_path):
