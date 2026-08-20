@@ -289,10 +289,10 @@ def test_audit_breaker_malformed_round_fails_closed():
 
 
 def test_audit_breaker_malformed_outcome_counts_as_not_discharged():
-    rounds = [a_round(1, ["junk"]), a_round(2, [{"identity": "f::x"}])]
-    # round 1 has a non-dict outcome (fail-closed not-discharged marker); round 2 has an
-    # outcome with a MISSING ruling (also fail-closed not-discharged). Different identities,
-    # so no consecutive stall here, but the malformed markers are counted, not dropped.
+    rounds = [a_round(1, ["junk"]), a_round(2, [{"identity": "f::x", "ruling": "not-discharged"}])]
+    # round 1 has a non-dict outcome (fail-closed not-discharged marker); round 2 is a
+    # well-formed not-discharged outcome with a different identity. Different identities,
+    # so no consecutive stall here, but the round 1 malformed marker is counted, not dropped.
     res = check_audit_breaker(rounds, 7)
     assert res["halt"] is False  # different identities, single round each
     # at the cap, the malformed latest round is still "open"
@@ -390,6 +390,94 @@ def test_round_not_discharged_outcome_without_identity_is_malformed():
     ]}
     result = _round_not_discharged(round_rec)
     assert result == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_outcome_not_dict_yields_malformed_marker():
+    # axis: non-dict outcome must yield _MALFORMED_OUTCOME before any clearing branch
+    from circuit_breaker import _round_not_discharged, _MALFORMED_OUTCOME
+    round_rec = {"outcomes": ["not-a-dict"]}
+    assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_id_only_not_discharged_yields_malformed():
+    # axis: id-only not-discharged outcome must not alias on id
+    from circuit_breaker import _round_not_discharged, _MALFORMED_OUTCOME
+    round_rec = {"outcomes": [{"id": "f.py::t@L1", "ruling": "not-discharged"}]}
+    assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_id_only_discharged_must_not_clear():
+    # axis: id-only discharged outcome must not clear — malformed before clearing branch
+    from circuit_breaker import _round_not_discharged, _MALFORMED_OUTCOME
+    round_rec = {"outcomes": [{"id": "f.py::t@L1", "ruling": "discharged"}]}
+    assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_id_only_with_class_key_yields_malformed():
+    # axis: class-key aliases must not rescue an identity-less outcome
+    from circuit_breaker import _round_not_discharged, _MALFORMED_OUTCOME
+    round_rec = {"outcomes": [{
+        "id": "f.py::t@L1", "ruling": "not-discharged",
+        "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1",
+    }]}
+    assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_empty_identity_yields_malformed():
+    # axis: empty or null identity is no identity — must yield _MALFORMED_OUTCOME
+    from circuit_breaker import _round_not_discharged, _MALFORMED_OUTCOME
+    for identity in ("", None):
+        round_rec = {"outcomes": [{"identity": identity, "ruling": "not-discharged"}]}
+        assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_unknown_ruling_yields_malformed():
+    # axis: ruling outside AUDIT_RULINGS must yield _MALFORMED_OUTCOME
+    from circuit_breaker import _round_not_discharged, _MALFORMED_OUTCOME
+    round_rec = {"outcomes": [{"identity": "f.py::t", "ruling": "dischargd"}]}
+    assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+    round_rec = {"outcomes": [{"identity": "f.py::t"}]}
+    assert _round_not_discharged(round_rec) == [{_MALFORMED_OUTCOME}]
+
+
+def test_round_not_discharged_valid_identity_not_discharged_unchanged():
+    # axis: valid identity + not-discharged keeps today's alias set
+    from circuit_breaker import _round_not_discharged
+    outcome = {"identity": "f.py::t", "title": "t",
+               "classKey": "k", "dimension": "Security", "taxonomy": "CWE-1",
+               "ruling": "not-discharged"}
+    result = _round_not_discharged({"outcomes": [outcome]})
+    aliases = result[0]
+    assert "f.py::t" in aliases
+    assert "k" in aliases or any("Security" in a for a in aliases)
+
+
+def test_round_not_discharged_valid_identity_clearing_ruling_clears():
+    # axis: valid identity + clearing ruling still clears
+    from circuit_breaker import _round_not_discharged
+    for ruling in ("discharged", "discharged-but-new-issue"):
+        round_rec = {"outcomes": [{"identity": "f.py::t", "ruling": ruling}]}
+        assert _round_not_discharged(round_rec) == []
+
+
+def test_audit_target_aliases_id_only_target_unchanged():
+    # axis: target side still aliases on id when identity is absent
+    target = {"id": "f.py::t@L1"}
+    assert audit_target_aliases(target) == {"f.py::t@L1"}
+
+
+def test_audit_outcome_aliases_id_only_record_empty_while_target_aliases_yields_id():
+    # axis: deliberate asymmetry — outcomes never alias on id; targets still do
+    record = {"id": "f.py::t@L1"}
+    assert _audit_outcome_aliases(record) == set()
+    assert audit_target_aliases(record) == {"f.py::t@L1"}
+
+
+def test_round_not_discharged_malformed_round_unchanged():
+    # axis: malformed round (not dict / no outcomes list) still yields _MALFORMED_ROUND
+    from circuit_breaker import _round_not_discharged, _MALFORMED_ROUND
+    assert _round_not_discharged(None) == [{_MALFORMED_ROUND}]
+    assert _round_not_discharged({"outcomes": "not-a-list"}) == [{_MALFORMED_ROUND}]
 
 
 # --- round ceiling (#1030) ----------------------------------------------------

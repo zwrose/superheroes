@@ -776,6 +776,76 @@ def test_audit_results_fault_pure():
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
+def test_collection_manifest_fault_pure():
+    # axis: absent manifest — accepted (no fault).
+    assert RD.collection_manifest_fault({}, [{"id": "a1"}]) is None
+    assert RD.collection_manifest_fault({"results": []}, [{"id": "a1"}]) is None
+    # axis: non-dict manifest — refused, type named.
+    assert "list" in RD.collection_manifest_fault({"collectionManifest": []}, [{"id": "a1"}])
+    assert "NoneType" in RD.collection_manifest_fault({"collectionManifest": None}, [{"id": "a1"}])
+    assert "str" in RD.collection_manifest_fault({"collectionManifest": "x"}, [{"id": "a1"}])
+    # axis: empty dict manifest — accepted; fold's unauthenticated path still governs.
+    assert RD.collection_manifest_fault({"collectionManifest": {}}, [{"id": "a1"}]) is None
+    # axis: strict subset of target ids — accepted.
+    assert RD.collection_manifest_fault({"collectionManifest": {"a1": "claude"}},
+                                        [{"id": "a1"}, {"id": "a2"}]) is None
+    # axis: unavailable targets (None) — no key judged, accepted.
+    assert RD.collection_manifest_fault({"collectionManifest": {"zz": "claude"}}, None) is None
+    # axis: known-empty targets + nonempty manifest — refused.
+    fault = RD.collection_manifest_fault({"collectionManifest": {"zz": "claude"}}, [])
+    assert fault is not None and "zz" in fault
+    # axis: identity key — refused with identity-vs-id hint.
+    targets = [{"id": "f.py::x@L1", "identity": "f.py::x"}]
+    fault = RD.collection_manifest_fault({"collectionManifest": {"f.py::x": "claude"}}, targets)
+    assert fault is not None
+    assert "identity" in fault and "f.py::x@L1" in fault
+    # axis: unknown key — refused, valid target ids listed.
+    fault = RD.collection_manifest_fault({"collectionManifest": {"nope": "claude"}},
+                                         [{"id": "a2"}, {"id": "a1"}])
+    assert fault is not None
+    assert "nope" in fault and "a1" in fault and "a2" in fault
+    # axis: determinism — first bad key is sorted.
+    fault = RD.collection_manifest_fault({"collectionManifest": {"z": "x", "a": "x"}},
+                                         [{"id": "a1"}])
+    assert fault is not None and "collectionManifest key 'a'" in fault
+    # axis: malformed target entries — no crash, do not widen the accepted set.
+    assert RD.collection_manifest_fault({"collectionManifest": {"a1": "x"}},
+                                        [{"id": "a1"}, "bad", {"id": 1}, {}]) is None
+    assert RD.collection_manifest_fault({"collectionManifest": {"bad": "x"}},
+                                        [{"id": "a1"}, "bad", {"id": 1}, {}]) is not None
+    # axis: non-dict artifact — accepted; envelope refusal is the sibling's job.
+    assert RD.collection_manifest_fault(None, [{"id": "a1"}]) is None
+
+
+def test_submit_audits_collection_manifest_key_refused(tmp_path):
+    """A mis-keyed collectionManifest is refused at the submit chokepoint with the mistake named,
+    the pending step intact, and a corrected resubmit on the same phase/attempt/state-hash accepted."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, targets = _audit_artifact(n)
+    bad = dict(good)
+    bad["collectionManifest"] = {targets[0]["identity"]: targets[0].get("auditorVendor")}
+    _assert_shape_refused(d, n, bad, "collection-manifest-key",
+                          ["identity", "re-key to", targets[0]["id"]], good)
+
+
+def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
+    """A refused manifest key does not run the fold — no auditRounds entry, no _auditOutcome, no
+    decisions recorded."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, _targets = _audit_artifact(n)
+    bad = dict(good)
+    bad["collectionManifest"] = {"no-such-key": "claude"}
+    before = _state_bytes(d)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], bad)
+    assert out["ok"] is False, out
+    assert _state_bytes(d) == before, "a refused manifest submit mutated loop-state"
+    ok, state = RD.load_state(d)
+    assert ok
+    assert not state.get("auditRounds"), state.get("auditRounds")
+    assert not state.get("_auditOutcome"), state.get("_auditOutcome")
+    assert not state.get("decisions"), state.get("decisions")
+
+
 def test_verifier_results_fault_pure():
     assert RD.verifier_results_fault({"verdicts": []}) is None
     assert RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]}) is None
