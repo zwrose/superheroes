@@ -88,6 +88,10 @@ above).
    that they are unapproved. Silence is not a disposition: an abandoned discovery you have not
    parked is one you have dropped.
 
+   **An abandoned child of a spec is the delivery-side twin of an abandoned discovery** — the spec
+   is left waiting for a closure moment that cannot come. **A spec whose child is abandoned — closed unmerged, orphaned, or displaced — is re-planned or parked by the advisor rather than left waiting for a closure moment that cannot come; silence is not a disposition.** **Re-plan** repairs the coverage map and files a replacement child, so a closure moment exists again; **park** parks the spec to the owner — park is one of two branches, never the only one. When the branch is **park**, R7's park surface governs — the same surface the abandoned-discovery paragraph above already cites. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
+
    **The review weight on a completed spec draft is yours to call.** When discovery hands you a
    finished draft, the weight call is the advisor's and no one else's — a discovery session
    never weighs its own draft. **A weight call names `light` or `full`, states its measurables (gradable-line count for a spec draft; child count and register-entry count for a package read), names a round ceiling when it governs a read loop, and may be overridden in either direction by one stated sentence; the numeric bars are guidelines, never gates.** Grade **both** classification inputs — the
@@ -379,6 +383,8 @@ above).
      there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
      while an **undisclosed** one holds the handback. Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
+   - **The closure row** — fires when **this vet is the final one**. **The vet that carries the closure receipt is the one whose merge closes the spec's last open child, and it knows it is the final vet by the present-tense test: every other child is already merged or closed at the moment of this vet.** **Where more than one candidate closure moment is live — concurrent final vets, or a vet racing a sibling's no-PR close — the advisor sequences them so exactly one carries the receipt.** **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.** That no-PR path produces **no PR**, so the receipt reaches the owner with the close itself — an advisor must not conclude that a closure with no PR needs no receipt. When the row fires, the vet **assembles and carries the closure receipt** — Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
    - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
      actually fire when its target breaks? does the test assert what its name claims? does the
@@ -665,6 +671,10 @@ above).
    drive-to-state instructions — `attended` and **none** remain the honest floor when nothing higher is
    reachable. Disclosure names what could not be presented and why, and **reaches the owner before the
    merge click**, not a line in a body nobody reads after the fact.
+   **Delivery acceptance is an owner gate in this duty's sense** — it reaches the owner before the
+   merge click, presented with the final child's handback — or with the no-PR close — in **one
+   sitting**, never a separate process. **No spec closes without either full delivery accepted or an explicit owner acceptance of partial delivery, named as such on the closure receipt with delivered, deferred, and declined each named; nothing closes silently incomplete.** **A failing end-to-end validation run keeps the spec open by default and mints one repair issue per failure, each anchored to the failing run's record and naming the unmet acceptance criterion it restores; the owner may instead explicitly accept delivery with the failing run disclosed, and either way the cycle ends at an owner decision.** Both outcomes are the design — the default (spec stays open, repair issues minted) and the alternative (the owner explicitly accepts with the failing run disclosed) — not a rule plus an exception. The verdict is **advisory** and the acceptance is the **owner's**, consistent with this charter's standing rule that approval never delegates. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md`.
    **Calibration home:** this list is the **default**; per-owner taste domains belong in the
    **configure profile** eventually (not yet built) so a consuming advisor does not re-derive what
    "taste" means for their owner.
@@ -961,3 +971,5 @@ above).
 | "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |
 | "The spec's almost approved — I'll start the coverage map now" | Decomposition is post-approval work; an artifact dated before approval is a routing defect, and the owner's approval is what the whole package is graded against. |
 | "The package read found the spec is wrong — I'll just fix the spec line" | Three dispositions and no fourth — package fix, owner-stamped amendment, or a recorded refutation in the audit trail. A silent spec edit rewrites the thing the owner approved. |
+| "The last child is closing without a PR, so there is nothing to attach a receipt to" | The no-PR close presents the receipt with that close, same sitting — no PR is not no receipt. |
+| "The validation run failed, so the spec obviously stays open" / "the run failed but everything shipped, so close it" | Both outcomes exist — open-by-default with repair issues anchored to the failing run, **or** an explicit owner acceptance with the failure disclosed; the cycle ends at an owner decision either way, and neither branch is the advisor's to pick alone. |
