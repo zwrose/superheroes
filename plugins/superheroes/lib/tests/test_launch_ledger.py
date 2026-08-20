@@ -4614,11 +4614,17 @@ def test_fold_config_dir_is_none_when_the_record_omits_it():
 _LEDGER_PY = os.path.join(_LIB, "launch_ledger.py")
 
 _DECLARATION_DOOR_ADJUDICATION = {
-    "append_under_lock": "guarded-caller-record",
-    "declare_batch": "constructs-own-event",
-    "reserve": "guarded-caller-record",
-    "terminalize": "constructs-own-event",
-    "amend": "constructs-own-event",
+    "append_under_lock": {
+        "kind": "guarded-caller-record",
+        "refusalTest": "test_append_under_lock_refuses_batch_declared_record",
+    },
+    "reserve": {
+        "kind": "guarded-caller-record",
+        "refusalTest": "test_reserve_refuses_batch_declared_with_launch_id",
+    },
+    "declare_batch": {"kind": "the-door"},
+    "terminalize": {"kind": "constructs-own-event"},
+    "amend": {"kind": "constructs-own-event"},
 }
 
 _BATCH_REFUSAL_TOKEN_ADJUDICATION = {
@@ -4631,7 +4637,8 @@ _BATCH_REFUSAL_TOKEN_ADJUDICATION = {
     "batch-declaration-conflict": "test_declare_batch_refuses_declaration_conflict",
     "batch-declaration-malformed": {
         "unreachable": True,
-        "guard": "_validate_batch_declared",
+        "preemptedBy": "fold-bad-field:batch-declared:expectedLaunches",
+        "proofTest": "test_count_malformed_batch_declared_preempted_by_fold",
     },
     "batch-duplicate-declaration": (
         "test_declare_batch_refuses_duplicate_declaration_raw_appended_3_3"
@@ -4656,7 +4663,9 @@ _GUARDED_DOOR_REFUSAL_TOKENS = {
 
 def _module_level_append_callers(tree):
     callers = _ledger_append_writer_functions(tree)
-    # Primitives — batch-declared ownership is enforced at the doors that call them.
+    # Raw primitives — deliberately outside the door set. ``_append_raw`` is
+    # module-internal; public ``append`` cannot refuse ``batch-declared`` because
+    # ``declare_batch`` writes its declaration through it.
     callers.discard("_append_raw")
     callers.discard("append")
     return callers
@@ -4669,18 +4678,7 @@ def _function_def_node(tree, name):
     return None
 
 
-def _function_has_record_parameter(func_node):
-    return any(arg.arg == "record" for arg in func_node.args.args)
-
-
-def _function_has_refusal_token_guard(func_node, token):
-    for node in ast.walk(func_node):
-        if isinstance(node, ast.Constant) and node.value == token:
-            return True
-    return False
-
-
-def _test_function_contains_token_literal(test_name, token):
+def _test_source_contains(test_name, token):
     func = globals().get(test_name)
     assert func is not None, "missing test function %s" % test_name
     source = inspect.getsource(func)
@@ -4865,6 +4863,22 @@ def test_declare_batch_refuses_late_declaration_equal_cardinality(
     assert _ledger_bytes(repo, env) == before
 
 
+def test_declare_batch_refuses_unknown_declaration_index_with_reservation(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-unknown-index"
+    env = os.environ
+    assert _declare(repo, batch, 3, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=801), env=env)
+    monkeypatch.setattr(ll, "_declaration_index", lambda *args, **kwargs: None)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": False, "reason": "batch-declaration-after-reservations"}
+    assert _ledger_bytes(repo, env) == before
+
+
 def test_declare_batch_idempotent_after_reserve_ordering_fork(tmp_path, monkeypatch):
     repo = _init_repo(tmp_path / "repo")
     _ledger_env(tmp_path, monkeypatch)
@@ -5014,42 +5028,65 @@ def test_reserve_refuses_missing_launch_id_on_non_batch_declared_record(
     assert _ledger_bytes(repo, env) == before
 
 
+def test_count_malformed_batch_declared_preempted_by_fold(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-malformed-fold"
+    env = os.environ
+    assert _declare(repo, batch, 1, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo), env=env)
+    # Direct append models corruption — malformed batch-declared missing expectedLaunches.
+    ll.append(repo, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+    }, env=env)
+    result = ll.count(repo, batch, env=env)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "fold-bad-field:batch-declared:expectedLaunches"
+    assert result["reason"] != "batch-declaration-malformed"
+
+
 def test_declaration_door_census_append_callers():
-    """Census: every module-level ledger writer is adjudicated for declaration-door ownership.
+    """Census: every module-level ledger writer above the raw primitives is adjudicated.
 
     Parses ``launch_ledger.py`` source only — a writer added in another module, or one
     that reaches the ledger without calling ``append`` or ``_append_raw`` by those names,
-    is invisible here. ``constructs-own-event`` vs ``guarded-caller-record`` is derived
-    from whether the door accepts a caller ``record`` parameter.
+    is invisible here. ``guarded-caller-record`` rows must name a behavioral refusal test
+    in this module whose source contains the door's refusal token and names the door;
+    that is the honest coverage limit — structural proxies do not converge.
     """
     with open(_LEDGER_PY, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=_LEDGER_PY)
     callers = _module_level_append_callers(tree)
     adjudicated = set(_DECLARATION_DOOR_ADJUDICATION.keys())
     assert callers == adjudicated, (
-        "INVARIANT: declare_batch is the only door for batch-declared records; "
-        "every module-level append() caller must be adjudicated when added or removed: "
+        "INVARIANT: every module-level ledger writer above the raw append/_append_raw "
+        "primitives must be adjudicated when added or removed: "
         "callers=%r adjudicated=%r"
         % (sorted(callers), sorted(adjudicated))
     )
-    for name, kind in _DECLARATION_DOOR_ADJUDICATION.items():
+    module_tests = {name for name in globals() if name.startswith("test_")}
+    for name, entry in _DECLARATION_DOOR_ADJUDICATION.items():
         func_node = _function_def_node(tree, name)
         assert func_node is not None, "missing function %s in launch_ledger.py" % name
-        has_record = _function_has_record_parameter(func_node)
+        kind = entry["kind"]
         if kind == "guarded-caller-record":
-            assert has_record, (
-                "guarded-caller-record %s must accept a caller record parameter"
-                % name
+            refusal_test = entry["refusalTest"]
+            assert refusal_test in module_tests, (
+                "guarded-caller-record %s refusalTest %r is not defined in this module"
+                % (name, refusal_test)
             )
             token = _GUARDED_DOOR_REFUSAL_TOKENS[name]
-            assert _function_has_refusal_token_guard(func_node, token), (
-                "guarded-caller-record %s must return refusal token %r"
-                % (name, token)
+            assert _test_source_contains(refusal_test, token), (
+                "refusalTest %r for %s must contain refusal token %r as a string literal"
+                % (refusal_test, name, token)
             )
-        elif kind == "constructs-own-event":
-            assert not has_record, (
-                "constructs-own-event %s must not accept a caller record parameter"
-                % name
+            refusal_source = inspect.getsource(globals()[refusal_test])
+            assert ("ll.%s" % name) in refusal_source, (
+                "refusalTest %r for %s must name the door (ll.%s) in its source"
+                % (refusal_test, name, name)
             )
 
 
@@ -5059,7 +5096,8 @@ def test_declaration_token_census_batch_reasons():
     Parses string literals in source only — a token built by concatenation rather than
     written as a literal is invisible here (batch-declaration-conflict is pinned by its
     literal prefix). Each covered token's mapped test must contain that token as a string
-    literal in its own source; unreachable tokens must name the guard that pre-empts them.
+    literal in its own source; unreachable tokens must name a proof test whose source
+    contains both the unreachable token and the pre-empting reason.
     """
     with open(_LEDGER_PY, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=_LEDGER_PY)
@@ -5076,13 +5114,26 @@ def test_declaration_token_census_batch_reasons():
     }
     for token, entry in _BATCH_REFUSAL_TOKEN_ADJUDICATION.items():
         if isinstance(entry, dict) and entry.get("unreachable"):
-            guard = entry.get("guard")
-            assert guard is not None, (
-                "unreachable token %r must name the pre-empting guard" % token
+            preempted_by = entry.get("preemptedBy")
+            proof_test = entry.get("proofTest")
+            assert preempted_by is not None, (
+                "unreachable token %r must name the pre-empting reason" % token
             )
-            assert _function_def_node(tree, guard) is not None, (
-                "unreachable token %r guard %r is not defined in launch_ledger.py"
-                % (token, guard)
+            assert proof_test is not None, (
+                "unreachable token %r must name a proof test" % token
+            )
+            assert proof_test in module_tests, (
+                "proof test %r for unreachable token %r is not defined in this module"
+                % (proof_test, token)
+            )
+            assert _test_source_contains(proof_test, token), (
+                "proof test %r for unreachable token %r must contain %r"
+                % (proof_test, token, token)
+            )
+            assert _test_source_contains(proof_test, preempted_by), (
+                "proof test %r for unreachable token %r must contain pre-empting "
+                "reason %r"
+                % (proof_test, token, preempted_by)
             )
             continue
         test_name = entry
@@ -5090,7 +5141,7 @@ def test_declaration_token_census_batch_reasons():
             "adjudicated test %r for token %r is not defined in this module"
             % (test_name, token)
         )
-        assert _test_function_contains_token_literal(test_name, token), (
+        assert _test_source_contains(test_name, token), (
             "adjudicated test %r for token %r must contain %r as a string literal"
             % (test_name, token, token)
         )

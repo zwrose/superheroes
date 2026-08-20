@@ -1318,14 +1318,16 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
                     if info.get("batchId") != batch_id:
                         continue
                     reserved_index = info.get("reservedIndex")
-                    if (reserved_index is not None and decl_index is not None
-                            and decl_index > reserved_index):
-                        # axis: declaration ordering — refuse when declaration is indexed
-                        # after a reservation, even at equal cardinality.
-                        return {
-                            "ok": False,
-                            "reason": "batch-declaration-after-reservations",
-                        }
+                    if reserved_index is not None:
+                        if (decl_index is None
+                                or decl_index > reserved_index):
+                            # axis: declaration ordering — refuse when declaration is
+                            # indexed after a reservation, even at equal cardinality, or
+                            # when the declaration index is unknown; fails closed.
+                            return {
+                                "ok": False,
+                                "reason": "batch-declaration-after-reservations",
+                            }
                 return {"ok": True, "reason": None, "idempotent": True}
             return {
                 "ok": False,
@@ -2077,6 +2079,10 @@ def count(repo_root, batch_id, env=None):
     With the three doors closed, both are reachable only from a ledger written by a
     pre-fix build or by the raw unlocked ``append()``; this module stops new duplicates
     being created but does not repair an existing ledger — recovery stays ledger-clear.
+
+    The public raw ``append()`` remains an unguarded writer by construction — ``declare_batch``
+    writes its declaration through it — which is why this function keeps its
+    ``batch-duplicate-declaration`` fail-closed guard.
     """
     lp = ledger_path(repo_root, env=env)
     if not lp["ok"]:
