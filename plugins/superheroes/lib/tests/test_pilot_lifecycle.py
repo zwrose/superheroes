@@ -859,6 +859,17 @@ def test_slots_dir_valid_cwd_returns_pilot_slots_path():
         shutil.rmtree(tmp)
 
 
+def test_slots_dir_ignores_calibration_refusal(tmp_path):
+    layer_dir = tmp_path / ".claude" / "superheroes"
+    layer_dir.mkdir(parents=True)
+    (layer_dir / "test-pilot.md").symlink_to("/no/such/layer")
+    root = str(tmp_path / "store")
+    result = pl.slots_dir(str(tmp_path), root=root)
+    assert result["ok"] is True
+    assert result["reason"] is None
+    assert result["path"].endswith(os.path.join("pilot-slots"))
+
+
 @pytest.mark.parametrize("bad_cwd", ["x" * 10000, "/nonexistent/path/that/does/not/exist"])
 def test_slots_dir_unresolvable_cwd_refuses(bad_cwd):
     result = pl.slots_dir(bad_cwd)

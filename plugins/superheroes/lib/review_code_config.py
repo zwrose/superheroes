@@ -106,6 +106,9 @@ def resolve(cwd, root=None):
         profile = None
         verify_mode = None
     try:
+        # Deliberate fail-open: model tiers here are a cost knob for review-code rounds,
+        # not a governance gate — an unreadable profile yields band defaults (cost concern,
+        # not a safety one). Governance/readout consumers use effective_tiers_for_gate.
         overrides = model_tier_overrides.load_overrides(profile)
     except Exception:
         overrides = {}

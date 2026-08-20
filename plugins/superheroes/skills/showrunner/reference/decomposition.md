@@ -221,10 +221,33 @@ is nonconforming:
 - Each fix's verification outcome
 - A recorded verification pass (an invocation with rounds and none is nonconforming)
 
-The per-round receipt machinery is **pending (#1077)**. Until it lands, the advisor **writes the
-trail by hand** against the element list above. Convergence and the park call are the advisor's
-judgment, recorded in the trail; the tool (when it lands) checks completeness and well-formedness,
-never re-decides them.
+The per-round receipts are machine-written and machine-checked: `lib/package_read_audit.py` opens
+an invocation, records each round and the verification pass, and its `check` verb audits a trail
+for completeness and well-formedness. Convergence and the park call are the advisor's judgment,
+recorded in the trail; the tool checks completeness and well-formedness, never re-decides them.
+
+The stable invocation (`ROOT_DIR` is the plugin root):
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+python3 -B "$ROOT_DIR/lib/package_read_audit.py" check --trail <path to the trail .md>
+```
+
+`--invocation <id>` narrows the audit to one invocation. `check` returns **`conforming`** (exit 0),
+**`nonconforming`** (exit 1) — one finding per missing element or ill-formed record, each naming
+the record's position in the trail and the field it lands on — or **`undecided`** (exit 2), which
+means the trail could not be read at all: absent, not UTF-8, an unterminated fence, or JSON that
+would not load. A record the writer verbs would refuse never reads as conforming. **A non-zero
+exit blocks the package from being treated as verified** — `undecided` blocks exactly like
+`nonconforming`.
+
+That blocking rule governs **a trail the writer verbs produced**. A trail hand-written before this
+machinery existed holds prose, not records: `check` finds nothing in it to read and returns
+**`undecided`** — a verdict about the reader's reach, not about the read that was done. Such a
+trail comes under the rule the one way there is, by **re-recording its rounds through the writer
+verbs** — an ordinary use of them that needs no new verb — and until that happens it stays a prose
+record, **named as one when the package is vetted** rather than presented as a checked trail. None
+of this relaxes the rule for a trail the tool wrote: there, a non-zero exit blocks.
 
 ### The ceiling park
 

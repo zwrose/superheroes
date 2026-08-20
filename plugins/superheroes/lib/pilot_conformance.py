@@ -70,6 +70,7 @@ REASON_EXERCISE_FN_INVALID = "conformance-exercise-fn-invalid"
 REASON_EXERCISE_RAISED = "conformance-exercise-raised"
 
 REASON_INPUT_NO_CALIBRATION = "conformance-input-no-calibration"
+REASON_INPUT_CALIBRATION_UNREADABLE = "conformance-input-calibration-unreadable"
 REASON_INPUT_NO_PILOT_BLOCK = "conformance-input-no-pilot-block"
 REASON_INPUT_PILOT_BLOCK_INVALID = "conformance-input-pilot-block-invalid"
 REASON_INPUT_NO_POLICY_ROOT = "conformance-input-no-policy-root"
@@ -457,6 +458,9 @@ def _load_calibration_config(cwd, store_root):
     # _read_calibration_text is required to load the pilot block for resolve_inputs.
     try:
         info = store.resolve(cwd, store_root)
+        refusal = info.get("refusal")
+        if refusal is not None:
+            return None, refusal
         path = info.get("profile") if info.get("exists") else None
     except Exception:
         return None, None
@@ -593,10 +597,12 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
     inputs = {}
     root = store_root if store_root is not None else store.store_root()
 
-    cfg, _profile_path = _load_calibration_config(cwd, root)
+    cfg, profile_or_refusal = _load_calibration_config(cwd, root)
     pilot_block = None
     pilot_reason = REASON_INPUT_NO_CALIBRATION
-    if cfg is None:
+    if isinstance(profile_or_refusal, dict) and "reason" in profile_or_refusal:
+        pilot_reason = REASON_INPUT_CALIBRATION_UNREADABLE
+    elif cfg is None:
         pilot_reason = REASON_INPUT_NO_CALIBRATION
     elif pilot_contract.PILOT_BLOCK_KEY not in cfg:
         pilot_reason = REASON_INPUT_NO_PILOT_BLOCK
@@ -616,6 +622,9 @@ def resolve_inputs(cwd, *, policy_root=None, reach_roots=None, slots_dir=None,
     resolved_artifacts_dir = artifacts_dir
     if resolved_artifacts_dir is None:
         try:
+            # Calibration refusal is deliberately not consulted here: artifacts_dir
+            # is machine-local under the store entry and does not depend on which
+            # profile source won calibration resolution.
             resolved_artifacts_dir = store.resolve(cwd, root)["artifacts_dir"]
         except Exception:
             resolved_artifacts_dir = None
