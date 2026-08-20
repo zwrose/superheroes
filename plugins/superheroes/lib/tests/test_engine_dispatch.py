@@ -142,18 +142,6 @@ def _repo(tmp_path, git_as_file=True):
     return str(root)
 
 
-def _case_insensitive_alias_path(path):
-    parent = os.path.dirname(path)
-    name = os.path.basename(path)
-    upper_name = name.upper()
-    if upper_name == name:
-        pytest.skip("case-insensitive filesystem alias unavailable")
-    alt = os.path.join(parent, upper_name)
-    if not os.path.exists(alt):
-        pytest.skip("case-insensitive filesystem alias unavailable")
-    return alt
-
-
 class FakeRunner:
     """Records each call's (argv, prompt_bytes, timeout) and returns scripted responses."""
 
