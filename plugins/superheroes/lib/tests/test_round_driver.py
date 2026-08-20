@@ -841,6 +841,14 @@ def test_collection_manifest_fault_non_string_key_mixed_with_valid_id():
     assert "int" in fault
 
 
+def _collection_manifest_rekey_clause(fault):
+    """Isolate the recovery-id portion of an identity-confusion refusal."""
+    lead = "re-key to a per-location target id for each location: "
+    start = fault.index(lead) + len(lead)
+    end = fault.index("; valid target ids:", start)
+    return fault[start:end]
+
+
 def test_collection_manifest_fault_colliding_identity_names_all_ids():
     """When several targets share one identity, the refusal names every carrying id."""
     targets = [
@@ -856,6 +864,26 @@ def test_collection_manifest_fault_colliding_identity_names_all_ids():
     assert "f.py::x@L1" in fault
     assert "f.py::x@L9" in fault
     assert "per-location" in fault
+    rekey_clause = _collection_manifest_rekey_clause(fault)
+    assert "'f.py::x@L1'" in rekey_clause
+    assert "'f.py::x@L9'" in rekey_clause
+
+
+def test_collection_manifest_fault_duplicate_same_id_single_wording():
+    """Duplicate rows sharing one identity and one id use single-id wording."""
+    legacy_id = "legacy-id"
+    targets = [
+        {"id": legacy_id, "identity": "f.py::x"},
+        {"id": legacy_id, "identity": "f.py::x"},
+    ]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"f.py::x": "claude"}},
+        targets,
+    )
+    assert fault is not None
+    assert "identity" in fault
+    assert "per-location" not in fault
+    assert ("re-key to %r; valid target ids:" % legacy_id) in fault
 
 
 def test_collection_manifest_fault_single_identity_wording_preserved():

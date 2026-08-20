@@ -2395,7 +2395,7 @@ def collection_manifest_fault(artifact, targets):
             if isinstance(t, dict) and isinstance(t.get("id"), str):
                 ident = t.get("identity")
                 if isinstance(ident, str) and ident:
-                    identity_to_ids.setdefault(ident, []).append(t["id"])
+                    identity_to_ids.setdefault(ident, set()).add(t["id"])
         # axis: non-string manifest key — name the key and its type; never let sorted() raise.
         non_string_keys = [k for k in manifest if not isinstance(k, str)]
         if non_string_keys:
