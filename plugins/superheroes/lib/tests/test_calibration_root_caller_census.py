@@ -18,11 +18,11 @@ _REQUIRED_BASENAMES = ("review_code_config.py", "configure_view.py")
 # Site key: "<module basename>::<enclosing def name>::<attr-or-name>"
 # Value: how that call site handles UnresolvableRootError (must not swallow into uncalibrated-looking output).
 ADJUDICATED = {
+    "configure_view.py::collect::resolve": (
+        "re-raise UnresolvableRootError; TIERS_ROOT_UNAVAILABLE re-probe fail-opens default tiers on success"
+    ),
     "configure_view.py::collect::resolve_profile_path": (
         "re-raise UnresolvableRootError; fail-open other exceptions"
-    ),
-    "core_md.py::_evaluate_configured_dispatch_gate::resolve_profile_path": (
-        "convert to gate_refusal evaluation_error (explicit refusal)"
     ),
     "model_tier_overrides.py::_resolve_profile_path::resolve_profile_path": (
         "re-raise UnresolvableRootError; return None for other exceptions"
@@ -33,11 +33,8 @@ ADJUDICATED = {
     "model_tier_overrides.py::resolve_profile_path::_resolve_profile_path": (
         "propagate via _resolve_profile_path re-raise"
     ),
-    "preflight_probe.py::_dispatch_selftest_config::resolve_profile_path": (
-        "convert to read_error (explicit refusal marker)"
-    ),
-    "preflight_probe.py::dispatch_calibration::resolve_profile_path": (
-        "convert to read_error marker (explicit refusal)"
+    "model_tier_overrides.py::resolve_profile_path_for_gate::resolve": (
+        "convert to TIERS_ROOT_UNAVAILABLE tier gate (explicit refusal; never raises)"
     ),
     "review_code_config.py::resolve::resolve": (
         "re-raise UnresolvableRootError; fail-open other exceptions"
