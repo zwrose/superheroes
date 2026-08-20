@@ -1143,6 +1143,35 @@ def test_fixer_profile_unresolvable_root_differs_from_resolved_absent(tmp_path, 
     assert refused != absent
 
 
+def test_profile_path_for_orders_failopen_when_profile_unreadable(tmp_path, monkeypatch):
+    import model_tier_overrides as mto
+    import round_driver as RD
+
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+
+    repo = str(tmp_path / "repo")
+    cal = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(cal)
+    profile = os.path.join(cal, "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\n")
+    os.chmod(profile, 0o000)
+    real_resolve = mto.resolve_profile_path
+
+    def resolve_unreadable_path(cwd, **kwargs):
+        path = real_resolve(cwd, **kwargs)
+        return path if path else profile
+
+    monkeypatch.setattr(mto, "resolve_profile_path", resolve_unreadable_path)
+    try:
+        got = RD._profile_path_for_orders(repo)
+        assert got == profile
+        assert "refused" not in got
+    finally:
+        os.chmod(profile, 0o644)
+
+
 def test_host_order_delivery_names_landing_not_phase_result_file():
     landing = os.path.join(_SESSION, "round-2", "landing", "dispatch-panel",
                            "code-reviewer.a0.payload.json")

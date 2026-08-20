@@ -15,7 +15,16 @@ seeding blocks. Two modes: **create** (nothing resolves) and **reconcile**
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-RES=$(python3 -B "$ROOT_DIR/lib/store.py" resolve)
+RES=$(python3 -B "$ROOT_DIR/lib/store.py" resolve) || RC=$?
+RC=${RC:-0}
+if printf '%s' "$RES" | jq -e '.refusal != null' >/dev/null 2>&1; then
+  printf '%s' "$RES" | jq -r '"\(.refusal.reason): \(.refusal.detail)"' >&2
+  exit 1
+fi
+if [ "$RC" -ne 0 ]; then
+  echo "store.py resolve exited non-zero (exit $RC)" >&2
+  exit "$RC"
+fi
 LOCATION=$(printf '%s' "$RES" | jq -r .location)
 # FR-7/8: surface the single coalesced storage-mode reconcile nudge (non-blocking, ack-gated).
 NUDGE_MSG=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" signals 2>/dev/null | jq -r 'if . == null then empty else .message end' 2>/dev/null)
@@ -55,7 +64,12 @@ REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/de
 if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
   echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
 fi
-PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC")
+PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC") || RC=$?
+RC=${RC:-0}
+if [ "$RC" -ne 0 ]; then
+  printf '%s' "$PATHS" | jq -r 'if .reason then "\(.reason): \(.detail)" else "store.py create exited non-zero (exit '"$RC"')" end' >&2
+  exit "$RC"
+fi
 ```
 
 ## Step 5 — Interview only the gaps
