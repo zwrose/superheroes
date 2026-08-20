@@ -20,6 +20,10 @@ import pilot_contract  # noqa: E402
 import pilot_policy  # noqa: E402
 import pilot_slot  # noqa: E402
 
+from test_launch_chokepoint_census import (  # noqa: E402
+    _ledger_append_writer_functions,
+)
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 
@@ -127,6 +131,26 @@ def _declare(repo_root, batch_id, expected, env=None):
 
 def _ledger_file(repo_root, env):
     return ll.ledger_path(repo_root, env=env)["path"]
+
+
+def _ledger_bytes(repo_root, env=None):
+    if env is None:
+        env = os.environ
+    path = _ledger_file(repo_root, env)
+    if not os.path.isfile(path):
+        return b""
+    with open(path, "rb") as fh:
+        return fh.read()
+
+
+def _batch_declared_for_batch(repo_root, batch_id, env=None):
+    if env is None:
+        env = os.environ
+    records = ll.read(repo_root, env=env)["records"]
+    return [
+        rec for rec in records
+        if rec.get("event") == "batch-declared" and rec.get("batchId") == batch_id
+    ]
 
 
 def _walk_strings(obj):
@@ -1993,7 +2017,11 @@ def test_append_under_lock_accepts_missing_ledger(tmp_path, monkeypatch):
     _ledger_env(tmp_path, monkeypatch)
     assert ll.read(repo)["state"] == "missing"
     count_before = len(ll.read(repo)["records"])
-    result = ll.append_under_lock(repo, _batch_declared("b-fresh", 1))
+    launch_id = "l-fresh"
+    batch = "b-fresh"
+    result = ll.append_under_lock(
+        repo, _reserved(launch_id, batch, ["a"], repo),
+    )
     assert result["ok"] is True
     assert len(ll.read(repo)["records"]) == count_before + 1
     assert ll.read(repo)["state"] == "ok"
@@ -4578,3 +4606,542 @@ def test_fold_config_dir_is_none_when_the_record_omits_it():
     result = ll.fold([rec])
     assert result["ok"] is True
     assert result["launches"]["l1"]["configDir"] is None
+
+
+# --- WO-B declaration grammar (issue #784) -----------------------------------
+
+
+_LEDGER_PY = os.path.join(_LIB, "launch_ledger.py")
+
+_DECLARATION_DOOR_ADJUDICATION = {
+    "append_under_lock": {
+        "kind": "guarded-caller-record",
+        "refusalTest": "test_append_under_lock_refuses_batch_declared_record",
+    },
+    "reserve": {
+        "kind": "guarded-caller-record",
+        "refusalTest": "test_reserve_refuses_batch_declared_with_launch_id",
+    },
+    "declare_batch": {"kind": "the-door"},
+    "terminalize": {"kind": "constructs-own-event"},
+    "amend": {"kind": "constructs-own-event"},
+}
+
+_BATCH_REFUSAL_TOKEN_ADJUDICATION = {
+    "batch-already-has-reservations": (
+        "test_declare_batch_refuses_when_batch_has_reservations"
+    ),
+    "batch-declaration-after-reservations": (
+        "test_c1_edge17_batch_declared_after_reservations_count_indeterminate"
+    ),
+    "batch-declaration-conflict": "test_declare_batch_refuses_declaration_conflict",
+    "batch-declaration-malformed": {
+        "unreachable": True,
+        "preemptedBy": "fold-bad-field:batch-declared:expectedLaunches",
+        "proofTest": "test_count_malformed_batch_declared_preempted_by_fold",
+    },
+    "batch-duplicate-declaration": (
+        "test_declare_batch_refuses_duplicate_declaration_raw_appended_3_3"
+    ),
+    "batch-empty": "test_count_indeterminate_on_empty_batch",
+    "batch-expected-invalid": "test_declare_batch_refuses_invalid_expected_launches",
+    "batch-id-empty": "test_declare_batch_refuses_empty_batch_id",
+    "batch-lane-concurrent": "test_count_concurrency_beats_unresolved",
+    "batch-lane-issue-invalid": "test_count_invalid_issue_beats_reservation_mismatch",
+    "batch-reservation-mismatch": (
+        "test_edge11_count_indeterminate_when_reservations_below_declared"
+    ),
+    "batch-undeclared": "test_edge9_count_indeterminate_without_batch_declared",
+    "batch-unresolved": "test_count_indeterminate_on_unresolved_member",
+}
+
+_GUARDED_DOOR_REFUSAL_TOKENS = {
+    "append_under_lock": "append-batch-declared-must-use-declare-batch",
+    "reserve": "reserve-batch-declared-must-use-declare-batch",
+}
+
+
+def _module_level_append_callers(tree):
+    callers = _ledger_append_writer_functions(tree)
+    # Raw primitives — deliberately outside the door set. ``_append_raw`` is
+    # module-internal; public ``append`` cannot refuse ``batch-declared`` because
+    # ``declare_batch`` writes its declaration through it.
+    callers.discard("_append_raw")
+    callers.discard("append")
+    return callers
+
+
+def _function_def_node(tree, name):
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+            return node
+    return None
+
+
+def _test_source_contains(test_name, token):
+    func = globals().get(test_name)
+    assert func is not None, "missing test function %s" % test_name
+    source = inspect.getsource(func)
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Constant) or not isinstance(node.value, str):
+            continue
+        val = node.value
+        if val == token or val.startswith(token + ":"):
+            return True
+    return False
+
+
+def _batch_token_from_literal(value):
+    if "%" in value:
+        return value.split("%", 1)[0].rstrip(":")
+    return value
+
+
+def _batch_reason_tokens_from_function(func_node):
+    tokens = set()
+    for node in ast.walk(func_node):
+        if isinstance(node, ast.Return) and isinstance(node.value, ast.Dict):
+            for key, val in zip(node.value.keys, node.value.values):
+                if not isinstance(key, ast.Constant) or key.value != "reason":
+                    continue
+                if isinstance(val, ast.Constant) and isinstance(val.value, str):
+                    if val.value.startswith("batch-"):
+                        tokens.add(_batch_token_from_literal(val.value))
+                elif isinstance(val, ast.BinOp) and isinstance(val.op, ast.Mod):
+                    if isinstance(val.left, ast.Constant) and isinstance(
+                        val.left.value, str,
+                    ):
+                        if val.left.value.startswith("batch-"):
+                            tokens.add(_batch_token_from_literal(val.left.value))
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "_count_indeterminate":
+                if len(node.args) >= 2:
+                    arg = node.args[1]
+                    if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
+                        if arg.value.startswith("batch-"):
+                            tokens.add(_batch_token_from_literal(arg.value))
+                    elif isinstance(arg, ast.BinOp) and isinstance(arg.op, ast.Mod):
+                        if isinstance(arg.left, ast.Constant) and isinstance(
+                            arg.left.value, str,
+                        ):
+                            if arg.left.value.startswith("batch-"):
+                                tokens.add(
+                                    _batch_token_from_literal(arg.left.value),
+                                )
+    return tokens
+
+
+def _derived_batch_refusal_tokens(tree):
+    tokens = set()
+    for func_name in ("declare_batch", "count"):
+        func_node = _function_def_node(tree, func_name)
+        if func_node is not None:
+            tokens.update(_batch_reason_tokens_from_function(func_node))
+    return tokens
+
+
+def test_declare_batch_first_declaration_appends_one_record(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-first-decl"
+    env = os.environ
+    before_count = len(_batch_declared_for_batch(repo, batch, env=env))
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": True, "reason": None}
+    assert "idempotent" not in result
+    after = _batch_declared_for_batch(repo, batch, env=env)
+    assert len(after) == before_count + 1
+    assert after[-1]["expectedLaunches"] == 3
+
+
+def test_declare_batch_refuses_when_batch_has_reservations(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-has-resv"
+    env = os.environ
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 1, env=env)
+    assert result == {"ok": False, "reason": "batch-already-has-reservations"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_idempotent_when_prior_declaration_matches(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-idem"
+    env = os.environ
+    assert _declare(repo, batch, 3, env=env)["ok"]
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": True, "reason": None, "idempotent": True}
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_declaration_conflict(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-conflict"
+    env = os.environ
+    assert _declare(repo, batch, 3, env=env)["ok"]
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 5, env=env)
+    assert result == {"ok": False, "reason": "batch-declaration-conflict:3:5"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_duplicate_declaration_raw_appended_3_3(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-dup-33"
+    env = os.environ
+    # Direct append models corruption or a concurrent writer, not a supported call.
+    ll.append(repo, _batch_declared(batch, 3), env=env)
+    ll.append(repo, _batch_declared(batch, 3), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": False, "reason": "batch-duplicate-declaration"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_duplicate_declaration_raw_appended_3_5(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-dup-35"
+    env = os.environ
+    # Direct append models corruption or a concurrent writer, not a supported call.
+    ll.append(repo, _batch_declared(batch, 3), env=env)
+    ll.append(repo, _batch_declared(batch, 5), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": False, "reason": "batch-duplicate-declaration"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_duplicate_declaration_with_reservation_present(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-dup-resv"
+    env = os.environ
+    # Direct append models corruption or a concurrent writer, not a supported call.
+    ll.append(repo, _batch_declared(batch, 3), env=env)
+    ll.append(repo, _batch_declared(batch, 3), env=env)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": False, "reason": "batch-duplicate-declaration"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_late_declaration_equal_cardinality(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-late-equal"
+    env = os.environ
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo), env=env)
+    # Direct append models corruption or a concurrent writer, not a supported call.
+    ll.append(repo, _batch_declared(batch, 1), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 1, env=env)
+    assert result == {"ok": False, "reason": "batch-declaration-after-reservations"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_unknown_declaration_index_with_reservation(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-unknown-index"
+    env = os.environ
+    assert _declare(repo, batch, 3, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=801), env=env)
+    monkeypatch.setattr(ll, "_declaration_index", lambda *args, **kwargs: None)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    assert result == {"ok": False, "reason": "batch-declaration-after-reservations"}
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_idempotent_after_reserve_ordering_fork(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-fork-idem"
+    env = os.environ
+    assert _declare(repo, batch, 3, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=701), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 3, env=env)
+    # Fork: declare after reserve with equal count is idempotent, not batch-already-has-reservations.
+    assert result == {"ok": True, "reason": None, "idempotent": True}
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_conflict_after_reserve_ordering_fork(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-fork-conflict"
+    env = os.environ
+    assert _declare(repo, batch, 3, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=702), env=env)
+    before = _ledger_bytes(repo, env)
+    result = _declare(repo, batch, 5, env=env)
+    # Fork: conflicting re-declaration after reserve uses conflict token, not reservations refusal.
+    assert result == {"ok": False, "reason": "batch-declaration-conflict:3:5"}
+    assert "idempotent" not in result
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_declare_batch_refuses_empty_batch_id(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ll.declare_batch(repo, "", 1)
+    assert result == {"ok": False, "reason": "batch-id-empty"}
+
+
+def test_declare_batch_refuses_invalid_expected_launches(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    result = ll.declare_batch(repo, "b-invalid", 0)
+    assert result == {"ok": False, "reason": "batch-expected-invalid"}
+
+
+def test_fold_reports_duplicate_raw_batch_declarations(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch_dup = "b-dup-fold"
+    batch_ok = "b-ok-fold"
+    env = os.environ
+    assert _declare(repo, batch_ok, 1, env=env)["ok"]
+    ll.reserve(repo, _reserved("l-ok", batch_ok, ["a"], repo), env=env)
+    path = _ledger_file(repo, env)
+    _append_raw(path, _started("l-ok"))
+    _append_raw(path, _outcome("l-ok"))
+    # Direct append models corruption or a concurrent writer, not a supported call.
+    ll.append(repo, _batch_declared(batch_dup, 3), env=env)
+    ll.append(repo, _batch_declared(batch_dup, 5), env=env)
+    records = ll.read(repo, env=env)["records"]
+    folded = ll.fold(records)
+    assert folded["ok"] is True
+    decls = folded["batchDeclarations"][batch_dup]
+    assert len(decls) == 2
+    assert decls[0]["index"] < decls[1]["index"]
+    assert folded["launches"]["l-ok"]["terminal"] is True
+
+
+def test_fold_duplicate_raw_batch_declarations_count_indeterminate(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-dup-count"
+    env = os.environ
+    # Direct append models corruption or a concurrent writer, not a supported call.
+    ll.append(repo, _batch_declared(batch, 3), env=env)
+    ll.append(repo, _batch_declared(batch, 5), env=env)
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo), env=env)
+    path = _ledger_file(repo, env)
+    _append_raw(path, _started("l1"))
+    _append_raw(path, _outcome("l1"))
+    result = ll.count(repo, batch, env=env)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "batch-duplicate-declaration"
+
+
+def test_count_resolves_after_idempotent_redeclaration(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-idem-count"
+    env = os.environ
+    assert _declare(repo, batch, 1, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo, issue=501), env=env)
+    path = _ledger_file(repo, env)
+    _append_raw(path, _started("l1"))
+    ll.record_outcome(repo, "l1", "handback", "done", env=env)
+    assert ll.count(repo, batch, env=env)["resolved"] is True
+    idem = _declare(repo, batch, 1, env=env)
+    assert idem == {"ok": True, "reason": None, "idempotent": True}
+    result = ll.count(repo, batch, env=env)
+    assert result["resolved"] is True
+    assert result["indeterminate"] is False
+    assert result["counts"]["total"] == 1
+    assert result["counts"]["handback"] == 1
+
+
+def test_append_under_lock_refuses_batch_declared_record(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    env = os.environ
+    assert _declare(repo, "b-append-guard", 1, env=env)["ok"]
+    before = _ledger_bytes(repo, env)
+    result = ll.append_under_lock(repo, _batch_declared("b-append-guard", 2), env=env)
+    assert result == {
+        "ok": False,
+        "reason": "append-batch-declared-must-use-declare-batch",
+        "path": None,
+    }
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_reserve_refuses_batch_declared_with_launch_id(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    env = os.environ
+    rec = _batch_declared("b-reserve-guard", 1)
+    rec["launchId"] = "l-sneak"
+    rec["surfaces"] = ["a"]
+    before = _ledger_bytes(repo, env)
+    result = ll.reserve(repo, rec, env=env)
+    assert result == {
+        "ok": False,
+        "reason": "reserve-batch-declared-must-use-declare-batch",
+        "path": None,
+    }
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_reserve_refuses_missing_launch_id_on_non_batch_declared_record(
+    tmp_path, monkeypatch,
+):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    env = os.environ
+    rec = _reserved("l1", "b-no-lid", ["a"], repo)
+    del rec["launchId"]
+    before = _ledger_bytes(repo, env)
+    result = ll.reserve(repo, rec, env=env)
+    assert result == {"ok": False, "reason": "reserve-launch-id-invalid", "path": None}
+    assert _ledger_bytes(repo, env) == before
+
+
+def test_count_malformed_batch_declared_preempted_by_fold(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    _ledger_env(tmp_path, monkeypatch)
+    batch = "b-malformed-fold"
+    env = os.environ
+    assert _declare(repo, batch, 1, env=env)["ok"]
+    ll.reserve(repo, _reserved("l1", batch, ["a"], repo), env=env)
+    # Direct append models corruption — malformed batch-declared missing expectedLaunches.
+    ll.append(repo, {
+        "event": "batch-declared",
+        "batchId": batch,
+        "ts": time.time(),
+        "schema": ll.SCHEMA,
+    }, env=env)
+    result = ll.count(repo, batch, env=env)
+    assert result["indeterminate"] is True
+    assert result["reason"] == "fold-bad-field:batch-declared:expectedLaunches"
+    assert result["reason"] != "batch-declaration-malformed"
+
+
+def test_declaration_door_census_append_callers():
+    """Census: every module-level ledger writer above the raw primitives is adjudicated.
+
+    Parses ``launch_ledger.py`` source only — a writer added in another module, or one
+    that reaches the ledger without calling ``append`` or ``_append_raw`` by those names,
+    is invisible here. ``guarded-caller-record`` rows must name a behavioral refusal test
+    in this module whose source contains the door's refusal token and names the door;
+    that is the honest coverage limit — structural proxies do not converge.
+    """
+    with open(_LEDGER_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_LEDGER_PY)
+    callers = _module_level_append_callers(tree)
+    adjudicated = set(_DECLARATION_DOOR_ADJUDICATION.keys())
+    assert callers == adjudicated, (
+        "INVARIANT: every module-level ledger writer above the raw append/_append_raw "
+        "primitives must be adjudicated when added or removed: "
+        "callers=%r adjudicated=%r"
+        % (sorted(callers), sorted(adjudicated))
+    )
+    module_tests = {name for name in globals() if name.startswith("test_")}
+    for name, entry in _DECLARATION_DOOR_ADJUDICATION.items():
+        func_node = _function_def_node(tree, name)
+        assert func_node is not None, "missing function %s in launch_ledger.py" % name
+        kind = entry["kind"]
+        if kind == "guarded-caller-record":
+            refusal_test = entry["refusalTest"]
+            assert refusal_test in module_tests, (
+                "guarded-caller-record %s refusalTest %r is not defined in this module"
+                % (name, refusal_test)
+            )
+            token = _GUARDED_DOOR_REFUSAL_TOKENS[name]
+            assert _test_source_contains(refusal_test, token), (
+                "refusalTest %r for %s must contain refusal token %r as a string literal"
+                % (refusal_test, name, token)
+            )
+            refusal_source = inspect.getsource(globals()[refusal_test])
+            assert ("ll.%s" % name) in refusal_source, (
+                "refusalTest %r for %s must name the door (ll.%s) in its source"
+                % (refusal_test, name, name)
+            )
+
+
+def test_declaration_token_census_batch_reasons():
+    """Census: every batch-* refusal token from declare_batch and count is adjudicated.
+
+    Parses string literals in source only — a token built by concatenation rather than
+    written as a literal is invisible here (batch-declaration-conflict is pinned by its
+    literal prefix). Each covered token's mapped test must contain that token as a string
+    literal in its own source; unreachable tokens must name a proof test whose source
+    contains both the unreachable token and the pre-empting reason.
+    """
+    with open(_LEDGER_PY, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=_LEDGER_PY)
+    derived = _derived_batch_refusal_tokens(tree)
+    adjudicated = set(_BATCH_REFUSAL_TOKEN_ADJUDICATION.keys())
+    assert derived == adjudicated, (
+        "INVARIANT: every batch-* refusal token from declare_batch/count must be "
+        "adjudicated with a covering test in this module: "
+        "derived=%r adjudicated=%r"
+        % (sorted(derived), sorted(adjudicated))
+    )
+    module_tests = {
+        name for name in globals() if name.startswith("test_")
+    }
+    for token, entry in _BATCH_REFUSAL_TOKEN_ADJUDICATION.items():
+        if isinstance(entry, dict) and entry.get("unreachable"):
+            preempted_by = entry.get("preemptedBy")
+            proof_test = entry.get("proofTest")
+            assert preempted_by is not None, (
+                "unreachable token %r must name the pre-empting reason" % token
+            )
+            assert proof_test is not None, (
+                "unreachable token %r must name a proof test" % token
+            )
+            assert proof_test in module_tests, (
+                "proof test %r for unreachable token %r is not defined in this module"
+                % (proof_test, token)
+            )
+            assert _test_source_contains(proof_test, token), (
+                "proof test %r for unreachable token %r must contain %r"
+                % (proof_test, token, token)
+            )
+            assert _test_source_contains(proof_test, preempted_by), (
+                "proof test %r for unreachable token %r must contain pre-empting "
+                "reason %r"
+                % (proof_test, token, preempted_by)
+            )
+            continue
+        test_name = entry
+        assert test_name in module_tests, (
+            "adjudicated test %r for token %r is not defined in this module"
+            % (test_name, token)
+        )
+        assert _test_source_contains(test_name, token), (
+            "adjudicated test %r for token %r must contain %r as a string literal"
+            % (test_name, token, token)
+        )
