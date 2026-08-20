@@ -209,10 +209,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable
 > (`--repo-root ""`), a path that is not an existing directory, or a directory without `.git` exits
 > **2** with argparse's usage error — it never reaches the JSON envelope. `--run-dir` is optional;
-> when omitted the runner allocates a private temp directory. When supplied, a path that is not a
-> directory is refused at argparse (exit 2). **JSON refusals** (exit 0,
+> when omitted the runner allocates a private temp directory. When supplied, a path that **exists but
+> is not a directory** is refused at argparse (exit 2); a missing path is accepted (the nearest
+> existing ancestor must be a directory). **JSON refusals** (exit 0,
 > top-level `ok: false`) still apply for run-directory problems argparse cannot see: `run-dir-is-symlink`,
-> `run-dir-not-writable`, and the post-spawn `run-dir-*` family documented below.
+> `run-dir-not-writable`, `run-dir-setup-failed:<Type>`, and the post-spawn `run-dir-*` family documented below.
 >
 > **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
 > `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`, plus `diffBase`,

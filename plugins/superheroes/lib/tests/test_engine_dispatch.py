@@ -142,6 +142,18 @@ def _repo(tmp_path, git_as_file=True):
     return str(root)
 
 
+def _case_insensitive_alias_path(path):
+    parent = os.path.dirname(path)
+    name = os.path.basename(path)
+    upper_name = name.upper()
+    if upper_name == name:
+        pytest.skip("case-insensitive filesystem alias unavailable")
+    alt = os.path.join(parent, upper_name)
+    if not os.path.exists(alt):
+        pytest.skip("case-insensitive filesystem alias unavailable")
+    return alt
+
+
 class FakeRunner:
     """Records each call's (argv, prompt_bytes, timeout) and returns scripted responses."""
 
@@ -1535,6 +1547,31 @@ def test_validate_run_dir_containment_before_create(tmp_path):
     assert not ok
     assert detail == "inside-protected"
     assert not nested.exists()
+
+
+def test_path_inside_case_insensitive_alias(tmp_path):
+    parent = tmp_path / "casetestdir"
+    parent.mkdir()
+    alt_parent = _case_insensitive_alias_path(str(parent))
+    child = os.path.join(alt_parent, "nested", "run")
+    assert ED._path_inside(str(parent), child)
+
+
+def test_dispatch_review_run_dir_case_alias_inside_repo_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    alt_repo = _case_insensitive_alias_path(repo_root)
+    run_dir = os.path.join(alt_repo, "fresh-alias-run")
+    assert not os.path.exists(run_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    assert res["detail"] == "run-dir-inside-repo-root"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+    assert not os.path.exists(run_dir)
 
 
 def test_dispatch_review_creates_missing_run_dir(tmp_path):

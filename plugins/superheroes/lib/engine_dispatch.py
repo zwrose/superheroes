@@ -857,11 +857,11 @@ def _validate_run_dir(
     path = run_dir
     while path.endswith(os.sep) and len(path) > 1:
         path = path[:-1]
-    if not path or path == os.sep * len(path):
-        path = os.sep
     if os.path.islink(path):
         return False, "run-dir-is-symlink"
     if forbidden_parent is not None and _path_inside(forbidden_parent, path):
+        if forbidden_detail is None:
+            forbidden_detail = "run-dir-inside-forbidden-parent"
         return False, forbidden_detail
     if create and not os.path.exists(path):
         try:
@@ -885,7 +885,24 @@ def _validate_run_dir(
 def _path_inside(parent, child):
     parent = os.path.realpath(parent)
     child = os.path.realpath(child)
-    return child == parent or child.startswith(parent + os.sep)
+    if child == parent or child.startswith(parent + os.sep):
+        return True
+    try:
+        parent_stat = os.stat(parent)
+    except OSError:
+        return False
+    walk = child
+    while True:
+        try:
+            if os.path.samestat(os.stat(walk), parent_stat):
+                return True
+        except OSError:
+            pass
+        parent_dir = os.path.dirname(walk)
+        if parent_dir == walk:
+            break
+        walk = parent_dir
+    return False
 
 
 def _run_dir_nonempty(run_dir_real):

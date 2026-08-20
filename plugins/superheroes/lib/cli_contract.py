@@ -115,10 +115,6 @@ def creatable_path(value: str) -> str:
                 f"cannot create {path!r}: no parent directory"
             )
         probe = parent
-    if os.path.isfile(probe):
-        raise argparse.ArgumentTypeError(
-            f"cannot create {path!r}: nearest existing ancestor {probe!r} is not a directory"
-        )
     if not os.path.isdir(probe):
         raise argparse.ArgumentTypeError(
             f"cannot create {path!r}: nearest existing ancestor {probe!r} is not a directory"

@@ -269,6 +269,30 @@ def test_dispatch_write_run_dir_creatable_when_parent_missing(tmp_path):
     assert not run_dir.exists()
 
 
+def test_dispatch_review_run_dir_creatable_when_parent_missing(tmp_path):
+    prompt = tmp_path / "prompt.txt"
+    prompt.write_text("review me", encoding="utf-8")
+    repo = _git_repo(tmp_path)
+    run_dir = tmp_path / "missing" / "parent" / "run"
+    args = ED.build_parser().parse_args(
+        [
+            "dispatch-review",
+            "--engine",
+            "codex",
+            "--effort",
+            "high",
+            "--prompt-path",
+            str(prompt),
+            "--repo-root",
+            repo,
+            "--run-dir",
+            str(run_dir),
+        ]
+    )
+    assert args.run_dir == str(run_dir)
+    assert not run_dir.exists()
+
+
 def test_dispatch_write_run_dir_refused_when_nearest_ancestor_is_file(tmp_path):
     prompt = tmp_path / "prompt.txt"
     prompt.write_text("write me", encoding="utf-8")
