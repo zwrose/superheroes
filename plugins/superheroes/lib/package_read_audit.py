@@ -198,6 +198,11 @@ NONCONFORMITY_SYNC_CHECK_FAILED = "sync-check-failed"
 NONCONFORMITY_RECORD_VALUE_INVALID = "record-value-invalid"
 NONCONFORMITY_RECORD_DUPLICATE = "record-duplicate"
 NONCONFORMITY_ROUND_EXCEEDS_CEILING = "round-exceeds-ceiling"
+# The check-side counterpart of REFUSAL_INVOCATION_UNKNOWN: a round or
+# verification record naming an invocation no record ever opened. The writers
+# refuse such a record, so `check` must not read it as conforming. Distinct
+# from NONCONFORMITY_FINDING_UNKNOWN, which is about a finding id.
+NONCONFORMITY_INVOCATION_UNKNOWN = "invocation-unknown"
 NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_ROUND_MISSING,
     NONCONFORMITY_ELEMENT_MISSING,
@@ -212,6 +217,7 @@ NONCONFORMITY_KINDS = frozenset({
     NONCONFORMITY_RECORD_VALUE_INVALID,
     NONCONFORMITY_RECORD_DUPLICATE,
     NONCONFORMITY_ROUND_EXCEEDS_CEILING,
+    NONCONFORMITY_INVOCATION_UNKNOWN,
 })
 
 SPEC_CONTRADICTION_DISPOSITIONS = frozenset({
@@ -1147,7 +1153,7 @@ def _duplicate_group_key(record, rule, identity):
     if scope == DUPLICATE_SCOPE_TRAIL:
         return stable
     if scope == DUPLICATE_SCOPE_INVOCATION:
-        return (record.get("invocation"), stable)
+        return (_stable_identity(record.get("invocation")), stable)
     return stable
 
 
@@ -1283,7 +1289,10 @@ def _round_ceiling_findings(records, positions, unique_invocations):
         if record.get("kind") != RECORD_KIND_ROUND:
             continue
         inv_id = record.get("invocation")
-        if inv_id not in unique_invocations:
+        # `unique_invocations` is keyed by string ids only, so a non-string
+        # (possibly unhashable) `invocation` can never match one -- testing
+        # membership with it would only raise.
+        if not isinstance(inv_id, str) or inv_id not in unique_invocations:
             continue
         invocation = unique_invocations[inv_id]
         if not isinstance(invocation, dict) or "ceiling" not in invocation:
@@ -1320,7 +1329,7 @@ def _finding_unknown_findings(records, positions):
         items = record.get("findings")
         if not isinstance(items, list):
             continue
-        bucket = known.setdefault(inv_id, set())
+        bucket = known.setdefault(_stable_identity(inv_id), set())
         for item in items:
             if not isinstance(item, dict) or "finding" not in item:
                 continue
@@ -1336,7 +1345,7 @@ def _finding_unknown_findings(records, positions):
         if record.get("kind") != RECORD_KIND_VERIFICATION:
             continue
         inv_id = record.get("invocation")
-        known_ids = known.get(inv_id, set())
+        known_ids = known.get(_stable_identity(inv_id), set())
         items = record.get("findings")
         if not isinstance(items, list):
             continue
@@ -1367,6 +1376,68 @@ def _finding_unknown_findings(records, positions):
             ),
         ))
     return findings
+
+
+def _orphan_record_findings(records, positions, invocations):
+    """Round and verification records naming an invocation nothing opened.
+
+    `check` assembles its per-invocation audit from the `invocation`-kind
+    records, so a round or verification record attached to an id no record ever
+    opened would otherwise be invisible: nothing reads it, nothing reports it.
+    The writers refuse exactly this record with REFUSAL_INVOCATION_UNKNOWN, so
+    the reader owes the same judgment -- a record the writers would refuse never
+    reads as conforming.
+
+    Records whose `invocation` is absent or not a string are left alone: the
+    declaration walk already reports those as missing-or-ill-typed fields, and
+    naming them here would double-report one defect.
+    """
+    pending = []
+    for record, pos in zip(records, positions):
+        if not isinstance(record, dict):
+            continue
+        if record.get("kind") not in (RECORD_KIND_ROUND, RECORD_KIND_VERIFICATION):
+            continue
+        inv_id = record.get("invocation")
+        if not isinstance(inv_id, str):
+            continue
+        if inv_id in invocations:
+            continue
+        pending.append((inv_id, pos, record.get("kind")))
+    pending.sort(key=lambda item: (item[0], item[1]))
+    findings = []
+    for inv_id, pos, kind in pending:
+        findings.append(_make_nonconformity(
+            NONCONFORMITY_INVOCATION_UNKNOWN,
+            inv_id,
+            pos,
+            "invocation",
+            (
+                "%s record at trail position %d names invocation %r, which no "
+                "invocation record opened" % (kind, pos, inv_id)
+            ),
+        ))
+    return findings
+
+
+def _finding_in_scope(finding, invocation_filter):
+    """Whether one finding belongs to the scope `--invocation` narrowed to.
+
+    Narrowing to an invocation narrows the *findings* too: a record-scoped
+    finding attributed to a different invocation is out of scope for that call,
+    or asking about a clean invocation reports a dirty neighbour's record.
+
+    A finding attributed to no invocation at all (an unattributable record --
+    one whose `invocation` field is absent or not a string) belongs to no
+    scope, so no narrowing can exclude it without losing it. It is reported in
+    every scope: never silently dropped, and never charged to a neighbour.
+    """
+    if invocation_filter is None:
+        return True
+    inv_id = finding.get("invocation")
+    if inv_id is None:
+        return True
+    return inv_id == invocation_filter
 
 
 def _invocation_id_for_finding(record):
@@ -1466,7 +1537,14 @@ def _invocation_trail_records(records, inv_id):
 
 
 def _project_invocation(records):
-    """Collect order-free invocation trail facts for completeness checks."""
+    """Collect order-free invocation trail facts for completeness checks.
+
+    Every set member and dict key below is a raw trail value, and a trail is
+    hand-editable: a `finding` of `["x"]` or a sync-check `child` of `{"a": 1}`
+    is ordinary bad input, not a broken tool. `_stable_identity` is what keeps
+    those out of the `set`/`dict` machinery, so an unhashable value is reported
+    as a nonconformity instead of surfacing as `internal-error`.
+    """
     rounds = []
     verifications = []
     finding_ids = []
@@ -1485,14 +1563,15 @@ def _project_invocation(records):
                 if not isinstance(item, dict):
                     continue
                 fid = item.get("finding")
-                if fid not in finding_ids_seen:
+                key = _stable_identity(fid)
+                if key not in finding_ids_seen:
                     finding_ids.append(fid)
-                    finding_ids_seen.add(fid)
-                finding_lenses[fid] = item.get("lens")
+                    finding_ids_seen.add(key)
+                finding_lenses[key] = item.get("lens")
             declined = record.get("declinedExtension", [])
             if isinstance(declined, list):
                 for fid in declined:
-                    declined_extension.add(fid)
+                    declined_extension.add(_stable_identity(fid))
         elif kind == RECORD_KIND_VERIFICATION:
             verifications.append(record)
             for item in record.get("findings", []):
@@ -1500,9 +1579,9 @@ def _project_invocation(records):
                     continue
                 fid = item.get("finding")
                 if fid is not None:
-                    findings_named_in_verification.add(fid)
+                    findings_named_in_verification.add(_stable_identity(fid))
                     if item.get("outcome") == OUTCOME_VERIFIED:
-                        verified_finding_ids.add(fid)
+                        verified_finding_ids.add(_stable_identity(fid))
             checks = record.get("syncChecks", [])
             if isinstance(checks, list):
                 for check in checks:
@@ -1666,7 +1745,7 @@ def _nonconformities_for_invocation(
         )
 
     for fid in projection["finding_ids"]:
-        if fid not in projection["findings_named_in_verification"]:
+        if _stable_identity(fid) not in projection["findings_named_in_verification"]:
             rnd_for_fid = None
             for rnd in rounds:
                 for item in rnd.get("findings") or []:
@@ -1692,8 +1771,9 @@ def _nonconformities_for_invocation(
             if not isinstance(item, dict):
                 continue
             fid = item.get("finding")
-            if fid in declined_named and item.get("disposition") != DISPOSITION_DECLINED_EXTENSION:
-                key = (fid, "declined-named")
+            fid_key = _stable_identity(fid)
+            if fid_key in declined_named and item.get("disposition") != DISPOSITION_DECLINED_EXTENSION:
+                key = (fid_key, "declined-named")
                 if key not in mismatch_declined_not_extension:
                     mismatch_declined_not_extension.add(key)
                     add(
@@ -1707,9 +1787,9 @@ def _nonconformities_for_invocation(
                     )
             if (
                 item.get("disposition") == DISPOSITION_DECLINED_EXTENSION
-                and fid not in declined_named
+                and fid_key not in declined_named
             ):
-                key = (fid, "extension-not-declined")
+                key = (fid_key, "extension-not-declined")
                 if key not in mismatch_extension_not_declined:
                     mismatch_extension_not_declined.add(key)
                     add(
@@ -1730,7 +1810,7 @@ def _nonconformities_for_invocation(
             if not isinstance(item, dict):
                 continue
             fid = item.get("finding")
-            lens = finding_lenses.get(fid)
+            lens = finding_lenses.get(_stable_identity(fid))
             disposition = item.get("disposition")
             if lens is not None and disposition is not None:
                 if not _disposition_allowed_for_lens(lens, disposition):
@@ -1789,9 +1869,14 @@ def _nonconformities_for_invocation(
             if isinstance(check, dict):
                 child = check.get("child")
                 if child is not None:
-                    distinct_children.add(child)
+                    distinct_children.add(_stable_identity(child))
         distinct_count = len(distinct_children)
-        if expected_children is not None and distinct_count != expected_children:
+        # `measurables.children` is a raw trail value and can be any JSON. A
+        # count comparison against a non-integer -- and the `%d` that formats it
+        # below -- is ordinary bad input reaching `internal-error`; the
+        # declaration walk already reports an ill-typed `children` at its own
+        # path, so there is nothing to compare and nothing lost by not trying.
+        if _is_actual_int(expected_children) and distinct_count != expected_children:
             ver_rec = projection["verifications"][0] if projection["verifications"] else None
             add(
                 NONCONFORMITY_SYNC_CHECK_INCOMPLETE,
@@ -1811,7 +1896,7 @@ def _nonconformities_for_invocation(
         child = check.get("child")
         result = check.get("result")
         if result != SYNC_RESULT_PASS:
-            key = (child, result)
+            key = (_stable_identity(child), _stable_identity(result))
             if key not in failed_sync_checks:
                 failed_sync_checks.add(key)
                 ver_rec = None
@@ -2339,6 +2424,9 @@ def verb_check(trail, invocation_filter=None):
         _round_ceiling_findings(records, positions, unique_invocations),
     )
     relational_findings.extend(_finding_unknown_findings(records, positions))
+    relational_findings.extend(
+        _orphan_record_findings(records, positions, invocations),
+    )
 
     if invocation_filter is not None:
         if invocation_filter not in invocations:
@@ -2356,8 +2444,15 @@ def verb_check(trail, invocation_filter=None):
         inv_ids = sorted(invocations.keys())
 
     summaries = []
-    findings = list(value_findings)
-    findings.extend(relational_findings)
+    # Record-scoped findings are collected over the whole trail, so narrowing to
+    # one invocation has to narrow them too -- otherwise asking about a clean
+    # invocation reports a neighbour's bad record. `_finding_in_scope` carries
+    # the rule, including what happens to a finding attributable to no
+    # invocation.
+    findings = [
+        finding for finding in list(value_findings) + relational_findings
+        if _finding_in_scope(finding, invocation_filter)
+    ]
     for inv_id in inv_ids:
         if inv_id not in unique_invocations:
             continue

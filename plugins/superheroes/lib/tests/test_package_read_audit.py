@@ -1181,12 +1181,178 @@ def test_undecided_internal_error(tmp_path, monkeypatch, capsys):
     assert payload["reason"] == pra.UNDECIDED_INTERNAL_ERROR
 
 
+def _orphan_round(invocation="orphan", round_no=1):
+    return {
+        "kind": "round",
+        "invocation": invocation,
+        "round": round_no,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "unreviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_NOT_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+    }
+
+
+def _orphan_verification(invocation="orphan"):
+    return {
+        "kind": "verification",
+        "invocation": invocation,
+        "findings": [],
+        "syncChecks": [{"child": "c1", "result": pra.SYNC_RESULT_PASS}],
+    }
+
+
+def _conforming_invocation(tmp_path, invocation="inv-1"):
+    """A trail holding one complete, conforming invocation, writer-produced."""
+    trail, _ = _open_default(tmp_path, invocation=invocation, ceiling=2)
+    _record_round(
+        trail,
+        invocation=invocation,
+        round_no=1,
+        findings=["f-1:register-drift"],
+        parts=["pkg:unreviewed"],
+    )
+    _record_verification(
+        trail,
+        invocation=invocation,
+        findings=["f-1:package-fix:verified"],
+        sync_checks=["c1:pass", "c2:pass"],
+    )
+    return trail
+
+
+def _orphan_findings(payload):
+    return [
+        item for item in payload["findings"]
+        if item["kind"] == pra.NONCONFORMITY_INVOCATION_UNKNOWN
+    ]
+
+
 def test_check_records_without_invocation_nonconforming(tmp_path):
+    """An orphan record alongside a conforming invocation is still nonconforming.
+
+    The orphan is invisible to the per-invocation assembly, so before the
+    invocation-unknown check the whole trail read `conforming` on a record the
+    writers refuse. The conforming invocation is the point of the fixture: with
+    it removed the `trail has records but no invocation records` fallback covers
+    for a missing check.
+    """
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    _hand_append_record(trail, _orphan_round(invocation="orphan"))
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING, out
+    payload = json.loads(out.strip())
+    assert [item["invocation"] for item in payload["invocations"]] == ["inv-1"]
+    orphans = _orphan_findings(payload)
+    assert len(orphans) == 1, payload["findings"]
+    assert orphans[0]["invocation"] == "orphan"
+    assert orphans[0]["path"] == "invocation"
+    assert isinstance(orphans[0]["position"], int)
+    assert "orphan" in orphans[0]["detail"]
+
+
+def test_check_orphan_verification_record_nonconforming(tmp_path):
+    """Edge 2: a verification record naming an unopened invocation reports too."""
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    _hand_append_record(trail, _orphan_verification(invocation="orphan"))
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING, out
+    payload = json.loads(out.strip())
+    orphans = _orphan_findings(payload)
+    assert len(orphans) == 1, payload["findings"]
+    assert orphans[0]["invocation"] == "orphan"
+    assert orphans[0]["path"] == "invocation"
+
+
+def test_check_all_orphan_records_report_the_orphans(tmp_path):
+    """Edge 4: an all-orphan trail names each orphan, not the bare fallback.
+
+    The pre-existing `trail has records but no invocation records` result said
+    nonconforming with an empty findings list — right verdict, no evidence, and
+    it went silent the moment one valid invocation joined the trail.
+    """
     trail = tmp_path / "trail.md"
     trail.write_text(pra.TRAIL_HEADING + "\n", encoding="utf-8")
+    _hand_append_record(trail, _orphan_round(invocation="orphan-a"))
+    _hand_append_record(trail, _orphan_verification(invocation="orphan-b"))
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING, out
+    payload = json.loads(out.strip())
+    assert payload["invocations"] == []
+    orphans = _orphan_findings(payload)
+    assert [item["invocation"] for item in orphans] == ["orphan-a", "orphan-b"]
+
+
+def test_check_invocation_filter_scopes_findings_to_that_invocation(tmp_path):
+    """Filtering to a clean invocation must not report a neighbour's record."""
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    _run_cli(
+        "open",
+        "--trail", str(trail),
+        "--invocation", "inv-2",
+        "--cause", "re-read",
+        "--weight", pra.WEIGHT_LIGHT,
+        "--children", "1",
+        "--register-entries", "1",
+        "--ceiling", "2",
+        "--seat", "seat-b",
+    )
+    _record_round(trail, invocation="inv-2", round_no=1, parts=["pkg:reviewed"])
+    _record_verification(
+        trail, invocation="inv-2", sync_checks=["c1:pass"],
+    )
     _hand_append_record(trail, {
         "kind": "round",
-        "invocation": "orphan",
+        "invocation": "inv-2",
+        "round": 2,
+        "lenses": [pra.LENS_COLLISIONS],
+        "parts": [{"part": "pkg", "status": "reviewed"}],
+        "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+        "findings": [],
+        "declinedExtension": [],
+        "mechanicalOnly": False,
+        "smuggledField": "x",
+    })
+
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING, out
+    assert any(
+        item["invocation"] == "inv-2" and item["path"] == "smuggledField"
+        for item in payload["findings"]
+    ), payload["findings"]
+
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "inv-1",
+    )
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_CONFORMING, out
+    assert payload["result"] == pra.RESULT_CONFORMING, out
+    assert payload["findings"] == [], payload["findings"]
+    assert [item["invocation"] for item in payload["invocations"]] == ["inv-1"]
+
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "inv-2",
+    )
+    payload = json.loads(out.strip())
+    assert code == pra.EXIT_NONCONFORMING, out
+    assert payload["findings"], out
+    assert all(
+        item["invocation"] == "inv-2" for item in payload["findings"]
+    ), payload["findings"]
+
+
+def test_check_invocation_filter_keeps_unattributable_findings(tmp_path):
+    """A finding belonging to no invocation is reported in every scope.
+
+    Narrowing cannot exclude it without losing it entirely, so the scope rule
+    keeps it rather than charging it to a neighbour or dropping it.
+    """
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    _hand_append_record(trail, {
+        "kind": "round",
         "round": 1,
         "lenses": [pra.LENS_COLLISIONS],
         "parts": [{"part": "pkg", "status": "unreviewed"}],
@@ -1195,11 +1361,55 @@ def test_check_records_without_invocation_nonconforming(tmp_path):
         "declinedExtension": [],
         "mechanicalOnly": False,
     })
-    code, out, _err = _run_cli("check", "--trail", str(trail))
-    assert code == pra.EXIT_NONCONFORMING
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "inv-1",
+    )
+    assert code == pra.EXIT_NONCONFORMING, out
     payload = json.loads(out.strip())
-    assert payload["invocations"] == []
-    assert payload["findings"] == []
+    unattributable = [
+        item for item in payload["findings"] if item["invocation"] is None
+    ]
+    assert unattributable, payload["findings"]
+    assert all(item["path"] == "invocation" for item in unattributable), (
+        unattributable
+    )
+
+
+def test_check_invocation_filter_unknown_id_still_undecided(tmp_path):
+    """Edge 6: narrowing to an id no invocation record opened is unchanged."""
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    _hand_append_record(trail, _orphan_round(invocation="orphan"))
+    code, out, _err = _run_cli(
+        "check", "--trail", str(trail), "--invocation", "orphan",
+    )
+    assert code == pra.EXIT_UNDECIDED, out
+    payload = json.loads(out.strip())
+    assert payload["result"] == pra.RESULT_UNDECIDED
+    assert payload["reason"] == pra.UNDECIDED_INVOCATION_UNKNOWN
+
+
+def test_check_orphan_is_the_record_the_writers_refuse(tmp_path):
+    """The reader's judgment and the writer's refusal are one rule.
+
+    The writer refuses `invocation-unknown`; `check` reports the same token as a
+    nonconformity, so a record that could never be written cannot read clean.
+    """
+    trail = _conforming_invocation(tmp_path, invocation="inv-1")
+    code, out, _err = _record_round(
+        trail, invocation="orphan", round_no=1, parts=["pkg:unreviewed"],
+    )
+    assert code == pra.EXIT_REFUSED, out
+    write_payload = json.loads(out.strip())
+    assert write_payload["reason"] == pra.REFUSAL_INVOCATION_UNKNOWN
+
+    _hand_append_record(trail, _orphan_round(invocation="orphan"))
+    code, out, _err = _run_cli("check", "--trail", str(trail))
+    assert code == pra.EXIT_NONCONFORMING, out
+    payload = json.loads(out.strip())
+    assert _orphan_findings(payload)[0]["kind"] == (
+        pra.NONCONFORMITY_INVOCATION_UNKNOWN
+    )
+    assert pra.NONCONFORMITY_INVOCATION_UNKNOWN == pra.REFUSAL_INVOCATION_UNKNOWN
 
 
 # --- marker discipline ------------------------------------------------------
@@ -2014,6 +2224,74 @@ def _wrong_type_value(type_name):
         "object": [],
         "array": {},
     }[type_name]
+
+
+# Unhashable stand-ins. The wrong-type substitutes above are hashable wherever
+# the declared type is a scalar (0, True, "not-bool"), so a 61-case sweep of
+# them never put an unhashable value where `check` builds a set or a dict key --
+# which is how a trail carrying `"finding": ["x"]` reached `internal-error`
+# while the sweep stayed green. Non-empty on purpose: an empty list or dict
+# would also be falsy, and a falsy value can be swallowed by a truth test before
+# it ever reaches the hashing that is the point of the case.
+_UNHASHABLE_SUBSTITUTES = (
+    ("list", ["unhashable"]),
+    ("dict", {"unhashable": 1}),
+)
+
+
+def _is_unhashable(value):
+    try:
+        hash(value)
+    except TypeError:
+        return True
+    return False
+
+
+def _unhashable_expectation(constraint, value, path):
+    """Result and path a given unhashable substitute is entitled to claim.
+
+    Where the substitute mistypes the field, the declaration walk reports it at
+    exactly that path. Where it does not — a list into an `array` field, a dict
+    into an `object` field — the record is ill-formed somewhere else or not at
+    all, so the case claims neither, and the sweep's standing assertions (never
+    `undecided`, never exit 2, every finding positioned and pathed) carry it.
+    """
+    declared = constraint.get("type") if isinstance(constraint, dict) else None
+    if isinstance(value, list) and declared == "array":
+        return None, None
+    if isinstance(value, dict) and declared == "object":
+        return None, None
+    return pra.RESULT_NONCONFORMING, path
+
+
+def _unhashable_duplicate_fixture(rule, value):
+    """A duplicate-rule fixture whose repeated identity is unhashable.
+
+    Two equal-but-unhashable identities are the shape that reached
+    `internal-error`: the duplicate machinery must key them by stable identity
+    to see them as the same identity at all.
+    """
+    records = copy.deepcopy(_duplicate_fixture(rule["token"]))
+    if records is None:
+        return None, 0
+    replaced = 0
+    collection = rule.get("collection")
+    for record in records:
+        if not isinstance(record, dict) or record.get("kind") != rule["kind"]:
+            continue
+        if collection is None:
+            if rule["identity"] in record:
+                record[rule["identity"]] = copy.deepcopy(value)
+                replaced += 1
+            continue
+        items = record.get(collection)
+        if not isinstance(items, list):
+            continue
+        for item in items:
+            if isinstance(item, dict) and rule["identity"] in item:
+                item[rule["identity"]] = copy.deepcopy(value)
+                replaced += 1
+    return records, replaced
 
 
 def _check_exit_code(payload):
@@ -2989,6 +3267,43 @@ def _hostile_cases():
                 path=path,
             ))
 
+    for kind, declaration in pra.RECORD_SCHEMAS.items():
+        for path, constraint in _iter_constraints(declaration):
+            for label, value in _UNHASHABLE_SUBSTITUTES:
+                expect, expect_path = _unhashable_expectation(
+                    constraint, value, path,
+                )
+                cases.append(_sweep_case(
+                    _sweep_id("unhashable", kind, path, label),
+                    _sweep_mutation(kind, path, copy.deepcopy(value)),
+                    "unhashable",
+                    kind=kind,
+                    expect=expect,
+                    path=expect_path,
+                ))
+
+    for rule in pra.DUPLICATE_RULES:
+        for label, value in _UNHASHABLE_SUBSTITUTES:
+            fixture, replaced = _unhashable_duplicate_fixture(rule, value)
+            assert fixture is not None, (
+                "no duplicate fixture for rule token %r; every DUPLICATE_RULES "
+                "entry owes one" % rule["token"]
+            )
+            assert replaced >= 2, (
+                "unhashable duplicate fixture for %r replaced %d identity "
+                "occurrence(s); two equal identities are what makes it a "
+                "duplicate case" % (rule["token"], replaced)
+            )
+            cases.append(_sweep_case(
+                _sweep_id("unhashable-duplicate", rule["token"], label),
+                fixture,
+                "unhashable-duplicate",
+                kind=rule["kind"],
+                expect=pra.RESULT_NONCONFORMING,
+                duplicate=True,
+                token=rule["token"],
+            ))
+
     for kind, path in _nonempty_fields():
         cases.append(_sweep_case(
             _sweep_id("empty-string", kind, path),
@@ -3053,6 +3368,27 @@ def _assert_sweep_census(cases):
         case["token"] for case in cases if case["family"] == "duplicate"
     }
     assert duplicate_tokens == {rule["token"] for rule in pra.DUPLICATE_RULES}
+
+    declared_paths = [
+        (kind, path)
+        for kind, declaration in pra.RECORD_SCHEMAS.items()
+        for path, _constraint in _iter_constraints(declaration)
+    ]
+    unhashable_cases = [
+        case for case in cases if case["family"] == "unhashable"
+    ]
+    assert len(unhashable_cases) == len(declared_paths) * len(
+        _UNHASHABLE_SUBSTITUTES,
+    ), (len(unhashable_cases), len(declared_paths))
+    for _label, value in _UNHASHABLE_SUBSTITUTES:
+        assert _is_unhashable(value), value
+    unhashable_dup_tokens = {
+        case["token"] for case in cases
+        if case["family"] == "unhashable-duplicate"
+    }
+    assert unhashable_dup_tokens == {
+        rule["token"] for rule in pra.DUPLICATE_RULES
+    }
 
 
 _HOSTILE_CASES = _hostile_cases()

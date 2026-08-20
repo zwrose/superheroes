@@ -241,6 +241,14 @@ would not load. A record the writer verbs would refuse never reads as conforming
 exit blocks the package from being treated as verified** — `undecided` blocks exactly like
 `nonconforming`.
 
+That blocking rule governs **a trail the writer verbs produced**. A trail hand-written before this
+machinery existed holds prose, not records: `check` finds nothing in it to read and returns
+**`undecided`** — a verdict about the reader's reach, not about the read that was done. Such a
+trail comes under the rule the one way there is, by **re-recording its rounds through the writer
+verbs** — an ordinary use of them that needs no new verb — and until that happens it stays a prose
+record, **named as one when the package is vetted** rather than presented as a checked trail. None
+of this relaxes the rule for a trail the tool wrote: there, a non-zero exit blocks.
+
 ### The ceiling park
 
 A read invocation that fails to converge within the ceiling named at its invocation **parks to the
