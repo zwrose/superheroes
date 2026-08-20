@@ -17,6 +17,7 @@ from test_launcher import (  # noqa: E402
     L,
     _all_checks,
     _init_repo,
+    _ledger_bytes,
     _ledger_env,
     _make_spawn_fn,
     _valid_premise,
@@ -26,12 +27,6 @@ from test_launcher import (  # noqa: E402
 def _read_ledger(repo):
     """Read ledger bytes from disk."""
     return ll.read(repo)
-
-
-def _ledger_bytes(repo):
-    path = ll.ledger_path(repo)["path"]
-    with open(path, "rb") as fh:
-        return fh.read()
 
 
 def _assert_single_declaration_unchanged(repo, batch, decl_index_before):

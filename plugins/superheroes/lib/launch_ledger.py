@@ -1062,12 +1062,14 @@ def fold(records):
 
     ``retry`` on a non-terminal launch is legal whether or not ``started`` has been seen.
 
-    Batch declarations are reported, never refused: ``batchDeclarations[batchId]`` is an
-    ordered list of declaration records with their ``index``. A ``fold`` refusal is
-    ledger-global (every lane of every batch goes indeterminate; recovery is deleting the
-    file), whereas a duplicate declaration is batch-local and ``count`` already localizes
-    it. Refusal for duplicate or rogue declarations lives at the doors and at ``count``,
-    not here.
+    A well-formed batch declaration is reported and never refused: ``batchDeclarations[batchId]``
+    is an ordered list of declaration records with their ``index``, including duplicates or
+    conflicting ones. A malformed ``batch-declared`` record still refuses the whole stream
+    via ``_validate_batch_declared`` (``fold-schema:*``, ``fold-missing-field:*``,
+    ``fold-bad-field:*``). A ``fold`` refusal is ledger-global (every lane of every batch
+    goes indeterminate; recovery is deleting the file), whereas a duplicate declaration is
+    batch-local and ``count`` already localizes it. Refusal for duplicate or rogue
+    declarations lives at the doors and at ``count``, not here.
     """
     launches = {}
     batch_declarations = {}
@@ -1309,6 +1311,21 @@ def declare_batch(repo_root, batch_id, expected_launches, env=None,
             return {"ok": False, "reason": "batch-duplicate-declaration"}
         if len(decls) == 1:
             if decls[0] == expected_launches:
+                decl_index = _declaration_index(
+                    read_result["records"], batch_id, folded=folded,
+                )
+                for launch_id, info in folded["launches"].items():
+                    if info.get("batchId") != batch_id:
+                        continue
+                    reserved_index = info.get("reservedIndex")
+                    if (reserved_index is not None and decl_index is not None
+                            and decl_index > reserved_index):
+                        # axis: declaration ordering — refuse when declaration is indexed
+                        # after a reservation, even at equal cardinality.
+                        return {
+                            "ok": False,
+                            "reason": "batch-declaration-after-reservations",
+                        }
                 return {"ok": True, "reason": None, "idempotent": True}
             return {
                 "ok": False,

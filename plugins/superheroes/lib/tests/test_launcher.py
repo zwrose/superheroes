@@ -1527,6 +1527,8 @@ def test_edge1_declare_batch_invalid_expected(tmp_path, monkeypatch):
 
 def _ledger_bytes(repo):
     path = ll.ledger_path(repo)["path"]
+    if not os.path.isfile(path):
+        return b""
     with open(path, "rb") as fh:
         return fh.read()
 
