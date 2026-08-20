@@ -1731,9 +1731,9 @@ def test_absent_core_with_corrupt_tiers_blocks_go(tmp_path, monkeypatch, capsys)
     cal = payload["dispatchCalibration"]
     assert len(cal) == 1
     assert cal[0]["role"] == "*"
-    assert cal[0]["readError"].startswith("dispatch-gate-evaluation-failed: ")
+    assert cal[0]["readError"].startswith("model-tiers-unreadable: UTF-8 decode failed at ")
     _assert_read_error_payload_shape(
-        cal[0]["readError"], reason_prefix="dispatch-gate-evaluation-failed: ")
+        cal[0]["readError"], reason_prefix="model-tiers-unreadable: ")
 
 
 def test_dispatch_selftest_config_absent_core_reads_real_tiers(tmp_path):
@@ -1799,13 +1799,13 @@ def test_config_read_payload_keys_are_core_only(tmp_path, monkeypatch, capsys):
 def test_run_reads_tiers_once_per_consumer(tmp_path, monkeypatch, capsys):
     repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
     calls = []
-    real = pp.model_tier_overrides.effective_tiers
+    real = pp.model_tier_overrides.effective_tiers_for_gate
 
     def counting(*args, **kwargs):
         calls.append(1)
         return real(*args, **kwargs)
 
-    monkeypatch.setattr(pp.model_tier_overrides, "effective_tiers", counting)
+    monkeypatch.setattr(pp.model_tier_overrides, "effective_tiers_for_gate", counting)
     monkeypatch.setattr(pp, "gh_auth_probe", lambda run=None: {
         "tool": "gh auth", "ok": True, "exit": 0, "detail": ""})
     monkeypatch.setattr(pp, "cross_vendor_cli_probe", lambda engine, run=None, argv=None: {

@@ -325,6 +325,7 @@ def resolve_profile_path_for_gate(cwd=None, root=None):
 
     try:
         cwd = cwd or os.getcwd()
+        calibration_resolve.resolve(cwd, root=root)
         for path in calibration_resolve.candidate_profile_paths(cwd, root=root):
             status, detail = _classify_profile_path(path)
             if status == TIERS_ABSENT:

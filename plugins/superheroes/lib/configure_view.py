@@ -284,12 +284,27 @@ def collect(cwd, root=None):
         health = None
     model_tier_refusal = None
     try:
-        tier_gate = model_tier_overrides.effective_tiers_for_gate(cwd=cwd, root=root)
-        if model_tier_overrides.tier_gate_is_refusal(tier_gate):
+        profile = model_tier_overrides.resolve_profile_path(cwd, root)
+        tier_gate = model_tier_overrides.effective_tiers_for_gate(
+            cwd=cwd, root=root, profile_path=profile)
+        if tier_gate.status == model_tier_overrides.TIERS_ROOT_UNAVAILABLE:
+            import calibration_resolve
+            calibration_resolve.resolve(cwd, root=root)
+            profile = None
+            tiers = model_tier_overrides.effective_tiers(None)
+            overrides = {}
+        elif (
+            tier_gate.status == model_tier_overrides.TIERS_UNREADABLE
+            and tier_gate.path is not None
+        ):
             profile = tier_gate.path
             tiers = None
             overrides = {}
             model_tier_refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
+        elif model_tier_overrides.tier_gate_is_refusal(tier_gate):
+            profile = tier_gate.path
+            tiers = model_tier_overrides.effective_tiers(None)
+            overrides = {}
         else:
             profile = tier_gate.path
             tiers = tier_gate.tiers
@@ -303,7 +318,9 @@ def collect(cwd, root=None):
                 _cr = None
         if _cr is not None and isinstance(exc, getattr(_cr, "UnresolvableRootError", ())):
             raise
-        profile, tiers, overrides = None, None, {}
+        profile = None
+        tiers = model_tier_overrides.effective_tiers(None)
+        overrides = {}
     try:
         # #409: the validated engine-preference view — carries the accepted codexModels pins AND the
         # rejected `invalidCodexModels` sub-map, so a hand-edited bad pin surfaces instead of showing

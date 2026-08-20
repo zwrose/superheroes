@@ -102,15 +102,44 @@ def _read_calibration_text(path):
     return text, None
 
 
+def _path_from_layer_refusal_detail(detail):
+    """Extract the layer path embedded in a store layer-unreadable refusal detail."""
+    if " at " not in detail:
+        return None
+    suffix = detail.rsplit(" at ", 1)[1]
+    if suffix.startswith("/"):
+        return suffix.split(": ", 1)[0]
+    return suffix
+
+
+def _legacy_profile_selected(path):
+    """True when ``path`` is a legacy profile.md the store resolver would select."""
+    return path is not None and (
+        path.endswith(os.path.join("test-pilot", "profile.md"))
+        or path.endswith("/profile.md")
+    )
+
+
 def declares_slots(repo_root):
     """Return whether pilot slots are declared in the project's calibration profile."""
     if not isinstance(repo_root, str) or not repo_root:
         return _answer(STATE_CANNOT_TELL, CAUSE_REPO_ROOT_INVALID, None)
     try:
+        # Store-level refusal is not short-circuited here — this module performs its
+        # own, more specific candidate classification in the walk below (#913).
         info = store.resolve(repo_root, store.store_root())
         refusal = info.get("refusal")
-        if refusal is not None:
-            return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
+        if refusal is not None and not info.get("exists"):
+            reason = refusal.get("reason")
+            detail = refusal.get("detail") or ""
+            if reason == store.STORE_REASON_POINTER_UNREADABLE:
+                return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
+            if reason == store.STORE_REASON_LAYER_UNREADABLE:
+                refused_path = _path_from_layer_refusal_detail(detail)
+                if _legacy_profile_selected(refused_path):
+                    return _answer(
+                        STATE_CANNOT_TELL, CAUSE_CALIBRATION_UNREADABLE,
+                        refused_path)
         path = info.get("profile") if info.get("exists") else None
     except Exception:
         return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
