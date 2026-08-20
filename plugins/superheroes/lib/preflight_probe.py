@@ -357,8 +357,12 @@ def dispatch_calibration(cwd=None, root=None, prefs=None, tiers=None, snapshot=N
                 prefs = core_md.gate_config_usable_prefs(cfg)
                 prefs = prefs if isinstance(prefs, dict) else {}
         if tiers is None:
-            tiers = model_tier_overrides.effective_tiers(
-                model_tier_overrides.resolve_profile_path(cwd, root))
+            tier_gate = model_tier_overrides.effective_tiers_for_gate(cwd=cwd, root=root)
+            if model_tier_overrides.tier_gate_is_refusal(tier_gate):
+                refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
+                return _dispatch_calibration_read_error_marker(
+                    refusal["reason"], refusal["detail"], cwd=cwd)
+            tiers = tier_gate.tiers
         return engine_pref.dispatch_calibration_rows(prefs, tiers)
     except Exception as exc:
         return _dispatch_calibration_read_error_marker(
@@ -383,9 +387,15 @@ def _dispatch_selftest_config(cwd=None, root=None, snapshot=None):
         if read_error is not None:
             return {"prefs": {}, "tiers": {}, "read_error": read_error}
         prefs = prefs if isinstance(prefs, dict) else {}
-        tiers = model_tier_overrides.effective_tiers(
-            model_tier_overrides.resolve_profile_path(cwd, root))
-        return {"prefs": prefs, "tiers": tiers}
+        tier_gate = model_tier_overrides.effective_tiers_for_gate(cwd=cwd, root=root)
+        if model_tier_overrides.tier_gate_is_refusal(tier_gate):
+            refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
+            return {
+                "prefs": prefs,
+                "tiers": {},
+                "read_error": core_md.gate_refusal_line(refusal),
+            }
+        return {"prefs": prefs, "tiers": tier_gate.tiers}
     except Exception as exc:
         return {
             "prefs": {},

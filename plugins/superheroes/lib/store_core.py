@@ -14,6 +14,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import subprocess
 import sys
 import tempfile
@@ -24,6 +25,26 @@ GIT_DECLINED = "declined"        # git ran and exited non-zero — an authoritat
 GIT_UNAVAILABLE = "unavailable"  # git could not be run at all — the answer is unknown
 
 GitResult = collections.namedtuple("GitResult", "out status detail")
+
+POINTER_OK = "ok"
+POINTER_ABSENT = "absent"
+POINTER_UNREADABLE = "unreadable"
+PointerResult = collections.namedtuple("PointerResult", "entry_id status detail")
+
+
+class PointerUnreadable(Exception):
+    """A store key pointer or its entry directory exists but could not be read, so which entry
+    belongs to this repository is UNKNOWN (issue #782).
+
+    Deliberately NOT an OSError: no incidental ``except OSError`` may absorb this into a local
+    story (unreadable pointer, absent file, dangling entry). Callers that need to translate it
+    must catch ``PointerUnreadable`` by name."""
+
+    def __init__(self, message, *, path=None, status=None, detail=None):
+        super().__init__(message)
+        self.path = path
+        self.status = status
+        self.detail = detail
 
 
 class RepoRootUnavailable(Exception):
@@ -395,13 +416,61 @@ def atomic_write(path, text, tmp_prefix=".store-core."):
         raise
 
 
+def read_pointer_result(root, key_hash):
+    """`read_pointer` plus WHY there is no entry id. Never raises."""
+    path = os.path.join(root, "keys", key_hash)
+    try:
+        with open(path) as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        return PointerResult(None, POINTER_ABSENT, None)
+    except UnicodeDecodeError as exc:
+        return PointerResult(
+            None, POINTER_UNREADABLE, "%s: %s" % (path, exc))
+    except OSError as exc:
+        return PointerResult(
+            None, POINTER_UNREADABLE, "%s: %s" % (path, exc))
+    entry_id = text.strip() or None
+    if entry_id is None:
+        return PointerResult(None, POINTER_ABSENT, None)
+    return PointerResult(entry_id, POINTER_OK, None)
+
+
 def read_pointer(root, key_hash):
     """Read the entry-id stored at root/keys/<key_hash>. None if absent/empty."""
+    return read_pointer_result(root, key_hash).entry_id
+
+
+def _entry_dir_is_live(root, entry_id, *, strict=False):
+    """True when root/entries/<entry_id> is a live directory.
+
+    In strict mode, an unstatable path or a non-directory raises ``PointerUnreadable``;
+    ``FileNotFoundError`` returns False (dangling pointer). In fail-open mode, uses
+    ``os.path.isdir`` (stat errors read as not live)."""
+    path = os.path.join(root, "entries", entry_id)
+    if not strict:
+        return os.path.isdir(path)
     try:
-        with open(os.path.join(root, "keys", key_hash)) as fh:
-            return fh.read().strip() or None
-    except OSError:
-        return None
+        st = os.stat(path)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        detail = "%s: %s" % (path, exc)
+        raise PointerUnreadable(
+            "entry directory could not be stat-ed at %s: %s" % (path, exc),
+            path=path, status=POINTER_UNREADABLE, detail=detail) from exc
+    if not stat.S_ISDIR(st.st_mode):
+        detail = "%s: not a directory" % path
+        raise PointerUnreadable(
+            "entry path is not a directory at %s" % path,
+            path=path, status=POINTER_UNREADABLE, detail=detail)
+    return True
+
+
+def _raise_pointer_unreadable(result, path):
+    raise PointerUnreadable(
+        "store key pointer could not be read at %s: %s" % (path, result.detail),
+        path=path, status=result.status, detail=result.detail)
 
 
 def write_pointer(root, key_hash, entry_id):
@@ -420,18 +489,37 @@ def write_keys_json(entry_dir, ident):
                  }, indent=2))
 
 
-def resolve_global(cwd, root, _consumer="store_core", heal=True):
+def resolve_global(cwd, root, _consumer="store_core", heal=True, *, strict=False):
     """Find the live global entry for cwd via key pointers (remote preferred),
     self-healing dangling/stale pointers.
 
     Returns {entry_id, dir, healed} or None if no live entry exists.
     This is the shared algorithm used by both test-pilot (store.py) and
     review-crew (review_store.py).
+
+    With ``strict=True``, an unreadable pointer or unstatable entry directory
+    raises ``PointerUnreadable`` before candidate selection or self-healing.
     """
     ident = derive_identifiers(cwd)
     rh, gh = ident["remote_hash"], ident["gitdir_hash"]
-    p_remote = read_pointer(root, rh) if rh else None
-    p_gitdir = read_pointer(root, gh)
+
+    if strict:
+        if rh:
+            r_remote = read_pointer_result(root, rh)
+            if r_remote.status == POINTER_UNREADABLE:
+                _raise_pointer_unreadable(
+                    r_remote, os.path.join(root, "keys", rh))
+            p_remote = r_remote.entry_id
+        else:
+            p_remote = None
+        r_gitdir = read_pointer_result(root, gh)
+        if r_gitdir.status == POINTER_UNREADABLE:
+            _raise_pointer_unreadable(
+                r_gitdir, os.path.join(root, "keys", gh))
+        p_gitdir = r_gitdir.entry_id
+    else:
+        p_remote = read_pointer(root, rh) if rh else None
+        p_gitdir = read_pointer(root, gh)
 
     # Candidate entry-ids in preference order (remote first), deduped.
     candidates = []
@@ -445,16 +533,16 @@ def resolve_global(cwd, root, _consumer="store_core", heal=True):
     # A dangling pointer (entry dir deleted out of band) falls through to the
     # other; if none is live, treat as absent.
     entry_id = next(
-        (c for c in candidates
-         if os.path.isdir(os.path.join(root, "entries", c))), None)
+        (c for c in candidates if _entry_dir_is_live(root, c, strict=strict)),
+        None)
     if entry_id is None:
         return None
 
     # Warn only on a GENUINE conflict: both keys point at live-but-different
     # entries. A mere dangling pointer is routine self-heal, not a conflict.
     if (p_remote and p_gitdir and p_remote != p_gitdir
-            and os.path.isdir(os.path.join(root, "entries", p_remote))
-            and os.path.isdir(os.path.join(root, "entries", p_gitdir))):
+            and _entry_dir_is_live(root, p_remote, strict=strict)
+            and _entry_dir_is_live(root, p_gitdir, strict=strict)):
         sys.stderr.write(
             f"{_consumer}: key disagreement — both keys point at live but "
             "different entries; preferring the remote-keyed entry\n")

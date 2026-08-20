@@ -1,4 +1,6 @@
 import importlib.util, json, os
+
+import pytest
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -190,3 +192,21 @@ def test_resolve_fallopen_when_unresolvable_root_error_missing(tmp_path, monkeyp
     out = RC.resolve(str(tmp_path))
     assert out["verifyCommand"] == "none"
     assert out["verifyMode"] is None
+
+
+def test_load_failopen_when_profile_unreadable(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo = str(tmp_path / "repo")
+    cal = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(cal)
+    profile = os.path.join(cal, "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\nreviewer: opus\n")
+    os.chmod(profile, 0o000)
+    try:
+        out = RC.resolve(repo)
+        assert out["tiers"]["reviewer"] == "sonnet"
+        assert out["calibrationRefusal"] is None
+    finally:
+        os.chmod(profile, 0o644)
