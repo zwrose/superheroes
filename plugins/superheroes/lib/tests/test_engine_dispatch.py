@@ -1549,6 +1549,60 @@ def test_validate_run_dir_containment_before_create(tmp_path):
     assert not nested.exists()
 
 
+def test_validate_run_dir_containment_after_create_refused(tmp_path, monkeypatch):
+    protected = tmp_path / "protected"
+    protected.mkdir()
+    hijacked = protected / "evil"
+    hijacked.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    alias = tmp_path / "alias"
+    alias.symlink_to(outside)
+    run_path = alias / "nested" / "run"
+    orig_realpath = os.path.realpath
+    post_create = {"active": False}
+    orig_makedirs = os.makedirs
+
+    def tracking_makedirs(*args, **kwargs):
+        post_create["active"] = True
+        return orig_makedirs(*args, **kwargs)
+
+    def selective_realpath(p):
+        result = orig_realpath(p)
+        if post_create["active"] and os.path.normpath(p) == os.path.normpath(str(run_path)):
+            return str(hijacked)
+        return result
+
+    monkeypatch.setattr(os, "makedirs", tracking_makedirs)
+    monkeypatch.setattr(os.path, "realpath", selective_realpath)
+    ok, detail = ED._validate_run_dir(
+        str(run_path), create=True, forbidden_parent=str(protected),
+        forbidden_detail="inside-protected",
+    )
+    assert not ok
+    assert detail == "inside-protected"
+
+
+def test_path_inside_samestat_ancestor_walk(tmp_path, monkeypatch):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(parent)
+    child = parent / "nested"
+    child.mkdir()
+    orig_realpath = os.path.realpath
+
+    def alias_parent_realpath(p):
+        result = orig_realpath(p)
+        if os.path.normpath(p) == os.path.normpath(str(parent)):
+            return str(link)
+        return result
+
+    monkeypatch.setattr(os.path, "realpath", alias_parent_realpath)
+    assert not child.resolve().as_posix().startswith(str(link) + os.sep)
+    assert ED._path_inside(str(parent), str(child))
+
+
 def test_path_inside_case_insensitive_alias(tmp_path):
     parent = tmp_path / "casetestdir"
     parent.mkdir()
