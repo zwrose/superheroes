@@ -3057,6 +3057,7 @@ _R5_PLUGIN_COPY_HOLDERS = (
 _R7_PLUGIN_COPY_HOLDERS = (
     "skills/architect-discovery/SKILL.md",
     "skills/showrunner/SKILL.md",
+    "skills/showrunner/reference/closure.md",
 )
 
 # §11.2: every known in-repo copy-holder outside the plugin for R5. A child doc that stops
@@ -4529,9 +4530,6 @@ def test_decomposition_doc_invocation_matches_the_cli():
         "doc does not publish: %r"
         % (missing_from_cli, extra_in_doc)
     )
-
-
-    "skills/showrunner/reference/closure.md",
 
 
 # --- Cluster: R8 closure receipt elements (pinned register literal) --------
