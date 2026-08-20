@@ -103,7 +103,7 @@ are never holding the inventory in working memory.
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | this vet is the one whose merge (or whose close, where the last open child closes without a PR) closes the spec's last open child | the **closure receipt** — it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
 
-The last row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
+The collector-escalation row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
 the path. Each pending item's **proposing ordinal** is what makes its age inspectable — a subtraction
 against this vet's ordinal, not a count of anything — so the escalation is raised by a number the
 artifacts carry rather than by your memory of having carried the item.

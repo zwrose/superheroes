@@ -299,7 +299,7 @@ The **in-channel fast continuation**: the advisor proposes the single child issu
 conversation**, and the owner approves it **there**.
 
 **Closure folds into that PR's vet** — the applicable closure elements are graded there. The closure
-receipt's element list belongs to the closure contract at `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/closure.md` and is not enumerated here.
+receipt's element list belongs to the closure contract at `skills/showrunner/reference/closure.md` and is not enumerated here.
 
 **The owner's merge decision doubles as delivery acceptance only when the handback names it as such
 in so many words — an explicit line, never an inference.** A single-issue spec still ends with an

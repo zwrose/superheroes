@@ -4306,3 +4306,56 @@ def test_charters_forbid_inverted_routing_forms():
     assert not hits, (
         "inverted routing form(s) found in charter(s): %r" % hits
     )
+
+
+# --- Cluster: R8 closure receipt elements (pinned register literal) --------
+
+R8_CLOSURE_RECEIPT_ELEMENTS = (
+    "The closure receipt enumerates exactly: coverage map complete; all other children merged "
+    "with green vets; amendments reconciled — meaning the Amendments log is valid against R4's "
+    "format AND UFR-4's propagation is verified: every affected child carried the amended text "
+    "or an explicit notice, and the coverage map still allocates every acceptance criterion; "
+    "one end-to-end validation run against the current spec body with its result stated; "
+    "aggregated Show-it items; delivered versus deferred/declined named; and NFR conformance "
+    "checked across the delivery (owner reading load, plain language, guidelines never hardened "
+    "into gates) — an absent element is named with why."
+)
+
+_R8_PLUGIN_COPY_HOLDERS = (
+    "skills/showrunner/reference/closure.md",
+)
+
+# §11.2: every known in-repo copy-holder outside the plugin for R8. A child doc that stops
+# quoting an entry is a real failure, not a stale test — the register's Consumers line
+# decides who must quote it.
+_R8_IN_REPO_COPY_HOLDERS = (
+    _EPIC_REGISTER_REL,
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c6-epic-machinery.md")
+    ),
+    os.path.normpath(
+        os.path.join("..", "..", "docs", "superheroes",
+                     "front-half-sdlc-core-6181ee", "children", "c7-closure.md")
+    ),
+)
+
+
+def test_r8_pinned_literal_exactly_once_in_epic_register_when_reachable():
+    """§11.2: pinned R8 literal is byte-exact in the epic register when the home is reachable."""
+    _assert_literal_exactly_once_if_reachable(
+        R8_CLOSURE_RECEIPT_ELEMENTS, _EPIC_REGISTER_REL
+    )
+
+
+def test_r8_closure_receipt_elements_exactly_once_in_plugin_copy_holders():
+    """§11.2: R8 closure-receipt element sentence is byte-identical in every plugin copy-holder."""
+    for rel in _R8_PLUGIN_COPY_HOLDERS:
+        _assert_literal_exactly_once(R8_CLOSURE_RECEIPT_ELEMENTS, rel)
+
+
+def test_r8_closure_receipt_elements_exactly_once_in_in_repo_copy_holders():
+    """§11.2: R8 closure-receipt element sentence is byte-identical in every in-repo copy-holder."""
+    _assert_literal_exactly_once_across_holders(
+        R8_CLOSURE_RECEIPT_ELEMENTS, _R8_IN_REPO_COPY_HOLDERS
+    )

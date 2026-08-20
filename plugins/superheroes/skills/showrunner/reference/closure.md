@@ -49,7 +49,7 @@ Reading the entry element by element, the advisor checks:
   stamp, class, touched section names, positional numbering) **and** propagation is verified: every
   affected child carried the amended text or an explicit notice, and the coverage map still
   allocates every acceptance criterion. The amendment machinery lives in
-  `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/amendments.md`.
+  `skills/showrunner/reference/amendments.md`.
 - **one end-to-end validation run against the current spec body, with its result stated** —
   detailed in [The validation run](#the-validation-run).
 - **aggregated Show-it items** — the package's Show-it surface gathered across children, so the
@@ -145,6 +145,5 @@ A single-issue spec skips epic machinery; closure folds into that one PR's vet, 
 **applicable** elements of [The closure receipt](#the-closure-receipt) are graded. The owner's merge
 decision doubles as delivery acceptance **only when the handback names it as such in so many words —
 an explicit line, never an inference**, and a single-issue spec still ends with an explicit owner
-delivery decision. Point at
-`${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md` §
-*The single-issue fast path* for the rest of that path.
+delivery decision. The rest of that path lives in
+`skills/showrunner/reference/decomposition.md` § *The single-issue fast path*.
