@@ -1461,6 +1461,216 @@ def test_review_run_dir_inside_repo_root_refused(tmp_path):
     assert len(fake.calls) == 0
 
 
+def test_validate_run_dir_leaf_symlink_to_dir_refused(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real_dir)
+    ok, detail = ED._validate_run_dir(str(link), create=True)
+    assert not ok
+    assert detail == "run-dir-is-symlink"
+
+
+def test_validate_run_dir_dangling_symlink_refused(tmp_path):
+    link = tmp_path / "dangle"
+    link.symlink_to(tmp_path / "missing")
+    ok, detail = ED._validate_run_dir(str(link), create=True)
+    assert not ok
+    assert detail == "run-dir-is-symlink"
+
+
+def test_validate_run_dir_ancestor_symlink_physicalized(tmp_path):
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(real_parent)
+    run_path = alias_parent / "new-run"
+    ok, detail = ED._validate_run_dir(str(run_path), create=True)
+    assert ok
+    assert detail == os.path.realpath(str(run_path))
+    assert os.path.isdir(detail)
+
+
+def test_validate_run_dir_existing_file_refused(tmp_path):
+    blocker = tmp_path / "blocker"
+    blocker.write_text("x", encoding="utf-8")
+    ok, detail = ED._validate_run_dir(str(blocker), create=True)
+    assert not ok
+    assert detail == "run-dir-not-a-directory"
+
+
+def test_validate_run_dir_missing_without_create(tmp_path):
+    missing = tmp_path / "no-such-run"
+    ok, detail = ED._validate_run_dir(str(missing), create=False)
+    assert not ok
+    assert detail == "run-dir-missing"
+
+
+def test_validate_run_dir_creates_nested_path(tmp_path):
+    nested = tmp_path / "a" / "b" / "run"
+    ok, detail = ED._validate_run_dir(str(nested), create=True)
+    assert ok
+    assert os.path.isdir(detail)
+    assert detail == os.path.realpath(str(nested))
+
+
+def test_validate_run_dir_trailing_separator_symlink_refused(tmp_path):
+    real_dir = tmp_path / "real"
+    real_dir.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real_dir)
+    ok, detail = ED._validate_run_dir(str(link) + os.sep, create=True)
+    assert not ok
+    assert detail == "run-dir-is-symlink"
+
+
+def test_validate_run_dir_containment_before_create(tmp_path):
+    parent = tmp_path / "protected"
+    parent.mkdir()
+    nested = parent / "nested" / "run"
+    ok, detail = ED._validate_run_dir(
+        str(nested), create=True, forbidden_parent=str(parent),
+        forbidden_detail="inside-protected",
+    )
+    assert not ok
+    assert detail == "inside-protected"
+    assert not nested.exists()
+
+
+def test_dispatch_review_creates_missing_run_dir(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = tmp_path / "fresh-run"
+    assert not run_dir.exists()
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+    )
+    assert run_dir.is_dir()
+    assert res["runDir"] == os.path.realpath(str(run_dir))
+    records, _ = ED._journal_read(res["runDir"])
+    assert any(r.get("kind") == "run-opened" for r in records)
+
+
+def test_dispatch_review_ancestor_symlink_physicalizes_run_dir(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_parent = tmp_path / "real-parent"
+    real_parent.mkdir()
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(real_parent)
+    run_dir = alias_parent / "review-run"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+    )
+    assert res["runDir"] == os.path.realpath(str(run_dir))
+
+
+def test_dispatch_review_symlink_leaf_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    link = tmp_path / "run-link"
+    link.symlink_to(real_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(link),
+    )
+    assert res["detail"] == "run-dir-is-symlink"
+    assert res["attempts"] == 0
+    assert len(fake.calls) == 0
+
+
+def test_dispatch_review_trailing_separator_symlink_leaf_refused(tmp_path):
+    repo_root = _repo(tmp_path)
+    real_dir = tmp_path / "real-run"
+    real_dir.mkdir()
+    link = tmp_path / "run-link"
+    link.symlink_to(real_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(link) + os.sep,
+    )
+    assert res["detail"] == "run-dir-is-symlink"
+    assert res["attempts"] == 0
+
+
+def test_dispatch_review_inside_repo_root_missing_not_created(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = os.path.join(repo_root, "nested", "fresh-run")
+    assert not os.path.exists(run_dir)
+    fake = FakeRunner([])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=run_dir,
+    )
+    assert res["detail"] == "run-dir-inside-repo-root"
+    assert not os.path.exists(run_dir)
+
+
+def test_dispatch_review_continuation_reuses_created_run_dir(tmp_path):
+    repo_root = _repo(tmp_path)
+    run_dir = tmp_path / "continue-run"
+    fake = FakeRunner([(_VALID_FINDINGS_STDOUT, False, 0, "")])
+    first = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-1",
+    )
+    records_after_first, _ = ED._journal_read(first["runDir"])
+    second = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=FakeRunner([]),
+        build_view=_fake_build_view(tmp_path), run_dir=str(run_dir), max_wait=0,
+        order_id="order-1",
+    )
+    assert second["runDir"] == first["runDir"]
+    records_after_second, _ = ED._journal_read(second["runDir"])
+    opened = [r for r in records_after_second if r.get("kind") == "run-opened"]
+    assert len(opened) == len([r for r in records_after_first if r.get("kind") == "run-opened"])
+
+
+def test_dispatch_poll_missing_run_dir_refused(tmp_path):
+    missing = str(tmp_path / "no-such-run")
+    res = ED.dispatch_poll(missing)
+    assert res["detail"] == "run-dir-missing"
+
+
+def test_dispatch_abandon_missing_run_dir_refused(tmp_path):
+    missing = str(tmp_path / "no-such-run")
+    res = ED.dispatch_abandon(missing)
+    assert res["detail"] == "run-dir-missing"
+
+
+def test_dispatch_poll_ancestor_symlink_accepted(tmp_path):
+    run_dir = str(tmp_path / "real-run")
+    _manual_open_review_run(tmp_path, run_dir)
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(os.path.dirname(run_dir))
+    symlinked = os.path.join(str(alias_parent), os.path.basename(run_dir))
+    res = ED.dispatch_poll(symlinked)
+    assert res["reason"] == "running"
+
+
+def test_dispatch_abandon_ancestor_symlink_accepted(tmp_path):
+    run_dir = str(tmp_path / "real-run")
+    _manual_open_review_run(tmp_path, run_dir)
+    alias_parent = tmp_path / "alias-parent"
+    alias_parent.symlink_to(os.path.dirname(run_dir))
+    symlinked = os.path.join(str(alias_parent), os.path.basename(run_dir))
+    res = ED.dispatch_abandon(symlinked)
+    assert res["detail"] == "run-abandoned"
+
+
 def test_dispatch_abandon_idempotent_terminal(tmp_path):
     run_dir = str(tmp_path / "run")
     _manual_open_review_run(tmp_path, run_dir)

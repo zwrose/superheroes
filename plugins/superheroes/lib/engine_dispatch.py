@@ -849,19 +849,34 @@ def _validate_repo_root(repo_root):
     return True, os.path.realpath(root)
 
 
-def _validate_run_dir(run_dir):
+def _validate_run_dir(
+    run_dir, *, create=False, forbidden_parent=None, forbidden_detail=None,
+):
     if not run_dir:
         return False, "run-dir-absent"
-    if not os.path.exists(run_dir):
+    path = run_dir
+    while path.endswith(os.sep) and len(path) > 1:
+        path = path[:-1]
+    if not path or path == os.sep * len(path):
+        path = os.sep
+    if os.path.islink(path):
+        return False, "run-dir-is-symlink"
+    if forbidden_parent is not None and _path_inside(forbidden_parent, path):
+        return False, forbidden_detail
+    if create and not os.path.exists(path):
+        try:
+            os.makedirs(path, mode=0o700, exist_ok=True)
+        except OSError as exc:
+            return False, "run-dir-setup-failed:%s" % type(exc).__name__
+    # Re-check after creation: a symlink swapped in between checks would otherwise
+    # be followed by os.path.exists / makedirs and yield a misleading token.
+    if os.path.islink(path):
+        return False, "run-dir-is-symlink"
+    if not os.path.exists(path):
         return False, "run-dir-missing"
-    if os.path.islink(run_dir):
-        return False, "run-dir-is-symlink"
-    if not os.path.isdir(run_dir):
+    if not os.path.isdir(path):
         return False, "run-dir-not-a-directory"
-    real = os.path.realpath(run_dir)
-    abspath = os.path.abspath(run_dir)
-    if real != abspath:
-        return False, "run-dir-is-symlink"
+    real = os.path.realpath(path)
     if not os.access(real, os.W_OK):
         return False, "run-dir-not-writable"
     return True, real
@@ -2860,7 +2875,10 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
     try:
         if run_dir is not None:
-            ok_rd, rd_detail = _validate_run_dir(run_dir)
+            ok_rd, rd_detail = _validate_run_dir(
+                run_dir, create=True, forbidden_parent=repo_detail,
+                forbidden_detail="run-dir-inside-repo-root",
+            )
             if not ok_rd:
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -2869,13 +2887,6 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                     run_dir=run_dir or "", engine=engine,
                 )
             run_dir_real = rd_detail
-            if _path_inside(repo_detail, run_dir_real):
-                return _finish_preflight_terminal(
-                    repo_detail,
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-inside-repo-root",
-                     "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir_real, engine=engine,
-                )
             records, _corrupt = _journal_read(run_dir_real)
             state = _journal_state(records)
             opened = state.get("opened")
@@ -3185,33 +3196,17 @@ def _dispatch_write_impl(engine, *, model, effort=None, engine_model=None, promp
             argv=argv,
         )
 
-    ok_rd, rd_detail = _validate_run_dir(run_dir)
+    ok_rd, rd_detail = _validate_run_dir(
+        run_dir, create=True, forbidden_parent=cwd_real,
+        forbidden_detail="run-dir-inside-cwd",
+    )
     if not ok_rd:
-        if rd_detail == "run-dir-missing":
-            try:
-                os.makedirs(run_dir, mode=0o700, exist_ok=True)
-            except OSError as exc:
-                return _write_preflight_terminal(
-                    {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
-                     "detail": "run-dir-setup-failed:%s" % type(exc).__name__,
-                     "attempts": 0, "forfeited": False, "terminal": True},
-                    run_dir=run_dir or "", argv=argv,
-                )
-            ok_rd, rd_detail = _validate_run_dir(run_dir)
-        if not ok_rd:
-            return _write_preflight_terminal(
-                {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
-                 "attempts": 0, "forfeited": False, "terminal": True},
-                run_dir=run_dir or "", argv=argv,
-            )
-    run_dir_real = rd_detail
-
-    if _path_inside(cwd_real, run_dir_real):
         return _write_preflight_terminal(
-            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": "run-dir-inside-cwd",
+            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE, "detail": rd_detail,
              "attempts": 0, "forfeited": False, "terminal": True},
-            run_dir=run_dir_real, argv=argv,
+            run_dir=run_dir or "", argv=argv,
         )
+    run_dir_real = rd_detail
 
     caller_omitted_expected = expected_items is None and expected_items_file is None
 
@@ -3630,7 +3625,7 @@ def build_parser():
                     default=RETRY_MIN_TIMEOUT, type=int)
     cc.add_argument(d, "--progress-file", contract="free-text", default=None)
     cc.add_argument(d, "--repo-root", contract="repo-root", required=True)
-    cc.add_argument(d, "--run-dir", contract="existing-directory", default=None)
+    cc.add_argument(d, "--run-dir", contract="creatable-path", default=None)
     cc.add_argument(d, "--max-wait", contract="integer", default=None, type=int)
     cc.add_argument(d, "--order-id", contract="free-text", default=None)
     cc.add_argument(d, "--diff-base", contract="free-text", default=None, metavar="<commit-oid>",
