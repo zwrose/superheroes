@@ -11,6 +11,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import pilot_conformance as pc  # noqa: E402
+import store  # noqa: E402
 
 EXERCISED_AT = "2026-08-07T12:00:00Z"
 SAMPLE_SURFACE = "pilot_wave.wave_phase"
@@ -636,6 +637,47 @@ def _write_calibration_layer(tmp_path, *, include_mint=False):
         '{"schemaVersion": 1, "pilot": %s}\n```\n' % pilot_json,
         encoding="utf-8",
     )
+
+
+def test_load_calibration_config_unreadable_layer_returns_refusal(tmp_path):
+    layer_dir = tmp_path / ".claude" / "superheroes"
+    layer_dir.mkdir(parents=True)
+    (layer_dir / "test-pilot.md").symlink_to("/no/such/layer")
+    root = str(tmp_path / "store")
+    cfg, profile_or_refusal = pc._load_calibration_config(str(tmp_path), root)
+    assert cfg is None
+    assert profile_or_refusal["reason"] == store.STORE_REASON_LAYER_UNREADABLE
+
+
+def test_resolve_inputs_unreadable_layer_not_no_calibration(tmp_path, monkeypatch):
+    layer_dir = tmp_path / ".claude" / "superheroes"
+    layer_dir.mkdir(parents=True)
+    (layer_dir / "test-pilot.md").symlink_to("/no/such/layer")
+    root = str(tmp_path / "store")
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", root)
+    inputs, resolution = pc.resolve_inputs(str(tmp_path), store_root=root, now=EXERCISED_AT)
+    assert inputs == {}
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["artifacts"]["reason"] == pc.REASON_INPUT_CALIBRATION_UNREADABLE
+
+
+def test_resolve_inputs_artifacts_dir_ignores_calibration_refusal(tmp_path, monkeypatch):
+    layer_dir = tmp_path / ".claude" / "superheroes"
+    layer_dir.mkdir(parents=True)
+    (layer_dir / "test-pilot.md").symlink_to("/no/such/layer")
+    root = str(tmp_path / "store")
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", root)
+    resolved = store.resolve(str(tmp_path), root)
+    assert resolved["refusal"] is not None
+    assert resolved["artifacts_dir"] is not None
+    inputs, resolution = pc.resolve_inputs(
+        str(tmp_path),
+        store_root=root,
+        artifacts_dir=resolved["artifacts_dir"],
+        now=EXERCISED_AT,
+    )
+    by_input = {entry["input"]: entry for entry in resolution}
+    assert by_input["artifacts"]["reason"] != pc.REASON_INPUT_NO_ARTIFACTS_DIR
 
 
 def test_resolve_inputs_no_calibration_all_absent(tmp_path):

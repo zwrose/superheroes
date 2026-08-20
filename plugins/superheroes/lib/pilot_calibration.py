@@ -108,6 +108,9 @@ def declares_slots(repo_root):
         return _answer(STATE_CANNOT_TELL, CAUSE_REPO_ROOT_INVALID, None)
     try:
         info = store.resolve(repo_root, store.store_root())
+        refusal = info.get("refusal")
+        if refusal is not None:
+            return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)
         path = info.get("profile") if info.get("exists") else None
     except Exception:
         return _answer(STATE_CANNOT_TELL, CAUSE_RESOLVER_FAILED, None)

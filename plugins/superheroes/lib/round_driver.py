@@ -4512,6 +4512,9 @@ def _seat_transport_fault(row, seat_key):
 def _profile_path_for_orders(repo_root):
     """Resolved project profile path for fixer orders — never a hand-typed layout guess."""
     try:
+        # Deliberate fail-open: the profile path is prose for fixer orders (a cost/context
+        # hint), not a governance decision — resolve_profile_path swallows read failures to
+        # None rather than refusing the order. Governance uses effective_tiers_for_gate.
         path = model_tier_overrides.resolve_profile_path(repo_root)
     except calibration_resolve.UnresolvableRootError as exc:
         refusal = core_md.gate_refusal_line(

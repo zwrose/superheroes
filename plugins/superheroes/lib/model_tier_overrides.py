@@ -185,10 +185,18 @@ def replace_model_tiers_block(text, overrides):
     return "".join(lines[:start]) + block + "".join(lines[end:])
 
 
+class _TierGateRefusal(Exception):
+    def __init__(self, gate):
+        self.gate = gate
+
+
 def _candidate_effective_tiers(profile_path, set_overrides=None, clear_roles=None):
     import model_tier
 
-    current = load_overrides(profile_path)
+    gate = overrides_for_gate(profile_path)
+    if tier_gate_is_refusal(gate):
+        raise _TierGateRefusal(gate)
+    current = dict(gate.overrides)
     for role in clear_roles or []:
         role = _LEGACY_ROLE_ALIAS.get(role, role)
         if role in KNOWN_ROLES:
@@ -226,6 +234,8 @@ def _evaluate_tier_writer_dispatch_gate(profile_path, set_overrides=None, clear_
         return None, gate_err
     try:
         candidate_tiers = _candidate_effective_tiers(profile_path, set_overrides, clear_roles)
+    except _TierGateRefusal as exc:
+        return None, tier_gate_refusal(exc.gate)
     except Exception as exc:
         import core_md
 

@@ -406,3 +406,152 @@ def test_candidate_profile_paths_agrees_with_resolve_per_position(tmp_path, monk
         assert len(candidates) == 4, name
         r = store.resolve(repo, root)
         assert r["profile"] == candidates[idx], name
+
+
+# ---------------------------------------------------------------------------
+# #782 — fail-closed layer classification
+# ---------------------------------------------------------------------------
+
+def _tree_snapshot(root):
+    snapshot = {}
+    if not os.path.isdir(root):
+        return snapshot
+    for dirpath, _dirnames, filenames in os.walk(root):
+        for fn in filenames:
+            p = os.path.join(dirpath, fn)
+            with open(p, "rb") as fh:
+                snapshot[p] = fh.read()
+    return snapshot
+
+
+def test_resolve_in_repo_layer_directory_refusal(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer_dir = os.path.join(repo, ".claude", "superheroes", "test-pilot.md")
+    os.makedirs(layer_dir, exist_ok=True)
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["exists"] is False
+    assert r["refusal"] is not None
+    assert r["refusal"]["reason"] == store.STORE_REASON_LAYER_UNREADABLE
+
+
+def test_resolve_in_repo_layer_dangling_symlink_refusal(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    os.symlink("/no/such/layer", os.path.join(d, "test-pilot.md"))
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["refusal"] is not None
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
+def test_resolve_in_repo_layer_mode_zero_refusal(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    os.chmod(layer, 0o000)
+    try:
+        r = store.resolve(repo, root)
+        assert r["location"] == "none"
+        assert r["refusal"] is not None
+    finally:
+        os.chmod(layer, 0o644)
+
+
+def test_resolve_in_repo_layer_invalid_utf8_refusal(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    layer = os.path.join(d, "test-pilot.md")
+    with open(layer, "wb") as fh:
+        fh.write(b"\xff\xfe")
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["refusal"] is not None
+
+
+def test_resolve_unreadable_in_repo_does_not_fall_through_to_global(tmp_path, monkeypatch):
+    monkeypatch.setenv("WORKHORSE_STORE_ROOT", str(tmp_path / "core-store"))
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    os.symlink("/no/such/in-repo-layer", os.path.join(d, "test-pilot.md"))
+    _write_global_layer(repo)
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["refusal"] is not None
+    assert r["profileSource"] == "none"
+
+
+def test_resolve_legacy_profile_unstatable_refusal(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    base = os.path.join(repo, ".claude", "test-pilot")
+    os.makedirs(base, exist_ok=True)
+    legacy = os.path.join(base, "profile.md")
+    os.symlink("/no/such/legacy", legacy)
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["refusal"] is not None
+
+
+def test_resolve_layer_without_config_block_refusal_none(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    _write_in_repo_layer(repo, text="<!-- test-pilot -->\n\n## App launch\n- npm run dev\n")
+    r = store.resolve(repo, root)
+    assert r["location"] == "none"
+    assert r["refusal"] is None
+
+
+def test_resolve_pointer_unreadable_refusal(tmp_path):
+    repo = _init_repo(tmp_path / "repo", remote="git@github.com:org/repo.git")
+    root = str(tmp_path / "store")
+    store.create(repo, "global", root)
+    ident = store.derive_identifiers(repo)
+    pointer = os.path.join(root, "keys", ident["gitdir_hash"])
+    os.chmod(pointer, 0o000)
+    try:
+        r = store.resolve(repo, root)
+        assert r["location"] == "none"
+        assert r["refusal"] is not None
+        assert r["refusal"]["reason"] == store.STORE_REASON_POINTER_UNREADABLE
+    finally:
+        os.chmod(pointer, 0o644)
+
+
+@pytest.mark.skipif(os.geteuid() == 0, reason="root can read mode 0o000 files")
+def test_create_unreadable_layer_raises_without_writing(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    layer = _write_in_repo_layer(repo)
+    os.chmod(layer, 0o000)
+    before = _tree_snapshot(root)
+    try:
+        with pytest.raises(store.LayerUnreadable):
+            store.create(repo, "in-repo", root)
+    finally:
+        os.chmod(layer, 0o644)
+    after = _tree_snapshot(root)
+    assert before == after
+
+
+def test_cli_resolve_unreadable_layer_exit_one(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    d = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(d, exist_ok=True)
+    os.symlink("/no/such/layer", os.path.join(d, "test-pilot.md"))
+    env = dict(os.environ, TEST_PILOT_STORE_ROOT=root)
+    lib = os.path.dirname(os.path.abspath(store.__file__))
+    out = subprocess.run(
+        ["/usr/bin/python3", os.path.join(lib, "store.py"), "resolve"],
+        capture_output=True, text=True, cwd=repo, env=env)
+    assert out.returncode == 1
+    payload = json.loads(out.stdout)
+    assert payload["refusal"] is not None

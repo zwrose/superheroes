@@ -683,10 +683,62 @@ def test_dispatch_calibration_invalid_utf8_tiers_returns_evaluation_failed_marke
     assert rows[0]["role"] == "*"
     assert rows[0]["engine"] is None
     assert rows[0]["model"] is None
-    assert rows[0]["readError"].startswith("dispatch-gate-evaluation-failed: UnicodeDecodeError")
+    assert rows[0]["readError"].startswith("model-tiers-unreadable:")
     _assert_read_error_payload_shape(
         rows[0]["readError"],
-        reason_prefix="dispatch-gate-evaluation-failed: UnicodeDecodeError")
+        reason_prefix="model-tiers-unreadable:")
+
+
+def test_dispatch_calibration_tiers_unreadable_returns_marker_row(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\nimplementer: opus\n")
+    os.chmod(profile, 0o000)
+    try:
+        rows = pp.dispatch_calibration(cwd=repo, root=store)
+        assert len(rows) == 1
+        assert rows[0]["role"] == "*"
+        assert rows[0]["engine"] is None
+        assert rows[0]["model"] is None
+        assert rows[0]["readError"].startswith("model-tiers-unreadable:")
+    finally:
+        os.chmod(profile, 0o644)
+
+
+def test_dispatch_calibration_tiers_unreadable_never_raises(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\n")
+    os.chmod(profile, 0o000)
+    try:
+        rows = pp.dispatch_calibration(cwd=repo, root=store)
+        assert isinstance(rows, list)
+        assert len(rows) == 1
+    finally:
+        os.chmod(profile, 0o644)
+
+
+def test_dispatch_selftest_config_tiers_unreadable(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    repo, store = _selftest_repo_with_core_shape(tmp_path, "ok")
+    profile = os.path.join(repo, ".claude", "superheroes", "review-crew.md")
+    with open(profile, "w", encoding="utf-8") as fh:
+        fh.write("## Model tiers\n")
+    os.chmod(profile, 0o000)
+    try:
+        cfg = pp._dispatch_selftest_config(cwd=repo, root=store)
+        assert cfg["tiers"] == {}
+        assert "read_error" in cfg
+        assert cfg["read_error"].startswith("model-tiers-unreadable:")
+    finally:
+        os.chmod(profile, 0o644)
 
 
 # --- configured_cross_vendor_engines -------------------------------------------------------

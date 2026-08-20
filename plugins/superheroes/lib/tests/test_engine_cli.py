@@ -322,3 +322,19 @@ def test_resolve_paths_repo_root_unavailable_maps_to_engine_error(tmp_path, monk
     with pytest.raises(engine.EngineError) as excinfo:
         engine._resolve_paths()
     assert "repository root unavailable" in str(excinfo.value).lower()
+
+
+def test_resolve_paths_unreadable_layer_refusal_not_init_message(tmp_path, monkeypatch):
+    repo = str(tmp_path / "repo")
+    subprocess.run(["git", "init", "-q", repo], check=True, capture_output=True, text=True)
+    root = str(tmp_path / "store")
+    monkeypatch.setenv("TEST_PILOT_STORE_ROOT", root)
+    layer_dir = os.path.join(repo, ".claude", "superheroes")
+    os.makedirs(layer_dir, exist_ok=True)
+    os.symlink("/no/such/layer", os.path.join(layer_dir, "test-pilot.md"))
+    monkeypatch.chdir(repo)
+    with pytest.raises(engine.EngineError) as excinfo:
+        engine._resolve_paths()
+    msg = str(excinfo.value)
+    assert store.STORE_REASON_LAYER_UNREADABLE in msg
+    assert "test-pilot-init" not in msg

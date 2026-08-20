@@ -884,3 +884,25 @@ def test_tier_gate_predicates_match_status_semantics(tmp_path):
     assert MTO.tier_gate_is_refusal(unreadable)
     assert MTO.tier_gate_refusal(absent) is None
     assert MTO.tier_gate_refusal(unreadable)["reason"] == MTO.TIER_REASON_UNREADABLE
+
+
+def test_tier_writer_gate_refuses_unreadable_existing_overrides(tmp_path, capsys):
+    if os.geteuid() == 0:
+        pytest.skip("root can read mode 0o000 files")
+    profile = _tier_gate_project(tmp_path, "regular")
+    profile.chmod(0o000)
+    try:
+        rc = MTO.main([
+            "model_tier_overrides.py",
+            "write",
+            "--profile",
+            str(profile),
+            "--set",
+            "reviewer=sonnet",
+        ])
+        out = json.loads(capsys.readouterr().out)
+        assert rc == 1
+        assert out["reason"] == MTO.TIER_REASON_UNREADABLE
+        assert out["violations"][0]["reason"] == MTO.TIER_REASON_UNREADABLE
+    finally:
+        profile.chmod(0o644)

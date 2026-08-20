@@ -282,10 +282,18 @@ def collect(cwd, root=None):
         health = store_sweep.report(root=root)["counts"]  # read-only scan
     except Exception:
         health = None
+    model_tier_refusal = None
     try:
-        profile = model_tier_overrides.resolve_profile_path(cwd, root)
-        tiers = model_tier_overrides.effective_tiers(profile)
-        overrides = model_tier_overrides.load_overrides(profile)
+        tier_gate = model_tier_overrides.effective_tiers_for_gate(cwd=cwd, root=root)
+        if model_tier_overrides.tier_gate_is_refusal(tier_gate):
+            profile = tier_gate.path
+            tiers = None
+            overrides = {}
+            model_tier_refusal = model_tier_overrides.tier_gate_refusal(tier_gate)
+        else:
+            profile = tier_gate.path
+            tiers = tier_gate.tiers
+            overrides = tier_gate.overrides
     except Exception as exc:
         _cr = sys.modules.get("calibration_resolve")
         if _cr is None:
@@ -320,6 +328,7 @@ def collect(cwd, root=None):
     return {"core": core, "layers": layers, "patterns": patterns, "mode": mode,
             "drift": drift, "storeHealth": health,
             "modelTiers": tiers, "modelTierOverrides": overrides, "modelTierProfile": profile,
+            "modelTierRefusal": model_tier_refusal,
             "enginePrefs": engine_prefs, "guardian": guardian,
             "reviewGatePolicy": review_gate}
 
@@ -470,7 +479,10 @@ def render(cwd, *, root=None):
         out.append((text or "").strip())
     out.append("")
     out.append("## Model tiers")
-    if not tiers:
+    model_tier_refusal = data.get("modelTierRefusal")
+    if model_tier_refusal:
+        out.append("refused (%s)" % core_md.gate_refusal_line(model_tier_refusal))
+    elif not tiers:
         out.append("(using built-in defaults; review-crew profile not resolved)")
     else:
         for role in model_tier_overrides.KNOWN_ROLES:

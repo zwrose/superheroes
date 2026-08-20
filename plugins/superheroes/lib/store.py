@@ -9,11 +9,14 @@ is illegal in git refnames, so distinct (branch, slot) pairs never collide.
 The two-key pointer + self-heal resolution algorithm lives in store_core.py;
 this module is the test-pilot-specific adapter on top.
 """
+import collections
 import json
 import os
 import re
+import stat
 import sys
 
+import core_md
 from store_core import (
     normalize_remote,
     short_hash,
@@ -27,7 +30,27 @@ from store_core import (
     atomic_write,
     run_git,
     repo_root,
+    PointerUnreadable,
 )
+
+LAYER_OK = "ok"
+LAYER_ABSENT = "absent"
+LAYER_UNREADABLE = "unreadable"
+LayerResult = collections.namedtuple("LayerResult", "has_block status detail")
+
+STORE_REASON_LAYER_UNREADABLE = "test-pilot-layer-unreadable"
+STORE_REASON_POINTER_UNREADABLE = "test-pilot-store-pointer-unreadable"
+
+
+class LayerUnreadable(Exception):
+    """A calibration layer candidate exists but could not be read — refuse before mutating."""
+
+    def __init__(self, path, status, detail, *, reason=STORE_REASON_LAYER_UNREADABLE):
+        super().__init__("%s: %s" % (reason, detail))
+        self.path = path
+        self.status = status
+        self.detail = detail
+        self.reason = reason
 
 SLOT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*\Z")
 
@@ -128,24 +151,86 @@ def candidate_profile_paths(cwd, root):
     return candidates
 
 
-def _layer_has_config_block(path):
-    """True when the layer file carries the ```json test-pilot-config``` block — the exact
-    block the engine parses (CONFIG_BLOCK_RE above, shared with engine.load_profile_config
-    so this presence gate can never drift from what the engine extracts downstream). A layer
-    with only prose (no block) is genuinely un-calibrated for the engine → resolve() falls
-    through to `location: none` (epic #327: "missing calibration" must mean calibration is
-    actually missing)."""
+def classify_layer_config_block(path):
+    """Classify a calibration-layer candidate. Never raises."""
+    try:
+        st = os.stat(path)
+    except FileNotFoundError:
+        try:
+            os.lstat(path)
+        except FileNotFoundError:
+            return LayerResult(False, LAYER_ABSENT, None)
+        except OSError as exc:
+            return LayerResult(
+                False,
+                LAYER_UNREADABLE,
+                "lstat failed at %s: %s" % (path, exc),
+            )
+        return LayerResult(
+            False,
+            LAYER_UNREADABLE,
+            "dangling symlink at %s" % path,
+        )
+    except OSError as exc:
+        return LayerResult(
+            False,
+            LAYER_UNREADABLE,
+            core_md.gate_refusal_detail(exc, at=path),
+        )
+
+    if not stat.S_ISREG(st.st_mode):
+        return LayerResult(
+            False,
+            LAYER_UNREADABLE,
+            "not a regular file at %s" % path,
+        )
+
     try:
         with open(path, encoding="utf-8") as fh:
             text = fh.read()
+    except FileNotFoundError:
+        return LayerResult(
+            False,
+            LAYER_UNREADABLE,
+            "layer existed at stat but was missing at open (read race) at %s" % path,
+        )
     except OSError as exc:
-        # A present-but-unreadable layer must not silently masquerade as greenfield
-        # (the legacy profile.md path surfaces read errors via load_profile_config;
-        # this gate reads earlier, so at least leave a trace on stderr).
-        sys.stderr.write(f"test-pilot store: calibration layer {path} exists but "
-                         f"could not be read ({exc}); treating as no calibration\n")
-        return False
-    return has_config_block(text)
+        return LayerResult(
+            False,
+            LAYER_UNREADABLE,
+            core_md.gate_refusal_detail(exc, at=path, verb="opening"),
+        )
+    except UnicodeDecodeError as exc:
+        return LayerResult(
+            False,
+            LAYER_UNREADABLE,
+            "UTF-8 decode failed at %s: %s" % (path, exc),
+        )
+
+    return LayerResult(has_config_block(text), LAYER_OK, None)
+
+
+def _layer_refusal(path, detail):
+    return core_md.gate_refusal(STORE_REASON_LAYER_UNREADABLE, detail)
+
+
+def _pointer_refusal(exc):
+    return core_md.gate_refusal(
+        STORE_REASON_POINTER_UNREADABLE,
+        exc.detail if exc.detail is not None else str(exc),
+    )
+
+
+def _raise_layer_unreadable(path, result, *, reason=STORE_REASON_LAYER_UNREADABLE):
+    raise LayerUnreadable(path, result.status, result.detail, reason=reason)
+
+
+def _none_resolve(entry_id, machine, refusal=None):
+    return {"location": "none", "exists": False, "entry_id": entry_id,
+            "profile": None, "profileSource": "none",
+            "blocks_dir": None, "manifests_dir": None,
+            "refusal": refusal,
+            **machine}
 
 
 def resolve(cwd, root):
@@ -163,7 +248,14 @@ def resolve(cwd, root):
     entry (machine-local)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
-    g = resolve_global(cwd, root, _consumer="test_pilot store")
+    try:
+        g = resolve_global(cwd, root, _consumer="test_pilot store", strict=True)
+    except PointerUnreadable as exc:
+        entry_id = ident["gitdir_hash"]
+        entry_dir = os.path.join(root, "entries", entry_id)
+        machine = {k: v for k, v in _entry_dirs(entry_dir).items()
+                   if k in ("plans_dir", "state_dir", "artifacts_dir")}
+        return _none_resolve(entry_id, machine, _pointer_refusal(exc))
     entry_id = g["entry_id"] if g else ident["gitdir_hash"]
     entry_dir = os.path.join(root, "entries", entry_id)
     machine = {k: v for k, v in _entry_dirs(entry_dir).items()
@@ -171,39 +263,61 @@ def resolve(cwd, root):
 
     legacy_in_repo = _legacy_in_repo_profile_path(repo_root)
     in_repo = os.path.dirname(legacy_in_repo)
-    if os.path.exists(legacy_in_repo):
+    legacy_in_repo_result = classify_layer_config_block(legacy_in_repo)
+    if legacy_in_repo_result.status == LAYER_UNREADABLE:
+        return _none_resolve(
+            entry_id, machine,
+            _layer_refusal(legacy_in_repo, legacy_in_repo_result.detail))
+    if legacy_in_repo_result.status == LAYER_OK:
         return {"location": "in-repo", "exists": True, "entry_id": entry_id,
                 "profile": legacy_in_repo,
                 "profileSource": "profile-md",
                 "blocks_dir": os.path.join(in_repo, "blocks"),
                 "manifests_dir": os.path.join(in_repo, "manifests"),
+                "refusal": None,
                 **machine}
-    if g is not None and os.path.exists(_legacy_global_profile_path(g)):
-        d = _entry_dirs(g["dir"])
-        return {"location": "global", "exists": True, "entry_id": g["entry_id"],
-                "profile": _legacy_global_profile_path(g),
-                "profileSource": "profile-md", **d}
+    if g is not None:
+        legacy_global = _legacy_global_profile_path(g)
+        legacy_global_result = classify_layer_config_block(legacy_global)
+        if legacy_global_result.status == LAYER_UNREADABLE:
+            return _none_resolve(
+                entry_id, machine,
+                _layer_refusal(legacy_global, legacy_global_result.detail))
+        if legacy_global_result.status == LAYER_OK:
+            d = _entry_dirs(g["dir"])
+            return {"location": "global", "exists": True, "entry_id": g["entry_id"],
+                    "profile": legacy_global,
+                    "profileSource": "profile-md", "refusal": None, **d}
     # #412: migrated projects carry calibration in the unified layer, not profile.md. The
     # layer is the calibration SSOT; read the same config block from it (in-repo first, then
     # the out-of-repo project store). blocks/manifests follow the mode the layer lives in.
-    layer = _in_repo_layer(repo_root)
-    if layer is not None and _layer_has_config_block(layer):
+    in_repo_layer = _in_repo_layer_path(repo_root)
+    in_repo_layer_result = classify_layer_config_block(in_repo_layer)
+    if in_repo_layer_result.status == LAYER_UNREADABLE:
+        return _none_resolve(
+            entry_id, machine,
+            _layer_refusal(in_repo_layer, in_repo_layer_result.detail))
+    if in_repo_layer_result.status == LAYER_OK and in_repo_layer_result.has_block:
         return {"location": "in-repo", "exists": True, "entry_id": entry_id,
-                "profile": layer, "profileSource": "layer",
+                "profile": in_repo_layer, "profileSource": "layer",
                 "blocks_dir": os.path.join(in_repo, "blocks"),
                 "manifests_dir": os.path.join(in_repo, "manifests"),
+                "refusal": None,
                 **machine}
-    layer = _global_layer(cwd)
-    if layer is not None and _layer_has_config_block(layer):
+    global_layer = _global_layer_path(cwd)
+    global_layer_result = classify_layer_config_block(global_layer)
+    if global_layer_result.status == LAYER_UNREADABLE:
+        return _none_resolve(
+            entry_id, machine,
+            _layer_refusal(global_layer, global_layer_result.detail))
+    if global_layer_result.status == LAYER_OK and global_layer_result.has_block:
         e_dir = g["dir"] if g is not None else entry_dir
         e_id = g["entry_id"] if g is not None else entry_id
         d = _entry_dirs(e_dir)
         return {"location": "global", "exists": True, "entry_id": e_id,
-                "profile": layer, "profileSource": "layer", **d}
-    return {"location": "none", "exists": False, "entry_id": entry_id,
-            "profile": None, "profileSource": "none",
-            "blocks_dir": None, "manifests_dir": None,
-            **machine}
+                "profile": global_layer, "profileSource": "layer",
+                "refusal": None, **d}
+    return _none_resolve(entry_id, machine, None)
 
 
 def create(cwd, location, root):
@@ -216,15 +330,68 @@ def create(cwd, location, root):
     never writes (#428)."""
     repo_root = get_repo_root(cwd)
     ident = derive_identifiers(cwd)
-    # Reuse an existing live entry if one already exists (avoids orphaning
-    # applied state when a second clone creates a fresh gitdir-hash entry).
-    existing = resolve_global(cwd, root, _consumer="test_pilot store")
+    try:
+        existing = resolve_global(cwd, root, _consumer="test_pilot store", strict=True)
+    except PointerUnreadable as exc:
+        _raise_layer_unreadable(
+            exc.path, LayerResult(False, exc.status, exc.detail),
+            reason=STORE_REASON_POINTER_UNREADABLE)
+
+    legacy_in_repo = _legacy_in_repo_profile_path(repo_root)
+    legacy_in_repo_result = classify_layer_config_block(legacy_in_repo)
+    if legacy_in_repo_result.status == LAYER_UNREADABLE:
+        _raise_layer_unreadable(legacy_in_repo, legacy_in_repo_result)
+
+    legacy_global_result = None
+    if existing is not None:
+        legacy_global = _legacy_global_profile_path(existing)
+        legacy_global_result = classify_layer_config_block(legacy_global)
+        if legacy_global_result.status == LAYER_UNREADABLE:
+            _raise_layer_unreadable(legacy_global, legacy_global_result)
+
+    in_repo_layer = _in_repo_layer_path(repo_root)
+    in_repo_layer_result = classify_layer_config_block(in_repo_layer)
+    if in_repo_layer_result.status == LAYER_UNREADABLE:
+        _raise_layer_unreadable(in_repo_layer, in_repo_layer_result)
+
+    global_layer = _global_layer_path(cwd)
+    global_layer_result = classify_layer_config_block(global_layer)
+    if global_layer_result.status == LAYER_UNREADABLE:
+        _raise_layer_unreadable(global_layer, global_layer_result)
+
+    legacy_anywhere = (
+        legacy_in_repo_result.status == LAYER_OK
+        or (legacy_global_result is not None
+            and legacy_global_result.status == LAYER_OK))
+
     if existing is not None:
         entry_id = existing["entry_id"]
         entry_dir = existing["dir"]
     else:
         entry_id = ident["gitdir_hash"]
         entry_dir = os.path.join(root, "entries", entry_id)
+
+    if location == "in-repo":
+        base = os.path.join(repo_root, ".claude", "test-pilot")
+        blocks, manifests = (os.path.join(base, "blocks"),
+                             os.path.join(base, "manifests"))
+        legacy = os.path.join(base, "profile.md")
+        layer_path = in_repo_layer
+        layer_result = in_repo_layer_result
+    elif location == "global":
+        d_pre = _entry_dirs(entry_dir)
+        blocks, manifests = d_pre["blocks_dir"], d_pre["manifests_dir"]
+        legacy = os.path.join(entry_dir, "profile.md")
+        layer_path = global_layer
+        layer_result = global_layer_result
+    else:
+        raise ValueError(f"unknown location: {location}")
+
+    if not legacy_anywhere and layer_result.status == LAYER_OK and layer_result.has_block:
+        profile, profile_source = layer_path, "layer"
+    else:
+        profile, profile_source = legacy, "profile-md"
+
     os.makedirs(entry_dir, exist_ok=True)
     if not os.path.exists(os.path.join(entry_dir, "keys.json")):
         write_keys_json(entry_dir, ident)
@@ -237,39 +404,13 @@ def create(cwd, location, root):
     # Do not makedirs artifacts_dir here — pilot_artifacts creates it with 0o700; a
     # directory pre-created under the ambient umask would be 0o755 and refused.
 
-    # #428: a MIGRATED project's calibration lives in the unified layer — create() must
-    # point callers (test-pilot-init Step 6 writes the profile at this path) AT THE LAYER,
-    # never back at the legacy .claude/test-pilot/profile.md. Re-minting the legacy file on
-    # a migrated project used to re-arm core_md.migrate_on_read (removed #724) — the chain
-    # that committed a destructive layer deletion (weekly-eats 9dad0f6). A legacy profile.md
-    # now produces a named refusal instead. Only a genuinely un-migrated project (no layer with
-    # a config block) still scaffolds at the legacy path, byte-identical to before.
-    # A still-present legacy — in EITHER location — keeps resolve()'s legacy-first
-    # precedence (in-repo profile.md → global-entry profile.md → layers): create() must
-    # never point a writer at the layer while the engine would keep reading a legacy.
-    legacy_anywhere = (
-        os.path.exists(os.path.join(repo_root, ".claude", "test-pilot", "profile.md"))
-        or os.path.exists(os.path.join(entry_dir, "profile.md")))
     if location == "in-repo":
-        base = os.path.join(repo_root, ".claude", "test-pilot")
-        blocks, manifests = (os.path.join(base, "blocks"),
-                             os.path.join(base, "manifests"))
         os.makedirs(blocks, exist_ok=True)
         os.makedirs(manifests, exist_ok=True)
-        legacy = os.path.join(base, "profile.md")
-        layer = _in_repo_layer(repo_root)
     elif location == "global":
         os.makedirs(d["blocks_dir"], exist_ok=True)
         os.makedirs(d["manifests_dir"], exist_ok=True)
-        blocks, manifests = d["blocks_dir"], d["manifests_dir"]
-        legacy = os.path.join(entry_dir, "profile.md")
-        layer = _global_layer(cwd)
-    else:
-        raise ValueError(f"unknown location: {location}")
-    if not legacy_anywhere and layer is not None and _layer_has_config_block(layer):
-        profile, profile_source = layer, "layer"
-    else:
-        profile, profile_source = legacy, "profile-md"
+
     return {"location": location, "exists": os.path.exists(profile),
             "entry_id": entry_id, "profile": profile, "profileSource": profile_source,
             "blocks_dir": blocks, "manifests_dir": manifests,
@@ -305,8 +446,9 @@ def main(argv):
     cmd = args[0]
     try:
         if cmd == "resolve":
-            sys.stdout.write(json.dumps(resolve(os.getcwd(), store_root())) + "\n")
-            return 0
+            result = resolve(os.getcwd(), store_root())
+            sys.stdout.write(json.dumps(result) + "\n")
+            return 1 if result.get("refusal") is not None else 0
         if cmd == "create":
             location = _parse_kv(args, "--location")
             if location not in ("global", "in-repo"):
@@ -327,6 +469,9 @@ def main(argv):
                 return 2
             sys.stdout.write(artifact_key(branch, _parse_kv(args, "--slot")) + "\n")
             return 0
+    except LayerUnreadable as exc:
+        sys.stdout.write(json.dumps(core_md.gate_refusal(exc.reason, exc.detail)) + "\n")
+        return 1
     except Exception as exc:
         sys.stderr.write(f"store error: {exc}\n")
         return 1
