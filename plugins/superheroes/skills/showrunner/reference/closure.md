@@ -35,6 +35,12 @@ with the close, not with a PR merge that never comes. **Where more than one cand
 
 **Where the last open child closes without a PR — declined scope — the closure receipt is presented to the owner with that close, in the same sitting, and there is still no separate closure trigger.**
 
+On this path the receipt follows the same owner's reading-surface rule as **R7 — The park
+surface** (quoted in [An abandoned child](#an-abandoned-child)): in the advisor's delivery
+message when the owner is present, else as the opening item of the advisor's next delivery
+message, with a durable copy as a comment on the closed item — the durable copy is for the
+record and is never required owner reading.
+
 ## The closure receipt
 
 The element list's pinned home of record is R8:

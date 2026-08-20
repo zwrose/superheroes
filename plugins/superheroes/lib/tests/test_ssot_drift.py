@@ -3055,6 +3055,7 @@ _R5_PLUGIN_COPY_HOLDERS = (
 _R7_PLUGIN_COPY_HOLDERS = (
     "skills/architect-discovery/SKILL.md",
     "skills/showrunner/SKILL.md",
+    "skills/showrunner/reference/closure.md",
 )
 
 # §11.2: every known in-repo copy-holder outside the plugin for R5. A child doc that stops

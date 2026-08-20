@@ -101,7 +101,10 @@ are never holding the inventory in working memory.
 | a **prior receipt on this PR is being corrected** | a dated correction, **edited in place** — never a superseding comment |
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
-| this vet is the one whose merge (or whose close, where the last open child closes without a PR) closes the spec's last open child | the **closure receipt** — it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
+| this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
+
+Where the last open child closes without a PR there is no vet receipt to ride; the receipt
+reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
 
 The collector-escalation row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
 the path. Each pending item's **proposing ordinal** is what makes its age inspectable — a subtraction

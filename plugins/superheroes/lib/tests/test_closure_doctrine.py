@@ -431,12 +431,20 @@ def test_closure_validation_run_fails_has_two_h3_subheadings():
 # --- R8 element list home ----------------------------------------------------
 
 
-def test_r8_element_sentence_exactly_once_in_closure_md():
-    _assert_literal_count(R8_CLOSURE_RECEIPT_ELEMENTS, _CLOSURE_REF, 1)
-
-
-def test_r8_element_sentence_absent_from_showrunner_charter():
-    _assert_literal_count(R8_CLOSURE_RECEIPT_ELEMENTS, _SHOWRUNNER_CHARTER, 0)
+def test_r8_element_sentence_has_exactly_one_plugin_home():
+    hits = []
+    for dirpath, _dirs, files in os.walk(_PLUGIN_ROOT):
+        for name in files:
+            if not name.endswith(".md"):
+                continue
+            rel = os.path.relpath(os.path.join(dirpath, name), _PLUGIN_ROOT)
+            count = _read_plugin(rel).count(R8_CLOSURE_RECEIPT_ELEMENTS)
+            if count:
+                hits.append((rel, count))
+    assert hits == [(_CLOSURE_REF, 1)], (
+        "R8 element list must live in closure.md and nowhere else in the plugin; found %r"
+        % (hits,)
+    )
 
 
 # --- Seam surfaces -----------------------------------------------------------
