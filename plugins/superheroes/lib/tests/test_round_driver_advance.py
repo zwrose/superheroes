@@ -1922,6 +1922,7 @@ def test_advance_judgment_auto_applies_calibration_overlay(tmp_path, adapters):
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
     assert out["policyApplied"]["action"] == {"dispositions": [
         {"findingClass": "judgment:important", "disposition": "skip"}]}
     assert _state(d)["terminal"] == "converged"
@@ -2060,6 +2061,7 @@ def test_advance_stall_accept_risk_authorized(tmp_path, adapters):
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
     assert out.get("policyApplied") is not None
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
     assert out["policyApplied"]["action"] == {"choice": "accept-the-disclosed-risk"}
     assert _state(d)["terminal"] == "converged"
     receipt_path = os.path.join(d, RD.RECEIPT_FILE)
@@ -2126,17 +2128,25 @@ def test_advance_owner_gate_policy_applied_commits_state_and_journal(tmp_path, a
         "disposition": "skip",
     }])
     d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-commit")
-    commit_kinds = []
+    seen = []
     real_begin = RD.round_commit.begin
 
-    def track_begin(session_dir, kind):
-        commit_kinds.append(kind)
-        return real_begin(session_dir, kind)
+    def track_begin(session_dir, kind, **kw):
+        commit = real_begin(session_dir, kind, **kw)
+        seen.append((kind, commit))
+        return commit
 
     monkeypatch.setattr(RD.round_commit, "begin", track_begin)
     out = _advance(d, tmp_path)
     assert out["ok"] is True, out
-    assert "advance-policy-applied" in commit_kinds
+    commit_kinds = [kind for kind, _commit in seen]
+    assert "advance-policy-applied" not in commit_kinds
+    accepts = [c for kind, c in seen if kind == "submit-accept"]
+    assert len(accepts) == 1, commit_kinds
+    journals = [p for p in accepts[0]._parts if p.get("type") == "journal-append"]
+    assert any((j.get("entry") or {}).get("outcome") == "accepted" for j in journals), journals
+    assert any((j.get("entry") or {}).get("outcome") == "advanced"
+               and (j.get("entry") or {}).get("policyApplied") for j in journals), journals
 
 
 def test_policy_applied_records_match_and_action_not_identities_only(tmp_path, adapters):
@@ -2166,12 +2176,14 @@ def test_advance_owner_gate_fold_refused_leaves_session_unblocked(tmp_path, adap
     real_submit = RD.cmd_submit
 
     def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-                    _pending_policy_applied=None):
+                    _pending_policy_applied=None, _policy_journal_entry=None, _durable_record=None):
         if _via_advance:
             return {"ok": False, "reason": "test-fold-refused"}
         return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
                            _via_advance=_via_advance,
-                           _pending_policy_applied=_pending_policy_applied)
+                           _pending_policy_applied=_pending_policy_applied,
+                           _policy_journal_entry=_policy_journal_entry,
+                           _durable_record=_durable_record)
 
     monkeypatch.setattr(RD, "cmd_submit", refuse_once)
     out = _advance(d, tmp_path)
@@ -2232,12 +2244,14 @@ def test_owner_gate_fold_refused_leaves_no_policy_applied_durable_record(tmp_pat
     real_submit = RD.cmd_submit
 
     def refuse_once(session_dir, phase, attempt, state_hash_arg, artifact, _via_advance=False,
-                    _pending_policy_applied=None):
+                    _pending_policy_applied=None, _policy_journal_entry=None, _durable_record=None):
         if _via_advance:
             return {"ok": False, "reason": "test-fold-refused"}
         return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
                            _via_advance=_via_advance,
-                           _pending_policy_applied=_pending_policy_applied)
+                           _pending_policy_applied=_pending_policy_applied,
+                           _policy_journal_entry=_policy_journal_entry,
+                           _durable_record=_durable_record)
 
     monkeypatch.setattr(RD, "cmd_submit", refuse_once)
     out = _advance(d, tmp_path)
@@ -2269,6 +2283,183 @@ def test_hand_submit_and_advance_may_not_interleave(tmp_path, adapters):
     RD.cmd_next(submitted)
     out = _advance(submitted, tmp_path)
     assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
+
+
+# =============================================================================================
+# §4c advance --owner-artifact (#1061 WO-B)
+# =============================================================================================
+
+def _write_owner_artifact(tmp_path, artifact, name="owner-artifact.json"):
+    path = str(tmp_path / name)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(artifact, fh)
+    return path
+
+
+def _judgment_dispositions_artifact(state):
+    finding = state["_judgmentFindings"][0]
+    return {"dispositions": [{"id": RD._location_id(finding),
+                              "disposition": "fix-as-suggested"}]}
+
+
+def _set_advance_used(session_dir):
+    state = _state(session_dir)
+    state["_advanceUsed"] = True
+    RD.save_state(session_dir, state)
+
+
+def test_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters):
+    repo = _repo_without_gate_policy(tmp_path)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="owner-artifact-judgment")
+    _set_advance_used(d)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    artifact = _judgment_dispositions_artifact(_state(d))
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
+        RD._canonical(artifact).encode("utf-8")).hexdigest()
+    assert _state(d)["step"] == RD.P_FIXER
+    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+
+
+def test_advance_owner_artifact_stall_closes_dead_end(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall")
+    _set_advance_used(d)
+    artifact = {"choice": RD.HOLD_CHOICE}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, artifact))
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert _state(d)["terminal"] == "held"
+
+
+def test_advance_owner_artifact_runs_stall_chokepoint(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall-guard")
+    _set_advance_used(d)
+    bad = {"choice": "not-on-menu"}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "%snot-on-menu" % RD.STALL_CHOICE_NOT_OFFERED_PREFIX
+    assert _state(d)["pending"]["phase"] == RD.P_STALL
+    good = {"choice": RD.HOLD_CHOICE}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, good, "good.json"))
+    assert out["ok"] is True, out
+
+
+@pytest.mark.parametrize("bad_artifact", [
+    pytest.param({}, id="absent"),
+    pytest.param({"choice": None}, id="null"),
+    pytest.param({"choice": 5}, id="non-string"),
+])
+def test_advance_owner_artifact_missing_choice_refused_not_folded(tmp_path, adapters, bad_artifact):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-missing-choice")
+    _set_advance_used(d)
+    out = _advance(d, tmp_path,
+                   owner_artifact_path=_write_owner_artifact(tmp_path, bad_artifact, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == RD.STALL_CHOICE_MISSING
+    assert not _state(d).get("terminal")
+    assert _state(d)["pending"]["phase"] == RD.P_STALL
+    good = {"choice": RD.HOLD_CHOICE}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, good, "good.json"))
+    assert out["ok"] is True, out
+
+
+def test_advance_owner_artifact_retired_choice_still_wins(tmp_path, adapters):
+    retired = RD.RETIRED_STALL_CHOICES[0]
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-retired-choice")
+    _set_advance_used(d)
+    bad = {"choice": retired}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "%s%s" % (RD.RETIRED_STALL_CHOICE_PREFIX, retired)
+
+
+def test_advance_owner_artifact_off_menu_choice_still_wins(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-off-menu-choice")
+    _set_advance_used(d)
+    bad = {"choice": "not-on-menu"}
+    out = _advance(d, tmp_path, owner_artifact_path=_write_owner_artifact(tmp_path, bad, "bad.json"))
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "%snot-on-menu" % RD.STALL_CHOICE_NOT_OFFERED_PREFIX
+
+
+def test_advance_owner_artifact_terminal_refusal(tmp_path, adapters):
+    gitdir = _gitdir(tmp_path, "owner-artifact-terminal")
+    d = _session(tmp_path, name="owner-artifact-terminal")
+    _drive_to_terminal(d, tmp_path, adapters, gitdir=gitdir)
+    path = _write_owner_artifact(tmp_path, {"choice": RD.HOLD_CHOICE})
+    out = _advance(d, tmp_path, owner_artifact_path=path)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_TERMINAL_REFUSAL
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True and out.get("idempotent") is True
+
+
+def test_advance_owner_artifact_submit_used_refuses_before_io(tmp_path, adapters):
+    d = _session(tmp_path, name="owner-artifact-submit-used")
+    state = _state(d)
+    state["_submitUsed"] = True
+    state["step"] = RD.P_STALL
+    state["pending"] = {"action": RD.P_STALL, "round": 1, "phase": RD.P_STALL, "attempt": 0,
+                        "payload": {}}
+    state["_stallChoices"] = list(RD.STALL_CHOICES)
+    RD.save_state(d, state)
+    missing = str(tmp_path / "does-not-exist.json")
+    assert not os.path.exists(missing)
+    out = _advance(d, tmp_path, owner_artifact_path=missing)
+    assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
+    assert not os.path.exists(missing)
+
+
+def test_advance_owner_artifact_seat_phase_refuses_before_io(tmp_path, adapters):
+    d = _session(tmp_path, name="owner-artifact-seat")
+    _set_advance_used(d)
+    missing = str(tmp_path / "does-not-exist-seat.json")
+    assert not os.path.exists(missing)
+    out = _advance(d, tmp_path, owner_artifact_path=missing)
+    assert out["ok"] is False and out["reason"] == "advance-submit-interleaved"
+    assert not os.path.exists(missing)
+
+
+def test_advance_owner_artifact_unreadable_missing_file(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-missing")
+    missing = str(tmp_path / "missing-owner-artifact.json")
+    out = _advance(d, tmp_path, owner_artifact_path=missing)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL
+
+
+def test_advance_owner_artifact_unreadable_invalid_json(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-bad-json")
+    path = str(tmp_path / "bad.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("{not json")
+    out = _advance(d, tmp_path, owner_artifact_path=path)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_UNREADABLE_REFUSAL
+
+
+def test_advance_owner_artifact_shape_refusal_json_list(tmp_path, adapters):
+    d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-list")
+    path = _write_owner_artifact(tmp_path, [1, 2, 3], "list.json")
+    out = _advance(d, tmp_path, owner_artifact_path=path)
+    assert out["ok"] is False and out["reason"] == RD.OWNER_ARTIFACT_SHAPE_REFUSAL
+
+
+def test_advance_calibration_path_policy_applied_source_gate_policy(tmp_path, adapters):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="gate-policy-source")
+    out = _advance(d, tmp_path)
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
+    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
+    on_disk = _receipt_on_disk_policy_applied(d)
+    assert on_disk[-1]["source"] == RD.POLICY_APPLIED_SOURCE_GATE_POLICY
 
 
 # =============================================================================================
@@ -2933,7 +3124,7 @@ def test_receipt_state_writes_census_red_on_post_fold_probe_write():
     probe_key = "_censusReceiptProbe"
     with open(_ROUND_DRIVER_PATH, encoding="utf-8") as fh:
         source = fh.read()
-    marker = "    ok_folded, state = load_state(session_dir)\n"
+    marker = "    ok_after, after = load_state(session_dir)\n"
     assert marker in source
     probe_line = '    state["%s"] = True\n' % probe_key
     probed = source.replace(marker, probe_line + marker, 1)
@@ -3082,6 +3273,190 @@ def test_advance_locked_parks_honestly_above_round_ceiling(tmp_path, adapters):
     assert "durableRecord" not in out
     rows = _advance_rows_for_step(d, phase, rnd, attempt)
     assert not any(r.get("outcome") == "advanced" for r in rows)
+
+
+# --- #1061 advance/submit refusal contract -------------------------------------
+
+
+def _patch_submit_accept_run(monkeypatch, reason, detail="simulated"):
+    real_begin = RD.round_commit.begin
+
+    def hooked_begin(session_dir, kind, **kw):
+        commit = real_begin(session_dir, kind, **kw)
+        if kind == "submit-accept":
+            def run():
+                raise RD.round_commit.CommitRefused(reason, detail)
+            commit.run = run
+        return commit
+
+    monkeypatch.setattr(RD.round_commit, "begin", hooked_begin)
+
+
+def _judgment_submit_artifact(session_dir):
+    state = _state(session_dir)
+    return {"dispositions": [
+        {"id": RD._location_id(state["_judgmentFindings"][0]), "disposition": "skip"},
+    ]}
+
+
+def test_cmd_submit_cleanup_failure_carries_foldLanded(tmp_path, adapters, monkeypatch):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="cleanup-fold")
+    pend = _pending(d)
+    _patch_submit_accept_run(monkeypatch, "commit-cleanup-failed")
+    out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
+                        _judgment_submit_artifact(d), _via_advance=True)
+    assert out == {"ok": False, "reason": "commit-cleanup-failed", "detail": "simulated",
+                   "foldLanded": True}
+
+
+def test_cmd_submit_apply_failure_does_not_carry_foldLanded(tmp_path, adapters, monkeypatch):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="apply-fold")
+    pend = _pending(d)
+    _patch_submit_accept_run(monkeypatch, "commit-apply-failed")
+    out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
+                        _judgment_submit_artifact(d), _via_advance=True)
+    assert out["ok"] is False and out["reason"] == "commit-apply-failed"
+    assert "foldLanded" not in out
+
+
+def test_advance_owner_gate_propagates_receipt_fault_and_exits_nonzero(tmp_path, adapters,
+                                                                       monkeypatch):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="receipt-fault-owner")
+    real_submit = RD.cmd_submit
+
+    def submit_receipt_fault(session_dir, phase, attempt, state_hash_arg, artifact,
+                             _via_advance=False, **_kw):
+        if _via_advance:
+            return {"ok": False, "reason": "receipt-fault", "detail": "simulated fault",
+                    "foldLanded": True}
+        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
+                           _via_advance=_via_advance, **_kw)
+
+    monkeypatch.setattr(RD, "cmd_submit", submit_receipt_fault)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "receipt-fault"
+    assert out["reason"] != "fold-refused"
+    assert out.get("foldLanded") is True
+    rc = RD.main(["advance", "--session-dir", d])
+    assert rc == 1
+
+
+def test_advance_locked_propagates_receipt_fault_and_exits_nonzero(tmp_path, adapters,
+                                                                   monkeypatch):
+    d = _session(tmp_path, name="receipt-fault-seat")
+    _record_all_panel_seats(d)
+    real_submit = RD.cmd_submit
+
+    def submit_receipt_fault(session_dir, phase, attempt, state_hash_arg, artifact,
+                             _via_advance=False, **_kw):
+        if _via_advance:
+            return {"ok": False, "reason": "receipt-fault", "detail": "simulated fault",
+                    "foldLanded": True}
+        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
+                           _via_advance=_via_advance, **_kw)
+
+    monkeypatch.setattr(RD, "cmd_submit", submit_receipt_fault)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "receipt-fault"
+    rc = RD.main(["advance", "--session-dir", d])
+    assert rc == 1
+
+
+def test_advance_fold_refused_still_wraps_non_receipt_fault(tmp_path, adapters, monkeypatch):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="ordinary-refusal")
+    real_submit = RD.cmd_submit
+
+    def submit_refused(session_dir, phase, attempt, state_hash_arg, artifact,
+                       _via_advance=False, **_kw):
+        if _via_advance:
+            return {"ok": False, "reason": "commit-apply-failed", "detail": "simulated"}
+        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
+                           _via_advance=_via_advance, **_kw)
+
+    monkeypatch.setattr(RD, "cmd_submit", submit_refused)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "commit-apply-failed"
+
+
+def test_advance_fold_refused_carries_foldLanded_from_submit(tmp_path, adapters, monkeypatch):
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="cleanup-advance")
+    real_submit = RD.cmd_submit
+
+    def submit_cleanup_failed(session_dir, phase, attempt, state_hash_arg, artifact,
+                              _via_advance=False, **_kw):
+        if _via_advance:
+            return {"ok": False, "reason": "commit-cleanup-failed", "detail": "simulated",
+                    "foldLanded": True}
+        return real_submit(session_dir, phase, attempt, state_hash_arg, artifact,
+                           _via_advance=_via_advance, **_kw)
+
+    monkeypatch.setattr(RD, "cmd_submit", submit_cleanup_failed)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "fold-refused"
+    assert out["detail"] == "commit-cleanup-failed"
+    assert out.get("foldLanded") is True
+
+
+def test_owner_gate_policy_applied_rides_the_folds_own_commit_intent(tmp_path, adapters,
+                                                                     monkeypatch):
+    """ONE submit-accept carries state advance, policyApplied state, and advanced journal row.
+
+    axis: ATOMICITY — the `advanced` row bearing `policyApplied` must share the fold's commit, not
+    a second `advance-policy-applied` commit whose journal row could be lost after the fold lands.
+    """
+    repo = _repo_with_gate_policy(tmp_path, [{
+        "gate": "present-judgment",
+        "findingClass": "judgment:important",
+        "disposition": "skip",
+    }])
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="policy-atomicity")
+    seen = []
+    real_begin = RD.round_commit.begin
+
+    def spy(session_dir, kind, **kw):
+        commit = real_begin(session_dir, kind, **kw)
+        seen.append((kind, commit))
+        return commit
+
+    monkeypatch.setattr(RD.round_commit, "begin", spy)
+    assert _advance(d, tmp_path)["ok"] is True
+    commit_kinds = [kind for kind, _commit in seen]
+    assert "advance-policy-applied" not in commit_kinds
+    accepts = [c for kind, c in seen if kind == "submit-accept"]
+    assert len(accepts) == 1, commit_kinds
+    parts = accepts[0]._parts
+    targets = [p.get("target") for p in parts if p.get("type") == "replace-file"]
+    journals = [p for p in parts if p.get("type") == "journal-append"]
+    assert any(t.endswith(RD.STATE_FILE) for t in targets), targets
+    assert any((j.get("entry") or {}).get("outcome") == "accepted" for j in journals), journals
+    assert any((j.get("entry") or {}).get("outcome") == "advanced"
+               and (j.get("entry") or {}).get("policyApplied") for j in journals), journals
 
 
 # --- cmd_submit foldLanded caller census ---------------------------------------

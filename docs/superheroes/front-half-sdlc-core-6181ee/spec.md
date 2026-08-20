@@ -4,7 +4,6 @@ schemaVersion: 1
 docType: spec
 workItem: front-half-sdlc-core-6181ee
 issue: null
-parent: null
 size: large
 status: approved
 approved: "2026-08-07"

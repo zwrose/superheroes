@@ -94,6 +94,16 @@ above).
    gradable-line count **and** whether any sections interlock — and state both alongside the
    resulting weight; `light` needs both to hold. The two review paths and the 10-line guideline
    live in the discovery charter — read them there rather than restating them here.
+
+   **Vetting a finished spec is yours; approving it never is.** You vet the spec from its
+   artifacts against five checks: **review ran and its findings were dispositioned**; **grounding
+   verified**; **decomposable**; **no conflict with ratified surfaces**; **consequences stated in
+   owner terms**. You deliver the verdict **"ready for your approval," never approval itself** —
+   only the owner approves a spec, and the vet verdict is **advisory by construction**. **The sequence
+   is fixed:** automated review → your vet → owner review → owner approval. The owner reads a
+   **vetted** spec and approves **last**. **Nothing re-reviews an approved spec** except the
+   downstream nets, the amendment path, and the consolidation re-read. **Record the approval with its
+   date** — the dated approval is what a later before-or-after-approval test reads.
 2. **Board hygiene — file and wire.** Every issue gets full wiring at filing time (epic,
    milestone, labels, dependencies). Every routed issue body carries the three-slot skeleton
    (`Anchor (<kind>):`, `What:`, `DoD:`); micro-route work is exempt. Detail:
@@ -192,6 +202,47 @@ above).
    **A non-zero exit blocks**. **A non-zero exit blocks** verified — `undecided` blocks exactly
    like `fail`. Detail:
    `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/register-check.md`.
+
+   **Decomposition is post-approval work.** Decomposition begins only after the spec is
+   owner-approved: no coverage map, no register, and no child body is drafted against an unapproved
+   spec, and a decomposition artifact dated before its spec's approval is a routing defect. Epic
+   machinery activates at **two or more children, never below**; one child takes the single-issue
+   fast path. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
+   **The three artifacts.** A decomposition produces a **coverage map** (every acceptance criterion
+   owned by exactly one named child — none unowned, none owned twice), a **contract register**
+   (numbered binding sentences, each naming its consuming children, each either decided now or
+   marked **decide-by** naming the child that owns the decision), and a **package-read audit trail** —
+   all three **beside the spec in the work item's folder**, linked from the epic body. An
+   **unallocated criterion or an unowned decide-by is a routing defect you repair before any child
+   build starts.**
+   **Seam first.** Where one child creates a seam others build on, **sequence that child first** so
+   the register's contracts get their real review as working code rather than as a document.
+   **The package read before children file.** An **adversarial read by seats independent of the
+   package's author**, across **five lenses**, at a **weight you call** with its measurables (child
+   count, register-entry count) and a **round ceiling**; it repeats until a round returns **only
+   mechanical items**, ends with a **recorded verification pass**, and **parks to the owner with the
+   children unfiled** if it hits its ceiling unconverged. **You are the maker when you authored the
+   package** — your own model family is excluded from every seat. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md` — for the
+   protocol and the audit trail's element list.
+   **A spec contradiction never resolves as a silent spec edit.** A package-read contradiction
+   finding resolves as a **package fix**, an **owner-stamped spec amendment**, or a **recorded
+   refutation in the audit trail** — those three, and nothing else.
+   **Amendments after approval.** Every post-approval spec amendment is classified `wording` — it
+   changes phrasing and decides nothing a builder could build differently against — or `substantive`,
+   which is everything else and the default whenever the call is ambiguous. The amended artifact and
+   its dated, owner-stamped log entry come first; **unstarted children are mechanically re-injected or
+   re-checked against the coverage map, children already building are explicitly notified, and a
+   recorded coverage-map re-check runs after every affected spec amendment**; a **substantive**
+   amendment additionally sends the touched parts back through the read loop before injection. **A
+   child that never received an amendment is a process defect, not a builder defect.** Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/amendments.md`.
+   **Cross-epic seams are reciprocal.** Recorded in **both** registers and **both** affected child
+   bodies; a seam recorded on one side only is a blocking package-read finding. Where one side is a
+   single-issue spec, that child's **issue body stands in for the register**. Detail:
+   `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
+
    **Route each issue to exactly one of four routes.** The four intake routes are named
    `discovery`, `detective`, `build-ready`, `micro`, and their tests are: new product opinion or a
    genuine unknown (the spec-trigger test: *will this work produce sentences a vet could grade a PR
@@ -321,6 +372,13 @@ above).
      package-wide NFRs **by name with their fit criteria**: owner reading load, plain language,
      and guidelines never hardened into gates. Detail:
      `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/issue-contract.md`.
+   - **The standing register row** — A child PR in a package that has a contract register is vetted
+     against one added row: the change conforms to the epic's register, or the drift is disclosed —
+     and undisclosed drift is a blocker, held until it is disclosed or repaired. The row is graded at
+     **every** child PR vet in a package that has a register (and is simply **not applicable** where
+     there is none), and a deliberate departure the build **disclosed** is a call to accept or reject,
+     while an **undisclosed** one holds the handback. Detail:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/decomposition.md`.
    - **Trust CI-green** as the receipt that the suite passed — do **not** re-run green suites.
      Spend vet time on the **adversarial probes the suite does not contain**: does the guard
      actually fire when its target breaks? does the test assert what its name claims? does the
@@ -901,3 +959,5 @@ above).
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
 | "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
 | "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |
+| "The spec's almost approved — I'll start the coverage map now" | Decomposition is post-approval work; an artifact dated before approval is a routing defect, and the owner's approval is what the whole package is graded against. |
+| "The package read found the spec is wrong — I'll just fix the spec line" | Three dispositions and no fourth — package fix, owner-stamped amendment, or a recorded refutation in the audit trail. A silent spec edit rewrites the thing the owner approved. |

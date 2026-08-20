@@ -4,7 +4,6 @@ schemaVersion: 1
 docType: spec
 workItem: light-spec-sample-a1b2c3
 issue: null
-parent: null
 size: small
 status: approved
 approved: "2026-08-16"
