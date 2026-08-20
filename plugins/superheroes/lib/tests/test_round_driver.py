@@ -776,6 +776,167 @@ def test_audit_results_fault_pure():
     assert "results[1]" in RD.audit_results_fault({"results": two}, [{"id": "a1"}, {"id": "a2"}])
 
 
+def test_collection_manifest_fault_pure():
+    # axis: absent manifest — accepted (no fault).
+    assert RD.collection_manifest_fault({}, [{"id": "a1"}]) is None
+    assert RD.collection_manifest_fault({"results": []}, [{"id": "a1"}]) is None
+    # axis: non-dict manifest — refused, type named.
+    assert "list" in RD.collection_manifest_fault({"collectionManifest": []}, [{"id": "a1"}])
+    assert "NoneType" in RD.collection_manifest_fault({"collectionManifest": None}, [{"id": "a1"}])
+    assert "str" in RD.collection_manifest_fault({"collectionManifest": "x"}, [{"id": "a1"}])
+    # axis: empty dict manifest — accepted; fold's unauthenticated path still governs.
+    assert RD.collection_manifest_fault({"collectionManifest": {}}, [{"id": "a1"}]) is None
+    # axis: strict subset of target ids — accepted.
+    assert RD.collection_manifest_fault({"collectionManifest": {"a1": "claude"}},
+                                        [{"id": "a1"}, {"id": "a2"}]) is None
+    # axis: unavailable targets (None) — no key judged, accepted.
+    assert RD.collection_manifest_fault({"collectionManifest": {"zz": "claude"}}, None) is None
+    # axis: known-empty targets + nonempty manifest — refused.
+    fault = RD.collection_manifest_fault({"collectionManifest": {"zz": "claude"}}, [])
+    assert fault is not None and "zz" in fault
+    # axis: identity key — refused with identity-vs-id hint.
+    targets = [{"id": "f.py::x@L1", "identity": "f.py::x"}]
+    fault = RD.collection_manifest_fault({"collectionManifest": {"f.py::x": "claude"}}, targets)
+    assert fault is not None
+    assert "identity" in fault and "f.py::x@L1" in fault
+    # axis: unknown key — refused, valid target ids listed.
+    fault = RD.collection_manifest_fault({"collectionManifest": {"nope": "claude"}},
+                                         [{"id": "a2"}, {"id": "a1"}])
+    assert fault is not None
+    assert "nope" in fault and "a1" in fault and "a2" in fault
+    # axis: determinism — first bad key is sorted.
+    fault = RD.collection_manifest_fault({"collectionManifest": {"z": "x", "a": "x"}},
+                                         [{"id": "a1"}])
+    assert fault is not None and "collectionManifest key 'a'" in fault
+    # axis: malformed target entries — no crash, do not widen the accepted set.
+    assert RD.collection_manifest_fault({"collectionManifest": {"a1": "x"}},
+                                        [{"id": "a1"}, "bad", {"id": 1}, {}]) is None
+    assert RD.collection_manifest_fault({"collectionManifest": {"bad": "x"}},
+                                        [{"id": "a1"}, "bad", {"id": 1}, {}]) is not None
+    # axis: non-dict artifact — accepted; envelope refusal is the sibling's job.
+    assert RD.collection_manifest_fault(None, [{"id": "a1"}]) is None
+
+
+def test_collection_manifest_fault_non_string_key_refused():
+    """A non-string manifest key is refused with the key and type named — no TypeError."""
+    targets = [{"id": "a1"}]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"z": "claude", 1: "codex"}},
+        targets,
+    )
+    assert fault is not None
+    assert "1" in fault
+    assert "int" in fault
+    assert "resubmit the same phase/attempt/state-hash with a corrected artifact" in fault
+
+
+def test_collection_manifest_fault_non_string_key_mixed_with_valid_id():
+    """A manifest mixing a valid string id and a non-string key refuses the non-string key."""
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"a1": "claude", 1: "codex"}},
+        [{"id": "a1"}],
+    )
+    assert fault is not None
+    assert "1" in fault
+    assert "int" in fault
+
+
+def _collection_manifest_rekey_clause(fault):
+    """Isolate the recovery-id portion of an identity-confusion refusal."""
+    lead = "re-key to a per-location target id for each location: "
+    start = fault.index(lead) + len(lead)
+    end = fault.index("; valid target ids:", start)
+    return fault[start:end]
+
+
+def test_collection_manifest_fault_colliding_identity_names_all_ids():
+    """When several targets share one identity, the refusal names every carrying id."""
+    targets = [
+        {"id": "f.py::x@L1", "identity": "f.py::x"},
+        {"id": "f.py::x@L9", "identity": "f.py::x"},
+    ]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"f.py::x": "claude"}},
+        targets,
+    )
+    assert fault is not None
+    assert "identity" in fault
+    assert "f.py::x@L1" in fault
+    assert "f.py::x@L9" in fault
+    assert "per-location" in fault
+    rekey_clause = _collection_manifest_rekey_clause(fault)
+    assert "'f.py::x@L1'" in rekey_clause
+    assert "'f.py::x@L9'" in rekey_clause
+
+
+def test_collection_manifest_fault_duplicate_same_id_single_wording():
+    """Duplicate rows sharing one identity and one id use single-id wording."""
+    legacy_id = "legacy-id"
+    targets = [
+        {"id": legacy_id, "identity": "f.py::x"},
+        {"id": legacy_id, "identity": "f.py::x"},
+    ]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"f.py::x": "claude"}},
+        targets,
+    )
+    assert fault is not None
+    assert "identity" in fault
+    assert "per-location" not in fault
+    assert ("re-key to %r; valid target ids:" % legacy_id) in fault
+
+
+def test_collection_manifest_fault_single_identity_wording_preserved():
+    """Exactly one target carries the identity — preserve the single-id re-key wording."""
+    targets = [{"id": "f.py::x@L1", "identity": "f.py::x"}]
+    fault = RD.collection_manifest_fault(
+        {"collectionManifest": {"f.py::x": "claude"}},
+        targets,
+    )
+    assert fault is not None
+    assert "re-key to 'f.py::x@L1'" in fault
+    assert "per-location" not in fault
+
+
+def test_collection_manifest_fault_determinism_repeated_calls():
+    """Repeated calls name the same bad key when several bad keys exist."""
+    artifact = {"collectionManifest": {"z": "x", "a": "x"}}
+    targets = [{"id": "a1"}]
+    first = RD.collection_manifest_fault(artifact, targets)
+    for _ in range(5):
+        assert RD.collection_manifest_fault(artifact, targets) == first
+    assert first is not None and "collectionManifest key 'a'" in first
+
+
+def test_submit_audits_collection_manifest_key_refused(tmp_path):
+    """A mis-keyed collectionManifest is refused at the submit chokepoint with the mistake named,
+    the pending step intact, and a corrected resubmit on the same phase/attempt/state-hash accepted."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, targets = _audit_artifact(n)
+    bad = dict(good)
+    bad["collectionManifest"] = {targets[0]["identity"]: targets[0].get("auditorVendor")}
+    _assert_shape_refused(d, n, bad, "collection-manifest-key",
+                          ["identity", "re-key to", targets[0]["id"]], good)
+
+
+def test_submit_audits_collection_manifest_refusal_no_fold(tmp_path):
+    """A refused manifest key does not run the fold — no auditRounds entry, no _auditOutcome, no
+    decisions recorded."""
+    d, n = _at(tmp_path, RD.P_AUDITS)
+    good, _targets = _audit_artifact(n)
+    bad = dict(good)
+    bad["collectionManifest"] = {"no-such-key": "claude"}
+    before = _state_bytes(d)
+    out = RD.cmd_submit(d, n["phase"], n["attempt"], n["expectedStateHash"], bad)
+    assert out["ok"] is False, out
+    assert _state_bytes(d) == before, "a refused manifest submit mutated loop-state"
+    ok, state = RD.load_state(d)
+    assert ok
+    assert not state.get("auditRounds"), state.get("auditRounds")
+    assert not state.get("_auditOutcome"), state.get("_auditOutcome")
+    assert not state.get("decisions"), state.get("decisions")
+
+
 def test_verifier_results_fault_pure():
     assert RD.verifier_results_fault({"verdicts": []}) is None
     assert RD.verifier_results_fault({"verdicts": [{"id": "x", "verdict": "CONFIRMED"}]}) is None
