@@ -19,7 +19,8 @@ _REQUIRED_BASENAMES = ("review_code_config.py", "configure_view.py")
 # Value: how that call site handles UnresolvableRootError (must not swallow into uncalibrated-looking output).
 ADJUDICATED = {
     "configure_view.py::collect::resolve": (
-        "re-raise UnresolvableRootError; TIERS_ROOT_UNAVAILABLE re-probe fail-opens default tiers on success"
+        "re-raise UnresolvableRootError on TIERS_ROOT_UNAVAILABLE re-probe; "
+        "surfaces model_tier_refusal with tiers=None (no default-tier fall-open)"
     ),
     "configure_view.py::collect::resolve_profile_path": (
         "re-raise UnresolvableRootError; fail-open other exceptions"

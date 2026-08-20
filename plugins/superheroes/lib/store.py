@@ -121,24 +121,6 @@ def _global_layer_path(cwd):
     return os.path.join(mode_registry.project_store_dir(cwd), "config", "test-pilot.md")
 
 
-def _in_repo_layer(repo_root):
-    """Physical in-repo path to the unified calibration layer (#412), or None if absent.
-    Same convention core_md/calibration_resolve use for the in-repo layer — a direct
-    file probe, so this read path never triggers a mode_registry backfill WRITE."""
-    p = _in_repo_layer_path(repo_root)
-    return p if os.path.isfile(p) else None
-
-
-def _global_layer(cwd):
-    """Physical out-of-repo (project store) path to the unified layer (#412), or None.
-    Mode-aware via mode_registry.project_store_dir (mirrors core_md.core_path's global
-    branch and calibration_resolve._unified_global_layer) — never a hardcoded ~/.claude
-    path. Always the real control-plane project store: resolve()'s `root` is TEST-PILOT's
-    store root, not the superheroes core store base, so it must not be threaded here."""
-    p = _global_layer_path(cwd)
-    return p if os.path.isfile(p) else None
-
-
 def candidate_profile_paths(cwd, root):
     """The ordered profile-source candidates resolve() considers, existing or not."""
     repo_root_path = get_repo_root(cwd)
@@ -353,12 +335,21 @@ def create(cwd, location, root):
     if legacy_in_repo_result.status == LAYER_UNREADABLE:
         _raise_layer_unreadable(legacy_in_repo, legacy_in_repo_result)
 
-    legacy_global_result = None
     if existing is not None:
-        legacy_global = _legacy_global_profile_path(existing)
-        legacy_global_result = classify_layer_config_block(legacy_global)
-        if legacy_global_result.status == LAYER_UNREADABLE:
-            _raise_layer_unreadable(legacy_global, legacy_global_result)
+        entry_id = existing["entry_id"]
+        entry_dir = existing["dir"]
+    else:
+        entry_id = ident["gitdir_hash"]
+        entry_dir = os.path.join(root, "entries", entry_id)
+
+    # #428/#724: classify the global-entry legacy candidate unconditionally (using the same
+    # entry_dir fallback as pre-#782), so a surviving entry dir with profile.md but no key
+    # pointer keeps resolve()'s legacy-first precedence — create() must not hand back the
+    # layer while the engine keeps reading the legacy.
+    legacy_global = os.path.join(entry_dir, "profile.md")
+    legacy_global_result = classify_layer_config_block(legacy_global)
+    if legacy_global_result.status == LAYER_UNREADABLE:
+        _raise_layer_unreadable(legacy_global, legacy_global_result)
 
     in_repo_layer = _in_repo_layer_path(repo_root)
     in_repo_layer_result = classify_layer_config_block(in_repo_layer)

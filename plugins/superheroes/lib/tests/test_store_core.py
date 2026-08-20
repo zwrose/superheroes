@@ -725,6 +725,29 @@ def test_read_pointer_result_unreadable_when_pointer_is_directory(tmp_path):
     assert result.entry_id is None
 
 
+def test_read_pointer_result_unreadable_when_keys_parent_is_file(tmp_path):
+    root = _store_root(tmp_path)
+    keys_path = os.path.join(root, "keys")
+    os.makedirs(root)
+    with open(keys_path, "w") as fh:
+        fh.write("not a directory")
+    result = sc.read_pointer_result(root, "some-key")
+    assert result.status == sc.POINTER_UNREADABLE
+    assert result.entry_id is None
+
+
+def test_resolve_global_strict_true_keys_parent_is_file_raises(tmp_path):
+    repo = _repo_with_remote(tmp_path)
+    root = _store_root(tmp_path)
+    keys_path = os.path.join(root, "keys")
+    os.makedirs(root)
+    with open(keys_path, "w") as fh:
+        fh.write("not a directory")
+    with pytest.raises(sc.PointerUnreadable) as excinfo:
+        sc.resolve_global(repo, root, strict=True)
+    assert excinfo.value.status == sc.POINTER_UNREADABLE
+
+
 def test_read_pointer_result_unreadable_invalid_utf8(tmp_path):
     root = _store_root(tmp_path)
     keys = os.path.join(root, "keys")

@@ -363,6 +363,22 @@ def test_create_prose_only_layer_falls_back_to_legacy_path(tmp_path):
     assert c["profile"] == os.path.join(repo, ".claude", "test-pilot", "profile.md")
 
 
+def test_create_legacy_global_without_pointer_keeps_precedence_over_layer(tmp_path):
+    # #428/#724: surviving entry dir with legacy profile.md but no key pointer must keep
+    # legacy-first precedence so create() and resolve() agree.
+    repo = _init_repo(tmp_path / "repo")
+    root = str(tmp_path / "store")
+    ident = store.derive_identifiers(repo)
+    entry_dir = os.path.join(root, "entries", ident["gitdir_hash"])
+    os.makedirs(entry_dir)
+    open(os.path.join(entry_dir, "profile.md"), "w").write("# legacy\n")
+    _write_in_repo_layer(repo)
+    c = store.create(repo, "in-repo", root)
+    assert c["profileSource"] == "profile-md"
+    r = store.resolve(repo, root)
+    assert r["profileSource"] == "profile-md"
+
+
 def test_create_cross_mode_legacy_keeps_precedence_over_layer(tmp_path):
     # #428 round-2 review: resolve()'s precedence puts ANY legacy (in-repo OR global-entry
     # profile.md) ahead of the layers. create() must honor the cross-location legacy too, or a

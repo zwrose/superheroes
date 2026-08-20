@@ -818,17 +818,14 @@ def test_effective_tiers_for_gate_readable_profile_with_overrides_ok(tmp_path):
     assert gate.tiers["mechanical"] == "sonnet"
 
 
-def test_effective_tiers_for_gate_unresolvable_root_error_refuses(tmp_path, monkeypatch):
-    import calibration_resolve as cr
-
-    def _raise(*_a, **_kw):
-        raise cr.UnresolvableRootError(
-            root="/bad", cwd=str(tmp_path), hero=cr.REVIEW_CREW,
-            default_location="global", default_layer_path="/layer",
-        )
-
-    monkeypatch.setattr(cr, "candidate_profile_paths", _raise)
-    gate = MTO.effective_tiers_for_gate(cwd=str(tmp_path))
+def test_effective_tiers_for_gate_unresolvable_root_error_refuses(tmp_path, isolated_default_store_root):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    _init_repo(repo)
+    default_store = isolated_default_store_root
+    empty = _empty_store_root(tmp_path)
+    _ensure_global_unified_layer(str(repo), default_store)
+    gate = MTO.effective_tiers_for_gate(cwd=str(repo), root=empty)
     assert gate.status == MTO.TIERS_ROOT_UNAVAILABLE
     assert gate.tiers is None
 

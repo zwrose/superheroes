@@ -424,8 +424,6 @@ def read_pointer_result(root, key_hash):
             text = fh.read()
     except FileNotFoundError:
         return PointerResult(None, POINTER_ABSENT, None)
-    except NotADirectoryError:
-        return PointerResult(None, POINTER_ABSENT, None)
     except UnicodeDecodeError as exc:
         return PointerResult(
             None, POINTER_UNREADABLE, "%s: %s" % (path, exc))
