@@ -209,10 +209,11 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable
 > (`--repo-root ""`), a path that is not an existing directory, or a directory without `.git` exits
 > **2** with argparse's usage error — it never reaches the JSON envelope. `--run-dir` is optional;
-> when omitted the runner allocates a private temp directory. When supplied, a path that does not
-> exist or is not a directory is also refused at argparse (exit 2). **JSON refusals** (exit 0,
+> when omitted the runner allocates a private temp directory. When supplied, a path that **exists but
+> is not a directory** is refused at argparse (exit 2); a missing path is accepted (the nearest
+> existing ancestor must be a directory). **JSON refusals** (exit 0,
 > top-level `ok: false`) still apply for run-directory problems argparse cannot see: `run-dir-is-symlink`,
-> `run-dir-not-writable`, and the post-spawn `run-dir-*` family documented below.
+> `run-dir-not-writable`, `run-dir-setup-failed:<Type>`, and the post-spawn `run-dir-*` family documented below.
 >
 > **Receipt.** Every dispatch result carries a `sanitizedView` block (`strategy`, `stripped`,
 > `strippedCount`, `headSha`, `sourceDirty`, `buildSeconds`, `bytes`, `fileCount`, plus `diffBase`,
@@ -321,17 +322,6 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 >
 > ```bash
 > ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-> # RUN_DIR — create once per seat before first dispatch-review (continuation reuses the same path)
-> if [ -z "$RUN_DIR" ]; then echo "RUN_DIR required (run-dir-absent)" >&2; exit 1; fi
-> mkdir -p "$(dirname "$RUN_DIR")" || { echo "cannot create RUN_DIR parent" >&2; exit 1; }
-> RUN_DIR="$(cd -P "$(dirname "$RUN_DIR")" && pwd -P)/$(basename "$RUN_DIR")"
-> if [ -L "$RUN_DIR" ]; then echo "RUN_DIR must be physical (run-dir-is-symlink)" >&2; exit 1; fi
-> if [ -d "$RUN_DIR" ]; then
->   if [ -n "$(ls -A "$RUN_DIR" 2>/dev/null)" ]; then echo "RUN_DIR must be empty on first launch (run-dir-not-empty-unopened)" >&2; exit 1; fi
-> else
->   mkdir "$RUN_DIR" || { echo "cannot create RUN_DIR" >&2; exit 1; }
-> fi
-> RUN_DIR="$(cd -P "$RUN_DIR" && pwd -P)"
 > # Keep $SEAT_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 > # LAUNCH — first call on each --run-dir: short positive slice (see dispatch-mechanics.md)
 > python3 -B "$ROOT_DIR/lib/engine_dispatch.py" dispatch-review \
