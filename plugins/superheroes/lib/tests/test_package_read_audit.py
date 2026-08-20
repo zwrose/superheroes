@@ -1,6 +1,9 @@
 """Tests for package_read_audit (#937)."""
+import copy
+import itertools
 import json
 import os
+import re
 import subprocess
 import sys
 
@@ -1823,52 +1826,462 @@ def test_rounds_asserted_echo_mechanical_only_false(tmp_path):
     assert "parkOwed" not in summary
 
 
-def test_check_order_independence_same_kinds(tmp_path):
-    trail_a_path = tmp_path / "a" / "trail.md"
-    trail_a_path.parent.mkdir(parents=True)
-    trail_a, _ = _open_default(tmp_path / "a", trail=trail_a_path)
-    _record_round(trail_a, round_no=1, findings=["f-1:collisions"])
-    _record_round(trail_a, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
-    _record_verification(
-        trail_a,
-        findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:pass", "c2:pass"],
+# --- WO-F: permutation oracle, census, hostile sweep, empty-string pairing ---
+#
+# Cap: none. Every fixture below has at most 5 records (5! = 120). A 6-record
+# fixture is 720 perms; if one is added, cap itertools.permutations at 120
+# here and name that cap in this comment.
+
+
+_TRAIL_POSITION_IN_DETAIL = re.compile(r"trail positions? \d+(?:, \d+)*")
+
+
+def _write_trail(path, records):
+    text = pra.TRAIL_HEADING + "\n"
+    for record in records:
+        text += pra._format_record(record)
+    path.write_text(text, encoding="utf-8")
+
+
+def _valid_record(kind):
+    if kind == pra.RECORD_KIND_INVOCATION:
+        return {
+            "kind": kind,
+            "invocation": "i1",
+            "cause": "read",
+            "weight": pra.WEIGHT_LIGHT,
+            "measurables": {"children": 2, "registerEntries": 1},
+            "ceiling": 2,
+            "override": "none",
+            "seats": ["seat-a"],
+        }
+    if kind == pra.RECORD_KIND_ROUND:
+        return {
+            "kind": kind,
+            "invocation": "i1",
+            "round": 1,
+            "lenses": [pra.LENS_COLLISIONS],
+            "parts": [{"part": "pkg", "status": pra.PART_STATUS_UNREVIEWED}],
+            "controlProbe": pra.CONTROL_PROBE_ENGAGED,
+            "findings": [{"finding": "f-1", "lens": pra.LENS_COLLISIONS}],
+            "declinedExtension": ["f-1"],
+            "mechanicalOnly": False,
+        }
+    if kind == pra.RECORD_KIND_VERIFICATION:
+        return {
+            "kind": kind,
+            "invocation": "i1",
+            "findings": [{
+                "finding": "f-1",
+                "disposition": pra.DISPOSITION_PACKAGE_FIX,
+                "outcome": pra.OUTCOME_VERIFIED,
+                "evidence": "note",
+            }],
+            "syncChecks": [{"child": "c1", "result": pra.SYNC_RESULT_PASS}],
+        }
+    raise AssertionError("no valid-record template for kind %r" % kind)
+
+
+def _sync_two_pass():
+    return [
+        {"child": "c1", "result": pra.SYNC_RESULT_PASS},
+        {"child": "c2", "result": pra.SYNC_RESULT_PASS},
+    ]
+
+
+def _round_n(round_no, findings=None, mechanical_only=False):
+    rec = _valid_record(pra.RECORD_KIND_ROUND)
+    rec["round"] = round_no
+    rec["findings"] = [] if findings is None else findings
+    rec["declinedExtension"] = []
+    rec["mechanicalOnly"] = mechanical_only
+    return rec
+
+
+def _ver(findings=None, sync=None):
+    rec = _valid_record(pra.RECORD_KIND_VERIFICATION)
+    rec["findings"] = [] if findings is None else findings
+    rec["syncChecks"] = _sync_two_pass() if sync is None else sync
+    return rec
+
+
+def _f1_finding():
+    return [{"finding": "f-1", "lens": pra.LENS_COLLISIONS}]
+
+
+def _f1_verified():
+    return [{
+        "finding": "f-1",
+        "disposition": pra.DISPOSITION_PACKAGE_FIX,
+        "outcome": pra.OUTCOME_VERIFIED,
+    }]
+
+
+def _complete_four():
+    """Invocation, round 1 (finding), round 2 (mechanical), verification."""
+    return [
+        _valid_record(pra.RECORD_KIND_INVOCATION),
+        _round_n(1, findings=_f1_finding()),
+        _round_n(2, mechanical_only=True),
+        _ver(findings=_f1_verified()),
+    ]
+
+
+def _complete_three():
+    return [
+        _valid_record(pra.RECORD_KIND_INVOCATION),
+        _round_n(1, findings=[]),
+        _ver(findings=[], sync=_sync_two_pass()),
+    ]
+
+
+def _path_segments(path):
+    segments = []
+    current = ""
+    idx = 0
+    while idx < len(path):
+        ch = path[idx]
+        if ch == ".":
+            if current:
+                segments.append(current)
+                current = ""
+            idx += 1
+            continue
+        if ch == "[":
+            if current:
+                segments.append(current)
+                current = ""
+            close = path.index("]", idx)
+            segments.append(int(path[idx + 1:close]))
+            idx = close + 1
+            continue
+        current += ch
+        idx += 1
+    if current:
+        segments.append(current)
+    return segments
+
+
+def _set_path(record, path, value):
+    segs = _path_segments(path)
+    target = record
+    for seg in segs[:-1]:
+        target = target[seg]
+    target[segs[-1]] = value
+
+
+def _iter_constraints(declaration, prefix=""):
+    fields = declaration.get("fields", {})
+    if not isinstance(fields, dict):
+        return
+    for name, constraint in fields.items():
+        path = "%s.%s" % (prefix, name) if prefix else name
+        yield path, constraint
+        if not isinstance(constraint, dict):
+            continue
+        if constraint.get("type") == "array" and "items" in constraint:
+            items = constraint["items"]
+            item_path = "%s[0]" % path
+            yield item_path, items
+            if isinstance(items, dict) and items.get("type") == "object":
+                yield from _iter_constraints(items, item_path)
+        if constraint.get("type") == "object" and "fields" in constraint:
+            yield from _iter_constraints(constraint, path)
+
+
+def _nonempty_fields():
+    rows = []
+    for kind, declaration in pra.RECORD_SCHEMAS.items():
+        for path, constraint in _iter_constraints(declaration):
+            if isinstance(constraint, dict) and constraint.get("nonEmpty"):
+                rows.append((kind, path))
+    return rows
+
+
+def _wrong_type_value(type_name):
+    return {
+        "string": 0,
+        "integer": True,
+        "boolean": "not-bool",
+        "object": [],
+        "array": {},
+    }[type_name]
+
+
+def _check_exit_code(payload):
+    if payload["result"] == pra.RESULT_CONFORMING:
+        return pra.EXIT_CONFORMING
+    if payload["result"] == pra.RESULT_NONCONFORMING:
+        return pra.EXIT_NONCONFORMING
+    return pra.EXIT_UNDECIDED
+
+
+def _canonical_check_payload(payload):
+    """Whole check payload minus physical trail positions (PRA-007)."""
+    findings = []
+    for item in payload["findings"]:
+        detail = item.get("detail")
+        if isinstance(detail, str):
+            detail = _TRAIL_POSITION_IN_DETAIL.sub("trail position *", detail)
+        findings.append({
+            "kind": item["kind"],
+            "invocation": item.get("invocation"),
+            "path": item.get("path"),
+            "detail": detail,
+        })
+    findings.sort(key=lambda row: json.dumps(row, sort_keys=True))
+    return {
+        "result": payload["result"],
+        "ok": payload["ok"],
+        "invocations": payload["invocations"],
+        "findings": findings,
+    }
+
+
+def _ver_before_highest(records):
+    round_idxs = [
+        (idx, rec["round"])
+        for idx, rec in enumerate(records)
+        if rec.get("kind") == pra.RECORD_KIND_ROUND and isinstance(rec.get("round"), int)
+    ]
+    ver_idxs = [
+        idx for idx, rec in enumerate(records)
+        if rec.get("kind") == pra.RECORD_KIND_VERIFICATION
+    ]
+    if not round_idxs or not ver_idxs:
+        return False
+    highest_n = max(n for _idx, n in round_idxs)
+    highest_idx = min(idx for idx, n in round_idxs if n == highest_n)
+    return min(ver_idxs) < highest_idx
+
+
+def _rounds_adjacent(records):
+    idxs = [
+        idx for idx, rec in enumerate(records)
+        if rec.get("kind") == pra.RECORD_KIND_ROUND
+    ]
+    if len(idxs) < 2:
+        return False
+    return abs(idxs[0] - idxs[1]) == 1
+
+
+def _oracle_fixtures():
+    clean = _complete_four()
+    ver_before = [
+        clean[0],
+        clean[1],
+        clean[3],
+        clean[2],
+    ]
+    inv_a = _valid_record(pra.RECORD_KIND_INVOCATION)
+    inv_b = _valid_record(pra.RECORD_KIND_INVOCATION)
+    inv_b["ceiling"] = 3
+    inv_b["weight"] = pra.WEIGHT_FULL
+    inv_b["seats"] = ["seat-b"]
+    conflicting = [
+        inv_a,
+        inv_b,
+        _round_n(1, findings=_f1_finding()),
+        _round_n(2, mechanical_only=True),
+        _ver(findings=_f1_verified()),
+    ]
+    r1 = _round_n(1, findings=[])
+    r1_dup = _round_n(1, findings=[])
+    duplicate_round = [
+        _valid_record(pra.RECORD_KIND_INVOCATION),
+        r1,
+        r1_dup,
+        _ver(findings=[]),
+    ]
+    no_ceiling = _valid_record(pra.RECORD_KIND_INVOCATION)
+    no_ceiling["ceiling"] = None
+    return [
+        {
+            "id": "verification_before_highest_round",
+            "records": ver_before,
+            "expected_result": pra.RESULT_CONFORMING,
+            "expected_kinds": set(),
+            "flip": "verification_before_highest",
+        },
+        {
+            "id": "conflicting_invocations",
+            "records": conflicting,
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {pra.NONCONFORMITY_RECORD_DUPLICATE},
+            "expected_summaries": 0,
+            "flip": "conflicting_payloads",
+        },
+        {
+            "id": "duplicate_round",
+            "records": duplicate_round,
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {pra.NONCONFORMITY_RECORD_DUPLICATE},
+            "flip": "duplicate_round",
+        },
+        {
+            "id": "clean",
+            "records": clean,
+            "expected_result": pra.RESULT_CONFORMING,
+            "expected_kinds": set(),
+            "flip": "clean",
+        },
+        {
+            "id": "round_exceeds_ceiling",
+            "records": [
+                _valid_record(pra.RECORD_KIND_INVOCATION),
+                _round_n(7, findings=_f1_finding()),
+                _ver(findings=_f1_verified()),
+            ],
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {pra.NONCONFORMITY_ROUND_EXCEEDS_CEILING},
+        },
+        {
+            "id": "unknown_finding",
+            "records": [
+                _valid_record(pra.RECORD_KIND_INVOCATION),
+                _round_n(1, findings=_f1_finding()),
+                _ver(findings=[{
+                    "finding": "ghost",
+                    "disposition": pra.DISPOSITION_PACKAGE_FIX,
+                    "outcome": pra.OUTCOME_VERIFIED,
+                }]),
+            ],
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {
+                pra.NONCONFORMITY_FINDING_UNKNOWN,
+                pra.NONCONFORMITY_FINDING_UNVERIFIED,
+            },
+        },
+        {
+            "id": "duplicate_sync_check",
+            "records": [
+                dict(_valid_record(pra.RECORD_KIND_INVOCATION), **{"measurables": {
+                    "children": 1, "registerEntries": 1,
+                }}),
+                _round_n(1, findings=_f1_finding()),
+                _ver(
+                    findings=_f1_verified(),
+                    sync=[
+                        {"child": "c1", "result": pra.SYNC_RESULT_FAIL},
+                        {"child": "c1", "result": pra.SYNC_RESULT_FAIL},
+                    ],
+                ),
+            ],
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {
+                pra.NONCONFORMITY_RECORD_DUPLICATE,
+                pra.NONCONFORMITY_SYNC_CHECK_FAILED,
+            },
+        },
+        {
+            "id": "verification_finding_id_only",
+            "records": [
+                _valid_record(pra.RECORD_KIND_INVOCATION),
+                _round_n(1, findings=_f1_finding()),
+                _ver(findings=[{"finding": "f-1"}]),
+            ],
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {pra.NONCONFORMITY_ELEMENT_MISSING},
+        },
+        {
+            "id": "invocation_without_ceiling",
+            "records": [
+                no_ceiling,
+                _round_n(1, findings=_f1_finding()),
+                _ver(findings=_f1_verified()),
+            ],
+            "expected_result": pra.RESULT_NONCONFORMING,
+            "expected_kinds": {pra.NONCONFORMITY_ELEMENT_MISSING},
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "fixture",
+    _oracle_fixtures(),
+    ids=lambda f: f["id"],
+)
+def test_check_verdict_is_order_independent(tmp_path, fixture):
+    records = fixture["records"]
+    assert len(records) <= 5, (
+        "fixture %s has %d records; cap permutations at 120 and name the cap"
+        % (fixture["id"], len(records))
+    )
+    orders = list(itertools.permutations(records))
+    if fixture.get("flip") == "verification_before_highest":
+        assert _ver_before_highest(records)
+        assert any(_ver_before_highest(order) for order in orders)
+        assert any(not _ver_before_highest(order) for order in orders)
+    elif fixture.get("flip") == "conflicting_payloads":
+        invs = [rec for rec in records if rec["kind"] == pra.RECORD_KIND_INVOCATION]
+        assert len(invs) == 2
+        assert invs[0]["invocation"] == invs[1]["invocation"]
+        assert invs[0]["ceiling"] != invs[1]["ceiling"]
+        assert invs[0]["weight"] != invs[1]["weight"]
+        assert invs[0]["seats"] != invs[1]["seats"]
+    elif fixture.get("flip") == "duplicate_round":
+        rounds = [rec for rec in records if rec["kind"] == pra.RECORD_KIND_ROUND]
+        assert len(rounds) == 2
+        assert rounds[0]["round"] == rounds[1]["round"]
+        assert any(_rounds_adjacent(order) for order in orders)
+        assert any(not _rounds_adjacent(order) for order in orders)
+
+    trail = tmp_path / "trail.md"
+    distinct = set()
+    listed_payload = None
+    for idx, order in enumerate(orders):
+        _write_trail(trail, order)
+        payload = pra.verb_check(str(trail))
+        if idx == 0:
+            listed_payload = payload
+        canonical = _canonical_check_payload(payload)
+        distinct.add(json.dumps(canonical, sort_keys=True))
+        if fixture["id"] == "clean":
+            assert payload["result"] == pra.RESULT_CONFORMING, fixture["id"]
+            assert payload["findings"] == [], fixture["id"]
+
+    assert listed_payload is not None
+    assert listed_payload["result"] == fixture["expected_result"], fixture["id"]
+    kinds = {item["kind"] for item in listed_payload["findings"]}
+    assert kinds == fixture["expected_kinds"], (fixture["id"], kinds)
+    if "expected_summaries" in fixture:
+        assert len(listed_payload["invocations"]) == fixture["expected_summaries"], (
+            fixture["id"]
+        )
+    if fixture["id"] == "invocation_without_ceiling":
+        summary = listed_payload["invocations"][0]
+        assert summary["ceiling"] is None
+        assert summary["seats"] == ["seat-a"]
+    assert len(distinct) == 1, (
+        "fixture %s produced %d distinct canonical verdicts"
+        % (fixture["id"], len(distinct))
     )
 
-    trail_b_path = tmp_path / "b" / "trail.md"
-    trail_b_path.parent.mkdir(parents=True)
-    trail_b, _ = _open_default(tmp_path / "b", trail=trail_b_path)
-    _record_round(trail_b, round_no=1, findings=["f-1:collisions"])
-    _record_round(trail_b, round_no=2, mechanical_only=True, parts=["pkg:reviewed"])
-    _record_verification(
-        trail_b,
-        findings=["f-1:package-fix:verified"],
-        sync_checks=["c1:pass", "c2:pass"],
-    )
-    text_b = trail_b.read_text(encoding="utf-8")
-    blocks = text_b.split(pra.RECORD_MARKER)
-    invocation_block = blocks[1]
-    round1_block = blocks[2]
-    round2_block = blocks[3]
-    verification_block = blocks[4]
-    reordered = (
-        pra.TRAIL_HEADING + "\n"
-        + pra.RECORD_MARKER + invocation_block
-        + pra.RECORD_MARKER + round2_block
-        + pra.RECORD_MARKER + verification_block
-        + pra.RECORD_MARKER + round1_block
-    )
-    trail_b.write_text(reordered, encoding="utf-8")
 
-    code_a, out_a, _ = _run_cli("check", "--trail", str(trail_a))
-    code_b, out_b, _ = _run_cli("check", "--trail", str(trail_b))
-    payload_a = json.loads(out_a.strip())
-    payload_b = json.loads(out_b.strip())
-    assert code_a == code_b
-    assert payload_a["result"] == payload_b["result"]
-    kinds_a = {item["kind"] for item in payload_a["findings"]}
-    kinds_b = {item["kind"] for item in payload_b["findings"]}
-    assert kinds_a == kinds_b
+def test_finding_positions_point_at_the_right_records(tmp_path):
+    records = [
+        dict(_valid_record(pra.RECORD_KIND_INVOCATION), cause=""),
+        _round_n(7, findings=_f1_finding()),
+        _ver(findings=[{
+            "finding": "ghost",
+            "disposition": pra.DISPOSITION_PACKAGE_FIX,
+            "outcome": pra.OUTCOME_VERIFIED,
+        }]),
+    ]
+    trail = tmp_path / "trail.md"
+    _write_trail(trail, records)
+    payload = pra.verb_check(str(trail))
+    got = {
+        (item["kind"], item["path"], item["position"])
+        for item in payload["findings"]
+    }
+    expected = {
+        (pra.NONCONFORMITY_RECORD_VALUE_INVALID, "cause", 1),
+        (pra.NONCONFORMITY_ROUND_EXCEEDS_CEILING, "round", 2),
+        (pra.NONCONFORMITY_FINDING_UNKNOWN, "findings[0].finding", 3),
+        (pra.NONCONFORMITY_FINDING_UNVERIFIED, "finding", 2),
+    }
+    assert got == expected
 
 
 # --- vocabulary drift guards ------------------------------------------------
