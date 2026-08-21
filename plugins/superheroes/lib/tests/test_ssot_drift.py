@@ -29,6 +29,9 @@ are gone with them; no lib/*.js copy-holders remain):
   copy-holders: skills/workhorse/SKILL.md (operative resolution bullets, log-side paragraph,
   stop), skills/showrunner/SKILL.md (filing, repair, notice and standing-row clauses),
   skills/showrunner/reference/vet-receipt.md (owner-half delivery clause))
+- Pre-doctrine on-ramp structure (home: skills/showrunner/reference/issue-contract.md
+  § Pre-doctrine issues; copy-holder: skills/workhorse/SKILL.md anchor-intake repair
+  template)
 - Four-route drift (R6 register → two charters + five prose/registry copies) (home:
   docs/superheroes/front-half-sdlc-core-6181ee/register.md R6; copy-holders: skills/showrunner/SKILL.md
   routing block + frontmatter description, skills/workhorse/SKILL.md §1 intake,
@@ -3739,6 +3742,282 @@ def test_anchor_stop_terminal_and_resume_gate():
     ) in home_norm, (
         "issue-contract ## Anchor resolution missing resumes-only clause "
         "(moved or reworded?)"
+    )
+
+
+# --- Sub-cluster: pre-doctrine on-ramp structure -----------------------------
+# (home: skills/showrunner/reference/issue-contract.md § Pre-doctrine issues;
+# copy-holder: skills/workhorse/SKILL.md anchor-intake repair template)
+
+_PRE_DOCTRINE_HEADING = "## Pre-doctrine issues"
+
+_PRE_DOCTRINE_ORDERED_HEADINGS = (
+    "## Anchor resolution",
+    "## Pre-doctrine issues",
+    "## The standing anchor-coverage vet row",
+)
+
+_PRE_DOCTRINE_ORDERED_CONTENTS_ROWS = (
+    "- [Anchor resolution](#anchor-resolution)",
+    "- [Pre-doctrine issues](#pre-doctrine-issues)",
+    "- [The standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row)",
+)
+
+_PRE_DOCTRINE_PATTERN_HEADINGS = (
+    "### Pattern 1 — the per-issue retrofit",
+    "### Pattern 2 — the board-pass grandfathering",
+)
+
+_PRE_DOCTRINE_TEMPLATE_SLOT_HEADERS = (
+    "**Anchor (ruling):**",
+    "**What:**",
+    "**DoD:**",
+)
+
+_PRE_DOCTRINE_ANNOTATION_FRAGMENTS = (
+    "*Original filing (<filing-date>), preserved verbatim below; skeleton slots "
+    "retrofitted",
+    "during pre-doctrine repair (advisor edit, content unchanged).*",
+)
+
+_PRE_DOCTRINE_COMPLETION_TOKENS = ("ok: true", "reason: null")
+
+_PRE_DOCTRINE_REGISTER_TOKEN_RE = re.compile(r"\bR\d+\b")
+
+_WORKHORSE_REPAIR_TEMPLATE_SENTINEL = "**The stop-report carries its own repair.**"
+
+_WORKHORSE_REPAIR_TEMPLATE_POINTER = (
+    "`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues"
+)
+
+_WORKHORSE_REPAIR_FIELD_LABELS = frozenset(
+    {
+        "the Anchor header, with its kind token",
+        "the What slot",
+        "the DoD slot",
+        "the dated separator line",
+        "the original body",
+    }
+)
+
+_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
+
+
+def _pre_doctrine_section():
+    """The § Pre-doctrine issues section body, bounded by the next `## ` heading."""
+    return _issue_contract_section(_PRE_DOCTRINE_HEADING)
+
+
+def _issue_contract_heading_index(text, heading):
+    m = re.search(r"^%s$" % re.escape(heading), text, re.MULTILINE)
+    assert m, (
+        "issue-contract.md: heading %r not found (moved or reworded?)" % heading
+    )
+    return m.start()
+
+
+def _issue_contract_contents_block():
+    """The `# Contents` list, bounded by the next `# ` heading."""
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    m = re.search(r"^# Contents\s*\n(.*?)(?=^# )", text, re.MULTILINE | re.DOTALL)
+    assert m, "issue-contract.md: # Contents list not found (moved or reworded?)"
+    block = m.group(1)
+    assert block.strip(), "issue-contract.md: # Contents list is empty"
+    return block
+
+
+def _workhorse_repair_template_block():
+    """The stop-report repair-template paragraph plus its field bullets, bounded
+    from the sentinel to the paragraph that closes the template."""
+    span = _workhorse_intake_anchor_section()
+    m_start = re.search(
+        r"^\*\*The stop-report carries its own repair\.\*\*",
+        span,
+        re.MULTILINE,
+    )
+    assert m_start, (
+        "workhorse/SKILL.md: repair-template block start not found in the "
+        "anchor-intake span (moved or reworded?)"
+    )
+    tail = span[m_start.start():]
+    m_end = re.search(r"^Filling the derivable fields", tail, re.MULTILINE)
+    assert m_end, (
+        "workhorse/SKILL.md: repair-template block end marker not found "
+        "(moved or reworded?)"
+    )
+    block = tail[: m_end.start()].strip()
+    assert block, "workhorse/SKILL.md: repair-template block is empty"
+    return block
+
+
+def test_pre_doctrine_section_exists_exactly_once():
+    # axis: the § Pre-doctrine issues heading is present exactly once
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    headings = re.findall(
+        r"^%s$" % re.escape(_PRE_DOCTRINE_HEADING), text, re.MULTILINE
+    )
+    assert len(headings) == 1, (
+        "issue-contract.md: expected exactly one %r heading line, found %d "
+        "(section removed, renamed, or duplicated?)"
+        % (_PRE_DOCTRINE_HEADING, len(headings))
+    )
+
+
+def test_pre_doctrine_section_sits_between_resolution_and_coverage():
+    # axis: section position — § Pre-doctrine issues is what terminates
+    # § Anchor resolution for the anchor cluster's section bounder
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    indexes = [
+        _issue_contract_heading_index(text, heading)
+        for heading in _PRE_DOCTRINE_ORDERED_HEADINGS
+    ]
+    resolution, pre_doctrine, coverage = indexes
+    assert resolution < pre_doctrine, (
+        "issue-contract.md: %r no longer sits after %r (section moved?) — the anchor "
+        "cluster bounds %r at the next `## ` heading, so this order is load-bearing"
+        % (
+            _PRE_DOCTRINE_ORDERED_HEADINGS[1],
+            _PRE_DOCTRINE_ORDERED_HEADINGS[0],
+            _PRE_DOCTRINE_ORDERED_HEADINGS[0],
+        )
+    )
+    assert pre_doctrine < coverage, (
+        "issue-contract.md: %r no longer sits before %r (section moved?)"
+        % (_PRE_DOCTRINE_ORDERED_HEADINGS[1], _PRE_DOCTRINE_ORDERED_HEADINGS[2])
+    )
+
+
+def test_pre_doctrine_contents_row_matches_section_order():
+    # axis: the Contents row exists once and in the same order as the sections
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    row = _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[1]
+    occurrences = re.findall(r"^%s$" % re.escape(row), text, re.MULTILINE)
+    assert len(occurrences) == 1, (
+        "issue-contract.md: expected exactly one Contents row %r, found %d "
+        "(row removed, reworded, or duplicated?)" % (row, len(occurrences))
+    )
+    block = _issue_contract_contents_block()
+    indexes = []
+    for contents_row in _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS:
+        m = re.search(r"^%s$" % re.escape(contents_row), block, re.MULTILINE)
+        assert m, (
+            "issue-contract.md: Contents row %r not found in the # Contents list "
+            "(moved or reworded?)" % contents_row
+        )
+        indexes.append(m.start())
+    assert indexes[0] < indexes[1], (
+        "issue-contract.md: Contents row %r no longer sits after %r (row moved?)"
+        % (
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[1],
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[0],
+        )
+    )
+    assert indexes[1] < indexes[2], (
+        "issue-contract.md: Contents row %r no longer sits before %r (row moved?)"
+        % (
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[1],
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[2],
+        )
+    )
+
+
+def test_pre_doctrine_both_pattern_headings_present():
+    # axis: the two repair recipes are named headings, one each
+    section = _pre_doctrine_section()
+    for heading in _PRE_DOCTRINE_PATTERN_HEADINGS:
+        occurrences = re.findall(
+            r"^%s$" % re.escape(heading), section, re.MULTILINE
+        )
+        assert len(occurrences) == 1, (
+            "issue-contract.md § Pre-doctrine issues: expected exactly one %r "
+            "heading, found %d (recipe removed, renamed, or duplicated?)"
+            % (heading, len(occurrences))
+        )
+
+
+def test_pre_doctrine_template_carries_all_three_slot_headers():
+    # axis: the copyable template carries all three skeleton slot headers
+    section = _pre_doctrine_section()
+    for slot_header in _PRE_DOCTRINE_TEMPLATE_SLOT_HEADERS:
+        assert slot_header in section, (
+            "issue-contract.md § Pre-doctrine issues: copyable template missing slot "
+            "header %r (removed or reworded?)" % slot_header
+        )
+
+
+def test_pre_doctrine_dated_annotation_shape_pinned():
+    # axis: the dated separator annotation keeps its verbatim-preservation shape
+    section_norm = _anchor_whitespace_normalize(_pre_doctrine_section())
+    for fragment in _PRE_DOCTRINE_ANNOTATION_FRAGMENTS:
+        fragment_norm = _anchor_whitespace_normalize(fragment)
+        assert fragment_norm in section_norm, (
+            "issue-contract.md § Pre-doctrine issues: dated annotation missing "
+            "fragment %r (removed or reworded?)" % fragment
+        )
+
+
+def test_pre_doctrine_completion_condition_read_from_json_tokens():
+    # axis: the completion condition is the JSON's own tokens, never an exit status
+    # (the build-ready check is advisory and always exits zero)
+    section = _pre_doctrine_section()
+    for token in _PRE_DOCTRINE_COMPLETION_TOKENS:
+        assert token in section, (
+            "issue-contract.md § Pre-doctrine issues: completion condition missing "
+            "token %r — the recipe reads the result out of the JSON, never from an "
+            "exit status (softened back to 'green'?)" % token
+        )
+
+
+def test_pre_doctrine_section_carries_no_register_token():
+    # axis: no repo-internal register id leaks into consumer-facing guidance
+    section = _pre_doctrine_section()
+    leaked = _PRE_DOCTRINE_REGISTER_TOKEN_RE.findall(section)
+    assert not leaked, (
+        "issue-contract.md § Pre-doctrine issues: register token(s) %r leaked into "
+        "consumer-facing guidance — a consuming project's advisor has no register, "
+        "so the recipe names the ruling test by heading instead" % sorted(set(leaked))
+    )
+
+
+def test_workhorse_intake_repair_template_required_with_pointer():
+    # axis: the stop-report repair requirement and its section-specific pointer
+    span = _workhorse_intake_anchor_section()
+    assert _WORKHORSE_REPAIR_TEMPLATE_SENTINEL in span, (
+        "workhorse/SKILL.md anchor-intake span: missing repair-template sentinel %r "
+        "(removed or reworded?)" % _WORKHORSE_REPAIR_TEMPLATE_SENTINEL
+    )
+    span_norm = _anchor_whitespace_normalize(span)
+    pointer_norm = _anchor_whitespace_normalize(_WORKHORSE_REPAIR_TEMPLATE_POINTER)
+    assert pointer_norm in span_norm, (
+        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where both "
+        "repair recipes live (removed or reworded?)"
+        % _WORKHORSE_REPAIR_TEMPLATE_POINTER
+    )
+
+
+def test_workhorse_intake_repair_template_field_bullets_complete():
+    # axis: all five template field labels, each exactly once, and no sixth
+    block = _workhorse_repair_template_block()
+    for label in sorted(_WORKHORSE_REPAIR_FIELD_LABELS):
+        occurrences = re.findall(
+            r"^- \*\*%s\*\*" % re.escape(label), block, re.MULTILINE
+        )
+        assert len(occurrences) == 1, (
+            "workhorse/SKILL.md repair template: expected exactly one bullet led by "
+            "**%s**, found %d (field removed, reworded, or duplicated?)"
+            % (label, len(occurrences))
+        )
+    labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
+    label_set = set(labels)
+    unexpected = sorted(label_set - _WORKHORSE_REPAIR_FIELD_LABELS)
+    missing = sorted(_WORKHORSE_REPAIR_FIELD_LABELS - label_set)
+    assert len(labels) == 5, (
+        "workhorse/SKILL.md repair template: expected exactly five field bullets, "
+        "found %d; labels: %r; unexpected: %r" % (len(labels), labels, unexpected)
+    )
+    assert not unexpected and not missing, (
+        "workhorse/SKILL.md repair template: field-bullet label set mismatch — "
+        "unexpected: %r; missing: %r; found: %r" % (unexpected, missing, labels)
     )
 
 
