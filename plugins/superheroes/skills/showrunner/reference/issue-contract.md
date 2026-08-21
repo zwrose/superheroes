@@ -158,15 +158,15 @@ by order of addition, which is what keeps two amendments made on the same day or
 to each other. A reader who reaches for the dates instead gets the same answer most of the time and
 the wrong answer on exactly the day it matters, silently. **The comparison is on entry numbers.**
 
-**A `ruling` anchor never cites a conversational venue** — "the advisor channel," "a live
-sitting" — because a venue name is not a record: a builder reading it has nothing to follow, and
-the claim is a paraphrase nobody downstream can check. A conversational venue is precisely a
-surface that cannot yield a durably reachable record, so the ruling test's own fallback governs:
-the owner **re-rules on the issue itself** — a dated owner comment or owner-stamped body line,
-which *is* the record, with its own date — or the anchor cites an **exact permalink** to a dated
-echo that already exists on a durable surface. Pattern 2's board-pass permalink (below) is this
-rule at work, not an exception: the permalink is the record; "advisor channel" names only where it
-lives.
+**A `ruling` anchor never cites a venue by name** — "the advisor channel," "a live sitting" —
+because a venue name is not a record: a builder reading it has nothing to follow, and the claim is
+a paraphrase nobody downstream can check. The test is mechanical: **can the anchor carry an exact
+permalink to a dated record of the ruling?** Where the venue lives as a durable thread — a
+collector issue, a recorded sitting log — it can, and the permalink is the record (Pattern 2's
+board-pass permalink, below, is exactly this). Where it cannot — a chat, a live conversation — the
+ruling test's own fallback governs: the owner **re-rules on the issue itself**, a dated owner
+comment or owner-stamped body line, which *is* the record, with its own date. Either way the
+anchor's location leg is a followable record, never a name.
 
 **Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
 no file in the repository changes — and reports on the issue which per-kind test failed and what
