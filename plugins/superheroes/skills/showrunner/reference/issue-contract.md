@@ -178,10 +178,17 @@ are in front of you.
 
 **First: check for a prior ratified arrangement.** A project may already carry an adoption
 arrangement its **owner ratified before this doctrine** — a **closed list** of issues, recorded with
-that project's advisor seat, where that ruling was made. That list **keeps**: the issues on it are
-not re-decided, not re-anchored, and not re-surfaced to the owner. Everything else takes the pass —
-so run either pattern below only over the **remaining** open pre-doctrine issues. Where no such
-arrangement is recorded, that remainder is the whole open backlog.
+that project's advisor seat, where that ruling was made; that seat's record is where a consuming
+advisor reads the list back. What that list **keeps** is the owner's **decision**: the issues on it
+are not re-litigated, not re-decided, and not re-surfaced to the owner. It does **not** keep them
+out of the slot. **There is no grandfather exemption at the gate** — [Anchor
+resolution](#anchor-resolution) refuses an Anchor-less body whatever ruled it, so a kept issue with
+no Anchor would never build. Each kept issue therefore still **materializes** its resolving Anchor
+when it comes up for a build, by the Pattern 1 retrofit below, with the ratified arrangement
+supplying the Anchor's citation in place of a fresh owner sitting. The arrangement spares the
+issue the *re-decision*, not the *slot*. Everything else takes the pass — so run the board pass
+below only over the **remaining** open pre-doctrine issues. Where no such arrangement is recorded,
+that remainder is the whole open backlog.
 
 ### Pattern 1 — the per-issue retrofit
 
@@ -246,16 +253,27 @@ is downstream of. The steps:
 2. **Give each surviving issue its resolving Anchor**, in the Pattern 1 shape — the Anchor header
    above a dated separator, the original filing preserved verbatim below it. The Anchor line names
    the sitting's date, the owner attribution, and the permalink from step 1. **A ruling yields the
-   Anchor, not the What and DoD:** those two slots are filled per Pattern 1 when the issue is
-   actually picked up for a build, and Pattern 1's no-gradable-DoD branch governs there.
+   Anchor, not the What and DoD** — see the pickup step below for how those two arrive.
+
+   **At pickup — completing a board-passed body.** When such an issue is actually taken up for a
+   build, edit the body that is already there: insert **only** the `What` and `DoD` slots, in the
+   canonical slot order, under the Anchor the sitting wrote. **No second Anchor, no second dated
+   separator, and no re-preserving a filing this step already preserved verbatim** — a body may
+   carry the Anchor slot exactly once, and a duplicate makes the last one win. This is the **pickup
+   counterpart** to Pattern 1, not a second application of it: Pattern 1 is the *full* retrofit for
+   a body carrying **no** Anchor, and re-running it here would produce exactly the duplicates just
+   ruled out. Everything else Pattern 1 asks still holds — the two slots are carried up from the
+   preserved filing and owe [The DoD bar](#the-dod-bar), Pattern 1's no-gradable-DoD branch governs
+   when the filing yields none, and the build-ready check is re-read out of its JSON afterward.
 3. **Confirm nothing later supersedes it.** The ruling test's last leg. A backlog issue whose scope
    a newer owner decision has since overtaken is re-ruled in the sitting, not grandfathered on the
    old date.
 4. **Write the pass down where the sitting's rulings live.** Add the advisor's own dated note to the
    same durable surface step 1 made reachable, carrying the **sitting's date** and the **scope it
    covered** — which issues were walked — so a later reader can tell a grandfathered issue from one
-   nobody has looked at. That note is the whole record: there is no marker to set and nothing to
-   write into the project's calibration.
+   nobody has looked at. That dated note is the record: the approved spec's companion leg — a
+   pass-done marker written into the project's calibration — was **owner-declined and never
+   implemented**, so there is no such store operation to call and the note carries the pass alone.
 
 The pass is cheaper than it sounds, because the ruling and the triage are the same act: an owner
 walking a backlog is already deciding what survives. What the pass adds is writing each decision
@@ -263,9 +281,12 @@ down, dated, where it can be reached.
 
 **Which to use.** A board pass first, then per-issue retrofits as builds come up — one lifecycle,
 two moments. The sitting's ruling is what every surviving issue's **Anchor** cites, backlog-wide, in
-one pass. Pattern 1 fills that issue's `What` and `DoD` later, when it is actually picked up for a
-build; where the original filing yields no gradable DoD, Pattern 1's branch above governs — the gap
-is named, the build stops, and the advisor gets the outcome from the owner, re-routes, or parks.
+one pass. Pattern 2's pickup step fills that issue's `What` and `DoD` later, when it is actually
+picked up for a build — those two slots inserted into the body the sitting already anchored, never a
+second Anchor. Pattern 1's full retrofit stays for the issue that reaches a build with **no** Anchor
+at all. Where the original filing yields no gradable DoD, Pattern 1's branch above governs either
+way — the gap is named, the build stops, and the advisor gets the outcome from the owner, re-routes,
+or parks.
 
 ## The standing anchor-coverage vet row
 
