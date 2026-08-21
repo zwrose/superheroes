@@ -67,7 +67,7 @@ The three recognized kinds:
    *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · https://github.com/zwrose/superheroes/issues/695#issuecomment-1234567890`
 
    The location leg is a record a builder can follow — a permalink to a dated echo, or the
-   ruling quoted verbatim on the issue — never a bare venue name (see
+   owner's re-rule on the issue itself — never a bare venue name (see
    [Anchor resolution](#anchor-resolution)).
 
 The citation text is **never read to decide a kind** — a bare receipt URL whose path happens
@@ -160,12 +160,13 @@ the wrong answer on exactly the day it matters, silently. **The comparison is on
 
 **A `ruling` anchor never cites a conversational venue** — "the advisor channel," "a live
 sitting" — because a venue name is not a record: a builder reading it has nothing to follow, and
-the claim is a paraphrase nobody downstream can check. The ruling is captured where a builder can
-read it: quoted verbatim with its date in the Anchor block or an owner comment on the issue itself,
-or cited by exact permalink where a dated echo already exists on another durable surface. The
-captured text *is* the record the anchor resolves to. Pattern 2's board-pass permalink (below) is
-this rule at work, not an exception: the permalink is the record; "advisor channel" names only
-where it lives.
+the claim is a paraphrase nobody downstream can check. A conversational venue is precisely a
+surface that cannot yield a durably reachable record, so the ruling test's own fallback governs:
+the owner **re-rules on the issue itself** — a dated owner comment or owner-stamped body line,
+which *is* the record, with its own date — or the anchor cites an **exact permalink** to a dated
+echo that already exists on a durable surface. Pattern 2's board-pass permalink (below) is this
+rule at work, not an exception: the permalink is the record; "advisor channel" names only where it
+lives.
 
 **Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
 no file in the repository changes — and reports on the issue which per-kind test failed and what

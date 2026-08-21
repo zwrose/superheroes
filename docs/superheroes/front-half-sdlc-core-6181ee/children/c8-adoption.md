@@ -6,8 +6,8 @@
 surfaces every open pre-doctrine issue to the owner and each is decided case by case —
 re-anchored (per R1's kinds), re-routed (per R6's names), or closed — with each decision
 recorded on the issue as a dated ruling; completion recorded as the advisor's dated note
-on the sitting's durable surface (the calibration-record leg was removed — spec
-Amendments, 2026-08-21). Ratified prior adoption arrangements (closed lists recorded with that
+on the sitting's durable surface, carrying the sitting's date and the scope it covered
+(the calibration-record leg was removed — spec Amendments, 2026-08-21). Ratified prior adoption arrangements (closed lists recorded with that
 project's advisor seat) are kept; everything else takes the pass. No automatic conversion
 (owner-ruled 2026-08-07, recorded in zwrose/superheroes#873).
 
