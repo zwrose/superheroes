@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.31.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.30.0...superheroes-v0.31.0) (2026-08-21)
+
+
+### Features
+
+* **superheroes:** a hard round ceiling that halts the review loop loud regardless of the latest round ([#1064](https://github.com/zwrose/superheroes/issues/1064)) ([3fc88c5](https://github.com/zwrose/superheroes/commit/3fc88c59a5ca2a471a18c1cf58fc88dd75f3da16))
+* **superheroes:** advance --owner-artifact — close the owner-gate dead end on the durable-record path ([#1076](https://github.com/zwrose/superheroes/issues/1076)) ([e352ee4](https://github.com/zwrose/superheroes/commit/e352ee4ac9900756500f92905b0c72fa8fc6ac17))
+* **superheroes:** decomposition + the epic contract — coverage map, register, package read, verbatim injection ([#1073](https://github.com/zwrose/superheroes/issues/1073)) ([7cc0ef2](https://github.com/zwrose/superheroes/commit/7cc0ef2acf2fe5f846b644b194eceeec44f8b9e2))
+* **superheroes:** detector hygiene under the byte-literal-floor ruling — fixes, the rubric section, and the structural trim ([#1072](https://github.com/zwrose/superheroes/issues/1072)) ([3300e67](https://github.com/zwrose/superheroes/commit/3300e6713c309ed40c67a0110178ac7148f463e5))
+* **superheroes:** discovery — consent-gated investigation, adaptive elicitation, three exits, the weight call ([#1067](https://github.com/zwrose/superheroes/issues/1067)) ([cf02260](https://github.com/zwrose/superheroes/commit/cf02260f5486ce245c661f8f119c51b710fdca46))
+* **superheroes:** dispatch-review/dispatch-write create their own run directory (release re-statement of [#1082](https://github.com/zwrose/superheroes/issues/1082)) ([#1087](https://github.com/zwrose/superheroes/issues/1087)) ([abeadbf](https://github.com/zwrose/superheroes/commit/abeadbf433baaafc93fda85d7445a1a0060b8764))
+* **superheroes:** four-route intake + the builder's side of the discovery boundary ([#1068](https://github.com/zwrose/superheroes/issues/1068)) ([bbca624](https://github.com/zwrose/superheroes/commit/bbca624721c1b58a80c44e99ffc2ea730554a753))
+* **superheroes:** package-read audit validator — declared per-kind schemas replace the hand-rolled ladder ([#1086](https://github.com/zwrose/superheroes/issues/1086)) ([af1455d](https://github.com/zwrose/superheroes/commit/af1455d5075f07cf776cc56d17d47ee30961efd8))
+* **superheroes:** pre-doctrine issue on-ramp — the intake stop-report carries its own repair ([#1090](https://github.com/zwrose/superheroes/issues/1090)) ([49b8deb](https://github.com/zwrose/superheroes/commit/49b8deb615aa42ef5313bd740f2ae703f95ba9a8))
+* **superheroes:** set_gate refuses on unrewritten managed keys; the v1 parent vestige is removed for real ([#1074](https://github.com/zwrose/superheroes/issues/1074)) ([7ba0fac](https://github.com/zwrose/superheroes/commit/7ba0fac4df1b6363fc30dc60614b83e4661e5368))
+* **superheroes:** spec closure — the closure receipt and the owner's delivery decision ([#1081](https://github.com/zwrose/superheroes/issues/1081)) ([985e35d](https://github.com/zwrose/superheroes/commit/985e35d6505a3e419044418a81fe13bff07ef136))
+* **superheroes:** spec content rules — the merged Dispositions table, the elicitation test, and what may change after approval ([#1075](https://github.com/zwrose/superheroes/issues/1075)) ([351fc15](https://github.com/zwrose/superheroes/commit/351fc15b5e8e7d8057cb8bd4af9cf0523be29c5d))
+* **superheroes:** the anchor invariant at all three layers — filing, build intake, vet ([#1065](https://github.com/zwrose/superheroes/issues/1065)) ([5f79d63](https://github.com/zwrose/superheroes/commit/5f79d6311333def996dfc87523686cf92ff14a00))
+* **superheroes:** the approval path owns the `approved:` date ([#1069](https://github.com/zwrose/superheroes/issues/1069)) ([e166609](https://github.com/zwrose/superheroes/commit/e166609b9b63406c75905cd84d7368831c5caa0b))
+
+
+### Bug Fixes
+
+* **superheroes:** fail-closed model-tier accessor — tier read failures are no longer invisible ([#1085](https://github.com/zwrose/superheroes/issues/1085)) ([b4d406f](https://github.com/zwrose/superheroes/commit/b4d406fc1ace99ade3810967d3de786e24ca43a2))
+* **superheroes:** pin declare_batch idempotency and close the batch-declared doors ([#1084](https://github.com/zwrose/superheroes/issues/1084)) ([fbb2de1](https://github.com/zwrose/superheroes/commit/fbb2de1c2b7ca0449d3655a345b5af98b8863ef9))
+* **superheroes:** validate collectionManifest keys at the earliest boundary — a mis-keyed manifest refuses loudly instead of burning the loop ([#1083](https://github.com/zwrose/superheroes/issues/1083)) ([8b8d2d0](https://github.com/zwrose/superheroes/commit/8b8d2d068a0b06e2cefd12513115e1a4d058da62))
+
 ## [0.30.0](https://github.com/zwrose/superheroes/compare/superheroes-v0.29.1...superheroes-v0.30.0) (2026-08-17)
 
 
