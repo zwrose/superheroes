@@ -3748,6 +3748,9 @@ def test_anchor_stop_terminal_and_resume_gate():
 # --- Sub-cluster: pre-doctrine on-ramp structure -----------------------------
 # (home: skills/showrunner/reference/issue-contract.md § Pre-doctrine issues;
 # copy-holder: skills/workhorse/SKILL.md anchor-intake repair template)
+# The slot sequence and the build-ready completion tokens are NOT the prose's to declare
+# — both are read out of lib/issue_contract.py, the runtime home, and the prose surfaces
+# are checked against it. There is no level above that module in this chain.
 
 _PRE_DOCTRINE_HEADING = "## Pre-doctrine issues"
 
@@ -3780,8 +3783,6 @@ _PRE_DOCTRINE_ANNOTATION_FRAGMENTS = (
     "during pre-doctrine repair (advisor edit, content unchanged).*",
 )
 
-_PRE_DOCTRINE_COMPLETION_TOKENS = ("ok: true", "reason: null")
-
 _PRE_DOCTRINE_REGISTER_TOKEN_RE = re.compile(r"\bR\d+\b")
 
 _WORKHORSE_REPAIR_TEMPLATE_SENTINEL = "**The stop-report carries its own repair.**"
@@ -3792,16 +3793,20 @@ _WORKHORSE_REPAIR_TEMPLATE_POINTER = (
 
 _WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
 
-# The home template's fenced block and the slot headers read out of it. The slot
-# ORDER is derived from that fence, never hand-written here — a hand-written copy
-# would be the tautological pin CONVENTIONS §11.3 prohibits.
+# The home template's fenced block. The slot ORDER this cluster asserts comes from the
+# RUNTIME home — `issue_contract.SLOTS` — and the fence is checked against it; the fence
+# is itself a copy of that sequence, so deriving the order from the fence alone would
+# only move the tautological pin CONVENTIONS §11.3 prohibits, not end it. Nothing here
+# re-types a slot name.
 _PRE_DOCTRINE_TEMPLATE_FENCE_RE = re.compile(
     r"^```markdown\n(.*?)^```", re.MULTILINE | re.DOTALL
 )
 
-_PRE_DOCTRINE_TEMPLATE_SLOT_NAME_RE = re.compile(
-    r"^\*\*(Anchor|What|DoD)\b[^*]*:\*\*", re.MULTILINE
-)
+# The result keys the § Pre-doctrine issues guidance quotes out of the build-ready JSON.
+# Only the KEY SELECTION is named here — each key is asserted present in a real
+# `check_build_ready()` success payload, and its value spelling is read off that payload
+# rather than re-typed (see `_pre_doctrine_completion_tokens_from_home`).
+_PRE_DOCTRINE_QUOTED_RESULT_KEYS = ("ok", "reason")
 
 # The two copy-holder fields that follow the derived slots, in order. Short durable
 # tokens, not full bullet prose — rewording the bullet around them stays free.
@@ -3867,9 +3872,9 @@ def _workhorse_repair_template_block():
 
 
 def _pre_doctrine_template_fence():
-    """The single fenced retrofit template in § Pre-doctrine issues — the declared
-    home of the slot sequence the workhorse field bullets copy. Fails closed on a
-    missing or duplicated fence."""
+    """The single fenced retrofit template in § Pre-doctrine issues — the prose copy of
+    the runtime slot sequence the workhorse field bullets copy in turn. Fails closed on
+    a missing or duplicated fence."""
     section = _pre_doctrine_section()
     fences = _PRE_DOCTRINE_TEMPLATE_FENCE_RE.findall(section)
     assert len(fences) == 1, (
@@ -3881,21 +3886,98 @@ def _pre_doctrine_template_fence():
     return fences[0]
 
 
+def _pre_doctrine_template_slot_name_re(slots):
+    """Slot-header reader built from the runtime slot names — the alternation is never
+    re-typed here, so a rename in issue_contract moves this reader with it."""
+    return re.compile(
+        r"^\*\*(%s)\b[^*]*:\*\*" % "|".join(re.escape(slot) for slot in slots),
+        re.MULTILINE,
+    )
+
+
 def _pre_doctrine_template_slot_order():
-    """The ordered slot sequence read out of the home template's fence. Fails
-    closed when a slot header is absent or declared more than once."""
+    """The ordered slot sequence the copy-holder pin checks against, taken from the
+    RUNTIME home (`issue_contract.SLOTS`) and cross-checked against the home template's
+    fence. Reading the order out of the fence alone would pass a synchronized reorder of
+    the fence AND the copy-holder while both diverged from the runtime contract — the
+    fence is a copy, and issue_contract.py is the end of the chain. Fails closed when a
+    slot header is absent, declared more than once, or out of runtime order."""
+    import issue_contract
+
+    canonical = list(issue_contract.SLOTS)
     fence = _pre_doctrine_template_fence()
-    slots = _PRE_DOCTRINE_TEMPLATE_SLOT_NAME_RE.findall(fence)
-    assert len(slots) == 3, (
-        "issue-contract.md § Pre-doctrine issues: expected 3 slot headers in the "
-        "fenced retrofit template, found %d: %r (slot removed or reshaped?)"
-        % (len(slots), slots)
+    slots = _pre_doctrine_template_slot_name_re(canonical).findall(fence)
+    assert len(slots) == len(canonical), (
+        "issue-contract.md § Pre-doctrine issues: expected %d slot headers in the "
+        "fenced retrofit template — one per issue_contract.SLOTS entry %r — found %d: "
+        "%r (slot removed or reshaped?)"
+        % (len(canonical), canonical, len(slots), slots)
     )
     assert len(set(slots)) == len(slots), (
         "issue-contract.md § Pre-doctrine issues: a slot header is declared more "
         "than once in the fenced retrofit template: %r" % (slots,)
     )
-    return slots
+    assert slots == canonical, (
+        "issue-contract.md § Pre-doctrine issues: the fenced retrofit template's slot "
+        "order %r no longer matches the runtime contract issue_contract.SLOTS %r — the "
+        "fence is a copy of that runtime sequence, so a reorder in the fence (or a "
+        "reorder in issue_contract.py the fence did not follow) has to move both"
+        % (slots, canonical)
+    )
+    return canonical
+
+
+def _pre_doctrine_conforming_body_from_home():
+    """A minimal issue body the runtime build-ready check accepts, assembled out of the
+    runtime slot names and anchor kinds rather than re-typed markdown."""
+    import issue_contract
+
+    # Any registered kind conforms; taking the registry's first sorted entry keeps this
+    # derived from ANCHOR_KINDS instead of naming one kind by hand.
+    kind = sorted(issue_contract.ANCHOR_KINDS)[0]
+    return "\n".join(
+        [
+            "**%s (%s):** 2026-01-01 - owner decision - reachable record. "
+            "Not superseded." % (issue_contract.SLOT_ANCHOR, kind),
+            "",
+            "**%s:** plain-language scope carried up from the original filing."
+            % issue_contract.SLOT_WHAT,
+            "",
+            "**%s:**" % issue_contract.SLOT_DOD,
+            "- an observable outcome a vet can grade from the handback alone.",
+            "",
+        ]
+    )
+
+
+def _pre_doctrine_completion_tokens_from_home(tmp_path):
+    """The `key: value` completion tokens the guidance quotes, read off a REAL
+    successful `issue_contract.check_build_ready()` result rather than hand-typed: each
+    quoted key must be present in that payload, and the value is the payload's own JSON
+    spelling. A runtime schema change — the key renamed or dropped, or a successful
+    result no longer carrying a null reason — moves these tokens, so the section pin
+    bites instead of leaving the shipped guidance stale."""
+    import issue_contract
+
+    body_path = tmp_path / "pre-doctrine-conforming-body.md"
+    body_path.write_text(_pre_doctrine_conforming_body_from_home(), encoding="utf-8")
+    result = issue_contract.check_build_ready(body_path.read_text(encoding="utf-8"))
+    assert result.get("ok") is True, (
+        "issue_contract.check_build_ready() refused the body this pin builds out of "
+        "SLOTS + ANCHOR_KINDS (result: %r) — the § Pre-doctrine issues completion-token "
+        "pin needs a real successful result to read its tokens off (runtime check "
+        "tightened, or the derived body shape is no longer conforming?)" % (result,)
+    )
+    tokens = []
+    for key in _PRE_DOCTRINE_QUOTED_RESULT_KEYS:
+        assert key in result, (
+            "issue_contract.check_build_ready() success result no longer carries the "
+            "%r key (renamed or dropped?) — issue-contract.md § Pre-doctrine issues "
+            "quotes it out of the JSON, so the shipped guidance has to move with it; "
+            "result keys: %r" % (key, sorted(result))
+        )
+        tokens.append("%s: %s" % (key, json.dumps(result[key])))
+    return tokens
 
 
 def test_pre_doctrine_section_exists_exactly_once():
@@ -4004,15 +4086,20 @@ def test_pre_doctrine_dated_annotation_shape_pinned():
         )
 
 
-def test_pre_doctrine_completion_tokens_present():
-    # axis: token presence only — both completion tokens survive in the section.
-    # A substring check cannot prove the surrounding prose reads them out of the
-    # JSON rather than the exit status; that reading is prose review's call.
+def test_pre_doctrine_completion_tokens_present(tmp_path):
+    # axis: token presence only — both completion tokens survive in the section, each
+    # DERIVED from a real check_build_ready() success payload rather than re-typed here,
+    # so a runtime result-schema change moves the expectation. A substring check cannot
+    # prove the surrounding prose reads them out of the JSON rather than the exit
+    # status; that reading is prose review's call.
     section = _pre_doctrine_section()
-    for token in _PRE_DOCTRINE_COMPLETION_TOKENS:
+    for token in _pre_doctrine_completion_tokens_from_home(tmp_path):
         assert token in section, (
             "issue-contract.md § Pre-doctrine issues: completion token %r is not "
-            "present in the section (removed or softened back to 'green'?)" % token
+            "present in the section — the token is read off a real "
+            "issue_contract.check_build_ready() success result, so either the guidance "
+            "moved (removed or softened back to 'green'?) or the runtime result shape "
+            "changed and the guidance is now stale" % token
         )
 
 
@@ -4046,9 +4133,9 @@ def test_workhorse_intake_repair_template_required_with_pointer():
 def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
     # axis: copy-holder ORDER — the workhorse field bullets carry the home
     # template's slot sequence, in that order, followed by the separator and
-    # original-body fields. The expected sequence is parsed out of the fenced
-    # template in issue-contract.md § Pre-doctrine issues (the declared home), not
-    # hand-written here.
+    # original-body fields. The expected sequence is the RUNTIME contract's
+    # issue_contract.SLOTS — cross-checked against the fenced template in
+    # issue-contract.md § Pre-doctrine issues — never hand-written here.
     slots = _pre_doctrine_template_slot_order()
     block = _workhorse_repair_template_block()
     labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
@@ -4067,8 +4154,8 @@ def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order()
     for index, slot in enumerate(slots):
         assert re.search(r"\b%s\b" % re.escape(slot), labels[index]), (
             "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
-            "not name the %r slot — issue-contract.md § Pre-doctrine issues declares "
-            "the slot order %r and the copy-holder must follow it"
+            "not name the %r slot — issue_contract.SLOTS declares the slot order %r "
+            "and every copy-holder must follow it"
             % (index + 1, labels[index], slot, slots)
         )
     for offset, token in enumerate(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS):
