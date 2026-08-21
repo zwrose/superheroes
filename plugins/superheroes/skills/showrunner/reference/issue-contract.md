@@ -64,7 +64,11 @@ The three recognized kinds:
 
 3. **Ruling** — an ISO date together with where the ruling was made.
 
-   *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · advisor channel, discovery sitting`
+   *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · https://github.com/zwrose/superheroes/issues/695#issuecomment-1234567890`
+
+   The location leg is a record a builder can follow — a permalink to a dated echo, or the
+   ruling quoted verbatim on the issue — never a bare venue name (see
+   [Anchor resolution](#anchor-resolution)).
 
 The citation text is **never read to decide a kind** — a bare receipt URL whose path happens
 to contain `ruling` or a date is a perfectly good `Anchor (receipt):`. Declared kind tokens
@@ -159,7 +163,9 @@ sitting" — because a venue name is not a record: a builder reading it has noth
 the claim is a paraphrase nobody downstream can check. The ruling is captured where a builder can
 read it: quoted verbatim with its date in the Anchor block or an owner comment on the issue itself,
 or cited by exact permalink where a dated echo already exists on another durable surface. The
-captured text *is* the record the anchor resolves to.
+captured text *is* the record the anchor resolves to. Pattern 2's board-pass permalink (below) is
+this rule at work, not an exception: the permalink is the record; "advisor channel" names only
+where it lives.
 
 **Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
 no file in the repository changes — and reports on the issue which per-kind test failed and what

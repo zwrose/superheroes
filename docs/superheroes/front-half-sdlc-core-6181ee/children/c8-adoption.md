@@ -1,6 +1,6 @@
 # C8 — feat(superheroes): the adoption pass — pre-doctrine issues decided case by case
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Adoption (FR-40) — owner-approved 2026-08-07, as-of amendment #4.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Adoption (FR-40) — owner-approved 2026-08-07, as-of amendment #7.
 
 **What:** The one-time-per-project pass that brings a board under the doctrine: the advisor
 surfaces every open pre-doctrine issue to the owner and each is decided case by case —
