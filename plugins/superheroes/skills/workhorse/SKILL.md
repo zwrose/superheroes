@@ -194,9 +194,12 @@ it without being told to look.
 
 **The stop-report carries its own repair.** The stop costs the advisor one round trip, so make it
 arrive carrying the fix and not only the diagnosis. **Which repair you carry depends on which
-failure you hit** — the two below are not interchangeable. Either way, point at
-`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues, where both repair recipes
-live. **Only when the Anchor slot is missing entirely** — a **pre-doctrine issue**, filed before the
+failure you hit** — the two below are not interchangeable. For the missing-slot failure, point at
+`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues, where those two recipes live
+— the per-issue retrofit and the board-pass grandfathering. That section covers the missing-slot
+population only; the existing-Anchor repair is the paragraph below, in this charter, and that
+paragraph is the whole recipe — do not send the advisor to the reference for it.
+**Only when the Anchor slot is missing entirely** — a **pre-doctrine issue**, filed before the
 skeleton shipped, so the body carries no Anchor slot at all — include a **pre-filled three-slot
 template**: every field you can derive already filled in, the Anchor line left blank. That
 template's fields are:
@@ -214,10 +217,15 @@ template's fields are:
 
 **When the issue already carries an Anchor** — a stale spec-section cursor, a dead receipt link, a
 superseded ruling, or a malformed header — carry a **targeted in-place Anchor replacement** instead:
-the one replacement `Anchor (<kind>):` header line, its citation left blank for the advisor, and
-nothing else. **No nested skeleton, no dated separator, no second What or DoD.** The reason is
-mechanical, not stylistic: that issue already holds all three slots, so prepending a second set
-above a preserved body leaves a **duplicate-slot body** — and the build-ready check carries no
+the one replacement `Anchor (<kind>):` header line, its citation left blank for the advisor, **plus
+any non-Anchor slot that body is genuinely missing**, filled the way the template's fields above are
+filled. An Anchor present is no proof the other two slots are: a missing What or DoD is a **vet
+finding, not a filing-time block**, and a board pass deliberately leaves an Anchor-only body with
+What and DoD deferred to pickup — so a stale Anchor and an absent DoD reach you together, and
+carrying only the Anchor line would hand the advisor a body still incomplete. **Never a second copy
+of a slot the body already carries:** no nested skeleton, no dated separator, no second Anchor, What,
+or DoD. The reason is mechanical, not stylistic: prepending a second set of slots above a preserved
+body leaves a **duplicate-slot body** — and the build-ready check carries no
 duplicate-slot refusal. It keeps the **last** Anchor declaration it reads, which is the stale one
 sitting below, so the repair would silently change which anchor is read while the check still
 reports success.

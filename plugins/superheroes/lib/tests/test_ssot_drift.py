@@ -4037,8 +4037,8 @@ def test_workhorse_intake_repair_template_required_with_pointer():
     span_norm = _anchor_whitespace_normalize(span)
     pointer_norm = _anchor_whitespace_normalize(_WORKHORSE_REPAIR_TEMPLATE_POINTER)
     assert pointer_norm in span_norm, (
-        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where both "
-        "repair recipes live (removed or reworded?)"
+        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where the "
+        "missing-slot repair recipes live (removed or reworded?)"
         % _WORKHORSE_REPAIR_TEMPLATE_POINTER
     )
 
