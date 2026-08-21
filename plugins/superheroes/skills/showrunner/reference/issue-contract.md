@@ -166,7 +166,10 @@ collector issue, a recorded sitting log — it can, and the permalink is the rec
 board-pass permalink, below, is exactly this). Where it cannot — a chat, a live conversation — the
 ruling test's own fallback governs: the owner **re-rules on the issue itself**, a dated owner
 comment or owner-stamped body line, which *is* the record, with its own date. Either way the
-anchor's location leg is a followable record, never a name.
+anchor's location leg is a followable record, never a name. **This adds no new gate**: it spells
+out how the ruling test's existing reachability leg (above) is satisfied — an anchor that fails it
+was already unresolvable, and it takes the same stop-report path with the same advisor repair,
+nothing stricter.
 
 **Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
 no file in the repository changes — and reports on the issue which per-kind test failed and what
