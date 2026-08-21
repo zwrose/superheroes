@@ -154,6 +154,13 @@ by order of addition, which is what keeps two amendments made on the same day or
 to each other. A reader who reaches for the dates instead gets the same answer most of the time and
 the wrong answer on exactly the day it matters, silently. **The comparison is on entry numbers.**
 
+**A `ruling` anchor never cites a conversational venue** — "the advisor channel," "a live
+sitting" — because a venue name is not a record: a builder reading it has nothing to follow, and
+the claim is a paraphrase nobody downstream can check. The ruling is captured where a builder can
+read it: quoted verbatim with its date in the Anchor block or an owner comment on the issue itself,
+or cited by exact permalink where a dated echo already exists on another durable surface. The
+captured text *is* the record the anchor resolves to.
+
 **Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
 no file in the repository changes — and reports on the issue which per-kind test failed and what
 failed to resolve. The **builder never repairs its own anchor**. The **advisor repairs the route**:
