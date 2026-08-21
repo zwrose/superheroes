@@ -29,6 +29,9 @@ are gone with them; no lib/*.js copy-holders remain):
   copy-holders: skills/workhorse/SKILL.md (operative resolution bullets, log-side paragraph,
   stop), skills/showrunner/SKILL.md (filing, repair, notice and standing-row clauses),
   skills/showrunner/reference/vet-receipt.md (owner-half delivery clause))
+- Pre-doctrine on-ramp structure (home: skills/showrunner/reference/issue-contract.md
+  § Pre-doctrine issues; copy-holder: skills/workhorse/SKILL.md anchor-intake repair
+  template)
 - Four-route drift (R6 register → two charters + five prose/registry copies) (home:
   docs/superheroes/front-half-sdlc-core-6181ee/register.md R6; copy-holders: skills/showrunner/SKILL.md
   routing block + frontmatter description, skills/workhorse/SKILL.md §1 intake,
@@ -3740,6 +3743,428 @@ def test_anchor_stop_terminal_and_resume_gate():
         "issue-contract ## Anchor resolution missing resumes-only clause "
         "(moved or reworded?)"
     )
+
+
+# --- Sub-cluster: pre-doctrine on-ramp structure -----------------------------
+# (home: skills/showrunner/reference/issue-contract.md § Pre-doctrine issues;
+# copy-holder: skills/workhorse/SKILL.md anchor-intake repair template)
+# The slot sequence and the build-ready completion tokens are NOT the prose's to declare
+# — both are read out of lib/issue_contract.py, the runtime home, and the prose surfaces
+# are checked against it. There is no level above that module in this chain.
+
+_PRE_DOCTRINE_HEADING = "## Pre-doctrine issues"
+
+_PRE_DOCTRINE_ORDERED_HEADINGS = (
+    "## Anchor resolution",
+    "## Pre-doctrine issues",
+    "## The standing anchor-coverage vet row",
+)
+
+_PRE_DOCTRINE_ORDERED_CONTENTS_ROWS = (
+    "- [Anchor resolution](#anchor-resolution)",
+    "- [Pre-doctrine issues](#pre-doctrine-issues)",
+    "- [The standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row)",
+)
+
+_PRE_DOCTRINE_PATTERN_HEADINGS = (
+    "### Pattern 1 — the per-issue retrofit",
+    "### Pattern 2 — the board-pass grandfathering",
+)
+
+_PRE_DOCTRINE_TEMPLATE_SLOT_HEADERS = (
+    "**Anchor (ruling):**",
+    "**What:**",
+    "**DoD:**",
+)
+
+_PRE_DOCTRINE_ANNOTATION_FRAGMENTS = (
+    "*Original filing (<filing-date>), preserved verbatim below; skeleton slots "
+    "retrofitted",
+    "during pre-doctrine repair (advisor edit, content unchanged).*",
+)
+
+_PRE_DOCTRINE_REGISTER_TOKEN_RE = re.compile(r"\bR\d+\b")
+
+_WORKHORSE_REPAIR_TEMPLATE_SENTINEL = "**The stop-report carries its own repair.**"
+
+_WORKHORSE_REPAIR_TEMPLATE_POINTER = (
+    "`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues"
+)
+
+_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
+
+# The home template's fenced block. The slot ORDER this cluster asserts comes from the
+# RUNTIME home — `issue_contract.SLOTS` — and the fence is checked against it; the fence
+# is itself a copy of that sequence, so deriving the order from the fence alone would
+# only move the tautological pin CONVENTIONS §11.3 prohibits, not end it. Nothing here
+# re-types a slot name.
+_PRE_DOCTRINE_TEMPLATE_FENCE_RE = re.compile(
+    r"^```markdown\n(.*?)^```", re.MULTILINE | re.DOTALL
+)
+
+# The result keys the § Pre-doctrine issues guidance quotes out of the build-ready JSON.
+# Only the KEY SELECTION is named here — each key is asserted present in a real
+# `check_build_ready()` success payload, and its value spelling is read off that payload
+# rather than re-typed (see `_pre_doctrine_completion_tokens_from_home`).
+_PRE_DOCTRINE_QUOTED_RESULT_KEYS = ("ok", "reason")
+
+# The two copy-holder fields that follow the derived slots, in order. Short durable
+# tokens, not full bullet prose — rewording the bullet around them stays free.
+_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS = ("separator", "original body")
+
+_BLANK_LINE_RE = re.compile(r"^[ \t]*$", re.MULTILINE)
+
+
+def _pre_doctrine_section():
+    """The § Pre-doctrine issues section body, bounded by the next `## ` heading."""
+    return _issue_contract_section(_PRE_DOCTRINE_HEADING)
+
+
+def _issue_contract_heading_index(text, heading):
+    m = re.search(r"^%s$" % re.escape(heading), text, re.MULTILINE)
+    assert m, (
+        "issue-contract.md: heading %r not found (moved or reworded?)" % heading
+    )
+    return m.start()
+
+
+def _issue_contract_contents_block():
+    """The `# Contents` list, bounded by the next `# ` heading."""
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    m = re.search(r"^# Contents\s*\n(.*?)(?=^# )", text, re.MULTILINE | re.DOTALL)
+    assert m, "issue-contract.md: # Contents list not found (moved or reworded?)"
+    block = m.group(1)
+    assert block.strip(), "issue-contract.md: # Contents list is empty"
+    return block
+
+
+def _workhorse_repair_template_block():
+    """The stop-report repair-template paragraph plus its field bullets.
+
+    Bounded structurally at both ends: the sentinel opens it, and it closes at the
+    end of the field-bullet list (the first blank line after the last `- **…**`
+    bullet). No ordinary prose sentence is a delimiter, so rewording the paragraph
+    that follows the list does not break this reader.
+    """
+    span = _workhorse_intake_anchor_section()
+    m_start = re.search(
+        r"^\*\*The stop-report carries its own repair\.\*\*",
+        span,
+        re.MULTILINE,
+    )
+    assert m_start, (
+        "workhorse/SKILL.md: repair-template block start not found in the "
+        "anchor-intake span (moved or reworded?)"
+    )
+    tail = span[m_start.start():]
+    m_first = _WORKHORSE_REPAIR_FIELD_BULLET_RE.search(tail)
+    assert m_first, (
+        "workhorse/SKILL.md: no repair-template field bullets found after the "
+        "sentinel (bullet list removed or reshaped?)"
+    )
+    # The list runs unbroken to the first blank line after its first bullet; that
+    # blank line is the structural end of the block.
+    m_end = _BLANK_LINE_RE.search(tail, m_first.end())
+    end = m_end.start() if m_end else len(tail)
+    block = tail[:end].strip()
+    assert block, "workhorse/SKILL.md: repair-template block is empty"
+    return block
+
+
+def _pre_doctrine_template_fence():
+    """The single fenced retrofit template in § Pre-doctrine issues — the prose copy of
+    the runtime slot sequence the workhorse field bullets copy in turn. Fails closed on
+    a missing or duplicated fence."""
+    section = _pre_doctrine_section()
+    fences = _PRE_DOCTRINE_TEMPLATE_FENCE_RE.findall(section)
+    assert len(fences) == 1, (
+        "issue-contract.md § Pre-doctrine issues: expected exactly one ```markdown "
+        "fenced retrofit template, found %d — the copy-holder drift pin reads the "
+        "slot order out of that fence, so it cannot be missing or duplicated"
+        % len(fences)
+    )
+    return fences[0]
+
+
+def _pre_doctrine_template_slot_name_re(slots):
+    """Slot-header reader built from the runtime slot names — the alternation is never
+    re-typed here, so a rename in issue_contract moves this reader with it."""
+    return re.compile(
+        r"^\*\*(%s)\b[^*]*:\*\*" % "|".join(re.escape(slot) for slot in slots),
+        re.MULTILINE,
+    )
+
+
+def _pre_doctrine_template_slot_order():
+    """The ordered slot sequence the copy-holder pin checks against, taken from the
+    RUNTIME home (`issue_contract.SLOTS`) and cross-checked against the home template's
+    fence. Reading the order out of the fence alone would pass a synchronized reorder of
+    the fence AND the copy-holder while both diverged from the runtime contract — the
+    fence is a copy, and issue_contract.py is the end of the chain. Fails closed when a
+    slot header is absent, declared more than once, or out of runtime order."""
+    import issue_contract
+
+    canonical = list(issue_contract.SLOTS)
+    fence = _pre_doctrine_template_fence()
+    slots = _pre_doctrine_template_slot_name_re(canonical).findall(fence)
+    assert len(slots) == len(canonical), (
+        "issue-contract.md § Pre-doctrine issues: expected %d slot headers in the "
+        "fenced retrofit template — one per issue_contract.SLOTS entry %r — found %d: "
+        "%r (slot removed or reshaped?)"
+        % (len(canonical), canonical, len(slots), slots)
+    )
+    assert len(set(slots)) == len(slots), (
+        "issue-contract.md § Pre-doctrine issues: a slot header is declared more "
+        "than once in the fenced retrofit template: %r" % (slots,)
+    )
+    assert slots == canonical, (
+        "issue-contract.md § Pre-doctrine issues: the fenced retrofit template's slot "
+        "order %r no longer matches the runtime contract issue_contract.SLOTS %r — the "
+        "fence is a copy of that runtime sequence, so a reorder in the fence (or a "
+        "reorder in issue_contract.py the fence did not follow) has to move both"
+        % (slots, canonical)
+    )
+    return canonical
+
+
+def _pre_doctrine_conforming_body_from_home():
+    """A minimal issue body the runtime build-ready check accepts, assembled out of the
+    runtime slot names and anchor kinds rather than re-typed markdown."""
+    import issue_contract
+
+    # Any registered kind conforms; taking the registry's first sorted entry keeps this
+    # derived from ANCHOR_KINDS instead of naming one kind by hand.
+    kind = sorted(issue_contract.ANCHOR_KINDS)[0]
+    return "\n".join(
+        [
+            "**%s (%s):** 2026-01-01 - owner decision - reachable record. "
+            "Not superseded." % (issue_contract.SLOT_ANCHOR, kind),
+            "",
+            "**%s:** plain-language scope carried up from the original filing."
+            % issue_contract.SLOT_WHAT,
+            "",
+            "**%s:**" % issue_contract.SLOT_DOD,
+            "- an observable outcome a vet can grade from the handback alone.",
+            "",
+        ]
+    )
+
+
+def _pre_doctrine_completion_tokens_from_home(tmp_path):
+    """The `key: value` completion tokens the guidance quotes, read off a REAL
+    successful `issue_contract.check_build_ready()` result rather than hand-typed: each
+    quoted key must be present in that payload, and the value is the payload's own JSON
+    spelling. A runtime schema change — the key renamed or dropped, or a successful
+    result no longer carrying a null reason — moves these tokens, so the section pin
+    bites instead of leaving the shipped guidance stale."""
+    import issue_contract
+
+    body_path = tmp_path / "pre-doctrine-conforming-body.md"
+    body_path.write_text(_pre_doctrine_conforming_body_from_home(), encoding="utf-8")
+    result = issue_contract.check_build_ready(body_path.read_text(encoding="utf-8"))
+    assert result.get("ok") is True, (
+        "issue_contract.check_build_ready() refused the body this pin builds out of "
+        "SLOTS + ANCHOR_KINDS (result: %r) — the § Pre-doctrine issues completion-token "
+        "pin needs a real successful result to read its tokens off (runtime check "
+        "tightened, or the derived body shape is no longer conforming?)" % (result,)
+    )
+    tokens = []
+    for key in _PRE_DOCTRINE_QUOTED_RESULT_KEYS:
+        assert key in result, (
+            "issue_contract.check_build_ready() success result no longer carries the "
+            "%r key (renamed or dropped?) — issue-contract.md § Pre-doctrine issues "
+            "quotes it out of the JSON, so the shipped guidance has to move with it; "
+            "result keys: %r" % (key, sorted(result))
+        )
+        tokens.append("%s: %s" % (key, json.dumps(result[key])))
+    return tokens
+
+
+def test_pre_doctrine_section_exists_exactly_once():
+    # axis: the § Pre-doctrine issues heading is present exactly once
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    headings = re.findall(
+        r"^%s$" % re.escape(_PRE_DOCTRINE_HEADING), text, re.MULTILINE
+    )
+    assert len(headings) == 1, (
+        "issue-contract.md: expected exactly one %r heading line, found %d "
+        "(section removed, renamed, or duplicated?)"
+        % (_PRE_DOCTRINE_HEADING, len(headings))
+    )
+
+
+def test_pre_doctrine_section_sits_between_resolution_and_coverage():
+    # axis: section position — § Pre-doctrine issues is what terminates
+    # § Anchor resolution for the anchor cluster's section bounder
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    indexes = [
+        _issue_contract_heading_index(text, heading)
+        for heading in _PRE_DOCTRINE_ORDERED_HEADINGS
+    ]
+    resolution, pre_doctrine, coverage = indexes
+    assert resolution < pre_doctrine, (
+        "issue-contract.md: %r no longer sits after %r (section moved?) — the anchor "
+        "cluster bounds %r at the next `## ` heading, so this order is load-bearing"
+        % (
+            _PRE_DOCTRINE_ORDERED_HEADINGS[1],
+            _PRE_DOCTRINE_ORDERED_HEADINGS[0],
+            _PRE_DOCTRINE_ORDERED_HEADINGS[0],
+        )
+    )
+    assert pre_doctrine < coverage, (
+        "issue-contract.md: %r no longer sits before %r (section moved?)"
+        % (_PRE_DOCTRINE_ORDERED_HEADINGS[1], _PRE_DOCTRINE_ORDERED_HEADINGS[2])
+    )
+
+
+def test_pre_doctrine_contents_row_matches_section_order():
+    # axis: the Contents row exists once and in the same order as the sections
+    text = _read("skills/showrunner/reference/issue-contract.md")
+    row = _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[1]
+    occurrences = re.findall(r"^%s$" % re.escape(row), text, re.MULTILINE)
+    assert len(occurrences) == 1, (
+        "issue-contract.md: expected exactly one Contents row %r, found %d "
+        "(row removed, reworded, or duplicated?)" % (row, len(occurrences))
+    )
+    block = _issue_contract_contents_block()
+    indexes = []
+    for contents_row in _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS:
+        m = re.search(r"^%s$" % re.escape(contents_row), block, re.MULTILINE)
+        assert m, (
+            "issue-contract.md: Contents row %r not found in the # Contents list "
+            "(moved or reworded?)" % contents_row
+        )
+        indexes.append(m.start())
+    assert indexes[0] < indexes[1], (
+        "issue-contract.md: Contents row %r no longer sits after %r (row moved?)"
+        % (
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[1],
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[0],
+        )
+    )
+    assert indexes[1] < indexes[2], (
+        "issue-contract.md: Contents row %r no longer sits before %r (row moved?)"
+        % (
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[1],
+            _PRE_DOCTRINE_ORDERED_CONTENTS_ROWS[2],
+        )
+    )
+
+
+def test_pre_doctrine_both_pattern_headings_present():
+    # axis: the two repair recipes are named headings, one each
+    section = _pre_doctrine_section()
+    for heading in _PRE_DOCTRINE_PATTERN_HEADINGS:
+        occurrences = re.findall(
+            r"^%s$" % re.escape(heading), section, re.MULTILINE
+        )
+        assert len(occurrences) == 1, (
+            "issue-contract.md § Pre-doctrine issues: expected exactly one %r "
+            "heading, found %d (recipe removed, renamed, or duplicated?)"
+            % (heading, len(occurrences))
+        )
+
+
+def test_pre_doctrine_template_carries_all_three_slot_headers():
+    # axis: the copyable template carries all three skeleton slot headers
+    section = _pre_doctrine_section()
+    for slot_header in _PRE_DOCTRINE_TEMPLATE_SLOT_HEADERS:
+        assert slot_header in section, (
+            "issue-contract.md § Pre-doctrine issues: copyable template missing slot "
+            "header %r (removed or reworded?)" % slot_header
+        )
+
+
+def test_pre_doctrine_dated_annotation_shape_pinned():
+    # axis: the dated separator annotation keeps its verbatim-preservation shape
+    section_norm = _anchor_whitespace_normalize(_pre_doctrine_section())
+    for fragment in _PRE_DOCTRINE_ANNOTATION_FRAGMENTS:
+        fragment_norm = _anchor_whitespace_normalize(fragment)
+        assert fragment_norm in section_norm, (
+            "issue-contract.md § Pre-doctrine issues: dated annotation missing "
+            "fragment %r (removed or reworded?)" % fragment
+        )
+
+
+def test_pre_doctrine_completion_tokens_present(tmp_path):
+    # axis: token presence only — both completion tokens survive in the section, each
+    # DERIVED from a real check_build_ready() success payload rather than re-typed here,
+    # so a runtime result-schema change moves the expectation. A substring check cannot
+    # prove the surrounding prose reads them out of the JSON rather than the exit
+    # status; that reading is prose review's call.
+    section = _pre_doctrine_section()
+    for token in _pre_doctrine_completion_tokens_from_home(tmp_path):
+        assert token in section, (
+            "issue-contract.md § Pre-doctrine issues: completion token %r is not "
+            "present in the section — the token is read off a real "
+            "issue_contract.check_build_ready() success result, so either the guidance "
+            "moved (removed or softened back to 'green'?) or the runtime result shape "
+            "changed and the guidance is now stale" % token
+        )
+
+
+def test_pre_doctrine_section_carries_no_register_token():
+    # axis: no repo-internal register id leaks into consumer-facing guidance
+    section = _pre_doctrine_section()
+    leaked = _PRE_DOCTRINE_REGISTER_TOKEN_RE.findall(section)
+    assert not leaked, (
+        "issue-contract.md § Pre-doctrine issues: register token(s) %r leaked into "
+        "consumer-facing guidance — a consuming project's advisor has no register, "
+        "so the recipe names the ruling test by heading instead" % sorted(set(leaked))
+    )
+
+
+def test_workhorse_intake_repair_template_required_with_pointer():
+    # axis: the stop-report repair requirement and its section-specific pointer
+    span = _workhorse_intake_anchor_section()
+    assert _WORKHORSE_REPAIR_TEMPLATE_SENTINEL in span, (
+        "workhorse/SKILL.md anchor-intake span: missing repair-template sentinel %r "
+        "(removed or reworded?)" % _WORKHORSE_REPAIR_TEMPLATE_SENTINEL
+    )
+    span_norm = _anchor_whitespace_normalize(span)
+    pointer_norm = _anchor_whitespace_normalize(_WORKHORSE_REPAIR_TEMPLATE_POINTER)
+    assert pointer_norm in span_norm, (
+        "workhorse/SKILL.md anchor-intake span: missing pointer %r to where the "
+        "missing-slot repair recipes live (removed or reworded?)"
+        % _WORKHORSE_REPAIR_TEMPLATE_POINTER
+    )
+
+
+def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
+    # axis: copy-holder ORDER — the workhorse field bullets carry the home
+    # template's slot sequence, in that order, followed by the separator and
+    # original-body fields. The expected sequence is the RUNTIME contract's
+    # issue_contract.SLOTS — cross-checked against the fenced template in
+    # issue-contract.md § Pre-doctrine issues — never hand-written here.
+    slots = _pre_doctrine_template_slot_order()
+    block = _workhorse_repair_template_block()
+    labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
+    expected_count = len(slots) + len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS)
+    assert len(labels) == expected_count, (
+        "workhorse/SKILL.md repair template: expected exactly %d field bullets "
+        "(%d home slots + %d trailing fields), found %d; labels: %r"
+        % (
+            expected_count,
+            len(slots),
+            len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS),
+            len(labels),
+            labels,
+        )
+    )
+    for index, slot in enumerate(slots):
+        assert re.search(r"\b%s\b" % re.escape(slot), labels[index]), (
+            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
+            "not name the %r slot — issue_contract.SLOTS declares the slot order %r "
+            "and every copy-holder must follow it"
+            % (index + 1, labels[index], slot, slots)
+        )
+    for offset, token in enumerate(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS):
+        index = len(slots) + offset
+        assert token in labels[index], (
+            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
+            "not carry the %r field (reordered, removed, or duplicated?); labels: %r"
+            % (index + 1, labels[index], token, labels)
+        )
 
 
 # --- Cluster: four-route drift (register R6 → the two charters) ---------------

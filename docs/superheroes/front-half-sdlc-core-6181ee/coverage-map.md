@@ -48,7 +48,7 @@ ordered freely per R9's landing rule.
 | FR-37 (closure receipt) + UFR-8 (failing run: repair path AND the owner's disclosed-failure acceptance alternative) + UFR-10b (abandoned child — second acceptance bullet) | FR-37 bullet; UFR-8 bullet (both outcomes); UFR-10 bullet 2 | **C7** |
 | FR-38 (delivery acceptance) + UFR-5 (partial delivery) | FR-38 rule; UFR-5 bullet | **C7** |
 | FR-39 (builder boundary — no inline discovery) | bullet | **C3** |
-| FR-40 (adoption pass) | bullet + rule | **C8** |
+| FR-40 (adoption pass) | bullet + rule | **C8** — calibration-record leg declined 2026-08-15 (#939 NOT_PLANNED) and removed by Amendment 2026-08-21 |
 
 ## Non-functional requirements — package-wide
 

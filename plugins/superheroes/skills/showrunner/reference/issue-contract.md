@@ -5,6 +5,7 @@
 - [The Anchor slot](#the-anchor-slot)
 - [The build-ready block](#the-build-ready-block)
 - [Anchor resolution](#anchor-resolution)
+- [Pre-doctrine issues](#pre-doctrine-issues)
 - [The standing anchor-coverage vet row](#the-standing-anchor-coverage-vet-row)
 - [The DoD bar](#the-dod-bar)
 - [Currency](#currency)
@@ -63,7 +64,11 @@ The three recognized kinds:
 
 3. **Ruling** — an ISO date together with where the ruling was made.
 
-   *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · advisor channel, discovery sitting`
+   *Example:* `Anchor (ruling): 2026-08-07 · owner ruling · https://github.com/zwrose/superheroes/issues/695#issuecomment-1234567890`
+
+   The location leg is a record a builder can follow — a permalink to a dated echo, or the
+   owner's re-rule on the issue itself — never a bare venue name (see
+   [Anchor resolution](#anchor-resolution)).
 
 The citation text is **never read to decide a kind** — a bare receipt URL whose path happens
 to contain `ruling` or a date is a perfectly good `Anchor (receipt):`. Declared kind tokens
@@ -153,6 +158,19 @@ by order of addition, which is what keeps two amendments made on the same day or
 to each other. A reader who reaches for the dates instead gets the same answer most of the time and
 the wrong answer on exactly the day it matters, silently. **The comparison is on entry numbers.**
 
+**A `ruling` anchor never cites a venue by name** — "the advisor channel," "a live sitting" —
+because a venue name is not a record: a builder reading it has nothing to follow, and the claim is
+a paraphrase nobody downstream can check. The test is mechanical: **can the anchor carry an exact
+permalink to a dated record of the ruling?** Where the venue lives as a durable thread — a
+collector issue, a recorded sitting log — it can, and the permalink is the record (Pattern 2's
+board-pass permalink, below, is exactly this). Where it cannot — a chat, a live conversation — the
+ruling test's own fallback governs: the owner **re-rules on the issue itself**, a dated owner
+comment or owner-stamped body line, which *is* the record, with its own date. Either way the
+anchor's location leg is a followable record, never a name. **This adds no new gate**: it spells
+out how the ruling test's existing reachability leg (above) is satisfied — an anchor that fails it
+was already unresolvable, and it takes the same stop-report path with the same advisor repair,
+nothing stricter.
+
 **Stop, report, repair — one path.** When a test fails, the **builder stops before any spend** —
 no file in the repository changes — and reports on the issue which per-kind test failed and what
 failed to resolve. The **builder never repairs its own anchor**. The **advisor repairs the route**:
@@ -166,6 +184,126 @@ the diff is [the standing anchor-coverage vet row](#the-standing-anchor-coverage
 **no machinery over the Amendments log**: it reads that log's entry numbers, classes, and touched
 sections as they already stand, and the log's own contract lives with the amendment machinery, not
 here.
+
+## Pre-doctrine issues
+
+A **pre-doctrine issue** is one filed before this contract shipped: it carries no `Anchor (<kind>):`
+slot, so [Anchor resolution](#anchor-resolution) stops the build at intake. A project adopting the
+doctrine meets this across its open backlog at once, and the stop is working as designed — what
+follows is how the advisor clears it. Both patterns below are field-proven; pick by how many issues
+are in front of you.
+
+**First: check for a prior ratified arrangement.** A project may already carry an adoption
+arrangement its **owner ratified before this doctrine** — a **closed list** of issues, recorded with
+that project's advisor seat, where that ruling was made; that seat's record is where a consuming
+advisor reads the list back. What that list **keeps** is the owner's **decision**: the issues on it
+are not re-litigated, not re-decided, and not re-surfaced to the owner. It does **not** keep them
+out of the slot. **There is no grandfather exemption at the gate** — [Anchor
+resolution](#anchor-resolution) refuses an Anchor-less body whatever ruled it, so a kept issue with
+no Anchor would never build. Each kept issue therefore still **materializes** its resolving Anchor
+when it comes up for a build, by the Pattern 1 retrofit below, with the ratified arrangement
+supplying the Anchor's citation in place of a fresh owner sitting. The arrangement spares the
+issue the *re-decision*, not the *slot*. Everything else takes the pass — so run the board pass
+below only over the **remaining** open pre-doctrine issues. Where no such arrangement is recorded,
+that remainder is the whole open backlog.
+
+### Pattern 1 — the per-issue retrofit
+
+Use it when **one** issue is about to be built. The advisor edits the issue body: the three slots go
+**above** the original filing, which is preserved **verbatim** below a dated separator, so nothing
+is lost and a later reader can tell the advisor's words from the filer's.
+
+```markdown
+**Anchor (ruling):** <ISO date> · owner ruling · <where the ruling is reachable>. Not superseded.
+
+**What:** <plain-language scope and why, carried up from the original filing>
+
+**DoD:**
+- <observable outcome a vet can grade from the handback's artifacts alone>
+
+---
+*Original filing (<filing-date>), preserved verbatim below; skeleton slots retrofitted
+<retrofit-date> during pre-doctrine repair (advisor edit, content unchanged).*
+
+<the original body, byte-for-byte unchanged>
+```
+
+A `receipt` anchor substitutes for the `ruling` line wherever a live link — a review finding, an
+incident record, a gate result — is the decision the issue is downstream of; the kind token in the
+header changes with it.
+
+Four things make it a retrofit rather than a rewrite:
+
+- **The Anchor cites a decision that already exists.** Retrofitting is not the moment to invent an
+  approval. Where no decision covers the issue, the repair is to route it to the owner — not to
+  write an anchor for it.
+- **The original body is preserved verbatim.** The separator carries both dates — when it was filed,
+  when the slots were added — and states that the content is unchanged.
+- **What and DoD are filled, to the bar.** Carry them up from the original filing; every DoD bullet
+  still owes what [The DoD bar](#the-dod-bar) asks — an observable outcome, not an activity.
+- **The check is green afterward, read from the JSON.** Run the build-ready check ([The build-ready
+  block](#the-build-ready-block)) against the edited body and read `ok: true` with `reason: null`
+  **out of the result**. Do not read the exit status: the check is advisory and **always exits
+  zero**, and its refusal set covers the Anchor only — it reports an empty What or DoD without
+  refusing. A body that passes the check with an empty DoD has moved the stop to vet, not cleared
+  it.
+
+**When the original filing yields no gradable DoD.** This is common on old issues, and it is not the
+builder's to fix: the builder names the gap and stops, inventing no requirements. The advisor gets
+the missing outcome from the owner, re-routes the issue, or parks it. A DoD written to make a check
+pass is worse than an empty one — it looks graded and grades nothing.
+
+### Pattern 2 — the board-pass grandfathering
+
+Use it when the **whole backlog** needs clearing. In **one owner sitting**, walk the open issues and
+rule on each — keep it, re-route it, or close it. That ruling is the decision each surviving issue
+is downstream of. The steps:
+
+1. **Make the sitting's record reachable before it is cited.** The ruling test in [Anchor
+   resolution](#anchor-resolution) asks for a dated, owner-attributed record *reachable where the
+   ruling was made* — so each ruling **stays at the surface the owner made it on**; the advisor
+   channel is such a surface, and the issue carries an **exact permalink** into it, per issue.
+   Copying a ruling onto the issue does not move where it was made. Only where that surface cannot
+   yield a durably reachable record does the **owner re-rule on the issue itself** — and that new
+   ruling, with its own date, is what the Anchor then cites. A date stamped on an issue whose ruling
+   lives nowhere does not resolve.
+2. **Give each surviving issue its resolving Anchor**, in the Pattern 1 shape — the Anchor header
+   above a dated separator, the original filing preserved verbatim below it. The Anchor line names
+   the sitting's date, the owner attribution, and the permalink from step 1. **A ruling yields the
+   Anchor, not the What and DoD** — see the pickup step below for how those two arrive.
+
+   **At pickup — completing a board-passed body.** When such an issue is actually taken up for a
+   build, edit the body that is already there: insert **only** the `What` and `DoD` slots, in the
+   canonical slot order, under the Anchor the sitting wrote. **No second Anchor, no second dated
+   separator, and no re-preserving a filing this step already preserved verbatim** — a body may
+   carry the Anchor slot exactly once, and a duplicate makes the last one win. This is the **pickup
+   counterpart** to Pattern 1, not a second application of it: Pattern 1 is the *full* retrofit for
+   a body carrying **no** Anchor, and re-running it here would produce exactly the duplicates just
+   ruled out. Everything else Pattern 1 asks still holds — the two slots are carried up from the
+   preserved filing and owe [The DoD bar](#the-dod-bar), Pattern 1's no-gradable-DoD branch governs
+   when the filing yields none, and the build-ready check is re-read out of its JSON afterward.
+3. **Confirm nothing later supersedes it.** The ruling test's last leg. A backlog issue whose scope
+   a newer owner decision has since overtaken is re-ruled in the sitting, not grandfathered on the
+   old date.
+4. **Write the pass down where the sitting's rulings live.** Add the advisor's own dated note to the
+   same durable surface step 1 made reachable, carrying the **sitting's date** and the **scope it
+   covered** — which issues were walked — so a later reader can tell a grandfathered issue from one
+   nobody has looked at. That dated note is the record: the approved spec's companion leg — a
+   pass-done marker written into the project's calibration — was **owner-declined and never
+   implemented**, so there is no such store operation to call and the note carries the pass alone.
+
+The pass is cheaper than it sounds, because the ruling and the triage are the same act: an owner
+walking a backlog is already deciding what survives. What the pass adds is writing each decision
+down, dated, where it can be reached.
+
+**Which to use.** A board pass first, then per-issue retrofits as builds come up — one lifecycle,
+two moments. The sitting's ruling is what every surviving issue's **Anchor** cites, backlog-wide, in
+one pass. Pattern 2's pickup step fills that issue's `What` and `DoD` later, when it is actually
+picked up for a build — those two slots inserted into the body the sitting already anchored, never a
+second Anchor. Pattern 1's full retrofit stays for the issue that reaches a build with **no** Anchor
+at all. Where the original filing yields no gradable DoD, Pattern 1's branch above governs either
+way — the gap is named, the build stops, and the advisor gets the outcome from the owner, re-routes,
+or parks.
 
 ## The standing anchor-coverage vet row
 

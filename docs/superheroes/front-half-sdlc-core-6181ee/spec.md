@@ -447,7 +447,9 @@ re-anchored, re-routed, or closed — with each decision recorded on the issue a
 ruling (FR-3's resolution test reads it there).
   - *Acceptance:* Given adoption, when the pass completes, then every open pre-doctrine
     issue carries a resolving anchor, a new route, or a close — none is silently left
-    ungated — and the pass's completion is recorded with the project's calibration.
+    ungated — and the pass's completion is recorded as the advisor's dated note on the
+    sitting's durable surface, carrying the sitting's date and the scope it covered (the
+    calibration-record leg was removed — see Amendments, 2026-08-21).
   - *Acceptance (rule):* a project carrying an adoption arrangement the owner ratified
     before this doctrine — a closed list, recorded with that project's advisor seat per
     FR-25's rulings-live-where-made rule — keeps it; the case-by-case pass governs
@@ -695,6 +697,17 @@ case-by-case owner-advisor pass over open pre-doctrine issues.
   body as a whole after the re-read's result was delivered (collector item 44), recorded
   here at the owner's word. The carried debt is cleared; the count restarts from this
   re-stamp. Sections touched: FR-39, Amendments.
+- **2026-08-21 (owner-stamped, substantive):** FR-40 / C8 — the calibration-record
+  completion leg is **removed**. A board pass completes with the advisor's dated note on
+  the sitting's durable surface, carrying the sitting's date and the scope it covered; no
+  store marker exists or is owed. Cause: the pass-done calibration marker was declined
+  2026-08-15 (#939 closed NOT_PLANNED — "that should never have been in the spec") and was
+  never built; the divergence between that declination and this spec's text surfaced as PR
+  #1090's open review blocker, and the owner re-affirmed the declination and stamped this
+  amendment 2026-08-21 at the #1090 merge sitting (the ruling is captured in this entry,
+  per the venue-citation convention that same PR ships). Substantive — a builder
+  implementing the pass builds its completion record differently against it. Sections
+  touched: FR-40, c8-adoption.md (What and DoD), coverage-map FR-40 row, Amendments.
 
 ## Coverage
 

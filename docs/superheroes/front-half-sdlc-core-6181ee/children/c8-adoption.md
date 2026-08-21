@@ -1,20 +1,23 @@
 # C8 — feat(superheroes): the adoption pass — pre-doctrine issues decided case by case
 
-**Anchor:** spec `front-half-sdlc-core-6181ee` §Adoption (FR-40) — owner-approved 2026-08-07, as-of amendment #4.
+**Anchor:** spec `front-half-sdlc-core-6181ee` §Adoption (FR-40) — owner-approved 2026-08-07, as-of amendment #7.
 
 **What:** The one-time-per-project pass that brings a board under the doctrine: the advisor
 surfaces every open pre-doctrine issue to the owner and each is decided case by case —
 re-anchored (per R1's kinds), re-routed (per R6's names), or closed — with each decision
-recorded on the issue as a dated ruling; completion recorded with the project's
-calibration. Ratified prior adoption arrangements (closed lists recorded with that
+recorded on the issue as a dated ruling; completion recorded as the advisor's dated note
+on the sitting's durable surface, carrying the sitting's date and the scope it covered
+(the calibration-record leg was removed — spec Amendments, 2026-08-21). Ratified prior adoption arrangements (closed lists recorded with that
 project's advisor seat) are kept; everything else takes the pass. No automatic conversion
 (owner-ruled 2026-08-07, recorded in zwrose/superheroes#873).
 
 **DoD:**
 - Showrunner charter (or configure surface — builder's call, disclosed): the adoption-pass
   duty with the three per-issue outcomes and the dated-ruling record on each issue.
-- Completion recorded with the project's calibration (the store carries the pass-done
-  marker; both storage modes honored).
+- ~~Completion recorded with the project's calibration (the store carries the pass-done
+  marker; both storage modes honored).~~ **Declined 2026-08-15** (#939 closed NOT_PLANNED)
+  and removed by the spec's 2026-08-21 amendment: completion is the advisor's dated note
+  on the sitting's durable surface; no store marker exists.
 - The grandfather rule stated: prior ratified arrangements keep; the pass governs the rest.
 
 **Non-goals:** this project's own adoption pass — the child ships the machinery; running
