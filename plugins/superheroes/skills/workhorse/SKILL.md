@@ -193,10 +193,13 @@ back and waits. **Post the report on the issue**, so it outlives this session an
 it without being told to look.
 
 **The stop-report carries its own repair.** The stop costs the advisor one round trip, so make it
-arrive carrying the fix and not only the diagnosis. Include a **pre-filled three-slot template** —
-every field you can derive already filled in, the Anchor line left blank — together with a pointer
-to `skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues, where both repair recipes
-live. The template's fields are:
+arrive carrying the fix and not only the diagnosis. **Which repair you carry depends on which
+failure you hit** — the two below are not interchangeable. Either way, point at
+`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues, where both repair recipes
+live. **Only when the Anchor slot is missing entirely** — a **pre-doctrine issue**, filed before the
+skeleton shipped, so the body carries no Anchor slot at all — include a **pre-filled three-slot
+template**: every field you can derive already filled in, the Anchor line left blank. That
+template's fields are:
 
 - **the Anchor header, with its kind token** — **left blank**; the citation is the advisor's to
   choose, and choosing one would be repairing your own anchor;
@@ -204,13 +207,25 @@ live. The template's fields are:
 - **the DoD slot** — you fill it, carried up from the issue's existing body, one bullet per outcome
   a vet could grade from artifacts alone; where the body yields none, **say so and fill nothing**
   rather than inventing requirements;
-- **the dated separator line** — you fill it: the original filing's date and today's;
+- **the dated separator line** — you fill in the **original filing's date** only; the retrofit date
+  belongs to the advisor's actual edit, which may land days after your report, so leave it blank for
+  the advisor to stamp;
 - **the original body** — preserved verbatim below that separator, byte-for-byte.
 
+**When the issue already carries an Anchor** — a stale spec-section cursor, a dead receipt link, a
+superseded ruling, or a malformed header — carry a **targeted in-place Anchor replacement** instead:
+the one replacement `Anchor (<kind>):` header line, its citation left blank for the advisor, and
+nothing else. **No nested skeleton, no dated separator, no second What or DoD.** The reason is
+mechanical, not stylistic: that issue already holds all three slots, so prepending a second set
+above a preserved body leaves a **duplicate-slot body** — and the build-ready check carries no
+duplicate-slot refusal. It keeps the **last** Anchor declaration it reads, which is the stale one
+sitting below, so the repair would silently change which anchor is read while the check still
+reports success.
+
 Filling the derivable fields is **not** repairing the anchor: the citation and the edit both stay
-the advisor's, and the build still resumes only on the advisor's word. A **pre-doctrine issue** —
-filed before the skeleton shipped, so it carries no Anchor slot at all — is the case this template
-was built for, and a project adopting the doctrine meets it across its whole open backlog at once.
+the advisor's, and the build still resumes only on the advisor's word. A project adopting the
+doctrine meets the missing-slot case across its open backlog at once — that is what the full
+template above was built for.
 
 This layer grades the **issue**, never the diff. The layer that inspects the diff is the advisor's
 standing anchor-coverage row at vet. And it adds **no machinery over the Amendments log** — it

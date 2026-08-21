@@ -3790,17 +3790,24 @@ _WORKHORSE_REPAIR_TEMPLATE_POINTER = (
     "`skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues"
 )
 
-_WORKHORSE_REPAIR_FIELD_LABELS = frozenset(
-    {
-        "the Anchor header, with its kind token",
-        "the What slot",
-        "the DoD slot",
-        "the dated separator line",
-        "the original body",
-    }
+_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
+
+# The home template's fenced block and the slot headers read out of it. The slot
+# ORDER is derived from that fence, never hand-written here — a hand-written copy
+# would be the tautological pin CONVENTIONS §11.3 prohibits.
+_PRE_DOCTRINE_TEMPLATE_FENCE_RE = re.compile(
+    r"^```markdown\n(.*?)^```", re.MULTILINE | re.DOTALL
 )
 
-_WORKHORSE_REPAIR_FIELD_BULLET_RE = re.compile(r"^- \*\*([^*]+)\*\*", re.MULTILINE)
+_PRE_DOCTRINE_TEMPLATE_SLOT_NAME_RE = re.compile(
+    r"^\*\*(Anchor|What|DoD)\b[^*]*:\*\*", re.MULTILINE
+)
+
+# The two copy-holder fields that follow the derived slots, in order. Short durable
+# tokens, not full bullet prose — rewording the bullet around them stays free.
+_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS = ("separator", "original body")
+
+_BLANK_LINE_RE = re.compile(r"^[ \t]*$", re.MULTILINE)
 
 
 def _pre_doctrine_section():
@@ -3827,8 +3834,13 @@ def _issue_contract_contents_block():
 
 
 def _workhorse_repair_template_block():
-    """The stop-report repair-template paragraph plus its field bullets, bounded
-    from the sentinel to the paragraph that closes the template."""
+    """The stop-report repair-template paragraph plus its field bullets.
+
+    Bounded structurally at both ends: the sentinel opens it, and it closes at the
+    end of the field-bullet list (the first blank line after the last `- **…**`
+    bullet). No ordinary prose sentence is a delimiter, so rewording the paragraph
+    that follows the list does not break this reader.
+    """
     span = _workhorse_intake_anchor_section()
     m_start = re.search(
         r"^\*\*The stop-report carries its own repair\.\*\*",
@@ -3840,14 +3852,50 @@ def _workhorse_repair_template_block():
         "anchor-intake span (moved or reworded?)"
     )
     tail = span[m_start.start():]
-    m_end = re.search(r"^Filling the derivable fields", tail, re.MULTILINE)
-    assert m_end, (
-        "workhorse/SKILL.md: repair-template block end marker not found "
-        "(moved or reworded?)"
+    m_first = _WORKHORSE_REPAIR_FIELD_BULLET_RE.search(tail)
+    assert m_first, (
+        "workhorse/SKILL.md: no repair-template field bullets found after the "
+        "sentinel (bullet list removed or reshaped?)"
     )
-    block = tail[: m_end.start()].strip()
+    # The list runs unbroken to the first blank line after its first bullet; that
+    # blank line is the structural end of the block.
+    m_end = _BLANK_LINE_RE.search(tail, m_first.end())
+    end = m_end.start() if m_end else len(tail)
+    block = tail[:end].strip()
     assert block, "workhorse/SKILL.md: repair-template block is empty"
     return block
+
+
+def _pre_doctrine_template_fence():
+    """The single fenced retrofit template in § Pre-doctrine issues — the declared
+    home of the slot sequence the workhorse field bullets copy. Fails closed on a
+    missing or duplicated fence."""
+    section = _pre_doctrine_section()
+    fences = _PRE_DOCTRINE_TEMPLATE_FENCE_RE.findall(section)
+    assert len(fences) == 1, (
+        "issue-contract.md § Pre-doctrine issues: expected exactly one ```markdown "
+        "fenced retrofit template, found %d — the copy-holder drift pin reads the "
+        "slot order out of that fence, so it cannot be missing or duplicated"
+        % len(fences)
+    )
+    return fences[0]
+
+
+def _pre_doctrine_template_slot_order():
+    """The ordered slot sequence read out of the home template's fence. Fails
+    closed when a slot header is absent or declared more than once."""
+    fence = _pre_doctrine_template_fence()
+    slots = _PRE_DOCTRINE_TEMPLATE_SLOT_NAME_RE.findall(fence)
+    assert len(slots) == 3, (
+        "issue-contract.md § Pre-doctrine issues: expected 3 slot headers in the "
+        "fenced retrofit template, found %d: %r (slot removed or reshaped?)"
+        % (len(slots), slots)
+    )
+    assert len(set(slots)) == len(slots), (
+        "issue-contract.md § Pre-doctrine issues: a slot header is declared more "
+        "than once in the fenced retrofit template: %r" % (slots,)
+    )
+    return slots
 
 
 def test_pre_doctrine_section_exists_exactly_once():
@@ -3956,15 +4004,15 @@ def test_pre_doctrine_dated_annotation_shape_pinned():
         )
 
 
-def test_pre_doctrine_completion_condition_read_from_json_tokens():
-    # axis: the completion condition is the JSON's own tokens, never an exit status
-    # (the build-ready check is advisory and always exits zero)
+def test_pre_doctrine_completion_tokens_present():
+    # axis: token presence only — both completion tokens survive in the section.
+    # A substring check cannot prove the surrounding prose reads them out of the
+    # JSON rather than the exit status; that reading is prose review's call.
     section = _pre_doctrine_section()
     for token in _PRE_DOCTRINE_COMPLETION_TOKENS:
         assert token in section, (
-            "issue-contract.md § Pre-doctrine issues: completion condition missing "
-            "token %r — the recipe reads the result out of the JSON, never from an "
-            "exit status (softened back to 'green'?)" % token
+            "issue-contract.md § Pre-doctrine issues: completion token %r is not "
+            "present in the section (removed or softened back to 'green'?)" % token
         )
 
 
@@ -3995,30 +4043,41 @@ def test_workhorse_intake_repair_template_required_with_pointer():
     )
 
 
-def test_workhorse_intake_repair_template_field_bullets_complete():
-    # axis: all five template field labels, each exactly once, and no sixth
+def test_workhorse_intake_repair_template_field_bullets_follow_home_slot_order():
+    # axis: copy-holder ORDER — the workhorse field bullets carry the home
+    # template's slot sequence, in that order, followed by the separator and
+    # original-body fields. The expected sequence is parsed out of the fenced
+    # template in issue-contract.md § Pre-doctrine issues (the declared home), not
+    # hand-written here.
+    slots = _pre_doctrine_template_slot_order()
     block = _workhorse_repair_template_block()
-    for label in sorted(_WORKHORSE_REPAIR_FIELD_LABELS):
-        occurrences = re.findall(
-            r"^- \*\*%s\*\*" % re.escape(label), block, re.MULTILINE
-        )
-        assert len(occurrences) == 1, (
-            "workhorse/SKILL.md repair template: expected exactly one bullet led by "
-            "**%s**, found %d (field removed, reworded, or duplicated?)"
-            % (label, len(occurrences))
-        )
     labels = _WORKHORSE_REPAIR_FIELD_BULLET_RE.findall(block)
-    label_set = set(labels)
-    unexpected = sorted(label_set - _WORKHORSE_REPAIR_FIELD_LABELS)
-    missing = sorted(_WORKHORSE_REPAIR_FIELD_LABELS - label_set)
-    assert len(labels) == 5, (
-        "workhorse/SKILL.md repair template: expected exactly five field bullets, "
-        "found %d; labels: %r; unexpected: %r" % (len(labels), labels, unexpected)
+    expected_count = len(slots) + len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS)
+    assert len(labels) == expected_count, (
+        "workhorse/SKILL.md repair template: expected exactly %d field bullets "
+        "(%d home slots + %d trailing fields), found %d; labels: %r"
+        % (
+            expected_count,
+            len(slots),
+            len(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS),
+            len(labels),
+            labels,
+        )
     )
-    assert not unexpected and not missing, (
-        "workhorse/SKILL.md repair template: field-bullet label set mismatch — "
-        "unexpected: %r; missing: %r; found: %r" % (unexpected, missing, labels)
-    )
+    for index, slot in enumerate(slots):
+        assert re.search(r"\b%s\b" % re.escape(slot), labels[index]), (
+            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
+            "not name the %r slot — issue-contract.md § Pre-doctrine issues declares "
+            "the slot order %r and the copy-holder must follow it"
+            % (index + 1, labels[index], slot, slots)
+        )
+    for offset, token in enumerate(_WORKHORSE_REPAIR_TRAILING_FIELD_TOKENS):
+        index = len(slots) + offset
+        assert token in labels[index], (
+            "workhorse/SKILL.md repair template: field bullet %d is %r, which does "
+            "not carry the %r field (reordered, removed, or duplicated?); labels: %r"
+            % (index + 1, labels[index], token, labels)
+        )
 
 
 # --- Cluster: four-route drift (register R6 → the two charters) ---------------

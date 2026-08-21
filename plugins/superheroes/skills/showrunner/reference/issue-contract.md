@@ -172,9 +172,16 @@ here.
 
 A **pre-doctrine issue** is one filed before this contract shipped: it carries no `Anchor (<kind>):`
 slot, so [Anchor resolution](#anchor-resolution) stops the build at intake. A project adopting the
-doctrine meets this on its whole open backlog at once, and the stop is working as designed — what
+doctrine meets this across its open backlog at once, and the stop is working as designed — what
 follows is how the advisor clears it. Both patterns below are field-proven; pick by how many issues
 are in front of you.
+
+**First: check for a prior ratified arrangement.** A project may already carry an adoption
+arrangement its **owner ratified before this doctrine** — a **closed list** of issues, recorded with
+that project's advisor seat, where that ruling was made. That list **keeps**: the issues on it are
+not re-decided, not re-anchored, and not re-surfaced to the owner. Everything else takes the pass —
+so run either pattern below only over the **remaining** open pre-doctrine issues. Where no such
+arrangement is recorded, that remainder is the whole open backlog.
 
 ### Pattern 1 — the per-issue retrofit
 
@@ -230,25 +237,35 @@ is downstream of. The steps:
 
 1. **Make the sitting's record reachable before it is cited.** The ruling test in [Anchor
    resolution](#anchor-resolution) asks for a dated, owner-attributed record *reachable where the
-   ruling was made* — so the sitting's decisions are written somewhere durable and linkable, per
-   issue, not left in a conversation. A date stamped on an issue whose ruling lives nowhere does not
-   resolve.
-2. **Prepend the skeleton to each surviving issue**, exactly as Pattern 1 does — Anchor, What, DoD,
-   dated separator, original body verbatim. The Anchor line names the sitting's date, the owner
-   attribution, and where the record is reachable.
+   ruling was made* — so each ruling **stays at the surface the owner made it on**; the advisor
+   channel is such a surface, and the issue carries an **exact permalink** into it, per issue.
+   Copying a ruling onto the issue does not move where it was made. Only where that surface cannot
+   yield a durably reachable record does the **owner re-rule on the issue itself** — and that new
+   ruling, with its own date, is what the Anchor then cites. A date stamped on an issue whose ruling
+   lives nowhere does not resolve.
+2. **Give each surviving issue its resolving Anchor**, in the Pattern 1 shape — the Anchor header
+   above a dated separator, the original filing preserved verbatim below it. The Anchor line names
+   the sitting's date, the owner attribution, and the permalink from step 1. **A ruling yields the
+   Anchor, not the What and DoD:** those two slots are filled per Pattern 1 when the issue is
+   actually picked up for a build, and Pattern 1's no-gradable-DoD branch governs there.
 3. **Confirm nothing later supersedes it.** The ruling test's last leg. A backlog issue whose scope
    a newer owner decision has since overtaken is re-ruled in the sitting, not grandfathered on the
    old date.
-4. **Record that the pass happened**, with the project's calibration, so a later reader can tell a
-   grandfathered issue from one nobody has looked at.
+4. **Write the pass down where the sitting's rulings live.** Add the advisor's own dated note to the
+   same durable surface step 1 made reachable, carrying the **sitting's date** and the **scope it
+   covered** — which issues were walked — so a later reader can tell a grandfathered issue from one
+   nobody has looked at. That note is the whole record: there is no marker to set and nothing to
+   write into the project's calibration.
 
 The pass is cheaper than it sounds, because the ruling and the triage are the same act: an owner
 walking a backlog is already deciding what survives. What the pass adds is writing each decision
 down, dated, where it can be reached.
 
-**Which to use.** A board pass first, then per-issue retrofits as builds come up. The pass gives
-every surviving issue a resolving anchor in one sitting; the retrofit fills that issue's `What` and
-`DoD` when it is about to be built.
+**Which to use.** A board pass first, then per-issue retrofits as builds come up — one lifecycle,
+two moments. The sitting's ruling is what every surviving issue's **Anchor** cites, backlog-wide, in
+one pass. Pattern 1 fills that issue's `What` and `DoD` later, when it is actually picked up for a
+build; where the original filing yields no gradable DoD, Pattern 1's branch above governs — the gap
+is named, the build stops, and the advisor gets the outcome from the owner, re-routes, or parks.
 
 ## The standing anchor-coverage vet row
 
