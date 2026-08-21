@@ -192,6 +192,26 @@ falls open — but it is **not the same terminal**: the register-check parks; th
 back and waits. **Post the report on the issue**, so it outlives this session and the advisor finds
 it without being told to look.
 
+**The stop-report carries its own repair.** The stop costs the advisor one round trip, so make it
+arrive carrying the fix and not only the diagnosis. Include a **pre-filled three-slot template** —
+every field you can derive already filled in, the Anchor line left blank — together with a pointer
+to `skills/showrunner/reference/issue-contract.md` § Pre-doctrine issues, where both repair recipes
+live. The template's fields are:
+
+- **the Anchor header, with its kind token** — **left blank**; the citation is the advisor's to
+  choose, and choosing one would be repairing your own anchor;
+- **the What slot** — you fill it, carried up from the issue's existing body;
+- **the DoD slot** — you fill it, carried up from the issue's existing body, one bullet per outcome
+  a vet could grade from artifacts alone; where the body yields none, **say so and fill nothing**
+  rather than inventing requirements;
+- **the dated separator line** — you fill it: the original filing's date and today's;
+- **the original body** — preserved verbatim below that separator, byte-for-byte.
+
+Filling the derivable fields is **not** repairing the anchor: the citation and the edit both stay
+the advisor's, and the build still resumes only on the advisor's word. A **pre-doctrine issue** —
+filed before the skeleton shipped, so it carries no Anchor slot at all — is the case this template
+was built for, and a project adopting the doctrine meets it across its whole open backlog at once.
+
 This layer grades the **issue**, never the diff. The layer that inspects the diff is the advisor's
 standing anchor-coverage row at vet. And it adds **no machinery over the Amendments log** — it
 reads the log's entry numbers, classes, and touched sections as they already stand. Detail:
