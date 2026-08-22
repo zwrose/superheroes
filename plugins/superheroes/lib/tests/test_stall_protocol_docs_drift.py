@@ -16,6 +16,7 @@ import os
 
 import pytest
 
+import round_driver as RD
 import round_phases as RP
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,12 +29,56 @@ _STALL_DOCS = (
     "skills/review-code/reference/round-driver.md",
 )
 
+_GATE_POLICY_HEADING = "### Owner gates and gate policy"
+_ROUND_DRIVER_DOC = "skills/review-code/reference/round-driver.md"
+
 
 def _read(rel):
     path = os.path.join(_PLUGIN, rel)
     assert os.path.exists(path), "stall-protocol doc moved or renamed: %s" % rel
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _gate_policy_section():
+    text = _read(_ROUND_DRIVER_DOC)
+    start = text.find(_GATE_POLICY_HEADING)
+    assert start != -1, (
+        "%s does not contain the expected gate-policy section heading %r"
+        % (_ROUND_DRIVER_DOC, _GATE_POLICY_HEADING))
+    rest = text[start + len(_GATE_POLICY_HEADING):]
+    end = rest.find("\n### ")
+    if end == -1:
+        end = rest.find("\n| `action`")
+    return rest[:end] if end != -1 else rest
+
+
+def _stall_submit_refusal_exact_tokens():
+    """Exact stall submit refusal tokens — string STALL_* constants on round_driver."""
+    skip = {"STALL_CHOICES"}
+    tokens = []
+    for name, val in vars(RD).items():
+        if not name.startswith("STALL_") or name in skip:
+            continue
+        if isinstance(val, str) and val.startswith("stall-") and not val.endswith(":"):
+            tokens.append(val)
+    return tokens
+
+
+def _stall_submit_refusal_prefixes():
+    """Parameterized stall submit refusal prefixes (colon-terminated)."""
+    return [RD.STALL_CHOICE_NOT_OFFERED_PREFIX, RP.RETIRED_STALL_CHOICE_PREFIX]
+
+
+def test_every_stall_submit_refusal_token_named_in_gate_policy_section():
+    """Gate-policy prose must name every stall submit refusal derived from authoritative constants."""
+    section = _gate_policy_section()
+    missing_exact = [t for t in _stall_submit_refusal_exact_tokens() if t not in section]
+    missing_prefix = [p for p in _stall_submit_refusal_prefixes() if p not in section]
+    missing = missing_exact + missing_prefix
+    assert not missing, (
+        "round-driver.md gate-policy section is missing stall submit refusal fragment(s) %r — "
+        "derive from round_driver / round_phases constants" % missing)
 
 
 @pytest.mark.parametrize("rel", _STALL_DOCS)

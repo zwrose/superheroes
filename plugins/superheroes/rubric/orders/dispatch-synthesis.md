@@ -12,7 +12,13 @@ review. Your job is **not** keep/drop — you group issues that share the same r
 
 ## Your task
 Group issues that share the same root cause. Emit a JSON array of `{group_id, member_ids}`
-echoing the staged ids verbatim. {{OUTPUT_CHANNEL_BLOCK}}
+echoing the staged ids verbatim — **no severities**; only `group_id` and `member_ids`.
+{{OUTPUT_CHANNEL_BLOCK}}
+
+Grouping **never lowers a severity**: the merged issue carries the **highest** severity among
+its members; the driver enforces this mechanically on a normalized, fail-closed vocabulary, so a
+mis-cased or off-scale severity is treated as blocking rather than ranked last. Proposing a group
+in order to demote a finding is outside your remit.
 
 `verification.merge_and_rank` applies your groups under a **coverage guarantee**: every
 survivor's staged id appears exactly once in the output; invalid or missing groups fail
@@ -26,7 +32,7 @@ merge is PLAUSIBLE. Issues are ranked Critical → Important → Minor → Nit, 
 
 ## Hard rules
 - Judge only group structure — do NOT add new issues, drop issues, merge issues beyond your
-  group proposal, or decide the run's outcome.
+  group proposal, assign or change severities, or decide the run's outcome.
 - Echo staged ids verbatim — do not recompute or rename.
 - **Never change the repository, and never claim a run you did not make.**
 - {{OUTPUT_CHANNEL_BLOCK}}

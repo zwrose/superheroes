@@ -74,11 +74,13 @@ def _kept_severity(f, v, honored):
     """
     if honored:
         verdict_severity = v.get("severity") if isinstance(v, dict) else None
-        if verdict_severity in _TIERS:
-            return verdict_severity
+        canonical = circuit_breaker.canonical_severity(verdict_severity)
+        if canonical is not None:
+            return canonical
     finding_severity = f.get("severity")
-    if finding_severity in _TIERS:
-        return finding_severity
+    canonical = circuit_breaker.canonical_severity(finding_severity)
+    if canonical is not None:
+        return canonical
     return _DEFAULT_BLOCKING_SEVERITY
 
 
@@ -171,12 +173,10 @@ def apply_verdicts(findings, verdicts):
 
 
 def _severity_rank(severity):
-    # Fail-closed / never-raise: a non-str severity (a model may emit a list/dict) is
-    # unhashable, so guard BEFORE the dict lookup — treat it as the unknown rank (99) rather
-    # than letting `_SEV_RANK.get(<unhashable>, 99)` raise TypeError and blow up the fold.
-    if not isinstance(severity, str):
-        return 99
-    return _SEV_RANK.get(severity, 99)
+    # Delegates to circuit_breaker.severity_rank — fail-closed / never-raise: a non-str or
+    # unhashable severity is coerced through effective_severity rather than raising or
+    # returning the old unknown rank (99).
+    return circuit_breaker.severity_rank(severity)
 
 
 def _rank_key(f):
@@ -212,12 +212,12 @@ def _union_dimensions(members):
 
 
 def _eff_sev(severity):
-    """Effective severity: a valid tier passes through unchanged; any non-tier value
-    (malformed / off-scale / unhashable list-or-dict) coerces to the fail-closed blocking
-    default. `x in _TIERS` compares element-wise, so an unhashable severity never raises.
-    Used by the merge fold so both the merged severity and the confirming-member comparison
-    are deterministic regardless of member order (identity on a valid tier)."""
-    return severity if severity in _TIERS else _DEFAULT_BLOCKING_SEVERITY
+    """Effective severity: delegates to circuit_breaker.effective_severity — a canonical tier
+    passes through at its exact case; any non-tier value (malformed / off-scale / unhashable
+    list-or-dict) coerces to the fail-closed blocking default. Used by the merge fold so both
+    the merged severity and the confirming-member comparison are deterministic regardless of
+    member order."""
+    return circuit_breaker.effective_severity(severity)
 
 
 def _merge_group(members):
