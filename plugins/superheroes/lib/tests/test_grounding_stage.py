@@ -297,6 +297,66 @@ def test_dod_rows_exact_set_and_verifiability(tmp_path):
     assert "Defer later|deferred|#609 reason" not in repo_texts
 
 
+def test_dod_table_without_separator_mints_all_rows(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| Ship the thing | done | tests/test_a.py |\n"
+        "| Second thing | done | tests/b.py |"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 2
+    texts = {c["text"] for c in dod}
+    assert texts == {
+        "Ship the thing|done|tests/test_a.py",
+        "Second thing|done|tests/b.py",
+    }
+    assert manifest.get("noSubstantiveClaims") is not True
+    assert body_out.get("noSubstantiveClaims") is not True
+
+
+def test_dod_table_with_separator_excludes_header_only(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship the thing | done | tests/test_a.py |\n"
+        "| Second thing | done | tests/b.py |"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 2
+    texts = {c["text"] for c in dod}
+    assert "DoD|Status|Evidence" not in texts
+    assert texts == {
+        "Ship the thing|done|tests/test_a.py",
+        "Second thing|done|tests/b.py",
+    }
+
+
+def test_degradation_marker_without_heading_bounded_by_first_heading(tmp_path):
+    body = (
+        "<!-- superheroes:degradations -->\n"
+        "- real degradation one\n\n"
+        "### Dispatch provenance\n"
+        "- WO-A by cursor\n\n"
+        "### Follow-ups\n"
+        "- unrelated follow-up\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    deg = _degradation_claims(manifest)
+    assert [c["text"] for c in deg] == ["real degradation one"]
+
+
 def test_degradation_region_bounded_by_headings(tmp_path):
     body = (
         "## Summary\n"
@@ -319,6 +379,22 @@ def test_degradation_region_bounded_by_headings(tmp_path):
     repo_deg = [c for c in body_out["claims"] if c["kind"] == "degradation"]
     assert len(repo_deg) == 1
     assert repo_deg[0]["text"] == "real degradation one"
+
+
+def test_dod_table_separator_does_not_drop_final_row(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Only data row | done | tests/final.py |"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Only data row|done|tests/final.py"
 
 
 def test_happy_path_stage(tmp_path):

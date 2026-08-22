@@ -156,6 +156,24 @@ def _next_heading_boundary(text, section_level):
     return len(text)
 
 
+def _first_any_heading_offset(text):
+    """Offset in text where the first heading of any level begins."""
+    offset = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped and _heading_level(stripped) is not None:
+            return offset
+        offset += len(line)
+    return len(text)
+
+
+def _region_heading_bound(text, opening_level):
+    """Offset where the region's heading-boundary ends (exclusive)."""
+    if opening_level is not None:
+        return _next_heading_boundary(text, opening_level)
+    return _first_any_heading_offset(text)
+
+
 def _extract_region(body, marker):
     idx = body.find(marker)
     if idx < 0:
@@ -177,10 +195,7 @@ def _extract_region(body, marker):
             continue
         section_level = _heading_level(stripped)
         break
-    if section_level is not None:
-        heading_end = start + _next_heading_boundary(rest, section_level)
-    else:
-        heading_end = len(body)
+    heading_end = start + _region_heading_bound(rest, section_level)
     end = min(marker_end, heading_end)
     region_text = body[start:end]
     lines = region_text.splitlines()
@@ -196,21 +211,30 @@ def _parse_dod_rows(body, marker):
     region_text, _ = _extract_region(body, marker)
     if region_text is None:
         return []
-    rows = []
-    past_separator = False
+    table_lines = []
     for line in region_text.splitlines():
         stripped = line.strip()
-        if not stripped.startswith("|"):
-            continue
+        if stripped.startswith("|"):
+            table_lines.append(stripped)
+    rows = []
+    i = 0
+    while i < len(table_lines):
+        stripped = table_lines[i]
         if re.match(r"^\|[-:\s|]+\|$", stripped):
-            past_separator = True
+            i += 1
             continue
-        if not past_separator:
+        if (
+            i + 1 < len(table_lines)
+            and re.match(r"^\|[-:\s|]+\|$", table_lines[i + 1])
+        ):
+            i += 1
             continue
         cells = [c.strip() for c in stripped.strip("|").split("|")]
         if not any(cells):
+            i += 1
             continue
         rows.append("|".join(cells))
+        i += 1
     return rows
 
 
