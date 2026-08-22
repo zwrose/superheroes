@@ -197,12 +197,13 @@ rule self-feeding: every honest skip either points at a tracked blocker or is a 
 list of things standing between this project and a certified loop maintains itself.
 
 **Seat-provenance parity — a hand-driven panel owes what the driver records.** The driver path
-records, per seat, an attempt on the configured reviewer engine or a **terminal forfeit** naming
-why. A hand-driven panel owes the **same recorded attempt-or-forfeit on the configured reviewer
-engine**. **A panel seated off the configured reviewer engine with no recorded forfeit on that
-engine is a vet finding** — the record is the only thing separating an engine that was tried and
-failed from one that was never asked, and a substitution nobody recorded is exactly the silent
-degradation this lane exists to prevent.
+records, per seat, an attempt on that seat's seat-map-assigned vendor or a **terminal forfeit**
+naming why. A hand-driven panel owes the **same recorded attempt-or-forfeit on the vendor that seat
+was assigned**. A mixed panel — different seats on different vendors by design — is normal and is not
+itself a finding. **A seat that ran on a vendor other than its seat-map assignment with no recorded
+forfeit on the assigned vendor is a vet finding** — the record is the only thing separating an
+engine that was tried and failed from one that was never asked, and a substitution nobody recorded
+is exactly the silent degradation this lane exists to prevent.
 
 **The flip — a dated conditional that arms itself.** Ruled **2026-08-21**. **When the milestone
 *Review panels can't silently degrade* closes, a full-lane review that is not the certified loop

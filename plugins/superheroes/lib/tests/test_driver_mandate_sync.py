@@ -69,11 +69,12 @@ _SKIP_CITATION_COPY = (
 )
 
 _PARITY_HOME = (
-    "A panel seated off the configured reviewer engine with no recorded forfeit on that "
-    "engine is a vet finding"
+    "A seat that ran on a vendor other than its seat-map assignment with no recorded forfeit on the "
+    "assigned vendor is a vet finding"
 )
 _PARITY_COPY = (
-    "A seat substituted with no recorded forfeit on the engine it replaced is a finding"
+    "A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was "
+    "assigned is a finding"
 )
 
 _BACKGROUNDABLE_VERIFY_SURFACES = [
