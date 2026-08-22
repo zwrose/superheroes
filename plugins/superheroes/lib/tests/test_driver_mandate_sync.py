@@ -13,21 +13,36 @@ Six guarded elements (two single-home facts — the flip conditional and the pos
 policy — are deliberately out of scope; they live only in ``rubric/review-discipline.md``).
 
 What is guaranteed is **presence** of each pinned literal verbatim modulo ``*``-stripping and
-whitespace collapse on every enumerated surface. The guard does **not** detect a literal that is
-present but neutralized by surrounding prose (for example an appended exception clause); that
-semantic check is deliberately out of scope — the enumeration exists to prevent exactly that
-overclaim.
+whitespace collapse inside its **declared section** on every enumerated surface. Section
+extraction reuses ``_file_section`` and ``_normalized`` from ``test_charter_boundary_sync``;
+that reader is deliberately **fence-blind** (fence-awareness was tried and reverted in PR #727).
+
+The guard does **not** detect a literal that is present but neutralized by surrounding prose (for
+example an appended exception clause); that semantic check is deliberately out of scope — the
+enumeration exists to prevent exactly that overclaim.
 """
 import os
-import re
 
 import pytest
+
+from test_charter_boundary_sync import _file_section, _normalized
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 
 _HOME = "rubric/review-discipline.md"
 _VET_RECEIPT = "skills/showrunner/reference/vet-receipt.md"
+
+_DRIVER_MANDATE_SECTION = (
+    "## The driver mandate — the certified loop, its skips, and the flip"
+)
+_VET_TRIGGERED_SECTION = (
+    "## Triggered fields — the artifacts raise them, not your memory"
+)
+_WORKHORSE_DELEGATE_SECTION = (
+    "## 7. Delegate every implementation (lane-scoped — no size exception)"
+)
+_ROUND_DRIVER_ACTIONS_SECTION = "## Actions and payloads"
 
 _BACKGROUNDABLE_VERIFY = (
     "The verify step may run harness-backgrounded and polled in-turn — the already-sanctioned "
@@ -36,14 +51,25 @@ _BACKGROUNDABLE_VERIFY = (
     "the turn to wait."
 )
 
-_SKIP_CITATION = "`driver-blocker` issue by number"
-
-_PARITY = "configured reviewer engine"
-
-_BACKGROUNDABLE_VERIFY_SURFACES = (
-    "skills/review-code/reference/round-driver.md",
-    "skills/workhorse/SKILL.md",
+_SKIP_CITATION_HOME = (
+    "A skip citing nothing, and a skip citing a closed issue, are each a vet finding"
 )
+_SKIP_CITATION_COPY = (
+    "A citation that is absent, or that names a closed issue, is a finding"
+)
+
+_PARITY_HOME = (
+    "A panel seated off the configured reviewer engine with no recorded forfeit on that "
+    "engine is a vet finding"
+)
+_PARITY_COPY = (
+    "A seat substituted with no recorded forfeit on the engine it replaced is a finding"
+)
+
+_BACKGROUNDABLE_VERIFY_SURFACES = {
+    "skills/review-code/reference/round-driver.md": _ROUND_DRIVER_ACTIONS_SECTION,
+    "skills/workhorse/SKILL.md": _WORKHORSE_DELEGATE_SECTION,
+}
 
 
 def _read(rel):
@@ -54,52 +80,53 @@ def _read(rel):
         return fh.read()
 
 
-def _normalize(text):
-    return re.sub(r"\s+", " ", text.replace("*", "")).strip()
+def _section_text(rel, section):
+    return _file_section(rel, section, _read)
 
 
-def _assert_literal_present(rel, text, literal):
-    normalized_literal = _normalize(literal)
-    if normalized_literal not in _normalize(text):
+def _assert_clause_in_section(rel, section, literal):
+    section_text = _section_text(rel, section)
+    normalized_literal = _normalized(literal)
+    if normalized_literal not in section_text:
         raise AssertionError(
-            f"literal missing from {rel} — expected substring: {normalized_literal!r}"
+            f"literal missing from {rel} (section {section!r}) — "
+            f"expected substring: {normalized_literal!r}"
         )
 
 
 @pytest.mark.parametrize(
-    "rel",
-    _BACKGROUNDABLE_VERIFY_SURFACES,
+    "rel,section",
+    list(_BACKGROUNDABLE_VERIFY_SURFACES.items()),
     ids=["round-driver", "workhorse"],
 )
-def test_backgroundable_verify_present(rel):
-    # axis: presence of BACKGROUNDABLE_VERIFY literal in enumerated copy-holder surface
-    text = _read(rel)
-    _assert_literal_present(rel, text, _BACKGROUNDABLE_VERIFY)
+def test_backgroundable_verify_present(rel, section):
+    # axis: presence of BACKGROUNDABLE_VERIFY literal in enumerated copy-holder section
+    _assert_clause_in_section(rel, section, _BACKGROUNDABLE_VERIFY)
 
 
 def test_skip_citation_present_in_home():
-    # axis: presence of SKIP_CITATION literal in review-discipline.md home (anti-tautology leg)
-    home_text = _read(_HOME)
-    _assert_literal_present(_HOME, home_text, _SKIP_CITATION)
+    # axis: presence of the skip-citation rule clause in review-discipline.md home section
+    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
+    assert _normalized(_SKIP_CITATION_HOME) in home_section_text
 
 
 def test_skip_citation_present_in_vet_receipt_copy():
-    # axis: presence of home-derived SKIP_CITATION literal in vet-receipt.md copy
-    home_text = _read(_HOME)
-    _assert_literal_present(_HOME, home_text, _SKIP_CITATION)
-    copy_text = _read(_VET_RECEIPT)
-    _assert_literal_present(_VET_RECEIPT, copy_text, _SKIP_CITATION)
+    # axis: presence of the holder-specific skip-citation clause in vet-receipt.md
+    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
+    assert _normalized(_SKIP_CITATION_HOME) in home_section_text
+    copy_section_text = _section_text(_VET_RECEIPT, _VET_TRIGGERED_SECTION)
+    assert _normalized(_SKIP_CITATION_COPY) in copy_section_text
 
 
 def test_parity_present_in_home():
-    # axis: presence of PARITY literal in review-discipline.md home (anti-tautology leg)
-    home_text = _read(_HOME)
-    _assert_literal_present(_HOME, home_text, _PARITY)
+    # axis: presence of the parity rule clause in review-discipline.md home, exactly once
+    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
+    assert home_section_text.count(_normalized(_PARITY_HOME)) == 1
 
 
 def test_parity_present_in_vet_receipt_copy():
-    # axis: presence of home-derived PARITY literal in vet-receipt.md copy
-    home_text = _read(_HOME)
-    _assert_literal_present(_HOME, home_text, _PARITY)
-    copy_text = _read(_VET_RECEIPT)
-    _assert_literal_present(_VET_RECEIPT, copy_text, _PARITY)
+    # axis: presence of the holder-specific parity clause in vet-receipt.md
+    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
+    assert home_section_text.count(_normalized(_PARITY_HOME)) == 1
+    copy_section_text = _section_text(_VET_RECEIPT, _VET_TRIGGERED_SECTION)
+    assert _normalized(_PARITY_COPY) in copy_section_text

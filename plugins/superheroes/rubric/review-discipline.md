@@ -214,7 +214,10 @@ is honest. The arming event is the **milestone's close** — the owner's judgmen
 condition is met, read off the receipts, as ROADMAP.md's standing rule already defines closure; the
 release cut carrying that milestone's work is how the close is **stamped**, not a second and
 separate trigger. It is written as a dated conditional precisely so that nobody has to remember to
-arm it: a reader at the close needs no context beyond this paragraph.
+arm it: a reader at the close needs no context beyond this paragraph. **The milestone named here
+and ROADMAP.md's closure rule are this band's arming record in the superheroes project itself** —
+a consuming project inherits the portable **driver-or-park** valve from the sentences above, not an
+obligation to evaluate this repository's milestone state.
 
 **No mechanical gate ships for any of this.** The skip rule, the parity rule, and the flip are vet
 doctrine, graded by reading — the advisor at vet is the enforcement, and a guard that parsed a PR
