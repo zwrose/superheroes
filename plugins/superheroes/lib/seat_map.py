@@ -447,14 +447,6 @@ def build(
                     if try_tier != tier:
                         cfg["tier"] = try_tier
                     return cfg
-        for vendor in seating_vendors:
-            for try_tier in sorted({tiers.get(s, "reviewer") for s in roster} | {"reviewer", "reviewer-deep"}):
-                cfg = _resolve_at_tier(seat, vendor, try_tier)
-                if cfg is not None:
-                    cfg = dict(cfg)
-                    cfg["source"] = "backfill"
-                    cfg["tier"] = try_tier
-                    return cfg
         for try_tier in ("reviewer-deep", "reviewer"):
             cfg = _resolve_at_tier(seat, "claude", try_tier)
             if cfg is not None:
@@ -940,20 +932,19 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         if key not in seen:
             seen.add(key)
             degradations.append(rec)
-    receipt_live_cells, _receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
+    receipt_live_cells, receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
     out = {
         "seats": seat_map.get("seats", {}),
         "degradations": degradations,
         "seed": seat_map.get("seed"),
         "liveVendors": seat_map.get("liveVendors", []),
         "liveCells": receipt_live_cells,
+        "liveCellsSource": receipt_cells_source,
         "narrativeFamily": seat_map.get("narrativeFamily"),
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
     }
-    if seat_map.get("liveCellsSource") is not None:
-        out["liveCellsSource"] = seat_map["liveCellsSource"]
     return out
 
 

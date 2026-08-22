@@ -129,6 +129,7 @@ def test_read_rejects_pre_711_schema_v1_receipt(tmp_path, monkeypatch):
 
 
 def test_read_rejects_v2_receipt_without_cells(tmp_path, monkeypatch):
+    # axis: liveness structure — v2 receipts lacking per-cell evidence are rejected
     monkeypatch.delenv(lc._ENV_TTL, raising=False)
     path = str(tmp_path / "r.json")
     now = 5_000.0
@@ -142,6 +143,24 @@ def test_read_rejects_v2_receipt_without_cells(tmp_path, monkeypatch):
         },
         "claude": {"live": True, "models": {}},
     }
+    json.dump(
+        {
+            "schemaVersion": 2,
+            "probedAt": now - 10,
+            "liveness": v2_liveness,
+            "needed": _good_needed(),
+        },
+        open(path, "w"),
+    )
+    assert lc.read(path, now=now) is None
+
+
+def test_read_rejects_v2_receipt_with_well_formed_cells(tmp_path, monkeypatch):
+    # axis: SCHEMA_VERSION gate — stale v2 receipts rejected even when cell structure is valid
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 5_000.0
+    v2_liveness = _good_liveness()
     json.dump(
         {
             "schemaVersion": 2,

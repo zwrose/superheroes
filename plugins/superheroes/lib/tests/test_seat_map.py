@@ -1925,13 +1925,12 @@ def test_census_seated_cells_appear_in_live_cells():
 
 
 def test_to_receipt_always_emits_live_cells_fields():
+    # bite-axis: provenance — liveCells and liveCellsSource must appear together on every receipt
+    receipts = []
     m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
     assert "liveCells" in m
     assert m["liveCells"]
-    receipt = SM.to_receipt(m)
-    assert "liveCells" in receipt
-    assert receipt["liveCells"] is not None
-    assert isinstance(receipt["liveCells"], list)
+    receipts.append(SM.to_receipt(m))
 
     probed = SM.build(
         SM.PANEL_ROSTER,
@@ -1947,6 +1946,7 @@ def test_to_receipt_always_emits_live_cells_fields():
     )
     probed_receipt = SM.to_receipt(probed)
     assert probed_receipt["liveCellsSource"] == "probed"
+    receipts.append(probed_receipt)
 
     synthesized = SM.build(
         SM.PANEL_ROSTER,
@@ -1959,7 +1959,14 @@ def test_to_receipt_always_emits_live_cells_fields():
     )
     syn_receipt = SM.to_receipt(synthesized)
     assert syn_receipt["liveCellsSource"] == "synthesized"
+    receipts.append(syn_receipt)
 
-    bare = {"seats": _full_seats_template(), "liveVendors": THREE_VENDORS}
+    bare = {"seats": {}, "liveVendors": ["claude", "codex", "cursor"]}
     bare_receipt = SM.to_receipt(bare, "xai")
     assert bare_receipt["liveCells"] is not None
+    assert bare_receipt["liveCellsSource"] == "synthesized"
+    receipts.append(bare_receipt)
+
+    for receipt in receipts:
+        assert "liveCells" in receipt
+        assert "liveCellsSource" in receipt
