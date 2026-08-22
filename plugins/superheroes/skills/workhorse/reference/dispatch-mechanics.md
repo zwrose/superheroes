@@ -271,10 +271,10 @@ stdout, and deliver nothing gradeable through our transport (`stages.engaged: tr
 
 ### Brief-check dispatch (`--mode brief-check`)
 
-The workhorse charter §5 names *who* reviews the brief; this subsection is the mechanics for *how* it
-is dispatched. The sanctioned channel is `dispatch-review --mode brief-check` — not a hand-rolled
-`codex exec`, which is permitted **only when the runner itself is unavailable** (disclosed degradation
-in the PR body, never the normal path).
+The workhorse charter §5 names *who* reviews the brief; this subsection carries the standing lens the
+check always applies, and the mechanics for *how* it is dispatched. The sanctioned channel is
+`dispatch-review --mode brief-check` — not a hand-rolled `codex exec`, which is permitted **only when
+the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -307,6 +307,25 @@ supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Expl
 inherited from the journal and `--mode` is omitted. The terminal journaled result — `mode:
 brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all four diff keys `null` — is
 the receipt that the brief check happened.
+
+**The standing lens: the foreign-contract round-trip.** Whatever else the brief prompt asks, the
+check always applies this one. **A brief that touches an external API, CLI, or service contract owes
+the round-trip answer** — evidence that the *far side* accepts what we intend to send, established
+before code rather than after. Exactly one of three satisfies it: **(a)** local validation against
+the foreign contract's own rules (the vendor's schema dialect and its strict-mode restrictions, its
+required/optional shape, its argv grammar) — not against our own idea of well-formedness; **(b)** a
+live smoke against the real endpoint or binary; or **(c)** a stated reason neither is available, so
+the risk is accepted knowingly instead of by omission. A brief that describes in detail what we will
+send, and never says how we established the far side takes it, has **not** answered — and the check
+says so. The failure this catches is not a bug in our code: our code is exactly what we designed,
+and the contract we designed against was never real. *Teaching examples.* **#307** — `codex review
+--output-schema` was handed a schema that is valid JSON Schema but invalid under OpenAI strict mode;
+every codex review dispatch 400'd at request time, **32/32 failures, zero successes ever**, and the
+silent Claude fallback made the loss read as a working cross-vendor panel. The same class recurred
+**2026-08-09** in the weekly-eats project: a hand-rolled schema, request-time 400s, and three
+re-dispatches of a review that had already come back clean — the repair landed as **#949**'s
+canonical result contract. In both, one local validation of the foreign contract's rules at brief
+time would have cost minutes.
 
 ## Supervised write dispatch
 

@@ -52,6 +52,15 @@ Collect findings under these named smells; **every finding cites its smell by na
   the file bites on does not blanket unrelated detectors in the same file, and a seat should flag a
   single shared line across detectors that bite on different axes. Everything needed to apply this
   smell is in this file; `rubric/bite-proof.md` is the plugin's own reference.
+- **environment-supplied-posture** — the test is green only because *this* environment supplies
+  something the target environment does not: an ambient git identity, a permission or allow rule, a
+  gate whose precondition the harness pre-satisfies, network reachability, a binary already on
+  `PATH`. The assertion may be perfectly real; the **posture** it runs under is not the shipped one,
+  so the green measures the runner rather than the code. Distinguish it from its two neighbours: a
+  **cleanup leak** is state a *sibling test* left behind, and the pinning case under *Bite-proof
+  gaps* is a pin the test **declares** — here nothing is declared, because the supply is ambient and
+  therefore invisible in the diff. A test in this class owes a named statement of what the
+  environment supplies, and a showing of itself red without it.
 
 ## What to Flag
 
@@ -121,6 +130,28 @@ Collect findings under these named smells; **every finding cites its smell by na
   hides the failure mode the test claims to catch** (a pinned clock in a timing or interleaving
   test, a pinned concurrency in a race test, a pinned environment in a test whose claim is
   environment-dependent) without saying what production shape the pin makes unobservable.
+
+**Environment-supplied posture (diff-only — you cannot see the build record).**
+
+- A changed test, fixture, or harness helper whose green depends on something the **runner's
+  environment happens to supply** and the target environment does not — a configured git identity, a
+  permission grant, a pre-satisfied gate precondition, reachable network, an installed binary. Flag
+  it when the diff neither names what is being supplied nor shows the check red without it. Ask the
+  question directly: *if this ran where the supply is absent, would it still pass — and would it
+  still be measuring the same thing?* The fix is the **negative case** — run the unit with the
+  supplied thing removed or overridden and assert the failure — or, where the negative case
+  genuinely cannot be constructed under this runner, an in-diff line saying so and naming the
+  environment that does prove it. **Important** when the check's whole claim is
+  environment-dependent (an identity, permission, liveness, or CI gate); **Minor** when the supplied
+  thing is incidental to what the test actually asserts. The severity cap in *Output Format* still
+  binds — test findings are never Critical. *Teaching examples:* the **2026-08-09 CI-identity
+  escape** — a dev box silently supplied `user.email`, so a fixture's own commits succeeded locally
+  **by construction**, the local run read ready, and both halves of the stack went red only in CI
+  (the encoded response is the workhorse charter's §2 rule that commits inherit the *resolved*
+  identity and a missing one parks); and the **pre-proven-liveness fixture class**, PR **#714**,
+  where the harness defaulted an engaged liveness result the fixtures then leaned on — `4051 passed,
+  3 skipped` carried a park-to-certify regression straight through, and the PR's own honest
+  explanation was that the harness pre-proves liveness.
 
 ## Do NOT Flag
 
