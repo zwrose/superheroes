@@ -5216,11 +5216,32 @@ def test_git_config_local_keys_reports_unknown_distinctly_from_empty():
     assert sv._git_config_local_keys("/definitely/not/a/repo/797") is None
 
 
-def test_git_config_says_true_refuses_a_key_outside_the_promisor_pattern(tmp_path):
-    """Repository-supplied text can never reach git's argv as an option."""
-    repo = _init_repo(tmp_path / "argv-guard", files={"a.txt": "a\n"})
-    for key in ("--global", "-c", "core.bare", "extensions.partialclone"):
-        assert sv._git_config_says_true(repo, key) is False
+def test_git_config_says_true_never_spawns_for_a_key_outside_the_pattern(monkeypatch):
+    """Repository-supplied text is never handed to git at all — not merely rejected by it.
+
+    Asserting only the ``False`` return would pass with the guard deleted, because git
+    exits non-zero on an unknown key anyway. The axis is *reaching argv*, so this asserts
+    that no subprocess is spawned.
+    """
+    spawned = []
+
+    def record(*args, **kwargs):
+        spawned.append(args[0])
+        raise AssertionError("unvetted key reached git argv: %r" % (args[0],))
+
+    monkeypatch.setattr(sv, "_git_run", record)
+    for key in ("--global", "-c", "--type=int", "core.bare", "extensions.partialclone"):
+        assert sv._git_config_says_true("/anywhere", key) is False
+    assert spawned == []
+
+
+def test_git_config_says_true_does_spawn_for_a_matching_key(tmp_path):
+    """The guard must not be so tight that the real key never gets through."""
+    repo = _init_repo(tmp_path / "argv-guard-positive", files={"a.txt": "a\n"})
+    _git(repo, "config", "remote.origin.promisor", "true")
+    assert sv._git_config_says_true(repo, "remote.origin.promisor") is True
+    _git(repo, "config", "remote.origin.promisor", "off")
+    assert sv._git_config_says_true(repo, "remote.origin.promisor") is False
 
 
 def test_is_partial_clone_ignores_a_disabled_promisor_remote(tmp_path):
