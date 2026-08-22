@@ -5111,9 +5111,26 @@ def test_partial_clone_attribution_covers_every_refusal_token():
     ) == frozenset()
 
 
-def test_is_partial_clone_answers_false_when_the_probe_cannot_run(tmp_path):
-    """Probe failure must not manufacture a shape attribution."""
+def test_is_partial_clone_answers_false_when_the_probe_exits_nonzero(tmp_path):
+    """Probe failure must not manufacture a shape attribution (non-zero-exit leg)."""
     assert sv._is_partial_clone(str(tmp_path / "does-not-exist")) is False
+
+
+@pytest.mark.parametrize(
+    "boom", [OSError("no git"), subprocess.TimeoutExpired("git", 1), ValueError("bad")]
+)
+def test_is_partial_clone_answers_false_when_the_probe_raises(monkeypatch, boom):
+    """Probe failure must not manufacture a shape attribution (raise leg).
+
+    The non-zero-exit leg above cannot reach this ``except``; both legs are proved
+    because either one falling open would attribute an unrelated fault to the shape.
+    """
+
+    def explode(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(sv, "_git_run", explode)
+    assert sv._is_partial_clone("/anywhere") is False
 
 
 def test_is_partial_clone_ignores_a_disabled_promisor_remote(tmp_path):
