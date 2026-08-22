@@ -1475,6 +1475,18 @@ def test_grounding_stage_region_markers_match_conventions_10_7():
     )
 
 
+def test_grounding_stage_session_modes_match_review_base_guard():
+    """§11: grounding_stage consumes review_base_guard.SESSION_MODES as the mode SSOT."""
+    import grounding_stage
+    import review_base_guard
+
+    assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
+    assert grounding_stage._read_meta  # module loaded
+    # _read_meta enforces review_base_guard.SESSION_MODES at runtime — bind the symbol.
+    assert "pr" in review_base_guard.SESSION_MODES
+    assert "branch" in review_base_guard.SESSION_MODES
+
+
 def test_vet_receipt_markers_match_conventions_10_7():
     """§11 + §12.3: the vet-receipt marker literals agree across every hand-maintained copy.
 

@@ -39,6 +39,7 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "staged-file-hash-mismatch",
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
+    "source-body-stale",
     "invalid-invocation",
 })
 
@@ -299,7 +300,8 @@ def test_dod_rows_exact_set_and_verifiability(tmp_path):
     repo_dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
     repo_texts = {c["text"] for c in repo_dod}
     assert "Remove deferred fallback|done|tests/test_x.py" in repo_texts
-    assert "Defer later|deferred|#609 reason" not in repo_texts
+    assert "Defer later|deferred|#609 reason" in repo_texts
+    assert "Ship the thing|done|tests/test_a.py" in repo_texts
 
 
 def test_dod_table_without_separator_mints_all_rows(tmp_path):
@@ -451,9 +453,9 @@ def test_absent_regions_still_stage(tmp_path):
     session = _session(tmp_path, body=body)
     rc, body_out = _invoke("stage", session)
     assert rc == 0 and body_out["ok"]
-    assert body_out.get("noSubstantiveClaims") is True
+    assert body_out.get("noSubstantiveClaims") is not True
     manifest = _manifest(session)
-    assert manifest.get("noSubstantiveClaims") is True
+    assert manifest.get("noSubstantiveClaims") is not True
     regions = {r["name"]: r for r in manifest["regions"]}
     assert regions["dod-table"]["present"] is False
     assert regions["degradations"]["present"] is False
@@ -638,6 +640,18 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
 
     cases["manifest-flag-mismatch"] = case_manifest_flag_mismatch
 
+    def case_source_body_stale():
+        session = _session(tmp_path, body=_happy_body(), name="case-source-body-stale")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        pr_path = tmp_path / "case-source-body-stale" / "pr.json"
+        pr_data = json.loads(pr_path.read_text(encoding="utf-8"))
+        pr_data["body"] = pr_data["body"] + "\nEdited after staging."
+        pr_path.write_text(json.dumps(pr_data), encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["source-body-stale"] = case_source_body_stale
+
     def case_invalid_invocation():
         session = _session(tmp_path, body=_happy_body(), name="case-invalid-invocation")
         argv = ["grounding_stage.py", "nope", "--session-dir", session]
@@ -730,6 +744,8 @@ def _manifest_shape_mutations():
         {"claimId": "x-abc", "kind": "dod-row", "text": "x"}))
     add("claim-unknown-verifiability", lambda m: m["claims"].append(
         {"claimId": "x-abc", "kind": "dod-row", "text": "x", "verifiability": "bogus"}))
+    add("sourceBodySha256-missing", lambda m: m.pop("sourceBodySha256", None))
+    add("sourceBodySha256-empty", lambda m: m.update({"sourceBodySha256": ""}))
 
     def defect_b1_minimal_claim():
         m = {"claims": [{"verifiability": "repo"}]}
@@ -806,18 +822,24 @@ def test_stage_check_round_trip_full_envelope(tmp_path):
     assert rc2 == 0
     assert check_body["ok"] is True
     assert check_body["applicable"] is True
-    repo_claims = [
-        c for c in manifest["claims"]
-        if isinstance(c, dict) and c.get("verifiability") == "repo"
-    ]
-    assert check_body["claims"] == repo_claims
+    assert check_body["claims"] == manifest["claims"]
     assert check_body["files"] == manifest["files"]
     assert check_body.get("noSubstantiveClaims") is not True
-    assert len(repo_claims) >= 1
+    assert len(manifest["claims"]) >= 1
 
 
 def test_stage_check_round_trip_no_substantive_claims(tmp_path):
-    body = "## Summary\nNo markers here.\n"
+    body = (
+        "## Summary\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n\n"
+        "<!-- superheroes:build-record -->\n"
+        "<details><summary>Build record</summary></details>\n\n"
+        "<!-- superheroes:degradations -->\n"
+        "### Disclosed degradations\n\n"
+        "<!-- superheroes:advisor-vet -->\n"
+    )
     session = _session(tmp_path, body=body)
     rc, stage_body = _invoke("stage", session)
     assert rc == 0
@@ -825,7 +847,10 @@ def test_stage_check_round_trip_no_substantive_claims(tmp_path):
     rc2, check_body = _invoke("check", session)
     assert rc2 == 0
     assert check_body.get("noSubstantiveClaims") is True
-    assert check_body["claims"] == []
+    assert not any(
+        c.get("kind") in ("dod-row", "degradation", "stub-marker")
+        for c in check_body["claims"]
+    )
 
 
 def _dod_table_body(row_count):
@@ -978,3 +1003,33 @@ def test_refuse_call_sites_use_registered_string_literals():
 
     assert not non_literal, "_refuse first arg not a string literal at lines: %s" % non_literal
     assert not unregistered, "_refuse unregistered literals: %s" % unregistered
+
+
+def test_nonstandard_dod_status_with_issue_ref_stays_repo(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| all tests pass | shipped | fixes #609 |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
+    assert len(dod) == 1
+    assert dod[0]["verifiability"] == "repo"
+
+
+def test_tampered_manifest_claim_refuses_check(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    for claim in manifest["claims"]:
+        if claim.get("kind") == "dod-row" and claim.get("verifiability") == "external":
+            claim["verifiability"] = "repo"
+            break
+    else:
+        pytest.fail("expected a deferred dod-row claim in manifest")
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    rc2, body = _invoke("check", session)
+    _assert_refusal(rc2, body, "stage-manifest-invalid")

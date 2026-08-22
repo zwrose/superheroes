@@ -67,9 +67,6 @@ VERIFIABILITY_VALUES = frozenset({
     VERIFIABILITY_EXTERNAL,
 })
 
-# Closed session modes — same set as review_base_guard.decide(); that module has no named export.
-_SESSION_MODES = ("pr", "branch")
-
 REFUSAL_REASONS = frozenset({
     "meta-unreadable",
     "meta-mode-unknown",
@@ -88,6 +85,7 @@ REFUSAL_REASONS = frozenset({
     "staged-file-hash-mismatch",
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
+    "source-body-stale",
     "invalid-invocation",
 })
 
@@ -208,7 +206,7 @@ def _read_meta(session_dir):
             return _refuse("meta-mode-unknown", detail)
         return _refuse("meta-unreadable", detail)
     mode = data.get("mode")
-    if mode not in _SESSION_MODES:
+    if mode not in review_base_guard.SESSION_MODES:
         return _refuse("meta-mode-unknown", "mode absent or unknown: %r" % mode)
     return {"ok": True, "mode": mode}
 
@@ -342,9 +340,6 @@ def _dod_row_verifiability(row_text):
             return VERIFIABILITY_EXTERNAL
         if status == "done":
             return VERIFIABILITY_REPO
-    evidence = cells[2] if len(cells) >= 3 else row_text
-    if re.search(r"#\d+", evidence):
-        return VERIFIABILITY_EXTERNAL
     return VERIFIABILITY_REPO
 
 
@@ -426,27 +421,60 @@ def _verify_written_file(path, expected_text):
     return {"ok": True, "sha256": actual_hash, "bytes": len(on_disk.encode("utf-8"))}
 
 
-def _repo_claims(claims):
-    return [
-        c for c in (claims or [])
-        if isinstance(c, dict) and c.get("verifiability") == VERIFIABILITY_REPO
-    ]
+def _region_map(regions):
+    if not isinstance(regions, list):
+        return {}
+    return {
+        r["name"]: r for r in regions
+        if isinstance(r, dict) and isinstance(r.get("name"), str)
+    }
+
+
+def _no_substantive_claims(claims, region_map):
+    """True only when every region is present and no row-level claims were minted."""
+    for name in REGION_MARKERS:
+        if not region_map.get(name, {}).get("present"):
+            return False
+    substantive_kinds = frozenset({
+        CLAIM_KIND_DOD_ROW,
+        CLAIM_KIND_DEGRADATION,
+        CLAIM_KIND_STUB_MARKER,
+    })
+    for claim in claims or []:
+        if isinstance(claim, dict) and claim.get("kind") in substantive_kinds:
+            return False
+    return True
 
 
 def _branch_mode_result():
     return {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
 
 
-def _success_envelope(repo_claims, files):
+def _success_envelope(claims, files, region_map):
     result = {
         "ok": True,
         "applicable": True,
-        "claims": repo_claims,
+        "claims": list(claims or []),
         "files": files,
     }
-    if not repo_claims:
+    if _no_substantive_claims(claims, region_map):
         result["noSubstantiveClaims"] = True
     return result
+
+
+def _extract_untrusted_pr_body(staged_text):
+    nonce = _parse_fence_nonce(staged_text)
+    if not nonce:
+        return None
+    pattern = (
+        r"<!-- BEGIN UNTRUSTED PR BODY %s[^\n]*\n"
+        r"(.*)"
+        r"<!-- END UNTRUSTED PR BODY %s -->"
+    ) % (re.escape(nonce), re.escape(nonce))
+    match = re.search(pattern, staged_text, re.DOTALL)
+    if not match:
+        return None
+    return match.group(1)
 
 
 def _parse_fence_nonce(staged_text):
@@ -544,6 +572,9 @@ def _validate_manifest_shape(manifest, session_dir):
         claim_err = _validate_claim_shape(claim, index)
         if claim_err:
             return _refuse("stage-manifest-invalid", claim_err)
+    source_sha = manifest.get("sourceBodySha256")
+    if not isinstance(source_sha, str) or not source_sha:
+        return _refuse("stage-manifest-invalid", "sourceBodySha256 missing or empty")
     return {"ok": True, "manifest": manifest}
 
 
@@ -575,6 +606,15 @@ def _verify_manifest_files(manifest, session_dir):
                 "staged-stage-token-mismatch",
                 "staged body token %r != manifest token %r" % (body_token, manifest_token),
             )
+        raw_body = _extract_untrusted_pr_body(on_disk)
+        if raw_body is None:
+            return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
+        derived_regions = _detect_regions(raw_body)
+        if derived_regions != manifest.get("regions"):
+            return _refuse("stage-manifest-invalid", "regions do not match staged body")
+        derived_claims = _enumerate_claims(raw_body, _region_map(derived_regions))
+        if derived_claims != manifest.get("claims"):
+            return _refuse("stage-manifest-invalid", "claims do not match staged body")
     return {"ok": True, "manifest": manifest}
 
 
@@ -639,18 +679,18 @@ def stage(session_dir):
         "sha256": verify["sha256"],
         "bytes": verify["bytes"],
     }]
-    repo_claims = _repo_claims(claims)
     manifest = {
         "schema": STAGE_SCHEMA,
         "mode": "pr",
         "stageToken": token,
         "stagedAt": _iso8601_utc(),
         "sessionDir": abs_session,
+        "sourceBodySha256": _sha256_text(body),
         "files": files,
         "regions": regions,
         "claims": claims,
     }
-    if not repo_claims:
+    if _no_substantive_claims(claims, region_map):
         manifest["noSubstantiveClaims"] = True
     manifest_path = os.path.join(grounding, STAGE_MANIFEST)
     manifest_text = json.dumps(manifest, sort_keys=True) + "\n"
@@ -661,7 +701,7 @@ def stage(session_dir):
     verify_manifest = _verify_written_file(manifest_path, manifest_text)
     if not verify_manifest.get("ok"):
         return verify_manifest
-    return _success_envelope(repo_claims, files)
+    return _success_envelope(claims, files, region_map)
 
 
 def _load_manifest(session_dir):
@@ -695,19 +735,43 @@ def check(session_dir):
     if not verified.get("ok"):
         return verified
     manifest = verified["manifest"]
-    repo_claims = _repo_claims(manifest.get("claims"))
-    if not repo_claims:
+    pr_path = os.path.join(session_dir, "pr.json")
+    try:
+        pr_data = _read_json(pr_path)
+    except FileNotFoundError as exc:
+        return _refuse("source-body-stale", str(exc))
+    except UnicodeDecodeError as exc:
+        return _refuse("source-body-stale", str(exc))
+    except OSError as exc:
+        return _refuse("source-body-stale", str(exc))
+    except json.JSONDecodeError as exc:
+        return _refuse("source-body-stale", str(exc))
+    if not isinstance(pr_data, dict):
+        return _refuse("source-body-stale", "pr.json root is not an object")
+    current_body = pr_data.get("body")
+    if current_body is None or not isinstance(current_body, str):
+        return _refuse("source-body-stale", "body absent or not a string")
+    current_sha = _sha256_text(current_body)
+    if current_sha != manifest.get("sourceBodySha256"):
+        return _refuse(
+            "source-body-stale",
+            "pr.json body changed since staging",
+        )
+    claims = manifest.get("claims") or []
+    region_map = _region_map(manifest.get("regions"))
+    computed_flag = _no_substantive_claims(claims, region_map)
+    if computed_flag:
         if manifest.get("noSubstantiveClaims") is not True:
             return _refuse(
                 "manifest-flag-mismatch",
-                "noSubstantiveClaims must be true when no repo claims exist",
+                "noSubstantiveClaims must be true when no substantive claims exist",
             )
     elif manifest.get("noSubstantiveClaims") is True:
         return _refuse(
             "manifest-flag-mismatch",
-            "noSubstantiveClaims true but repo claims present",
+            "noSubstantiveClaims true but substantive claims present",
         )
-    return _success_envelope(repo_claims, manifest.get("files") or [])
+    return _success_envelope(claims, manifest.get("files") or [], region_map)
 
 
 def main(argv):
