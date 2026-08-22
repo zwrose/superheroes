@@ -1813,3 +1813,153 @@ def test_review_code_reference_documents_pin_shorthand_and_rerotation():
     flat = " ".join(text.split())
     assert "`--pins null` is an **absent** pin map, not a refusal" in flat
     assert "the refusal grades the **value shape** only" in flat
+
+
+# --- cell-level liveness (#795 WO-B) ----------------------------------------------------------
+
+
+def _aug15_live_cells():
+    """2026-08-15 shape: codex sol/xhigh live, terra/high absent; cursor cells live."""
+    return [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+
+
+def test_dod_aug15_partial_codex_cell_live():
+    """DoD row 1: lens seats keep codex at reviewer-deep when only sol/xhigh is live."""
+    live_vendors = ["claude", "cursor"]
+    live_cells = _aug15_live_cells()
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        live_vendors,
+        "xai",
+        "anthropic",
+        SM.seed_from(795, None),
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    assert "codex" not in m["liveVendors"]
+    codex_lens = [
+        s for s in SM.LENS_SEATS
+        if m["seats"][s]["vendor"] == "codex"
+        and m["seats"][s]["model"] == "gpt-5.6-sol"
+        and m["seats"][s]["effort"] == "xhigh"
+    ]
+    assert codex_lens, "codex lost from every lens seat despite sol/xhigh live"
+    for seat in SM.LENS_SEATS:
+        pinned = SM.build(
+            SM.PANEL_ROSTER,
+            live_vendors,
+            "xai",
+            "anthropic",
+            0,
+            pins={seat: {"vendor": "codex"}},
+            live_cells=live_cells,
+            live_cells_source="probed",
+        )
+        cfg = pinned["seats"][seat]
+        assert cfg["source"] == "pinned", seat
+        assert cfg["vendor"] == "codex", seat
+        assert cfg["model"] == "gpt-5.6-sol", seat
+        assert cfg["effort"] == "xhigh", seat
+        assert cfg["tier"] == "reviewer-deep", seat
+    grounding = m["seats"][SM.GROUNDING_SEAT]
+    assert grounding["vendor"] != "codex"
+    assert grounding["model"] != "gpt-5.6-terra"
+
+
+def test_dod_ab3_arm_g_pinned_codex_sol_honored():
+    """DoD row 2: pin to live sol/xhigh is honored when terra is dead."""
+    live_vendors = ["claude", "cursor"]
+    live_cells = _aug15_live_cells()
+    pins = {
+        "code-reviewer": {
+            "vendor": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "xhigh",
+        },
+    }
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        live_vendors,
+        "xai",
+        "anthropic",
+        0,
+        pins=pins,
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    pinned = m["seats"]["code-reviewer"]
+    assert pinned["source"] == "pinned"
+    assert pinned["vendor"] == "codex"
+    assert pinned["model"] == "gpt-5.6-sol"
+    assert pinned["effort"] == "xhigh"
+    pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
+    assert not any("not honorable" in d["reason"] for d in pin_degs)
+
+
+def test_census_seated_cells_appear_in_live_cells():
+    # bite-axis: a seated cell absent from the probed live set is caught
+    live_cells = [
+        ["claude", "opus-5", "xhigh"],
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        SM.seed_from(795, None),
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    assert m["liveCellsSource"] == "probed"
+    live_set = {tuple(c) for c in m["liveCells"]}
+    for seat, cfg in m["seats"].items():
+        if cfg["vendor"] == "claude":
+            continue
+        cell = (cfg["vendor"], cfg["model"], cfg["effort"])
+        assert cell in live_set, "seat %s seated dead cell %s" % (seat, cell)
+
+
+def test_to_receipt_always_emits_live_cells_fields():
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    assert "liveCells" in m
+    assert m["liveCells"]
+    receipt = SM.to_receipt(m)
+    assert "liveCells" in receipt
+    assert receipt["liveCells"] is not None
+    assert isinstance(receipt["liveCells"], list)
+
+    probed = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=[
+            ["codex", "gpt-5.6-sol", "xhigh"],
+            ["cursor", "cursor-grok-4.6", "xhigh"],
+        ],
+        live_cells_source="probed",
+    )
+    probed_receipt = SM.to_receipt(probed)
+    assert probed_receipt["liveCellsSource"] == "probed"
+
+    synthesized = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=None,
+        live_cells_source="synthesized",
+    )
+    syn_receipt = SM.to_receipt(synthesized)
+    assert syn_receipt["liveCellsSource"] == "synthesized"
+
+    bare = {"seats": _full_seats_template(), "liveVendors": THREE_VENDORS}
+    bare_receipt = SM.to_receipt(bare, "xai")
+    assert bare_receipt["liveCells"] is not None

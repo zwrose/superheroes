@@ -267,6 +267,16 @@ def live_from(liveness, needed):
             if vendor == "claude":
                 continue
             if not isinstance(entries, (list, tuple)) or len(entries) == 0:
+                dead_notes.append(
+                    {
+                        "constraint": "liveness-cell",
+                        "vendor": vendor,
+                        "model": None,
+                        "effort": None,
+                        "reason": "%s not live: no needed cell is reachable for it"
+                        % vendor,
+                    }
+                )
                 continue
             vendor_live = True
             info = liveness.get(vendor)

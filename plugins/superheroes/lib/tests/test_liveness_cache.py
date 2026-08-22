@@ -367,7 +367,10 @@ def test_live_vendors_one_model_not_ok():
 def test_live_vendors_empty_model_list_not_live():
     live, notes = lc.live_vendors_from(_good_liveness(), {"codex": []})
     assert "codex" not in live
-    assert notes == []
+    assert len(notes) == 1
+    assert notes[0]["vendor"] == "codex"
+    assert notes[0]["model"] is None
+    assert "no needed cell is reachable" in notes[0]["reason"]
 
 
 def test_live_vendors_missing_vendor_in_liveness():
@@ -514,6 +517,64 @@ def test_bounded_reason_collapses_and_truncates():
 def test_bounded_reason_no_detail():
     assert lc._bounded_reason(None) == "no probe evidence recorded"
     assert lc._bounded_reason("") == "no probe evidence recorded"
+
+
+def _notes_name_vendor(notes, vendor):
+    return any(n.get("vendor") == vendor for n in notes)
+
+
+# axis: every vendor in needed but absent from live_vendors has at least one note naming it
+@pytest.mark.parametrize(
+    "liveness,needed",
+    [
+        # empty-entries: vendor needed but no reachable cell
+        (
+            _good_liveness(),
+            {"codex": [], "cursor": []},
+        ),
+        # dead-cell: cell evidence says not live
+        (
+            _aug15_liveness(),
+            {"codex": [["gpt-5.6-sol", "xhigh"], ["gpt-5.6-terra", "high"]]},
+        ),
+        # missing-vendor-evidence: vendor absent from liveness dict
+        (
+            _good_liveness(),
+            {"cursor": [["grok", None]]},
+        ),
+        # malformed-entry: entries not a list/tuple
+        (
+            _good_liveness(),
+            {"codex": "not-a-list"},
+        ),
+        # mixed: one live vendor, one empty-entries drop, one dead cell
+        (
+            {
+                "codex": {
+                    "live": True,
+                    "models": {"gpt-5.6-sol": {"ok": True, "detail": ""}},
+                    "cells": [
+                        {"model": "gpt-5.6-sol", "effort": "xhigh", "ok": True, "detail": ""},
+                    ],
+                },
+                "claude": {"live": True, "models": {}, "cells": []},
+            },
+            {
+                "codex": [["gpt-5.6-sol", "xhigh"]],
+                "cursor": [],
+            },
+        ),
+    ],
+)
+def test_live_from_absent_vendors_always_have_disclosure_note(liveness, needed):
+    live_vendors, _live_cells, dead_notes = lc.live_from(liveness, needed)
+    for vendor in needed:
+        if vendor == "claude":
+            continue
+        if vendor not in live_vendors:
+            assert _notes_name_vendor(dead_notes, vendor), (
+                "vendor %r left live set with no note" % vendor
+            )
 
 
 def test_live_from_fail_closed_absent_cell():
