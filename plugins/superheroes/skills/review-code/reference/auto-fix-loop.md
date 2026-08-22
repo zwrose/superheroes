@@ -206,6 +206,70 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > (also `attempts: 0`). There is
 > **no fallback to the raw repo and no opt-out**.
 >
+> **Partial clones are an unsupported checkout shape** (owner-ruled 2026-08-09, #797). View
+> construction **refuses the shape up front**, before it reads a single object:
+> **`sanitized-view-partial-clone` — partial or unhydrated clone detected; sanitized-view
+> construction refused. Hydrate the checkout and dispatch again.** Nothing is materialized, so
+> there is no partial view to clean up. As defence in depth, every git subprocess construction
+> spawns also runs under `GIT_NO_LAZY_FETCH=1`, so no path can wait on git's on-demand fetching of
+> an object the checkout does not hold — the quiet-hang class PR #761 recorded.
+>
+> **Hydrating.** Re-clone without `--filter`, or drop the filter in place and refetch:
+>
+> ```bash
+> git config --unset remote.origin.partialclonefilter
+> git config --unset remote.origin.promisor
+> git fetch --refetch origin
+> ```
+>
+> **`git fetch --refetch` on its own is not a remedy** — it deliberately reapplies the filter
+> recorded in `remote.<name>.partialCloneFilter`, so it downloads another filtered pack and leaves
+> the required objects absent, returning the operator to the identical refusal. (Measured on git
+> 2.50.1 against a `--filter=blob:none` clone: the blob was still reported `missing` after a bare
+> `--refetch`, and present after the unset-then-refetch above.)
+>
+> **The refusal is wider than "this clone is missing something we need", deliberately.** A filtered
+> clone that happens to hold every object it needs still refuses. Three measured facts make the
+> narrower reading untenable. A blob-filtered clone **with a checkout** — the shape real users have
+> — has its HEAD blobs already hydrated, so materialization succeeds and only the review diff trips
+> over an absent base-side blob, arriving as an ordinary "git diff failed" that is
+> indistinguishable at that call site from a dozen unrelated faults. The outward refusal tokens are
+> umbrellas (`sanitized-view-export-failed` also covers a census type mismatch and a
+> destination-filesystem error), so renaming one would tell an operator to hydrate their checkout
+> when their disk was full. And `GIT_NO_LAZY_FETCH` is honoured only by newer git, so a mechanism
+> resting on it alone is silently inert on an older client. Refusing the shape, from config, is the
+> one answer that holds on every git version and every filter.
+>
+> **What counts as the shape.** The repository's **own** config (`--local`, so a marker in a user's
+> global config cannot condemn every repository on the machine) carrying any of
+> `extensions.partialclone`, `remote.<name>.partialCloneFilter`, or a git-true
+> `remote.<name>.promisor`. Boolean values are evaluated by `git config --type=bool` itself rather
+> than by a hand-rolled parser — git reads `yes`/`on`/`1` as true and also `0x10`, `010` and `1k`.
+> A config probe that cannot run answers "not partial" and lets the build proceed under the
+> `GIT_NO_LAZY_FETCH` backstop, so a config hiccup on an ordinary repository never becomes a hard
+> refusal. No timeout machinery is involved — the ruling replaced the earlier bounded-deadline
+> design.
+>
+> **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
+> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
+> false clean.
+>
+> **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
+> dispatched prompt, so it performs **no echo strip**. An **empty-findings result from that path is
+> unverified** — apply the investigation floor **manually**. The runner path (`engine_dispatch.py
+> dispatch-review`) parses raw stdout first; only when that parse yields no findings does it strip
+> the echoed prompt and re-parse (so an empty-findings result from the runner path has been through
+> the strip). A `--prompt-path` flag for `parse-result`
+> is **deliberately not built** pending a named consumer.
+>
+> **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
+> returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside post-argparse
+> refusals such as `sanitized-view-tempbase-inside-repo`, `sanitized-view-head-unresolved`,
+> `sanitized-view-export-failed`, `sanitized-view-export-timeout`, `sanitized-view-partial-clone`,
+> and `sanitized-view-init-failed`
+> (also `attempts: 0`). There is
+> **no fallback to the raw repo and no opt-out**.
+>
 > **Partial clones are an unsupported checkout shape** (owner-ruled 2026-08-09, #797). Every git
 > subprocess view construction spawns runs under `GIT_NO_LAZY_FETCH=1`, so construction can never
 > wait on git's on-demand fetching of an object the checkout does not hold — the quiet-hang class
