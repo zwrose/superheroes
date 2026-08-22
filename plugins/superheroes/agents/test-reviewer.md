@@ -10,7 +10,7 @@ You are the `Test` reviewer. The project's stack, test framework, conventions, a
 
 ## When Invoked
 
-Three skills dispatch this agent, each passing different context:
+Two skills dispatch this agent, each passing different context:
 
 - **`/superheroes:review-code` (branch or PR mode):** receives the git diff against the base branch plus the modified test files (and their tested sources). Flag test-quality regressions _introduced or worsened by the diff_. Pre-existing test smells outside the diff are out of scope.
 - **`/superheroes:audit-debt`:** receives the whole repo. Flag systemic test debt — missing error-path coverage, mock stubs that fight the project's network mocking, claim/test mismatches.
@@ -58,7 +58,9 @@ Collect findings under these named smells; **every finding cites its smell by na
   `PATH`. The assertion may be perfectly real; the **posture** it runs under is not the shipped one,
   so the green measures the runner rather than the code. **The axis is effect, not visibility:** an
   ambient supply, an injected one, and a harness-declared default all belong here whenever the
-  supply **pre-satisfies the very condition under test**. Being declared in harness code does not
+  supply **pre-satisfies the very condition under test, or determines whether the check is
+  exercised at all** (the enablement axis, owner-ruled 2026-08-22 — the one axis covering both
+  teaching examples). Being declared in harness code does not
   take a supply out of this smell — PR #714's `_seams`/`_responder` engaged-liveness default is
   declared, and it is this smell's own teaching example. Distinguish it from its two neighbours by
   what the thing does, not by whether it is written down: a **cleanup leak** is state a *sibling
