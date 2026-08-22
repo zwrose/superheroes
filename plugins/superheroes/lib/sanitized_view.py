@@ -146,6 +146,8 @@ def _git_env():
     # for sanitized-view construction, and construction must never wait on git's
     # on-demand object fetching. Every git subprocess this module spawns is built
     # through this function or _ancestry_env, so the two of them are the whole census.
+    # bite-axis: on-demand fetch suppression — every git subprocess built here
+    # refuses a promisor fetch rather than waiting on one.
     env["GIT_NO_LAZY_FETCH"] = "1"
     return env
 
@@ -183,6 +185,8 @@ def _is_partial_clone(repo_real):
             capture_output=True,
             timeout=_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS,
         )
+    # bite-axis: fail-safe direction — an unusable probe answers False (generic
+    # refusal), never True (a wrong attribution).
     except (OSError, subprocess.TimeoutExpired, ValueError):
         return False
     if proc.returncode != 0:
@@ -195,6 +199,8 @@ def _is_partial_clone(repo_real):
             key_text = key.decode("utf-8")
         except UnicodeDecodeError:
             continue
+        # bite-axis: shape detection — either config marker identifies a partial
+        # clone, and a promisor remote explicitly set to false does not.
         if key_text == _PARTIAL_CLONE_EXTENSION_KEY:
             return True
         if _PROMISOR_REMOTE_KEY_RE.match(key_text) and sep and value.strip() != b"false":
@@ -636,6 +642,8 @@ def _ancestry_env():
     # Added back explicitly, not inherited: this builder drops every GIT_* variable,
     # so the no-lazy-fetch rule that _git_env applies has to be restated here or the
     # ancestry probes would be the one channel still able to trigger a promisor fetch.
+    # bite-axis: on-demand fetch suppression, restated — this builder drops every
+    # inherited GIT_* variable, so ancestry probes need their own add-back.
     env["GIT_NO_LAZY_FETCH"] = "1"
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_SYSTEM"] = os.devnull
@@ -1987,6 +1995,8 @@ def _attribute_to_partial_clone(exc, repo_real):
 
     Returns the exception to raise — the original when the shape does not explain it.
     """
+    # bite-axis: attribution, not detection — the refusal is renamed only when the
+    # failure could be object availability AND the checkout really is a partial clone.
     if exc.detail not in _PARTIAL_CLONE_ATTRIBUTABLE_DETAILS:
         return exc
     if not _is_partial_clone(repo_real):
