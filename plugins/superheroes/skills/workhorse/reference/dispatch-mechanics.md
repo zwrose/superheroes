@@ -317,13 +317,19 @@ the sanitized-view notice, and `$BRIEF_PATH` verbatim, so **`$BRIEF_PATH` is rev
 *plus* the brief, never the bare brief** — and it carries the lens below **quoted verbatim, never
 paraphrased**, alongside a citation of this home
 (`skills/workhorse/reference/dispatch-mechanics.md` § *The standing lens*), on every brief check.
-A brief-check prompt that omits it has not dispatched this lens. **Why a copy and not only the
-citation** — CONVENTIONS §11.4's pointer rule presumes the consumer can read the home, and this seat
-often cannot: its working directory is a sanitized export of *the repository under review*, which in
-a consuming project does not contain this plugin at all. Carrying the citation next to the verbatim
-quote is what keeps the single home nameable and the copy checkable; **a builder's own re-wording is
-never acceptable**, because a paraphrase is exactly how the obligations soften without anyone
-deciding to soften them.
+A brief-check prompt that omits it has not dispatched this lens. **This is a declared, narrow
+exception to CONVENTIONS §11.4** — that rule says orders, agent prompts, and dispatch prompts cite
+the path and never paste the body, and it binds everywhere else. It is excepted **here only**, and
+for one reason: §11.4's own fail-loud half turns an unresolvable citation into a halt, and this
+seat's working directory is a sanitized export of *the repository under review* — which in a
+consuming project does not contain this plugin, so a bare plugin-relative citation is a **guaranteed**
+dangling pointer and every brief check in every consuming project would halt. §11.4's worked
+consumers (the implementer, the pilot) read the build worktree, where the path does resolve; this one
+does not. The exception is bounded to this prompt: the citation still rides alongside, so the single
+home stays nameable and the copy checkable, and **a builder's own re-wording is never acceptable** —
+a paraphrase is how the obligations soften without anyone deciding to soften them. Widening this
+exception, or retiring it if the seat ever gains a way to read the plugin, is the advisor's call, not
+a builder's.
 **A brief that touches an external API, CLI, or service contract owes
 the round-trip answer** — evidence that the *far side* accepts what we intend to send, established
 before code rather than after. Exactly one of three satisfies it: **(a)** local validation against
