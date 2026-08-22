@@ -1735,7 +1735,7 @@ def _write_pr_body_file(view_root, body_bytes):
     except FileExistsError:
         raise SanitizedViewError("sanitized-view-pr-body-name-collision")
     except OSError:
-        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+        raise SanitizedViewError("sanitized-view-pr-body-unwritable")
     try:
         with os.fdopen(fd, "wb") as fh:
             fh.write(body_bytes)
@@ -1744,10 +1744,10 @@ def _write_pr_body_file(view_root, body_bytes):
             os.unlink(body_path)
         except OSError:
             pass
-        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+        raise SanitizedViewError("sanitized-view-pr-body-unwritable")
 
 
-def _stage_pr_body(view_root, pr_body_path):
+def _stage_pr_body(view_root, pr_body_path, *, session_dir=None):
     """Materialize a PR body at the view root (before ``git init``).
 
     # axis: unstaged or drifted required PR body input must refuse, never proceed
@@ -1756,6 +1756,13 @@ def _stage_pr_body(view_root, pr_body_path):
         source_real = os.path.realpath(pr_body_path)
     except OSError:
         raise SanitizedViewError("sanitized-view-pr-body-missing")
+    if session_dir is not None:
+        try:
+            session_real = os.path.realpath(session_dir)
+        except OSError:
+            raise SanitizedViewError("sanitized-view-pr-body-outside-session")
+        if not path_is_confidently_under(source_real, session_real):
+            raise SanitizedViewError("sanitized-view-pr-body-outside-session")
     if not os.path.isfile(source_real):
         raise SanitizedViewError("sanitized-view-pr-body-missing")
 
@@ -1959,7 +1966,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     }
 
 
-def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None):
+def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None, session_dir=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
     ``sourceDirty`` in the returned dict is ``True`` when tracked files differ
@@ -2001,7 +2008,7 @@ def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None):
             }
         else:
             # axis: unstaged or drifted required PR body input must refuse, never proceed
-            pr_body_info = _stage_pr_body(view_root, pr_body_path)
+            pr_body_info = _stage_pr_body(view_root, pr_body_path, session_dir=session_dir)
         _init_view_git(view_root)
 
         build_seconds = time.monotonic() - started

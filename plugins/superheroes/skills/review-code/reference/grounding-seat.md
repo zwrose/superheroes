@@ -30,6 +30,9 @@ pass. Citing `SUPERHEROES_PR_BODY.md` in `investigated` does **not** satisfy the
 "did this seat read the repository" floor; the body is a **generated artifact** inside
 the sanitized view.
 
+The stage token must **never** appear in an order file, a prompt, or any orchestrator-authored
+prose; the seat's only lawful source is the staged body inside the view.
+
 ## Where it runs
 
 On the **read-only paths** (`--post`, `--review-only`), inside `## Compile + Dedupe`
@@ -54,25 +57,31 @@ enumerated claims manifest under `<session-dir>/grounding/`:
 | `$SESSION_DIR/grounding/stage.json` | `grounding_stage stage` | Schema `grounding-stage/1` manifest |
 
 The manifest records per-file `sha256`, a `regions[]` list (each `present: true|false`),
-a `claims[]` list (each with a stable `claimId` and `verifiability: "repo"|"external"`),
-and a `stageToken`.
+a `claims[]` list (each with a stable `claimId` and `verifiability: "repo"|"external"|"stager"`),
+and a per-run `stageToken` (unguessable; stored only in the manifest and staged body file).
 
 **Stage** (orchestrator, PR mode, before dispatch):
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/grounding_stage.py" stage \
-  --session-dir "$SESSION_DIR" \
-  --pr-body "$(jq -r .body "$SESSION_DIR/pr.json")"
+  --session-dir "$SESSION_DIR"
 ```
 
 ## Reachability
 
-`dispatch-review --pr-body-path <file>` materializes the staged body **inside the
-sanitized view** as `SUPERHEROES_PR_BODY.md` at the view root — the same mechanism that
-already stages `SUPERHEROES_REVIEW_DIFF.patch`. The seat reads it **relative to its own
-working directory** (the sanitized view root), not from a `/tmp` session path the sandbox
-cannot see.
+An **engine** seat reads `SUPERHEROES_PR_BODY.md` relative to its working directory (the
+sanitized view root). `dispatch-review --pr-body-path <file> --session-dir "$SESSION_DIR"`
+materializes the staged body **inside the sanitized view** as `SUPERHEROES_PR_BODY.md` at
+the view root — the same mechanism that already stages `SUPERHEROES_REVIEW_DIFF.patch`.
+The `--pr-body-path` source must resolve under `--session-dir`.
+
+A **native host** seat (e.g. Claude subagent) reads the **absolute staged path the order
+names** (`<session>/grounding/pr-body.md`). Do not substitute a session `/tmp` path when
+an engine seat was expected, or vice versa.
+
+When a seat's vendor has no staging mechanism at all, `grounding_stage` refuses
+`stage-unreachable-for-vendor` so the halt names the real defect.
 
 Branch mode has no PR body — skip staging and both grounding legs.
 
@@ -82,8 +91,11 @@ The dispatched seat emits **`verdicts`**, not findings (`--expected-result-kind 
 
 - One row per `repo`-verifiable claim from the manifest: `id` = the `claimId`,
   `verdict` ∈ `CONFIRMED` / `PLAUSIBLE` / `REFUTED`, plus a non-empty `reason`.
-- One **reserved** row: `id` = `stage-token:<token>`, where `<token>` is readable **only**
-  from inside the staged body file (`SUPERHEROES_PR_BODY.md`). A clean run is therefore a
+- One **reserved** row: `id` = `stage-token:<token>`, where `<token>` is the `stageToken`
+  value read from the staged body file. The orchestrator order must instruct the seat to
+  echo this token exactly in that row (with a non-empty `reason`); the staged file carries
+  the token as data only. The token is unguessable and appears only in the staged body and
+  the orchestrator-private manifest — never in order prose. A clean run is therefore a
   **non-empty** payload — which is what makes the read-proof possible.
 
 Rule **`PLAUSIBLE` — never `CONFIRMED`** — for a claim you cannot settle from the
@@ -105,6 +117,10 @@ python3 -B "$ROOT_DIR/lib/grounding_stage.py" attest \
   --session-dir "$SESSION_DIR" \
   --result-path "$SESSION_DIR/round-<round>/landing/<phase>/grounding-seat.a<K>.json"
 ```
+
+When the manifest records `noSubstantiveClaims: true`, attest still succeeds but surfaces
+that flag — an honestly claim-free PR body is legitimate; what is not legitimate is it
+looking identical to a grounded one.
 
 ## Fail-closed gate
 

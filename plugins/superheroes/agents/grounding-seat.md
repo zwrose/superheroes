@@ -58,20 +58,27 @@ Follow the **base rubric** for severity tiers, the verdicts JSON schema (you emi
 "Findings output format" section), the verification rules, and the in-pass
 Chain-of-Verification. Do not restate them here. Ground the DoD/stub markers you check
 against **CONVENTIONS §10.7** (PR-body honesty markers). Carry a non-empty `reason` on
-every verdict row.
+every verdict row, including the reserved stage-token row.
 
 ## Operational instructions (review-code leg, #609)
 
 **Live dispatch ships under #609** (the seat map that decides what gets dispatched shipped
-under #510). Read the staged PR body from **`SUPERHEROES_PR_BODY.md` relative to your
-working directory** (the sanitized view root) — not from a session `/tmp` path.
+under #510).
+
+**Engine seat:** read the staged PR body from **`SUPERHEROES_PR_BODY.md` relative to your
+working directory** (the sanitized view root).
+
+**Native host seat:** read the **absolute staged path named in your order**
+(`<session>/grounding/pr-body.md`).
 
 Emit **`verdicts`** with:
 
 - One row per `repo`-verifiable `claimId` supplied in your order: `id` = the `claimId`,
   `verdict` ∈ `CONFIRMED` / `PLAUSIBLE` / `REFUTED`, plus a non-empty `reason`.
 - One **reserved** row: `id` = `stage-token:<token>`, where `<token>` is the `stageToken`
-  found **inside** `SUPERHEROES_PR_BODY.md`. A clean run is a **non-empty** payload.
+  value read from the staged body file (a `stageToken: …` line near the top). Echo the
+  token exactly in the `id` suffix and carry a non-empty `reason` on this row. A clean run
+  is a **non-empty** payload.
 
 Rule **`PLAUSIBLE` — never `CONFIRMED`** for a claim you cannot settle from the repository
 you can see. **Never claim a run you did not make.**

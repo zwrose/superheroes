@@ -38,6 +38,8 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "attest-token-mismatch",
     "attest-claim-unanswered",
     "attest-verdict-out-of-enum",
+    "invalid-invocation",
+    "stage-unreachable-for-vendor",
 })
 
 
@@ -88,6 +90,22 @@ def _invoke(cmd, session_dir, result_path=None):
     return rc, body
 
 
+def _manifest(session):
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    with open(manifest_path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _manifest_token(session):
+    return _manifest(session)["stageToken"]
+
+
+def _staged_body_text(session):
+    path = os.path.join(session, "grounding", "pr-body.md")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
 def _assert_refusal(rc, body, reason):
     assert rc == 1
     assert body == {
@@ -100,6 +118,35 @@ def _assert_refusal(rc, body, reason):
 
 def test_refusal_reason_census():
     assert GS.REFUSAL_REASONS == EXPECTED_REFUSAL_REASONS
+
+
+def test_refuse_unregistered_reason_raises():
+    with pytest.raises(ValueError, match="unregistered refusal reason"):
+        GS._refuse("not-a-real-reason")
+
+
+def test_refuse_dict_shape():
+    result = GS._refuse("pr-body-empty", "detail text")
+    assert result == {
+        "ok": False,
+        "signal": "cannot-certify",
+        "reason": "pr-body-empty",
+        "detail": "detail text",
+    }
+
+
+def test_invalid_invocation_bad_subcommand(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    argv = ["grounding_stage.py", "nope", "--session-dir", session]
+    out = io.StringIO()
+    old = sys.stdout
+    sys.stdout = out
+    try:
+        rc = GS.main(argv)
+    finally:
+        sys.stdout = old
+    body = json.loads(out.getvalue().strip().splitlines()[-1])
+    _assert_refusal(rc, body, "invalid-invocation")
 
 
 def test_edge_01_meta_unreadable(tmp_path):
@@ -159,21 +206,21 @@ def test_edge_07_stage_unwritable(tmp_path, monkeypatch):
 
 def test_edge_08_stage_readback_mismatch(tmp_path, monkeypatch):
     session = _session(tmp_path, body=_happy_body())
-    real_verify = GS._verify_written_file
+    real_atomic = GS._atomic_write_text
 
-    def bad_verify(path, expected_text):
+    def drift_write(path, text, tmp_prefix=".grounding-stage-"):
         if path.endswith("pr-body.md"):
-            return GS._refuse("stage-readback-mismatch", "injected mismatch")
-        return real_verify(path, expected_text)
+            real_atomic(path, text + "\n<!-- drift -->\n", tmp_prefix=tmp_prefix)
+        else:
+            real_atomic(path, text, tmp_prefix=tmp_prefix)
 
-    monkeypatch.setattr(GS, "_verify_written_file", bad_verify)
+    monkeypatch.setattr(GS, "_atomic_write_text", drift_write)
     rc, body = _invoke("stage", session)
     _assert_refusal(rc, body, "stage-readback-mismatch")
 
 
 def test_edge_09_stage_manifest_missing(tmp_path):
     session = _session(tmp_path, mode="pr")
-    (tmp_path / "session" / "meta.json").write_text(json.dumps({"mode": "pr"}), encoding="utf-8")
     rc, body = _invoke("check", session)
     _assert_refusal(rc, body, "stage-manifest-missing")
 
@@ -188,9 +235,21 @@ def test_edge_10_stage_manifest_invalid(tmp_path):
     _assert_refusal(rc, body, "stage-manifest-invalid")
 
 
+def test_manifest_empty_files_rejected(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = tmp_path / "session" / "grounding" / "stage.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "stage-manifest-invalid")
+
+
 def test_edge_11_staged_file_unreadable(tmp_path):
     session = _session(tmp_path, body=_happy_body())
-    rc, staged = _invoke("stage", session)
+    rc, _ = _invoke("stage", session)
     assert rc == 0
     os.chmod(os.path.join(session, "grounding", "pr-body.md"), 0)
     try:
@@ -220,7 +279,7 @@ def test_edge_13_attest_result_unreadable(tmp_path):
 
 def test_edge_14_attest_token_missing(tmp_path):
     session = _session(tmp_path, body=_happy_body())
-    rc, staged = _invoke("stage", session)
+    rc, _ = _invoke("stage", session)
     assert rc == 0
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps({"verdicts": []}), encoding="utf-8")
@@ -230,7 +289,7 @@ def test_edge_14_attest_token_missing(tmp_path):
 
 def test_edge_15_attest_token_mismatch(tmp_path):
     session = _session(tmp_path, body=_happy_body())
-    rc, staged = _invoke("stage", session)
+    rc, _ = _invoke("stage", session)
     assert rc == 0
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps({
@@ -244,26 +303,41 @@ def test_edge_16_attest_claim_unanswered(tmp_path):
     session = _session(tmp_path, body=_happy_body())
     rc, staged = _invoke("stage", session)
     assert rc == 0
-    token = staged["stageToken"]
+    token = _manifest_token(session)
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps({
-        "verdicts": [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED"}],
+        "verdicts": [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED", "reason": "read"}],
     }), encoding="utf-8")
     rc, body = _invoke("attest", session, str(result_path))
     _assert_refusal(rc, body, "attest-claim-unanswered")
 
 
-def test_edge_17_attest_verdict_out_of_enum(tmp_path):
+def test_edge_17_attest_verdict_out_of_enum_on_claim(tmp_path):
     session = _session(tmp_path, body=_happy_body())
     rc, staged = _invoke("stage", session)
     assert rc == 0
-    token = staged["stageToken"]
+    token = _manifest_token(session)
     claims = staged["claims"]
     repo_claims = [c for c in claims if c["verifiability"] == "repo"]
-    verdicts = [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED"}]
+    verdicts = [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED", "reason": "read"}]
     for claim in repo_claims:
-        verdicts.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+        verdicts.append({"id": claim["claimId"], "verdict": "CONFIRMED", "reason": "ok"})
     verdicts[1]["verdict"] = "MAYBE"
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps({"verdicts": verdicts}), encoding="utf-8")
+    rc, body = _invoke("attest", session, str(result_path))
+    _assert_refusal(rc, body, "attest-verdict-out-of-enum")
+
+
+def test_edge_17b_attest_verdict_out_of_enum_on_token_row(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, staged = _invoke("stage", session)
+    assert rc == 0
+    token = _manifest_token(session)
+    repo_claims = [c for c in staged["claims"] if c["verifiability"] == "repo"]
+    verdicts = [{"id": "stage-token:%s" % token, "verdict": "MAYBE", "reason": "read"}]
+    for claim in repo_claims:
+        verdicts.append({"id": claim["claimId"], "verdict": "CONFIRMED", "reason": "ok"})
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps({"verdicts": verdicts}), encoding="utf-8")
     rc, body = _invoke("attest", session, str(result_path))
@@ -276,9 +350,8 @@ def test_happy_path_stage(tmp_path):
     assert rc == 0
     assert body["ok"] is True
     assert body["applicable"] is True
-    manifest_path = os.path.join(session, "grounding", "stage.json")
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
+    assert "stageToken" not in body
+    manifest = _manifest(session)
     assert manifest["schema"] == GS.STAGE_SCHEMA
     regions = {r["name"]: r for r in manifest["regions"]}
     assert regions["dod-table"]["present"] is True
@@ -286,26 +359,30 @@ def test_happy_path_stage(tmp_path):
     assert regions["degradations"]["present"] is True
     assert regions["advisor-vet"]["present"] is False
     claim_ids_first = [c["claimId"] for c in manifest["claims"]]
+    token_first = manifest["stageToken"]
     rc2, body2 = _invoke("stage", session)
     assert rc2 == 0
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest2 = json.load(fh)
+    manifest2 = _manifest(session)
     claim_ids_second = [c["claimId"] for c in manifest2["claims"]]
+    token_second = manifest2["stageToken"]
     assert claim_ids_first == claim_ids_second
+    assert token_first != token_second
     kinds = {c["kind"] for c in manifest["claims"]}
     assert "region-present" in kinds
     assert "dod-row" in kinds
     assert "degradation" in kinds
     assert "stub-marker" in kinds
+    staged = _staged_body_text(session)
+    assert "BEGIN UNTRUSTED PR BODY" in staged
+    assert "END UNTRUSTED PR BODY" in staged
+    assert "Echo this token" not in staged
 
 
 def test_stub_marker_claim_text_emitted_unchanged(tmp_path):
     session = _session(tmp_path, body=_happy_body())
     rc, body = _invoke("stage", session)
     assert rc == 0 and body["ok"]
-    manifest_path = os.path.join(session, "grounding", "stage.json")
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
+    manifest = _manifest(session)
     stub_claims = [c for c in manifest["claims"] if c["kind"] == "stub-marker"]
     assert len(stub_claims) == 1
     assert stub_claims[0]["text"] == "STUB(#123): unwired grounding dispatch"
@@ -316,9 +393,9 @@ def test_absent_regions_still_stage(tmp_path):
     session = _session(tmp_path, body=body)
     rc, body_out = _invoke("stage", session)
     assert rc == 0 and body_out["ok"]
-    manifest_path = os.path.join(session, "grounding", "stage.json")
-    with open(manifest_path, encoding="utf-8") as fh:
-        manifest = json.load(fh)
+    assert body_out.get("noSubstantiveClaims") is True
+    manifest = _manifest(session)
+    assert manifest.get("noSubstantiveClaims") is True
     regions = {r["name"]: r for r in manifest["regions"]}
     assert regions["dod-table"]["present"] is False
     assert regions["degradations"]["present"] is False
@@ -326,6 +403,7 @@ def test_absent_regions_still_stage(tmp_path):
     names = {c["text"] for c in region_claims}
     assert any("dod-table" in t and "present=False" in t for t in names)
     assert any("degradations" in t and "present=False" in t for t in names)
+    assert all(c["verifiability"] == "stager" for c in region_claims)
 
 
 def test_branch_mode_writes_nothing(tmp_path):
@@ -336,28 +414,63 @@ def test_branch_mode_writes_nothing(tmp_path):
     assert not os.path.isdir(os.path.join(session, "grounding"))
 
 
+def test_check_branch_mode_applicable_false(tmp_path):
+    session = _session(tmp_path, mode="branch", body=_happy_body())
+    rc, body = _invoke("check", session)
+    assert rc == 0
+    assert body == {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
+
+
 def test_token_scrub_round_trip(tmp_path):
     session = _session(tmp_path, body=_happy_body())
-    rc, staged = _invoke("stage", session)
+    rc, _ = _invoke("stage", session)
     assert rc == 0
-    token = staged["stageToken"]
-    row = {"id": "stage-token:%s" % token, "verdict": "CONFIRMED", "note": token}
-    scrubbed = EA._scrub_verdicts([row])
-    assert scrubbed[0]["id"] == "stage-token:%s" % token
-    assert scrubbed[0]["id"].split(":", 1)[1] == token
+    token = _manifest_token(session)
+    stdout = json.dumps({
+        "verdicts": [{
+            "id": "stage-token:%s" % token,
+            "verdict": "CONFIRMED",
+            "reason": "read token from staged body",
+            "note": token,
+        }],
+    })
+    parsed = EA.parse_result("codex", "review", stdout)
+    assert parsed["ok"] is True
+    row = parsed["verdicts"][0]
+    assert row["id"] == "stage-token:%s" % token
+    assert row["id"].split(":", 1)[1] == token
+
+
+def test_token_row_without_reason_unreadable(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    token = _manifest_token(session)
+    stdout = json.dumps({
+        "verdicts": [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED"}],
+    })
+    parsed = EA.parse_result("codex", "review", stdout)
+    assert parsed["ok"] is False
 
 
 def test_attest_happy_path(tmp_path):
     session = _session(tmp_path, body=_happy_body())
     rc, staged = _invoke("stage", session)
     assert rc == 0
-    token = staged["stageToken"]
+    token = _manifest_token(session)
     repo_claims = [c for c in staged["claims"] if c["verifiability"] == "repo"]
-    verdicts = [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED"}]
+    verdicts = [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED", "reason": "read"}]
     refuted_id = repo_claims[0]["claimId"]
+    plausible_id = None
     for claim in repo_claims:
-        verdict = "REFUTED" if claim["claimId"] == refuted_id else "CONFIRMED"
-        verdicts.append({"id": claim["claimId"], "verdict": verdict})
+        if claim["claimId"] == refuted_id:
+            verdict = "REFUTED"
+        elif plausible_id is None:
+            plausible_id = claim["claimId"]
+            verdict = "PLAUSIBLE"
+        else:
+            verdict = "CONFIRMED"
+        verdicts.append({"id": claim["claimId"], "verdict": verdict, "reason": "checked"})
     result_path = tmp_path / "result.json"
     result_path.write_text(json.dumps({"verdicts": verdicts}), encoding="utf-8")
     rc, body = _invoke("attest", session, str(result_path))
@@ -365,6 +478,21 @@ def test_attest_happy_path(tmp_path):
     assert body["ok"] is True
     assert body["attested"] is True
     assert refuted_id in body["refuted"]
-    assert all(cid in body["confirmed"] or cid in body["refuted"] for cid in [
-        c["claimId"] for c in repo_claims
-    ])
+    assert plausible_id in body["plausible"]
+    assert plausible_id not in body["confirmed"]
+    assert refuted_id not in body["confirmed"]
+
+
+def test_attest_no_substantive_claims_flag(tmp_path):
+    body = "## Summary\nNo markers here.\n"
+    session = _session(tmp_path, body=body)
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    token = _manifest_token(session)
+    result_path = tmp_path / "result.json"
+    result_path.write_text(json.dumps({
+        "verdicts": [{"id": "stage-token:%s" % token, "verdict": "CONFIRMED", "reason": "read"}],
+    }), encoding="utf-8")
+    rc, body = _invoke("attest", session, str(result_path))
+    assert rc == 0
+    assert body.get("noSubstantiveClaims") is True

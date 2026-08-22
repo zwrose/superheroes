@@ -45,6 +45,7 @@ import forfeit_ledger  # noqa: E402  durable forfeit ledger (#747 WO-3)
 import launch_ledger  # noqa: E402  repo_identity for run-opened (#747 WO-4b)
 import sanitized_view  # noqa: E402
 import sibling_worktree_probe  # noqa: E402  advisory sibling delta observation (#754)
+from guardian_tools import path_is_confidently_under  # noqa: E402
 
 # The adopted mode-7 hardening (#563) and sanitized review cwd (#684): a dispatched one-shot reviewer
 # must ignore the CLI's SessionStart/skill-selection bootstrap that otherwise hijacks codex into
@@ -2164,8 +2165,22 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
+    pr_body_staged = bool(opened.get("prBodySourcePath"))
+    if isinstance(view_meta, dict) and not pr_body_staged:
+        pr_body_staged = bool(view_meta.get("prBodyPath"))
+
     if not payload and not accepted:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
+        return {
+            "forfeit": True,
+            "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
+            "engagement": engagement,
+            "investigatedRejected": rejected_reasons,
+            "investigatedRejectedRecords": rejected_records,
+        }
+
+    if payload and pr_body_staged and not accepted:
+        engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         return {
             "forfeit": True,
             "reason": engine_adapter.REVIEW_FORFEIT_VACUOUS,
@@ -2776,7 +2791,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None,
-                    expected_result_kind=None, pr_body_path=None):
+                    expected_result_kind=None, pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -2796,7 +2811,8 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved,
-            expected_result_kind=expected_result_kind, pr_body_path=pr_body_path)
+            expected_result_kind=expected_result_kind, pr_body_path=pr_body_path,
+            session_dir=session_dir)
         stamped = dict(result)
         stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
@@ -2813,7 +2829,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, max_wait=None, order_id=None, diff_base=None,
                           mode=None, resolved_mode=None, expected_result_kind=None,
-                          pr_body_path=None):
+                          pr_body_path=None, session_dir=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
@@ -2939,8 +2955,31 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
+            if pr_body_path is not None and session_dir is not None:
+                try:
+                    body_real = os.path.realpath(pr_body_path)
+                    session_real = os.path.realpath(session_dir)
+                except OSError:
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "sanitized-view-pr-body-outside-session",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        engine=engine,
+                    )
+                if not path_is_confidently_under(body_real, session_real):
+                    return _finish_preflight_terminal(
+                        repo_detail,
+                        {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                         "detail": "sanitized-view-pr-body-outside-session",
+                         "attempts": 0, "forfeited": False, "terminal": True},
+                        engine=engine,
+                    )
             try:
-                view = build_view(repo_detail, diff_base=diff_base, pr_body_path=pr_body_path)
+                view = build_view(
+                    repo_detail, diff_base=diff_base, pr_body_path=pr_body_path,
+                    session_dir=session_dir,
+                )
             except sanitized_view.SanitizedViewError as exc:
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -3650,6 +3689,8 @@ def build_parser():
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
     cc.add_argument(d, "--pr-body-path", contract="free-text", default=None,
                     help="path to the PR body markdown to stage into the sanitized view")
+    cc.add_argument(d, "--session-dir", contract="existing-directory", default=None,
+                    help="session directory; pr-body-path must resolve under it when both are set")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--engine", contract="choices:codex,cursor",
@@ -3694,7 +3735,8 @@ def main(argv):
                               max_wait=args.max_wait, order_id=args.order_id,
                               diff_base=args.diff_base, mode=args.mode,
                               expected_result_kind=args.expected_result_kind,
-                              pr_body_path=args.pr_body_path)
+                              pr_body_path=args.pr_body_path,
+                              session_dir=args.session_dir)
     elif args.cmd == "dispatch-write":
         res = dispatch_write(args.engine, model=args.model, effort=args.effort,
                              engine_model=args.engine_model, prompt_path=args.prompt_path,

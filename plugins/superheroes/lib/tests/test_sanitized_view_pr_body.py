@@ -202,9 +202,46 @@ def test_pr_body_refuse_name_collision_review_patch_source(tmp_path):
     patch_path.write_text("diff content\n", encoding="utf-8")
     body_path = tmp_path / "body.md"
     body_path.write_text("body\n", encoding="utf-8")
-    # Point pr_body_path at the already-staged review patch via hard link.
     linked = tmp_path / "linked-patch"
     os.link(patch_path, linked)
     with pytest.raises(sv.SanitizedViewError) as exc:
         sv._stage_pr_body(str(view_root), str(linked))
     assert exc.value.detail == "sanitized-view-pr-body-name-collision"
+
+
+def test_pr_body_refuse_outside_session(tmp_path):
+    repo = _init_repo(tmp_path / "repo")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    body_path = tmp_path / "outside.md"
+    body_path.write_text("external\n", encoding="utf-8")
+    fake_tmp = str(tmp_path / "sanitized-temp-base")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(
+            repo, pr_body_path=str(body_path), session_dir=str(session_dir),
+        )
+    assert exc.value.detail == "sanitized-view-pr-body-outside-session"
+    assert _leftover_views(fake_tmp) == []
+
+
+def test_pr_body_refuse_unwritable(tmp_path, monkeypatch):
+    repo = _init_repo(tmp_path / "repo")
+    session_dir = tmp_path / "session"
+    session_dir.mkdir()
+    body_path = session_dir / "body.md"
+    body_path.write_text("content\n", encoding="utf-8")
+    real_open = os.open
+
+    def deny_open(path, flags, mode=0o600):
+        if isinstance(path, str) and path.endswith(sv.PR_BODY_FILE_NAME):
+            raise OSError("permission denied")
+        return real_open(path, flags, mode)
+
+    monkeypatch.setattr(os, "open", deny_open)
+    fake_tmp = str(tmp_path / "sanitized-temp-base")
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        sv.build_sanitized_view(
+            repo, pr_body_path=str(body_path), session_dir=str(session_dir),
+        )
+    assert exc.value.detail == "sanitized-view-pr-body-unwritable"
+    assert _leftover_views(fake_tmp) == []
