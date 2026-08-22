@@ -212,11 +212,34 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > PR #761 recorded. When a required object turns out to be absent, construction fails immediately
 > and, on a repository carrying a promisor remote, the refusal is renamed after the shape that
 > caused it: **`sanitized-view-partial-clone` — partial or unhydrated clone detected; sanitized-view
-> construction refused. Hydrate the checkout (`git fetch --refetch`, or re-clone without
-> `--filter`) and dispatch again.** Cleanup runs as on any refusal, so no partial view is left
-> behind. A partial clone whose required objects all happen to be present locally still builds
-> normally; the refusal appears only when construction would otherwise have reached for the network.
-> No timeout machinery is involved — the ruling replaced the earlier bounded-deadline design.
+> construction refused. Hydrate the checkout and dispatch again.** Cleanup runs as on any refusal,
+> so no partial view is left behind.
+>
+> **Hydrating.** Re-clone without `--filter`, or drop the filter in place and refetch:
+>
+> ```bash
+> git config --unset remote.origin.partialclonefilter
+> git config --unset remote.origin.promisor
+> git fetch --refetch origin
+> ```
+>
+> **`git fetch --refetch` on its own is not a remedy** — it deliberately reapplies the filter
+> recorded in `remote.<name>.partialCloneFilter`, so it downloads another filtered pack and leaves
+> the required objects absent, returning the operator to the identical refusal. (Measured on git
+> 2.50.1 against a `--filter=blob:none` clone: the blob was still reported `missing` after a bare
+> `--refetch`, and present after the unset-then-refetch above.)
+>
+> **Scope of the name, stated rather than implied.** The rename fires on git's own `<oid> missing`
+> reply, which is how a **blob**-filtered clone (`--filter=blob:none`, the dominant shape) fails. A
+> clone filtered hard enough to be missing *trees or commits* (`--filter=tree:0`) fails earlier, in
+> `ls-tree` or `rev-parse`, and still refuses — with a generic token such as
+> `sanitized-view-export-failed` rather than this named one. Attribution keys on that exact signal
+> and never on the outward token, because the tokens are umbrellas: `sanitized-view-export-failed`
+> also covers a census type mismatch and a destination-filesystem error, and renaming by token
+> would tell an operator to hydrate a checkout when their disk was full. A partial clone whose
+> required objects all happen to be present locally still builds normally; the refusal appears only
+> when construction would otherwise have reached for the network. No timeout machinery is involved —
+> the ruling replaced the earlier bounded-deadline design.
 >
 > **Argparse vs JSON refusals.** `--repo-root` is **required** and validated by argparse before
 > `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable

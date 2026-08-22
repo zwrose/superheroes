@@ -5051,64 +5051,91 @@ def test_ordinary_clone_failure_keeps_its_own_detail(tmp_path):
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
 
 
-def test_partial_clone_attribution_leaves_unattributable_details_alone(tmp_path):
-    """A partial clone does not get to explain a size ceiling or an empty diff."""
-    clone, _origin = _partial_clone_fixture(tmp_path, "unattributable")
-    for detail in sorted(sv._PARTIAL_CLONE_UNATTRIBUTABLE_DETAILS):
-        original = sv.SanitizedViewError(detail)
-        assert sv._attribute_to_partial_clone(original, clone) is original
+def test_partial_clone_attribution_keys_on_the_absent_object_not_the_token(tmp_path):
+    """An umbrella token alone never earns the rename — even on a real partial clone.
 
-
-def test_partial_clone_attribution_renames_every_attributable_detail(tmp_path):
-    clone, _origin = _partial_clone_fixture(tmp_path, "attributable")
-    for detail in sorted(sv._PARTIAL_CLONE_ATTRIBUTABLE_DETAILS):
-        renamed = sv._attribute_to_partial_clone(sv.SanitizedViewError(detail), clone)
-        assert renamed.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
-
-
-def test_partial_clone_attribution_covers_every_refusal_token():
-    """Census: the module's whole token inventory is deliberately classified.
-
-    Pins the set rather than modelling how tokens are raised, so a token added
-    later fails here until an author puts it on one side or the other.
+    ``sanitized-view-export-failed`` is also raised for a census type mismatch and for
+    destination-filesystem errors; renaming by token would tell an operator to hydrate
+    their checkout when their disk was full.
     """
-    import ast
+    clone, _origin = _partial_clone_fixture(tmp_path, "not-by-token")
+    assert sv._is_partial_clone(clone) is True
+    for detail in (
+        "sanitized-view-export-failed",
+        "sanitized-view-head-unresolved",
+        "sanitized-view-diff-failed",
+        "sanitized-view-diff-base-unresolved",
+        "sanitized-view-diff-too-large",
+        "sanitized-view-diff-base-shallow",
+    ):
+        plain = sv.SanitizedViewError(detail)
+        assert sv._attribute_to_partial_clone(plain, clone) is plain
 
-    path = os.path.join(os.path.dirname(sv.__file__), "sanitized_view.py")
-    with open(path, encoding="utf-8") as fh:
-        tree = ast.parse(fh.read())
 
-    raised = set()
-    non_literal = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
-            continue
-        func = node.func
-        if not (isinstance(func, ast.Name) and func.id == "SanitizedViewError"):
-            continue
-        if node.args and isinstance(node.args[0], ast.Constant) and isinstance(
-            node.args[0].value, str
-        ):
-            raised.add(node.args[0].value)
-        elif (
-            node.args
-            and isinstance(node.args[0], ast.Name)
-            and node.args[0].id == "SANITIZED_VIEW_PARTIAL_CLONE"
-        ):
-            raised.add(sv.SANITIZED_VIEW_PARTIAL_CLONE)
-        else:
-            non_literal.append(ast.dump(node))
+def test_partial_clone_attribution_renames_an_absent_object_failure(tmp_path):
+    clone, _origin = _partial_clone_fixture(tmp_path, "by-absent-object")
+    missing = sv._MissingObjectError("sanitized-view-export-failed")
+    renamed = sv._attribute_to_partial_clone(missing, clone)
+    assert renamed.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
 
-    assert non_literal == [], "unclassifiable SanitizedViewError argument"
-    classified = (
-        sv._PARTIAL_CLONE_ATTRIBUTABLE_DETAILS | sv._PARTIAL_CLONE_UNATTRIBUTABLE_DETAILS
-    )
-    assert raised - classified == set(), "refusal token not classified for #797"
-    assert classified - raised == set(), "classified token no longer raised"
+
+def test_absent_object_outside_a_partial_clone_keeps_its_own_detail(tmp_path):
+    """A missing object in an ordinary repository is corruption, not a checkout shape."""
+    repo = _init_repo(tmp_path / "corrupt-not-filtered", files={"a.txt": "a\n"})
+    assert sv._is_partial_clone(repo) is False
+    missing = sv._MissingObjectError("sanitized-view-export-failed")
+    assert sv._attribute_to_partial_clone(missing, repo) is missing
+
+
+def test_missing_object_error_is_a_sanitized_view_error_carrying_its_detail():
+    """The subclass must stay invisible to every caller that has not opted in."""
+    exc = sv._MissingObjectError("sanitized-view-export-failed")
+    assert isinstance(exc, sv.SanitizedViewError)
+    assert exc.detail == "sanitized-view-export-failed"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
+        ("42", True),
+        ("false", False),
+        ("FALSE", False),
+        ("no", False),
+        ("off", False),
+        ("0", False),
+        ("", False),
+        ("banana", False),
+    ],
+)
+def test_is_partial_clone_follows_git_boolean_spellings(tmp_path, value, expected):
+    """git reads every one of these as a boolean; a literal ``!= "false"`` did not.
+
+    Cross-checked against ``git config --bool`` itself for the spellings git accepts,
+    so this pins our reading to git's grammar rather than to one literal.
+    """
+    repo = _init_repo(tmp_path / ("gitbool-%s" % (value or "empty")), files={"a.txt": "a\n"})
+    _git(repo, "config", "remote.origin.promisor", value)
+    assert sv._is_partial_clone(repo) is expected
+    if value not in ("", "banana"):
+        probed = _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
+        assert probed == ("true" if expected else "false")
+
+
+def test_is_partial_clone_reads_a_valueless_promisor_key_as_true(tmp_path):
+    """``[remote "origin"] promisor`` with no ``=`` is git-true."""
+    repo = _init_repo(tmp_path / "valueless-promisor", files={"a.txt": "a\n"})
+    with open(os.path.join(repo, ".git", "config"), "a", encoding="utf-8") as fh:
+        fh.write('[remote "origin"]\n\tpromisor\n')
     assert (
-        sv._PARTIAL_CLONE_ATTRIBUTABLE_DETAILS
-        & sv._PARTIAL_CLONE_UNATTRIBUTABLE_DETAILS
-    ) == frozenset()
+        _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
+        == "true"
+    )
+    assert sv._is_partial_clone(repo) is True
 
 
 def test_is_partial_clone_answers_false_when_the_probe_exits_nonzero(tmp_path):

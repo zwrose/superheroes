@@ -170,6 +170,37 @@ _PARTIAL_CLONE_EXTENSION_KEY = "extensions.partialclone"
 _PROMISOR_REMOTE_KEY_RE = re.compile(r"\Aremote\..+\.promisor\Z")
 _PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS = 10
 
+# git's boolean grammar, not Python's. ``git config --bool`` reads true/yes/on and any
+# non-zero integer as true; false/no/off/0 and the empty value as false, case-insensitively;
+# a key present with no ``=`` at all is true. Comparing against the single literal "false"
+# would read an ordinary ``promisor = no`` as a promisor remote and misattribute that
+# repository's next failure to a partial clone.
+_GIT_BOOL_TRUE = frozenset({"true", "yes", "on"})
+_GIT_BOOL_FALSE = frozenset({"false", "no", "off", ""})
+
+
+def _git_config_bool(sep, value):
+    """Evaluate one ``git config --list -z`` record's value as a git boolean.
+
+    ``sep`` is empty when the record carried no value at all -- git spells that
+    ``true``. An unparseable value answers ``False``: git itself errors there, and a
+    refusal that keeps its own name is the safe direction for every caller here.
+    """
+    if not sep:
+        return True
+    try:
+        text = value.decode("utf-8").strip().lower()
+    except UnicodeDecodeError:
+        return False
+    if text in _GIT_BOOL_TRUE:
+        return True
+    if text in _GIT_BOOL_FALSE:
+        return False
+    try:
+        return int(text, 10) != 0
+    except ValueError:
+        return False
+
 
 def _is_partial_clone(repo_real):
     """True when ``repo_real`` is a partial clone (filtered, with a promisor remote).
@@ -200,10 +231,10 @@ def _is_partial_clone(repo_real):
         except UnicodeDecodeError:
             continue
         # bite-axis: shape detection — either config marker identifies a partial
-        # clone, and a promisor remote explicitly set to false does not.
+        # clone, and a promisor remote set to any git-false spelling does not.
         if key_text == _PARTIAL_CLONE_EXTENSION_KEY:
             return True
-        if _PROMISOR_REMOTE_KEY_RE.match(key_text) and sep and value.strip() != b"false":
+        if _PROMISOR_REMOTE_KEY_RE.match(key_text) and _git_config_bool(sep, value):
             return True
     return False
 
@@ -247,6 +278,19 @@ class SanitizedViewError(Exception):
     def __init__(self, detail):
         self.detail = detail
         super().__init__(detail)
+
+
+class _MissingObjectError(SanitizedViewError):
+    """A failure git attributed to an object absent from the local object store.
+
+    A **subclass, not a new outward token**: it carries the ordinary detail its call
+    site would otherwise have raised, so nothing downstream sees a new refusal unless
+    #797's attribution decides the checkout shape explains it. Being a distinct type
+    is what lets that attribution be exact — the outward tokens are umbrellas (
+    ``sanitized-view-export-failed`` also covers a type mismatch and a destination
+    filesystem error), and renaming an umbrella would blame the checkout shape for
+    faults that have nothing to do with object availability.
+    """
 
 
 def _platform_normalized_basename(name):
@@ -916,6 +960,11 @@ class _CatFileBatch:
         if not header or header == b"\n":
             raise SanitizedViewError("sanitized-view-export-failed")
         parts = header.decode("ascii", errors="replace").split()
+        # bite-axis: object availability, exactly — git's own two-field "<oid> missing"
+        # reply is the ONE place construction learns an object is absent from the local
+        # store, and it is the only failure #797's attribution is allowed to rename.
+        if parts == [oid, "missing"]:
+            raise _MissingObjectError("sanitized-view-export-failed")
         if len(parts) != 3:
             raise SanitizedViewError("sanitized-view-export-failed")
         resp_oid, obj_type, size_text = parts
@@ -1945,59 +1994,47 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
 
 SANITIZED_VIEW_PARTIAL_CLONE = "sanitized-view-partial-clone"
 
-# Refusal tokens that a *missing object* can produce, so a partial clone is a
-# genuine candidate cause for them. Membership is an allowlist, not a denylist: a
-# token added later and left unclassified keeps its own name, which is the
-# pre-existing behaviour, never a wrong attribution. The census test
-# ``test_partial_clone_attribution_covers_every_refusal_token`` pins the module's
-# complete token inventory against this set plus the one below, so a new token
-# fails the suite until it is deliberately classified one way or the other.
-_PARTIAL_CLONE_ATTRIBUTABLE_DETAILS = frozenset({
-    "sanitized-view-export-failed",
-    "sanitized-view-head-unresolved",
-    "sanitized-view-diff-failed",
-    "sanitized-view-diff-base-unresolved",
-})
-
-# The rest: failures whose cause is established independently of object availability
-# — a size ceiling, an integrity assertion, an operator/temp-dir misconfiguration, a
-# genuinely empty diff, or (``diff-base-shallow``) a *different* unsupported checkout
-# shape that has already named itself precisely.
-_PARTIAL_CLONE_UNATTRIBUTABLE_DETAILS = frozenset({
-    "sanitized-view-diff-base-shallow",
-    "sanitized-view-diff-empty",
-    "sanitized-view-diff-fully-withheld",
-    "sanitized-view-diff-opaque",
-    "sanitized-view-diff-path-collision",
-    "sanitized-view-diff-too-large",
-    "sanitized-view-diff-unaccounted",
-    "sanitized-view-export-incomplete",
-    "sanitized-view-export-timeout",
-    "sanitized-view-export-too-large",
-    "sanitized-view-init-failed",
-    "sanitized-view-tempbase-inside-repo",
-    SANITIZED_VIEW_PARTIAL_CLONE,
-})
-
 
 def _attribute_to_partial_clone(exc, repo_real):
-    """Rename an object-availability failure after the checkout shape that caused it.
+    """Rename an absent-object failure after the checkout shape that caused it.
 
     Owner ruling of 2026-08-09 (#797): a partial clone is not a supported checkout
-    shape here, and ``GIT_NO_LAZY_FETCH=1`` now makes git say so immediately instead
-    of stalling on an on-demand fetch. What it says, though, is an ordinary
-    command failure — indistinguishable, at the call site, from a corrupt object
-    store. Probing the shape *once*, on the failure path, turns that into an
-    attributed refusal: **partial or unhydrated clone detected; sanitized-view
-    construction refused. Hydrate the checkout (``git fetch --refetch``, or re-clone
-    without ``--filter``) and dispatch again.** The caller's cleanup has already run,
-    so no partial view is left behind either way.
+    shape here, and ``GIT_NO_LAZY_FETCH=1`` now makes git say an object is absent
+    immediately instead of stalling on an on-demand fetch. What it says, though, is
+    an ordinary command failure -- indistinguishable, at the call site, from a
+    corrupt object store. Probing the shape *once*, on the failure path, turns that
+    into an attributed refusal: **partial or unhydrated clone detected;
+    sanitized-view construction refused. Hydrate the checkout -- re-clone without
+    ``--filter``, or drop the filter in place and refetch
+    (``git config --unset remote.<name>.partialclonefilter``,
+    ``git config --unset remote.<name>.promisor``, ``git fetch --refetch <name>``)
+    -- and dispatch again.** Plain ``git fetch --refetch`` on its own is NOT a
+    remedy: it deliberately reapplies the configured filter, so it returns the
+    operator to this same refusal. The caller's cleanup has already run, so no
+    partial view is left behind either way.
 
-    Returns the exception to raise — the original when the shape does not explain it.
+    Attribution keys on the **exception type**, never on the outward detail token.
+    The tokens are umbrellas -- ``sanitized-view-export-failed`` also covers a
+    census type mismatch and a destination filesystem error, and
+    ``sanitized-view-diff-base-unresolved`` also covers scratch-repository setup --
+    so renaming by token would blame the checkout shape for faults that have
+    nothing to do with object availability.
+
+    **Accepted narrowness, disclosed:** ``_MissingObjectError`` is raised from git's
+    ``<oid> missing`` batch reply, which covers a filtered clone missing *blobs* --
+    the dominant shape, and the one ``--filter=blob:none`` produces. A clone
+    filtered hard enough to be missing *trees or commits* (``--filter=tree:0``)
+    fails earlier, inside ``ls-tree`` or ``rev-parse``, and still refuses -- with a
+    generic token rather than this named one. That is the safe direction (a generic
+    refusal, never wrong advice) and it is a smaller claim than "every partial
+    clone is named"; distinguishing it would mean parsing git's stderr prose, which
+    this module deliberately does not do.
+
+    Returns the exception to raise -- the original when the shape does not explain it.
     """
-    # bite-axis: attribution, not detection — the refusal is renamed only when the
-    # failure could be object availability AND the checkout really is a partial clone.
-    if exc.detail not in _PARTIAL_CLONE_ATTRIBUTABLE_DETAILS:
+    # bite-axis: attribution, not detection -- renamed only when git itself reported
+    # an object absent AND the checkout really is a partial clone.
+    if not isinstance(exc, _MissingObjectError):
         return exc
     if not _is_partial_clone(repo_real):
         return exc
