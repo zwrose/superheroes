@@ -165,8 +165,12 @@ Collect findings under these named smells; **every finding cites its smell by na
   escape**, harness-side half — a dev box silently supplied `user.email`, so a fixture's own commits
   succeeded locally **by construction**, the local run read ready, and both halves of the stack went
   red only in CI. (That escape also has a production-machinery half, which is
-  `premortem-reviewer`'s under the ownership rule above; the encoded response to both is the
-  workhorse charter's §2 rule that commits inherit the *resolved* identity and a missing one parks.)
+  `premortem-reviewer`'s under the ownership rule above — **and the two halves take opposite
+  remedies**, so do not carry one across: production commits inherit the *resolved* identity and a
+  missing one parks, while a throwaway repo a test fixture creates has no configured identity on a
+  CI runner and its commits deliberately pass an explicit inline one. Both are stated in the
+  workhorse charter's §2. What the fixture half owes this smell is not a different identity rule but
+  the red showing — that the check fails when the ambient identity is absent.)
   And the **pre-proven-liveness fixture class**, PR **#714**,
   where the harness defaulted an engaged liveness result the fixtures then leaned on — `4051 passed,
   3 skipped` carried a park-to-certify regression straight through, and the PR's own honest
