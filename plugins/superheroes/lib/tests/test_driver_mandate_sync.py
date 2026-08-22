@@ -20,8 +20,16 @@ whitespace collapse. BACKGROUNDABLE_VERIFY is pinned **whole-file** (count == 1 
 because its surfaces carry `` ``` `` fences inside section-scoped regions. SKIP_CITATION and
 PARITY are pinned inside their **declared sections** on every enumerated surface. Section extraction
 reuses ``_file_section`` and ``_normalized`` from ``test_charter_boundary_sync``; that reader is
-deliberately **fence-blind** (fence-awareness was tried and reverted in PR #727). A tripwire below
-asserts section-anchored surfaces contain no fences so that premise stays true where it is relied on.
+deliberately **fence-blind** (fence-awareness was tried and reverted in PR #727).
+
+**Known residual, not guarded here:** nothing mechanically asserts that a section-anchored
+surface stays fence-free. A line-oriented fence check over ``_file_section`` output is inert by
+construction — that reader returns whitespace-collapsed text, so ``splitlines()`` sees one line —
+and a guard that cannot fail is worse than none. ``rubric/review-discipline.md`` is already
+covered whole-file by ``test_charter_boundary_sync.test_no_fence_lines``; ``vet-receipt.md``
+cannot join that tuple because it legitimately carries a fenced ``## Skeleton`` block outside the
+guarded section. Today the guarded section is fence-free (measured); a correctly-homed raw-text
+tripwire is handed up as a follow-up.
 
 The guard does **not** detect a literal that is present but neutralized by surrounding prose (for
 example an appended exception clause); that semantic check is deliberately out of scope — the
@@ -73,11 +81,6 @@ _BACKGROUNDABLE_VERIFY_SURFACES = [
     "skills/workhorse/SKILL.md",
 ]
 
-_SECTION_ANCHORED_SURFACES = [
-    (_HOME, _DRIVER_MANDATE_SECTION),
-    (_VET_RECEIPT, _VET_TRIGGERED_SECTION),
-]
-
 
 def _read(rel):
     path = os.path.join(_PLUGIN_ROOT, rel)
@@ -114,21 +117,6 @@ def test_backgroundable_verify_present(rel):
     assert count == 1, (
         f"expected exactly one occurrence in {rel}, found {count}"
     )
-
-
-def test_section_anchored_surfaces_have_no_fences():
-    # axis: fence-blind section reader premise — no ``` inside section-anchored regions
-    for rel, section in _SECTION_ANCHORED_SURFACES:
-        section_text = _section_text(rel, section)
-        fence_lines = [
-            line
-            for line in section_text.splitlines()
-            if line.strip().startswith("```")
-        ]
-        assert not fence_lines, (
-            f"{rel} section {section!r} contains fence lines "
-            f"(fence-blind reader premise): {fence_lines}"
-        )
 
 
 def test_skip_citation_present_in_home():
