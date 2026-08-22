@@ -15,6 +15,8 @@
 | `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes       |
 | `$SESSION_DIR/repo/`                                | orchestrator   | `--post`/`--review-only` PR paths only: detached `git worktree` at the PR head SHA          |
 | `$SESSION_DIR/prior-comments.json`                  | orchestrator   | PR-mode only: prior review comments + threads (for author justifications)                   |
+| `$SESSION_DIR/grounding/pr-body.md`                 | `grounding_stage stage` | PR-mode only: staged PR body for the dispatched grounding seat (#609)                |
+| `$SESSION_DIR/grounding/stage.json`                 | `grounding_stage stage` | PR-mode only: `grounding-stage/1` manifest (claims, regions, `stageToken`, per-file `sha256`) |
 | `$SESSION_DIR/round-<N>/diff.txt`                   | orchestrator   | Round `<N>` unified diff (`git diff <pinned baseRef>...HEAD`). **Never read by the main context.** |
 | `$SESSION_DIR/round-<N>/findings-architecture.json` | arch agent     | Architecture-reviewer findings array                                                        |
 | `$SESSION_DIR/round-<N>/findings-code.json`         | code agent     | Code-reviewer findings array                                                                |

@@ -46,7 +46,7 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     yield
 
 
-def _never_build_view(_repo, *, diff_base=None):
+def _never_build_view(_repo, *, diff_base=None, pr_body_path=None):
     raise AssertionError("build_view should not be called")
 
 
@@ -54,11 +54,12 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
     counter = {"n": 0}
     meta = {"repo_arg": None, "view_path": None, "build_count": 0}
 
-    def build_view(repo_real, *, diff_base=None):
+    def build_view(repo_real, *, diff_base=None, pr_body_path=None):
         counter["n"] += 1
         meta["build_count"] = counter["n"]
         meta["repo_arg"] = repo_real
         meta["diff_base"] = diff_base
+        meta["pr_body_path"] = pr_body_path
         view_base = _SV_MOD.tempfile.gettempdir()
         view_dir = os.path.join(
             view_base,
@@ -87,6 +88,12 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
             "buildSeconds": 0.01,
             "bytes": 1,
             "fileCount": 1,
+            "diffBase": None,
+            "diffPath": None,
+            "diffBytes": None,
+            "diffWithheldCount": None,
+            "prBodyPath": None,
+            "prBodyBytes": None,
         }
 
     build_view.meta = meta
@@ -107,6 +114,8 @@ def _fake_view_receipt(**overrides):
         "diffPath": None,
         "diffBytes": None,
         "diffWithheldCount": None,
+        "prBodyPath": None,
+        "prBodyBytes": None,
     }
     base.update(overrides)
     return base
@@ -3435,9 +3444,13 @@ def _capture_build_view(tmp_path, *, diff_keys=None):
     inner = _fake_build_view(tmp_path)
     captured = {"kwargs": []}
 
-    def build_view(repo_real, *, diff_base=None):
-        captured["kwargs"].append({"repo": repo_real, "diff_base": diff_base})
-        view = inner(repo_real)
+    def build_view(repo_real, *, diff_base=None, pr_body_path=None):
+        captured["kwargs"].append({
+            "repo": repo_real,
+            "diff_base": diff_base,
+            "pr_body_path": pr_body_path,
+        })
+        view = inner(repo_real, diff_base=diff_base, pr_body_path=pr_body_path)
         if diff_keys:
             view.update(diff_keys)
         elif diff_base is not None:
@@ -3541,7 +3554,8 @@ def test_review_continuation_ignores_diff_base(tmp_path):
         proc.wait(timeout=2)
 
 
-def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, run_name="run"):
+def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, run_name="run",
+                                 investigated=None):
     run_dir = str(tmp_path / run_name)
     repo_root, view = _manual_open_review_run(tmp_path, run_dir)
     records, _ = ED._journal_read(run_dir)
@@ -3555,7 +3569,8 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
     with open(path, "w", encoding="utf-8") as fh:
         for rec in records:
             fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
-    stdout = json.dumps({"findings": [], "investigated": ["SUPERHEROES_REVIEW_DIFF.patch"]})
+    inv = investigated if investigated is not None else ["SUPERHEROES_REVIEW_DIFF.patch"]
+    stdout = json.dumps({"findings": [], "investigated": inv})
     with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
         fh.write(stdout)
     with open(os.path.join(run_dir, "attempt-1.stderr"), "w", encoding="utf-8") as fh:
@@ -3573,6 +3588,11 @@ def _grade_state_with_view_meta(tmp_path, view_meta, *, omit_view_meta=False, ru
     patch_path = os.path.join(view["path"], "SUPERHEROES_REVIEW_DIFF.patch")
     with open(patch_path, "w", encoding="utf-8") as fh:
         fh.write("diff\n")
+    pr_body_name = (view_meta or {}).get("prBodyPath") if not omit_view_meta else None
+    if isinstance(pr_body_name, str) and pr_body_name:
+        pr_body_path = os.path.join(view["path"], pr_body_name)
+        with open(pr_body_path, "w", encoding="utf-8") as fh:
+            fh.write("pr body\n")
     return run_dir, state
 
 
@@ -3599,6 +3619,27 @@ def test_grade_review_view_meta_diff_path_rejects_patch_only_investigation(tmp_p
     assert grade.get("forfeit") is True
     assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
     assert "generated-artifact" in grade.get("investigatedRejected", [])
+
+
+def test_grade_review_view_meta_pr_body_rejects_body_only_investigation(tmp_path):
+    run_dir, state = _grade_state_with_view_meta(
+        tmp_path,
+        {
+            "diffPath": None,
+            "prBodyPath": _SV_MOD.PR_BODY_FILE_NAME,
+            "headSha": "abc",
+        },
+        investigated=[_SV_MOD.PR_BODY_FILE_NAME],
+    )
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
+    rejected = grade.get("investigatedRejectedRecords") or []
+    assert any(
+        r.get("path") == _SV_MOD.PR_BODY_FILE_NAME
+        and r.get("reason") == "generated-artifact"
+        for r in rejected
+    )
 
 
 def test_main_dispatch_review_diff_base_cli_wiring(tmp_path, monkeypatch, capsys):
@@ -4492,6 +4533,53 @@ def test_continuation_explicit_brief_check_with_diff_base_still_refused(tmp_path
     )
     assert res["detail"] == ED.MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE
     assert res["attempts"] == 0
+
+
+def _manual_open_review_run_with_pr_body(tmp_path, run_dir, *, pr_body_source_path):
+    repo_root, view = _manual_open_review_run_with_mode(tmp_path, run_dir)
+    records, _ = ED._journal_read(run_dir)
+    opened = next(r for r in records if r.get("kind") == "run-opened")
+    opened["prBodySourcePath"] = pr_body_source_path
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for record in records:
+            fh.write(json.dumps(record, separators=(",", ":")) + "\n")
+    return repo_root, view
+
+
+def test_continuation_pr_body_mismatch_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    body_a = tmp_path / "body-a.md"
+    body_b = tmp_path / "body-b.md"
+    body_a.write_text("a\n", encoding="utf-8")
+    body_b.write_text("b\n", encoding="utf-8")
+    repo_root, _ = _manual_open_review_run_with_pr_body(
+        tmp_path, run_dir, pr_body_source_path=os.path.realpath(body_a),
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        pr_body_path=str(body_b), max_wait=0,
+    )
+    assert res["detail"] == ED.PR_BODY_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+
+
+def test_continuation_omitted_pr_body_inherits(tmp_path):
+    run_dir = str(tmp_path / "run")
+    body_a = tmp_path / "body-a.md"
+    body_a.write_text("a\n", encoding="utf-8")
+    repo_root, _ = _manual_open_review_run_with_pr_body(
+        tmp_path, run_dir, pr_body_source_path=os.path.realpath(body_a),
+    )
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        max_wait=0,
+    )
+    assert res.get("detail") != ED.PR_BODY_REFUSAL_RUN_DIR_MISMATCH
 
 
 def test_dispatch_review_brief_check_end_to_end(tmp_path):

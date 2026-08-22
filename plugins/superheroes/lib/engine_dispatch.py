@@ -110,6 +110,7 @@ MAX_STDERR_CAPTURE = 64 * 1024
 MODE_REFUSAL_INVALID = "mode-invalid"
 MODE_REFUSAL_BRIEF_CHECK_WITH_DIFF_BASE = "mode-brief-check-with-diff-base"
 MODE_REFUSAL_RUN_DIR_MISMATCH = "run-dir-mode-mismatch"
+PR_BODY_REFUSAL_RUN_DIR_MISMATCH = "run-dir-pr-body-mismatch"
 RESULT_KIND_REFUSAL_INVALID = "expected-result-kind-invalid"
 RESULT_KIND_REFUSAL_RUN_DIR_MISMATCH = "run-dir-result-kind-mismatch"
 
@@ -2148,9 +2149,15 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     view_meta = opened.get("viewMeta")
     generated = ()
     if isinstance(view_meta, dict):
+        gen_paths = []
         diff_path = view_meta.get("diffPath")
         if isinstance(diff_path, str) and diff_path:
-            generated = (diff_path,)
+            gen_paths.append(diff_path)
+        pr_body_path = view_meta.get("prBodyPath")
+        if isinstance(pr_body_path, str) and pr_body_path:
+            gen_paths.append(pr_body_path)
+        if gen_paths:
+            generated = tuple(gen_paths)
     _, accepted, spot_rejected = engine_adapter.spot_check_investigated(
         res.get("investigated"), cwd, generated_artifacts=generated)
     rejected_records, rejected_reasons = _merge_investigated_rejections(res, spot_rejected)
@@ -2692,6 +2699,8 @@ def _sanitized_view_receipt(view):
         "diffPath": view.get("diffPath"),
         "diffBytes": view.get("diffBytes"),
         "diffWithheldCount": view.get("diffWithheldCount"),
+        "prBodyPath": view.get("prBodyPath"),
+        "prBodyBytes": view.get("prBodyBytes"),
     }
 
 
@@ -2711,7 +2720,7 @@ def _attach_sanitized_view(result, view):
 def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
                      prompt_path, view_path, view_meta, fed_prompt, order_id,
                      progress_path, repo_root=None, mode="review",
-                     expected_result_kind=None):
+                     expected_result_kind=None, pr_body_source_path=None):
     journal_root = _journal_root_for_run_dir(run_dir_real)
     repo_root_real, repo_id = _repo_root_and_id(repo_root)
     try:
@@ -2755,6 +2764,8 @@ def _open_review_run(run_dir_real, *, engine, argv, cwd, timeout, retry_timeout,
     }
     if expected_result_kind in REVIEW_RESULT_KINDS:
         record["expectedResultKind"] = expected_result_kind
+    if pr_body_source_path is not None:
+        record["prBodySourcePath"] = pr_body_source_path
     if not _journal_append(run_dir_real, record):
         return False, "journal-append-failed"
     return True, ""
@@ -2765,7 +2776,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
                     retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                     build_view=sanitized_view.build_sanitized_view,
                     run_dir=None, max_wait=None, order_id=None, diff_base=None, mode=None,
-                    expected_result_kind=None):
+                    expected_result_kind=None, pr_body_path=None):
     """Reviewer-scoped dispatch in the repository under review (#665). An unresolvable repo root is
     a named refusal (attempts: 0). Never raises: any unexpected internal failure (build_argv,
     the injected run_engine, parse_result) is converted to a structured fall-open result so the
@@ -2785,7 +2796,7 @@ def dispatch_review(engine, *, model, effort, engine_model=None, prompt_path,
             retry_timeout=retry_timeout, progress_path=progress_path, run_engine=run_engine,
             build_view=build_view, run_dir=run_dir, max_wait=max_wait, order_id=order_id,
             diff_base=diff_base, mode=mode, resolved_mode=resolved,
-            expected_result_kind=expected_result_kind)
+            expected_result_kind=expected_result_kind, pr_body_path=pr_body_path)
         stamped = dict(result)
         stamped["mode"] = resolved["mode"] or (mode or sanitized_view.MODE_REVIEW)
         return stamped
@@ -2801,7 +2812,8 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                           retry_timeout=RETRY_MIN_TIMEOUT, progress_path=None, run_engine=_run_engine,
                           build_view=sanitized_view.build_sanitized_view,
                           run_dir=None, max_wait=None, order_id=None, diff_base=None,
-                          mode=None, resolved_mode=None, expected_result_kind=None):
+                          mode=None, resolved_mode=None, expected_result_kind=None,
+                          pr_body_path=None):
     """Reviewer-scoped dispatch in the repository under review (#665). The role is HARD-CODED
     'review' (read-only sandbox) — this API cannot emit a workspace-write dispatch."""
     role_kind = RUN_KIND_REVIEW
@@ -2893,6 +2905,20 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                          "attempts": 0, "forfeited": False, "terminal": True},
                         run_dir=run_dir_real, argv=argv, engine=engine,
                     )
+                journal_pr_body = opened.get("prBodySourcePath")
+                if pr_body_path is not None:
+                    try:
+                        supplied_pr_body = os.path.realpath(pr_body_path)
+                    except OSError:
+                        supplied_pr_body = pr_body_path
+                    if journal_pr_body != supplied_pr_body:
+                        return _finish_preflight_terminal(
+                            repo_detail,
+                            {"ok": False, "reason": dispatch_outcome.REASON_UNRUNNABLE,
+                             "detail": PR_BODY_REFUSAL_RUN_DIR_MISMATCH,
+                             "attempts": 0, "forfeited": False, "terminal": True},
+                            run_dir=run_dir_real, argv=argv, engine=engine,
+                        )
                 journal_result_kind = opened.get("expectedResultKind")
                 if expected_result_kind is not None and expected_result_kind != journal_result_kind:
                     return _finish_preflight_terminal(
@@ -2914,7 +2940,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
         if not continuation:
             resolved_mode["mode"] = mode or sanitized_view.MODE_REVIEW
             try:
-                view = build_view(repo_detail, diff_base=diff_base)
+                view = build_view(repo_detail, diff_base=diff_base, pr_body_path=pr_body_path)
             except sanitized_view.SanitizedViewError as exc:
                 return _finish_preflight_terminal(
                     repo_detail,
@@ -2952,6 +2978,12 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
 
             if run_dir_real is None:
                 run_dir_real = tempfile.mkdtemp(prefix="superheroes-dispatch-review-")
+            pr_body_source_path = None
+            if pr_body_path is not None:
+                try:
+                    pr_body_source_path = os.path.realpath(pr_body_path)
+                except OSError:
+                    pr_body_source_path = pr_body_path
             ok_open, open_detail = _open_review_run(
                 run_dir_real, engine=engine, argv=argv, cwd=cwd,
                 timeout=timeout, retry_timeout=retry_timeout,
@@ -2960,6 +2992,7 @@ def _dispatch_review_impl(engine, *, model, effort, engine_model=None, prompt_pa
                 progress_path=progress_path or os.path.join(run_dir_real, PROGRESS_NAME),
                 repo_root=repo_detail, mode=resolved_mode["mode"],
                 expected_result_kind=expected_result_kind,
+                pr_body_source_path=pr_body_source_path,
             )
             if not ok_open:
                 err = _attach_sanitized_view(_with_run_fields(
@@ -3615,6 +3648,8 @@ def build_parser():
     cc.add_argument(d, "--expected-result-kind", contract="choices:findings,verdicts",
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
+    cc.add_argument(d, "--pr-body-path", contract="free-text", default=None,
+                    help="path to the PR body markdown to stage into the sanitized view")
 
     w = sub.add_parser("dispatch-write")
     cc.add_argument(w, "--engine", contract="choices:codex,cursor",
@@ -3658,7 +3693,8 @@ def main(argv):
                               progress_path=args.progress_file, run_dir=args.run_dir,
                               max_wait=args.max_wait, order_id=args.order_id,
                               diff_base=args.diff_base, mode=args.mode,
-                              expected_result_kind=args.expected_result_kind)
+                              expected_result_kind=args.expected_result_kind,
+                              pr_body_path=args.pr_body_path)
     elif args.cmd == "dispatch-write":
         res = dispatch_write(args.engine, model=args.model, effort=args.effort,
                              engine_model=args.engine_model, prompt_path=args.prompt_path,

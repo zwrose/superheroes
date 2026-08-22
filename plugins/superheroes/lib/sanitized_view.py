@@ -65,6 +65,9 @@ SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 REVIEW_DIFF_FILE_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
 REVIEW_DIFF_MAX_BYTES = 8 * 1024 * 1024
 
+PR_BODY_FILE_NAME = "SUPERHEROES_PR_BODY.md"
+PR_BODY_MAX_BYTES = 1 * 1024 * 1024
+
 MODE_REVIEW = "review"
 MODE_BRIEF_CHECK = "brief-check"
 REVIEW_MODES = (MODE_REVIEW, MODE_BRIEF_CHECK)
@@ -1722,6 +1725,78 @@ def _reconcile_review_patch(patch_bytes, survivors, withheld):
     return b"".join(kept_sections)
 
 
+def _write_pr_body_file(view_root, body_bytes):
+    body_path = os.path.join(view_root, PR_BODY_FILE_NAME)
+    if os.path.lexists(body_path):
+        raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(body_path, flags, 0o600)
+    except FileExistsError:
+        raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(body_bytes)
+    except Exception:
+        try:
+            os.unlink(body_path)
+        except OSError:
+            pass
+        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+
+
+def _stage_pr_body(view_root, pr_body_path):
+    """Materialize a PR body at the view root (before ``git init``).
+
+    # axis: unstaged or drifted required PR body input must refuse, never proceed
+    """
+    try:
+        source_real = os.path.realpath(pr_body_path)
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-missing")
+    if not os.path.isfile(source_real):
+        raise SanitizedViewError("sanitized-view-pr-body-missing")
+
+    dest = os.path.join(view_root, PR_BODY_FILE_NAME)
+    if os.path.lexists(dest):
+        raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+    review_patch = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
+    if os.path.lexists(review_patch):
+        try:
+            if os.path.samefile(source_real, review_patch):
+                raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+        except OSError:
+            pass
+
+    try:
+        with open(source_real, "rb") as fh:
+            body_bytes = fh.read(PR_BODY_MAX_BYTES + 1)
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-unreadable")
+
+    if len(body_bytes) == 0:
+        raise SanitizedViewError("sanitized-view-pr-body-empty")
+    if len(body_bytes) > PR_BODY_MAX_BYTES:
+        raise SanitizedViewError("sanitized-view-pr-body-too-large")
+
+    _write_pr_body_file(view_root, body_bytes)
+
+    try:
+        with open(dest, "rb") as fh:
+            readback = fh.read()
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+    if readback != body_bytes:
+        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+
+    return {
+        "prBodyPath": PR_BODY_FILE_NAME,
+        "prBodyBytes": len(body_bytes),
+    }
+
+
 def _write_review_patch_file(view_root, patch_bytes):
     patch_path = os.path.join(view_root, REVIEW_DIFF_FILE_NAME)
     if os.path.lexists(patch_path):
@@ -1884,7 +1959,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     }
 
 
-def build_sanitized_view(repo_root, *, diff_base=None):
+def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
     ``sourceDirty`` in the returned dict is ``True`` when tracked files differ
@@ -1919,6 +1994,14 @@ def build_sanitized_view(repo_root, *, diff_base=None):
             diff_info = _stage_review_diff(
                 repo_real, head_sha, view_root, diff_base, started
             )
+        if pr_body_path is None:
+            pr_body_info = {
+                "prBodyPath": None,
+                "prBodyBytes": None,
+            }
+        else:
+            # axis: unstaged or drifted required PR body input must refuse, never proceed
+            pr_body_info = _stage_pr_body(view_root, pr_body_path)
         _init_view_git(view_root)
 
         build_seconds = time.monotonic() - started
@@ -1934,6 +2017,7 @@ def build_sanitized_view(repo_root, *, diff_base=None):
             "bytes": total_bytes,
             "fileCount": file_count,
             **diff_info,
+            **pr_body_info,
         }
     except SanitizedViewError:
         if view_root is not None:
