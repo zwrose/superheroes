@@ -129,8 +129,6 @@ def _resolvable_families_for_seat(
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
             return None
     cells_source = seat_map.get("liveCellsSource")
-    if cells_source == "synthesized":
-        return None
     known_vendors = set(vendors())
     tier = tier or _seat_tier(seat, cfg)
     families: set[str] = set()
@@ -166,6 +164,8 @@ def _resolvable_families_for_seat(
             if fam is not None and is_allowed(tier, "claude", model, effort):
                 families.add(fam)
         return families
+    # synthesized and absent source fall through: synthesized cells derive from the
+    # pessimistic liveVendors rollup, so vendor-level evidence is never less conservative.
     live = seat_map.get("liveVendors")
     if not isinstance(live, list) or not live:
         return None

@@ -1654,6 +1654,33 @@ def test_resolvable_families_for_seat_positive_family_set():
     assert fams == {"anthropic", "openai", "xai"}
 
 
+def test_resolvable_families_live_cells_source_probed_vs_synthesized_vs_absent():
+    # axis: probed uses cell-level derivation; synthesized and absent agree on vendor-level
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["livenessPinScoped"] = False
+    partial_cells = [["cursor", "cursor-grok-4.6", "xhigh"]]
+    vendor_level = {"anthropic", "openai", "xai"}
+    cell_level = {"anthropic", "xai"}
+
+    probed_map = {
+        **seat_map,
+        "liveCellsSource": "probed",
+        "liveCells": partial_cells,
+    }
+    assert SM._resolvable_families_for_seat(probed_map, seat, cfg) == cell_level
+
+    synthesized_map = {**seat_map, "liveCellsSource": "synthesized"}
+    assert SM._resolvable_families_for_seat(synthesized_map, seat, cfg) == vendor_level
+
+    absent_map = {k: v for k, v in seat_map.items() if k != "liveCellsSource"}
+    absent_map.pop("liveCells", None)
+    assert SM._resolvable_families_for_seat(absent_map, seat, cfg) == vendor_level
+    assert (
+        SM._resolvable_families_for_seat(synthesized_map, seat, cfg)
+        == SM._resolvable_families_for_seat(absent_map, seat, cfg)
+    )
+
+
 # --- pin-shape normalization + refusal (#1039) -------------------------------------------------
 
 
