@@ -201,9 +201,22 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
 > returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside post-argparse
 > refusals such as `sanitized-view-tempbase-inside-repo`, `sanitized-view-head-unresolved`,
-> `sanitized-view-export-failed`, `sanitized-view-export-timeout`, and `sanitized-view-init-failed`
+> `sanitized-view-export-failed`, `sanitized-view-export-timeout`, `sanitized-view-partial-clone`,
+> and `sanitized-view-init-failed`
 > (also `attempts: 0`). There is
 > **no fallback to the raw repo and no opt-out**.
+>
+> **Partial clones are an unsupported checkout shape** (owner-ruled 2026-08-09, #797). Every git
+> subprocess view construction spawns runs under `GIT_NO_LAZY_FETCH=1`, so construction can never
+> wait on git's on-demand fetching of an object the checkout does not hold — the quiet-hang class
+> PR #761 recorded. When a required object turns out to be absent, construction fails immediately
+> and, on a repository carrying a promisor remote, the refusal is renamed after the shape that
+> caused it: **`sanitized-view-partial-clone` — partial or unhydrated clone detected; sanitized-view
+> construction refused. Hydrate the checkout (`git fetch --refetch`, or re-clone without
+> `--filter`) and dispatch again.** Cleanup runs as on any refusal, so no partial view is left
+> behind. A partial clone whose required objects all happen to be present locally still builds
+> normally; the refusal appears only when construction would otherwise have reached for the network.
+> No timeout machinery is involved — the ruling replaced the earlier bounded-deadline design.
 >
 > **Argparse vs JSON refusals.** `--repo-root` is **required** and validated by argparse before
 > `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable

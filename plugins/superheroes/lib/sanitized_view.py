@@ -6,6 +6,7 @@ case-sensitive filesystems) so behavior is predictable and case-variant agent
 config cannot leak. Non-ASCII letters are not folded.
 """
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -141,7 +142,11 @@ def _git_env():
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = ""
-    # Lazy fetch stays enabled on partial clones; the export deadline bounds it.
+    # Owner-ruled 2026-08-09 (#797): partial clones are not a supported checkout shape
+    # for sanitized-view construction, and construction must never wait on git's
+    # on-demand object fetching. Every git subprocess this module spawns is built
+    # through this function or _ancestry_env, so the two of them are the whole census.
+    env["GIT_NO_LAZY_FETCH"] = "1"
     return env
 
 
@@ -153,6 +158,48 @@ def _git_run(*args, **kwargs):
 def _git_popen(*args, **kwargs):
     kwargs["env"] = _git_env()
     return subprocess.Popen(*args, **kwargs)
+
+
+# Config markers of a partial clone. git writes ``remote.<name>.promisor`` on every
+# filtered clone; ``extensions.partialclone`` is the older/bare-repository spelling and
+# is kept so the probe is not pinned to one git version. Config keys arrive lowercased
+# for both (git lowercases section and variable names; only subsection case survives).
+_PARTIAL_CLONE_EXTENSION_KEY = "extensions.partialclone"
+_PROMISOR_REMOTE_KEY_RE = re.compile(r"\Aremote\..+\.promisor\Z")
+_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS = 10
+
+
+def _is_partial_clone(repo_real):
+    """True when ``repo_real`` is a partial clone (filtered, with a promisor remote).
+
+    Probed from **config only** — this never names an object id, so the probe itself
+    can never be the on-demand fetch the refusal exists to prevent. Any probe failure
+    answers ``False``: an unattributed generic refusal is the pre-existing behaviour,
+    whereas a false ``True`` would blame the checkout shape for an unrelated fault.
+    """
+    try:
+        proc = _git_run(
+            ["git", "-C", repo_real, "config", "--list", "-z"],
+            capture_output=True,
+            timeout=_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    if proc.returncode != 0:
+        return False
+    for record in proc.stdout.split(b"\0"):
+        if not record:
+            continue
+        key, sep, value = record.partition(b"\n")
+        try:
+            key_text = key.decode("utf-8")
+        except UnicodeDecodeError:
+            continue
+        if key_text == _PARTIAL_CLONE_EXTENSION_KEY:
+            return True
+        if _PROMISOR_REMOTE_KEY_RE.match(key_text) and sep and value.strip() != b"false":
+            return True
+    return False
 
 
 def _is_git_object_id_hex(value):
@@ -586,6 +633,10 @@ def _ancestry_env():
     """
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    # Added back explicitly, not inherited: this builder drops every GIT_* variable,
+    # so the no-lazy-fetch rule that _git_env applies has to be restated here or the
+    # ancestry probes would be the one channel still able to trigger a promisor fetch.
+    env["GIT_NO_LAZY_FETCH"] = "1"
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_SYSTEM"] = os.devnull
     env["LC_ALL"] = "C"
@@ -1884,6 +1935,65 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     }
 
 
+SANITIZED_VIEW_PARTIAL_CLONE = "sanitized-view-partial-clone"
+
+# Refusal tokens that a *missing object* can produce, so a partial clone is a
+# genuine candidate cause for them. Membership is an allowlist, not a denylist: a
+# token added later and left unclassified keeps its own name, which is the
+# pre-existing behaviour, never a wrong attribution. The census test
+# ``test_partial_clone_attribution_covers_every_refusal_token`` pins the module's
+# complete token inventory against this set plus the one below, so a new token
+# fails the suite until it is deliberately classified one way or the other.
+_PARTIAL_CLONE_ATTRIBUTABLE_DETAILS = frozenset({
+    "sanitized-view-export-failed",
+    "sanitized-view-head-unresolved",
+    "sanitized-view-diff-failed",
+    "sanitized-view-diff-base-unresolved",
+})
+
+# The rest: failures whose cause is established independently of object availability
+# — a size ceiling, an integrity assertion, an operator/temp-dir misconfiguration, a
+# genuinely empty diff, or (``diff-base-shallow``) a *different* unsupported checkout
+# shape that has already named itself precisely.
+_PARTIAL_CLONE_UNATTRIBUTABLE_DETAILS = frozenset({
+    "sanitized-view-diff-base-shallow",
+    "sanitized-view-diff-empty",
+    "sanitized-view-diff-fully-withheld",
+    "sanitized-view-diff-opaque",
+    "sanitized-view-diff-path-collision",
+    "sanitized-view-diff-too-large",
+    "sanitized-view-diff-unaccounted",
+    "sanitized-view-export-incomplete",
+    "sanitized-view-export-timeout",
+    "sanitized-view-export-too-large",
+    "sanitized-view-init-failed",
+    "sanitized-view-tempbase-inside-repo",
+    SANITIZED_VIEW_PARTIAL_CLONE,
+})
+
+
+def _attribute_to_partial_clone(exc, repo_real):
+    """Rename an object-availability failure after the checkout shape that caused it.
+
+    Owner ruling of 2026-08-09 (#797): a partial clone is not a supported checkout
+    shape here, and ``GIT_NO_LAZY_FETCH=1`` now makes git say so immediately instead
+    of stalling on an on-demand fetch. What it says, though, is an ordinary
+    command failure — indistinguishable, at the call site, from a corrupt object
+    store. Probing the shape *once*, on the failure path, turns that into an
+    attributed refusal: **partial or unhydrated clone detected; sanitized-view
+    construction refused. Hydrate the checkout (``git fetch --refetch``, or re-clone
+    without ``--filter``) and dispatch again.** The caller's cleanup has already run,
+    so no partial view is left behind either way.
+
+    Returns the exception to raise — the original when the shape does not explain it.
+    """
+    if exc.detail not in _PARTIAL_CLONE_ATTRIBUTABLE_DETAILS:
+        return exc
+    if not _is_partial_clone(repo_real):
+        return exc
+    return SanitizedViewError(SANITIZED_VIEW_PARTIAL_CLONE)
+
+
 def build_sanitized_view(repo_root, *, diff_base=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
@@ -1935,10 +2045,10 @@ def build_sanitized_view(repo_root, *, diff_base=None):
             "fileCount": file_count,
             **diff_info,
         }
-    except SanitizedViewError:
+    except SanitizedViewError as exc:
         if view_root is not None:
             destroy_sanitized_view(view_root)
-        raise
+        raise _attribute_to_partial_clone(exc, repo_real)
     except OSError:
         if view_root is not None:
             destroy_sanitized_view(view_root)
