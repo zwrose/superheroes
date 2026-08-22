@@ -34,6 +34,8 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "stage-manifest-invalid",
     "staged-file-unreadable",
     "staged-file-hash-mismatch",
+    "staged-stage-token-mismatch",
+    "manifest-flag-mismatch",
     "invalid-invocation",
 })
 
@@ -586,6 +588,30 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
 
     cases["staged-file-hash-mismatch"] = case_staged_file_hash_mismatch
 
+    def case_staged_stage_token_mismatch():
+        session = _session(tmp_path, body=_happy_body(), name="case-staged-stage-token-mismatch")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        manifest_path = tmp_path / "case-staged-stage-token-mismatch" / "grounding" / "stage.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["stageToken"] = "9999-9999-9999-9999"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["staged-stage-token-mismatch"] = case_staged_stage_token_mismatch
+
+    def case_manifest_flag_mismatch():
+        session = _session(tmp_path, body=_happy_body(), name="case-manifest-flag-mismatch")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        manifest_path = tmp_path / "case-manifest-flag-mismatch" / "grounding" / "stage.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["noSubstantiveClaims"] = True
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["manifest-flag-mismatch"] = case_manifest_flag_mismatch
+
     def case_invalid_invocation():
         session = _session(tmp_path, body=_happy_body(), name="case-invalid-invocation")
         argv = ["grounding_stage.py", "nope", "--session-dir", session]
@@ -613,6 +639,167 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
         assert body.get("ok") is False, "token %r: ok not false" % token
         assert body.get("signal") == "cannot-certify", "token %r: signal mismatch" % token
         assert body.get("reason") == token, "token %r: reason was %r" % (token, body.get("reason"))
+
+
+def _stage_then_mutate_manifest(tmp_path, mutate):
+    session = _session(tmp_path, body=_happy_body(), name="mutate-session")
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    mutate(manifest)
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    return session
+
+
+def _manifest_shape_mutations():
+    """Every manifest field / nested member shape that must refuse check."""
+    cases = []
+
+    def add(case_id, mutate, reason="stage-manifest-invalid"):
+        cases.append(pytest.param(case_id, mutate, reason, id=case_id))
+
+    add("schema-wrong", lambda m: m.update({"schema": "wrong/0"}))
+    add("schema-missing", lambda m: m.pop("schema", None))
+    add("stageToken-missing", lambda m: m.pop("stageToken", None))
+    add("stageToken-empty", lambda m: m.update({"stageToken": "   "}))
+    add("stageToken-non-string", lambda m: m.update({"stageToken": 123}))
+    add("files-empty", lambda m: m.update({"files": []}))
+    add("files-two-entries", lambda m: m.update({"files": m["files"] * 2}))
+    add("files-non-list", lambda m: m.update({"files": {}}))
+    add("files-entry-non-object", lambda m: m.update({"files": ["x"]}))
+    add("files-name-wrong", lambda m: m["files"][0].update({"name": "other.md"}))
+    add("files-sha256-missing", lambda m: m["files"][0].pop("sha256", None))
+    add("files-sha256-empty", lambda m: m["files"][0].update({"sha256": ""}))
+    add("files-bytes-non-int", lambda m: m["files"][0].update({"bytes": "1"}))
+    add("files-bytes-bool", lambda m: m["files"][0].update({"bytes": True}))
+    add("files-path-missing", lambda m: m["files"][0].pop("path", None))
+    add("files-path-outside-grounding", lambda m: m["files"][0].update(
+        {"path": "/tmp/outside-pr-body.md"}))
+    add("regions-non-list", lambda m: m.update({"regions": {}}))
+    add("regions-count-wrong", lambda m: m.update({"regions": m["regions"][:2]}))
+    add("regions-extra", lambda m: m.update({
+        "regions": m["regions"] + [{"name": "extra", "present": False, "lines": None}],
+    }))
+    add("region-name-unknown", lambda m: m["regions"][0].update({"name": "not-a-region"}))
+    add("region-name-missing", lambda m: m["regions"][0].pop("name", None))
+    add("region-present-non-bool", lambda m: m["regions"][0].update({"present": "yes"}))
+    add("region-present-missing", lambda m: m["regions"][0].pop("present", None))
+    add("region-member-non-object", lambda m: m.update({"regions": ["x"] + m["regions"][1:]}))
+    add("claims-empty", lambda m: m.update({"claims": []}))
+    add("claims-non-list", lambda m: m.update({"claims": {}}))
+    add("claim-non-object", lambda m: m.update({"claims": [{"verifiability": "repo"}]}))
+    add("claim-missing-claimId", lambda m: m["claims"].append({"kind": "dod-row", "text": "x", "verifiability": "repo"}))
+    add("claim-empty-claimId", lambda m: m["claims"].append(
+        {"claimId": "  ", "kind": "dod-row", "text": "x", "verifiability": "repo"}))
+    add("claim-missing-kind", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "text": "x", "verifiability": "repo"}))
+    add("claim-unknown-kind", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "bogus", "text": "x", "verifiability": "repo"}))
+    add("claim-missing-text", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "verifiability": "repo"}))
+    add("claim-text-non-string", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "text": 1, "verifiability": "repo"}))
+    add("claim-missing-verifiability", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "text": "x"}))
+    add("claim-unknown-verifiability", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "text": "x", "verifiability": "bogus"}))
+
+    def defect_b1_minimal_claim():
+        m = {"claims": [{"verifiability": "repo"}]}
+        return m
+
+    add("defect-B1-minimal-claim", lambda m: m.update(defect_b1_minimal_claim()))
+
+    def defect_b2_stage_token_mismatch(session):
+        manifest_path = os.path.join(session, "grounding", "stage.json")
+        manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+        manifest["stageToken"] = "9999-9999-9999-9999"
+        open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+
+    def defect_b4_flag_mismatch(session):
+        manifest_path = os.path.join(session, "grounding", "stage.json")
+        manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+        manifest["noSubstantiveClaims"] = True
+        open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+
+    cases.append(pytest.param(
+        "defect-B2-stage-token-mismatch",
+        None,
+        "staged-stage-token-mismatch",
+        id="defect-B2-stage-token-mismatch",
+        marks=pytest.mark.special_b2,
+    ))
+    cases.append(pytest.param(
+        "defect-B4-flag-mismatch",
+        None,
+        "manifest-flag-mismatch",
+        id="defect-B4-flag-mismatch",
+        marks=pytest.mark.special_b4,
+    ))
+    return cases, defect_b2_stage_token_mismatch, defect_b4_flag_mismatch
+
+
+_MANIFEST_MUTATIONS, _DEFECT_B2, _DEFECT_B4 = _manifest_shape_mutations()
+
+
+@pytest.mark.parametrize("case_id,mutate,reason", _MANIFEST_MUTATIONS)
+def test_manifest_shape_mutations_refuse(tmp_path, case_id, mutate, reason, request):
+    if request.node.get_closest_marker("special_b2"):
+        session = _session(tmp_path, body=_happy_body(), name="b2-session")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        _DEFECT_B2(session)
+    elif request.node.get_closest_marker("special_b4"):
+        session = _session(tmp_path, body=_happy_body(), name="b4-session")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        _DEFECT_B4(session)
+    else:
+        session = _stage_then_mutate_manifest(tmp_path, mutate)
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, reason)
+
+
+def test_malformed_claim_member_refuses_not_filtered(tmp_path):
+    session = _stage_then_mutate_manifest(
+        tmp_path,
+        lambda m: m.update({"claims": m["claims"] + [{"verifiability": "repo"}]}),
+    )
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "stage-manifest-invalid")
+    assert body.get("claims") is None
+
+
+def test_stage_check_round_trip_full_envelope(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, stage_body = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0
+    assert check_body["ok"] is True
+    assert check_body["applicable"] is True
+    repo_claims = [
+        c for c in manifest["claims"]
+        if isinstance(c, dict) and c.get("verifiability") == "repo"
+    ]
+    assert check_body["claims"] == repo_claims
+    assert check_body["files"] == manifest["files"]
+    assert check_body.get("noSubstantiveClaims") is not True
+    assert len(repo_claims) >= 1
+
+
+def test_stage_check_round_trip_no_substantive_claims(tmp_path):
+    body = "## Summary\nNo markers here.\n"
+    session = _session(tmp_path, body=body)
+    rc, stage_body = _invoke("stage", session)
+    assert rc == 0
+    assert stage_body.get("noSubstantiveClaims") is True
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0
+    assert check_body.get("noSubstantiveClaims") is True
+    assert check_body["claims"] == []
 
 
 def test_refuse_call_sites_use_registered_string_literals():

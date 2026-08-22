@@ -39,6 +39,19 @@ REGION_MARKERS = {
     "advisor-vet": "<!-- superheroes:advisor-vet -->",
 }
 
+CLAIM_KINDS = frozenset({
+    "region-present",
+    "dod-row",
+    "degradation",
+    "stub-marker",
+})
+
+VERIFIABILITY_VALUES = frozenset({
+    "stager",
+    "repo",
+    "external",
+})
+
 REFUSAL_REASONS = frozenset({
     "meta-unreadable",
     "meta-mode-unknown",
@@ -52,6 +65,8 @@ REFUSAL_REASONS = frozenset({
     "stage-manifest-invalid",
     "staged-file-unreadable",
     "staged-file-hash-mismatch",
+    "staged-stage-token-mismatch",
+    "manifest-flag-mismatch",
     "invalid-invocation",
 })
 
@@ -359,6 +374,59 @@ def _repo_claims(claims):
     ]
 
 
+def _branch_mode_result():
+    return {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
+
+
+def _success_envelope(repo_claims, files):
+    result = {
+        "ok": True,
+        "applicable": True,
+        "claims": repo_claims,
+        "files": files,
+    }
+    if not repo_claims:
+        result["noSubstantiveClaims"] = True
+    return result
+
+
+def _parse_staged_stage_token(staged_text):
+    match = re.match(r"^stageToken:\s*(\S+)", staged_text)
+    if not match:
+        return None
+    return match.group(1)
+
+
+def _validate_claim_shape(claim, index):
+    if not isinstance(claim, dict):
+        return "claims[%d] not an object" % index
+    claim_id = claim.get("claimId")
+    if not isinstance(claim_id, str) or not claim_id.strip():
+        return "claims[%d] claimId missing or empty" % index
+    kind = claim.get("kind")
+    if kind not in CLAIM_KINDS:
+        return "claims[%d] kind invalid: %r" % (index, kind)
+    text = claim.get("text")
+    if not isinstance(text, str):
+        return "claims[%d] text must be a string" % index
+    verifiability = claim.get("verifiability")
+    if verifiability not in VERIFIABILITY_VALUES:
+        return "claims[%d] verifiability invalid: %r" % (index, verifiability)
+    return None
+
+
+def _validate_region_shape(region, index):
+    if not isinstance(region, dict):
+        return "regions[%d] not an object" % index
+    name = region.get("name")
+    if name not in REGION_MARKERS:
+        return "regions[%d] name invalid: %r" % (index, name)
+    present = region.get("present")
+    if not isinstance(present, bool):
+        return "regions[%d] present must be a bool" % index
+    return None
+
+
 def _validate_manifest_shape(manifest, session_dir):
     if not isinstance(manifest, dict) or manifest.get("schema") != STAGE_SCHEMA:
         return _refuse("stage-manifest-invalid", "schema mismatch")
@@ -390,11 +458,23 @@ def _validate_manifest_shape(manifest, session_dir):
     if not path_is_confidently_under(resolved, grounding):
         return _refuse("stage-manifest-invalid", "file path outside grounding dir")
     regions = manifest.get("regions")
-    if not isinstance(regions, list) or len(regions) != 4:
-        return _refuse("stage-manifest-invalid", "regions must be a list of four")
+    expected_region_count = len(REGION_MARKERS)
+    if not isinstance(regions, list) or len(regions) != expected_region_count:
+        return _refuse(
+            "stage-manifest-invalid",
+            "regions must be a list of %d" % expected_region_count,
+        )
+    for index, region in enumerate(regions):
+        region_err = _validate_region_shape(region, index)
+        if region_err:
+            return _refuse("stage-manifest-invalid", region_err)
     claims = manifest.get("claims")
     if not isinstance(claims, list) or not claims:
         return _refuse("stage-manifest-invalid", "claims must be a non-empty list")
+    for index, claim in enumerate(claims):
+        claim_err = _validate_claim_shape(claim, index)
+        if claim_err:
+            return _refuse("stage-manifest-invalid", claim_err)
     return {"ok": True, "manifest": manifest}
 
 
@@ -413,6 +493,13 @@ def _verify_manifest_files(manifest, session_dir):
         actual_hash = _sha256_text(on_disk)
         if actual_hash != expected_hash:
             return _refuse("staged-file-hash-mismatch", path)
+        body_token = _parse_staged_stage_token(on_disk)
+        manifest_token = manifest.get("stageToken")
+        if body_token != manifest_token:
+            return _refuse(
+                "staged-stage-token-mismatch",
+                "staged body token %r != manifest token %r" % (body_token, manifest_token),
+            )
     return {"ok": True, "manifest": manifest}
 
 
@@ -421,7 +508,7 @@ def stage(session_dir):
     if not meta.get("ok"):
         return meta
     if meta["mode"] == "branch":
-        return {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
+        return _branch_mode_result()
     pr_path = os.path.join(session_dir, "pr.json")
     try:
         pr_data = _read_json(pr_path)
@@ -483,15 +570,7 @@ def stage(session_dir):
     verify_manifest = _verify_written_file(manifest_path, manifest_text)
     if not verify_manifest.get("ok"):
         return verify_manifest
-    result = {
-        "ok": True,
-        "applicable": True,
-        "claims": repo_claims,
-        "files": files,
-    }
-    if not repo_claims:
-        result["noSubstantiveClaims"] = True
-    return result
+    return _success_envelope(repo_claims, files)
 
 
 def _load_manifest(session_dir):
@@ -512,7 +591,7 @@ def check(session_dir):
     if not meta.get("ok"):
         return meta
     if meta["mode"] == "branch":
-        return {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
+        return _branch_mode_result()
     loaded = _load_manifest(session_dir)
     if not loaded.get("ok"):
         return loaded
@@ -521,15 +600,18 @@ def check(session_dir):
         return verified
     manifest = verified["manifest"]
     repo_claims = _repo_claims(manifest.get("claims"))
-    result = {
-        "ok": True,
-        "applicable": True,
-        "claims": repo_claims,
-        "files": manifest.get("files") or [],
-    }
-    if manifest.get("noSubstantiveClaims"):
-        result["noSubstantiveClaims"] = True
-    return result
+    if not repo_claims:
+        if manifest.get("noSubstantiveClaims") is not True:
+            return _refuse(
+                "manifest-flag-mismatch",
+                "noSubstantiveClaims must be true when no repo claims exist",
+            )
+    elif manifest.get("noSubstantiveClaims") is True:
+        return _refuse(
+            "manifest-flag-mismatch",
+            "noSubstantiveClaims true but repo claims present",
+        )
+    return _success_envelope(repo_claims, manifest.get("files") or [])
 
 
 def main(argv):
