@@ -18,6 +18,8 @@ are gone with them; no lib/*.js copy-holders remain):
 - Base-guard refusal reasons                           (home: review_base_guard.py)
 - Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7;
   copy-holders: review-discipline.md, workhorse §11, review-code step 8, grounding_stage.py)
+- Session modes                                       (home: review_base_guard.py;
+  copy-holder: grounding_stage.py)
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
@@ -1478,14 +1480,20 @@ def test_grounding_stage_region_markers_match_conventions_10_7():
 
 def test_grounding_stage_session_modes_match_review_base_guard():
     """§11: grounding_stage consumes review_base_guard.SESSION_MODES as the mode SSOT."""
+    import inspect
+
     import grounding_stage
     import review_base_guard
 
     assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
-    assert grounding_stage._read_meta  # module loaded
-    # _read_meta enforces review_base_guard.SESSION_MODES at runtime — bind the symbol.
-    assert "pr" in review_base_guard.SESSION_MODES
-    assert "branch" in review_base_guard.SESSION_MODES
+    read_meta_source = inspect.getsource(grounding_stage._read_meta)
+    assert "review_base_guard.SESSION_MODES" in read_meta_source, (
+        "grounding_stage._read_meta must reference review_base_guard.SESSION_MODES"
+    )
+    gs_source = _read("lib/grounding_stage.py")
+    assert not re.search(
+        r'\(\s*["\']pr["\']\s*,\s*["\']branch["\']\s*\)', gs_source
+    ), "grounding_stage.py must not re-inline a local mode tuple"
 
 
 def test_vet_receipt_markers_match_conventions_10_7():

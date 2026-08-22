@@ -286,6 +286,10 @@ def _find_standalone_marker(body, marker, start=0):
     offset = 0
     for i, line in enumerate(lines):
         if offset >= start and not fence_scan.inert[i]:
+            # axis: indented code block (4+ columns) — marker lines inside are not live regions.
+            if md_fence.indent_width(bare[i]) >= md_fence.INDENT_CODE_BLOCK_COLUMNS:
+                offset += len(line)
+                continue
             stripped = bare[i].strip()
             if stripped == marker:
                 leading = len(bare[i]) - len(bare[i].lstrip())
@@ -376,33 +380,41 @@ def _is_table_row_line(line):
     return bool(stripped) and "|" in stripped
 
 
+def _parse_dod_table_block(block_lines):
+    """Return data rows from a consecutive run of pipe-bearing lines."""
+    if not block_lines:
+        return []
+    start = 0
+    if (
+        len(block_lines) >= 2
+        and _is_separator_cells(_split_table_cells(block_lines[1]))
+    ):
+        start = 2
+    elif len(block_lines) == 1 and not block_lines[0].lstrip().startswith("|"):
+        return []
+    rows = []
+    for line in block_lines[start:]:
+        cells = _split_table_cells(line)
+        if _is_separator_cells(cells) or not any(cells):
+            continue
+        rows.append("|".join(cells))
+    return rows
+
+
 def _parse_dod_rows(body, marker):
     # bite-axis: DoD table rows — optional outer pipes, separator row skipped, escaped pipes kept.
     region_text, _ = _extract_region(body, marker)
     if region_text is None:
         return []
-    table_lines = []
+    rows = []
+    block_lines = []
     for line in region_text.splitlines():
         if _is_table_row_line(line):
-            table_lines.append(line.strip())
-    rows = []
-    i = 0
-    while i < len(table_lines):
-        cells = _split_table_cells(table_lines[i])
-        if _is_separator_cells(cells):
-            i += 1
+            block_lines.append(line.strip())
             continue
-        if (
-            i + 1 < len(table_lines)
-            and _is_separator_cells(_split_table_cells(table_lines[i + 1]))
-        ):
-            i += 2
-            continue
-        if not any(cells):
-            i += 1
-            continue
-        rows.append("|".join(cells))
-        i += 1
+        rows.extend(_parse_dod_table_block(block_lines))
+        block_lines = []
+    rows.extend(_parse_dod_table_block(block_lines))
     return rows
 
 

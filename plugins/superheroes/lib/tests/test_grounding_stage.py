@@ -1159,6 +1159,27 @@ def test_inline_code_decoy_marker_does_not_hide_real_table(tmp_path):
     assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
 
 
+def test_indented_code_decoy_marker_does_not_hide_real_table(tmp_path):
+    body = (
+        "Example of the marker in an indented code block:\n\n"
+        "    <!-- superheroes:dod-table -->\n"
+        "    | DoD | Status | Evidence |\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship it | done | tests/test_x.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is True
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
 def test_crlf_pr_body_stages_and_round_trips(tmp_path):
     body = "alpha\r\nbeta\r\n" + _happy_body()
     session = _session(tmp_path, body=body)
