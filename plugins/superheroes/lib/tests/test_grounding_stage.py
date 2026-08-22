@@ -28,6 +28,9 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "pr-json-unparseable",
     "pr-body-absent",
     "pr-body-empty",
+    "pr-body-too-large",
+    "pr-body-claim-count-exceeded",
+    "session-dir-not-absolute",
     "stage-unwritable",
     "stage-readback-mismatch",
     "stage-manifest-missing",
@@ -523,6 +526,29 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
 
     cases["pr-body-empty"] = case_pr_body_empty
 
+    def case_pr_body_too_large():
+        pad = "x" * (GS.PR_BODY_MAX_BYTES + 1)
+        session = _session(tmp_path, body=pad, name="case-pr-body-too-large")
+        return _invoke("stage", session)
+
+    cases["pr-body-too-large"] = case_pr_body_too_large
+
+    def case_pr_body_claim_count_exceeded():
+        over = GS.CLAIM_COUNT_MAX + 1
+        session = _session(
+            tmp_path, body=_dod_table_body(over), name="case-pr-body-claim-count-exceeded",
+        )
+        return _invoke("stage", session)
+
+    cases["pr-body-claim-count-exceeded"] = case_pr_body_claim_count_exceeded
+
+    def case_session_dir_not_absolute():
+        session = _session(tmp_path, body=_happy_body(), name="case-session-dir-not-absolute")
+        rel = os.path.relpath(session)
+        return _invoke("stage", rel)
+
+    cases["session-dir-not-absolute"] = case_session_dir_not_absolute
+
     def case_stage_unwritable():
         session = _session(tmp_path, body=_happy_body(), name="case-stage-unwritable")
 
@@ -800,6 +826,127 @@ def test_stage_check_round_trip_no_substantive_claims(tmp_path):
     assert rc2 == 0
     assert check_body.get("noSubstantiveClaims") is True
     assert check_body["claims"] == []
+
+
+def _dod_table_body(row_count):
+    header = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+    )
+    rows = "\n".join(
+        "| row %d | done | tests/test_%d.py |" % (i, i) for i in range(row_count)
+    )
+    return header + rows + "\n"
+
+
+def test_c1_claim_count_exceeded_refuses(tmp_path):
+    over = GS.CLAIM_COUNT_MAX + 1
+    session = _session(tmp_path, body=_dod_table_body(over))
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "pr-body-claim-count-exceeded")
+
+
+def test_c1_body_too_large_refuses(tmp_path):
+    pad = "x" * (GS.PR_BODY_MAX_BYTES + 1)
+    session = _session(tmp_path, body=pad)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "pr-body-too-large")
+
+
+def test_c2_neutralize_strips_invisible_and_bidi_chars():
+    raw = "hello\u200bworld\u202e!\ufeff"
+    cleaned = GS._neutralize_claim_text(raw)
+    assert "\u200b" not in cleaned
+    assert "\u202e" not in cleaned
+    assert "\ufeff" not in cleaned
+    assert cleaned == "helloworld!"
+
+
+def test_c3_identical_dod_rows_yield_distinct_claim_ids(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| same row | done | tests/a.py |\n"
+        "| same row | done | tests/a.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 2
+    ids = [c["claimId"] for c in dod]
+    assert ids[0] != ids[1]
+
+
+def test_c4_planted_stage_token_line_not_ambiguous(tmp_path):
+    planted = "stageToken: 0000-0000-0000-0000\n"
+    session = _session(tmp_path, body=planted + _happy_body())
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    staged = _staged_body_text(session)
+    manifest = _manifest(session)
+    token = manifest["stageToken"]
+    nonce_match = __import__("re").search(
+        r"BEGIN UNTRUSTED PR BODY ([a-f0-9]+)", staged,
+    )
+    assert nonce_match is not None
+    nonce = nonce_match.group(1)
+    assert staged.count("stageToken[%s]:" % nonce) == 1
+    assert staged.count("stageToken:") == 1
+    parsed = GS._parse_staged_stage_token(staged)
+    assert parsed == token
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0 and check_body["ok"]
+
+
+def test_c5_unicode_decode_error_maps_to_staged_file_unreadable(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    pr_body = os.path.join(session, "grounding", "pr-body.md")
+    with open(pr_body, "wb") as fh:
+        fh.write(b"\xff\xfe invalid utf-8\n")
+    result = GS.check(session)
+    assert result.get("reason") == "staged-file-unreadable"
+    rc_cli, body_cli = _invoke("check", session)
+    _assert_refusal(rc_cli, body_cli, "staged-file-unreadable")
+
+
+def test_c6_relative_session_dir_refuses(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rel = os.path.relpath(session)
+    rc, body = _invoke("stage", rel)
+    _assert_refusal(rc, body, "session-dir-not-absolute")
+
+
+def test_c7_verify_manifest_files_opens_resolved_path(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    resolved = os.path.realpath(manifest["files"][0]["path"])
+    parent = os.path.dirname(resolved)
+    basename = os.path.basename(resolved)
+    dotted = os.path.join(parent, "dot", "..", basename)
+    manifest["files"][0]["path"] = dotted
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    opened = []
+    real_read = GS._read_text
+
+    def track_read(path):
+        opened.append(path)
+        return real_read(path)
+
+    monkeypatch.setattr(GS, "_read_text", track_read)
+    rc, body = _invoke("check", session)
+    assert rc == 0 and body["ok"]
+    pr_body_reads = [p for p in opened if p.endswith("pr-body.md")]
+    assert pr_body_reads
+    assert pr_body_reads[0] == resolved
 
 
 def test_refuse_call_sites_use_registered_string_literals():
