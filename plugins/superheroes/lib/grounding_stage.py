@@ -133,6 +133,29 @@ def _read_meta(session_dir):
     return {"ok": True, "mode": mode}
 
 
+def _heading_level(line):
+    stripped = line.strip()
+    match = re.match(r"^(#{1,6})\s", stripped)
+    return len(match.group(1)) if match else None
+
+
+def _next_heading_boundary(text, section_level):
+    """Offset in text where a same-or-higher-level heading begins after the opener."""
+    offset = 0
+    first_heading_seen = False
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped:
+            level = _heading_level(stripped)
+            if level is not None:
+                if not first_heading_seen:
+                    first_heading_seen = True
+                elif level <= section_level:
+                    return offset
+        offset += len(line)
+    return len(text)
+
+
 def _extract_region(body, marker):
     idx = body.find(marker)
     if idx < 0:
@@ -146,7 +169,19 @@ def _extract_region(body, marker):
         start += 1
         rest = body[start:]
     next_markers = [body.find(m, start) for m in REGION_MARKERS.values() if body.find(m, start) >= 0]
-    end = min(next_markers) if next_markers else len(body)
+    marker_end = min(next_markers) if next_markers else len(body)
+    section_level = None
+    for line in rest.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        section_level = _heading_level(stripped)
+        break
+    if section_level is not None:
+        heading_end = start + _next_heading_boundary(rest, section_level)
+    else:
+        heading_end = len(body)
+    end = min(marker_end, heading_end)
     region_text = body[start:end]
     lines = region_text.splitlines()
     while lines and not lines[0].strip():
@@ -162,11 +197,15 @@ def _parse_dod_rows(body, marker):
     if region_text is None:
         return []
     rows = []
+    past_separator = False
     for line in region_text.splitlines():
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
         if re.match(r"^\|[-:\s|]+\|$", stripped):
+            past_separator = True
+            continue
+        if not past_separator:
             continue
         cells = [c.strip() for c in stripped.strip("|").split("|")]
         if not any(cells):
@@ -190,12 +229,17 @@ def _parse_degradation_bullets(body, marker):
 
 
 def _dod_row_verifiability(row_text):
-    lowered = row_text.lower()
-    if "deferred" in lowered:
-        return "external"
-    if "done" in lowered:
-        return "repo"
-    if re.search(r"#\d+", row_text):
+    # Status is the second pipe-delimited cell (DoD|Status|Evidence); when it
+    # cannot be located, classify as repo so the claim is checked, not dropped.
+    cells = row_text.split("|")
+    if len(cells) >= 2:
+        status = cells[1].strip().lower()
+        if status == "deferred":
+            return "external"
+        if status == "done":
+            return "repo"
+    evidence = cells[2] if len(cells) >= 3 else row_text
+    if re.search(r"#\d+", evidence):
         return "external"
     return "repo"
 

@@ -262,6 +262,65 @@ def test_edge_12_staged_file_hash_mismatch(tmp_path):
     _assert_refusal(rc, body, "staged-file-hash-mismatch")
 
 
+def _dod_claims(manifest):
+    return [c for c in manifest["claims"] if c["kind"] == "dod-row"]
+
+
+def _degradation_claims(manifest):
+    return [c for c in manifest["claims"] if c["kind"] == "degradation"]
+
+
+def test_dod_rows_exact_set_and_verifiability(tmp_path):
+    body = (
+        "## Summary\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship the thing | done | tests/test_a.py |\n"
+        "| Defer later | deferred | #609 reason |\n"
+        "| Remove deferred fallback | done | tests/test_x.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 3
+    by_text = {c["text"]: c["verifiability"] for c in dod}
+    assert "DoD|Status|Evidence" not in by_text
+    assert by_text["Ship the thing|done|tests/test_a.py"] == "repo"
+    assert by_text["Defer later|deferred|#609 reason"] == "external"
+    assert by_text["Remove deferred fallback|done|tests/test_x.py"] == "repo"
+    repo_dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
+    repo_texts = {c["text"] for c in repo_dod}
+    assert "Remove deferred fallback|done|tests/test_x.py" in repo_texts
+    assert "Defer later|deferred|#609 reason" not in repo_texts
+
+
+def test_degradation_region_bounded_by_headings(tmp_path):
+    body = (
+        "## Summary\n"
+        "<!-- superheroes:degradations -->\n"
+        "### Disclosed degradations\n"
+        "- real degradation one\n\n"
+        "### Dispatch provenance\n"
+        "- WO-A implemented by cursor\n"
+        "- WO-B implemented by cursor\n\n"
+        "### Follow-up\n"
+        "- unrelated follow-up item\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    deg = _degradation_claims(manifest)
+    assert len(deg) == 1
+    assert deg[0]["text"] == "real degradation one"
+    repo_deg = [c for c in body_out["claims"] if c["kind"] == "degradation"]
+    assert len(repo_deg) == 1
+    assert repo_deg[0]["text"] == "real degradation one"
+
+
 def test_happy_path_stage(tmp_path):
     session = _session(tmp_path, body=_happy_body())
     rc, body = _invoke("stage", session)
