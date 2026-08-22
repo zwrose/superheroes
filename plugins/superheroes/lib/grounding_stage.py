@@ -23,6 +23,8 @@ GROUNDING_DIR = "grounding"
 STAGE_MANIFEST = "stage.json"
 PR_BODY_STAGED = "pr-body.md"
 
+_STUB_LABEL = "STUB"
+
 REGION_MARKERS = {
     "dod-table": "<!-- superheroes:dod-table -->",
     "build-record": "<!-- superheroes:build-record -->",
@@ -213,7 +215,7 @@ def _enumerate_claims(body, regions):
                 "verifiability": "repo",
             })
     for marker in stub_markers.find_markers(body):
-        text = "STUB(#%d): %s" % (marker["issue"], marker["description"])
+        text = "%s(#%d): %s" % (_STUB_LABEL, marker["issue"], marker["description"])
         claims.append({
             "claimId": _claim_id("stub-marker", text),
             "kind": "stub-marker",

@@ -1128,7 +1128,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([])
 
-    def fail_build(_repo, *, diff_base=None):
+    def fail_build(_repo, *, diff_base=None, pr_body_path=None):
         raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
 
     res = ED.dispatch_review(
@@ -1190,8 +1190,8 @@ def test_view_destroyed_after_dispatch(tmp_path):
     repo_root = _repo(tmp_path)
     captured_path = []
 
-    def capture_build(repo_real, *, diff_base=None):
-        view = _fake_build_view(tmp_path)(repo_real, diff_base=diff_base)
+    def capture_build(repo_real, *, diff_base=None, pr_body_path=None):
+        view = _fake_build_view(tmp_path)(repo_real, diff_base=diff_base, pr_body_path=pr_body_path)
         captured_path.append(view["path"])
         return view
 
@@ -1241,8 +1241,8 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
     captured_path = []
     build_view_fn = _fake_build_view(tmp_path)
 
-    def capture_build(repo_real, *, diff_base=None):
-        view = build_view_fn(repo_real, diff_base=diff_base)
+    def capture_build(repo_real, *, diff_base=None, pr_body_path=None):
+        view = build_view_fn(repo_real, diff_base=diff_base, pr_body_path=pr_body_path)
         captured_path.append(view["path"])
         return view
 
@@ -4705,7 +4705,7 @@ def test_dispatch_review_every_outcome_carries_mode(
     elif setup == "engine_config":
         base_kwargs["build_view"] = _fake_build_view(tmp_path)
     elif setup == "view_error":
-        def fail_build(_repo, *, diff_base=None):
+        def fail_build(_repo, *, diff_base=None, pr_body_path=None):
             raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
         base_kwargs["build_view"] = fail_build
         base_kwargs["run_engine"] = FakeRunner([])

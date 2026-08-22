@@ -299,6 +299,18 @@ def test_happy_path_stage(tmp_path):
     assert "stub-marker" in kinds
 
 
+def test_stub_marker_claim_text_emitted_unchanged(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, body = _invoke("stage", session)
+    assert rc == 0 and body["ok"]
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    with open(manifest_path, encoding="utf-8") as fh:
+        manifest = json.load(fh)
+    stub_claims = [c for c in manifest["claims"] if c["kind"] == "stub-marker"]
+    assert len(stub_claims) == 1
+    assert stub_claims[0]["text"] == "STUB(#123): unwired grounding dispatch"
+
+
 def test_absent_regions_still_stage(tmp_path):
     body = "## Summary\nNo markers here.\n"
     session = _session(tmp_path, body=body)
