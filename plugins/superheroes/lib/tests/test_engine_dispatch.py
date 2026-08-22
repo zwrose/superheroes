@@ -74,7 +74,7 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
             src = os.path.join(repo, name)
             dst = os.path.join(view_dir, name)
             if os.path.isdir(src):
-                shutil.copytree(src, dst)
+                shutil.copytree(src, dst, ignore=shutil.ignore_patterns("maintenance.lock"))
             else:
                 shutil.copy2(src, dst)
         return {
