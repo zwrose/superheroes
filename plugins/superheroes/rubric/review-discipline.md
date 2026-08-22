@@ -167,6 +167,60 @@ cannot be told apart from something forgotten
 (`skills/showrunner/reference/vet-receipt.md`). The **micro** lane has no vet at all — see the lane
 table above and *Micro — owner authorization*.
 
+**Post-handback merges carry a review expectation only when they author content** (owner-ruled
+2026-08-21). A **content-neutral freshening** of the branch — an update-from-main that resolves no
+conflicts and authors nothing — carries **no** review expectation; re-panelling it is a race the
+branch cannot win. A post-handback commit that **authors content** — a conflict resolution, an
+advisor integration fold — keeps the union-fix **micro floor** in
+`skills/showrunner/reference/merge-train.md`: one cross-vendor reviewer plus an **engaged** control
+probe on the final head.
+
+## The driver mandate — the certified loop, its skips, and the flip
+
+The **full lane's** review is the **certified loop** — the round driver's one entrypoint, which
+records what it seated, what each seat returned, and whether the round converged. A hand-driven
+panel can read identically in a PR body and carry none of that record. Three field specimens
+substituted "panel + hand-driven fix round" on exactly the builds that would have exercised the
+loop hardest, each on a stated excuse that does not survive contact with the skill text: no owner
+gate exists in the default loop, and the verify step's foreground cap is friction, not a wall. This
+section closes the excuses by making a skip **citable** rather than merely disclosable.
+
+**A skip is disclosed, and the disclosure cites a blocker by number.** A full-lane build that does
+not run the certified loop **discloses the skip in the PR body, citing a filed `driver-blocker`
+issue by number**. **A skip citing nothing, and a skip citing a closed issue, are each a vet
+finding.** This binds now, on every full-lane PR — it does not wait for the flip below.
+
+**The `driver-blocker` label is the standing view of what still blocks the loop.** Any bug that
+prevents proper use of the driver carries the project's `driver-blocker` label, and the label query
+— not anyone's memory — is what says whether the blockers are cleared. That is what makes the skip
+rule self-feeding: every honest skip either points at a tracked blocker or is a finding, so the
+list of things standing between this project and a certified loop maintains itself.
+
+**Seat-provenance parity — a hand-driven panel owes what the driver records.** The driver path
+records, per seat, an attempt on the configured reviewer engine or a **terminal forfeit** naming
+why. A hand-driven panel owes the **same recorded attempt-or-forfeit on the configured reviewer
+engine**. **A panel seated off the configured reviewer engine with no recorded forfeit on that
+engine is a vet finding** — the record is the only thing separating an engine that was tried and
+failed from one that was never asked, and a substitution nobody recorded is exactly the silent
+degradation this lane exists to prevent.
+
+**The flip — a dated conditional that arms itself.** Ruled **2026-08-21**. **When the milestone
+*Review panels can't silently degrade* closes, a full-lane review that is not the certified loop
+stops being a disclosable degradation and becomes a vet finding**, and the only valve is
+**driver-or-park** — never driver-or-improvise. Until that close, the skip rule above governs:
+disclose, cite an open `driver-blocker`, and the vet weighs it. After it, a citation is no longer a
+pass — the build runs the loop or parks, and the blocker it would have cited is the reason the park
+is honest. The arming event is the **milestone's close** — the owner's judgment that its exit
+condition is met, read off the receipts, as ROADMAP.md's standing rule already defines closure; the
+release cut carrying that milestone's work is how the close is **stamped**, not a second and
+separate trigger. It is written as a dated conditional precisely so that nobody has to remember to
+arm it: a reader at the close needs no context beyond this paragraph.
+
+**No mechanical gate ships for any of this.** The skip rule, the parity rule, and the flip are vet
+doctrine, graded by reading — the advisor at vet is the enforcement, and a guard that parsed a PR
+body for these would sit outside the byte-literal floor stated in *Mechanical guards over
+prose* below.
+
 ## Review bars and recorded residuals
 
 When a review seat runs, **ratified residuals** are part of its bar — quoted data in the emitted

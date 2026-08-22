@@ -61,6 +61,12 @@ shape is wrong and the thinking wins.
    clean sheet:** both are prose, so an agreeable model drives either rate to zero and it reads as a
    clean batch. Inspecting means re-reading a sample of that batch's park and vet receipts, not
    noticing the zero.
+   **A panel's confirmation rate is inspected the same way.** A verification pass whose verdicts
+   come back **uniformly confirming** — every finding CONFIRMED, over a large surface — is a
+   **signal to inspect**, not a clean panel: an agreeable verifier and a genuinely sound batch
+   produce the same number, and only reading a sample tells them apart. Record what the rate was
+   and what you did about it. The field flag that named this was **12 of 12 CONFIRMED on a
+   ~10,000-line diff**.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
@@ -102,6 +108,8 @@ are never holding the inventory in working memory.
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
+| the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an **open** `driver-blocker` issue by number. A citation that is absent, or that names a closed issue, is a finding |
+| dispatch provenance names a **review seat whose vendor is not the configured reviewer engine** | the **seat-provenance parity check** — a recorded attempt, or a recorded terminal forfeit, on the configured engine. A seat substituted with no recorded forfeit on the engine it replaced is a finding |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
