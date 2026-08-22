@@ -561,10 +561,24 @@ def _notes_name_vendor(notes, vendor):
             _good_liveness(),
             {"cursor": [["grok", None]]},
         ),
-        # malformed-entry: entries not a list/tuple
+        # malformed-entries: entries not a list/tuple
         (
             _good_liveness(),
             {"codex": "not-a-list"},
+        ),
+        # malformed-entry: entries is a list but an entry is not a model/effort pair
+        (
+            {
+                "codex": {
+                    "live": True,
+                    "models": {"m": {"ok": True, "detail": "x"}},
+                    "cells": [
+                        {"model": "m", "effort": None, "ok": True, "detail": "x"},
+                    ],
+                },
+                "claude": {"live": True, "models": {}, "cells": []},
+            },
+            {"codex": ["not-a-pair"]},
         ),
         # mixed: one live vendor, one empty-entries drop, one dead cell
         (
@@ -606,20 +620,23 @@ def test_live_from_fail_closed_absent_cell():
 
 
 def test_live_from_dead_note_redacts_absolute_paths():
-    liv = {
-        "codex": {
-            "live": False,
-            "models": {"m": {"ok": False, "detail": "<redacted-path>"}},
-            "cells": [
-                {
-                    "model": "m",
-                    "effort": None,
-                    "ok": False,
-                    "detail": "<redacted-path>",
-                },
-            ],
-        },
-    }
-    _, _, dead_notes = lc.live_from(liv, {"codex": [["m", None]]})
-    assert "/Users/" not in dead_notes[0]["reason"]
-    assert "<redacted-path>" in dead_notes[0]["reason"]
+    # axis: redaction boundary — absolute paths in probe detail never reach dead notes
+    from types import SimpleNamespace
+
+    import preflight_probe as pp
+
+    secret_path = "/Users/someone/secret/project/file.py"
+    detail_with_path = "failed at %s: timeout" % secret_path
+
+    def _run(argv, **kwargs):
+        return SimpleNamespace(returncode=1, stdout="", stderr=detail_with_path)
+
+    needed = {"codex": [("gpt-5.6-sol", "xhigh")]}
+    liveness = pp.composition_liveness(needed, run=_run)
+    cell = liveness["codex"]["cells"][0]
+    assert secret_path not in cell["detail"]
+    assert pp._REDACTED_ABS_PATH in cell["detail"]
+
+    _, _, dead_notes = lc.live_from(liveness, {"codex": [["gpt-5.6-sol", "xhigh"]]})
+    assert secret_path not in dead_notes[0]["reason"]
+    assert pp._REDACTED_ABS_PATH in dead_notes[0]["reason"]

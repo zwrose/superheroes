@@ -13,7 +13,8 @@ import mode_registry
 
 # Bump when probe configuration semantics change so legacy receipts cannot be
 # reused (#711: effort is now enforced per (model, effort) pair; v1 receipts
-# recorded effort the old probe never actually dispatched).
+# recorded effort the old probe never actually dispatched; #795: v2 receipts
+# carry no per-cell evidence and are refused rather than read as vendor-level truth).
 SCHEMA_VERSION = 3
 DEFAULT_TTL_SECONDS = 600
 _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
@@ -173,7 +174,6 @@ def read(path, *, now):
         return None
     if not isinstance(raw, dict):
         return None
-    # axis: refusal of a receipt lacking per-cell evidence
     if raw.get("schemaVersion") != SCHEMA_VERSION:
         return None
     probed_at = raw.get("probedAt")
@@ -187,6 +187,7 @@ def read(path, *, now):
         return None
     if not isinstance(raw.get("needed"), dict):
         return None
+    # axis: refusal of a receipt lacking per-cell evidence
     if not _liveness_structure_valid(raw["liveness"]):
         return None
     return raw
@@ -282,8 +283,19 @@ def live_from(liveness, needed):
             info = liveness.get(vendor)
             cells_by_key = _cells_by_key(info)
             for entry in entries:
+                # axis: disclosure — a vendor leaving the live set for a malformed entry emits a note
                 if not isinstance(entry, (list, tuple)) or len(entry) < 1:
                     vendor_live = False
+                    dead_notes.append(
+                        {
+                            "constraint": "liveness-cell",
+                            "vendor": vendor,
+                            "model": None,
+                            "effort": None,
+                            "reason": "%s not live: malformed needed cell entry %r"
+                            % (vendor, entry),
+                        }
+                    )
                     continue
                 model = entry[0]
                 effort = entry[1] if len(entry) > 1 else None

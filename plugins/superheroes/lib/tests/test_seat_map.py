@@ -435,6 +435,51 @@ def test_pure_functions_still_importable():
     assert callable(SM.main)
 
 
+def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch, capsys):
+    # axis: CLI serialization boundary — probed live_cells survives main→build→to_receipt
+    import preflight_probe as pp
+
+    aug15_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    live_vendors = ["claude", "cursor"]
+
+    def fake_live_vendors_for_composition(*_args, **_kwargs):
+        return (live_vendors, aug15_cells, {}, [])
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
+
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--configured-engines",
+            "codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "795",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["liveCellsSource"] == "probed"
+    assert ["codex", "gpt-5.6-sol", "xhigh"] in receipt["liveCells"]
+    assert "codex" not in receipt["liveVendors"]
+    codex_deep = [
+        s
+        for s in SM.LENS_SEATS
+        if receipt["seats"][s]["vendor"] == "codex"
+        and receipt["seats"][s]["model"] == "gpt-5.6-sol"
+        and receipt["seats"][s]["effort"] == "xhigh"
+        and receipt["seats"][s]["tier"] == "reviewer-deep"
+    ]
+    assert codex_deep, "codex deep-review seat not retained through CLI path"
+
+
 def test_cli_compose_with_live_vendors_override(capsys):
     rc = SM.main(
         [

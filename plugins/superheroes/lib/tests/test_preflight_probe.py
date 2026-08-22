@@ -1097,6 +1097,32 @@ def test_composition_liveness_cursor_grok_fails_not_live():
     assert result["cursor"]["models"]["cursor-grok-4.6"]["ok"] is False
 
 
+def test_composition_liveness_live_and_models_derived_from_cells():
+    # axis: vestigial copies — live flag and models map stay consistent with cells
+    all_ok_needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    all_ok = pp.composition_liveness(all_ok_needed, run=fake0)
+    for vendor, info in all_ok.items():
+        if vendor == "claude":
+            continue
+        assert info["live"] == all(c["ok"] for c in info["cells"])
+        for model in info["models"]:
+            assert any(c["model"] == model for c in info["cells"])
+
+    def _partial_run(argv, **kwargs):
+        model = argv[argv.index("-m") + 1] if "-m" in argv else ""
+        if model == "gpt-5.6-sol":
+            return SimpleNamespace(returncode=1, stdout="", stderr="fail")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    partial_needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    partial = pp.composition_liveness(partial_needed, run=_partial_run)
+    info = partial["codex"]
+    assert info["live"] is False
+    assert info["live"] == all(c["ok"] for c in info["cells"])
+    for model in info["models"]:
+        assert any(c["model"] == model for c in info["cells"])
+
+
 def test_composition_liveness_codex_both_ok_is_live():
     needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
     result = pp.composition_liveness(needed, run=fake0)
