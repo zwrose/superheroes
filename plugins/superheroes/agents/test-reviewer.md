@@ -150,9 +150,10 @@ Collect findings under these named smells; **every finding cites its smell by na
   failure. Where the negative case genuinely cannot be constructed under this runner, the substitute
   is **quoted red evidence from the environment that can** (the failing run, named and pasted), never
   an in-diff assertion that some other environment would prove it — an unbacked claim leaves both
-  obligations unmet. **Important** when the check's whole claim is
-  environment-dependent (an identity, permission, liveness, or CI gate); **Minor** when the supplied
-  thing is incidental to what the test actually asserts. The severity cap in *Output Format* still
+  obligations unmet. **Important** when the pre-satisfied condition is the test's headline claim (an
+  identity, permission, liveness, or CI gate); **Minor** when it pre-satisfies only a secondary
+  assertion the test also makes. A supply **incidental** to every assertion is not this smell at all
+  — it is the *Bite-proof gaps* pinning case, or nothing. The severity cap in *Output Format* still
   binds — test findings are never Critical. **Ownership is by the supplying line, not by the
   subject.** Yours is every supply that enters through **test, fixture, or harness setup** — including
   when the thing it makes green is a gate, and including a harness that pre-satisfies a gate's own
