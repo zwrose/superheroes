@@ -1105,8 +1105,11 @@ def test_composition_liveness_live_and_models_derived_from_cells():
         if vendor == "claude":
             continue
         assert info["live"] == all(c["ok"] for c in info["cells"])
-        for model in info["models"]:
-            assert any(c["model"] == model for c in info["cells"])
+        assert set(info["models"]) == {c["model"] for c in info["cells"]}
+        for model, entry in info["models"].items():
+            rel = [c for c in info["cells"] if c["model"] == model]
+            assert rel
+            assert entry["ok"] == all(c["ok"] for c in rel)
 
     def _partial_run(argv, **kwargs):
         model = argv[argv.index("-m") + 1] if "-m" in argv else ""
@@ -1119,8 +1122,23 @@ def test_composition_liveness_live_and_models_derived_from_cells():
     info = partial["codex"]
     assert info["live"] is False
     assert info["live"] == all(c["ok"] for c in info["cells"])
-    for model in info["models"]:
-        assert any(c["model"] == model for c in info["cells"])
+    assert set(info["models"]) == {c["model"] for c in info["cells"]}
+    for model, entry in info["models"].items():
+        rel = [c for c in info["cells"] if c["model"] == model]
+        assert rel
+        assert entry["ok"] == all(c["ok"] for c in rel)
+
+    collision_needed = {"codex": [("gpt-5.6-sol", "xhigh"), ("gpt-5.6-sol", "high")]}
+    collision = pp.composition_liveness(collision_needed, run=_collision_run)
+    info = collision["codex"]
+    assert set(info["models"]) == {c["model"] for c in info["cells"]}
+    for model, entry in info["models"].items():
+        rel = [c for c in info["cells"] if c["model"] == model]
+        assert rel
+        assert entry["ok"] == all(c["ok"] for c in rel)
+
+    empty = pp.composition_liveness({"codex": []}, run=fake0)
+    assert empty["codex"]["live"] is False
 
 
 def test_composition_liveness_codex_both_ok_is_live():

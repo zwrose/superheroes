@@ -680,10 +680,11 @@ rides the certification shape (`-degraded`) alongside `independenceDegraded` and
 `baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
 `verify()` treats a maker-family seat as a **violation** when an alternative family was
 reachable, and as **not** a violation when unavoidable (the degradation path); unusable
-liveness evidence — on probed receipts (`liveCellsSource: "probed"`), missing or
-malformed `liveCells`; on synthesized receipts, missing recorded `liveVendors`,
-synthesized liveness defaults, pin-scoped probes, malformed vendor names — **fails
-closed to violation**, and only a well-formed, registry-resolvable receipt authorizes
+liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
+degradations list, or malformed vendor names on **any** receipt; plus, on probed
+receipts (`liveCellsSource: "probed"`), missing or malformed `liveCells`, and on
+synthesized receipts, missing recorded `liveVendors` — **fails closed to violation**,
+and only a well-formed, registry-resolvable receipt authorizes
 the degradation branch. When neither
 narrative nor maker can seat the grounding seat independently, **maker exclusion outranks
 narrative independence**: the fallback prefers the narrative family over the maker's own.
