@@ -32,6 +32,7 @@ EDGE_VALUES = [
     "Blocker", "High", 123, ["Critical"], {"a": 1},
 ]
 ALL_VALUES = list(CB.SEVERITY_TIERS) + EDGE_VALUES
+_TIER_RANK = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
 
 
 def _cfg(**over):
@@ -81,7 +82,7 @@ def test_effective_severity_always_valid_tier(x):
 @pytest.mark.parametrize("x", ALL_VALUES)
 def test_severity_rank_matches_tier_index(x):
     eff = CB.effective_severity(x)
-    assert CB.severity_rank(x) == CB.SEVERITY_TIERS.index(eff)
+    assert CB.severity_rank(x) == _TIER_RANK[eff]
 
 
 @pytest.mark.parametrize("x", ALL_VALUES)
@@ -118,6 +119,17 @@ def test_apply_verdicts_honors_mis_cased_upgrade():
                  "reason": "real blocker"}]
     out = V.apply_verdicts(findings, verdicts)
     assert out["findings"][0]["severity"] == "Critical"
+
+
+def test_apply_verdicts_honors_mis_cased_demotion():
+    findings = V.stage_ids([_finding(severity="Important")])
+    verdicts = [{"id": "v0", "verdict": "PLAUSIBLE", "severity": "minor",
+                 "reason": "cosmetic only"}]
+    out = V.apply_verdicts(findings, verdicts)
+    assert out["findings"][0]["severity"] == "Minor"
+    assert len(out["downgrades"]) == 1
+    assert out["downgrades"][0]["from"] == "Important"
+    assert out["downgrades"][0]["to"] == "Minor"
 
 
 def test_apply_verdicts_keeps_mis_cased_finding_severity_without_verdict():

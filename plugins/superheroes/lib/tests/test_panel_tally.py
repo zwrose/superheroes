@@ -8,6 +8,8 @@ import importlib.util
 import json
 import os
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -41,6 +43,21 @@ def test_compile_dedupes_by_location_keeps_higher_severity_unions_dimensions():
     assert len(out) == 1
     assert out[0]["severity"] == "Important"
     assert "Code" in out[0]["dimension"] and "Security" in out[0]["dimension"]
+
+
+@pytest.mark.parametrize("order", [
+    ("important", "Minor"),
+    ("Minor", "important"),
+])
+def test_compile_findings_keeps_mis_cased_blocking(order):
+    sev_a, sev_b = order
+    findings = [
+        _f("a.py", 10, "Off-by-one", sev_a),
+        _f("a.py", 10, "Off-by-one", sev_b),
+    ]
+    out = PT.compile_findings(findings)
+    assert len(out) == 1
+    assert PT.circuit_breaker.effective_severity(out[0]["severity"]) == "Important"
 
 
 def test_compile_drops_uncited_and_out_of_context():
@@ -109,6 +126,17 @@ def test_round_gate_blocks_on_foreign_scale_severity():
 def test_present_deferred_counts_foreign_scale_blocker():
     f = _f("a.py", 1, "bug", "blocker")
     deferred = {PT._identity(f): "blocker"}
+    assert PT.present_deferred([f], deferred) == 1
+
+
+@pytest.mark.parametrize("order", [
+    ("important", "Important"),
+    ("Important", "important"),
+])
+def test_present_deferred_counts_miscased_blocking_deferred(order):
+    sev_finding, sev_deferred = order
+    f = _f("a.py", 1, "bug", sev_finding)
+    deferred = {PT._identity(f): sev_deferred}
     assert PT.present_deferred([f], deferred) == 1
 
 

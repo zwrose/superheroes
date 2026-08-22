@@ -3315,7 +3315,7 @@ def _patch_submit_accept_run(monkeypatch, reason, detail="simulated"):
 
 
 def _patch_cleanup_rename_failure(monkeypatch, detail="cleanup rename blocked for test"):
-    """Fail only ``round_commit._cleanup_commit``'s ``os.rename`` (its sole rename site)."""
+    """Patch ``round_commit.os.rename`` to fail when the destination basename starts with ``.cleanup-``."""
     real_rename = RD.round_commit.os.rename
 
     def rename(src, dst):
@@ -3353,7 +3353,7 @@ def test_cmd_submit_cleanup_failure_carries_foldLanded(tmp_path, adapters, monke
     }])
     d = _judgment_session_with_repo(tmp_path, adapters, repo, name="cleanup-fold")
     pend = _pending(d)
-    before_terminal = _state(d).get("terminal")
+    last_accepted_before = copy.deepcopy(_state(d).get("lastAccepted"))
     _patch_cleanup_rename_failure(monkeypatch)
     out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
                         _judgment_submit_artifact(d), _via_advance=True)
@@ -3362,12 +3362,17 @@ def test_cmd_submit_cleanup_failure_carries_foldLanded(tmp_path, adapters, monke
     assert out["foldLanded"] is True
     detail = out.get("detail")
     assert detail and "cleanup rename blocked" in detail
-    assert before_terminal is None
     state = _state(d)
-    assert state.get("lastAccepted") == {
-        "phase": pend["phase"], "attempt": pend["attempt"],
-        "round": pend["round"], "artifactHash": state["lastAccepted"]["artifactHash"],
-    }
+    assert state.get("terminal") is None
+    la = state.get("lastAccepted")
+    assert la is not None
+    assert la["phase"] == pend["phase"]
+    assert la["attempt"] == pend["attempt"]
+    assert la["round"] == pend["round"]
+    if last_accepted_before is not None:
+        assert la["artifactHash"] == last_accepted_before["artifactHash"]
+    else:
+        assert isinstance(la.get("artifactHash"), str) and la["artifactHash"]
     assert state["step"] == RD.P_FIXER
     done_dirs = _commit_dirs_with_done(d)
     assert len(done_dirs) == 1

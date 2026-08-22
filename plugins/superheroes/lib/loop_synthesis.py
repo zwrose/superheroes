@@ -52,11 +52,13 @@ def _identity(f):
 
 def _kept_severity(f, v):
     verdict_severity = v.get("severity") if isinstance(v, dict) else None
-    if verdict_severity in _TIERS:
-        return verdict_severity
+    canonical = circuit_breaker.canonical_severity(verdict_severity)
+    if canonical is not None:
+        return canonical
     finding_severity = f.get("severity")
-    if finding_severity in _TIERS:
-        return finding_severity
+    canonical = circuit_breaker.canonical_severity(finding_severity)
+    if canonical is not None:
+        return canonical
     return _DEFAULT_BLOCKING_SEVERITY
 
 

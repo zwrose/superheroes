@@ -10,10 +10,8 @@ import circuit_breaker
 import panel_tally
 
 VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
-_TIERS = ("Critical", "Important", "Minor", "Nit")
 _DEFAULT_BLOCKING_SEVERITY = "Important"
 CLUSTER_LINE_SPAN = 100
-_SEV_RANK = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
 _BODY_SEP = "\n\n---\n\n"
 
 
