@@ -39,7 +39,6 @@ import sys
 
 import circuit_breaker
 
-_TIERS = ("Critical", "Important", "Minor", "Nit")
 _DEFAULT_BLOCKING_SEVERITY = "Important"
 # #276: the blocking partition (was-tagged-blocking, blocking→non-blocking downgrade detection) routes
 # through circuit_breaker.is_blocking — the single, case-normalized, fail-closed predicate — so this

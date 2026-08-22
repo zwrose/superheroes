@@ -563,7 +563,7 @@ def _nit_cap(findings):
     kept = []
     nits = []
     for f in findings:
-        if isinstance(f, dict) and f.get("severity") == "Nit":
+        if isinstance(f, dict) and circuit_breaker.canonical_severity(f.get("severity")) == "Nit":
             nits.append(f)
         else:
             kept.append(f)

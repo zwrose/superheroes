@@ -120,7 +120,6 @@ def test_severity_vocabulary_is_single_sourced(monkeypatch):
     # to the eval tree so this copy-holder stays covered rather than silently unimported.
     monkeypatch.syspath_prepend(os.path.join(PLUGIN, "eval"))
     import review_telemetry
-    import verification
 
     # Python copy-holders (read at runtime) — every BLOCKING constant.
     py_blocking = {
@@ -134,7 +133,6 @@ def test_severity_vocabulary_is_single_sourced(monkeypatch):
         assert val == blocking, "%s drifted from the rubric blocking set %r" % (label, blocking)
 
     assert list(loop_state._ALL_SEVERITIES) == tiers, "loop_state._ALL_SEVERITIES order/vocab drift"
-    assert list(loop_synthesis._TIERS) == tiers, "loop_synthesis._TIERS order/vocab drift"
     assert list(circuit_breaker.SEVERITY_TIERS) == tiers, "circuit_breaker.SEVERITY_TIERS order/vocab drift"
     assert {t: i for i, t in enumerate(circuit_breaker.SEVERITY_TIERS)} == rank, (
         "circuit_breaker.SEVERITY_TIERS rank drift")
