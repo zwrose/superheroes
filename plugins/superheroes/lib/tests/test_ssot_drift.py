@@ -16,7 +16,8 @@ are gone with them; no lib/*.js copy-holders remain):
 - Codex translation/effort policy (docs + adapter default) (home: engine_pref.py)
 - Model-registry ids + family vocabulary                (home: model_registry.py)
 - Base-guard refusal reasons                           (home: review_base_guard.py)
-- Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7)
+- Omission floor + PR-body marker semantics (§10.7)   (home: CONVENTIONS.md §10.7;
+  copy-holders: review-discipline.md, workhorse §11, review-code step 8, grounding_stage.py)
 - `configRead` CLI field set                             (home: preflight_probe.py)
 - Wave-watch vocabulary                                  (home: wave_watch.py)
 - Issue-contract vocabulary                              (home: issue_contract.py)
@@ -1313,6 +1314,28 @@ def _body_marker_from_conventions(home):
     return marker
 
 
+def _grounding_stage_region_markers_from_home(home):
+    """Derive grounding_stage.REGION_MARKERS from §10.7 — the four PR-body regions #609 stages.
+
+    dod-table (prose-named), the omission-floor pair, and the PR-body vet marker. Vet-receipt's
+    comment-only markers are intentionally excluded — grounding_stage never parses them.
+    """
+    m = re.search(
+        r"\*\*Definition-of-done disposition table\*\* \(`(superheroes:dod-table)` marker\)",
+        home,
+    )
+    assert m, "§10.7 dod-table marker prose not found (moved or reworded?)"
+    expected = {"dod-table": "<!-- %s -->" % m.group(1)}
+    _, floor_markers = _omission_floor_expectations_from_home(home)
+    for marker in floor_markers:
+        name = re.search(r"superheroes:([a-z-]+)", marker).group(1)
+        expected[name] = marker
+    body_marker = _body_marker_from_conventions(home)
+    body_name = re.search(r"superheroes:([a-z-]+)", body_marker).group(1)
+    expected[body_name] = body_marker
+    return expected
+
+
 def _showrunner_slot_write_bullet():
     """Duty 4's 'Write your verdict into the PR's owner half' bullet — the advisor's stamp
     instruction, and the charter's copy of the owner-half register."""
@@ -1438,6 +1461,18 @@ def test_omission_floor_matches_conventions_10_7():
     )
     for label, text in copies:
         _assert_omission_floor_matches_home(text, label, home)
+
+
+def test_grounding_stage_region_markers_match_conventions_10_7():
+    """§10.7 + §11: grounding_stage.REGION_MARKERS tracks the PR-body region family."""
+    import grounding_stage
+
+    home = _conventions_section_10_7()
+    expected = _grounding_stage_region_markers_from_home(home)
+    assert dict(grounding_stage.REGION_MARKERS) == expected, (
+        "grounding_stage.REGION_MARKERS drift from CONVENTIONS §10.7 — "
+        "expected %r, got %r" % (expected, dict(grounding_stage.REGION_MARKERS))
+    )
 
 
 def test_vet_receipt_markers_match_conventions_10_7():

@@ -21,6 +21,7 @@ _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import review_base_guard  # noqa: E402
 import store_core  # noqa: E402
 import stub_markers  # noqa: E402
 from guardian_tools import path_is_confidently_under  # noqa: E402
@@ -44,18 +45,30 @@ REGION_MARKERS = {
     "advisor-vet": "<!-- superheroes:advisor-vet -->",
 }
 
+CLAIM_KIND_REGION_PRESENT = "region-present"
+CLAIM_KIND_DOD_ROW = "dod-row"
+CLAIM_KIND_DEGRADATION = "degradation"
+CLAIM_KIND_STUB_MARKER = "stub-marker"
+
+VERIFIABILITY_STAGER = "stager"
+VERIFIABILITY_REPO = "repo"
+VERIFIABILITY_EXTERNAL = "external"
+
 CLAIM_KINDS = frozenset({
-    "region-present",
-    "dod-row",
-    "degradation",
-    "stub-marker",
+    CLAIM_KIND_REGION_PRESENT,
+    CLAIM_KIND_DOD_ROW,
+    CLAIM_KIND_DEGRADATION,
+    CLAIM_KIND_STUB_MARKER,
 })
 
 VERIFIABILITY_VALUES = frozenset({
-    "stager",
-    "repo",
-    "external",
+    VERIFIABILITY_STAGER,
+    VERIFIABILITY_REPO,
+    VERIFIABILITY_EXTERNAL,
 })
+
+# Closed session modes — same set as review_base_guard.decide(); that module has no named export.
+_SESSION_MODES = ("pr", "branch")
 
 REFUSAL_REASONS = frozenset({
     "meta-unreadable",
@@ -177,21 +190,25 @@ def _neutralize_claim_text(text):
 
 
 def _read_meta(session_dir):
-    meta_path = os.path.join(session_dir, "meta.json")
     try:
-        meta = _read_json(meta_path)
-    except FileNotFoundError as exc:
+        ok, data = review_base_guard.read_meta(session_dir)
+    except Exception as exc:
         return _refuse("meta-unreadable", str(exc))
-    except UnicodeDecodeError as exc:
-        return _refuse("meta-unreadable", str(exc))
-    except OSError as exc:
-        return _refuse("meta-unreadable", str(exc))
-    except json.JSONDecodeError as exc:
-        return _refuse("meta-mode-unknown", str(exc))
-    if not isinstance(meta, dict):
-        return _refuse("meta-mode-unknown", "meta.json root is not an object")
-    mode = meta.get("mode")
-    if mode not in ("pr", "branch"):
+    if not ok:
+        detail = data
+        if isinstance(detail, str) and detail.startswith("meta.json not readable:"):
+            return _refuse("meta-unreadable", detail)
+        if isinstance(detail, str) and detail.startswith("meta.json not parseable:"):
+            # read_meta classifies UnicodeDecodeError as parseable; this module's contract
+            # keeps corrupt file bytes under meta-unreadable.
+            if "codec can't decode" in detail or "invalid start byte" in detail:
+                return _refuse("meta-unreadable", detail)
+            return _refuse("meta-mode-unknown", detail)
+        if detail == "meta.json is not a JSON object":
+            return _refuse("meta-mode-unknown", detail)
+        return _refuse("meta-unreadable", detail)
+    mode = data.get("mode")
+    if mode not in _SESSION_MODES:
         return _refuse("meta-mode-unknown", "mode absent or unknown: %r" % mode)
     return {"ok": True, "mode": mode}
 
@@ -322,13 +339,13 @@ def _dod_row_verifiability(row_text):
     if len(cells) >= 2:
         status = cells[1].strip().lower()
         if status == "deferred":
-            return "external"
+            return VERIFIABILITY_EXTERNAL
         if status == "done":
-            return "repo"
+            return VERIFIABILITY_REPO
     evidence = cells[2] if len(cells) >= 3 else row_text
     if re.search(r"#\d+", evidence):
-        return "external"
-    return "repo"
+        return VERIFIABILITY_EXTERNAL
+    return VERIFIABILITY_REPO
 
 
 def _enumerate_claims(body, regions):
@@ -348,16 +365,16 @@ def _enumerate_claims(body, regions):
     for name, info in regions.items():
         present = info["present"]
         text = "region %s present=%s" % (name, present)
-        append_claim("region-present", text, "stager")
+        append_claim(CLAIM_KIND_REGION_PRESENT, text, VERIFIABILITY_STAGER)
     if regions.get("dod-table", {}).get("present"):
         for row in _parse_dod_rows(body, REGION_MARKERS["dod-table"]):
-            append_claim("dod-row", row, _dod_row_verifiability(row))
+            append_claim(CLAIM_KIND_DOD_ROW, row, _dod_row_verifiability(row))
     if regions.get("degradations", {}).get("present"):
         for bullet in _parse_degradation_bullets(body, REGION_MARKERS["degradations"]):
-            append_claim("degradation", bullet, "repo")
+            append_claim(CLAIM_KIND_DEGRADATION, bullet, VERIFIABILITY_REPO)
     for marker in stub_markers.find_markers(body):
         text = "%s(#%d): %s" % (_STUB_LABEL, marker["issue"], marker["description"])
-        append_claim("stub-marker", text, "repo")
+        append_claim(CLAIM_KIND_STUB_MARKER, text, VERIFIABILITY_REPO)
     return claims
 
 
@@ -412,7 +429,7 @@ def _verify_written_file(path, expected_text):
 def _repo_claims(claims):
     return [
         c for c in (claims or [])
-        if isinstance(c, dict) and c.get("verifiability") == "repo"
+        if isinstance(c, dict) and c.get("verifiability") == VERIFIABILITY_REPO
     ]
 
 
