@@ -184,12 +184,16 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
-This probes each configured reviewer vendor's models **once** and writes a machine-readable receipt
-(`vendor/model/ok/timestamp`) to the project store; a `review-code` compose within the TTL reuses it.
-When per-seat review pins are configured (the `--pins` supply the compose accepts, added by #607),
-pass them through so only pin-reachable models are probed. This is the **write side** — the read side lives in the `review-code`
-compose. **Fail-direction unchanged:** a probe failure drops the vendor loudly; the cache only skips
-re-proving recent liveness, never turns a failure into a pass. Empty `crossVendorEngines` (all-Claude
+This probes each configured reviewer vendor's pin-reachable models **once** and writes a
+machine-readable receipt to the project store — per-cell `liveCells` (`vendor`/`model`/`effort`,
+`probed` or `synthesized` provenance) plus the `liveVendors` audit rollup (`review-code` passes the
+latter to `round_driver --vendors`); a `review-code` compose within the TTL reuses it. When per-seat
+review pins are configured (the `--pins` supply the compose accepts, added by #607), pass them
+through so only pin-reachable models are probed. This is the **write side** — the read side lives in
+the `review-code` compose. **Fail-direction unchanged:** a probe failure drops **that cell**
+loudly, not the vendor; the cache only skips re-proving recent liveness, never turns a failure into
+a pass. A vendor may be absent from `liveVendors` while cells remain in `liveCells` — that
+divergence is deliberate. Empty `crossVendorEngines` (all-Claude
 project) → nothing to probe, mark **N/A**.
 
 ## C — Test-pilot readiness

@@ -680,9 +680,12 @@ rides the certification shape (`-degraded`) alongside `independenceDegraded` and
 `baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
 `verify()` treats a maker-family seat as a **violation** when an alternative family was
 reachable, and as **not** a violation when unavoidable (the degradation path); unusable
-liveness evidence — missing recorded `liveVendors`, synthesized liveness defaults,
-pin-scoped probes, malformed vendor names — **fails closed to violation**, and only a
-well-formed, registry-resolvable receipt authorizes the degradation branch. When neither
+liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
+degradations list, or malformed vendor names on **any** receipt; plus, on probed
+receipts (`liveCellsSource: "probed"`), missing or malformed `liveCells`, and on
+synthesized receipts, missing recorded `liveVendors` — **fails closed to violation**,
+and only a well-formed, registry-resolvable receipt authorizes
+the degradation branch. When neither
 narrative nor maker can seat the grounding seat independently, **maker exclusion outranks
 narrative independence**: the fallback prefers the narrative family over the maker's own.
 The cursor CLI's only sanctioned use is the models Cursor bills as **first-party** — today
@@ -701,13 +704,23 @@ so a stalled external CLI is killed well before the ceiling; the ceiling is neve
 disabled, and these limits are not owner-configurable through `enginePreferences`
 (that channel was retired as dead surface).
 
-**Seat-map preflight economics** (#610): the composition preflight that decides which vendors are
-live for the panel is **gated, cached, and pin-scoped**. It runs only on panel-dispatching entries —
-`--post` and any receipt-only path reuse a fresh **short-TTL machine-readable liveness receipt** or
-fall open to Claude, never re-probing; a compose within the TTL rides the receipt (the workhorse
-intake preflight can seed it); and only **pin-reachable** models are probed. The **fail-direction is
-unchanged**: a probe failure still drops the vendor loudly (disclosed degradation); the cache only
-ever skips re-proving recent liveness, and never converts a failure into a pass.
+**Seat-map preflight economics** (#610, #795): the composition preflight that decides which
+**(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
+runs only on panel-dispatching entries — `--post` and any receipt-only path reuse a fresh
+**short-TTL machine-readable liveness receipt** or fall open to Claude, never re-probing; a compose
+within the TTL rides the receipt (the workhorse intake preflight can seed it); and only
+**pin-reachable** models are probed. The **fail-direction is unchanged**: a probe failure still
+drops **that cell** loudly (disclosed degradation), not the whole vendor; the cache only ever skips
+re-proving recent liveness, and never converts a failure into a pass. The receipt carries two
+deliberately distinct pools: **`liveVendors`** — the pessimistic rollup of vendors live at every
+needed cell (unchanged from today); this is the **audit vendor pool** that `review-code` reads for
+`round_driver --vendors`, so a vendor with a dead cell is never selected for a later audit cell the
+panel preflight never probed — and **`liveCells`**, the per-cell verdicts that are the **seating**
+currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
+be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
+correct, not a bug. `liveCells` records provenance (`probed` vs `synthesized`); only `probed` counts
+as verification evidence. Claude is never probed and is live by construction — a stated exception,
+not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
 workspace-write, confined to the builder's own worktree, with **no remote authority** —
