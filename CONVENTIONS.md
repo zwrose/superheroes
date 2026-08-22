@@ -701,13 +701,23 @@ so a stalled external CLI is killed well before the ceiling; the ceiling is neve
 disabled, and these limits are not owner-configurable through `enginePreferences`
 (that channel was retired as dead surface).
 
-**Seat-map preflight economics** (#610): the composition preflight that decides which vendors are
-live for the panel is **gated, cached, and pin-scoped**. It runs only on panel-dispatching entries —
-`--post` and any receipt-only path reuse a fresh **short-TTL machine-readable liveness receipt** or
-fall open to Claude, never re-probing; a compose within the TTL rides the receipt (the workhorse
-intake preflight can seed it); and only **pin-reachable** models are probed. The **fail-direction is
-unchanged**: a probe failure still drops the vendor loudly (disclosed degradation); the cache only
-ever skips re-proving recent liveness, and never converts a failure into a pass.
+**Seat-map preflight economics** (#610, #795): the composition preflight that decides which
+**(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
+runs only on panel-dispatching entries — `--post` and any receipt-only path reuse a fresh
+**short-TTL machine-readable liveness receipt** or fall open to Claude, never re-probing; a compose
+within the TTL rides the receipt (the workhorse intake preflight can seed it); and only
+**pin-reachable** models are probed. The **fail-direction is unchanged**: a probe failure still
+drops **that cell** loudly (disclosed degradation), not the whole vendor; the cache only ever skips
+re-proving recent liveness, and never converts a failure into a pass. The receipt carries two
+deliberately distinct pools: **`liveVendors`** — the pessimistic rollup of vendors live at every
+needed cell (unchanged from today); this is the **audit vendor pool** that `review-code` reads for
+`round_driver --vendors`, so a vendor with a dead cell is never selected for a later audit cell the
+panel preflight never probed — and **`liveCells`**, the per-cell verdicts that are the **seating**
+currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
+be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
+correct, not a bug. `liveCells` records provenance (`probed` vs `synthesized`); only `probed` counts
+as verification evidence. Claude is never probed and is live by construction — a stated exception,
+not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
 workspace-write, confined to the builder's own worktree, with **no remote authority** —

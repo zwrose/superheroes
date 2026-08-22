@@ -15,8 +15,12 @@ def _good_liveness():
                 "gpt-5.6-sol": {"ok": True, "detail": "READY"},
                 "gpt-5.6-terra": {"ok": True, "detail": "READY"},
             },
+            "cells": [
+                {"model": "gpt-5.6-sol", "effort": "medium", "ok": True, "detail": "READY"},
+                {"model": "gpt-5.6-terra", "effort": None, "ok": True, "detail": "READY"},
+            ],
         },
-        "claude": {"live": True, "models": {}},
+        "claude": {"live": True, "models": {}, "cells": []},
     }
 
 
@@ -121,6 +125,50 @@ def test_read_rejects_pre_711_schema_v1_receipt(tmp_path, monkeypatch):
         },
         open(path, "w"),
     )
+    assert lc.read(path, now=now) is None
+
+
+def test_read_rejects_v2_receipt_without_cells(tmp_path, monkeypatch):
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    path = str(tmp_path / "r.json")
+    now = 5_000.0
+    v2_liveness = {
+        "codex": {
+            "live": True,
+            "models": {
+                "gpt-5.6-sol": {"ok": True, "detail": "READY"},
+                "gpt-5.6-terra": {"ok": True, "detail": "READY"},
+            },
+        },
+        "claude": {"live": True, "models": {}},
+    }
+    json.dump(
+        {
+            "schemaVersion": 2,
+            "probedAt": now - 10,
+            "liveness": v2_liveness,
+            "needed": _good_needed(),
+        },
+        open(path, "w"),
+    )
+    assert lc.read(path, now=now) is None
+
+
+def test_read_miss_cells_not_list(tmp_path):
+    path = str(tmp_path / "r.json")
+    now = 3000.0
+    liv = _good_liveness()
+    liv["codex"]["cells"] = "not-a-list"
+    lc.write(liv, _good_needed(), path=path, now=now - 10)
+    assert lc.read(path, now=now) is None
+
+
+def test_read_miss_cell_ok_string(tmp_path):
+    path = str(tmp_path / "r.json")
+    now = 3000.0
+    liv = _good_liveness()
+    liv["codex"]["cells"][0]["ok"] = "true"
+    lc.write(liv, _good_needed(), path=path, now=now - 10)
     assert lc.read(path, now=now) is None
 
 
@@ -297,7 +345,7 @@ def test_live_vendors_claude_always_present():
 
 def test_live_vendors_all_ok():
     liv = _good_liveness()
-    need = {"codex": [["gpt-5.6-sol", None], ["gpt-5.6-terra", None]]}
+    need = {"codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]]}
     live, notes = lc.live_vendors_from(liv, need)
     assert live == ["claude", "codex"]
     assert notes == []
@@ -306,33 +354,45 @@ def test_live_vendors_all_ok():
 def test_live_vendors_one_model_not_ok():
     liv = _good_liveness()
     liv["codex"]["models"]["gpt-5.6-terra"]["ok"] = False
-    need = {"codex": [["gpt-5.6-sol", None], ["gpt-5.6-terra", None]]}
+    liv["codex"]["cells"][1]["ok"] = False
+    need = {"codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-terra", None]]}
     live, notes = lc.live_vendors_from(liv, need)
     assert live == ["claude"]
     assert len(notes) == 1
-    assert notes[0]["constraint"] == "liveness-cache"
+    assert notes[0]["constraint"] == "liveness-cell"
+    assert notes[0]["model"] == "gpt-5.6-terra"
     assert "codex" in notes[0]["reason"]
 
 
 def test_live_vendors_empty_model_list_not_live():
     live, notes = lc.live_vendors_from(_good_liveness(), {"codex": []})
     assert "codex" not in live
-    assert any("codex" in n["reason"] for n in notes)
+    assert notes == []
 
 
 def test_live_vendors_missing_vendor_in_liveness():
     need = {"cursor": [["grok", None]]}
     live, notes = lc.live_vendors_from(_good_liveness(), need)
     assert "cursor" not in live
-    assert any("cursor" in n["reason"] for n in notes)
+    assert len(notes) == 1
+    assert notes[0]["constraint"] == "liveness-cell"
+    assert notes[0]["vendor"] == "cursor"
+    assert notes[0]["model"] == "grok"
 
 
 def test_live_vendors_ok_string_not_live():
-    liv = {"codex": {"live": True, "models": {"m": {"ok": "true", "detail": ""}}}}
+    liv = {
+        "codex": {
+            "live": True,
+            "models": {"m": {"ok": "true", "detail": ""}},
+            "cells": [{"model": "m", "effort": None, "ok": "true", "detail": ""}],
+        },
+    }
     need = {"codex": [["m", None]]}
     live, notes = lc.live_vendors_from(liv, need)
     assert "codex" not in live
     assert notes
+    assert notes[0]["constraint"] == "liveness-cell"
 
 
 # --- write failure ---
@@ -357,12 +417,19 @@ def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
                 "gpt-5.6-sol": {"ok": True, "detail": ""},
                 "gpt-5.6-terra": {"ok": True, "detail": ""},
             },
+            "cells": [
+                {"model": "gpt-5.6-sol", "effort": "medium", "ok": True, "detail": ""},
+                {"model": "gpt-5.6-terra", "effort": None, "ok": True, "detail": ""},
+            ],
         },
         "cursor": {
             "live": False,
             "models": {"cursor-grok-4.6": {"ok": False, "detail": "down"}},
+            "cells": [
+                {"model": "cursor-grok-4.6", "effort": "xhigh", "ok": False, "detail": "down"},
+            ],
         },
-        "claude": {"live": True, "models": {}},
+        "claude": {"live": True, "models": {}, "cells": []},
     }
     live, notes = lc.live_vendors_from(liveness, needed)
 
@@ -384,4 +451,95 @@ def test_live_vendors_from_quorum_matches_composition_liveness_live_flags():
         assert (vendor in live) == _composition_style_live(vendor, entries)
     assert "codex" in live
     assert "cursor" not in live
-    assert any("cursor" in n["reason"] for n in notes)
+    assert any(n["constraint"] == "liveness-cell" and n["vendor"] == "cursor" for n in notes)
+
+
+# --- live_from ---
+
+
+def _aug15_liveness():
+    """2026-08-15 incident shape: sol ok, terra timed out."""
+    return {
+        "codex": {
+            "live": False,
+            "models": {
+                "gpt-5.6-sol": {"ok": True, "detail": "READY"},
+                "gpt-5.6-terra": {"ok": False, "detail": "Command timed out after 120 seconds"},
+            },
+            "cells": [
+                {"model": "gpt-5.6-sol", "effort": "xhigh", "ok": True, "detail": "READY"},
+                {
+                    "model": "gpt-5.6-terra",
+                    "effort": "high",
+                    "ok": False,
+                    "detail": "Command timed out after 120 seconds",
+                },
+            ],
+        },
+        "claude": {"live": True, "models": {}, "cells": []},
+    }
+
+
+def test_live_from_aug15_sol_cell_live_terra_not():
+    needed = {
+        "codex": [["gpt-5.6-sol", "xhigh"], ["gpt-5.6-terra", "high"]],
+    }
+    live_vendors, live_cells, dead_notes = lc.live_from(_aug15_liveness(), needed)
+    assert live_vendors == ["claude"]
+    assert ["codex", "gpt-5.6-sol", "xhigh"] in live_cells
+    assert ["codex", "gpt-5.6-terra", "high"] not in live_cells
+    assert len(dead_notes) == 1
+    assert dead_notes[0]["model"] == "gpt-5.6-terra"
+    assert "timed out" in dead_notes[0]["reason"]
+
+
+def test_live_from_dead_note_names_model_and_reason():
+    needed = {"codex": [["gpt-5.6-terra", "high"]]}
+    _, _, dead_notes = lc.live_from(_aug15_liveness(), needed)
+    assert dead_notes[0]["constraint"] == "liveness-cell"
+    assert dead_notes[0]["vendor"] == "codex"
+    assert dead_notes[0]["model"] == "gpt-5.6-terra"
+    assert dead_notes[0]["effort"] == "high"
+    assert "120 seconds" in dead_notes[0]["reason"]
+
+
+def test_bounded_reason_collapses_and_truncates():
+    long = "word " * 60
+    got = lc._bounded_reason(long)
+    assert "  " not in got
+    assert len(got) == 201
+    assert got.endswith("\u2026")
+
+
+def test_bounded_reason_no_detail():
+    assert lc._bounded_reason(None) == "no probe evidence recorded"
+    assert lc._bounded_reason("") == "no probe evidence recorded"
+
+
+def test_live_from_fail_closed_absent_cell():
+    liv = _good_liveness()
+    needed = {"codex": [["gpt-5.6-sol", "medium"], ["missing-model", "high"]]}
+    live_vendors, live_cells, dead_notes = lc.live_from(liv, needed)
+    assert "codex" not in live_vendors
+    assert any(n["model"] == "missing-model" for n in dead_notes)
+    assert any("no probe evidence recorded" in n["reason"] for n in dead_notes)
+
+
+def test_live_from_dead_note_redacts_absolute_paths():
+    liv = {
+        "codex": {
+            "live": False,
+            "models": {"m": {"ok": False, "detail": "<redacted-path>"}},
+            "cells": [
+                {
+                    "model": "m",
+                    "effort": None,
+                    "ok": False,
+                    "detail": "<redacted-path>",
+                },
+            ],
+        },
+    }
+    _, _, dead_notes = lc.live_from(liv, {"codex": [["m", None]]})
+    assert "/Users/" not in dead_notes[0]["reason"]
+    assert "<redacted-path>" in dead_notes[0]["reason"]
