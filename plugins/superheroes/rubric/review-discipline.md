@@ -217,12 +217,15 @@ separate trigger. It is written as a dated conditional precisely so that nobody 
 arm it: a reader at the close needs no context beyond this paragraph. **The milestone named here
 and ROADMAP.md's closure rule are this band's arming record in the superheroes project itself** —
 a consuming project inherits the portable **driver-or-park** valve from the sentences above, not an
-obligation to evaluate this repository's milestone state.
+obligation to evaluate this repository's milestone state. For a consuming project the skip rule
+above binds now and continuously; the dated flip conditional is this band's own arming record,
+not a second regime they must evaluate.
 
-**No mechanical gate ships for any of this.** The skip rule, the parity rule, and the flip are vet
-doctrine, graded by reading — the advisor at vet is the enforcement, and a guard that parsed a PR
-body for these would sit outside the byte-literal floor stated in *Mechanical guards over
-prose* below.
+**No mechanical enforcement gate ships for any of this.** The skip rule, the parity rule, and the
+flip are vet doctrine, graded by reading — the advisor at vet is the enforcement, and a guard that
+parsed a PR body to grade a skip would sit outside the byte-literal floor stated in *Mechanical
+guards over prose* below. The wording of these rules **is** pinned by a cross-doc literal-agreement
+drift test — in-class under that byte-literal floor.
 
 ## Review bars and recorded residuals
 

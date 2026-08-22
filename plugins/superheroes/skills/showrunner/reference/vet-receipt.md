@@ -61,7 +61,9 @@ shape is wrong and the thinking wins.
    clean sheet:** both are prose, so an agreeable model drives either rate to zero and it reads as a
    clean batch. Inspecting means re-reading a sample of that batch's park and vet receipts, not
    noticing the zero.
-   **A panel's confirmation rate is inspected the same way.** A verification pass whose verdicts
+
+   This inspects the **verifier's** agreeableness — a different axis from the charter's park-rate
+   and receipt-integrity guards. **A panel's confirmation rate is inspected the same way.** A verification pass whose verdicts
    come back **uniformly confirming** — every finding CONFIRMED, over a large surface — is a
    **signal to inspect**, not a clean panel: an agreeable verifier and a genuinely sound batch
    produce the same number, and only reading a sample tells them apart. Record what the rate was
@@ -222,7 +224,7 @@ all the age of a carried item, and the loss of an advisor write.
 **What the owner still carries that the owner half does not say.** <consequence> | `None`
 **Degradations.** <build's, and my own> | `None`
 **Accounting.** orders <n>, reworks <n>, attribution <…>; parks/refusals <…, each correct?>;
-receipt-integrity catches <…>; window: <…>
+receipt-integrity catches <…>; panel confirmation rate <rate>, inspection <what you did>; window: <…>
 **Dispositions — completed.** <…> | `None`
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`

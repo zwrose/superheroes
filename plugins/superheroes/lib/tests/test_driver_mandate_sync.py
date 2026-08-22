@@ -1,21 +1,27 @@
 """Drift guard for driver-mandate facts across enumerated surfaces (CONVENTIONS §11.2 pattern 2).
 
-Guards six driver-mandate literals that now live in two hand-maintained homes each — the
-authoritative home is read first for home-derived pins, and every copy-holder is asserted against
-the same literal:
+Guards three pinned clauses across four surfaces = six guarded elements — the
+authoritative home is read first for hand-typed clauses asserted in the home before being asserted
+in the copy (CONVENTIONS §11.3 anti-tautology leg):
 
 - ``skills/review-code/reference/round-driver.md`` — BACKGROUNDABLE_VERIFY copy-holder 1
 - ``skills/workhorse/SKILL.md`` — BACKGROUNDABLE_VERIFY copy-holder 2
 - ``rubric/review-discipline.md`` — authoritative home for SKIP_CITATION and PARITY
 - ``skills/showrunner/reference/vet-receipt.md`` — SKIP_CITATION and PARITY copy-holder
 
-Six guarded elements (two single-home facts — the flip conditional and the post-handback merge
-policy — are deliberately out of scope; they live only in ``rubric/review-discipline.md``).
+Neither BACKGROUNDABLE_VERIFY surface is authoritative — the pin is a symmetric two-copy equality
+per CONVENTIONS §11.2. SKIP_CITATION and PARITY are home-first, then copy-holder.
+
+Two single-home facts — the flip conditional and the post-handback merge policy — are deliberately
+out of scope; they live only in ``rubric/review-discipline.md``.
 
 What is guaranteed is **presence** of each pinned literal verbatim modulo ``*``-stripping and
-whitespace collapse inside its **declared section** on every enumerated surface. Section
-extraction reuses ``_file_section`` and ``_normalized`` from ``test_charter_boundary_sync``;
-that reader is deliberately **fence-blind** (fence-awareness was tried and reverted in PR #727).
+whitespace collapse. BACKGROUNDABLE_VERIFY is pinned **whole-file** (count == 1 on each copy-holder)
+because its surfaces carry `` ``` `` fences inside section-scoped regions. SKIP_CITATION and
+PARITY are pinned inside their **declared sections** on every enumerated surface. Section extraction
+reuses ``_file_section`` and ``_normalized`` from ``test_charter_boundary_sync``; that reader is
+deliberately **fence-blind** (fence-awareness was tried and reverted in PR #727). A tripwire below
+asserts section-anchored surfaces contain no fences so that premise stays true where it is relied on.
 
 The guard does **not** detect a literal that is present but neutralized by surrounding prose (for
 example an appended exception clause); that semantic check is deliberately out of scope — the
@@ -39,10 +45,6 @@ _DRIVER_MANDATE_SECTION = (
 _VET_TRIGGERED_SECTION = (
     "## Triggered fields — the artifacts raise them, not your memory"
 )
-_WORKHORSE_DELEGATE_SECTION = (
-    "## 7. Delegate every implementation (lane-scoped — no size exception)"
-)
-_ROUND_DRIVER_ACTIONS_SECTION = "## Actions and payloads"
 
 _BACKGROUNDABLE_VERIFY = (
     "The verify step may run harness-backgrounded and polled in-turn — the already-sanctioned "
@@ -66,10 +68,15 @@ _PARITY_COPY = (
     "A seat substituted with no recorded forfeit on the engine it replaced is a finding"
 )
 
-_BACKGROUNDABLE_VERIFY_SURFACES = {
-    "skills/review-code/reference/round-driver.md": _ROUND_DRIVER_ACTIONS_SECTION,
-    "skills/workhorse/SKILL.md": _WORKHORSE_DELEGATE_SECTION,
-}
+_BACKGROUNDABLE_VERIFY_SURFACES = [
+    "skills/review-code/reference/round-driver.md",
+    "skills/workhorse/SKILL.md",
+]
+
+_SECTION_ANCHORED_SURFACES = [
+    (_HOME, _DRIVER_MANDATE_SECTION),
+    (_VET_RECEIPT, _VET_TRIGGERED_SECTION),
+]
 
 
 def _read(rel):
@@ -95,13 +102,33 @@ def _assert_clause_in_section(rel, section, literal):
 
 
 @pytest.mark.parametrize(
-    "rel,section",
-    list(_BACKGROUNDABLE_VERIFY_SURFACES.items()),
+    "rel",
+    _BACKGROUNDABLE_VERIFY_SURFACES,
     ids=["round-driver", "workhorse"],
 )
-def test_backgroundable_verify_present(rel, section):
-    # axis: presence of BACKGROUNDABLE_VERIFY literal in enumerated copy-holder section
-    _assert_clause_in_section(rel, section, _BACKGROUNDABLE_VERIFY)
+def test_backgroundable_verify_present(rel):
+    # axis: presence of BACKGROUNDABLE_VERIFY literal whole-file, exactly once
+    normalized_file = _normalized(_read(rel))
+    normalized_literal = _normalized(_BACKGROUNDABLE_VERIFY)
+    count = normalized_file.count(normalized_literal)
+    assert count == 1, (
+        f"expected exactly one occurrence in {rel}, found {count}"
+    )
+
+
+def test_section_anchored_surfaces_have_no_fences():
+    # axis: fence-blind section reader premise — no ``` inside section-anchored regions
+    for rel, section in _SECTION_ANCHORED_SURFACES:
+        section_text = _section_text(rel, section)
+        fence_lines = [
+            line
+            for line in section_text.splitlines()
+            if line.strip().startswith("```")
+        ]
+        assert not fence_lines, (
+            f"{rel} section {section!r} contains fence lines "
+            f"(fence-blind reader premise): {fence_lines}"
+        )
 
 
 def test_skip_citation_present_in_home():
