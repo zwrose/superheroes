@@ -225,8 +225,9 @@ not a second regime they must evaluate.
 **No mechanical enforcement gate ships for any of this.** The skip rule, the parity rule, and the
 flip are vet doctrine, graded by reading — the advisor at vet is the enforcement, and a guard that
 parsed a PR body to grade a skip would sit outside the byte-literal floor stated in *Mechanical
-guards over prose* below. The wording of these rules **is** pinned by a cross-doc literal-agreement
-drift test — in-class under that byte-literal floor.
+guards over prose* below. The wording of the skip rule and the parity rule **is** pinned by a
+cross-doc literal-agreement drift test — in-class under that byte-literal floor; the flip is
+single-homed and carries no cross-doc pin.
 
 ## Review bars and recorded residuals
 

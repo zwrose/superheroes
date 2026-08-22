@@ -63,12 +63,16 @@ shape is wrong and the thinking wins.
    noticing the zero.
 
    This inspects the **verifier's** agreeableness — a different axis from the charter's park-rate
-   and receipt-integrity guards. **A panel's confirmation rate is inspected the same way.** A verification pass whose verdicts
-   come back **uniformly confirming** — every finding CONFIRMED, over a large surface — is a
-   **signal to inspect**, not a clean panel: an agreeable verifier and a genuinely sound batch
-   produce the same number, and only reading a sample tells them apart. Record what the rate was
-   and what you did about it. The field flag that named this was **12 of 12 CONFIRMED on a
-   ~10,000-line diff**.
+   and receipt-integrity guards. **A panel's confirmation rate is inspected the same way.** The
+   round receipt does not today carry per-pass verdict totals, so where the rate is not derivable
+   from the durable artifacts record that plainly — **`not derivable from the receipt`** — rather
+   than guessing or reconstructing it from session-local files. Where the rate **is** visible —
+   the driver journal in the same session, or a rate the build recorded in its own build record —
+   a verification pass whose verdicts come back **uniformly confirming** — every finding
+   CONFIRMED, over a large surface — is still a **signal to inspect**, not a clean panel: an
+   agreeable verifier and a genuinely sound batch produce the same number, and only reading a
+   sample tells them apart. Record what the rate was and what you did about it. The field flag
+   that named this was **12 of 12 CONFIRMED on a ~10,000-line diff**.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
@@ -224,7 +228,8 @@ all the age of a carried item, and the loss of an advisor write.
 **What the owner still carries that the owner half does not say.** <consequence> | `None`
 **Degradations.** <build's, and my own> | `None`
 **Accounting.** orders <n>, reworks <n>, attribution <…>; parks/refusals <…, each correct?>;
-receipt-integrity catches <…>; panel confirmation rate <rate>, inspection <what you did>; window: <…>
+receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
+inspection <what you did>; window: <…>
 **Dispositions — completed.** <…> | `None`
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
