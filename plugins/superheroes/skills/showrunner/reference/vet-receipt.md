@@ -66,8 +66,10 @@ shape is wrong and the thinking wins.
    and receipt-integrity guards. **A panel's confirmation rate is inspected the same way.** The
    round receipt does not today carry per-pass verdict totals, so where the rate is not derivable
    from the durable artifacts record that plainly — **`not derivable from the receipt`** — rather
-   than guessing or reconstructing it from session-local files. Where the rate **is** visible —
-   the driver journal in the same session, or a rate the build recorded in its own build record —
+   than guessing. The receipt does serialize each surviving finding's own verdict, so an
+   all-CONFIRMED survivor set is still visible there — what is missing is the denominator, the
+   findings the verifier dropped. Where a rate **is** visible — that survivor set, or a rate the
+   build recorded in its own build record —
    a verification pass whose verdicts come back **uniformly confirming** — every finding
    CONFIRMED, over a large surface — is still a **signal to inspect**, not a clean panel: an
    agreeable verifier and a genuinely sound batch produce the same number, and only reading a
