@@ -314,8 +314,16 @@ the receipt that the brief check happened.
 check always applies this one — and applying it is an obligation on **`$BRIEF_PATH`**, not on this
 file. Nothing here reaches the reviewer on its own: the delivered prompt is the anti-hijack preamble,
 the sanitized-view notice, and `$BRIEF_PATH` verbatim, so **`$BRIEF_PATH` is reviewer instructions
-*plus* the brief, never the bare brief** — carry the lens below into it, in the builder's own words or
-quoted, on every brief check. A brief-check prompt that omits it has not dispatched this lens.
+*plus* the brief, never the bare brief** — and it carries the lens below **quoted verbatim, never
+paraphrased**, alongside a citation of this home
+(`skills/workhorse/reference/dispatch-mechanics.md` § *The standing lens*), on every brief check.
+A brief-check prompt that omits it has not dispatched this lens. **Why a copy and not only the
+citation** — CONVENTIONS §11.4's pointer rule presumes the consumer can read the home, and this seat
+often cannot: its working directory is a sanitized export of *the repository under review*, which in
+a consuming project does not contain this plugin at all. Carrying the citation next to the verbatim
+quote is what keeps the single home nameable and the copy checkable; **a builder's own re-wording is
+never acceptable**, because a paraphrase is exactly how the obligations soften without anyone
+deciding to soften them.
 **A brief that touches an external API, CLI, or service contract owes
 the round-trip answer** — evidence that the *far side* accepts what we intend to send, established
 before code rather than after. Exactly one of three satisfies it: **(a)** local validation against
@@ -325,9 +333,9 @@ live smoke against the real endpoint or binary; or **(c)** a stated reason neith
 the risk is accepted knowingly instead of by omission. A brief that describes in detail what we will
 send, and never says how we established the far side takes it, has **not** answered — and the check
 says so. The failure this catches is not a bug in our code: our code is exactly what we designed,
-and the contract we designed against was never real. *Teaching examples.* **#307** — `codex review
---output-schema` was handed a schema that is valid JSON Schema but invalid under OpenAI strict mode;
-every codex review dispatch 400'd at request time, **32/32 failures, zero successes ever**, and the
+and the contract we designed against was never real. *Teaching examples.* **#307** — the codex **review** role's
+`codex exec --output-schema` was handed a schema that is valid JSON Schema but invalid under OpenAI
+strict mode; every codex review dispatch 400'd at request time, **32/32 failures, zero successes ever**, and the
 silent Claude fallback made the loss read as a working cross-vendor panel. The same class recurred
 **2026-08-09** in the weekly-eats project: a hand-rolled schema, request-time 400s, and three
 re-dispatches of a review that had already come back clean — the repair landed as **#949**'s

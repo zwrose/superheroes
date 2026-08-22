@@ -56,11 +56,16 @@ Collect findings under these named smells; **every finding cites its smell by na
   something the target environment does not: an ambient git identity, a permission or allow rule, a
   gate whose precondition the harness pre-satisfies, network reachability, a binary already on
   `PATH`. The assertion may be perfectly real; the **posture** it runs under is not the shipped one,
-  so the green measures the runner rather than the code. Distinguish it from its two neighbours: a
-  **cleanup leak** is state a *sibling test* left behind, and the pinning case under *Bite-proof
-  gaps* is a pin the test **declares** — here nothing is declared, because the supply is ambient and
-  therefore invisible in the diff. A test in this class owes a named statement of what the
-  environment supplies, and a showing of itself red without it.
+  so the green measures the runner rather than the code. **The axis is effect, not visibility:** an
+  ambient supply, an injected one, and a harness-declared default all belong here whenever the
+  supply **pre-satisfies the very condition under test**. Being declared in harness code does not
+  take a supply out of this smell — PR #714's `_seams`/`_responder` engaged-liveness default is
+  declared, and it is this smell's own teaching example. Distinguish it from its two neighbours by
+  what the thing does, not by whether it is written down: a **cleanup leak** is state a *sibling
+  test* left behind, and the pinning case under *Bite-proof gaps* controls a variable that is
+  **incidental** to the claim. A test in this class owes a named statement of what the environment
+  supplies **and** a showing of itself red without it; naming it is never the end of the
+  obligation.
 
 ## What to Flag
 
