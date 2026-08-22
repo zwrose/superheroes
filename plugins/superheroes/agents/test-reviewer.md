@@ -135,20 +135,33 @@ Collect findings under these named smells; **every finding cites its smell by na
 
 - A changed test, fixture, or harness helper whose green depends on something the **runner's
   environment happens to supply** and the target environment does not — a configured git identity, a
-  permission grant, a pre-satisfied gate precondition, reachable network, an installed binary. Flag
-  it when the diff neither names what is being supplied nor shows the check red without it. Ask the
-  question directly: *if this ran where the supply is absent, would it still pass — and would it
-  still be measuring the same thing?* The fix is the **negative case** — run the unit with the
-  supplied thing removed or overridden and assert the failure — or, where the negative case
-  genuinely cannot be constructed under this runner, an in-diff line saying so and naming the
-  environment that does prove it. **Important** when the check's whole claim is
+  permission grant, a pre-satisfied gate precondition, reachable network, an installed binary. **Two
+  obligations, and a missing *either* is the finding:** the diff **names** what is being supplied,
+  **and** it **shows the check red without it**. Naming the ambient `user.email` and stopping there
+  does not satisfy this smell — the naming is what makes the supply visible, the red showing is what
+  proves the check was measuring anything. Ask the question directly: *if this ran where the supply
+  is absent, would it still pass — and would it still be measuring the same thing?* The fix is the
+  **negative case** — run the unit with the supplied thing removed or overridden and assert the
+  failure. Where the negative case genuinely cannot be constructed under this runner, the substitute
+  is **quoted red evidence from the environment that can** (the failing run, named and pasted), never
+  an in-diff assertion that some other environment would prove it — an unbacked claim leaves both
+  obligations unmet. **Important** when the check's whole claim is
   environment-dependent (an identity, permission, liveness, or CI gate); **Minor** when the supplied
   thing is incidental to what the test actually asserts. The severity cap in *Output Format* still
-  binds — test findings are never Critical. *Teaching examples:* the **2026-08-09 CI-identity
-  escape** — a dev box silently supplied `user.email`, so a fixture's own commits succeeded locally
-  **by construction**, the local run read ready, and both halves of the stack went red only in CI
-  (the encoded response is the workhorse charter's §2 rule that commits inherit the *resolved*
-  identity and a missing one parks); and the **pre-proven-liveness fixture class**, PR **#714**,
+  binds — test findings are never Critical. **Ownership is by the supplying line, not by the
+  subject.** Yours is every supply that enters through **test, fixture, or harness setup** — including
+  when the thing it makes green is a gate, and including a harness that pre-satisfies a gate's own
+  precondition. `premortem-reviewer` owns only the supply that enters through **production
+  machinery** — a shipped gate or the code it reads resolving on something ambient. When a diff
+  changes both the machinery and its harness, each seat flags **its own** line and says so in
+  `evidence`, so the two findings read as a pair rather than a duplicate. *Teaching examples:* the
+  **2026-08-09 CI-identity
+  escape**, harness-side half — a dev box silently supplied `user.email`, so a fixture's own commits
+  succeeded locally **by construction**, the local run read ready, and both halves of the stack went
+  red only in CI. (That escape also has a production-machinery half, which is
+  `premortem-reviewer`'s under the ownership rule above; the encoded response to both is the
+  workhorse charter's §2 rule that commits inherit the *resolved* identity and a missing one parks.)
+  And the **pre-proven-liveness fixture class**, PR **#714**,
   where the harness defaulted an engaged liveness result the fixtures then leaned on — `4051 passed,
   3 skipped` carried a park-to-certify regression straight through, and the PR's own honest
   explanation was that the harness pre-proves liveness.

@@ -278,6 +278,8 @@ the runner itself is unavailable** (disclosed degradation in the PR body, never 
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# $BRIEF_PATH is reviewer instructions + the brief — it is fed verbatim as the whole prompt, so
+# the standing lens below must be inside it (see "The standing lens", after this recipe)
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 # Gate first — thread model_id / effort from the JSON
 python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
@@ -309,7 +311,12 @@ brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all four d
 the receipt that the brief check happened.
 
 **The standing lens: the foreign-contract round-trip.** Whatever else the brief prompt asks, the
-check always applies this one. **A brief that touches an external API, CLI, or service contract owes
+check always applies this one — and applying it is an obligation on **`$BRIEF_PATH`**, not on this
+file. Nothing here reaches the reviewer on its own: the delivered prompt is the anti-hijack preamble,
+the sanitized-view notice, and `$BRIEF_PATH` verbatim, so **`$BRIEF_PATH` is reviewer instructions
+*plus* the brief, never the bare brief** — carry the lens below into it, in the builder's own words or
+quoted, on every brief check. A brief-check prompt that omits it has not dispatched this lens.
+**A brief that touches an external API, CLI, or service contract owes
 the round-trip answer** — evidence that the *far side* accepts what we intend to send, established
 before code rather than after. Exactly one of three satisfies it: **(a)** local validation against
 the foreign contract's own rules (the vendor's schema dialect and its strict-mode restrictions, its
