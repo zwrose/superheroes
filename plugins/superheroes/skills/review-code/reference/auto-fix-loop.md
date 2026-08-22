@@ -214,13 +214,26 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > spawns also runs under `GIT_NO_LAZY_FETCH=1`, so no path can wait on git's on-demand fetching of
 > an object the checkout does not hold — the quiet-hang class PR #761 recorded.
 >
-> **Hydrating.** Re-clone without `--filter`, or drop the filter in place and refetch:
+> **Hydrating.** Re-cloning without `--filter` is the reliable remedy. To fix a checkout in place,
+> every marker the detector reads has to go — not just `origin`'s two keys — because any one of
+> them on its own re-triggers the refusal:
 >
 > ```bash
-> git config --unset remote.origin.partialclonefilter
-> git config --unset remote.origin.promisor
-> git fetch --refetch origin
+> # 1. list what is actually there (any of these three shapes counts, on ANY remote name)
+> git config --local --get-regexp '^remote\..*\.(promisor|partialclonefilter)$'
+> git config --local --get extensions.partialclone
+>
+> # 2. clear every line the first step printed, substituting the real remote name
+> git config --local --unset-all remote.<name>.partialclonefilter
+> git config --local --unset-all remote.<name>.promisor
+> git config --local --unset-all extensions.partialclone
+>
+> # 3. fetch the objects the filter had been skipping
+> git fetch --refetch <name>
 > ```
+>
+> A checkout whose only marker is `extensions.partialclone`, or whose promisor remote is not named
+> `origin`, is still refused after unsetting `origin`'s keys alone.
 >
 > **`git fetch --refetch` on its own is not a remedy** — it deliberately reapplies the filter
 > recorded in `remote.<name>.partialCloneFilter`, so it downloads another filtered pack and leaves
@@ -249,61 +262,6 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `GIT_NO_LAZY_FETCH` backstop, so a config hiccup on an ordinary repository never becomes a hard
 > refusal. No timeout machinery is involved — the ruling replaced the earlier bounded-deadline
 > design.
->
-> **#666 investigation floor.** A seat that cites a **stripped** path in its `investigated` array fails
-> the investigation floor and forfeits vacuously — fail-safe (the seat falls open to Claude), never a
-> false clean.
->
-> **#685 CLI `parse-result` echo gap.** The CLI `parse-result --role review` path does not receive the
-> dispatched prompt, so it performs **no echo strip**. An **empty-findings result from that path is
-> unverified** — apply the investigation floor **manually**. The runner path (`engine_dispatch.py
-> dispatch-review`) parses raw stdout first; only when that parse yields no findings does it strip
-> the echoed prompt and re-parse (so an empty-findings result from the runner path has been through
-> the strip). A `--prompt-path` flag for `parse-result`
-> is **deliberately not built** pending a named consumer.
->
-> **View build refusal (no fallback).** If the sanitized view cannot be built, `dispatch-review`
-> returns a named `unrunnable` refusal with `attempts: 0` and **no spawn** — alongside post-argparse
-> refusals such as `sanitized-view-tempbase-inside-repo`, `sanitized-view-head-unresolved`,
-> `sanitized-view-export-failed`, `sanitized-view-export-timeout`, `sanitized-view-partial-clone`,
-> and `sanitized-view-init-failed`
-> (also `attempts: 0`). There is
-> **no fallback to the raw repo and no opt-out**.
->
-> **Partial clones are an unsupported checkout shape** (owner-ruled 2026-08-09, #797). Every git
-> subprocess view construction spawns runs under `GIT_NO_LAZY_FETCH=1`, so construction can never
-> wait on git's on-demand fetching of an object the checkout does not hold — the quiet-hang class
-> PR #761 recorded. When a required object turns out to be absent, construction fails immediately
-> and, on a repository carrying a promisor remote, the refusal is renamed after the shape that
-> caused it: **`sanitized-view-partial-clone` — partial or unhydrated clone detected; sanitized-view
-> construction refused. Hydrate the checkout and dispatch again.** Cleanup runs as on any refusal,
-> so no partial view is left behind.
->
-> **Hydrating.** Re-clone without `--filter`, or drop the filter in place and refetch:
->
-> ```bash
-> git config --unset remote.origin.partialclonefilter
-> git config --unset remote.origin.promisor
-> git fetch --refetch origin
-> ```
->
-> **`git fetch --refetch` on its own is not a remedy** — it deliberately reapplies the filter
-> recorded in `remote.<name>.partialCloneFilter`, so it downloads another filtered pack and leaves
-> the required objects absent, returning the operator to the identical refusal. (Measured on git
-> 2.50.1 against a `--filter=blob:none` clone: the blob was still reported `missing` after a bare
-> `--refetch`, and present after the unset-then-refetch above.)
->
-> **Scope of the name, stated rather than implied.** The rename fires on git's own `<oid> missing`
-> reply, which is how a **blob**-filtered clone (`--filter=blob:none`, the dominant shape) fails. A
-> clone filtered hard enough to be missing *trees or commits* (`--filter=tree:0`) fails earlier, in
-> `ls-tree` or `rev-parse`, and still refuses — with a generic token such as
-> `sanitized-view-export-failed` rather than this named one. Attribution keys on that exact signal
-> and never on the outward token, because the tokens are umbrellas: `sanitized-view-export-failed`
-> also covers a census type mismatch and a destination-filesystem error, and renaming by token
-> would tell an operator to hydrate a checkout when their disk was full. A partial clone whose
-> required objects all happen to be present locally still builds normally; the refusal appears only
-> when construction would otherwise have reached for the network. No timeout machinery is involved —
-> the ruling replaced the earlier bounded-deadline design.
 >
 > **Argparse vs JSON refusals.** `--repo-root` is **required** and validated by argparse before
 > `dispatch-review` runs: a missing flag, an empty expansion from an unset shell variable
