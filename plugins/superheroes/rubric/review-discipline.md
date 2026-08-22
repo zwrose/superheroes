@@ -196,14 +196,16 @@ prevents proper use of the driver carries the project's `driver-blocker` label, 
 rule self-feeding: every honest skip either points at a tracked blocker or is a finding, so the
 list of things standing between this project and a certified loop maintains itself.
 
-**Seat-provenance parity — a hand-driven panel owes what the driver records.** The driver path
-records, per seat, an attempt on that seat's seat-map-assigned vendor or a **terminal forfeit**
-naming why. A hand-driven panel owes the **same recorded attempt-or-forfeit on the vendor that seat
-was assigned**. A mixed panel — different seats on different vendors by design — is normal and is not
-itself a finding. **A seat that ran on a vendor other than its seat-map assignment with no recorded
-forfeit on the assigned vendor is a vet finding** — the record is the only thing separating an
-engine that was tried and failed from one that was never asked, and a substitution nobody recorded
-is exactly the silent degradation this lane exists to prevent.
+**Seat-provenance parity — a hand-driven panel owes what the build must record.** The driver path
+records which vendor **ran** each seat against the vendor that seat's seat map assigns — a mismatch
+is disclosed, but neither the driver receipt nor the panel submission contract carries proof that
+the assigned vendor was actually attempted. A hand-driven panel owes the **build record**: each seat's
+seat-map assignment, plus a recorded attempt or **terminal forfeit** on that assigned vendor. A mixed
+panel — different seats on different vendors by design — is normal and is not itself a finding.
+**A seat that ran on a vendor other than its seat-map assignment with no recorded forfeit on the
+assigned vendor is a vet finding** — the record is the only thing separating an engine that was
+tried and failed from one that was never asked, and a panel that records neither is exactly the
+silent degradation this lane exists to prevent.
 
 **The flip — a dated conditional that arms itself.** Ruled **2026-08-21**. **When the milestone
 *Review panels can't silently degrade* closes, a full-lane review that is not the certified loop
