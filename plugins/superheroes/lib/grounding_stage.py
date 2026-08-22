@@ -14,15 +14,17 @@ import os
 import re
 import secrets
 import sys
+import tempfile
 import time
+import traceback
 import unicodedata
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
     sys.path.insert(0, _LIB_DIR)
 
+import md_fence  # noqa: E402
 import review_base_guard  # noqa: E402
-import store_core  # noqa: E402
 import stub_markers  # noqa: E402
 from guardian_tools import path_is_confidently_under  # noqa: E402
 
@@ -87,7 +89,10 @@ REFUSAL_REASONS = frozenset({
     "manifest-flag-mismatch",
     "source-body-stale",
     "invalid-invocation",
+    "internal-error",
 })
+
+REFUSAL_INTERNAL_ERROR = "internal-error"
 
 
 def _iso8601_utc():
@@ -103,7 +108,7 @@ def _sha256_text(text):
 
 
 def _refuse(reason, detail=None):
-    # axis: unproven staged input must refuse, never return a usable result.
+    # bite-axis: unproven staged input must refuse, never return a usable result.
     if reason not in REFUSAL_REASONS:
         raise ValueError("unregistered refusal reason: %r" % reason)
     return {"ok": False, "signal": "cannot-certify", "reason": reason, "detail": detail}
@@ -114,11 +119,17 @@ def _emit(result):
 
 
 def _read_text(path):
-    with open(path, encoding="utf-8") as fh:
+    with open(path, encoding="utf-8", newline="") as fh:
+        return fh.read()
+
+
+def _read_bytes(path):
+    with open(path, "rb") as fh:
         return fh.read()
 
 
 def _require_absolute_session_dir(session_dir):
+    # bite-axis: session-dir must be absolute — relative paths refuse before any write.
     if not os.path.isabs(session_dir):
         return _refuse("session-dir-not-absolute", session_dir)
     return {"ok": True}
@@ -188,6 +199,7 @@ def _neutralize_claim_text(text):
 
 
 def _read_meta(session_dir):
+    # bite-axis: meta.json must be readable and carry a known session mode before staging.
     try:
         ok, data = review_base_guard.read_meta(session_dir)
     except Exception as exc:
@@ -252,8 +264,39 @@ def _region_heading_bound(text, opening_level):
     return _first_any_heading_offset(text)
 
 
+def _bare_lines_from_body(body):
+    lines = body.splitlines(keepends=True)
+    bare = []
+    for line in lines:
+        if line.endswith("\r\n"):
+            bare.append(line[:-2])
+        elif line.endswith("\n"):
+            bare.append(line[:-1])
+        elif line.endswith("\r"):
+            bare.append(line[:-1])
+        else:
+            bare.append(line)
+    return lines, bare
+
+
+def _find_standalone_marker(body, marker, start=0):
+    """Return byte offset of the first standalone marker line at or after start."""
+    lines, bare = _bare_lines_from_body(body)
+    fence_scan = md_fence.scan(bare)
+    offset = 0
+    for i, line in enumerate(lines):
+        if offset >= start and not fence_scan.inert[i]:
+            stripped = bare[i].strip()
+            if stripped == marker:
+                leading = len(bare[i]) - len(bare[i].lstrip())
+                return offset + leading
+        offset += len(line)
+    return -1
+
+
 def _extract_region(body, marker):
-    idx = body.find(marker)
+    # bite-axis: region markers must be standalone comment lines outside code fences.
+    idx = _find_standalone_marker(body, marker)
     if idx < 0:
         return None, 0
     start = idx + len(marker)
@@ -264,7 +307,11 @@ def _extract_region(body, marker):
     elif rest.startswith("\n"):
         start += 1
         rest = body[start:]
-    next_markers = [body.find(m, start) for m in REGION_MARKERS.values() if body.find(m, start) >= 0]
+    next_markers = [
+        _find_standalone_marker(body, m, start)
+        for m in REGION_MARKERS.values()
+    ]
+    next_markers = [pos for pos in next_markers if pos >= 0]
     marker_end = min(next_markers) if next_markers else len(body)
     section_level = None
     for line in rest.splitlines():
@@ -285,29 +332,72 @@ def _extract_region(body, marker):
     return region_text, line_count
 
 
+def _split_table_cells(line):
+    """Split a markdown table row into cells, honoring backslash-escaped pipes."""
+    stripped = line.strip()
+    if stripped.startswith("|"):
+        stripped = stripped[1:]
+    if stripped.endswith("|"):
+        stripped = stripped[:-1]
+    cells = []
+    current = []
+    i = 0
+    while i < len(stripped):
+        ch = stripped[i]
+        if ch == "\\" and i + 1 < len(stripped) and stripped[i + 1] == "|":
+            current.append("|")
+            i += 2
+            continue
+        if ch == "|":
+            cells.append("".join(current).strip())
+            current = []
+            i += 1
+            continue
+        current.append(ch)
+        i += 1
+    cells.append("".join(current).strip())
+    return cells
+
+
+def _is_separator_cells(cells):
+    if not cells:
+        return False
+    for cell in cells:
+        compact = cell.replace(" ", "")
+        if not compact:
+            continue
+        if not re.match(r"^:?-+:?$", compact):
+            return False
+    return True
+
+
+def _is_table_row_line(line):
+    stripped = line.strip()
+    return bool(stripped) and "|" in stripped
+
+
 def _parse_dod_rows(body, marker):
+    # bite-axis: DoD table rows — optional outer pipes, separator row skipped, escaped pipes kept.
     region_text, _ = _extract_region(body, marker)
     if region_text is None:
         return []
     table_lines = []
     for line in region_text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("|"):
-            table_lines.append(stripped)
+        if _is_table_row_line(line):
+            table_lines.append(line.strip())
     rows = []
     i = 0
     while i < len(table_lines):
-        stripped = table_lines[i]
-        if re.match(r"^\|[-:\s|]+\|$", stripped):
+        cells = _split_table_cells(table_lines[i])
+        if _is_separator_cells(cells):
             i += 1
             continue
         if (
             i + 1 < len(table_lines)
-            and re.match(r"^\|[-:\s|]+\|$", table_lines[i + 1])
+            and _is_separator_cells(_split_table_cells(table_lines[i + 1]))
         ):
-            i += 1
+            i += 2
             continue
-        cells = [c.strip() for c in stripped.strip("|").split("|")]
         if not any(cells):
             i += 1
             continue
@@ -317,6 +407,7 @@ def _parse_dod_rows(body, marker):
 
 
 def _parse_degradation_bullets(body, marker):
+    # bite-axis: degradation bullets — list items bounded by the region heading fence.
     region_text, _ = _extract_region(body, marker)
     if region_text is None:
         return []
@@ -344,15 +435,17 @@ def _dod_row_verifiability(row_text):
 
 
 def _enumerate_claims(body, regions):
+    # bite-axis: claim enumeration — regions, DoD rows, degradations, and stub markers minted.
     claims = []
     ordinal = 0
 
     def append_claim(kind, text, verifiability):
         nonlocal ordinal
+        cleaned = _neutralize_claim_text(text)
         claims.append({
-            "claimId": _claim_id(kind, text, ordinal),
+            "claimId": _claim_id(kind, cleaned, ordinal),
             "kind": kind,
-            "text": _neutralize_claim_text(text),
+            "text": cleaned,
             "verifiability": verifiability,
         })
         ordinal += 1
@@ -374,6 +467,7 @@ def _enumerate_claims(body, regions):
 
 
 def _detect_regions(body):
+    # bite-axis: region presence — standalone marker comments outside code fences.
     regions = []
     for name, marker in REGION_MARKERS.items():
         region_text, line_count = _extract_region(body, marker)
@@ -402,23 +496,35 @@ def _grounding_dir(session_dir):
 
 
 def _atomic_write_text(path, text, tmp_prefix=".grounding-stage-"):
-    store_core.atomic_write(path, text, tmp_prefix=tmp_prefix)
+    data = text.encode("utf-8")
+    d = os.path.dirname(os.path.abspath(path)) or "."
+    os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=tmp_prefix, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def _verify_written_file(path, expected_text):
+    # bite-axis: staged-file readback — byte identity and sha256 bind what landed on disk.
+    expected_bytes = expected_text.encode("utf-8")
     try:
-        on_disk = _read_text(path)
-    except UnicodeDecodeError as exc:
-        return _refuse("stage-readback-mismatch", "read-back failed: %s" % exc)
+        on_disk = _read_bytes(path)
     except OSError as exc:
         return _refuse("stage-readback-mismatch", "read-back failed: %s" % exc)
-    if on_disk != expected_text:
+    if on_disk != expected_bytes:
         return _refuse("stage-readback-mismatch", "content mismatch for %s" % path)
-    expected_hash = _sha256_text(expected_text)
-    actual_hash = _sha256_text(on_disk)
-    if actual_hash != expected_hash:
-        return _refuse("stage-readback-mismatch", "hash mismatch for %s" % path)
-    return {"ok": True, "sha256": actual_hash, "bytes": len(on_disk.encode("utf-8"))}
+    actual_hash = _sha256_bytes(on_disk)
+    return {"ok": True, "sha256": actual_hash, "bytes": len(on_disk)}
 
 
 def _region_map(regions):
@@ -432,6 +538,7 @@ def _region_map(regions):
 
 def _no_substantive_claims(claims, region_map):
     """True only when every region is present and no row-level claims were minted."""
+    # bite-axis: noSubstantiveClaims — all regions present but zero row-level claims.
     for name in REGION_MARKERS:
         if not region_map.get(name, {}).get("present"):
             return False
@@ -525,6 +632,7 @@ def _validate_region_shape(region, index):
 
 
 def _validate_manifest_shape(manifest, session_dir):
+    # bite-axis: manifest shape — schema, token, files, regions, and claims must be well-formed.
     if not isinstance(manifest, dict) or manifest.get("schema") != STAGE_SCHEMA:
         return _refuse("stage-manifest-invalid", "schema mismatch")
     stage_token = manifest.get("stageToken")
@@ -579,6 +687,7 @@ def _validate_manifest_shape(manifest, session_dir):
 
 
 def _verify_manifest_files(manifest, session_dir):
+    # bite-axis: manifest integrity — staged bytes, token echo, regions, and claims re-derived.
     validated = _validate_manifest_shape(manifest, session_dir)
     if not validated.get("ok"):
         return validated
@@ -591,12 +700,14 @@ def _verify_manifest_files(manifest, session_dir):
         except OSError as exc:
             return _refuse("staged-file-unreadable", str(exc))
         try:
-            on_disk = _read_text(resolved_path)
-        except UnicodeDecodeError as exc:
-            return _refuse("staged-file-unreadable", str(exc))
+            on_disk_bytes = _read_bytes(resolved_path)
         except OSError as exc:
             return _refuse("staged-file-unreadable", str(exc))
-        actual_hash = _sha256_text(on_disk)
+        try:
+            on_disk = on_disk_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            return _refuse("staged-file-unreadable", str(exc))
+        actual_hash = _sha256_bytes(on_disk_bytes)
         if actual_hash != expected_hash:
             return _refuse("staged-file-hash-mismatch", path)
         body_token = _parse_staged_stage_token(on_disk)
@@ -645,6 +756,7 @@ def stage(session_dir):
         return _refuse("pr-body-absent", "body absent or not a string")
     if not body.strip():
         return _refuse("pr-body-empty", "body empty or whitespace-only")
+    # bite-axis: PR-body size — UTF-8 byte count must stay within the flood ceiling.
     body_byte_len = len(body.encode("utf-8"))
     if body_byte_len > PR_BODY_MAX_BYTES:
         return _refuse(
@@ -656,6 +768,7 @@ def stage(session_dir):
     regions = _detect_regions(body)
     region_map = {r["name"]: r for r in regions}
     claims = _enumerate_claims(body, region_map)
+    # bite-axis: claim budget — minted claim count must not exceed the seat ceiling.
     if len(claims) > CLAIM_COUNT_MAX:
         return _refuse(
             "pr-body-claim-count-exceeded",
@@ -803,7 +916,11 @@ def main(argv):
             return 1
         raise
     except Exception as exc:
-        _emit(_refuse("invalid-invocation", "%s: %s" % (type(exc).__name__, exc)))
+        tb_hash = _sha256_text(traceback.format_exc())
+        _emit(_refuse(
+            "internal-error",
+            "%s: %s (tracebackSha256=%s)" % (type(exc).__name__, exc, tb_hash),
+        ))
         return 1
 
 

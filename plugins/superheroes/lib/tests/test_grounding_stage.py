@@ -41,6 +41,7 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "manifest-flag-mismatch",
     "source-body-stale",
     "invalid-invocation",
+    "internal-error",
 })
 
 
@@ -116,6 +117,7 @@ def _assert_refusal(rc, body, reason):
 
 
 def test_refusal_reason_census():
+    # bite-axis: refusal vocabulary — every registered token must appear in the census set.
     assert GS.REFUSAL_REASONS == EXPECTED_REFUSAL_REASONS
 
 
@@ -198,7 +200,7 @@ def test_edge_07_stage_unwritable(tmp_path, monkeypatch):
     def boom(path, text, tmp_prefix=".grounding-stage-"):
         raise OSError("permission denied")
 
-    monkeypatch.setattr(GS.store_core, "atomic_write", boom)
+    monkeypatch.setattr(GS, "_atomic_write_text", boom)
     rc, body = _invoke("stage", session)
     _assert_refusal(rc, body, "stage-unwritable")
 
@@ -216,6 +218,35 @@ def test_edge_08_stage_readback_mismatch(tmp_path, monkeypatch):
     monkeypatch.setattr(GS, "_atomic_write_text", drift_write)
     rc, body = _invoke("stage", session)
     _assert_refusal(rc, body, "stage-readback-mismatch")
+
+
+def test_edge_08b_manifest_readback_mismatch(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    real_atomic = GS._atomic_write_text
+
+    def drift_write(path, text, tmp_prefix=".grounding-stage-"):
+        if path.endswith("stage.json"):
+            real_atomic(path, text + "\n<!-- drift -->\n", tmp_prefix=tmp_prefix)
+        else:
+            real_atomic(path, text, tmp_prefix=tmp_prefix)
+
+    monkeypatch.setattr(GS, "_atomic_write_text", drift_write)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "stage-readback-mismatch")
+
+
+def test_edge_07b_manifest_unwritable(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    real_atomic = GS._atomic_write_text
+
+    def boom_manifest(path, text, tmp_prefix=".grounding-stage-"):
+        if path.endswith("stage.json"):
+            raise OSError("permission denied")
+        real_atomic(path, text, tmp_prefix=tmp_prefix)
+
+    monkeypatch.setattr(GS, "_atomic_write_text", boom_manifest)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "stage-unwritable")
 
 
 def test_edge_09_stage_manifest_missing(tmp_path):
@@ -482,6 +513,7 @@ def test_check_branch_mode_applicable_false(tmp_path):
 
 
 def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
+    # bite-axis: refusal reachability — every registered token must be observable in a live refusal.
     cases = {}
 
     def case_meta_unreadable():
@@ -536,7 +568,7 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
     cases["pr-body-too-large"] = case_pr_body_too_large
 
     def case_pr_body_claim_count_exceeded():
-        over = GS.CLAIM_COUNT_MAX + 1
+        over = GS.CLAIM_COUNT_MAX - 4 + 1
         session = _session(
             tmp_path, body=_dod_table_body(over), name="case-pr-body-claim-count-exceeded",
         )
@@ -557,7 +589,7 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
         def boom(path, text, tmp_prefix=".grounding-stage-"):
             raise OSError("permission denied")
 
-        with patch.object(GS.store_core, "atomic_write", boom):
+        with patch.object(GS, "_atomic_write_text", boom):
             return _invoke("stage", session)
 
     cases["stage-unwritable"] = case_stage_unwritable
@@ -667,6 +699,17 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
         return rc, body
 
     cases["invalid-invocation"] = case_invalid_invocation
+
+    def case_internal_error():
+        session = _session(tmp_path, body=_happy_body(), name="case-internal-error")
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("probe")
+
+        with patch.object(GS, "_detect_regions", boom):
+            return _invoke("stage", session)
+
+    cases["internal-error"] = case_internal_error
 
     missing_cases = GS.REFUSAL_REASONS - set(cases)
     extra_cases = set(cases) - GS.REFUSAL_REASONS
@@ -866,10 +909,40 @@ def _dod_table_body(row_count):
 
 
 def test_c1_claim_count_exceeded_refuses(tmp_path):
-    over = GS.CLAIM_COUNT_MAX + 1
+    over = GS.CLAIM_COUNT_MAX - 4 + 1
     session = _session(tmp_path, body=_dod_table_body(over))
     rc, body = _invoke("stage", session)
     _assert_refusal(rc, body, "pr-body-claim-count-exceeded")
+
+
+def test_c1_claim_count_at_limit_accepted(tmp_path):
+    rows = GS.CLAIM_COUNT_MAX - 4
+    session = _session(tmp_path, body=_dod_table_body(rows))
+    rc, body = _invoke("stage", session)
+    assert rc == 0 and body["ok"]
+    manifest = _manifest(session)
+    assert len(manifest["claims"]) == GS.CLAIM_COUNT_MAX
+
+
+def test_c1_body_exactly_max_bytes_accepted(tmp_path):
+    marker = "<!-- superheroes:dod-table -->\n"
+    pad_len = GS.PR_BODY_MAX_BYTES - len(marker.encode("utf-8"))
+    body = marker + ("x" * pad_len)
+    assert len(body.encode("utf-8")) == GS.PR_BODY_MAX_BYTES
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+
+
+def test_c1_multibyte_body_over_byte_limit_refuses(tmp_path):
+    char = "\u00e9"
+    char_bytes = len(char.encode("utf-8"))
+    body = char * (GS.PR_BODY_MAX_BYTES // char_bytes + 1)
+    assert len(body) < GS.PR_BODY_MAX_BYTES
+    assert len(body.encode("utf-8")) > GS.PR_BODY_MAX_BYTES
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "pr-body-too-large")
 
 
 def test_c1_body_too_large_refuses(tmp_path):
@@ -960,13 +1033,13 @@ def test_c7_verify_manifest_files_opens_resolved_path(tmp_path, monkeypatch):
     manifest["files"][0]["path"] = dotted
     open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
     opened = []
-    real_read = GS._read_text
+    real_read = GS._read_bytes
 
     def track_read(path):
         opened.append(path)
         return real_read(path)
 
-    monkeypatch.setattr(GS, "_read_text", track_read)
+    monkeypatch.setattr(GS, "_read_bytes", track_read)
     rc, body = _invoke("check", session)
     assert rc == 0 and body["ok"]
     pr_body_reads = [p for p in opened if p.endswith("pr-body.md")]
@@ -979,6 +1052,7 @@ def test_refuse_call_sites_use_registered_string_literals():
 
     Does not prove reachability — a _refuse call behind an impossible condition would
     still satisfy this detector. Reachability is test_every_registered_refusal_reason_is_observably_emitted."""
+    # bite-axis: refusal literal census — _refuse first args must be registered string literals.
     module_path = os.path.join(_LIB, "grounding_stage.py")
     with open(module_path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=module_path)
@@ -1016,6 +1090,110 @@ def test_nonstandard_dod_status_with_issue_ref_stays_repo(tmp_path):
     dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
     assert len(dod) == 1
     assert dod[0]["verifiability"] == "repo"
+
+
+def test_dod_table_without_outer_pipes_parses_rows(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "DoD | Status | Evidence\n"
+        "--- | --- | ---\n"
+        "Ship it | done | tests/test_x.py\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_dod_table_without_trailing_pipes_parses_rows(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence\n"
+        "| --- | --- | ---\n"
+        "| Ship it | done | tests/test_x.py\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_fenced_decoy_marker_does_not_emit_dod_claim(tmp_path):
+    body = (
+        "```\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| fake | done | planted |\n"
+        "```\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is False
+    assert _dod_claims(manifest) == []
+
+
+def test_inline_code_decoy_marker_does_not_hide_real_table(tmp_path):
+    body = (
+        "The token `<!-- superheroes:dod-table -->` is documented here.\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship it | done | tests/test_x.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is True
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_crlf_pr_body_stages_and_round_trips(tmp_path):
+    body = "alpha\r\nbeta\r\n" + _happy_body()
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0 and check_body["ok"]
+
+
+def test_claim_id_matches_stored_text():
+    raw = "hello\u200bworld|done|tests/a.py"
+    cleaned = GS._neutralize_claim_text(raw)
+    claim_id = GS._claim_id("dod-row", cleaned, 0)
+    expected = GS._claim_id("dod-row", cleaned, 0)
+    assert claim_id == expected
+    digest = claim_id.split("-")[-1]
+    import hashlib
+    assert digest == hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
+
+
+def test_tampered_manifest_claim_text_refuses_check(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    for claim in manifest["claims"]:
+        if claim.get("kind") == "dod-row":
+            claim["text"] = claim["text"] + " tampered"
+            break
+    else:
+        pytest.fail("expected a dod-row claim in manifest")
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    rc2, body = _invoke("check", session)
+    _assert_refusal(rc2, body, "stage-manifest-invalid")
 
 
 def test_tampered_manifest_claim_refuses_check(tmp_path):

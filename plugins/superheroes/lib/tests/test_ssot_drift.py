@@ -1465,6 +1465,7 @@ def test_omission_floor_matches_conventions_10_7():
 
 def test_grounding_stage_region_markers_match_conventions_10_7():
     """§10.7 + §11: grounding_stage.REGION_MARKERS tracks the PR-body region family."""
+    # bite-axis: region-marker SSOT — plugin REGION_MARKERS must match CONVENTIONS §10.7.
     import grounding_stage
 
     home = _conventions_section_10_7()
