@@ -1,6 +1,8 @@
 import importlib.util
 import os
 
+import pytest
+
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
 
@@ -61,6 +63,23 @@ def test_downgrade_flagged_from_miscased_blocking_severity():
     # blocking('critical') → non-blocking('Minor') is a downgrade the readout must surface
     assert len(out["downgrades"]) == 1
     assert out["downgrades"][0]["from"] == "critical" and out["downgrades"][0]["to"] == "Minor"
+
+
+@pytest.mark.parametrize("finding_sev", ["important", "IMPORTANT"])
+def test_kept_severity_canonicalizes_miscased_finding(finding_sev):
+    f = _f("a.py", "bug", finding_sev)
+    v = {"id": CB.finding_identity(f), "action": "keep", "reason": "still applies"}
+    out = LS.consume([f], [v])
+    assert out["findings"][0]["severity"] == "Important"
+
+
+@pytest.mark.parametrize("verdict_sev", ["important", "IMPORTANT"])
+def test_kept_severity_honors_miscased_verdict_over_minor_finding(verdict_sev):
+    f = _f("a.py", "bug", "Minor")
+    v = {"id": CB.finding_identity(f), "action": "keep", "reason": "confirmed blocker",
+         "severity": verdict_sev}
+    out = LS.consume([f], [v])
+    assert out["findings"][0]["severity"] == "Important"
 
 
 def test_clear_drop_can_match_reviewer_short_id():
