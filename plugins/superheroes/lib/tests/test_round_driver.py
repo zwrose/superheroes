@@ -2646,6 +2646,30 @@ def test_mechanical_compile_nit_cap():
     assert any(f.get("summaryEntry") for f in nits)
 
 
+def test_mechanical_compile_nit_cap_lowercase_equivalent_to_exact_case():
+    """Lowercase 'nit' severity variants count toward the Nit cap like exact-case 'Nit'."""
+    def _findings(severity):
+        return [
+            {"title": "nit%d" % i, "severity": severity, "file": "f.py", "line": i + 1}
+            for i in range(9)
+        ]
+
+    def _post_cap_counts(compiled):
+        nits = [
+            f for f in compiled
+            if RD.circuit_breaker.canonical_severity(f.get("severity")) == "Nit"
+        ]
+        return (
+            sum(1 for f in nits if not f.get("summaryEntry")),
+            sum(1 for f in nits if f.get("summaryEntry")),
+            len(compiled),
+        )
+
+    compiled_lower, _ = RD.mechanical_compile(_findings("nit"), None)
+    compiled_exact, _ = RD.mechanical_compile(_findings("Nit"), None)
+    assert _post_cap_counts(compiled_lower) == _post_cap_counts(compiled_exact)
+
+
 def test_mechanical_compile_normalizes_list_dimension():
     findings = [
         {"title": "hole", "severity": "Important", "file": "f.py", "line": 2,

@@ -16,6 +16,7 @@ import os
 
 import pytest
 
+import round_driver as RD
 import round_phases as RP
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -28,12 +29,86 @@ _STALL_DOCS = (
     "skills/review-code/reference/round-driver.md",
 )
 
+_GATE_POLICY_HEADING = "### Owner gates and gate policy"
+_ROUND_DRIVER_DOC = "skills/review-code/reference/round-driver.md"
+_EXPECTED_STALL_EXACT_TOKENS = {
+    RD.STALL_CHOICE_MISSING,
+    RD.STALL_ACCEPT_RISK_NOT_ELIGIBLE,
+}
+
 
 def _read(rel):
     path = os.path.join(_PLUGIN, rel)
     assert os.path.exists(path), "stall-protocol doc moved or renamed: %s" % rel
     with open(path, encoding="utf-8") as fh:
         return fh.read()
+
+
+def _gate_policy_section():
+    text = _read(_ROUND_DRIVER_DOC)
+    start = text.find(_GATE_POLICY_HEADING)
+    assert start != -1, (
+        "%s does not contain the expected gate-policy section heading %r"
+        % (_ROUND_DRIVER_DOC, _GATE_POLICY_HEADING))
+    rest = text[start + len(_GATE_POLICY_HEADING):]
+    h2 = rest.find("\n## ")
+    h3 = rest.find("\n### ")
+    if h2 == -1 and h3 == -1:
+        raise AssertionError(
+            "%s gate-policy section has no following level-2 or level-3 heading to bound the slice"
+            % _ROUND_DRIVER_DOC)
+    end = min(e for e in (h2, h3) if e != -1)
+    return rest[:end]
+
+
+def _stall_submit_refusal_exact_tokens():
+    """Exact stall submit refusal tokens — string STALL_* constants on round_driver."""
+    skip = {"STALL_CHOICES"}
+    tokens = []
+    for name, val in vars(RD).items():
+        if not name.startswith("STALL_") or name in skip:
+            continue
+        if isinstance(val, str) and val.startswith("stall-") and not val.endswith(":"):
+            tokens.append(val)
+    return tokens
+
+
+def _stall_submit_refusal_prefixes():
+    """Parameterized stall submit refusal prefixes (colon-terminated)."""
+    skip = {"STALL_CHOICES"}
+    prefixes = []
+    for name, val in vars(RD).items():
+        if not name.startswith("STALL_") or name in skip:
+            continue
+        if isinstance(val, str) and val.startswith("stall-") and val.endswith(":"):
+            prefixes.append(val)
+    prefixes.append(RP.RETIRED_STALL_CHOICE_PREFIX)
+    return prefixes
+
+
+_EXPECTED_STALL_PREFIXES = {
+    RD.STALL_CHOICE_NOT_OFFERED_PREFIX,
+    RP.RETIRED_STALL_CHOICE_PREFIX,
+}
+
+
+def test_every_stall_submit_refusal_token_named_in_gate_policy_section():
+    """Gate-policy prose must name every stall submit refusal derived from authoritative constants."""
+    derived_exact = _stall_submit_refusal_exact_tokens()
+    assert set(derived_exact) == _EXPECTED_STALL_EXACT_TOKENS, (
+        "stall exact-token census must find %r — update _EXPECTED_STALL_EXACT_TOKENS and the prose"
+        % sorted(_EXPECTED_STALL_EXACT_TOKENS))
+    derived_prefix = _stall_submit_refusal_prefixes()
+    assert set(derived_prefix) == _EXPECTED_STALL_PREFIXES, (
+        "stall prefix census must find %r — update _EXPECTED_STALL_PREFIXES and the prose"
+        % sorted(_EXPECTED_STALL_PREFIXES))
+    section = _gate_policy_section()
+    missing_exact = [t for t in derived_exact if t not in section]
+    missing_prefix = [p for p in derived_prefix if p not in section]
+    missing = missing_exact + missing_prefix
+    assert not missing, (
+        "round-driver.md gate-policy section is missing stall submit refusal fragment(s) %r — "
+        "derive from round_driver / round_phases constants" % missing)
 
 
 @pytest.mark.parametrize("rel", _STALL_DOCS)

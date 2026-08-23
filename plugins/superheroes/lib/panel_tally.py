@@ -142,7 +142,8 @@ def compile_findings(findings, context_files=None):
         if fid in by_id:
             ex = by_id[fid]
             dims = _merge_dims(ex, f)
-            if SEV_RANK.get(f.get("severity"), 99) < SEV_RANK.get(ex.get("severity"), 99):
+            if (circuit_breaker.severity_rank(f.get("severity"))
+                    < circuit_breaker.severity_rank(ex.get("severity"))):
                 merged = dict(f)
             else:
                 merged = dict(ex)
@@ -328,7 +329,8 @@ def present_deferred(compiled, deferred_set):
         deferred_sev = deferred_set.get(_identity(f))
         if deferred_sev is None:
             continue
-        if SEV_RANK.get(f.get("severity"), 99) >= SEV_RANK.get(deferred_sev, 99):
+        if (circuit_breaker.severity_rank(f.get("severity"))
+                >= circuit_breaker.severity_rank(deferred_sev)):
             n += 1
     return n
 

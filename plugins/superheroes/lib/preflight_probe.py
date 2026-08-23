@@ -444,24 +444,30 @@ def needed_configs_for(tiers, vendors):
 
 def composition_liveness(needed_configs, run=None):
     """Per-vendor composition liveness: auth is all-or-nothing per vendor, layered with per-model
-    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}}}."""
+    adequacy. Returns {vendor: {"live": bool, "models": {model: {"ok", "detail"}}, "cells": [...]}}."""
     if not isinstance(needed_configs, dict):
         return {}
     result = {}
     for vendor, configs in needed_configs.items():
         if vendor == "claude":
-            result[vendor] = {"live": True, "models": {}}
+            result[vendor] = {"live": True, "models": {}, "cells": []}
             continue
         models = {}
+        cells = []
         for model, effort in configs:
             argv = model_no_op_argv(vendor, model, effort)
             if argv is None:
-                models[model] = {"ok": False, "detail": "unknown/unroutable model"}
+                detail = "unknown/unroutable model"
+                cell_ok = False
+                models[model] = {"ok": False, "detail": detail}
+                cells.append({"model": model, "effort": effort, "ok": cell_ok, "detail": detail})
             else:
                 r = _engine_probe_in_scratch_repo(
                     "composition:%s:%s" % (vendor, model), argv, run, probe_prompt())
                 r_ok = r["ok"]
-                r_detail = r["detail"]
+                r_detail = _redact_absolute_paths_in_text(r["detail"])
+                cell_entry = {"model": model, "effort": effort, "ok": r_ok, "detail": r_detail}
+                cells.append(cell_entry)
                 entry = {"ok": r_ok, "detail": r_detail}
                 existing = models.get(model)
                 if existing is not None and not existing["ok"]:
@@ -472,7 +478,7 @@ def composition_liveness(needed_configs, run=None):
                     entry = existing
                 models[model] = entry
         live = bool(configs) and all(m["ok"] for m in models.values())
-        result[vendor] = {"live": live, "models": models}
+        result[vendor] = {"live": live, "models": models, "cells": cells}
     return result
 
 
@@ -493,13 +499,13 @@ def live_vendors_for_composition(
     if cache_path is not None and now is not None:
         rec = liveness_cache.read(cache_path, now=now)
         if rec is not None and liveness_cache.covers(rec.get("needed", {}), needed):
-            live, dead_notes = liveness_cache.live_vendors_from(rec["liveness"], needed)
+            live, live_cells, dead_notes = liveness_cache.live_from(rec["liveness"], needed)
             notes.append({
                 "constraint": "preflight-cache",
                 "reason": "reused liveness receipt (age %ds)" % int(now - rec["probedAt"]),
             })
             notes.extend(dead_notes)
-            return (live, rec["liveness"], notes)
+            return (live, live_cells, rec["liveness"], notes)
 
     if probe_mode == "cache-only":
         notes.append({
@@ -509,7 +515,7 @@ def live_vendors_for_composition(
                 "vendors not probed; panel falls open to Claude"
             ),
         })
-        return (["claude"], {"claude": {"live": True, "models": {}}}, notes)
+        return (["claude"], [], {"claude": {"live": True, "models": {}, "cells": []}}, notes)
 
     liveness = composition_liveness({**needed, "claude": []}, run)
     if cache_path is not None and now is not None:
@@ -522,8 +528,9 @@ def live_vendors_for_composition(
                     "until the store is writable"
                 ),
             })
-    live = sorted(v for v, info in liveness.items() if info.get("live"))
-    return (live, liveness, notes)
+    live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
+    notes.extend(dead_notes)
+    return (live, live_cells, liveness, notes)
 
 
 def configured_cross_vendor_engines(prefs):
@@ -566,7 +573,7 @@ def main(argv):
             needed_override = seat_map.reachable_configs(configured, pins)
         now = time.time()
         cache_path = liveness_cache.receipt_path(args.cwd)
-        live, liveness, notes = live_vendors_for_composition(
+        live, live_cells, liveness, notes = live_vendors_for_composition(
             configured,
             needed_override=needed_override,
             probe_mode="probe",
@@ -580,6 +587,7 @@ def main(argv):
             })
         sys.stdout.write(json.dumps({
             "live": live,
+            "liveCells": live_cells,
             "cachePath": cache_path,
             "crossVendorEngines": configured,
             "notes": notes,
