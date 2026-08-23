@@ -149,7 +149,10 @@ fast-follow):
 - **Work driven through the review skills reviews itself** — the cross-vendor review
   panels (review-code, and the spec panel) are the review.
 - **The full lane** ends a direct build with `/superheroes:review-code` (the full panel
-  and fix loop) or an explicit owner-directed review before handback. **The light and
+  and fix loop) before handback. An **explicit owner-directed review** remains a valid
+  ending, and it is **recorded as a cited skip of the driver loop with the owner's
+  direction as the citation** (owner-ruled 2026-08-23: subordinate, don't remove) — the
+  skip accounting stays whole and the owner's hands stay free. **The light and
   micro lanes** run **one** independent cross-vendor reviewer instead, carrying the
   mandatory control on every such review (see above). The loop is cheap on small diffs —
   scoped rounds, capped confirmations — so "too small to review" is never a reason to

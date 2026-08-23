@@ -431,6 +431,9 @@ above).
      Standing accounting, not machinery — the mechanical count is owed by the launcher build. Why
      these two and not the panel: **review panels check the diff against the brief, never the brief
      against the world**, so the class this guards — a bad advisor premise — is invisible to them.
+     (A third guard — the **panel confirmation-rate line** — joined at the driver mandate and lives
+     in `reference/vet-receipt.md`; it inspects the verifiers' agreeableness the same way and is not
+     restated here.)
      Standing accounting makes the work-order authoring rules' effect measurable over time, and tells
      you when a build's defects point at order quality rather than the engine. An **owner-half
      omission caught at vet** attributes to the **orchestrator's own integration/assembly**, so
