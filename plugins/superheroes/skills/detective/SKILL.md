@@ -64,10 +64,17 @@ else constant. When the factor must be toggled, the toggle runs on the disposabl
 A hypothesis formed from an error message is a **starting point**, not a finding. The receipt
 carries the repro or A/B that confirmed it — or says plainly that demonstration failed.
 
+**An absence claim is only as wide as its token set.** When a grep is the evidence for "nothing
+sets X", sweep the property's shorthand family too — `grep "margin:"` alone misses a framework's
+`mt:`/`mx:` shorthands (a field-observed precision miss, 2026-08-16).
+
 ## The diagnosis receipt
 
 **This charter is the single authoritative home for the receipt's shape in this repository.** No
-other file restates it; they point here.
+other file restates it; they point here. The shape is field-proven, not aspirational: the first
+live hero run (2026-08-16, owner-direct dispatch) passed the advisor's five-check vet on first
+read precisely because its receipt mapped one-to-one onto the elements below — treat them as the
+template, not a suggestion.
 
 Post the receipt as a **comment on the incident issue**, creating the incident issue if none
 exists. The receipt carries four elements:
