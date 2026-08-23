@@ -271,13 +271,15 @@ stdout, and deliver nothing gradeable through our transport (`stages.engaged: tr
 
 ### Brief-check dispatch (`--mode brief-check`)
 
-The workhorse charter §5 names *who* reviews the brief; this subsection is the mechanics for *how* it
-is dispatched. The sanctioned channel is `dispatch-review --mode brief-check` — not a hand-rolled
-`codex exec`, which is permitted **only when the runner itself is unavailable** (disclosed degradation
-in the PR body, never the normal path).
+The workhorse charter §5 names *who* reviews the brief; this subsection carries the standing lens the
+check always applies, and the mechanics for *how* it is dispatched. The sanctioned channel is
+`dispatch-review --mode brief-check` — not a hand-rolled `codex exec`, which is permitted **only when
+the runner itself is unavailable** (disclosed degradation in the PR body, never the normal path).
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+# $BRIEF_PATH is reviewer instructions + the brief — it is fed verbatim as the whole prompt, so
+# the standing lens below must be inside it (see "The standing lens", after this recipe)
 # Keep $BRIEF_PROGRESS outside $RUN_DIR — non-empty run-dir → run-dir-not-empty-unopened
 # Gate first — thread model_id / effort from the JSON
 python3 -B "$ROOT_DIR/lib/dispatch_guard.py" check \
@@ -307,6 +309,44 @@ supplying a disagreeing `--mode` is `run-dir-mode-mismatch`, `attempts: 0`. Expl
 inherited from the journal and `--mode` is omitted. The terminal journaled result — `mode:
 brief-check`, `attempts ≥ 1`, engagement read, `sanitizedView` with all four diff keys `null` — is
 the receipt that the brief check happened.
+
+**The standing lens: the foreign-contract round-trip.** Whatever else the brief prompt asks, the
+check always applies this one — and applying it is an obligation on **`$BRIEF_PATH`**, not on this
+file. Nothing here reaches the reviewer on its own: the delivered prompt is the anti-hijack preamble,
+the sanitized-view notice, and `$BRIEF_PATH` verbatim, so **`$BRIEF_PATH` is reviewer instructions
+*plus* the brief, never the bare brief** — and it carries the lens below **quoted verbatim, never
+paraphrased**, alongside a citation of this home
+(`skills/workhorse/reference/dispatch-mechanics.md` § *The standing lens*), on every brief check.
+A brief-check prompt that omits it has not dispatched this lens. **This is a declared, narrow
+exception to CONVENTIONS §11.4** — that rule says orders, agent prompts, and dispatch prompts cite
+the path and never paste the body, and it binds everywhere else. It is excepted **here only**, and
+for one reason: §11.4's own fail-loud half turns an unresolvable citation into a halt, and this
+seat's working directory is a sanitized export of *the repository under review* — which in a
+consuming project does not contain this plugin, so a bare plugin-relative citation is a **guaranteed**
+dangling pointer and every brief check in every consuming project would halt. §11.4's worked
+consumers (the implementer, the pilot) read the build worktree, where the path does resolve; this one
+does not. The exception is bounded to this prompt: the citation still rides alongside, so the single
+home stays nameable and the copy checkable, and **a builder's own re-wording is never acceptable** —
+a paraphrase is how the obligations soften without anyone deciding to soften them. Widening this
+exception, or retiring it if the seat ever gains a way to read the plugin, is the advisor's call, not
+a builder's.
+**A brief that touches an external API, CLI, or service contract owes
+the round-trip answer** — evidence that the *far side* accepts what we intend to send, established
+before code rather than after. Exactly one of three satisfies it: **(a)** local validation against
+the foreign contract's own rules (the vendor's schema dialect and its strict-mode restrictions, its
+required/optional shape, its argv grammar) — not against our own idea of well-formedness; **(b)** a
+live smoke against the real endpoint or binary; or **(c)** a stated reason neither is available, so
+the risk is accepted knowingly instead of by omission. A brief that describes in detail what we will
+send, and never says how we established the far side takes it, has **not** answered — and the check
+says so. The failure this catches is not a bug in our code: our code is exactly what we designed,
+and the contract we designed against was never real. *Teaching examples.* **#307** — the codex **review** role's
+`codex exec --output-schema` was handed a schema that is valid JSON Schema but invalid under OpenAI
+strict mode; every codex review dispatch 400'd at request time, **32/32 failures, zero successes ever**, and the
+silent Claude fallback made the loss read as a working cross-vendor panel. The same class recurred
+**2026-08-09** in the weekly-eats project: a hand-rolled schema, request-time 400s, and three
+re-dispatches of a review that had already come back clean — the repair landed as **#949**'s
+canonical result contract. In both, one local validation of the foreign contract's rules at brief
+time would have cost minutes.
 
 ## Supervised write dispatch
 
