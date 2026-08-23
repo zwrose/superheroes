@@ -901,8 +901,8 @@ pass. An empty degradation list is only clean when the section body is the liter
 **None**; marker absence and **None** are different states. Every copy-holder of this
 floor — `rubric/review-discipline.md` (Ship-phase honesty), `skills/workhorse/SKILL.md`
 §11, and `skills/review-code/SKILL.md` step 8 — restates it as an inline enumerated
-triple in order after the omission-floor anchor, using one accepted marker shape across
-all three rows; that enumerated shape is what makes per-row drift
+triple in order after the omission-floor anchor, with the marker literals byte-identical
+across all three copy-holders; that enumerated shape is what makes per-row drift
 mechanically detectable rather than a judgment call, because a copy that merges the three
 rows into prose can silently lose one.
 

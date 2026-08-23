@@ -201,8 +201,8 @@ _ARCHITECT_SPEC_SECTION_CLAUSES = {
         "There is no lighter approval.",
         "Empty sections are omitted, never filled.",
         "A heading with nothing",
-        "is recorded by hand today rather than",
-        "[#1062](https://github.com/zwrose/superheroes/issues/1062)'s work, not this skill's",
+        "is written by the approval path itself",
+        "[#1062](https://github.com/zwrose/superheroes/issues/1062), shipped in PR #1069",
     ],
 }
 
