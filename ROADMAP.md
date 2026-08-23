@@ -92,12 +92,17 @@ reason: the hardening milestones (review panels, engine dispatch, unattended wav
 machinery that is working well enough today, so they defer behind the two lingering features
 the owner is the direct consumer of.
 
-1. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
-   harnesses that actually deliver the click, plans derived from the spec, CLI-project
-   coverage; the parallel authenticated-pilot epic closes.
-2. **Review panels can't silently degrade** — a full-lane review either runs the promised
+1. **Review panels can't silently degrade** — a full-lane review either runs the promised
    cross-vendor panel or discloses loudly; certification is reachable when the loop
    converges; a stale liveness verdict can never quietly collapse a panel to one vendor.
+   *(Moved to 1 on 2026-08-21, owner-ruled: weekly-eats field report #6 falsified the
+   2026-08-15 "working well enough" rationale — three builds skipped the certified loop on
+   excuses that fail against the skill text, and the driver's synthesis merge silently
+   downgraded a blocker. The next themed release cuts from this milestone, and its close
+   arms the driver mandate's flip.)*
+2. **Test-pilot evidence you can act on** — pilot verdicts backed by on-screen oracles on
+   harnesses that actually deliver the click, plans derived from the spec, CLI-project
+   coverage; the parallel authenticated-pilot epic closes.
 3. **Engine dispatch you can trust** — a cursor/codex dispatch needs no manual
    re-verification: the result contract is test-bound, the run-dir failure class is deleted,
    the dispatch guard is hard-wired, seat bundles travel intact.
