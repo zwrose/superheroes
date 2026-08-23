@@ -1,0 +1,1234 @@
+import ast
+import importlib.util
+import io
+import json
+import os
+import sys
+from unittest.mock import patch
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.dirname(_HERE)
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_LIB, name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+GS = _load("grounding_stage")
+
+EXPECTED_REFUSAL_REASONS = frozenset({
+    "meta-unreadable",
+    "meta-mode-unknown",
+    "pr-json-unreadable",
+    "pr-json-unparseable",
+    "pr-body-absent",
+    "pr-body-empty",
+    "pr-body-too-large",
+    "pr-body-claim-count-exceeded",
+    "session-dir-not-absolute",
+    "stage-unwritable",
+    "stage-readback-mismatch",
+    "stage-manifest-missing",
+    "stage-manifest-invalid",
+    "staged-file-unreadable",
+    "staged-file-hash-mismatch",
+    "staged-stage-token-mismatch",
+    "manifest-flag-mismatch",
+    "source-body-stale",
+    "invalid-invocation",
+    "internal-error",
+})
+
+
+def _session(tmp_path, mode="pr", body=None, meta_extra=None, name="session"):
+    d = tmp_path / name
+    d.mkdir()
+    meta = {"mode": mode}
+    if meta_extra:
+        meta.update(meta_extra)
+    (d / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    if body is not None:
+        (d / "pr.json").write_text(json.dumps({"body": body}), encoding="utf-8")
+    return str(d)
+
+
+def _happy_body():
+    return (
+        "## Summary\n"
+        "Ship grounding stage.\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| tests pass | done | `plugins/superheroes/lib/tests/test_grounding_stage.py` |\n"
+        "| defer item | deferred | #609 reason |\n\n"
+        "<!-- superheroes:build-record -->\n"
+        "<details><summary>Build record</summary></details>\n\n"
+        "<!-- superheroes:degradations -->\n"
+        "### Disclosed degradations\n"
+        "- promised full suite, delivered scoped tests only\n"
+        "- promised advisor vet, delivered inline check\n\n"
+        "Seam STUB(#123): unwired grounding dispatch\n"
+    )
+
+
+def _invoke(cmd, session_dir):
+    argv = ["grounding_stage.py", cmd, "--session-dir", session_dir]
+    out = io.StringIO()
+    old = sys.stdout
+    sys.stdout = out
+    try:
+        rc = GS.main(argv)
+    finally:
+        sys.stdout = old
+    lines = [ln for ln in out.getvalue().strip().splitlines() if ln.strip()]
+    body = json.loads(lines[-1]) if lines else {}
+    return rc, body
+
+
+def _manifest(session):
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    with open(manifest_path, encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _manifest_token(session):
+    return _manifest(session)["stageToken"]
+
+
+def _staged_body_text(session):
+    path = os.path.join(session, "grounding", "pr-body.md")
+    with open(path, encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _assert_refusal(rc, body, reason):
+    assert rc == 1
+    assert body == {
+        "ok": False,
+        "signal": "cannot-certify",
+        "reason": reason,
+        "detail": body.get("detail"),
+    }
+
+
+def test_refusal_reason_census():
+    # bite-axis: refusal vocabulary — every registered token must appear in the census set.
+    assert GS.REFUSAL_REASONS == EXPECTED_REFUSAL_REASONS
+
+
+def test_refuse_unregistered_reason_raises():
+    with pytest.raises(ValueError, match="unregistered refusal reason"):
+        GS._refuse("not-a-real-reason")
+
+
+def test_refuse_dict_shape():
+    result = GS._refuse("pr-body-empty", "detail text")
+    assert result == {
+        "ok": False,
+        "signal": "cannot-certify",
+        "reason": "pr-body-empty",
+        "detail": "detail text",
+    }
+
+
+def test_invalid_invocation_bad_subcommand(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    argv = ["grounding_stage.py", "nope", "--session-dir", session]
+    out = io.StringIO()
+    old = sys.stdout
+    sys.stdout = out
+    try:
+        rc = GS.main(argv)
+    finally:
+        sys.stdout = old
+    body = json.loads(out.getvalue().strip().splitlines()[-1])
+    _assert_refusal(rc, body, "invalid-invocation")
+
+
+def test_edge_01_meta_unreadable(tmp_path):
+    rc, body = _invoke("stage", str(tmp_path / "missing"))
+    _assert_refusal(rc, body, "meta-unreadable")
+
+
+def test_edge_02_meta_mode_unknown_missing_mode(tmp_path):
+    d = tmp_path / "session"
+    d.mkdir()
+    (d / "meta.json").write_text("{}", encoding="utf-8")
+    rc, body = _invoke("stage", str(d))
+    _assert_refusal(rc, body, "meta-mode-unknown")
+
+
+def test_edge_03_pr_json_unreadable(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    os.unlink(os.path.join(session, "pr.json"))
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "pr-json-unreadable")
+
+
+def test_edge_04_pr_json_unparseable(tmp_path):
+    d = tmp_path / "session"
+    d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"mode": "pr"}), encoding="utf-8")
+    (d / "pr.json").write_text("{not json", encoding="utf-8")
+    rc, body = _invoke("stage", str(d))
+    _assert_refusal(rc, body, "pr-json-unparseable")
+
+
+def test_edge_05_pr_body_absent(tmp_path):
+    d = tmp_path / "session"
+    d.mkdir()
+    (d / "meta.json").write_text(json.dumps({"mode": "pr"}), encoding="utf-8")
+    (d / "pr.json").write_text(json.dumps({"title": "x"}), encoding="utf-8")
+    rc, body = _invoke("stage", str(d))
+    _assert_refusal(rc, body, "pr-body-absent")
+
+
+def test_edge_06_pr_body_empty(tmp_path):
+    session = _session(tmp_path, body="   \n\t")
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "pr-body-empty")
+
+
+def test_edge_07_stage_unwritable(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+
+    def boom(path, text, tmp_prefix=".grounding-stage-"):
+        raise OSError("permission denied")
+
+    monkeypatch.setattr(GS, "_atomic_write_text", boom)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "stage-unwritable")
+
+
+def test_edge_08_stage_readback_mismatch(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    real_atomic = GS._atomic_write_text
+
+    def drift_write(path, text, tmp_prefix=".grounding-stage-"):
+        if path.endswith("pr-body.md"):
+            real_atomic(path, text + "\n<!-- drift -->\n", tmp_prefix=tmp_prefix)
+        else:
+            real_atomic(path, text, tmp_prefix=tmp_prefix)
+
+    monkeypatch.setattr(GS, "_atomic_write_text", drift_write)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "stage-readback-mismatch")
+
+
+def test_edge_08b_manifest_readback_mismatch(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    real_atomic = GS._atomic_write_text
+
+    def drift_write(path, text, tmp_prefix=".grounding-stage-"):
+        if path.endswith("stage.json"):
+            real_atomic(path, text + "\n<!-- drift -->\n", tmp_prefix=tmp_prefix)
+        else:
+            real_atomic(path, text, tmp_prefix=tmp_prefix)
+
+    monkeypatch.setattr(GS, "_atomic_write_text", drift_write)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "stage-readback-mismatch")
+
+
+def test_edge_07b_manifest_unwritable(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    real_atomic = GS._atomic_write_text
+
+    def boom_manifest(path, text, tmp_prefix=".grounding-stage-"):
+        if path.endswith("stage.json"):
+            raise OSError("permission denied")
+        real_atomic(path, text, tmp_prefix=tmp_prefix)
+
+    monkeypatch.setattr(GS, "_atomic_write_text", boom_manifest)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "stage-unwritable")
+
+
+def test_edge_09_stage_manifest_missing(tmp_path):
+    session = _session(tmp_path, mode="pr")
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "stage-manifest-missing")
+
+
+def test_edge_10_stage_manifest_invalid(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = tmp_path / "session" / "grounding" / "stage.json"
+    manifest.write_text('{"schema":"wrong/0"}', encoding="utf-8")
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "stage-manifest-invalid")
+
+
+def test_manifest_empty_files_rejected(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = tmp_path / "session" / "grounding" / "stage.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["files"] = []
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "stage-manifest-invalid")
+
+
+def test_edge_11_staged_file_unreadable(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    os.chmod(os.path.join(session, "grounding", "pr-body.md"), 0)
+    try:
+        rc, body = _invoke("check", session)
+        _assert_refusal(rc, body, "staged-file-unreadable")
+    finally:
+        os.chmod(os.path.join(session, "grounding", "pr-body.md"), 0o644)
+
+
+def test_edge_12_staged_file_hash_mismatch(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    pr_body = tmp_path / "session" / "grounding" / "pr-body.md"
+    pr_body.write_text(pr_body.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "staged-file-hash-mismatch")
+
+
+def _dod_claims(manifest):
+    return [c for c in manifest["claims"] if c["kind"] == "dod-row"]
+
+
+def _degradation_claims(manifest):
+    return [c for c in manifest["claims"] if c["kind"] == "degradation"]
+
+
+def test_dod_rows_exact_set_and_verifiability(tmp_path):
+    body = (
+        "## Summary\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship the thing | done | tests/test_a.py |\n"
+        "| Defer later | deferred | #609 reason |\n"
+        "| Remove deferred fallback | done | tests/test_x.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 3
+    by_text = {c["text"]: c["verifiability"] for c in dod}
+    assert "DoD|Status|Evidence" not in by_text
+    assert by_text["Ship the thing|done|tests/test_a.py"] == "repo"
+    assert by_text["Defer later|deferred|#609 reason"] == "external"
+    assert by_text["Remove deferred fallback|done|tests/test_x.py"] == "repo"
+    repo_dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
+    repo_texts = {c["text"] for c in repo_dod}
+    assert "Remove deferred fallback|done|tests/test_x.py" in repo_texts
+    assert "Defer later|deferred|#609 reason" in repo_texts
+    assert "Ship the thing|done|tests/test_a.py" in repo_texts
+
+
+def test_dod_table_without_separator_mints_all_rows(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| Ship the thing | done | tests/test_a.py |\n"
+        "| Second thing | done | tests/b.py |"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 2
+    texts = {c["text"] for c in dod}
+    assert texts == {
+        "Ship the thing|done|tests/test_a.py",
+        "Second thing|done|tests/b.py",
+    }
+    assert manifest.get("noSubstantiveClaims") is not True
+    assert body_out.get("noSubstantiveClaims") is not True
+
+
+def test_dod_table_with_separator_excludes_header_only(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship the thing | done | tests/test_a.py |\n"
+        "| Second thing | done | tests/b.py |"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 2
+    texts = {c["text"] for c in dod}
+    assert "DoD|Status|Evidence" not in texts
+    assert texts == {
+        "Ship the thing|done|tests/test_a.py",
+        "Second thing|done|tests/b.py",
+    }
+
+
+def test_degradation_marker_without_heading_bounded_by_first_heading(tmp_path):
+    body = (
+        "<!-- superheroes:degradations -->\n"
+        "- real degradation one\n\n"
+        "### Dispatch provenance\n"
+        "- WO-A by cursor\n\n"
+        "### Follow-ups\n"
+        "- unrelated follow-up\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    deg = _degradation_claims(manifest)
+    assert [c["text"] for c in deg] == ["real degradation one"]
+
+
+def test_degradation_region_bounded_by_headings(tmp_path):
+    body = (
+        "## Summary\n"
+        "<!-- superheroes:degradations -->\n"
+        "### Disclosed degradations\n"
+        "- real degradation one\n\n"
+        "### Dispatch provenance\n"
+        "- WO-A implemented by cursor\n"
+        "- WO-B implemented by cursor\n\n"
+        "### Follow-up\n"
+        "- unrelated follow-up item\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    deg = _degradation_claims(manifest)
+    assert len(deg) == 1
+    assert deg[0]["text"] == "real degradation one"
+    repo_deg = [c for c in body_out["claims"] if c["kind"] == "degradation"]
+    assert len(repo_deg) == 1
+    assert repo_deg[0]["text"] == "real degradation one"
+
+
+def test_dod_table_separator_does_not_drop_final_row(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Only data row | done | tests/final.py |"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Only data row|done|tests/final.py"
+
+
+def test_happy_path_stage(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, body = _invoke("stage", session)
+    assert rc == 0
+    assert body["ok"] is True
+    assert body["applicable"] is True
+    assert "stageToken" not in body
+    manifest = _manifest(session)
+    assert manifest["schema"] == GS.STAGE_SCHEMA
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is True
+    assert regions["build-record"]["present"] is True
+    assert regions["degradations"]["present"] is True
+    assert regions["advisor-vet"]["present"] is False
+    claim_ids_first = [c["claimId"] for c in manifest["claims"]]
+    token_first = manifest["stageToken"]
+    rc2, body2 = _invoke("stage", session)
+    assert rc2 == 0
+    manifest2 = _manifest(session)
+    claim_ids_second = [c["claimId"] for c in manifest2["claims"]]
+    token_second = manifest2["stageToken"]
+    assert claim_ids_first == claim_ids_second
+    assert token_first != token_second
+    kinds = {c["kind"] for c in manifest["claims"]}
+    assert "region-present" in kinds
+    assert "dod-row" in kinds
+    assert "degradation" in kinds
+    assert "stub-marker" in kinds
+    staged = _staged_body_text(session)
+    assert "BEGIN UNTRUSTED PR BODY" in staged
+    assert "END UNTRUSTED PR BODY" in staged
+    assert "Echo this token" not in staged
+
+
+def test_stub_marker_claim_text_emitted_unchanged(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, body = _invoke("stage", session)
+    assert rc == 0 and body["ok"]
+    manifest = _manifest(session)
+    stub_claims = [c for c in manifest["claims"] if c["kind"] == "stub-marker"]
+    assert len(stub_claims) == 1
+    assert stub_claims[0]["text"] == "STUB(#123): unwired grounding dispatch"
+
+
+def test_absent_regions_still_stage(tmp_path):
+    body = "## Summary\nNo markers here.\n"
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    assert body_out.get("noSubstantiveClaims") is not True
+    manifest = _manifest(session)
+    assert manifest.get("noSubstantiveClaims") is not True
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is False
+    assert regions["degradations"]["present"] is False
+    region_claims = [c for c in manifest["claims"] if c["kind"] == "region-present"]
+    names = {c["text"] for c in region_claims}
+    assert any("dod-table" in t and "present=False" in t for t in names)
+    assert any("degradations" in t and "present=False" in t for t in names)
+    assert all(c["verifiability"] == "stager" for c in region_claims)
+
+
+def test_branch_mode_writes_nothing(tmp_path):
+    session = _session(tmp_path, mode="branch", body=_happy_body())
+    rc, body = _invoke("stage", session)
+    assert rc == 0
+    assert body == {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
+    assert not os.path.isdir(os.path.join(session, "grounding"))
+
+
+def test_check_branch_mode_applicable_false(tmp_path):
+    session = _session(tmp_path, mode="branch", body=_happy_body())
+    rc, body = _invoke("check", session)
+    assert rc == 0
+    assert body == {"ok": True, "applicable": False, "reason": "branch-mode-has-no-pr-body"}
+
+
+def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
+    # bite-axis: refusal reachability — every registered token must be observable in a live refusal.
+    cases = {}
+
+    def case_meta_unreadable():
+        return _invoke("stage", str(tmp_path / "case-meta-unreadable-missing"))
+
+    cases["meta-unreadable"] = case_meta_unreadable
+
+    def case_meta_mode_unknown():
+        d = tmp_path / "case-meta-mode-unknown"
+        d.mkdir()
+        (d / "meta.json").write_text("{}", encoding="utf-8")
+        return _invoke("stage", str(d))
+
+    cases["meta-mode-unknown"] = case_meta_mode_unknown
+
+    def case_pr_json_unreadable():
+        session = _session(tmp_path, body=_happy_body(), name="case-pr-json-unreadable")
+        os.unlink(os.path.join(session, "pr.json"))
+        return _invoke("stage", session)
+
+    cases["pr-json-unreadable"] = case_pr_json_unreadable
+
+    def case_pr_json_unparseable():
+        d = tmp_path / "case-pr-json-unparseable"
+        d.mkdir()
+        (d / "meta.json").write_text(json.dumps({"mode": "pr"}), encoding="utf-8")
+        (d / "pr.json").write_text("{not json", encoding="utf-8")
+        return _invoke("stage", str(d))
+
+    cases["pr-json-unparseable"] = case_pr_json_unparseable
+
+    def case_pr_body_absent():
+        d = tmp_path / "case-pr-body-absent"
+        d.mkdir()
+        (d / "meta.json").write_text(json.dumps({"mode": "pr"}), encoding="utf-8")
+        (d / "pr.json").write_text(json.dumps({"title": "x"}), encoding="utf-8")
+        return _invoke("stage", str(d))
+
+    cases["pr-body-absent"] = case_pr_body_absent
+
+    def case_pr_body_empty():
+        session = _session(tmp_path, body="   \n\t", name="case-pr-body-empty")
+        return _invoke("stage", session)
+
+    cases["pr-body-empty"] = case_pr_body_empty
+
+    def case_pr_body_too_large():
+        pad = "x" * (GS.PR_BODY_MAX_BYTES + 1)
+        session = _session(tmp_path, body=pad, name="case-pr-body-too-large")
+        return _invoke("stage", session)
+
+    cases["pr-body-too-large"] = case_pr_body_too_large
+
+    def case_pr_body_claim_count_exceeded():
+        over = GS.CLAIM_COUNT_MAX - 4 + 1
+        session = _session(
+            tmp_path, body=_dod_table_body(over), name="case-pr-body-claim-count-exceeded",
+        )
+        return _invoke("stage", session)
+
+    cases["pr-body-claim-count-exceeded"] = case_pr_body_claim_count_exceeded
+
+    def case_session_dir_not_absolute():
+        session = _session(tmp_path, body=_happy_body(), name="case-session-dir-not-absolute")
+        rel = os.path.relpath(session)
+        return _invoke("stage", rel)
+
+    cases["session-dir-not-absolute"] = case_session_dir_not_absolute
+
+    def case_stage_unwritable():
+        session = _session(tmp_path, body=_happy_body(), name="case-stage-unwritable")
+
+        def boom(path, text, tmp_prefix=".grounding-stage-"):
+            raise OSError("permission denied")
+
+        with patch.object(GS, "_atomic_write_text", boom):
+            return _invoke("stage", session)
+
+    cases["stage-unwritable"] = case_stage_unwritable
+
+    def case_stage_readback_mismatch():
+        session = _session(tmp_path, body=_happy_body(), name="case-stage-readback-mismatch")
+        real_atomic = GS._atomic_write_text
+
+        def drift_write(path, text, tmp_prefix=".grounding-stage-"):
+            if path.endswith("pr-body.md"):
+                real_atomic(path, text + "\n<!-- drift -->\n", tmp_prefix=tmp_prefix)
+            else:
+                real_atomic(path, text, tmp_prefix=tmp_prefix)
+
+        with patch.object(GS, "_atomic_write_text", drift_write):
+            return _invoke("stage", session)
+
+    cases["stage-readback-mismatch"] = case_stage_readback_mismatch
+
+    def case_stage_manifest_missing():
+        session = _session(tmp_path, mode="pr", name="case-stage-manifest-missing")
+        return _invoke("check", session)
+
+    cases["stage-manifest-missing"] = case_stage_manifest_missing
+
+    def case_stage_manifest_invalid():
+        session = _session(tmp_path, body=_happy_body(), name="case-stage-manifest-invalid")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        manifest = tmp_path / "case-stage-manifest-invalid" / "grounding" / "stage.json"
+        manifest.write_text('{"schema":"wrong/0"}', encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["stage-manifest-invalid"] = case_stage_manifest_invalid
+
+    def case_staged_file_unreadable():
+        session = _session(tmp_path, body=_happy_body(), name="case-staged-file-unreadable")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        pr_body = os.path.join(session, "grounding", "pr-body.md")
+        os.chmod(pr_body, 0)
+        try:
+            return _invoke("check", session)
+        finally:
+            os.chmod(pr_body, 0o644)
+
+    cases["staged-file-unreadable"] = case_staged_file_unreadable
+
+    def case_staged_file_hash_mismatch():
+        session = _session(tmp_path, body=_happy_body(), name="case-staged-file-hash-mismatch")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        pr_body = tmp_path / "case-staged-file-hash-mismatch" / "grounding" / "pr-body.md"
+        pr_body.write_text(pr_body.read_text(encoding="utf-8") + "\n", encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["staged-file-hash-mismatch"] = case_staged_file_hash_mismatch
+
+    def case_staged_stage_token_mismatch():
+        session = _session(tmp_path, body=_happy_body(), name="case-staged-stage-token-mismatch")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        manifest_path = tmp_path / "case-staged-stage-token-mismatch" / "grounding" / "stage.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["stageToken"] = "9999-9999-9999-9999"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["staged-stage-token-mismatch"] = case_staged_stage_token_mismatch
+
+    def case_manifest_flag_mismatch():
+        session = _session(tmp_path, body=_happy_body(), name="case-manifest-flag-mismatch")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        manifest_path = tmp_path / "case-manifest-flag-mismatch" / "grounding" / "stage.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["noSubstantiveClaims"] = True
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["manifest-flag-mismatch"] = case_manifest_flag_mismatch
+
+    def case_source_body_stale():
+        session = _session(tmp_path, body=_happy_body(), name="case-source-body-stale")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        pr_path = tmp_path / "case-source-body-stale" / "pr.json"
+        pr_data = json.loads(pr_path.read_text(encoding="utf-8"))
+        pr_data["body"] = pr_data["body"] + "\nEdited after staging."
+        pr_path.write_text(json.dumps(pr_data), encoding="utf-8")
+        return _invoke("check", session)
+
+    cases["source-body-stale"] = case_source_body_stale
+
+    def case_invalid_invocation():
+        session = _session(tmp_path, body=_happy_body(), name="case-invalid-invocation")
+        argv = ["grounding_stage.py", "nope", "--session-dir", session]
+        out = io.StringIO()
+        old = sys.stdout
+        sys.stdout = out
+        try:
+            rc = GS.main(argv)
+        finally:
+            sys.stdout = old
+        lines = [ln for ln in out.getvalue().strip().splitlines() if ln.strip()]
+        body = json.loads(lines[-1]) if lines else {}
+        return rc, body
+
+    cases["invalid-invocation"] = case_invalid_invocation
+
+    def case_internal_error():
+        session = _session(tmp_path, body=_happy_body(), name="case-internal-error")
+
+        def boom(*_args, **_kwargs):
+            raise RuntimeError("probe")
+
+        with patch.object(GS, "_detect_regions", boom):
+            return _invoke("stage", session)
+
+    cases["internal-error"] = case_internal_error
+
+    missing_cases = GS.REFUSAL_REASONS - set(cases)
+    extra_cases = set(cases) - GS.REFUSAL_REASONS
+    assert not missing_cases, "registered tokens with no case: %s" % sorted(missing_cases)
+    assert not extra_cases, "cases for unregistered tokens: %s" % sorted(extra_cases)
+
+    for token, run_case in cases.items():
+        rc, body = run_case()
+        assert rc == 1, "token %r: expected exit 1, got %r" % (token, rc)
+        assert body.get("ok") is False, "token %r: ok not false" % token
+        assert body.get("signal") == "cannot-certify", "token %r: signal mismatch" % token
+        assert body.get("reason") == token, "token %r: reason was %r" % (token, body.get("reason"))
+
+
+def _stage_then_mutate_manifest(tmp_path, mutate):
+    session = _session(tmp_path, body=_happy_body(), name="mutate-session")
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    mutate(manifest)
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    return session
+
+
+def _manifest_shape_mutations():
+    """Every manifest field / nested member shape that must refuse check."""
+    cases = []
+
+    def add(case_id, mutate, reason="stage-manifest-invalid"):
+        cases.append(pytest.param(case_id, mutate, reason, id=case_id))
+
+    add("schema-wrong", lambda m: m.update({"schema": "wrong/0"}))
+    add("schema-missing", lambda m: m.pop("schema", None))
+    add("stageToken-missing", lambda m: m.pop("stageToken", None))
+    add("stageToken-empty", lambda m: m.update({"stageToken": "   "}))
+    add("stageToken-non-string", lambda m: m.update({"stageToken": 123}))
+    add("files-empty", lambda m: m.update({"files": []}))
+    add("files-two-entries", lambda m: m.update({"files": m["files"] * 2}))
+    add("files-non-list", lambda m: m.update({"files": {}}))
+    add("files-entry-non-object", lambda m: m.update({"files": ["x"]}))
+    add("files-name-wrong", lambda m: m["files"][0].update({"name": "other.md"}))
+    add("files-sha256-missing", lambda m: m["files"][0].pop("sha256", None))
+    add("files-sha256-empty", lambda m: m["files"][0].update({"sha256": ""}))
+    add("files-bytes-non-int", lambda m: m["files"][0].update({"bytes": "1"}))
+    add("files-bytes-bool", lambda m: m["files"][0].update({"bytes": True}))
+    add("files-path-missing", lambda m: m["files"][0].pop("path", None))
+    add("files-path-outside-grounding", lambda m: m["files"][0].update(
+        {"path": "/tmp/outside-pr-body.md"}))
+    add("regions-non-list", lambda m: m.update({"regions": {}}))
+    add("regions-count-wrong", lambda m: m.update({"regions": m["regions"][:2]}))
+    add("regions-extra", lambda m: m.update({
+        "regions": m["regions"] + [{"name": "extra", "present": False, "lines": None}],
+    }))
+    add("region-name-unknown", lambda m: m["regions"][0].update({"name": "not-a-region"}))
+    add("region-name-missing", lambda m: m["regions"][0].pop("name", None))
+    add("region-present-non-bool", lambda m: m["regions"][0].update({"present": "yes"}))
+    add("region-present-missing", lambda m: m["regions"][0].pop("present", None))
+    add("region-member-non-object", lambda m: m.update({"regions": ["x"] + m["regions"][1:]}))
+    add("claims-empty", lambda m: m.update({"claims": []}))
+    add("claims-non-list", lambda m: m.update({"claims": {}}))
+    add("claim-non-object", lambda m: m.update({"claims": [{"verifiability": "repo"}]}))
+    add("claim-missing-claimId", lambda m: m["claims"].append({"kind": "dod-row", "text": "x", "verifiability": "repo"}))
+    add("claim-empty-claimId", lambda m: m["claims"].append(
+        {"claimId": "  ", "kind": "dod-row", "text": "x", "verifiability": "repo"}))
+    add("claim-missing-kind", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "text": "x", "verifiability": "repo"}))
+    add("claim-unknown-kind", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "bogus", "text": "x", "verifiability": "repo"}))
+    add("claim-missing-text", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "verifiability": "repo"}))
+    add("claim-text-non-string", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "text": 1, "verifiability": "repo"}))
+    add("claim-missing-verifiability", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "text": "x"}))
+    add("claim-unknown-verifiability", lambda m: m["claims"].append(
+        {"claimId": "x-abc", "kind": "dod-row", "text": "x", "verifiability": "bogus"}))
+    add("sourceBodySha256-missing", lambda m: m.pop("sourceBodySha256", None))
+    add("sourceBodySha256-empty", lambda m: m.update({"sourceBodySha256": ""}))
+
+    def defect_b1_minimal_claim():
+        m = {"claims": [{"verifiability": "repo"}]}
+        return m
+
+    add("defect-B1-minimal-claim", lambda m: m.update(defect_b1_minimal_claim()))
+
+    def defect_b2_stage_token_mismatch(session):
+        manifest_path = os.path.join(session, "grounding", "stage.json")
+        manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+        manifest["stageToken"] = "9999-9999-9999-9999"
+        open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+
+    def defect_b4_flag_mismatch(session):
+        manifest_path = os.path.join(session, "grounding", "stage.json")
+        manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+        manifest["noSubstantiveClaims"] = True
+        open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+
+    cases.append(pytest.param(
+        "defect-B2-stage-token-mismatch",
+        None,
+        "staged-stage-token-mismatch",
+        id="defect-B2-stage-token-mismatch",
+        marks=pytest.mark.special_b2,
+    ))
+    cases.append(pytest.param(
+        "defect-B4-flag-mismatch",
+        None,
+        "manifest-flag-mismatch",
+        id="defect-B4-flag-mismatch",
+        marks=pytest.mark.special_b4,
+    ))
+    return cases, defect_b2_stage_token_mismatch, defect_b4_flag_mismatch
+
+
+_MANIFEST_MUTATIONS, _DEFECT_B2, _DEFECT_B4 = _manifest_shape_mutations()
+
+
+@pytest.mark.parametrize("case_id,mutate,reason", _MANIFEST_MUTATIONS)
+def test_manifest_shape_mutations_refuse(tmp_path, case_id, mutate, reason, request):
+    if request.node.get_closest_marker("special_b2"):
+        session = _session(tmp_path, body=_happy_body(), name="b2-session")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        _DEFECT_B2(session)
+    elif request.node.get_closest_marker("special_b4"):
+        session = _session(tmp_path, body=_happy_body(), name="b4-session")
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        _DEFECT_B4(session)
+    else:
+        session = _stage_then_mutate_manifest(tmp_path, mutate)
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, reason)
+
+
+def test_malformed_claim_member_refuses_not_filtered(tmp_path):
+    session = _stage_then_mutate_manifest(
+        tmp_path,
+        lambda m: m.update({"claims": m["claims"] + [{"verifiability": "repo"}]}),
+    )
+    rc, body = _invoke("check", session)
+    _assert_refusal(rc, body, "stage-manifest-invalid")
+    assert body.get("claims") is None
+
+
+def test_stage_check_round_trip_full_envelope(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, stage_body = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0
+    assert check_body["ok"] is True
+    assert check_body["applicable"] is True
+    assert check_body["claims"] == manifest["claims"]
+    assert check_body["files"] == manifest["files"]
+    assert check_body.get("noSubstantiveClaims") is not True
+    assert len(manifest["claims"]) >= 1
+
+
+def test_stage_check_round_trip_no_substantive_claims(tmp_path):
+    body = (
+        "## Summary\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n\n"
+        "<!-- superheroes:build-record -->\n"
+        "<details><summary>Build record</summary></details>\n\n"
+        "<!-- superheroes:degradations -->\n"
+        "### Disclosed degradations\n\n"
+        "<!-- superheroes:advisor-vet -->\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, stage_body = _invoke("stage", session)
+    assert rc == 0
+    assert stage_body.get("noSubstantiveClaims") is True
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0
+    assert check_body.get("noSubstantiveClaims") is True
+    assert not any(
+        c.get("kind") in ("dod-row", "degradation", "stub-marker")
+        for c in check_body["claims"]
+    )
+
+
+def _dod_table_body(row_count):
+    header = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+    )
+    rows = "\n".join(
+        "| row %d | done | tests/test_%d.py |" % (i, i) for i in range(row_count)
+    )
+    return header + rows + "\n"
+
+
+def test_c1_claim_count_exceeded_refuses(tmp_path):
+    over = GS.CLAIM_COUNT_MAX - 4 + 1
+    session = _session(tmp_path, body=_dod_table_body(over))
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "pr-body-claim-count-exceeded")
+
+
+def test_c1_claim_count_at_limit_accepted(tmp_path):
+    rows = GS.CLAIM_COUNT_MAX - 4
+    session = _session(tmp_path, body=_dod_table_body(rows))
+    rc, body = _invoke("stage", session)
+    assert rc == 0 and body["ok"]
+    manifest = _manifest(session)
+    assert len(manifest["claims"]) == GS.CLAIM_COUNT_MAX
+
+
+def test_c1_body_exactly_max_bytes_accepted(tmp_path):
+    marker = "<!-- superheroes:dod-table -->\n"
+    pad_len = GS.PR_BODY_MAX_BYTES - len(marker.encode("utf-8"))
+    body = marker + ("x" * pad_len)
+    assert len(body.encode("utf-8")) == GS.PR_BODY_MAX_BYTES
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+
+
+def test_c1_multibyte_body_over_byte_limit_refuses(tmp_path):
+    char = "\u00e9"
+    char_bytes = len(char.encode("utf-8"))
+    body = char * (GS.PR_BODY_MAX_BYTES // char_bytes + 1)
+    assert len(body) < GS.PR_BODY_MAX_BYTES
+    assert len(body.encode("utf-8")) > GS.PR_BODY_MAX_BYTES
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "pr-body-too-large")
+
+
+def test_c1_body_too_large_refuses(tmp_path):
+    pad = "x" * (GS.PR_BODY_MAX_BYTES + 1)
+    session = _session(tmp_path, body=pad)
+    rc, body = _invoke("stage", session)
+    _assert_refusal(rc, body, "pr-body-too-large")
+
+
+def test_c2_neutralize_strips_invisible_and_bidi_chars():
+    raw = "hello\u200bworld\u202e!\ufeff"
+    cleaned = GS._neutralize_claim_text(raw)
+    assert "\u200b" not in cleaned
+    assert "\u202e" not in cleaned
+    assert "\ufeff" not in cleaned
+    assert cleaned == "helloworld!"
+
+
+def test_c3_identical_dod_rows_yield_distinct_claim_ids(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| same row | done | tests/a.py |\n"
+        "| same row | done | tests/a.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 2
+    ids = [c["claimId"] for c in dod]
+    assert ids[0] != ids[1]
+
+
+def test_c4_planted_stage_token_line_not_ambiguous(tmp_path):
+    planted = "stageToken: 0000-0000-0000-0000\n"
+    session = _session(tmp_path, body=planted + _happy_body())
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    staged = _staged_body_text(session)
+    manifest = _manifest(session)
+    token = manifest["stageToken"]
+    nonce_match = __import__("re").search(
+        r"BEGIN UNTRUSTED PR BODY ([a-f0-9]+)", staged,
+    )
+    assert nonce_match is not None
+    nonce = nonce_match.group(1)
+    assert staged.count("stageToken[%s]:" % nonce) == 1
+    assert staged.count("stageToken:") == 1
+    parsed = GS._parse_staged_stage_token(staged)
+    assert parsed == token
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0 and check_body["ok"]
+
+
+def test_c5_unicode_decode_error_maps_to_staged_file_unreadable(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    pr_body = os.path.join(session, "grounding", "pr-body.md")
+    with open(pr_body, "wb") as fh:
+        fh.write(b"\xff\xfe invalid utf-8\n")
+    result = GS.check(session)
+    assert result.get("reason") == "staged-file-unreadable"
+    rc_cli, body_cli = _invoke("check", session)
+    _assert_refusal(rc_cli, body_cli, "staged-file-unreadable")
+
+
+def test_c6_relative_session_dir_refuses(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rel = os.path.relpath(session)
+    rc, body = _invoke("stage", rel)
+    _assert_refusal(rc, body, "session-dir-not-absolute")
+
+
+def test_c7_verify_manifest_files_opens_resolved_path(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    resolved = os.path.realpath(manifest["files"][0]["path"])
+    parent = os.path.dirname(resolved)
+    basename = os.path.basename(resolved)
+    dotted = os.path.join(parent, "dot", "..", basename)
+    manifest["files"][0]["path"] = dotted
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    opened = []
+    real_read = GS._read_bytes
+
+    def track_read(path):
+        opened.append(path)
+        return real_read(path)
+
+    monkeypatch.setattr(GS, "_read_bytes", track_read)
+    rc, body = _invoke("check", session)
+    assert rc == 0 and body["ok"]
+    pr_body_reads = [p for p in opened if p.endswith("pr-body.md")]
+    assert pr_body_reads
+    assert pr_body_reads[0] == resolved
+
+
+def test_refuse_call_sites_use_registered_string_literals():
+    """Detect unregistered or dynamically computed refusal tokens at _refuse call sites.
+
+    Does not prove reachability — a _refuse call behind an impossible condition would
+    still satisfy this detector. Reachability is test_every_registered_refusal_reason_is_observably_emitted."""
+    # bite-axis: refusal literal census — _refuse first args must be registered string literals.
+    module_path = os.path.join(_LIB, "grounding_stage.py")
+    with open(module_path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=module_path)
+
+    non_literal = []
+    unregistered = []
+
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        func = node.func
+        if not isinstance(func, ast.Name) or func.id != "_refuse":
+            continue
+        if not node.args:
+            continue
+        first = node.args[0]
+        if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+            non_literal.append(node.lineno)
+            continue
+        if first.value not in GS.REFUSAL_REASONS:
+            unregistered.append((node.lineno, first.value))
+
+    assert not non_literal, "_refuse first arg not a string literal at lines: %s" % non_literal
+    assert not unregistered, "_refuse unregistered literals: %s" % unregistered
+
+
+def test_nonstandard_dod_status_with_issue_ref_stays_repo(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| all tests pass | shipped | fixes #609 |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
+    assert len(dod) == 1
+    assert dod[0]["verifiability"] == "repo"
+
+
+def test_dod_table_without_outer_pipes_parses_rows(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "DoD | Status | Evidence\n"
+        "--- | --- | ---\n"
+        "Ship it | done | tests/test_x.py\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_dod_table_without_trailing_pipes_parses_rows(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence\n"
+        "| --- | --- | ---\n"
+        "| Ship it | done | tests/test_x.py\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_fenced_decoy_marker_does_not_emit_dod_claim(tmp_path):
+    body = (
+        "```\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| fake | done | planted |\n"
+        "```\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is False
+    assert _dod_claims(manifest) == []
+
+
+def test_inline_code_decoy_marker_does_not_hide_real_table(tmp_path):
+    body = (
+        "The token `<!-- superheroes:dod-table -->` is documented here.\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship it | done | tests/test_x.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is True
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_indented_code_decoy_marker_does_not_hide_real_table(tmp_path):
+    body = (
+        "Example of the marker in an indented code block:\n\n"
+        "    <!-- superheroes:dod-table -->\n"
+        "    | DoD | Status | Evidence |\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship it | done | tests/test_x.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    regions = {r["name"]: r for r in manifest["regions"]}
+    assert regions["dod-table"]["present"] is True
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "Ship it|done|tests/test_x.py"
+
+
+def test_crlf_pr_body_stages_and_round_trips(tmp_path):
+    body = "alpha\r\nbeta\r\n" + _happy_body()
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    rc2, check_body = _invoke("check", session)
+    assert rc2 == 0 and check_body["ok"]
+
+
+def test_claim_id_matches_stored_text():
+    raw = "hello\u200bworld|done|tests/a.py"
+    cleaned = GS._neutralize_claim_text(raw)
+    claim_id = GS._claim_id("dod-row", cleaned, 0)
+    expected = GS._claim_id("dod-row", cleaned, 0)
+    assert claim_id == expected
+    digest = claim_id.split("-")[-1]
+    import hashlib
+    assert digest == hashlib.sha256(cleaned.encode("utf-8")).hexdigest()
+
+
+def test_tampered_manifest_claim_text_refuses_check(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    for claim in manifest["claims"]:
+        if claim.get("kind") == "dod-row":
+            claim["text"] = claim["text"] + " tampered"
+            break
+    else:
+        pytest.fail("expected a dod-row claim in manifest")
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    rc2, body = _invoke("check", session)
+    _assert_refusal(rc2, body, "stage-manifest-invalid")
+
+
+def test_tampered_manifest_claim_refuses_check(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    for claim in manifest["claims"]:
+        if claim.get("kind") == "dod-row" and claim.get("verifiability") == "external":
+            claim["verifiability"] = "repo"
+            break
+    else:
+        pytest.fail("expected a deferred dod-row claim in manifest")
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+    rc2, body = _invoke("check", session)
+    _assert_refusal(rc2, body, "stage-manifest-invalid")

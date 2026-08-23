@@ -37,6 +37,9 @@ REASON_DIFF_BASE_UNVERIFIABLE = "round-diff-base-unverifiable"
 REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
+# Closed session modes — authoritative set for check_base and grounding_stage.
+SESSION_MODES = frozenset({"pr", "branch"})
+
 _PIN_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
 _PIN_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -524,7 +527,7 @@ def check_base(session_dir, repo_root, prior_pin=None, run=None):
     mode = meta.get("mode")
     # Fail closed: defaulting unrecognized mode to branch mode made the fork check inert when
     # mode was unset; the guard cannot know whether fork comparison applies without a known mode.
-    if mode not in ("pr", "branch"):
+    if mode not in SESSION_MODES:
         return {
             "ok": False,
             "reason": REASON_MODE_UNRECOGNIZED,
