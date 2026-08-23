@@ -2227,13 +2227,47 @@ def test_review_diff_census_ignores_replace_refs(tmp_path):
     assert "decoy.txt" not in entries
 
 
-def test_git_env_leaves_lazy_fetch_enabled(monkeypatch):
+def test_git_env_disables_lazy_fetch(monkeypatch):
+    """#797: construction never waits on git's on-demand object fetching."""
     monkeypatch.setenv("GIT_REPLACE_REF_BASE", "/tmp/fake-replace")
     env = sv._git_env()
-    assert "GIT_NO_LAZY_FETCH" not in env
+    assert env["GIT_NO_LAZY_FETCH"] == "1"
     assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
     assert env["LC_ALL"] == "C"
     assert "GIT_REPLACE_REF_BASE" not in env
+
+
+def test_git_env_no_lazy_fetch_survives_a_hostile_inherited_value(monkeypatch):
+    """An inherited ``GIT_NO_LAZY_FETCH=0`` cannot re-enable the fetch."""
+    monkeypatch.setenv("GIT_NO_LAZY_FETCH", "0")
+    assert sv._git_env()["GIT_NO_LAZY_FETCH"] == "1"
+    assert sv._ancestry_env()["GIT_NO_LAZY_FETCH"] == "1"
+
+
+@pytest.mark.parametrize("wrapper", ["_git_run", "_git_popen", "_ancestry_run"])
+def test_every_git_spawn_wrapper_passes_no_lazy_fetch(monkeypatch, wrapper):
+    """Leg 1's census: the three wrappers are the only spawn sites (pinned by
+    ``test_subprocess_census_all_git_calls_use_wrappers``), so proving each one
+    passes the variable proves every git subprocess construction spawns carries it."""
+    seen = {}
+
+    class _Fake:
+        returncode = 0
+        stdout = b""
+        stderr = b""
+
+    def record(*args, **kwargs):
+        seen["env"] = kwargs.get("env")
+        return _Fake()
+
+    monkeypatch.setattr(sv.subprocess, "run", record)
+    monkeypatch.setattr(sv.subprocess, "Popen", record)
+    if wrapper == "_ancestry_run":
+        sv._ancestry_run(["git", "--version"], time.monotonic())
+    else:
+        getattr(sv, wrapper)(["git", "--version"])
+    assert seen["env"] is not None
+    assert seen["env"]["GIT_NO_LAZY_FETCH"] == "1"
 
 
 def test_review_diff_at_at_in_path_still_refuses_opaque(tmp_path, monkeypatch):
@@ -4304,10 +4338,12 @@ def test_review_diff_ancestry_env_drops_every_git_variable(monkeypatch):
     git_keys = {k for k in env if k.startswith("GIT_")}
     assert git_keys == {
         "GIT_NO_REPLACE_OBJECTS",
+        "GIT_NO_LAZY_FETCH",
         "GIT_CONFIG_GLOBAL",
         "GIT_CONFIG_SYSTEM",
     }
     assert env["GIT_NO_REPLACE_OBJECTS"] == "1"
+    assert env["GIT_NO_LAZY_FETCH"] == "1"
     assert env["GIT_CONFIG_GLOBAL"] == os.devnull
     assert env["GIT_CONFIG_SYSTEM"] == os.devnull
     assert env["LC_ALL"] == "C"
@@ -4921,3 +4957,303 @@ def test_build_sanitized_view_refuses_unpinned_base_before_head_resolution(
         sv.build_sanitized_view(repo, diff_base=bad_base)
     assert exc.value.detail == "sanitized-view-diff-base-unresolved"
     assert spawned == []
+
+
+# --- #797: partial clones are not a supported checkout shape ------------------
+
+
+def _partial_clone_fixture(tmp_path, name, *, checkout=False):
+    """A filtered clone and its live local origin.
+
+    ``checkout=False`` (``--no-checkout``) leaves every blob absent. ``checkout=True``
+    is the shape real users have: the checkout hydrates HEAD's blobs, while historical
+    and base-side blobs stay absent — the case that made refusing on a *failed object
+    read* insufficient. The origin is a ``file://`` path on the same disk, so the bite
+    direction resolves instantly and locally; no fixture here ever probes a live
+    stalled remote.
+    """
+    origin = _init_repo(
+        tmp_path / ("%s-origin" % name),
+        files={"README.md": "hello\n", "src/app.py": "print('hi')\n"},
+    )
+    _git(origin, "config", "uploadpack.allowFilter", "true")
+    clone = str(tmp_path / name)
+    argv = ["git", "clone", "-q", "--filter=blob:none"]
+    if not checkout:
+        argv.append("--no-checkout")
+    argv += ["--no-local", "file://%s" % origin, clone]
+    subprocess.run(argv, capture_output=True, check=True)
+    return clone, origin
+
+
+def test_partial_clone_fixture_really_is_missing_objects(tmp_path):
+    """Guards the fixture itself: a clone that silently hydrated proves nothing."""
+    clone, _origin = _partial_clone_fixture(tmp_path, "fixture-check")
+    assert sv._is_partial_clone(clone) is True
+    blob = _git(clone, "ls-tree", "-r", "HEAD").stdout.split()[2]
+    probe = subprocess.run(
+        ["git", "-C", clone, "cat-file", "--batch-check"],
+        input=("%s\n" % blob).encode("ascii"),
+        capture_output=True,
+        env={**os.environ, "GIT_NO_LAZY_FETCH": "1"},
+    )
+    assert probe.stdout.split() == [blob.encode("ascii"), b"missing"]
+
+
+@pytest.mark.parametrize("checkout", [False, True])
+def test_partial_clone_construction_refuses_with_the_named_shape(tmp_path, checkout):
+    """Both filtered shapes refuse — including the checked-out one whose HEAD is hydrated.
+
+    The checked-out case is the reason this refuses on the shape and not on a failed
+    object read: there, materialization would have *succeeded*.
+    """
+    clone, _origin = _partial_clone_fixture(
+        tmp_path, "refuses-%s" % checkout, checkout=checkout
+    )
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(clone)
+    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
+    assert exc.value.detail == "sanitized-view-partial-clone"
+    # Cleanup: the autouse fixture asserts no view directory survives the refusal.
+
+
+def test_partial_clone_refused_before_any_object_is_read(tmp_path, monkeypatch):
+    """'Fail fast' means no object is touched at all — not touched and then abandoned."""
+    clone, _origin = _partial_clone_fixture(tmp_path, "before-any-read", checkout=True)
+    reached = []
+
+    def must_not_run(*args, **kwargs):
+        reached.append(args)
+        raise AssertionError("construction touched objects after the shape refusal")
+
+    monkeypatch.setattr(sv, "_git_rev_parse_head", must_not_run)
+    monkeypatch.setattr(sv, "_materialize_from_tree", must_not_run)
+    monkeypatch.setattr(sv, "_CatFileBatch", must_not_run)
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(clone)
+    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
+    assert reached == []
+
+
+def test_partial_clone_with_a_diff_base_refuses_the_same_way(tmp_path):
+    """The review path — the one that actually passes a diff base — refuses too."""
+    clone, _origin = _partial_clone_fixture(tmp_path, "diff-base", checkout=True)
+    base = _git(clone, "rev-parse", "HEAD").stdout.strip()
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(clone, diff_base=base)
+    assert exc.value.detail == sv.SANITIZED_VIEW_PARTIAL_CLONE
+
+
+def test_no_lazy_fetch_is_what_stops_git_reaching_the_promisor_remote(tmp_path):
+    """The bite direction for the env var, asserted at the git level, never on a stall.
+
+    The up-front shape refusal means construction never reaches git here, so this pins
+    the second mechanism where it is observable: the identical absent blob in the
+    identical clone is reported ``missing`` under the variable and is silently fetched
+    without it. The origin is local, so the 'fetches' branch completes immediately —
+    on a stalled remote it is the hang PR #761 recorded, which is why the assertion is
+    on the reply and never on a live stalled remote.
+    """
+    clone, _origin = _partial_clone_fixture(tmp_path, "env-var-bite")
+    blob = _git(clone, "ls-tree", "-r", "HEAD").stdout.split()[2]
+
+    def batch_check(env_extra):
+        return subprocess.run(
+            ["git", "-C", clone, "cat-file", "--batch-check"],
+            input=("%s\n" % blob).encode("ascii"),
+            capture_output=True,
+            env={**os.environ, **env_extra},
+        ).stdout.split()
+
+    guarded = batch_check({"GIT_NO_LAZY_FETCH": "1"})
+    assert guarded == [blob.encode("ascii"), b"missing"]
+
+    unguarded = batch_check({"GIT_NO_LAZY_FETCH": "0"})
+    assert unguarded[:2] == [blob.encode("ascii"), b"blob"], (
+        "without the variable git fetched the object from the promisor remote"
+    )
+
+
+def test_ordinary_clone_is_not_refused(tmp_path):
+    """No promisor remote, no refusal — the shape check must not catch normal repos."""
+    repo = _init_repo(tmp_path / "ordinary", files={"a.txt": "a\n"})
+    assert sv._is_partial_clone(repo) is False
+    view = None
+    try:
+        view = _build(repo)
+        assert os.path.isfile(os.path.join(view["path"], "a.txt"))
+    finally:
+        if view is not None:
+            sv.destroy_sanitized_view(view["path"])
+
+
+def test_ordinary_clone_failure_keeps_its_own_detail(tmp_path):
+    """An unrelated fault in a normal repository is never renamed after a checkout shape."""
+    repo = _init_repo(tmp_path / "ordinary-failure", files={"a.txt": "a\n"})
+    with pytest.raises(sv.SanitizedViewError) as exc:
+        _build(repo, diff_base="0" * 40)
+    assert exc.value.detail == "sanitized-view-diff-base-unresolved"
+
+
+def test_partial_clone_marker_in_global_config_does_not_condemn_a_normal_repo(tmp_path):
+    """``git config --list`` merges global scope; the probe must read the repo's own.
+
+    A stray ``extensions.partialclone`` in a user's ~/.gitconfig would otherwise refuse
+    every repository on that machine.
+    """
+    repo = _init_repo(tmp_path / "global-marker", files={"a.txt": "a\n"})
+    fake_global = str(tmp_path / "fake-global-gitconfig")
+    with open(fake_global, "w", encoding="utf-8") as fh:
+        fh.write("[extensions]\n\tpartialclone = origin\n")
+        fh.write('[remote "origin"]\n\tpromisor = true\n')
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": fake_global}
+    merged = subprocess.run(
+        ["git", "-C", repo, "config", "--list"], capture_output=True, text=True, env=env
+    ).stdout
+    assert "extensions.partialclone" in merged, "fixture must actually leak into --list"
+
+    real_run = sv._git_run
+
+    def run_with_fake_global(*args, **kwargs):
+        kwargs["env"] = {**sv._git_env(), "GIT_CONFIG_GLOBAL": fake_global}
+        return subprocess.run(*args, **kwargs)
+
+    sv._git_run = run_with_fake_global
+    try:
+        assert sv._is_partial_clone(repo) is False
+    finally:
+        sv._git_run = real_run
+
+
+def test_is_partial_clone_reads_the_filter_key_on_its_own(tmp_path):
+    """``remote.<name>.partialclonefilter`` registers a promisor remote by itself.
+
+    Measured on git 2.50.1: a clone carrying the filter key with NO promisor key still
+    lazy-fetched a missing blob, so treating the promisor key as the only marker left a
+    genuinely filtered checkout undetected.
+    """
+    clone, _origin = _partial_clone_fixture(tmp_path, "filter-key-only")
+    _git(clone, "config", "--unset", "remote.origin.promisor")
+    assert (
+        _git(clone, "config", "--local", "--get", "remote.origin.partialclonefilter")
+        .stdout.strip()
+        == "blob:none"
+    )
+    assert sv._is_partial_clone(clone) is True
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("on", True),
+        ("1", True),
+        ("42", True),
+        ("0x10", True),
+        ("010", True),
+        ("1k", True),
+        ("false", False),
+        ("FALSE", False),
+        ("no", False),
+        ("off", False),
+        ("0", False),
+        ("", False),
+    ],
+)
+def test_is_partial_clone_agrees_with_git_on_every_boolean_spelling(
+    tmp_path, value, expected
+):
+    """Delegating to ``git config --type=bool`` means git's grammar, not a guess at it.
+
+    ``0x10``, ``010`` and ``1k`` are the ones a hand-rolled parser gets wrong: git's
+    integer parser accepts base prefixes and k/m/g suffixes, and ``--type=bool`` reports
+    every one of them as true. Each case is cross-checked against git itself below, so
+    this test cannot drift away from the grammar it claims to pin.
+    """
+    repo = _init_repo(
+        tmp_path / ("gitbool-%s" % (value or "empty")), files={"a.txt": "a\n"}
+    )
+    _git(repo, "config", "remote.origin.promisor", value)
+    probed = _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
+    assert probed == ("true" if expected else "false"), "git itself disagrees with this row"
+    assert sv._is_partial_clone(repo) is expected
+
+
+def test_is_partial_clone_reads_a_valueless_promisor_key_as_true(tmp_path):
+    """``[remote "origin"] promisor`` with no ``=`` is git-true."""
+    repo = _init_repo(tmp_path / "valueless-promisor", files={"a.txt": "a\n"})
+    with open(os.path.join(repo, ".git", "config"), "a", encoding="utf-8") as fh:
+        fh.write('[remote "origin"]\n\tpromisor\n')
+    assert (
+        _git(repo, "config", "--bool", "--get", "remote.origin.promisor").stdout.strip()
+        == "true"
+    )
+    assert sv._is_partial_clone(repo) is True
+
+
+def test_is_partial_clone_answers_false_when_the_probe_exits_nonzero(tmp_path):
+    """Probe failure proceeds under the env-var backstop rather than refusing everyone."""
+    assert sv._is_partial_clone(str(tmp_path / "does-not-exist")) is False
+
+
+@pytest.mark.parametrize(
+    "boom", [OSError("no git"), subprocess.TimeoutExpired("git", 1), ValueError("bad")]
+)
+def test_is_partial_clone_answers_false_when_the_probe_raises(monkeypatch, boom):
+    """The raise leg: the non-zero-exit leg above cannot reach this ``except``."""
+
+    def explode(*args, **kwargs):
+        raise boom
+
+    monkeypatch.setattr(sv, "_git_run", explode)
+    assert sv._is_partial_clone("/anywhere") is False
+
+
+def test_git_config_local_keys_reports_unknown_distinctly_from_empty():
+    """``None`` (probe unusable) must not be readable as 'no markers found'."""
+    assert sv._git_config_local_keys("/definitely/not/a/repo/797") is None
+
+
+def test_git_config_says_true_never_spawns_for_a_key_outside_the_pattern(monkeypatch):
+    """Repository-supplied text is never handed to git at all — not merely rejected by it.
+
+    Asserting only the ``False`` return would pass with the guard deleted, because git
+    exits non-zero on an unknown key anyway. The axis is *reaching argv*, so this asserts
+    that no subprocess is spawned.
+    """
+    spawned = []
+
+    def record(*args, **kwargs):
+        spawned.append(args[0])
+        raise AssertionError("unvetted key reached git argv: %r" % (args[0],))
+
+    monkeypatch.setattr(sv, "_git_run", record)
+    for key in ("--global", "-c", "--type=int", "core.bare", "extensions.partialclone"):
+        assert sv._git_config_says_true("/anywhere", key) is False
+    assert spawned == []
+
+
+def test_git_config_says_true_does_spawn_for_a_matching_key(tmp_path):
+    """The guard must not be so tight that the real key never gets through."""
+    repo = _init_repo(tmp_path / "argv-guard-positive", files={"a.txt": "a\n"})
+    _git(repo, "config", "remote.origin.promisor", "true")
+    assert sv._git_config_says_true(repo, "remote.origin.promisor") is True
+    _git(repo, "config", "remote.origin.promisor", "off")
+    assert sv._git_config_says_true(repo, "remote.origin.promisor") is False
+
+
+def test_is_partial_clone_ignores_a_disabled_promisor_remote(tmp_path):
+    repo = _init_repo(tmp_path / "disabled-promisor", files={"a.txt": "a\n"})
+    _git(repo, "config", "remote.origin.promisor", "false")
+    assert sv._is_partial_clone(repo) is False
+    _git(repo, "config", "remote.origin.promisor", "true")
+    assert sv._is_partial_clone(repo) is True
+
+
+def test_is_partial_clone_reads_the_extensions_spelling(tmp_path):
+    """Older/bare partial clones announce themselves through ``extensions``."""
+    repo = _init_repo(tmp_path / "extensions-spelling", files={"a.txt": "a\n"})
+    _git(repo, "config", "extensions.partialClone", "origin")
+    assert sv._is_partial_clone(repo) is True
