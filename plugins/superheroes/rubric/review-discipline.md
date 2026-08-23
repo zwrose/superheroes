@@ -192,8 +192,10 @@ section closes the excuses by making a skip **citable** rather than merely discl
 **A skip is disclosed, and the disclosure cites a blocker by number.** A full-lane build that does
 not run the certified loop **discloses the skip in the PR body, citing a filed `driver-blocker`
 issue by number** — or, for the subordinated owner-directed ending above, **citing the owner's
-direction as a dated record per the venue-citation convention** (the second and only other
-citation class). **A skip citing nothing, and a skip citing a closed issue, are each a vet
+direction as a dated record per the venue-citation convention**
+(`skills/showrunner/reference/issue-contract.md` § Anchor resolution — a venue name is never a
+record; the citation is an exact permalink to a dated record) — the second and only other
+citation class. **A skip citing nothing, and a skip citing a closed issue, are each a vet
 finding.** This binds now, on every full-lane PR — it does not wait for the flip below.
 
 **The `driver-blocker` label is the standing view of what still blocks the loop.** Any bug that
