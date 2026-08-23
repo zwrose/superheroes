@@ -12,8 +12,9 @@ in the copy (CONVENTIONS §11.3 anti-tautology leg):
 Neither BACKGROUNDABLE_VERIFY surface is authoritative — the pin is a symmetric two-copy equality
 per CONVENTIONS §11.2. SKIP_CITATION and PARITY are home-first, then copy-holder.
 
-Two single-home facts — the flip conditional and the post-handback merge policy — are deliberately
-out of scope; they live only in ``rubric/review-discipline.md``.
+One single-home fact — the post-handback merge policy — is deliberately out of scope; it lives
+only in ``rubric/review-discipline.md``. The flip conditional's operative clause is pinned in its
+single home (owner-authorized 2026-08-23) — presence-only, same limits as every pin here.
 
 What is guaranteed is **presence** of each pinned literal verbatim modulo ``*``-stripping and
 whitespace collapse. BACKGROUNDABLE_VERIFY is pinned **whole-file** (count == 1 on each copy-holder)
@@ -75,6 +76,11 @@ _PARITY_HOME = (
 _PARITY_COPY = (
     "A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was "
     "assigned is a finding"
+)
+
+_FLIP_HOME = (
+    "a full-lane review that is not the certified loop stops being a disclosable degradation and "
+    "becomes a vet finding, and the only valve is driver-or-park — never driver-or-improvise"
 )
 
 _BACKGROUNDABLE_VERIFY_SURFACES = [
@@ -146,3 +152,11 @@ def test_parity_present_in_vet_receipt_copy():
     assert home_section_text.count(_normalized(_PARITY_HOME)) == 1
     copy_section_text = _section_text(_VET_RECEIPT, _VET_TRIGGERED_SECTION)
     assert _normalized(_PARITY_COPY) in copy_section_text
+
+
+def test_flip_operative_clause_present_in_home():
+    # axis: presence of the flip's operative clause in its single home, exactly once
+    # (owner-authorized pin, 2026-08-23: the release's most load-bearing sentence was
+    # softenable with no red test — vet-156 probe)
+    home_section_text = _section_text(_HOME, _DRIVER_MANDATE_SECTION)
+    assert home_section_text.count(_normalized(_FLIP_HOME)) == 1
