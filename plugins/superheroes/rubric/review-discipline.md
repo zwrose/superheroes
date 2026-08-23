@@ -152,7 +152,8 @@ fast-follow):
   and fix loop) before handback. An **explicit owner-directed review** remains a valid
   ending, and it is **recorded as a cited skip of the driver loop with the owner's
   direction as the citation** (owner-ruled 2026-08-23: subordinate, don't remove) — the
-  skip accounting stays whole and the owner's hands stay free. **The light and
+  skip accounting stays whole and the owner's hands stay free. The skip rule below names
+  this citation class; the flip clause below names its post-flip fate. **The light and
   micro lanes** run **one** independent cross-vendor reviewer instead, carrying the
   mandatory control on every such review (see above). The loop is cheap on small diffs —
   scoped rounds, capped confirmations — so "too small to review" is never a reason to
@@ -190,7 +191,9 @@ section closes the excuses by making a skip **citable** rather than merely discl
 
 **A skip is disclosed, and the disclosure cites a blocker by number.** A full-lane build that does
 not run the certified loop **discloses the skip in the PR body, citing a filed `driver-blocker`
-issue by number**. **A skip citing nothing, and a skip citing a closed issue, are each a vet
+issue by number** — or, for the subordinated owner-directed ending above, **citing the owner's
+direction as a dated record per the venue-citation convention** (the second and only other
+citation class). **A skip citing nothing, and a skip citing a closed issue, are each a vet
 finding.** This binds now, on every full-lane PR — it does not wait for the flip below.
 
 **The `driver-blocker` label is the standing view of what still blocks the loop.** Any bug that
@@ -216,7 +219,9 @@ stops being a disclosable degradation and becomes a vet finding**, and the only 
 **driver-or-park** — never driver-or-improvise. Until that close, the skip rule above governs:
 disclose, cite an open `driver-blocker`, and the vet weighs it. After it, a citation is no longer a
 pass — the build runs the loop or parks, and the blocker it would have cited is the reason the park
-is honest. The arming event is the **milestone's close** — the owner's judgment that its exit
+is honest. The **subordinated owner-directed ending survives the flip** — "don't remove" carries no
+sunset — but post-flip it is graded as the owner's **recorded override** of driver-or-park (same
+dated-direction citation, named as an override in the vet receipt), never as a citation-pass. The arming event is the **milestone's close** — the owner's judgment that its exit
 condition is met, read off the receipts, as ROADMAP.md's standing rule already defines closure; the
 release cut carrying that milestone's work is how the close is **stamped**, not a second and
 separate trigger. It is written as a dated conditional precisely so that nobody has to remember to
