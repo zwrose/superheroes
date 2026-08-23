@@ -790,6 +790,10 @@ is awaited in-turn; never end a turn to wait.** **Poll synchronously in-turn** u
 narrative messages, dispatch-mechanics documents three on **2026-08-02**, and this paragraph is
 another instance of the same class.
 
+**The verify step may run harness-backgrounded and polled in-turn** — the already-sanctioned shape
+for long local work — because the host's foreground command-timeout cap bounds a **single call**, not
+the step; what stays forbidden is unchanged, `&`/setsid/nohup and ending the turn to wait.
+
 **Long dispatches you own get room to finish and a stuck/runaway monitor** — **never a borderline
 limit you expect to just barely clear**. For a **native subagent dispatch there is no detach** — the
 harness owns the lifecycle: **await it in-turn**, and if it genuinely cannot fit the turn, **do not
