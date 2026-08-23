@@ -13,8 +13,9 @@ import mode_registry
 
 # Bump when probe configuration semantics change so legacy receipts cannot be
 # reused (#711: effort is now enforced per (model, effort) pair; v1 receipts
-# recorded effort the old probe never actually dispatched).
-SCHEMA_VERSION = 2
+# recorded effort the old probe never actually dispatched; #795: v2 receipts
+# carry no per-cell evidence and are refused rather than read as vendor-level truth).
+SCHEMA_VERSION = 3
 DEFAULT_TTL_SECONDS = 600
 _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
 
@@ -65,6 +66,15 @@ def _is_timestamp(x):
     return isinstance(x, (int, float)) and not isinstance(x, bool) and math.isfinite(x)
 
 
+def _bounded_reason(detail):
+    if not detail or not isinstance(detail, str):
+        return "no probe evidence recorded"
+    collapsed = " ".join(detail.split())
+    if len(collapsed) <= 200:
+        return collapsed
+    return collapsed[:200] + "\u2026"
+
+
 def _liveness_structure_valid(liveness):
     if not isinstance(liveness, dict):
         return False
@@ -78,6 +88,21 @@ def _liveness_structure_valid(liveness):
             if not isinstance(entry, dict):
                 return False
             if type(entry.get("ok")) is not bool:
+                return False
+        cells = info.get("cells")
+        # axis: malformed per-cell evidence is refused (non-list cells)
+        if not isinstance(cells, list):
+            return False
+        for cell in cells:
+            if not isinstance(cell, dict):
+                return False
+            if not isinstance(cell.get("model"), str):
+                return False
+            # axis: malformed per-cell evidence is refused (non-bool ok)
+            if type(cell.get("ok")) is not bool:
+                return False
+            effort = cell.get("effort")
+            if effort is not None and not isinstance(effort, str):
                 return False
     return True
 
@@ -162,6 +187,7 @@ def read(path, *, now):
         return None
     if not isinstance(raw.get("needed"), dict):
         return None
+    # axis: refusal of a receipt lacking per-cell evidence
     if not _liveness_structure_valid(raw["liveness"]):
         return None
     return raw
@@ -199,9 +225,38 @@ def covers(receipt_needed, needed):
         return False
 
 
-def live_vendors_from(liveness, needed):
-    """Recompute live vendors from cached per-model oks; claude is always live."""
+def _cells_by_key(info):
+    out = {}
+    if not isinstance(info, dict):
+        return out
+    cells = info.get("cells")
+    if not isinstance(cells, list):
+        return out
+    for cell in cells:
+        if not isinstance(cell, dict):
+            continue
+        model = cell.get("model")
+        if not isinstance(model, str):
+            continue
+        out[(model, cell.get("effort"))] = cell
+    return out
+
+
+def _dead_cell_note(vendor, model, effort, detail):
+    return {
+        "constraint": "liveness-cell",
+        "vendor": vendor,
+        "model": model,
+        "effort": effort,
+        "reason": "%s/%s (%s) not live per cached liveness: %s"
+        % (vendor, model, effort, _bounded_reason(detail)),
+    }
+
+
+def live_from(liveness, needed):
+    """-> (live_vendors, live_cells, dead_notes). The ONE place a liveness verdict is read."""
     live = []
+    live_cells = []
     dead_notes = []
     try:
         if not isinstance(liveness, dict):
@@ -213,38 +268,55 @@ def live_vendors_from(liveness, needed):
             if vendor == "claude":
                 continue
             if not isinstance(entries, (list, tuple)) or len(entries) == 0:
-                dead_notes.append({
-                    "constraint": "liveness-cache",
-                    "reason": "%s not live per cached liveness" % vendor,
-                })
+                dead_notes.append(
+                    {
+                        "constraint": "liveness-cell",
+                        "vendor": vendor,
+                        "model": None,
+                        "effort": None,
+                        "reason": "%s not live: no needed cell is reachable for it"
+                        % vendor,
+                    }
+                )
                 continue
             vendor_live = True
             info = liveness.get(vendor)
-            if not isinstance(info, dict):
-                vendor_live = False
-            else:
-                models = info.get("models")
-                if not isinstance(models, dict):
+            cells_by_key = _cells_by_key(info)
+            for entry in entries:
+                # axis: disclosure — a vendor leaving the live set for a malformed entry emits a note
+                if not isinstance(entry, (list, tuple)) or len(entry) < 1:
                     vendor_live = False
+                    dead_notes.append(
+                        {
+                            "constraint": "liveness-cell",
+                            "vendor": vendor,
+                            "model": None,
+                            "effort": None,
+                            "reason": "%s not live: malformed needed cell entry %r"
+                            % (vendor, entry),
+                        }
+                    )
+                    continue
+                model = entry[0]
+                effort = entry[1] if len(entry) > 1 else None
+                cell = cells_by_key.get((model, effort))
+                if cell is None or type(cell.get("ok")) is not bool or cell.get("ok") is not True:
+                    vendor_live = False
+                    detail = cell.get("detail") if isinstance(cell, dict) else None
+                    dead_notes.append(_dead_cell_note(vendor, model, effort, detail))
                 else:
-                    for entry in entries:
-                        if not isinstance(entry, (list, tuple)) or len(entry) < 1:
-                            vendor_live = False
-                            break
-                        m = entry[0]
-                        ent = models.get(m)
-                        if not isinstance(ent, dict) or ent.get("ok") is not True:
-                            vendor_live = False
-                            break
+                    live_cells.append([vendor, model, effort])
             if vendor_live:
                 live.append(vendor)
-            else:
-                dead_notes.append({
-                    "constraint": "liveness-cache",
-                    "reason": "%s not live per cached liveness" % vendor,
-                })
     except Exception:
         pass
     if "claude" not in live:
         live.append("claude")
-    return (sorted(live), dead_notes)
+    live_cells.sort()
+    return (sorted(live), live_cells, dead_notes)
+
+
+def live_vendors_from(liveness, needed):
+    """Recompute live vendors from cached per-model oks; claude is always live."""
+    live, _cells, dead_notes = live_from(liveness, needed)
+    return (live, dead_notes)

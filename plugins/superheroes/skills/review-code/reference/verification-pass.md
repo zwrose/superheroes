@@ -156,6 +156,11 @@ model-supplied member order can't flip GATE-eligibility, and carrying that membe
 first such member in input order). A lower-severity confirmation **never promotes** the merged
 finding (no receiptless CONFIRMED is fabricated onto the higher-severity finding); otherwise the
 merge is PLAUSIBLE. Findings are ranked Critical → Important → Minor → Nit, then by file and line.
+Merged severity is the **highest effective severity among the group's members**, computed on the
+normalized fail-closed vocabulary in `circuit_breaker` (`severity_rank` / `effective_severity` /
+`canonical_severity`), so the merge can never produce a group less blocking than a member; `_kept_severity`
+honors a verdict severity at its **canonical** tier, so a mis-cased tier is neither ignored nor
+silently demoted.
 
 Use `synthesized.findings` as `compiled.findings`. Carry `verified.drops`, `verified.downgrades`,
 and `synthesized.merges` into the round record as appropriate.

@@ -6,6 +6,7 @@ case-sensitive filesystems) so behavior is predictable and case-variant agent
 config cannot leak. Non-ASCII letters are not folded.
 """
 import os
+import re
 import select
 import shutil
 import subprocess
@@ -141,7 +142,13 @@ def _git_env():
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
     env["LC_ALL"] = "C"
     env["LANGUAGE"] = ""
-    # Lazy fetch stays enabled on partial clones; the export deadline bounds it.
+    # Owner-ruled 2026-08-09 (#797): partial clones are not a supported checkout shape
+    # for sanitized-view construction, and construction must never wait on git's
+    # on-demand object fetching. Every git subprocess this module spawns is built
+    # through this function or _ancestry_env, so the two of them are the whole census.
+    # bite-axis: on-demand fetch suppression — every git subprocess built here
+    # refuses a promisor fetch rather than waiting on one.
+    env["GIT_NO_LAZY_FETCH"] = "1"
     return env
 
 
@@ -153,6 +160,108 @@ def _git_run(*args, **kwargs):
 def _git_popen(*args, **kwargs):
     kwargs["env"] = _git_env()
     return subprocess.Popen(*args, **kwargs)
+
+
+# Config markers of a partial clone, read from the repository's OWN config only.
+# ``git config --list`` merges system, global, included and command config, so an
+# ``extensions.partialclone`` line in a user's ~/.gitconfig would mark every repository
+# on that machine as partial; git's own repository-format reader takes extensions from
+# the repository config, and ``--local`` is how we read the same scope it does.
+#
+# Three markers, because git registers a promisor remote from more than one of them:
+# ``extensions.partialclone``; ``remote.<name>.promisor`` when git-true; and
+# ``remote.<name>.partialclonefilter``, which registers the remote on its own —
+# measured on git 2.50.1, a clone with the filter key and NO promisor key still
+# lazy-fetched a missing blob successfully.
+_PARTIAL_CLONE_EXTENSION_KEY = "extensions.partialclone"
+_PROMISOR_REMOTE_KEY_RE = re.compile(r"\Aremote\..+\.promisor\Z")
+_PARTIAL_CLONE_FILTER_KEY_RE = re.compile(r"\Aremote\..+\.partialclonefilter\Z")
+_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS = 10
+
+
+def _git_config_local_keys(repo_real):
+    """Keys of the repository's own config, or ``None`` when the probe could not run.
+
+    ``None`` is distinct from "no keys": it means the answer is unknown, and callers
+    must not read it as a clean bill of health.
+    """
+    try:
+        proc = _git_run(
+            ["git", "-C", repo_real, "config", "--local", "--list", "-z"],
+            capture_output=True,
+            timeout=_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return None
+    if proc.returncode != 0:
+        return None
+    keys = []
+    for record in proc.stdout.split(b"\0"):
+        if not record:
+            continue
+        key, _sep, _value = record.partition(b"\n")
+        try:
+            keys.append(key.decode("utf-8"))
+        except UnicodeDecodeError:
+            continue
+    return keys
+
+
+def _git_config_says_true(repo_real, key):
+    """Ask **git** whether ``key`` is true, rather than reimplementing its grammar.
+
+    git's boolean grammar is wider than it looks — ``yes``/``on``/``1`` are true,
+    ``no``/``off``/``0``/empty are false, a valueless key is true, and its integer
+    parser additionally accepts ``0x10``, ``010`` and ``1k``/``1m``/``1g`` suffixes,
+    every one of which ``--type=bool`` reports as true (measured, git 2.50.1). Any
+    hand-rolled parser is a running bet against that list, so this delegates.
+    ``--get-all`` is used because a config key may carry several values; any true one
+    counts, which is how git's own promisor-remote reader treats them.
+    """
+    if not _PROMISOR_REMOTE_KEY_RE.match(key):
+        # The caller only ever passes keys matched against that pattern; this refuses
+        # to hand git anything else, so no repository-supplied string can reach argv
+        # as an option.
+        return False
+    try:
+        proc = _git_run(
+            ["git", "-C", repo_real, "config", "--local", "--type=bool", "--get-all", key],
+            capture_output=True,
+            timeout=_PARTIAL_CLONE_PROBE_TIMEOUT_SECONDS,
+        )
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        return False
+    if proc.returncode != 0:
+        return False
+    return b"true" in proc.stdout.split()
+
+
+def _is_partial_clone(repo_real):
+    """True when ``repo_real`` is a partial clone — a checkout with a promisor remote.
+
+    Probed from **config only**: this never names an object id, so the probe itself can
+    never be the on-demand fetch the refusal exists to prevent, and — unlike
+    ``GIT_NO_LAZY_FETCH``, which older git versions ignore — its answer does not depend
+    on the git version in front of it.
+
+    An unusable probe answers ``False``, i.e. *proceed*. That is deliberate: a config
+    read that hiccups on an ordinary repository must not turn into a hard refusal for
+    everyone, and ``GIT_NO_LAZY_FETCH=1`` remains underneath as the backstop.
+    """
+    keys = _git_config_local_keys(repo_real)
+    if keys is None:
+        return False
+    promisor_keys = []
+    for key in keys:
+        # bite-axis: shape detection — each of the three markers identifies a partial
+        # clone on its own, and only the promisor key's value is consulted.
+        if key == _PARTIAL_CLONE_EXTENSION_KEY:
+            return True
+        if _PARTIAL_CLONE_FILTER_KEY_RE.match(key):
+            return True
+        if _PROMISOR_REMOTE_KEY_RE.match(key):
+            promisor_keys.append(key)
+    return any(_git_config_says_true(repo_real, key) for key in promisor_keys)
 
 
 def _is_git_object_id_hex(value):
@@ -586,6 +695,12 @@ def _ancestry_env():
     """
     env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
     env["GIT_NO_REPLACE_OBJECTS"] = "1"
+    # Added back explicitly, not inherited: this builder drops every GIT_* variable,
+    # so the no-lazy-fetch rule that _git_env applies has to be restated here or the
+    # ancestry probes would be the one channel still able to trigger a promisor fetch.
+    # bite-axis: on-demand fetch suppression, restated — this builder drops every
+    # inherited GIT_* variable, so ancestry probes need their own add-back.
+    env["GIT_NO_LAZY_FETCH"] = "1"
     env["GIT_CONFIG_GLOBAL"] = os.devnull
     env["GIT_CONFIG_SYSTEM"] = os.devnull
     env["LC_ALL"] = "C"
@@ -1884,6 +1999,28 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
     }
 
 
+# Owner-ruled 2026-08-09 (#797), option 1 — fail fast. A partial clone is not a
+# supported checkout shape for sanitized-view construction, so construction refuses the
+# SHAPE, up front, rather than waiting to discover a particular object is absent.
+#
+# Refusing on the shape rather than on a failed object read is what makes the guarantee
+# hold. Two measured facts drove it. A blob-filtered clone WITH a checkout has its HEAD
+# blobs hydrated, so materialization succeeds and only the review diff trips over an
+# absent base-side blob — arriving as an ordinary "git diff failed", indistinguishable
+# at that call site from a dozen other faults; that is the dominant real shape, and
+# detecting absent objects would have missed it. And ``GIT_NO_LAZY_FETCH`` is honoured
+# only by newer git, so a mechanism resting on it alone is silently inert on an older
+# client. The config probe answers the same on every version.
+#
+# The refusal is therefore WIDER than "this clone is missing something we need": a
+# filtered clone that happens to hold every object still refuses. That is the ruling's
+# own line — an unsupported checkout shape, not a best-effort attempt — and the remedy
+# is in reference/auto-fix-loop.md: re-clone without --filter, or drop the filter in
+# place and refetch. Plain ``git fetch --refetch`` is NOT a remedy; it reapplies the
+# configured filter (measured, git 2.50.1).
+SANITIZED_VIEW_PARTIAL_CLONE = "sanitized-view-partial-clone"
+
+
 def build_sanitized_view(repo_root, *, diff_base=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
@@ -1894,6 +2031,10 @@ def build_sanitized_view(repo_root, *, diff_base=None):
     if diff_base is not None:
         diff_base = _require_pinned_commit_oid(diff_base)
     repo_real = os.path.realpath(repo_root)
+    # bite-axis: unsupported checkout shape — refused BEFORE any object is read, so no
+    # code path can reach an on-demand fetch and no later failure has to be re-attributed.
+    if _is_partial_clone(repo_real):
+        raise SanitizedViewError(SANITIZED_VIEW_PARTIAL_CLONE)
     tmp_base = tempfile.gettempdir()
     if path_is_under_repo(tmp_base, repo_real):
         raise SanitizedViewError("sanitized-view-tempbase-inside-repo")
@@ -1935,7 +2076,7 @@ def build_sanitized_view(repo_root, *, diff_base=None):
             "fileCount": file_count,
             **diff_info,
         }
-    except SanitizedViewError:
+    except SanitizedViewError as exc:
         if view_root is not None:
             destroy_sanitized_view(view_root)
         raise

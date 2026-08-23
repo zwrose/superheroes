@@ -123,7 +123,6 @@ def test_severity_vocabulary_is_single_sourced(monkeypatch):
     # to the eval tree so this copy-holder stays covered rather than silently unimported.
     monkeypatch.syspath_prepend(os.path.join(PLUGIN, "eval"))
     import review_telemetry
-    import verification
 
     # Python copy-holders (read at runtime) — every BLOCKING constant.
     py_blocking = {
@@ -137,9 +136,9 @@ def test_severity_vocabulary_is_single_sourced(monkeypatch):
         assert val == blocking, "%s drifted from the rubric blocking set %r" % (label, blocking)
 
     assert list(loop_state._ALL_SEVERITIES) == tiers, "loop_state._ALL_SEVERITIES order/vocab drift"
-    assert list(loop_synthesis._TIERS) == tiers, "loop_synthesis._TIERS order/vocab drift"
-    assert list(verification._TIERS) == tiers, "verification._TIERS order/vocab drift"
-    assert verification._SEV_RANK == rank, "verification._SEV_RANK drift"
+    assert list(circuit_breaker.SEVERITY_TIERS) == tiers, "circuit_breaker.SEVERITY_TIERS order/vocab drift"
+    assert {t: i for i, t in enumerate(circuit_breaker.SEVERITY_TIERS)} == rank, (
+        "circuit_breaker.SEVERITY_TIERS rank drift")
     assert panel_tally.SEV_RANK == rank, "panel_tally.SEV_RANK drift"
 
     # #276: the shared FAIL-CLOSED blocking predicate has ONE home (circuit_breaker).

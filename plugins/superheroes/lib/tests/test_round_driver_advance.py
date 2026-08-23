@@ -2325,6 +2325,28 @@ def test_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters):
     assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
 
 
+def test_main_advance_owner_artifact_judgment_closes_dead_end(tmp_path, adapters, capsys):
+    """``advance --owner-artifact`` through ``main()`` argv, not only ``cmd_advance`` kwargs."""
+    repo = _repo_without_gate_policy(tmp_path)
+    d = _judgment_session_with_repo(tmp_path, adapters, repo, name="main-owner-artifact-judgment")
+    _set_advance_used(d)
+    out = _advance(d, tmp_path)
+    assert out["ok"] is False and out["reason"] == "advance-judgment-park"
+    artifact = _judgment_dispositions_artifact(_state(d))
+    path = _write_owner_artifact(tmp_path, artifact)
+    rc = RD.main(["advance", "--session-dir", d, "--owner-artifact", path])
+    captured = capsys.readouterr()
+    out = json.loads(captured.out.strip())
+    assert rc == 0, (rc, out)
+    assert out["ok"] is True, out
+    assert out["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+    assert out["policyApplied"]["artifactSha256"] == hashlib.sha256(
+        RD._canonical(artifact).encode("utf-8")).hexdigest()
+    assert _state(d)["step"] == RD.P_FIXER
+    advanced = [e for e in _journal(d) if e.get("outcome") == "advanced" and e.get("policyApplied")]
+    assert advanced[-1]["policyApplied"]["source"] == RD.POLICY_APPLIED_SOURCE_OWNER_SUPPLIED
+
+
 def test_advance_owner_artifact_stall_closes_dead_end(tmp_path, adapters):
     d = _parked_at_owner_gate(tmp_path, adapters, RD.P_STALL, name="owner-artifact-stall")
     _set_advance_used(d)
@@ -3292,6 +3314,30 @@ def _patch_submit_accept_run(monkeypatch, reason, detail="simulated"):
     monkeypatch.setattr(RD.round_commit, "begin", hooked_begin)
 
 
+def _patch_cleanup_rename_failure(monkeypatch, detail="cleanup rename blocked for test"):
+    """Patch ``round_commit.os.rename`` to fail when the destination basename starts with ``.cleanup-``."""
+    real_rename = RD.round_commit.os.rename
+
+    def rename(src, dst):
+        if os.path.basename(dst).startswith(".cleanup-"):
+            raise OSError(13, detail)
+        return real_rename(src, dst)
+
+    monkeypatch.setattr(RD.round_commit.os, "rename", rename)
+
+
+def _commit_dirs_with_done(session_dir):
+    root = RD.round_commit.commits_root(session_dir)
+    if not os.path.isdir(root):
+        return []
+    return [
+        os.path.join(root, name)
+        for name in os.listdir(root)
+        if os.path.isdir(os.path.join(root, name))
+        and os.path.isfile(os.path.join(root, name, "DONE"))
+    ]
+
+
 def _judgment_submit_artifact(session_dir):
     state = _state(session_dir)
     return {"dispositions": [
@@ -3307,11 +3353,30 @@ def test_cmd_submit_cleanup_failure_carries_foldLanded(tmp_path, adapters, monke
     }])
     d = _judgment_session_with_repo(tmp_path, adapters, repo, name="cleanup-fold")
     pend = _pending(d)
-    _patch_submit_accept_run(monkeypatch, "commit-cleanup-failed")
+    last_accepted_before = copy.deepcopy(_state(d).get("lastAccepted"))
+    _patch_cleanup_rename_failure(monkeypatch)
     out = RD.cmd_submit(d, pend["phase"], pend["attempt"], RD.state_hash(_state(d)),
                         _judgment_submit_artifact(d), _via_advance=True)
-    assert out == {"ok": False, "reason": "commit-cleanup-failed", "detail": "simulated",
-                   "foldLanded": True}
+    assert out["ok"] is False
+    assert out["reason"] == "commit-cleanup-failed"
+    assert out["foldLanded"] is True
+    detail = out.get("detail")
+    assert detail and "cleanup rename blocked" in detail
+    state = _state(d)
+    assert state.get("terminal") is None
+    la = state.get("lastAccepted")
+    assert la is not None
+    assert la["phase"] == pend["phase"]
+    assert la["attempt"] == pend["attempt"]
+    assert la["round"] == pend["round"]
+    if last_accepted_before is not None:
+        assert la["artifactHash"] == last_accepted_before["artifactHash"]
+    else:
+        assert isinstance(la.get("artifactHash"), str) and la["artifactHash"]
+    assert state["step"] == RD.P_FIXER
+    done_dirs = _commit_dirs_with_done(d)
+    assert len(done_dirs) == 1
+    assert os.path.isfile(os.path.join(done_dirs[0], "DONE"))
 
 
 def test_cmd_submit_apply_failure_does_not_carry_foldLanded(tmp_path, adapters, monkeypatch):

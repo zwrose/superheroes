@@ -61,6 +61,19 @@ shape is wrong and the thinking wins.
    clean sheet:** both are prose, so an agreeable model drives either rate to zero and it reads as a
    clean batch. Inspecting means re-reading a sample of that batch's park and vet receipts, not
    noticing the zero.
+
+   This inspects the **verifier's** agreeableness — a different axis from the charter's park-rate
+   and receipt-integrity guards. **A panel's confirmation rate is inspected the same way.** The
+   round receipt does not today carry per-pass verdict totals, so where the rate is not derivable
+   from the durable artifacts record that plainly — **`not derivable from the receipt`** — rather
+   than guessing: the receipt carries neither the per-pass verdict totals nor, on a converged
+   delta path, any surviving findings at all. Where a rate **is** visible — because the build
+   recorded one in its own build record —
+   a verification pass whose verdicts come back **uniformly confirming** — every finding
+   CONFIRMED, over a large surface — is still a **signal to inspect**, not a clean panel: an
+   agreeable verifier and a genuinely sound batch produce the same number, and only reading a
+   sample tells them apart. Record what the rate was and what you did about it. The field flag
+   that named this was **12 of 12 CONFIRMED on a ~10,000-line diff**.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
@@ -102,6 +115,8 @@ are never holding the inventory in working memory.
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
+| the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). A citation that is absent, or that names a closed issue, is a finding; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
+| the build record shows a **full-lane** review **not driven by the certified loop** | the **seat-provenance parity check** — each seat's seat-map assignment, plus a recorded attempt or terminal forfeit on the vendor that seat was assigned; a missing assignment is a finding. A seat that ran off its seat-map assignment with no recorded forfeit on the vendor it was assigned is a finding |
 
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
@@ -214,7 +229,8 @@ all the age of a carried item, and the loss of an advisor write.
 **What the owner still carries that the owner half does not say.** <consequence> | `None`
 **Degradations.** <build's, and my own> | `None`
 **Accounting.** orders <n>, reworks <n>, attribution <…>; parks/refusals <…, each correct?>;
-receipt-integrity catches <…>; window: <…>
+receipt-integrity catches <…>; panel confirmation rate <rate or `not derivable from the receipt`>,
+inspection <what you did>; window: <…>
 **Dispositions — completed.** <…> | `None`
 <!-- superheroes:pending-proposals -->
 **Pending.** this vet's ordinal: <n> · <item — recommendation — proposed at ordinal <n>> | `None`
