@@ -96,6 +96,36 @@ def check_round_ceiling(next_round, ceiling):
     }
 
 
+# One normalized severity vocabulary for rank/tier comparisons — lives beside `is_blocking` so a
+# blocking severity never ranks below a non-blocking one (#1094).
+SEVERITY_TIERS = ("Critical", "Important", "Minor", "Nit")
+_TIER_BY_LOWER = {t.lower(): t for t in SEVERITY_TIERS}
+
+
+def canonical_severity(severity):
+    """The exact tier for a case/whitespace variant of a tier, else None. Never raises."""
+    try:
+        s = str("" if severity is None else severity).strip()
+    except Exception:
+        return None
+    if not s:
+        return None
+    return _TIER_BY_LOWER.get(s.lower())
+
+
+def effective_severity(severity):
+    """Always a valid tier: the canonical tier when there is one, else the fail-closed
+    blocking default "Important". Never raises."""
+    return canonical_severity(severity) or "Important"
+
+
+def severity_rank(severity):
+    """The rank (Critical 0, Important 1, Minor 2, Nit 3) of effective_severity(severity).
+    Never returns 99, never raises — including on an unhashable severity (a model may emit a
+    list or dict)."""
+    return SEVERITY_TIERS.index(effective_severity(severity))
+
+
 def is_blocking(severity):
     return str("" if severity is None else severity).strip().lower() not in _NON_BLOCKING
 

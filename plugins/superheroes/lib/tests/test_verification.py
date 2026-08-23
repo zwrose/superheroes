@@ -440,7 +440,7 @@ def test_merge_group_malformed_severity_deterministic_and_valid_tier():
         out = V.merge_and_rank(survivors, [{"group_id": "g", "member_ids": order}])
         assert len(out["findings"]) == 1
         merged = out["findings"][0]
-        assert merged["severity"] in V._TIERS      # coerced to a valid tier, fail-closed
+        assert merged["severity"] in CB.SEVERITY_TIERS      # coerced to a valid tier, fail-closed
         results.append((merged["verdict"], merged["severity"]))
     assert results[0] == results[1], f"non-tier merge must be order-independent, got {results}"
 
@@ -448,7 +448,7 @@ def test_merge_group_malformed_severity_deterministic_and_valid_tier():
 # G1: a valid tier is unchanged by the effective-severity coercion (`_eff_sev` is identity on
 # a tier) — the coercion only touches non-tier severities.
 def test_eff_sev_identity_on_valid_tier_and_default_otherwise():
-    for tier in V._TIERS:
+    for tier in CB.SEVERITY_TIERS:
         assert V._eff_sev(tier) == tier
     for bad in ("bogus", None, [], {}, 123):
         assert V._eff_sev(bad) == V._DEFAULT_BLOCKING_SEVERITY

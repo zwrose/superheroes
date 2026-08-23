@@ -563,7 +563,7 @@ def _nit_cap(findings):
     kept = []
     nits = []
     for f in findings:
-        if isinstance(f, dict) and f.get("severity") == "Nit":
+        if isinstance(f, dict) and circuit_breaker.canonical_severity(f.get("severity")) == "Nit":
             nits.append(f)
         else:
             kept.append(f)
@@ -593,8 +593,8 @@ def _compile_by_anchor(findings):
         if key in by_anchor:
             ex = by_anchor[key]
             dims = panel_tally._merge_dims(ex, f)
-            if panel_tally.SEV_RANK.get(f.get("severity"), 99) \
-                    < panel_tally.SEV_RANK.get(ex.get("severity"), 99):
+            if circuit_breaker.severity_rank(f.get("severity")) \
+                    < circuit_breaker.severity_rank(ex.get("severity")):
                 merged = dict(f)
             else:
                 merged = dict(ex)
