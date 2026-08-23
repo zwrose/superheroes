@@ -311,7 +311,9 @@ checks**, and **cardinality floors** over those censuses stay in class; they enf
 byte-for-byte read can enforce without interpreting meaning. A **literal census** — the presence or
 absence of a set of pinned literals — is what a cardinality floor floors; that is the census
 "those censuses" names. An **extractor whose only job is bounding one of those pins to its home
-block is part of the pin, not a separate class** — it stays, and it is disclosed as such. What is
+block is part of the pin, not a separate class** — it stays, and it is disclosed as such. The same
+holds on the **source side**: a derivation whose only output is the literal set a cross-doc pin
+agrees on is the pin's **source half**, in class (owner-ruled 2026-08-23). What is
 out of class is an extractor that parses document structure or judges what prose means. **Structural
 parsers**, **table checks**, and **message/meaning guards** are **out of class** — permanently.
 Prose *meaning* and *structure* are review's job, not CI's.
