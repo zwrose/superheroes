@@ -435,6 +435,51 @@ def test_pure_functions_still_importable():
     assert callable(SM.main)
 
 
+def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch, capsys):
+    # axis: CLI serialization boundary — probed live_cells survives main→build→to_receipt
+    import preflight_probe as pp
+
+    aug15_cells = [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    live_vendors = ["claude", "cursor"]
+
+    def fake_live_vendors_for_composition(*_args, **_kwargs):
+        return (live_vendors, aug15_cells, {}, [])
+
+    monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
+
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--configured-engines",
+            "codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "795",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["liveCellsSource"] == "probed"
+    assert ["codex", "gpt-5.6-sol", "xhigh"] in receipt["liveCells"]
+    assert "codex" not in receipt["liveVendors"]
+    codex_deep = [
+        s
+        for s in SM.LENS_SEATS
+        if receipt["seats"][s]["vendor"] == "codex"
+        and receipt["seats"][s]["model"] == "gpt-5.6-sol"
+        and receipt["seats"][s]["effort"] == "xhigh"
+        and receipt["seats"][s]["tier"] == "reviewer-deep"
+    ]
+    assert codex_deep, "codex deep-review seat not retained through CLI path"
+
+
 def test_cli_compose_with_live_vendors_override(capsys):
     rc = SM.main(
         [
@@ -1654,6 +1699,33 @@ def test_resolvable_families_for_seat_positive_family_set():
     assert fams == {"anthropic", "openai", "xai"}
 
 
+def test_resolvable_families_live_cells_source_probed_vs_synthesized_vs_absent():
+    # axis: probed uses cell-level derivation; synthesized and absent agree on vendor-level
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["livenessPinScoped"] = False
+    partial_cells = [["cursor", "cursor-grok-4.6", "xhigh"]]
+    vendor_level = {"anthropic", "openai", "xai"}
+    cell_level = {"anthropic", "xai"}
+
+    probed_map = {
+        **seat_map,
+        "liveCellsSource": "probed",
+        "liveCells": partial_cells,
+    }
+    assert SM._resolvable_families_for_seat(probed_map, seat, cfg) == cell_level
+
+    synthesized_map = {**seat_map, "liveCellsSource": "synthesized"}
+    assert SM._resolvable_families_for_seat(synthesized_map, seat, cfg) == vendor_level
+
+    absent_map = {k: v for k, v in seat_map.items() if k != "liveCellsSource"}
+    absent_map.pop("liveCells", None)
+    assert SM._resolvable_families_for_seat(absent_map, seat, cfg) == vendor_level
+    assert (
+        SM._resolvable_families_for_seat(synthesized_map, seat, cfg)
+        == SM._resolvable_families_for_seat(absent_map, seat, cfg)
+    )
+
+
 # --- pin-shape normalization + refusal (#1039) -------------------------------------------------
 
 
@@ -1813,3 +1885,160 @@ def test_review_code_reference_documents_pin_shorthand_and_rerotation():
     flat = " ".join(text.split())
     assert "`--pins null` is an **absent** pin map, not a refusal" in flat
     assert "the refusal grades the **value shape** only" in flat
+
+
+# --- cell-level liveness (#795 WO-B) ----------------------------------------------------------
+
+
+def _aug15_live_cells():
+    """2026-08-15 shape: codex sol/xhigh live, terra/high absent; cursor cells live."""
+    return [
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+
+
+def test_dod_aug15_partial_codex_cell_live():
+    """DoD row 1: lens seats keep codex at reviewer-deep when only sol/xhigh is live."""
+    live_vendors = ["claude", "cursor"]
+    live_cells = _aug15_live_cells()
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        live_vendors,
+        "xai",
+        "anthropic",
+        SM.seed_from(795, None),
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    assert "codex" not in m["liveVendors"]
+    codex_lens = [
+        s for s in SM.LENS_SEATS
+        if m["seats"][s]["vendor"] == "codex"
+        and m["seats"][s]["model"] == "gpt-5.6-sol"
+        and m["seats"][s]["effort"] == "xhigh"
+    ]
+    assert codex_lens, "codex lost from every lens seat despite sol/xhigh live"
+    for seat in SM.LENS_SEATS:
+        pinned = SM.build(
+            SM.PANEL_ROSTER,
+            live_vendors,
+            "xai",
+            "anthropic",
+            0,
+            pins={seat: {"vendor": "codex"}},
+            live_cells=live_cells,
+            live_cells_source="probed",
+        )
+        cfg = pinned["seats"][seat]
+        assert cfg["source"] == "pinned", seat
+        assert cfg["vendor"] == "codex", seat
+        assert cfg["model"] == "gpt-5.6-sol", seat
+        assert cfg["effort"] == "xhigh", seat
+        assert cfg["tier"] == "reviewer-deep", seat
+    grounding = m["seats"][SM.GROUNDING_SEAT]
+    assert grounding["vendor"] != "codex"
+    assert grounding["model"] != "gpt-5.6-terra"
+
+
+def test_dod_ab3_arm_g_pinned_codex_sol_honored():
+    """DoD row 2: pin to live sol/xhigh is honored when terra is dead."""
+    live_vendors = ["claude", "cursor"]
+    live_cells = _aug15_live_cells()
+    pins = {
+        "code-reviewer": {
+            "vendor": "codex",
+            "model": "gpt-5.6-sol",
+            "effort": "xhigh",
+        },
+    }
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        live_vendors,
+        "xai",
+        "anthropic",
+        0,
+        pins=pins,
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    pinned = m["seats"]["code-reviewer"]
+    assert pinned["source"] == "pinned"
+    assert pinned["vendor"] == "codex"
+    assert pinned["model"] == "gpt-5.6-sol"
+    assert pinned["effort"] == "xhigh"
+    pin_degs = [d for d in m["degradations"] if d["constraint"] == "pin"]
+    assert not any("not honorable" in d["reason"] for d in pin_degs)
+
+
+def test_census_seated_cells_appear_in_live_cells():
+    # bite-axis: a seated cell absent from the probed live set is caught
+    live_cells = [
+        ["claude", "opus-5", "xhigh"],
+        ["codex", "gpt-5.6-sol", "xhigh"],
+        ["cursor", "cursor-grok-4.6", "xhigh"],
+    ]
+    m = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        SM.seed_from(795, None),
+        live_cells=live_cells,
+        live_cells_source="probed",
+    )
+    assert m["liveCellsSource"] == "probed"
+    live_set = {tuple(c) for c in m["liveCells"]}
+    for seat, cfg in m["seats"].items():
+        if cfg["vendor"] == "claude":
+            continue
+        cell = (cfg["vendor"], cfg["model"], cfg["effort"])
+        assert cell in live_set, "seat %s seated dead cell %s" % (seat, cell)
+
+
+def test_to_receipt_always_emits_live_cells_fields():
+    # bite-axis: provenance — liveCells and liveCellsSource must appear together on every receipt
+    receipts = []
+    m = SM.build(SM.PANEL_ROSTER, THREE_VENDORS, "xai", "anthropic", 0)
+    assert "liveCells" in m
+    assert m["liveCells"]
+    receipts.append(SM.to_receipt(m))
+
+    probed = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=[
+            ["codex", "gpt-5.6-sol", "xhigh"],
+            ["cursor", "cursor-grok-4.6", "xhigh"],
+        ],
+        live_cells_source="probed",
+    )
+    probed_receipt = SM.to_receipt(probed)
+    assert probed_receipt["liveCellsSource"] == "probed"
+    receipts.append(probed_receipt)
+
+    synthesized = SM.build(
+        SM.PANEL_ROSTER,
+        THREE_VENDORS,
+        "xai",
+        "anthropic",
+        0,
+        live_cells=None,
+        live_cells_source="synthesized",
+    )
+    syn_receipt = SM.to_receipt(synthesized)
+    assert syn_receipt["liveCellsSource"] == "synthesized"
+    receipts.append(syn_receipt)
+
+    bare = {"seats": {}, "liveVendors": ["claude", "codex", "cursor"]}
+    bare_receipt = SM.to_receipt(bare, "xai")
+    assert bare_receipt["liveCells"] is not None
+    assert bare_receipt["liveCellsSource"] == "synthesized"
+    receipts.append(bare_receipt)
+
+    for receipt in receipts:
+        assert "liveCells" in receipt
+        assert "liveCellsSource" in receipt

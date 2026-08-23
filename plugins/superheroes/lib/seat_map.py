@@ -67,6 +67,50 @@ def _seat_tier(seat: str, cfg: dict) -> str:
     return DEFAULT_TIER_BY_SEAT.get(seat, "reviewer")
 
 
+def _normalize_live_cell(entry) -> tuple[str, str, str | None] | None:
+    if isinstance(entry, (list, tuple)) and len(entry) == 3:
+        vendor, model, effort = entry[0], entry[1], entry[2]
+        if isinstance(vendor, str) and vendor and isinstance(model, str) and model:
+            return (vendor, model, effort)
+    return None
+
+
+def _synthesize_live_cells(
+    live_vendors: list[str],
+    roster: tuple[str, ...] | list[str],
+    tier_by_seat: dict[str, str] | None,
+) -> set[tuple[str, str, str | None]]:
+    tiers_map = dict(DEFAULT_TIER_BY_SEAT)
+    if tier_by_seat:
+        tiers_map.update(tier_by_seat)
+    tiers_in_play = {tiers_map.get(s, "reviewer") for s in roster}
+    cells: set[tuple[str, str, str | None]] = set()
+    for vendor in live_vendors:
+        if not isinstance(vendor, str) or not vendor:
+            continue
+        for tier in tiers_in_play:
+            cell = matrix_config(tier, vendor)
+            if cell is None:
+                continue
+            model, effort = cell
+            if is_allowed(tier, vendor, model, effort):
+                cells.add((vendor, model, effort))
+    return cells
+
+
+def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, str]:
+    raw_cells = seat_map.get("liveCells")
+    raw_source = seat_map.get("liveCellsSource")
+    if isinstance(raw_cells, list) and raw_source in ("probed", "synthesized"):
+        return list(raw_cells), raw_source
+    live = seat_map.get("liveVendors")
+    if isinstance(live, list) and live:
+        roster = tuple(seat_map.get("seats", {}).keys()) or PANEL_ROSTER
+        synthesized = _synthesize_live_cells(live, roster, None)
+        return sorted([list(c) for c in synthesized]), "synthesized"
+    return [], "synthesized"
+
+
 def _resolvable_families_for_seat(
     seat_map: dict, seat: str, cfg: dict, tier: str | None = None,
 ) -> set[str] | None:
@@ -84,15 +128,50 @@ def _resolvable_families_for_seat(
     for deg in degradations:
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
             return None
+    cells_source = seat_map.get("liveCellsSource")
+    known_vendors = set(vendors())
+    tier = tier or _seat_tier(seat, cfg)
+    families: set[str] = set()
+    if cells_source == "probed":
+        raw_cells = seat_map.get("liveCells")
+        if not isinstance(raw_cells, list):
+            return None
+        live_cell_set: set[tuple[str, str, str | None]] = set()
+        for entry in raw_cells:
+            normalized = _normalize_live_cell(entry)
+            if normalized is None:
+                return None
+            vendor, _model, _effort = normalized
+            if vendor not in known_vendors:
+                return None
+            live_cell_set.add(normalized)
+        for vendor in known_vendors:
+            cell = matrix_config(tier, vendor)
+            if cell is None:
+                continue
+            model, effort = cell
+            if (vendor, model, effort) not in live_cell_set:
+                continue
+            fam = family_for(tier, vendor)
+            if fam is None or not is_allowed(tier, vendor, model, effort):
+                continue
+            families.add(fam)
+        # claude is always live and is never probed — count its registry cell at this tier
+        claude_cell = matrix_config(tier, "claude")
+        if claude_cell is not None:
+            model, effort = claude_cell
+            fam = family_for(tier, "claude")
+            if fam is not None and is_allowed(tier, "claude", model, effort):
+                families.add(fam)
+        return families
+    # synthesized and absent source fall through: synthesized cells derive from the
+    # pessimistic liveVendors rollup, so vendor-level evidence is never less conservative.
     live = seat_map.get("liveVendors")
     if not isinstance(live, list) or not live:
         return None
-    known_vendors = set(vendors())
     for vendor in live:
         if not isinstance(vendor, str) or not vendor or vendor not in known_vendors:
             return None
-    tier = tier or _seat_tier(seat, cfg)
-    families: set[str] = set()
     for vendor in live:
         cell = matrix_config(tier, vendor)
         if cell is None:
@@ -272,6 +351,8 @@ def build(
     tier_by_seat: dict[str, str] | None = None,
     pins: dict[str, dict] | None = None,
     liveness_pin_scoped: bool = False,
+    live_cells: list | None = None,
+    live_cells_source: str | None = None,
 ) -> dict:
     degradations: list[dict[str, str]] = []
     tier_degraded_seats: set[str] = set()
@@ -279,14 +360,33 @@ def build(
     roster = tuple(roster) if roster else PANEL_ROSTER
 
     live = [v for v in (live_vendors or []) if isinstance(v, str) and v]
+
+    if live_cells is None:
+        live_cells_normalized = _synthesize_live_cells(live, roster, tier_by_seat)
+        resolved_cells_source = live_cells_source
+    else:
+        live_cells_normalized = set()
+        for entry in live_cells:
+            normalized = _normalize_live_cell(entry)
+            if normalized is not None:
+                live_cells_normalized.add(normalized)
+        resolved_cells_source = live_cells_source or "probed"
+
+    seating_vendors = sorted({v for (v, _m, _e) in live_cells_normalized})
+    if "claude" in live:
+        seating_vendors = sorted(set(seating_vendors) | {"claude"})
+    if not seating_vendors:
+        seating_vendors = ["claude"]
+
     if not live:
         live = ["claude"]
-        degradations.append(
-            {
-                "constraint": "live-vendors",
-                "reason": "no live vendors — defaulted to claude",
-            }
-        )
+        if not (set(seating_vendors) - {"claude"}):
+            degradations.append(
+                {
+                    "constraint": "live-vendors",
+                    "reason": "no live vendors — defaulted to claude",
+                }
+            )
 
     tiers = dict(DEFAULT_TIER_BY_SEAT)
     if tier_by_seat:
@@ -316,6 +416,9 @@ def build(
         if cell is None:
             return None
         model, effort = cell
+        # bite-axis: a seat is refused a cell that is not live — claude is always live, never probed
+        if vendor != "claude" and (vendor, model, effort) not in live_cells_normalized:
+            return None
         fam = family_for(tier, vendor)
         if fam is None:
             return None
@@ -336,21 +439,13 @@ def build(
     def _backfill(seat: str) -> dict:
         tier = _tier_for(seat)
         for try_tier in (tier, "reviewer"):
-            for vendor in sorted(live):
+            for vendor in seating_vendors:
                 cfg = _resolve_at_tier(seat, vendor, try_tier)
                 if cfg is not None:
                     cfg = dict(cfg)
                     cfg["source"] = "backfill"
                     if try_tier != tier:
                         cfg["tier"] = try_tier
-                    return cfg
-        for vendor in sorted(live):
-            for try_tier in sorted({tiers.get(s, "reviewer") for s in roster} | {"reviewer", "reviewer-deep"}):
-                cfg = _resolve_at_tier(seat, vendor, try_tier)
-                if cfg is not None:
-                    cfg = dict(cfg)
-                    cfg["source"] = "backfill"
-                    cfg["tier"] = try_tier
                     return cfg
         for try_tier in ("reviewer-deep", "reviewer"):
             cfg = _resolve_at_tier(seat, "claude", try_tier)
@@ -361,7 +456,7 @@ def build(
                 return cfg
         fallback_family = family_for("reviewer", "claude") or "anthropic"
         return {
-            "vendor": live[0],
+            "vendor": seating_vendors[0] if seating_vendors else "claude",
             "model": "",
             "effort": None,
             "tier": tier,
@@ -374,7 +469,7 @@ def build(
     same_family_seats: set[str] = set()
     pinned_maker_seats: set[str] = set()
     for seat in roster:
-        base = [cfg for cfg in (_resolve(seat, v) for v in live) if cfg is not None]
+        base = [cfg for cfg in (_resolve(seat, v) for v in seating_vendors) if cfg is not None]
 
         if seat in STRONG_TIER_SEATS:
             eligible = list(base)
@@ -454,7 +549,11 @@ def build(
         default_model, default_effort = cell
         model = pin.get("model", default_model)
         effort = pin.get("effort", default_effort)
-        if pin_vendor in live and is_allowed(tier, pin_vendor, model, effort):
+        pin_cell_live = (
+            pin_vendor == "claude"
+            or (pin_vendor, model, effort) in live_cells_normalized
+        )
+        if pin_cell_live and is_allowed(tier, pin_vendor, model, effort):
             fam = family_for(tier, pin_vendor)
             if pin_seat == GROUNDING_SEAT:
                 excl = {f for f in (author_family, narrative_family) if f}
@@ -518,7 +617,7 @@ def build(
         else:
             seen_vendors: set[str] = set()
             sorted_cfgs: list[dict] = []
-            for vendor in sorted(live):
+            for vendor in seating_vendors:
                 for cfg in cfgs:
                     if cfg["vendor"] == vendor and vendor not in seen_vendors:
                         seen_vendors.add(vendor)
@@ -618,10 +717,13 @@ def build(
         "degradations": degradations,
         "seed": seed,
         "liveVendors": list(live),
+        "liveCells": sorted([list(c) for c in live_cells_normalized]),
         "authorFamily": author_family,
         "narrativeFamily": narrative_family,
         "livenessPinScoped": bool(liveness_pin_scoped),
     }
+    if resolved_cells_source is not None:
+        result["liveCellsSource"] = resolved_cells_source
     # ONE predicate decides "was the maker unavoidable?" — recording it here from the finished map
     # keeps build() and verify() from disagreeing on the same seat (#670 review, two seats).
     seen = {(d.get("constraint"), d.get("seat")) for d in degradations if isinstance(d, dict)}
@@ -830,16 +932,20 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         if key not in seen:
             seen.add(key)
             degradations.append(rec)
-    return {
+    receipt_live_cells, receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
+    out = {
         "seats": seat_map.get("seats", {}),
         "degradations": degradations,
         "seed": seat_map.get("seed"),
         "liveVendors": seat_map.get("liveVendors", []),
+        "liveCells": receipt_live_cells,
+        "liveCellsSource": receipt_cells_source,
         "narrativeFamily": seat_map.get("narrativeFamily"),
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
     }
+    return out
 
 
 def build_parser():
@@ -913,9 +1019,12 @@ def main(argv):
                     print(token, file=sys.stderr)
                 return 1
 
+        live_cells = None
+        live_cells_source = None
         if args.live_vendors is not None and args.probe_mode != "cache-only":
             live = [v for v in args.live_vendors.split(",") if v]
             liveness_pin_scoped = False
+            live_cells_source = "synthesized"
         else:
             now = time.time()
             cache_path = liveness_cache.receipt_path(".")
@@ -924,13 +1033,14 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(configured, pins) if pins else None
             liveness_pin_scoped = needed_override is not None
-            live, _liveness, notes = preflight_probe.live_vendors_for_composition(
+            live, live_cells, _liveness, notes = preflight_probe.live_vendors_for_composition(
                 configured,
                 needed_override=needed_override,
                 probe_mode=args.probe_mode,
                 cache_path=cache_path,
                 now=now,
             )
+            live_cells_source = "probed"
         seed = seed_from(args.pr_number, args.head_sha)
         sm = build(
             PANEL_ROSTER,
@@ -940,12 +1050,18 @@ def main(argv):
             seed,
             pins=pins,
             liveness_pin_scoped=liveness_pin_scoped,
+            live_cells=live_cells,
+            live_cells_source=live_cells_source,
         )
         if notes:
             # merge BEFORE to_receipt: the evidence check reads sm["degradations"], so a note that
             # lands after the receipt is derived can never be seen by it (#670 review, two seats).
             sm["degradations"] = list(sm.get("degradations", [])) + list(notes)
         receipt = to_receipt(sm)
+        if "liveCellsSource" not in receipt:
+            receipt["liveCellsSource"] = (
+                live_cells_source if live_cells_source is not None else "synthesized"
+            )
         json.dump(receipt, sys.stdout)
         sys.stdout.write("\n")
         return 0
