@@ -1069,7 +1069,9 @@ _REVIEW_CONTRACT_PARSERS = {
 
 def _carries_findings(result):
     value = result.get("findings")
-    return isinstance(value, list), value
+    if isinstance(value, list):
+        return True, value
+    return False, None
 
 
 def _nonempty_findings(value):
@@ -1082,7 +1084,9 @@ def _engaged_findings(value):
 
 def _carries_verdicts(result):
     value = result.get("verdicts")
-    return isinstance(value, list), value
+    if isinstance(value, list):
+        return True, value
+    return False, None
 
 
 def _nonempty_verdicts(value):

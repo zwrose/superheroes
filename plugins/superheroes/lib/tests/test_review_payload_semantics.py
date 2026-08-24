@@ -31,7 +31,8 @@ def test_every_registered_kind_has_payload_semantics():
     kinds_matchers = {kind for kind, _ in EA._REVIEW_CONTRACT_MATCHERS}
     kinds_parsers = set(EA._REVIEW_CONTRACT_PARSERS)
     kinds_semantics = set(EA._REVIEW_PAYLOAD_SEMANTICS)
-    all_sets = (kinds_result, kinds_matchers, kinds_parsers, kinds_semantics)
+    kinds_public = set(EA.REVIEW_PAYLOAD_SEMANTIC_KINDS)
+    all_sets = (kinds_result, kinds_matchers, kinds_parsers, kinds_semantics, kinds_public)
     if len({frozenset(s) for s in all_sets}) != 1:
         symdiff = set()
         for left in all_sets:
@@ -127,6 +128,32 @@ def test_derived_sites_agree_with_the_registry(kind, dispatch_result, engagement
 
     assert (EA.engagement_read(engagement_input) == "engaged") == (
         EA.review_payload_engaged(engagement_input, kind))
+
+
+_CARRIES_NOT_CARRIED_WRONG_TYPED = {
+    "findings": "oops",
+    "verdicts": "oops",
+    "grouping": "oops",
+    "ruling": "oops",
+}
+assert set(_CARRIES_NOT_CARRIED_WRONG_TYPED) == set(EA._REVIEW_PAYLOAD_SEMANTICS)
+
+
+def _absent_payload_result(kind):
+    return {"resultKind": kind}
+
+
+def _wrong_typed_not_carried_result(kind):
+    if kind == "grouping":
+        # grouping carries any present key; only absence is not-carried.
+        return {"resultKind": kind}
+    return {"resultKind": kind, kind: _CARRIES_NOT_CARRIED_WRONG_TYPED[kind]}
+
+
+@pytest.mark.parametrize("kind", EA._REVIEW_PAYLOAD_SEMANTICS)
+def test_carries_returns_no_value_when_not_carried(kind):
+    assert EA.review_payload_carried(_absent_payload_result(kind), kind) == (False, None)
+    assert EA.review_payload_carried(_wrong_typed_not_carried_result(kind), kind) == (False, None)
 
 
 def test_unregistered_kind_fails_closed_at_runtime():
