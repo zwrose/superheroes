@@ -76,6 +76,7 @@ import round_phases  # noqa: E402
 import seat_map  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
+import version_skew  # noqa: E402
 from finding_identity import finding_identity, normalize_title  # noqa: E402
 
 _seat_map_unexcused_violations = seat_map.unexcused_violations
@@ -766,6 +767,41 @@ def _same_family_degraded(state):
     return bool(_same_family_seats(state))
 
 
+def _skew_records(state):
+    """Plugin-version-skew degradations from the seat map's own receipt (#677). A disclosed
+    degradation when the running plugin's review semantics differ from the repository's own —
+    never recomputed here."""
+    sm = state.get("seatMap")
+    degradations = sm.get("degradations") if isinstance(sm, dict) else None
+    if not isinstance(degradations, list):
+        return []
+    records = []
+    for deg in degradations:
+        if isinstance(deg, dict) and deg.get("constraint") == version_skew.CONSTRAINT:
+            records.append(deg)
+    return records
+
+
+def _skew_degraded(state):
+    return bool(_skew_records(state))
+
+
+def _plugin_version_skew_status(state):
+    """Seat-map tri-state status for certification disclosure (#677). ``absent`` when the seat map
+    carries no ``pluginVersionSkew`` receipt — an older map or one built without the field — so the
+    certification block never claims a skew check ran."""
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return "absent"
+    pvs = sm.get("pluginVersionSkew")
+    if not isinstance(pvs, dict):
+        return "absent"
+    status = pvs.get("status")
+    if status in version_skew.STATUSES:
+        return status
+    return "absent"
+
+
 def _seat_map_violations(state):
     """Unexcused seat-map constraint violations — a BREACH channel, distinct from the disclosed
     degradations (#680). The UNION of what each round recorded and what the live merged seat map
@@ -866,6 +902,9 @@ def _cert_shape(state, base):
         _degraded(state)
         or _base_degraded(state)
         or _same_family_degraded(state)
+        # bite-axis: skewed review never reads unqualified-clean — projection 1 of 3 independent
+        # skew guards (_cert_shape here; shapeDrivers and degraded prose are the other two, #677).
+        or _skew_degraded(state)
         or _seat_pin_excused(state)
     ):
         return base + "-degraded"
@@ -3024,6 +3063,10 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("base")
     if _same_family_degraded(state):
         shape_drivers.append("same-family")
+    # bite-axis: skewed review never reads unqualified-clean — projection 2 of 3 independent skew
+    # guards (shapeDrivers here; _cert_shape and degraded prose are the other two, #677).
+    if _skew_degraded(state):
+        shape_drivers.append("plugin-version-skew")
     if _seat_pin_excused(state):
         shape_drivers.append("seat-pin")
     if _seat_map_violated(state):
@@ -3031,9 +3074,12 @@ def _terminal_converged(state, config, full_panel, note=None):
     if _seat_map_unproven_liveness(state):
         shape_drivers.append("unproven-liveness")
     state["terminal"] = "converged"
+    # bite-axis: skew tri-state rides certification beside shape/shapeDrivers so a vetter sees
+    # whether the seat map checked skew — independent of the three -degraded projections (#677).
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
+            "pluginVersionSkew": _plugin_version_skew_status(state),
             "shapeDrivers": sorted(shape_drivers)}
     if note:
         cert["note"] = note
@@ -3111,6 +3157,23 @@ def build_receipt(state, session_dir=None):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(_same_family_seats(state)))
+    # bite-axis: skewed review never reads unqualified-clean — projection 3 of 3 independent skew
+    # guards (degraded prose here; _cert_shape and shapeDrivers are the other two, #677).
+    if _skew_degraded(state):
+        _skew_reasons = []
+        for rec in _skew_records(state):
+            reason = rec.get("reason")
+            if isinstance(reason, str) and reason:
+                _skew_reasons.append(reason)
+        if _skew_reasons:
+            degraded.append(
+                "%s; disclosed by the seat map and named in the certification shape"
+                % "; ".join(_skew_reasons))
+        else:
+            degraded.append(
+                "plugin-version-skew: the review ran under a plugin/repository semantics skew "
+                "but no usable reason text was recorded; disclosed by the seat map and named in "
+                "the certification shape")
     _pin_seats = _seat_pin_excused_seats(state)
     if _pin_seats:
         degraded.append(

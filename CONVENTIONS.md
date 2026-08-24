@@ -678,6 +678,15 @@ family simply never seats through rotation. Where **no** alternative family is l
 with the maker family and the map records a disclosed `same-family` degradation, which
 rides the certification shape (`-degraded`) alongside `independenceDegraded` and
 `baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
+Compose may also record a disclosed `plugin-version-skew` degradation when the running
+plugin's `lib/model_registry.py` or `lib/seat_map.py` content-diverges from the
+superheroes source repository (not a version-string compare — throughout the skew window
+the repo's `version.txt` still matches a correctly-updated cache); detection only, never
+blocks, and resolving it is human (apply ratified deltas by hand, or wait for the cut).
+The compose receipt always carries a separate `pluginVersionSkew` field (`status`, `detail`,
+`inspectedRoot`) so a receipt distinguishes checked-clean from never-checked — the negative
+is on the record, not inferred from silence; only `checked-degraded` appends to
+`degradations`. That channel too rides `-degraded` and appears in `certification.shapeDrivers`.
 `verify()` treats a maker-family seat as a **violation** when an alternative family was
 reachable, and as **not** a violation when unavoidable (the degradation path); unusable
 liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed

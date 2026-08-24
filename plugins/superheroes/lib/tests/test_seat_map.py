@@ -10,6 +10,8 @@ _LIB = os.path.join(_HERE, "..")
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import version_skew
+
 _MOD = os.path.join(_LIB, "seat_map.py")
 
 
@@ -561,6 +563,14 @@ def test_review_code_skill_wires_seat_pins_from_ep_to_compose():
     compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
     assert "SEAT_PINS" in compose_line or "PINS_ARGS" in compose_line
     assert "seat_map.py" in compose_line and '"${PINS_ARGS[@]}"' in compose_line
+    assert '--repo-root "$REPO_ROOT"' in compose_line
+
+
+def test_review_code_skill_wires_repo_root_to_compose():
+    from skill_surface import surface_text
+    text = surface_text("review-code")
+    compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
+    assert '--repo-root "$REPO_ROOT"' in compose_line
 
 
 def test_cli_compose_pins_json_error(capsys):
@@ -2094,3 +2104,107 @@ def test_to_receipt_always_emits_live_cells_fields():
     for receipt in receipts:
         assert "liveCells" in receipt
         assert "liveCellsSource" in receipt
+
+
+_PLUGIN_ROOT = os.path.join(_LIB, "..")
+
+
+def _write_superheroes_fixture_repo(tmp_path, divergent=True):
+    repo = tmp_path / "fixture_repo"
+    sh = repo / "plugins" / "superheroes"
+    manifest = sh / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps({"name": "superheroes", "version": "0.31.0"}),
+        encoding="utf-8",
+    )
+    (sh / "version.txt").write_text("0.31.0\n", encoding="utf-8")
+    lib = sh / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in ("model_registry.py", "seat_map.py"):
+        src = os.path.join(_PLUGIN_ROOT, "lib", entry)
+        content = open(src, encoding="utf-8").read()
+        if divergent and entry == "model_registry.py":
+            content = content + "# fixture skew marker\n"
+        (lib / entry).write_text(content, encoding="utf-8")
+    return str(repo)
+
+
+def test_cli_compose_repo_root_superheroes_skew_emits_plugin_version_skew(tmp_path, capsys):
+    repo_root = _write_superheroes_fixture_repo(tmp_path, divergent=True)
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            repo_root,
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    assert len(skew) == 1
+    assert skew[0]["detail"] == version_skew.DETAIL_SEMANTICS_DIVERGENT
+    assert "lib/model_registry.py" in skew[0]["reason"]
+
+
+def test_cli_compose_repo_root_superheroes_clean_emits_no_skew_degradation(tmp_path, capsys):
+    repo_root = _write_superheroes_fixture_repo(tmp_path, divergent=False)
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            repo_root,
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    assert skew == []
+    assert receipt["pluginVersionSkew"]["status"] == version_skew.STATUS_CHECKED_CLEAN
+    assert receipt["pluginVersionSkew"]["detail"] == version_skew.DETAIL_NO_DIVERGENCE
+
+
+def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_path, capsys):
+    repo_root = tmp_path / "other_repo"
+    repo_root.mkdir()
+    (repo_root / "README.md").write_text("not superheroes\n", encoding="utf-8")
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            str(repo_root),
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    assert skew == []
+    assert receipt["pluginVersionSkew"]["status"] == version_skew.STATUS_NOT_CHECKED
+    assert receipt["pluginVersionSkew"]["detail"] == version_skew.DETAIL_NOT_SOURCE_REPO
