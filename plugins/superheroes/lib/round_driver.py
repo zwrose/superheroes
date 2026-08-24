@@ -134,7 +134,9 @@ SUPPORTED_STATE_VERSIONS = (2, 3)
 # structurally un-confusable and `validate_receipt` dispatches on that.
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
+RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 ATTESTED_VERDICT = "uncertified-manual"
+CHECKPOINT_STOP_REASONS = ("tripwire", "park", "held")
 # The verdicts a CERTIFIED receipt may carry — every `state["terminal"]` the folds can set. An
 # unlisted verdict is a receipt nobody in this module produced.
 CERTIFIED_VERDICTS = ("converged", "halted", "held", "stalled", "cannot-certify",
@@ -516,11 +518,14 @@ def _receipt_version(state):
 
 
 def receipt_kind(receipt):
-    """The receipt's shape name — `receipt-certified/<v>`, `receipt-attested/1`, or None."""
+    """The receipt's shape name — `receipt-certified/<v>`, `receipt-attested/1`,
+    `receipt-interim/1`, or None."""
     if not isinstance(receipt, dict):
         return None
     if receipt.get("schema") == RECEIPT_ATTESTED_SCHEMA:
         return RECEIPT_ATTESTED_SCHEMA
+    if receipt.get("schema") == RECEIPT_INTERIM_SCHEMA:
+        return RECEIPT_INTERIM_SCHEMA
     version = receipt.get("schemaVersion")
     if isinstance(version, bool) or not isinstance(version, int):
         return None
@@ -1341,6 +1346,18 @@ def _record_round(state, key, value):
     rec[key] = value
 
 
+def _record_round_append(state, key, value):
+    """Append one value to a per-round list without disturbing `_record_round`'s overwrite semantics."""
+    rec = state["rounds"].setdefault(str(state["round"]), {})
+    existing = rec.get(key)
+    if existing is None:
+        rec[key] = [value]
+    elif isinstance(existing, list):
+        existing.append(value)
+    else:
+        rec[key] = [existing, value]
+
+
 def _decision(state, kind, detail):
     state["decisions"].append({"round": state["round"], "kind": kind, "detail": detail})
 
@@ -1887,6 +1904,16 @@ def _fold_verifiers(state, config, artifact):
     state["_verified"] = applied["findings"]
     _record_round(state, "verify", {"drops": applied["drops"], "downgrades": applied["downgrades"],
                                     "unverified": applied["unverified"], "ambiguous": applied["ambiguous"]})
+    # axis: each verifier fold appends one verifyPasses entry; a second wave must not overwrite.
+    _record_round_append(state, "verifyPasses", {
+        "CONFIRMED": sum(1 for f in applied["findings"] if f.get("verdict") == "CONFIRMED"),
+        "PLAUSIBLE": sum(1 for f in applied["findings"] if f.get("verdict") == "PLAUSIBLE"),
+        "REFUTED": len(applied["drops"]),
+        "drops": len(applied["drops"]),
+        "downgrades": len(applied["downgrades"]),
+        "unverified": len(applied["unverified"]),
+        "ambiguous": len(applied["ambiguous"]),
+    })
     for d in applied["drops"]:
         _decision(state, "verifier-refuted", d.get("reason"))
     # round-1 findings and delta scoped candidates both route to synthesis; the delta settle is
@@ -3137,6 +3164,9 @@ def build_receipt(state, session_dir=None):
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
+        verify_passes = rec.get("verifyPasses")
+        if verify_passes:
+            rd["verifyPasses"] = verify_passes
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
@@ -3364,12 +3394,57 @@ def build_receipt(state, session_dir=None):
     return receipt
 
 
+def build_interim_receipt(state, session_dir, stop_reason):
+    """An interim driver receipt at a non-terminal stop — per-pass verdict totals without certification."""
+    receipt = build_receipt(state, session_dir)
+    for key in ("certification", "certificationShape", "schemaVersion", "verdict"):
+        receipt.pop(key, None)
+    receipt["schema"] = RECEIPT_INTERIM_SCHEMA
+    receipt["stop"] = {
+        "reason": stop_reason,
+        "writtenAt": time.strftime("%Y-%m-%dT%H:%M:%S"),
+    }
+    return receipt
+
+
+def _read_on_disk_receipt(session_dir):
+    path = os.path.join(session_dir, RECEIPT_FILE)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+
+def _terminal_receipt_on_disk(session_dir):
+    """True when a certified or attested receipt sits at the terminal path (not an interim)."""
+    receipt = _read_on_disk_receipt(session_dir)
+    if receipt is None:
+        return False
+    kind = receipt_kind(receipt)
+    return kind is not None and kind != RECEIPT_INTERIM_SCHEMA
+
+
+def _write_interim_receipt(session_dir, state, stop_reason):
+    """Write an interim receipt atomically. OSError PROPAGATES — same stance as `_write_receipt`."""
+    receipt = build_interim_receipt(state, session_dir, stop_reason)
+    path = os.path.join(session_dir, RECEIPT_FILE)
+    round_commit.atomic_write_bytes(
+        path, (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8"))
+    return receipt
+
+
 _RECEIPT_REQUIRED = ("schemaVersion", "verdict", "certificationShape", "rounds", "findings",
                      "decisions", "seatMap", "scriptRan", "degraded", "skippedBlockers")
 
 
 _ATTESTED_REQUIRED = ("schema", "verdict", "attestation", "rounds", "findings", "decisions",
                       "seatMap", "scriptRan", "degraded", "skippedBlockers", "artifacts", "roster")
+
+_INTERIM_REQUIRED = ("schema", "stop", "rounds", "findings", "decisions", "seatMap", "scriptRan",
+                     "degraded", "skippedBlockers")
 
 
 def validate_receipt(receipt):
@@ -3387,6 +3462,8 @@ def validate_receipt(receipt):
         return False, "receipt is not an object"
     if receipt.get("schema") == RECEIPT_ATTESTED_SCHEMA:
         return _validate_attested_receipt(receipt)
+    if receipt.get("schema") == RECEIPT_INTERIM_SCHEMA:
+        return _validate_interim_receipt(receipt)
     return _validate_certified_receipt(receipt)
 
 
@@ -3420,6 +3497,45 @@ def _validate_attested_receipt(receipt):
     for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
         if not isinstance(receipt.get(key), list):
             return False, "receipt %s must be a list" % key
+    return True, None
+
+
+def _validate_interim_receipt(receipt):
+    """The `receipt-interim/1` shape: a `stop` block REQUIRED, `certification` FORBIDDEN — an interim
+    is not a certification and must not be read as terminal evidence."""
+    for key in _INTERIM_REQUIRED:
+        if key not in receipt:
+            return False, "interim receipt missing required key %r" % key
+    for key in ("certification", "certificationShape", "verdict", "attestation"):
+        if key in receipt:
+            return False, ("interim receipt must not carry %r — an interim is NOT a certification"
+                           % key)
+    if receipt.get("schema") != RECEIPT_INTERIM_SCHEMA:
+        return False, "interim receipt schema must be %r" % RECEIPT_INTERIM_SCHEMA
+    stop = receipt.get("stop")
+    if not isinstance(stop, dict):
+        return False, "interim receipt stop must be an object"
+    reason = stop.get("reason")
+    if reason not in CHECKPOINT_STOP_REASONS:
+        return False, ("interim receipt stop reason %r is not one of: %s"
+                       % (reason, ", ".join(CHECKPOINT_STOP_REASONS)))
+    if not isinstance(stop.get("writtenAt"), str) or not stop.get("writtenAt"):
+        return False, "interim receipt stop must carry writtenAt"
+    if not isinstance(receipt.get("scriptRan"), dict):
+        return False, "receipt scriptRan must be an object (the journal-derived evidence)"
+    if "byPhase" not in receipt["scriptRan"]:
+        return False, "receipt scriptRan must carry byPhase (the per-phase journal counts)"
+    if not isinstance(receipt.get("seatMap"), dict):
+        return False, "receipt seatMap must be an object"
+    for key in ("rounds", "findings", "decisions", "degraded", "skippedBlockers"):
+        if not isinstance(receipt.get(key), list):
+            return False, "receipt %s must be a list" % key
+    for idx, rd in enumerate(receipt.get("rounds") or []):
+        if not isinstance(rd, dict):
+            continue
+        vp = rd.get("verifyPasses")
+        if vp is not None and not isinstance(vp, list):
+            return False, "round %s verifyPasses must be a list" % rd.get("round", idx)
     return True, None
 
 
@@ -4191,6 +4307,8 @@ def _verify_terminal_receipt(session_dir):
             on_disk = json.load(fh)
     except (OSError, ValueError) as exc:
         return "terminal receipt unreadable (%s) — cannot certify; treat as park" % exc
+    if receipt_kind(on_disk) == RECEIPT_INTERIM_SCHEMA:
+        return ("terminal receipt is interim — cannot certify; treat as park")
     ok, why = validate_receipt(on_disk)
     if not ok:
         return "terminal receipt invalid (%s) — cannot certify; treat as park" % why
@@ -7036,7 +7154,7 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
             state, refusal = _load_driver_state(session_dir, "attest")
             if refusal is not None:
                 return refusal
-            if os.path.exists(os.path.join(session_dir, RECEIPT_FILE)) or state.get("terminal"):
+            if _terminal_receipt_on_disk(session_dir) or state.get("terminal"):
                 return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
             binding, why = _resolve_failure_ref(session_dir, failure_ref)
             if why is not None:
@@ -7110,6 +7228,52 @@ def _cmd_attest_locked(session_dir, failure_ref, note, git=None, state=None, bin
     return {"ok": True, "verdict": ATTESTED_VERDICT, "receiptPath": path,
             "attestation": receipt["attestation"], "roster": receipt["roster"],
             "sidecar": side_path}
+
+
+def cmd_checkpoint(session_dir, stop_reason):
+    """Write an interim receipt at a non-terminal stop.
+
+    Re-invoking checkpoint after an earlier checkpoint is allowed — a run can stop, resume, and stop
+    again — and each write supersedes the previous interim. The write-once terminal rule applies only
+    to certified/attested receipts, not to interim supersession."""
+    if stop_reason not in CHECKPOINT_STOP_REASONS:
+        return _refuse_cmd(session_dir, "checkpoint", "checkpoint-stop-reason-unknown",
+                           detail=stop_reason)
+    try:
+        with round_records.session_lock(session_dir):
+            state, refusal = _load_driver_state(session_dir, "checkpoint")
+            if refusal is not None:
+                return refusal
+            if state.get("terminal"):
+                return _refuse_cmd(session_dir, "checkpoint", "checkpoint-session-terminal")
+            if _terminal_receipt_on_disk(session_dir):
+                return _refuse_cmd(session_dir, "checkpoint", "checkpoint-terminal-receipt-exists")
+            receipt = build_interim_receipt(state, session_dir, stop_reason)
+            ok, invalid = validate_receipt(receipt)
+            if not ok:
+                return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-invalid",
+                                   fault=FAULT_INTERNAL, detail=invalid)
+            path = os.path.join(session_dir, RECEIPT_FILE)
+            receipt_bytes = (json.dumps(receipt, indent=2, sort_keys=True) + "\n").encode("utf-8")
+            checkpoint_entry = _journal_entry_for_commit(
+                session_dir, "checkpoint", "checkpointed", stopReason=stop_reason)
+            try:
+                c = round_commit.begin(session_dir, "checkpoint")
+                c.add_replace_file(path, receipt_bytes)
+                c.add_journal_append(os.path.join(session_dir, JOURNAL_FILE), checkpoint_entry)
+                c.run()
+            except OSError as exc:
+                return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-unwritable",
+                                   fault=FAULT_INTERNAL, detail=str(exc))
+            except round_commit.CommitRefused as exc:
+                if exc.reason == "commit-apply-failed":
+                    return _refuse_cmd(session_dir, "checkpoint", "interim-receipt-unwritable",
+                                       fault=FAULT_INTERNAL, detail=exc.detail)
+                return _commit_refused_response(session_dir, "checkpoint", exc)
+            return {"ok": True, "receiptPath": path, "schema": receipt["schema"],
+                    "stop": receipt["stop"]}
+    except round_records.SessionLockHeld as held:
+        return _lock_held_refusal(session_dir, "checkpoint", held)
 
 
 def _parse_seat_map(raw):
@@ -7245,6 +7409,10 @@ def build_parser():
                                    "journal-degraded fault marker. There is NO issue reference — "
                                    "eligibility is allowlist-only")
     cli_contract.add_argument(pt, "--note", contract="free-text", required=True)
+
+    pc = sub.add_parser("checkpoint")
+    cli_contract.add_argument(pc, "--session-dir", contract="existing-directory", required=True)
+    pc.add_argument("--stop-reason", required=True, choices=list(CHECKPOINT_STOP_REASONS))
     return parser
 
 
@@ -7384,6 +7552,8 @@ def _dispatch(args):
                           owner_artifact_path=args.owner_artifact)
     elif args.cmd == "attest":
         out = cmd_attest(args.session_dir, args.failure, args.note)
+    elif args.cmd == "checkpoint":
+        out = cmd_checkpoint(args.session_dir, args.stop_reason)
     else:
         try:
             with open(args.artifact, encoding="utf-8") as fh:
