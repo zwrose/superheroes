@@ -106,6 +106,9 @@ MAX_CONFIRMATIONS = review_round_policy.MAX_CONFIRMATIONS
 _SELF_RECOVERY_FIXER_MODEL = "sonnet-5"
 _SELF_RECOVERY_FIXER_EFFORT = "high"
 
+# Fix-batch guidance key — single source shared with order templates (dispatch-fixer.md).
+FIX_BATCH_GUIDANCE_KEY = "userGuidance"
+
 SCHEMA_VERSION = 2
 STATE_FILE = "loop-state.json"
 JOURNAL_FILE = "driver-journal.jsonl"
@@ -2050,7 +2053,7 @@ def _fold_judgment(state, config, artifact):
             g["judgmentDisposition"] = "fix-with-guidance"
             guidance = d.get("guidance")
             if isinstance(guidance, str) and guidance.strip():
-                g["guidance"] = guidance.strip()
+                g[FIX_BATCH_GUIDANCE_KEY] = guidance.strip()
             disposition_log.append({"id": fid, "title": f.get("title"),
                                     "disposition": "fix-with-guidance"})
         elif disposition == "fix-as-suggested":
@@ -4714,11 +4717,99 @@ def _shipped_resource_refusal(placeholders):
     return None
 
 
+def _order_profile_path_is_file(value):
+    """True when PROFILE_PATH names a resolved absolute file, not prose refusal/unresolved text."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    stripped = value.strip()
+    if stripped.startswith("("):
+        return False
+    return os.path.isabs(stripped)
+
+
+def _emitted_path_is_file(emitted):
+    """True when ``emitted`` names an existing file, whether shell-quoted or raw."""
+    if not isinstance(emitted, str) or not emitted:
+        return False
+    parts = shlex.split(emitted)
+    if len(parts) != 1:
+        return False
+    return os.path.isfile(parts[0])
+
+
+def _readable_file_input_refusal(placeholders):
+    """Refuse when a registered readable file input in placeholders does not exist on disk."""
+    if not isinstance(placeholders, dict):
+        return None
+    for name in ORDER_READABLE_FILE_INPUTS:
+        emitted = placeholders.get(name)
+        if emitted is None:
+            continue
+        if name == "PROFILE_PATH" and not _order_profile_path_is_file(emitted):
+            continue
+        if not _emitted_path_is_file(emitted):
+            return "order-input-missing:%s" % name
+    return None
+
+
+def _order_input_refusal(placeholders):
+    """Emit-time guard for shipped resources and driver/orchestrator-readable file inputs."""
+    reason = _shipped_resource_refusal(placeholders)
+    if reason is not None:
+        return reason
+    return _readable_file_input_refusal(placeholders)
+
+
 # Order-input sidecar layout — one home for commit writes and order placeholders.
 ORDER_SIDECAR_CLUSTERS_DIR = "clusters"
 ORDER_SIDECAR_AUDIT_TARGETS_DIR = "audit-targets"
 ORDER_SIDECAR_SCOPED_HUNKS_FILE = "scoped-hunks.json"
 ORDER_SIDECAR_VERIFIED_FILE = "verified.json"
+
+# Readable file inputs cited in emitted orders — existence guarded at emit (registry #723).
+ORDER_READABLE_FILE_INPUTS = frozenset({
+    "DIFF_PATH",
+    "HEAD_DIFF_PATH",
+    "CLUSTER_FINDINGS_PATH",
+    "TARGET_SUMMARY_PATH",
+    "HUNKS_PATH",
+    "VERIFIED_FINDINGS_PATH",
+    "FIX_BATCH_PATH",
+    "PRIOR_COMMENTS_PATH",
+    "PROFILE_PATH",
+})
+ORDER_SHIPPED_RESOURCE_INPUTS = frozenset({
+    "RUBRIC_PATH",
+    "ESCALATION_WRAPPER_PATH",
+})
+# Seat/orchestrator output paths — cited but not required to exist before dispatch.
+ORDER_OUTPUT_PLACEHOLDERS = frozenset({
+    "FINDINGS_OUTPUT_PATH",
+    "GROUPING_OUTPUT_PATH",
+    "PR_CHECKOUT_PATH",
+})
+# Substitution values — prose, derived blocks, or directories not file-existence-guarded here.
+ORDER_DERIVED_PLACEHOLDERS = frozenset({
+    "OUTPUT_CHANNEL_BLOCK",
+    "PR_CHECKOUT_CONTEXT_LINE",
+    "PR_CHECKOUT_INSTRUCTION_BLOCK",
+    "PRIOR_COMMENTS_CONTEXT_LINE",
+    "FOCUS_CONTEXT_LINE",
+    "MODE",
+    "REPO",
+    "TARGET",
+    "DIMENSION",
+    "CHANNEL",
+    "FOCUS_NOTES",
+    "CORE_PATH",
+    "LAYER_PATH",
+    "VERIFICATION_ROOT",
+    "CWD",
+    "REPO_ROOT",
+    "VERIFY_COMMAND",
+    "ROUND",
+    "TARGET_ID",
+})
 
 
 def _order_cluster_sidecar_path(rdir, index):
@@ -4782,6 +4873,21 @@ def _session_meta(session_dir):
     return obj if (err is None and isinstance(obj, dict)) else {}
 
 
+def _ensure_bytes_at_path(path, expected):
+    """Write ``path`` when absent or content differs — atomic tmp+rename."""
+    needs_write = True
+    if os.path.isfile(path):
+        try:
+            with open(path, "rb") as fh:
+                on_disk = fh.read()
+            needs_write = on_disk != expected
+        except OSError:
+            needs_write = True
+    if needs_write:
+        round_commit.atomic_write_bytes(path, expected)
+    return path
+
+
 def _ensure_round_diff(session_dir, rnd, state):
     """Write `round-<N>/diff.txt` when absent or untrusted so order templates have a real path to cite."""
     rdir = round_records.round_dir(session_dir, rnd)
@@ -4790,17 +4896,37 @@ def _ensure_round_diff(session_dir, rnd, state):
     if not isinstance(diff_text, str):
         raise ValueError("reviewed-diff-unavailable")
     expected = diff_text.encode("utf-8")
-    needs_write = True
-    if os.path.isfile(diff_path):
-        try:
-            with open(diff_path, "rb") as fh:
-                on_disk = fh.read()
-            needs_write = on_disk != expected
-        except OSError:
-            needs_write = True
-    if needs_write:
-        round_commit.atomic_write_bytes(diff_path, expected)
-    return diff_path
+    return _ensure_bytes_at_path(diff_path, expected)
+
+
+def _ensure_round_head_diff(session_dir, rnd, state):
+    """Write `round-<N>/head.diff` from state when absent or untrusted."""
+    head_text = state.get("headDiff")
+    if not isinstance(head_text, str) or not head_text:
+        raise ValueError("order-render-refused:head-diff-unavailable")
+    rdir = round_records.round_dir(session_dir, rnd)
+    head_path = os.path.join(rdir, "head.diff")
+    return _ensure_bytes_at_path(head_path, head_text.encode("utf-8"))
+
+
+def _ensure_fix_batch_file(session_dir, rnd, state):
+    """Materialize fix-batch.json from state for fixer orders."""
+    rdir = round_records.round_dir(session_dir, rnd)
+    path = os.path.join(rdir, "fix-batch.json")
+    batch = state.get("_fixBatch")
+    if not isinstance(batch, list):
+        batch = state.get("fixBatch")
+    if not isinstance(batch, list):
+        batch = []
+    return _ensure_bytes_at_path(path, round_records.canonical(batch).encode("utf-8"))
+
+
+def _ensure_prior_comments_file(session_dir):
+    """Materialize prior-comments.json when absent so panel orders cite a real path."""
+    path = os.path.join(session_dir, "prior-comments.json")
+    if not os.path.isfile(path):
+        _ensure_bytes_at_path(path, b"[]")
+    return path
 
 
 def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat):
@@ -4854,7 +4980,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,
-            "PRIOR_COMMENTS_PATH": os.path.join(session_dir, "prior-comments.json"),
+            "PRIOR_COMMENTS_PATH": _ensure_prior_comments_file(session_dir),
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,
             "CHANNEL": channel,
@@ -4871,16 +4997,27 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
                 break
         if cluster_index is None:
             raise ValueError("order-render-refused:unmatched-verifier-cluster:%s" % cluster_key)
+        cluster = (payload.get("clusters") or [])[cluster_index]
+        if not isinstance(cluster, dict):
+            cluster = {}
+        cluster_path = _order_cluster_sidecar_path(rdir, cluster_index)
+        _ensure_bytes_at_path(cluster_path, round_records.canonical(cluster).encode("utf-8"))
         ph = {
-            "CLUSTER_FINDINGS_PATH": _order_cluster_sidecar_path(rdir, cluster_index),
+            "CLUSTER_FINDINGS_PATH": cluster_path,
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "CHANNEL": channel,
         }
     elif phase == P_SYNTHESIS:
+        findings = payload.get("findings")
+        if not isinstance(findings, list):
+            findings = []
+        verified_path = _order_verified_sidecar_path(rdir)
+        _ensure_bytes_at_path(verified_path,
+                              round_records.canonical({"findings": findings}).encode("utf-8"))
         ph = {
-            "VERIFIED_FINDINGS_PATH": _order_verified_sidecar_path(rdir),
+            "VERIFIED_FINDINGS_PATH": verified_path,
             "DIFF_PATH": diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
@@ -4903,19 +5040,33 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             targets = []
         if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
+        skey = round_records.storage_key(seat_key, occurrence)
+        target = {}
+        for t in targets:
+            if isinstance(t, dict) and t.get("id") == seat_key:
+                target = t
+                break
+        target_path = _order_audit_target_sidecar_path(rdir, skey)
+        _ensure_bytes_at_path(target_path, round_records.canonical(target).encode("utf-8"))
+        head_diff_path = _ensure_round_head_diff(session_dir, rnd, state)
         ph = {
-            "TARGET_SUMMARY_PATH": _order_audit_target_sidecar_path(
-                rdir, round_records.storage_key(seat_key, occurrence)),
-            "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
+            "TARGET_SUMMARY_PATH": target_path,
+            "HEAD_DIFF_PATH": head_diff_path,
             "VERIFICATION_ROOT": repo_root,
             "RUBRIC_PATH": rubric_path,
             "TARGET_ID": seat_key,
             "CHANNEL": channel,
         }
     elif phase == P_SCOPED:
+        hunks = payload.get("hunks")
+        if not isinstance(hunks, dict):
+            hunks = {}
+        hunks_path = _order_scoped_hunks_sidecar_path(rdir)
+        _ensure_bytes_at_path(hunks_path, round_records.canonical(hunks).encode("utf-8"))
+        head_diff_path = _ensure_round_head_diff(session_dir, rnd, state)
         ph = {
-            "HUNKS_PATH": _order_scoped_hunks_sidecar_path(rdir),
-            "HEAD_DIFF_PATH": os.path.join(rdir, "head.diff"),
+            "HUNKS_PATH": hunks_path,
+            "HEAD_DIFF_PATH": head_diff_path,
             "RUBRIC_PATH": rubric_path,
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
@@ -4924,8 +5075,9 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
         }
     elif phase == P_FIXER:
+        fix_batch_path = _ensure_fix_batch_file(session_dir, rnd, state)
         ph = {
-            "FIX_BATCH_PATH": os.path.join(rdir, "fix-batch.json"),
+            "FIX_BATCH_PATH": fix_batch_path,
             "PROFILE_PATH": _profile_path_for_orders(repo_root),
             "RUBRIC_PATH": rubric_path,
             "CWD": repo_root,
@@ -5113,18 +5265,17 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                                     "phase": phase, "vendorSource": row.get("vendorSource")})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
                                                      seat_key, occurrence, pending_payload, row)
-        resource_reason = _shipped_resource_refusal(context.get("placeholders"))
+        resource_reason = _order_input_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
         # Order-input ownership at emission (see also round-driver.md §Emitted orders):
         #   driver commits in orders-emit: clusters/<i>.json, audit-targets/<skey>.json,
         #   scoped-hunks.json, verified.json
-        #   driver writes outside orders-emit commit: diff.txt (via _ensure_round_diff when absent
-        #   or untrusted — atomic tmp+rename, content-checked against state)
-        #   orchestrator must supply before dispatch: diff.txt (real git diff), head.diff,
-        #   fix-batch.json (skills/review-code/reference/setup.md session-artifact table).
-        # STUB(#723): order-input existence class not closed — placeholder set and sidecar set
-        # must derive from one source before a fail-closed guard can land here.
+        #   driver materializes before emit: diff.txt, head.diff, fix-batch.json, phase sidecars,
+        #   prior-comments.json (empty array when orchestrator did not supply one)
+        # STUB(#723): readable-input registry + fail-closed existence guard now cover driver-owned
+        # file inputs; sidecar set still duplicates _order_sidecar_writes for the orders-emit commit
+        # — closing that single-source seam remains open.
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))
