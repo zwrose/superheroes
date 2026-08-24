@@ -406,10 +406,11 @@ as builder-dispatched work, in this shape:
   against two files holding two sides of one contract.
 - **The order carries the finding text**, so the implementer fixes a stated defect rather than
   re-deriving it from the file.
-- **The orchestrator verifies independently**, re-running every receipt itself. The refusal removes
-  the loop's own fix-audit stage, and that re-run is what **replaces** it — it replaces nothing
-  else. Re-review below, the full local gates, and CI all still apply exactly as they do to any
-  other fix.
+- **The orchestrator verifies independently**, re-running every receipt itself, exactly as it does
+  for any implementer work order — and re-review below, the full local gates, and CI all still
+  apply unchanged. Nothing about the refusal lowers that bar or shifts any part of it onto the
+  loop; how the loop's own stages behave around an escalated finding is the driver's business
+  (`skills/review-code/reference/round-driver.md`), not this route's.
 - **Re-review is unchanged** — the fixed surface goes back through the review loop like any other
   fix, and the loop's convergence bar and the third-rework tripwire both still bind.
 
