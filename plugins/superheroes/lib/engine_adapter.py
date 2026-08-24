@@ -31,7 +31,7 @@ TASK_ID_TRAILER = "Task-Id"
 # import this name, never restate the literal.
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
-import round_adapters  # noqa: E402  (P_SYNTHESIS / P_AUDITS contracts; no import cycle)
+import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
@@ -913,11 +913,11 @@ def _matches_review_grouping(obj):
 
 
 def _audit_ruling_payload_valid(obj):
-    """Validate ruling per round_adapters P_AUDITS contract. Never raises."""
+    """Validate ruling per payload_contracts P_AUDITS contract. Never raises."""
     audit_id = obj.get("id")
     if isinstance(audit_id, str) and not audit_id.strip():
         return False
-    return round_adapters.payload_fault(round_adapters.P_AUDITS, obj, "") is None
+    return payload_contracts.payload_fault(payload_contracts.P_AUDITS, obj, "") is None
 
 
 def _matches_review_ruling(obj):
@@ -950,11 +950,11 @@ def _recognised_review_kinds(obj):
 
 
 def _grouping_payload_valid(grouping):
-    """Validate synthesis grouping per round_adapters P_SYNTHESIS contract. Never raises."""
-    return round_adapters.payload_fault(
-        round_adapters.P_SYNTHESIS,
+    """Validate synthesis grouping per payload_contracts P_SYNTHESIS contract. Never raises."""
+    return payload_contracts.payload_fault(
+        payload_contracts.P_SYNTHESIS,
         {"grouping": grouping},
-        round_adapters.SEAT_SYNTHESIS,
+        payload_contracts.SEAT_SYNTHESIS,
     ) is None
 
 
