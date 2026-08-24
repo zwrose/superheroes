@@ -168,6 +168,45 @@ def test_interactivity_survives_compaction():
         "the compaction-recovery step does not restore `$INTERACTIVE` — it restores everything "
         "the gate needs except the flag the gate branches on (#1133 review round 1)"
     )
+    # Restoring after the gate restores nothing: the gate has already sent an unknown channel to
+    # the degradation and exited. Order is the guarantee, not the mention.
+    restore_at = review_only.index(compaction[0])
+    gate_at = review_only.index("Decide the presentation channel")
+    assert restore_at < gate_at, (
+        "the compaction-recovery step sits at offset %d, after the channel gate at offset %d — a "
+        "resumed interactive run reaches the gate with the flag unrestored, takes the degradation, "
+        "and exits before the line that would have recovered it (#1133 review round 2)"
+        % (restore_at, gate_at)
+    )
+
+
+# axis: the inline review-init bootstrap — the one branch of Setup that runs another skill's
+# questions — is gated on the inherited flag. This is where two separate residual stalls lived
+# (the reassigned flag, and the in-repo commit question), so the detector covers Setup's route,
+# not only the presentation section.
+def test_inline_bootstrap_route_is_gated():
+    setup = _read(_SETUP_MD)
+    inline = [
+        para for para in setup.split("\n\n")
+        if "run review-init inline" in para
+    ]
+    assert inline, (
+        "reference/setup.md no longer describes the inline review-init bootstrap — if that route "
+        "moved, re-point this detector at its new home rather than deleting it (#1133)"
+    )
+    route = "\n\n".join(inline + [
+        para for para in setup.split("\n\n") if "not the only question in there" in para
+    ])
+    assert _GATE_FLAG in route, (
+        "the inline review-init bootstrap is described with no `%s` gate — Setup runs another "
+        "skill's interview and its in-repo commit question inside a run that may have nobody to "
+        "answer either (#1133 review rounds 1 and 2)" % _GATE_FLAG
+    )
+    assert "uncommitted" in route, (
+        "the inline bootstrap does not say what a headless in-repo run does with the files it "
+        "creates — the commit question is reachable with `$LOC` = in-repo even when the flag is "
+        "false, so the headless answer has to be written down (#1133 review round 2)"
+    )
 
 
 # axis: regression in the interactive path — a question tier or the review gate's partition lost

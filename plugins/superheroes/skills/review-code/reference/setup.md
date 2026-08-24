@@ -178,6 +178,8 @@ fi
 
 When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above — **inheriting this run's already-resolved `$INTERACTIVE`, never reassigning it.** That skill's own bootstrap block opens with `INTERACTIVE=true` for the case where it is the entry point; run inline it is not, and re-running that line would raise the flag a headless run just lowered and hand review-init's interview questions to nobody — the stall this file's resolve-once rule exists to prevent. Its own headless branch (skip the interview, provisional profile from detected defaults) is the one that applies.
 
+**Its interview is not the only question in there.** When the created layer lands **in-repo**, review-init's write step asks whether to commit the new files — and `$LOC` can be `in-repo` on a headless run regardless of the flag, because `decide_mode` honours an env override or a recorded band mode ahead of the interactive/headless split. So `$INTERACTIVE=false` plus a recorded in-repo band mode reaches a commit question with nobody to answer it. **On a headless inline bootstrap that question is skipped too:** write the core + layer, leave them **uncommitted and untracked**, say so in the dispatch summary, and continue. Committing them unasked would be the other failure — a headless review writing to the user's index — so the honest headless answer is to leave the files for a human to stage.
+
 **Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate and fixer:
 
 ```bash
