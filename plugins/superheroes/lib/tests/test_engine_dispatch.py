@@ -5496,7 +5496,6 @@ def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch
         monkeypatch,
         "_git_scrubbed_bytes",
         fail_worktree_list,
-        {("_git_scrubbed_bytes", "worktree")},
     )
     baseline = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert baseline is not None
@@ -5746,7 +5745,6 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         monkeypatch,
         "_git_scrubbed_bytes",
         fake_status_git,
-        {("_git_scrubbed_bytes", "status")},
     )
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
@@ -5845,6 +5843,7 @@ def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
 PROBE_GIT_FAKE_ROUTES = {
     "test_worktree_baseline_fallback_on_enumeration_failure": {
         ("_git_scrubbed_bytes", "worktree"),
+        ("_git_scrubbed_bytes", "status"),
     },
     "test_worktree_dirt_invariant_unchanged_tree_cross_product": {
         ("_git_scrubbed_bytes", "status"),
@@ -5853,6 +5852,12 @@ PROBE_GIT_FAKE_ROUTES = {
         ("_git_scrubbed_bytes", "status"),
     },
     "test_worktree_baseline_non_utf8_pathname_no_raise": {
+        ("_git_scrubbed_bytes", "status"),
+        ("_git_scrubbed_bytes", "worktree"),
+    },
+    "test_probe_git_fake_routes_are_live": {
+        ("_git_scrubbed", "rev-parse"),
+        ("_git_scrubbed_bytes", "worktree"),
         ("_git_scrubbed_bytes", "status"),
     },
 }
@@ -5915,22 +5920,30 @@ def _finish_probe_git_fake_identity_check(test_name, snapshots, registered_fakes
         raise AssertionError("; ".join(errors))
 
 
-def _register_probe_git_fake(monkeypatch, helper_name, fake, routes):
-    """Install a probe-surface git helper fake; record routes at install time."""
+def _register_probe_git_fake(monkeypatch, helper_name, fake):
+    """Install a probe-surface git helper fake; record routes at call time."""
     global _probe_git_chokepoint_depth
     if helper_name not in _PROBE_GIT_HELPER_NAMES:
         raise ValueError("not a probe git helper: %r" % (helper_name,))
+    _wrapper_invocation_depth = [0]
+
+    def wrapper(cwd_real, *args, timeout=None, **kwargs):
+        if _wrapper_invocation_depth[0] == 0:
+            if args:
+                subcommand = args[0]
+            else:
+                subcommand = ""
+            _PROBE_GIT_STATE.installed_routes.add((helper_name, subcommand))
+        _wrapper_invocation_depth[0] += 1
+        try:
+            return fake(cwd_real, *args, timeout=timeout, **kwargs)
+        finally:
+            _wrapper_invocation_depth[0] -= 1
+
     _probe_git_chokepoint_depth += 1
     try:
-        for helper, subcommand in routes:
-            if helper != helper_name:
-                raise ValueError(
-                    "route helper %r does not match install target %r"
-                    % (helper, helper_name)
-                )
-            _PROBE_GIT_STATE.installed_routes.add((helper, subcommand))
-        _PROBE_GIT_STATE.registered_fakes.add(fake)
-        monkeypatch.setattr(ED, helper_name, fake)
+        _PROBE_GIT_STATE.registered_fakes.add(wrapper)
+        monkeypatch.setattr(ED, helper_name, wrapper)
     finally:
         _probe_git_chokepoint_depth -= 1
 
@@ -5953,14 +5966,6 @@ def _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name):
     monkeypatch.setattr(monkeypatch, "setattr", guarded_setattr)
 
 
-@pytest.hookimpl(hookwrapper=True, tryfirst=True)
-def pytest_runtest_makereport(item, call):
-    outcome = yield
-    rep = outcome.get_result()
-    if rep.when == "call":
-        item.rep_call = rep
-
-
 @pytest.fixture(autouse=True)
 def _probe_git_fake_route_registry(request, monkeypatch):
     test_name = request.node.originalname or request.node.name.split("[", 1)[0]
@@ -5979,11 +5984,7 @@ def _probe_git_fake_route_registry(request, monkeypatch):
         )
     except AssertionError as exc:
         teardown_errors.append(str(exc))
-    rep_call = getattr(request.node, "rep_call", None)
-    skipped = rep_call is not None and rep_call.skipped
-    if not skipped and (
-        test_name in PROBE_GIT_FAKE_ROUTES or _PROBE_GIT_STATE.installed_routes
-    ):
+    if test_name in PROBE_GIT_FAKE_ROUTES or _PROBE_GIT_STATE.installed_routes:
         try:
             _finish_probe_git_fake_route_check(
                 test_name, set(_PROBE_GIT_STATE.installed_routes),
@@ -6006,9 +6007,9 @@ def _install_git_route_recorders(monkeypatch, observed):
         observed.append(("_git_scrubbed_bytes", args[0]))
         return real_scrubbed_bytes(cwd_real, *args, timeout=timeout)
 
-    _register_probe_git_fake(monkeypatch, "_git_scrubbed", recording_scrubbed, ())
+    _register_probe_git_fake(monkeypatch, "_git_scrubbed", recording_scrubbed)
     _register_probe_git_fake(
-        monkeypatch, "_git_scrubbed_bytes", recording_scrubbed_bytes, (),
+        monkeypatch, "_git_scrubbed_bytes", recording_scrubbed_bytes,
     )
 
 
@@ -6058,11 +6059,11 @@ def test_probe_git_fake_detects_undeclared_wrapped_install(monkeypatch):
         _register_probe_git_fake(
             monkeypatch,
             "_git_scrubbed_bytes",
-            lambda *args, **kwargs: None,
-            {("_git_scrubbed_bytes", "status")},
+            lambda cwd_real, *args, timeout=None, **kwargs: None,
         )
 
     _install_from_helper()
+    ED._git_scrubbed_bytes(os.path.realpath("/tmp"), "status")
     with pytest.raises(AssertionError, match="undeclared"):
         _finish_probe_git_fake_route_check(
             _PROBE_GIT_STATE.test_name,
@@ -6684,7 +6685,6 @@ def test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit(tmp_path, mo
         monkeypatch,
         "_git_scrubbed_bytes",
         fake_timeout,
-        {("_git_scrubbed_bytes", "status")},
     )
     assert ED._worktree_entry_set(cwd, timeout=5) is None
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
@@ -6698,7 +6698,6 @@ def test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit(tmp_path, mo
         monkeypatch,
         "_git_scrubbed_bytes",
         fake_nonzero,
-        {("_git_scrubbed_bytes", "status")},
     )
     assert ED._worktree_entry_set(cwd, timeout=5) is None
 
@@ -6871,7 +6870,6 @@ def test_worktree_baseline_non_utf8_pathname_no_raise(tmp_path, monkeypatch):
         monkeypatch,
         "_git_scrubbed_bytes",
         fake_status,
-        {("_git_scrubbed_bytes", "status")},
     )
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
