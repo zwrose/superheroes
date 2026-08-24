@@ -88,11 +88,34 @@ REFUSAL_REASONS = frozenset({
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
     "source-body-stale",
+    "staged-body-source-mismatch",
+    "stage-unreachable-for-vendor",
+    "attest-result-outside-session",
+    "attest-result-unreadable",
+    "attest-token-missing",
+    "attest-token-mismatch",
+    "attest-claim-unanswered",
+    "attest-verdict-out-of-enum",
+    "region-marker-duplicated",
+    "dod-table-rows-unadmitted",
+    "body-context-unterminated",
+    "attest-duplicate-claim-verdict",
+    "attest-verdict-reason-missing",
     "invalid-invocation",
     "internal-error",
 })
 
+VENDOR_PATHS = frozenset({"engine", "native"})
+VALID_VERDICTS = frozenset({"CONFIRMED", "PLAUSIBLE", "REFUTED"})
+
 REFUSAL_INTERNAL_ERROR = "internal-error"
+
+
+class _BodyRefusal(Exception):
+    def __init__(self, reason, detail=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
 
 
 def _iso8601_utc():
@@ -112,6 +135,10 @@ def _refuse(reason, detail=None):
     if reason not in REFUSAL_REASONS:
         raise ValueError("unregistered refusal reason: %r" % reason)
     return {"ok": False, "signal": "cannot-certify", "reason": reason, "detail": detail}
+
+
+def _convert_body_refusal(exc):
+    return _refuse(exc.reason, exc.detail)
 
 
 def _emit(result):
@@ -201,20 +228,20 @@ def _neutralize_claim_text(text):
 def _read_meta(session_dir):
     # bite-axis: meta.json must be readable and carry a known session mode before staging.
     try:
-        ok, data = review_base_guard.read_meta(session_dir)
+        ok, data, reason = review_base_guard.classify_meta(session_dir)
     except Exception as exc:
         return _refuse("meta-unreadable", str(exc))
     if not ok:
         detail = data
-        if isinstance(detail, str) and detail.startswith("meta.json not readable:"):
+        if reason == "unreadable":
             return _refuse("meta-unreadable", detail)
-        if isinstance(detail, str) and detail.startswith("meta.json not parseable:"):
-            # read_meta classifies UnicodeDecodeError as parseable; this module's contract
+        if reason == "undecodable":
+            # classify_meta distinguishes decode from parse; this module's contract
             # keeps corrupt file bytes under meta-unreadable.
-            if "codec can't decode" in detail or "invalid start byte" in detail:
-                return _refuse("meta-unreadable", detail)
+            return _refuse("meta-unreadable", detail)
+        if reason == "unparseable":
             return _refuse("meta-mode-unknown", detail)
-        if detail == "meta.json is not a JSON object":
+        if reason == "not-an-object":
             return _refuse("meta-mode-unknown", detail)
         return _refuse("meta-unreadable", detail)
     mode = data.get("mode")
@@ -229,11 +256,15 @@ def _heading_level(line):
     return len(match.group(1)) if match else None
 
 
-def _next_heading_boundary(text, section_level):
-    """Offset in text where a same-or-higher-level heading begins after the opener."""
+def _next_heading_boundary(text, section_level, scan, start_line):
+    """Offset in text where a same-or-higher-level live heading begins after the opener."""
     offset = 0
     first_heading_seen = False
-    for line in text.splitlines(keepends=True):
+    for i, line in enumerate(text.splitlines(keepends=True)):
+        body_line = start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            offset += len(line)
+            continue
         stripped = line.strip()
         if stripped:
             level = _heading_level(stripped)
@@ -246,10 +277,14 @@ def _next_heading_boundary(text, section_level):
     return len(text)
 
 
-def _first_any_heading_offset(text):
-    """Offset in text where the first heading of any level begins."""
+def _first_any_heading_offset(text, scan, start_line):
+    """Offset in text where the first live heading of any level begins."""
     offset = 0
-    for line in text.splitlines(keepends=True):
+    for i, line in enumerate(text.splitlines(keepends=True)):
+        body_line = start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            offset += len(line)
+            continue
         stripped = line.strip()
         if stripped and _heading_level(stripped) is not None:
             return offset
@@ -257,11 +292,22 @@ def _first_any_heading_offset(text):
     return len(text)
 
 
-def _region_heading_bound(text, opening_level):
+def _region_heading_bound(text, opening_level, scan, start_line):
     """Offset where the region's heading-boundary ends (exclusive)."""
     if opening_level is not None:
-        return _next_heading_boundary(text, opening_level)
-    return _first_any_heading_offset(text)
+        return _next_heading_boundary(text, opening_level, scan, start_line)
+    return _first_any_heading_offset(text, scan, start_line)
+
+
+def _line_index_at_offset(lines, offset):
+    pos = 0
+    for i, line in enumerate(lines):
+        if pos == offset:
+            return i
+        if pos < offset < pos + len(line):
+            return i
+        pos += len(line)
+    return len(lines)
 
 
 def _bare_lines_from_body(body):
@@ -279,30 +325,98 @@ def _bare_lines_from_body(body):
     return lines, bare
 
 
-def _find_standalone_marker(body, marker, start=0):
-    """Return byte offset of the first standalone marker line at or after start."""
+def _context_scan(body):
+    """Return one combined live/inert classification for every line of ``body``."""
+    _, bare = _bare_lines_from_body(body)
+    return md_fence.scan_contexts(bare)
+
+
+def _unterminated_span_start_line(scan):
+    """Return the 1-based line where an unterminated fence or HTML span begins, or None."""
+    start = None
+    if scan.unterminated_opener_line is not None:
+        start = scan.unterminated_opener_line
+    if scan.unterminated_html_line is not None:
+        html_start = scan.unterminated_html_line
+        if start is None or html_start < start:
+            start = html_start
+    return start
+
+
+def _region_marker_shadowed_by_unterminated_span(body, scan):
+    """True when a region marker line falls inside an unterminated fence/HTML span."""
+    span_start = _unterminated_span_start_line(scan)
+    if span_start is None:
+        return False
+    _, bare = _bare_lines_from_body(body)
+    markers = set(REGION_MARKERS.values())
+    for i, line in enumerate(bare):
+        line_no = i + 1
+        if line_no < span_start:
+            continue
+        if md_fence.indent_width(line) != 0:
+            continue
+        if line.strip() in markers:
+            return True
+    return False
+
+
+def _refuse_unterminated_body_context(body, scan):
+    span_start = _unterminated_span_start_line(scan)
+    if span_start is None:
+        return
+    if not _region_marker_shadowed_by_unterminated_span(body, scan):
+        return
+    if scan.unterminated_opener_line is not None:
+        raise _BodyRefusal(
+            "body-context-unterminated",
+            "unterminated code fence at line %d" % scan.unterminated_opener_line,
+        )
+    raise _BodyRefusal(
+        "body-context-unterminated",
+        "unterminated raw HTML block at line %d" % scan.unterminated_html_line,
+    )
+
+
+def _find_all_standalone_markers(body, marker, scan=None):
+    """Return byte offsets of every live standalone ``marker`` line in ``body``."""
     lines, bare = _bare_lines_from_body(body)
-    fence_scan = md_fence.scan(bare)
+    if scan is None:
+        scan = _context_scan(body)
+    offsets = []
     offset = 0
     for i, line in enumerate(lines):
-        if offset >= start and not fence_scan.inert[i]:
-            # axis: indented code block (4+ columns) — marker lines inside are not live regions.
-            if md_fence.indent_width(bare[i]) >= md_fence.INDENT_CODE_BLOCK_COLUMNS:
+        if not scan.inert[i]:
+            if md_fence.indent_width(bare[i]) != 0:
                 offset += len(line)
                 continue
-            stripped = bare[i].strip()
-            if stripped == marker:
+            if bare[i].strip() == marker:
                 leading = len(bare[i]) - len(bare[i].lstrip())
-                return offset + leading
+                offsets.append(offset + leading)
         offset += len(line)
+    return offsets
+
+
+def _find_standalone_marker(body, marker, start=0, scan=None):
+    """Return byte offset of the first standalone marker line at or after start."""
+    for off in _find_all_standalone_markers(body, marker, scan):
+        if off >= start:
+            return off
     return -1
 
 
-def _extract_region(body, marker):
+def _extract_region(body, marker, scan, marker_name):
     # bite-axis: region markers must be standalone comment lines outside code fences.
-    idx = _find_standalone_marker(body, marker)
-    if idx < 0:
-        return None, 0
+    offsets = _find_all_standalone_markers(body, marker, scan)
+    if len(offsets) >= 2:
+        raise _BodyRefusal(
+            "region-marker-duplicated",
+            "%s: %d live occurrences" % (marker_name, len(offsets)),
+        )
+    if not offsets:
+        return None, 0, 0
+    lines, _ = _bare_lines_from_body(body)
+    idx = offsets[0]
     start = idx + len(marker)
     rest = body[start:]
     if rest.startswith("\r\n"):
@@ -311,29 +425,35 @@ def _extract_region(body, marker):
     elif rest.startswith("\n"):
         start += 1
         rest = body[start:]
+    region_start_line = _line_index_at_offset(lines, start)
     next_markers = [
-        _find_standalone_marker(body, m, start)
+        _find_standalone_marker(body, m, start, scan)
         for m in REGION_MARKERS.values()
     ]
     next_markers = [pos for pos in next_markers if pos >= 0]
     marker_end = min(next_markers) if next_markers else len(body)
     section_level = None
-    for line in rest.splitlines():
+    for i, line in enumerate(rest.splitlines()):
+        body_line = region_start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            continue
         stripped = line.strip()
         if not stripped:
             continue
         section_level = _heading_level(stripped)
         break
-    heading_end = start + _region_heading_bound(rest, section_level)
+    heading_end = start + _region_heading_bound(rest, section_level, scan, region_start_line)
     end = min(marker_end, heading_end)
     region_text = body[start:end]
-    lines = region_text.splitlines()
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    line_count = len(lines)
-    return region_text, line_count
+    region_lines = region_text.splitlines()
+    while region_lines and not region_lines[0].strip():
+        region_lines.pop(0)
+        region_start_line += 1
+    while region_lines and not region_lines[-1].strip():
+        region_lines.pop()
+    region_text = "\n".join(region_lines)
+    line_count = len(region_lines)
+    return region_text, line_count, region_start_line
 
 
 def _split_table_cells(line):
@@ -381,50 +501,78 @@ def _is_table_row_line(line):
 
 
 def _parse_dod_table_block(block_lines):
-    """Return data rows from a consecutive run of pipe-bearing lines."""
-    if not block_lines:
-        return []
-    start = 0
-    if (
-        len(block_lines) >= 2
-        and _is_separator_cells(_split_table_cells(block_lines[1]))
-    ):
-        start = 2
-    elif len(block_lines) == 1 and not block_lines[0].lstrip().startswith("|"):
-        return []
+    """Return (admitted, data_rows) for a run of consecutive live pipe-bearing lines.
+
+    Within a region, a maximal run of consecutive live pipe-bearing lines is admitted
+    as a GFM table when it has a header line immediately followed by a delimiter row
+    whose cell count equals the header's. Its data rows are then every line after the
+    delimiter. Otherwise the run is not admitted and yields no rows.
+    """
+    if len(block_lines) < 2:
+        return False, []
+    header_cells = _split_table_cells(block_lines[0])
+    delim_cells = _split_table_cells(block_lines[1])
+    if not _is_separator_cells(delim_cells):
+        return False, []
+    if len(header_cells) != len(delim_cells):
+        return False, []
     rows = []
-    for line in block_lines[start:]:
+    for line in block_lines[2:]:
         cells = _split_table_cells(line)
         if _is_separator_cells(cells) or not any(cells):
             continue
         rows.append("|".join(cells))
-    return rows
+    return True, rows
 
 
-def _parse_dod_rows(body, marker):
-    # bite-axis: DoD table rows — optional outer pipes, separator row skipped, escaped pipes kept.
-    region_text, _ = _extract_region(body, marker)
+def _parse_dod_rows(body, marker, scan, marker_name):
+    # bite-axis: DoD table rows — every maximal live pipe run admitted per-run as GFM.
+    region_text, _, region_start_line = _extract_region(body, marker, scan, marker_name)
     if region_text is None:
         return []
     rows = []
     block_lines = []
-    for line in region_text.splitlines():
+    block_start_line = None
+
+    def flush_block():
+        nonlocal block_lines, block_start_line
+        if not block_lines:
+            return
+        admitted, block_rows = _parse_dod_table_block(block_lines)
+        if not admitted:
+            raise _BodyRefusal(
+                "dod-table-rows-unadmitted",
+                "line %d" % block_start_line,
+            )
+        rows.extend(block_rows)
+        block_lines = []
+        block_start_line = None
+
+    for i, line in enumerate(region_text.splitlines()):
+        body_line = region_start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            flush_block()
+            continue
         if _is_table_row_line(line):
+            if not block_lines:
+                block_start_line = body_line + 1
             block_lines.append(line.strip())
             continue
-        rows.extend(_parse_dod_table_block(block_lines))
-        block_lines = []
-    rows.extend(_parse_dod_table_block(block_lines))
+        flush_block()
+    flush_block()
     return rows
 
 
-def _parse_degradation_bullets(body, marker):
+def _parse_degradation_bullets(body, marker, scan, marker_name):
     # bite-axis: degradation bullets — list items bounded by the region heading fence.
-    region_text, _ = _extract_region(body, marker)
+    region_text, _, region_start_line = _extract_region(body, marker, scan, marker_name)
     if region_text is None:
         return []
     bullets = []
-    for line in region_text.splitlines():
+    for i, line in enumerate(region_text.splitlines()):
+        body_line = region_start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            continue
         stripped = line.strip()
         if stripped.startswith("- "):
             bullets.append(stripped[2:].strip())
@@ -446,7 +594,7 @@ def _dod_row_verifiability(row_text):
     return VERIFIABILITY_REPO
 
 
-def _enumerate_claims(body, regions):
+def _enumerate_claims(body, regions, scan):
     # bite-axis: claim enumeration — regions, DoD rows, degradations, and stub markers minted.
     claims = []
     ordinal = 0
@@ -467,10 +615,12 @@ def _enumerate_claims(body, regions):
         text = "region %s present=%s" % (name, present)
         append_claim(CLAIM_KIND_REGION_PRESENT, text, VERIFIABILITY_STAGER)
     if regions.get("dod-table", {}).get("present"):
-        for row in _parse_dod_rows(body, REGION_MARKERS["dod-table"]):
+        for row in _parse_dod_rows(body, REGION_MARKERS["dod-table"], scan, "dod-table"):
             append_claim(CLAIM_KIND_DOD_ROW, row, _dod_row_verifiability(row))
     if regions.get("degradations", {}).get("present"):
-        for bullet in _parse_degradation_bullets(body, REGION_MARKERS["degradations"]):
+        for bullet in _parse_degradation_bullets(
+            body, REGION_MARKERS["degradations"], scan, "degradations",
+        ):
             append_claim(CLAIM_KIND_DEGRADATION, bullet, VERIFIABILITY_REPO)
     for marker in stub_markers.find_markers(body):
         text = "%s(#%d): %s" % (_STUB_LABEL, marker["issue"], marker["description"])
@@ -478,11 +628,11 @@ def _enumerate_claims(body, regions):
     return claims
 
 
-def _detect_regions(body):
+def _detect_regions(body, scan):
     # bite-axis: region presence — standalone marker comments outside code fences.
     regions = []
     for name, marker in REGION_MARKERS.items():
-        region_text, line_count = _extract_region(body, marker)
+        region_text, line_count, _ = _extract_region(body, marker, scan, name)
         present = region_text is not None
         regions.append({
             "name": name,
@@ -586,7 +736,7 @@ def _extract_untrusted_pr_body(staged_text):
     if not nonce:
         return None
     pattern = (
-        r"<!-- BEGIN UNTRUSTED PR BODY %s[^\n]*\n"
+        r"<!-- BEGIN UNTRUSTED PR BODY %s.*?-->\n"
         r"(.*)"
         r"<!-- END UNTRUSTED PR BODY %s -->"
     ) % (re.escape(nonce), re.escape(nonce))
@@ -732,10 +882,23 @@ def _verify_manifest_files(manifest, session_dir):
         raw_body = _extract_untrusted_pr_body(on_disk)
         if raw_body is None:
             return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
-        derived_regions = _detect_regions(raw_body)
+        body_scan = _context_scan(raw_body)
+        try:
+            _refuse_unterminated_body_context(raw_body, body_scan)
+        except _BodyRefusal as exc:
+            return _convert_body_refusal(exc)
+        try:
+            derived_regions = _detect_regions(raw_body, body_scan)
+        except _BodyRefusal as exc:
+            return _convert_body_refusal(exc)
         if derived_regions != manifest.get("regions"):
             return _refuse("stage-manifest-invalid", "regions do not match staged body")
-        derived_claims = _enumerate_claims(raw_body, _region_map(derived_regions))
+        try:
+            derived_claims = _enumerate_claims(
+                raw_body, _region_map(derived_regions), body_scan,
+            )
+        except _BodyRefusal as exc:
+            return _convert_body_refusal(exc)
         if derived_claims != manifest.get("claims"):
             return _refuse("stage-manifest-invalid", "claims do not match staged body")
     return {"ok": True, "manifest": manifest}
@@ -777,9 +940,20 @@ def stage(session_dir):
         )
     token = _stage_token()
     fence_nonce = _fence_nonce()
-    regions = _detect_regions(body)
+    body_scan = _context_scan(body)
+    try:
+        _refuse_unterminated_body_context(body, body_scan)
+    except _BodyRefusal as exc:
+        return _convert_body_refusal(exc)
+    try:
+        regions = _detect_regions(body, body_scan)
+    except _BodyRefusal as exc:
+        return _convert_body_refusal(exc)
     region_map = {r["name"]: r for r in regions}
-    claims = _enumerate_claims(body, region_map)
+    try:
+        claims = _enumerate_claims(body, region_map, body_scan)
+    except _BodyRefusal as exc:
+        return _convert_body_refusal(exc)
     # bite-axis: claim budget — minted claim count must not exceed the seat ceiling.
     if len(claims) > CLAIM_COUNT_MAX:
         return _refuse(
@@ -844,22 +1018,43 @@ def _load_manifest(session_dir):
     return _validate_manifest_shape(manifest, session_dir)
 
 
-def check(session_dir):
-    abs_check = _require_absolute_session_dir(session_dir)
-    if not abs_check.get("ok"):
-        return abs_check
-    meta = _read_meta(session_dir)
-    if not meta.get("ok"):
-        return meta
-    if meta["mode"] == "branch":
-        return _branch_mode_result()
-    loaded = _load_manifest(session_dir)
-    if not loaded.get("ok"):
-        return loaded
-    verified = _verify_manifest_files(loaded["manifest"], session_dir)
-    if not verified.get("ok"):
-        return verified
-    manifest = verified["manifest"]
+class _Validated(object):
+    """A manifest that has passed the trust boundary. Constructible only by _trust_boundary."""
+    __slots__ = ("manifest", "claims", "mode")
+
+    def __init__(self, manifest, claims, mode):
+        self.manifest = manifest
+        self.claims = claims
+        self.mode = mode
+
+
+def _project_claims(claims):
+    # Claim text is author-controlled; the orchestrator composes the seat's order from
+    # whatever check returns — interpolating author text into a trusted order is an injection
+    # surface. The text stays inside the nonce-fenced staged body the seat reads as data.
+    projected = []
+    for claim in claims or []:
+        if not isinstance(claim, dict):
+            continue
+        projected.append({
+            "claimId": claim.get("claimId"),
+            "kind": claim.get("kind"),
+            "verifiability": claim.get("verifiability"),
+        })
+    return projected
+
+
+def _canonical_staged_body_for_sha(raw_body):
+    # _staged_pr_body writes the fenced author bytes as "%s\n" before the END marker.
+    if isinstance(raw_body, str) and raw_body.endswith("\n"):
+        return raw_body[:-1]
+    return raw_body
+
+
+def _bind_three_way_source(session_dir, manifest):
+    # The staged body and sourceBodySha256 both live in files an attacker who can write the
+    # session dir controls, so checking them against each other alone is self-consistency, not
+    # integrity. Only binding both to the live pr.json closes the coordinated two-file forge.
     pr_path = os.path.join(session_dir, "pr.json")
     try:
         pr_data = _read_json(pr_path)
@@ -877,14 +1072,87 @@ def check(session_dir):
     if current_body is None or not isinstance(current_body, str):
         return _refuse("source-body-stale", "body absent or not a string")
     current_sha = _sha256_text(current_body)
-    if current_sha != manifest.get("sourceBodySha256"):
+    manifest_sha = manifest.get("sourceBodySha256")
+    if current_sha != manifest_sha:
         return _refuse(
             "source-body-stale",
             "pr.json body changed since staging",
         )
-    claims = manifest.get("claims") or []
+    staged_path = manifest["files"][0]["path"]
+    try:
+        resolved_path = os.path.realpath(staged_path)
+    except OSError as exc:
+        return _refuse("staged-file-unreadable", str(exc))
+    try:
+        on_disk = _read_text(resolved_path)
+    except OSError as exc:
+        return _refuse("staged-file-unreadable", str(exc))
+    except UnicodeDecodeError as exc:
+        return _refuse("staged-file-unreadable", str(exc))
+    raw_body = _extract_untrusted_pr_body(on_disk)
+    if raw_body is None:
+        return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
+    staged_sha = _sha256_text(_canonical_staged_body_for_sha(raw_body))
+    if staged_sha != manifest_sha:
+        return _refuse(
+            "staged-body-source-mismatch",
+            "staged body sha256 != manifest sourceBodySha256",
+        )
+    return {"ok": True}
+
+
+def _trust_boundary(session_dir, *, vendor_path, result_path=None):
+    """The single trust boundary. Returns _Validated, a branch-mode marker, or a refusal dict."""
+    abs_check = _require_absolute_session_dir(session_dir)
+    if not abs_check.get("ok"):
+        return abs_check
+    meta = _read_meta(session_dir)
+    if not meta.get("ok"):
+        return meta
+    if meta["mode"] == "branch":
+        return _branch_mode_result()
+    if vendor_path not in VENDOR_PATHS:
+        return _refuse("stage-unreachable-for-vendor", repr(vendor_path))
+    loaded = _load_manifest(session_dir)
+    if not loaded.get("ok"):
+        return loaded
+    verified = _verify_manifest_files(loaded["manifest"], session_dir)
+    if not verified.get("ok"):
+        return verified
+    manifest = verified["manifest"]
+    bound = _bind_three_way_source(session_dir, manifest)
+    if not bound.get("ok"):
+        return bound
+    if result_path is not None:
+        try:
+            resolved = os.path.realpath(result_path)
+        except OSError as exc:
+            return _refuse("attest-result-outside-session", str(exc))
+        session_real = os.path.realpath(session_dir)
+        if not path_is_confidently_under(resolved, session_real):
+            return _refuse(
+                "attest-result-outside-session",
+                "result path %r outside session dir %r" % (resolved, session_real),
+            )
+    return _Validated(
+        manifest=manifest,
+        claims=_project_claims(manifest.get("claims")),
+        mode=meta["mode"],
+    )
+
+
+def check(session_dir, vendor_path):
+    validated = _trust_boundary(session_dir, vendor_path=vendor_path)
+    if isinstance(validated, dict):
+        if validated.get("ok") is False or validated.get("applicable") is False:
+            return validated
+        return _refuse("internal-error", "trust boundary returned unexpected dict")
+    if not isinstance(validated, _Validated):
+        return _refuse("internal-error", "trust boundary returned unexpected type")
+    manifest = validated.manifest
+    claims = validated.claims
     region_map = _region_map(manifest.get("regions"))
-    computed_flag = _no_substantive_claims(claims, region_map)
+    computed_flag = _no_substantive_claims(manifest.get("claims") or [], region_map)
     if computed_flag:
         if manifest.get("noSubstantiveClaims") is not True:
             return _refuse(
@@ -899,6 +1167,136 @@ def check(session_dir):
     return _success_envelope(claims, manifest.get("files") or [], region_map)
 
 
+def _grade_attest_result(validated, result_path):
+    manifest = validated.manifest
+    try:
+        result = _read_json(result_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return _refuse("attest-result-unreadable", str(exc))
+    if not isinstance(result, dict):
+        return _refuse("attest-result-unreadable", "result root is not an object")
+    verdicts = result.get("verdicts")
+    if not isinstance(verdicts, list):
+        return _refuse("attest-result-unreadable", "verdicts missing or not a list")
+    token_rows = []
+    seen_ids = {}
+    for index, row in enumerate(verdicts):
+        if not isinstance(row, dict):
+            return _refuse("attest-result-unreadable", "verdicts[%d] not an object" % index)
+        row_id = row.get("id")
+        if isinstance(row_id, str) and row_id.startswith("stage-token:"):
+            token_rows.append(row)
+        verdict = row.get("verdict")
+        if verdict is not None and verdict not in VALID_VERDICTS:
+            return _refuse(
+                "attest-verdict-out-of-enum",
+                "verdicts[%d] verdict invalid: %r" % (index, verdict),
+            )
+        if isinstance(row_id, str):
+            if row_id in seen_ids:
+                return _refuse(
+                    "attest-duplicate-claim-verdict",
+                    "duplicate verdict id: %r" % row_id,
+                )
+            seen_ids[row_id] = row
+    if len(token_rows) != 1:
+        return _refuse("attest-token-missing", "expected exactly one stage-token row")
+    stage_token_row = token_rows[0]
+    stage_verdict = stage_token_row.get("verdict")
+    if stage_verdict != "CONFIRMED":
+        return _refuse(
+            "attest-verdict-out-of-enum",
+            "stage-token row verdict must be CONFIRMED, got %r" % stage_verdict,
+        )
+    reason = stage_token_row.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return _refuse(
+            "attest-verdict-reason-missing",
+            "stage-token row missing non-empty reason",
+        )
+    token_suffix = token_rows[0]["id"][len("stage-token:"):]
+    if token_suffix != manifest.get("stageToken"):
+        return _refuse(
+            "attest-token-mismatch",
+            "stage-token suffix %r != manifest stageToken %r"
+            % (token_suffix, manifest.get("stageToken")),
+        )
+    repo_claim_ids = {
+        c["claimId"]
+        for c in (manifest.get("claims") or [])
+        if isinstance(c, dict) and c.get("verifiability") == VERIFIABILITY_REPO
+    }
+    answered = set()
+    for row_id, row in seen_ids.items():
+        if row_id.startswith("stage-token:"):
+            continue
+        reason = row.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return _refuse(
+                "attest-verdict-reason-missing",
+                "verdict row %r missing non-empty reason" % row_id,
+            )
+        claim_id = row_id
+        if claim_id in repo_claim_ids:
+            answered.add(claim_id)
+    missing = repo_claim_ids - answered
+    if missing:
+        return _refuse(
+            "attest-claim-unanswered",
+            "repo-verifiability claims without verdict rows: %s"
+            % sorted(missing),
+        )
+    refuted = []
+    plausible = []
+    confirmed = []
+    for claim_id in sorted(repo_claim_ids):
+        row = seen_ids.get(claim_id)
+        if row is None:
+            continue
+        verdict = row.get("verdict")
+        if verdict == "REFUTED":
+            refuted.append(claim_id)
+        elif verdict == "PLAUSIBLE":
+            plausible.append(claim_id)
+        elif verdict == "CONFIRMED":
+            confirmed.append(claim_id)
+        else:
+            return _refuse(
+                "attest-verdict-out-of-enum",
+                "claim %r verdict invalid: %r" % (claim_id, verdict),
+            )
+    result_out = {
+        "ok": True,
+        "attested": True,
+        "refuted": refuted,
+        "plausible": plausible,
+        "confirmed": confirmed,
+    }
+    region_map = _region_map(manifest.get("regions"))
+    if manifest.get("noSubstantiveClaims") is True:
+        result_out["noSubstantiveClaims"] = True
+    elif _no_substantive_claims(manifest.get("claims") or [], region_map):
+        result_out["noSubstantiveClaims"] = True
+    return result_out
+
+
+def attest(session_dir, result_path, vendor_path):
+    validated = _trust_boundary(
+        session_dir, vendor_path=vendor_path, result_path=result_path,
+    )
+    if isinstance(validated, dict):
+        if validated.get("ok") is False or validated.get("applicable") is False:
+            return validated
+        return _refuse("internal-error", "trust boundary returned unexpected dict")
+    if not isinstance(validated, _Validated):
+        return _refuse("internal-error", "trust boundary returned unexpected type")
+    try:
+        resolved_result = os.path.realpath(result_path)
+    except OSError as exc:
+        return _refuse("attest-result-unreadable", str(exc))
+    return _grade_attest_result(validated, resolved_result)
+
+
 def main(argv):
     try:
         ap = argparse.ArgumentParser(description="grounding stage PR-body staging")
@@ -907,6 +1305,11 @@ def main(argv):
         st.add_argument("--session-dir", required=True)
         ck = sub.add_parser("check")
         ck.add_argument("--session-dir", required=True)
+        ck.add_argument("--vendor-path", required=True, choices=sorted(VENDOR_PATHS))
+        at = sub.add_parser("attest")
+        at.add_argument("--session-dir", required=True)
+        at.add_argument("--result-path", required=True)
+        at.add_argument("--vendor-path", required=True, choices=sorted(VENDOR_PATHS))
         args = ap.parse_args(argv[1:])
         if args.cmd == "stage":
             result = stage(args.session_dir)
@@ -915,7 +1318,13 @@ def main(argv):
                 return 1
             return 0
         if args.cmd == "check":
-            result = check(args.session_dir)
+            result = check(args.session_dir, args.vendor_path)
+            _emit(result)
+            if not result.get("ok"):
+                return 1
+            return 0
+        if args.cmd == "attest":
+            result = attest(args.session_dir, args.result_path, args.vendor_path)
             _emit(result)
             if not result.get("ok"):
                 return 1

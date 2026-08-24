@@ -210,6 +210,63 @@ def test_meta_json_list(git_repo, tmp_path):
     assert r["reason"] == REASON.REASON_META_UNREADABLE
 
 
+def test_classify_meta_unreadable(tmp_path):
+    ok, detail, reason = rbg.classify_meta(str(tmp_path / "missing"))
+    assert ok is False
+    assert reason == "unreadable"
+    assert detail.startswith("meta.json not readable:")
+
+
+def test_classify_meta_undecodable(tmp_path):
+    session = tmp_path / "sess"
+    session.mkdir()
+    (session / "meta.json").write_bytes(b"\xff\xfe")
+    ok, detail, reason = rbg.classify_meta(str(session))
+    assert ok is False
+    assert reason == "undecodable"
+    assert detail.startswith("meta.json not parseable:")
+
+
+def test_classify_meta_unparseable(tmp_path):
+    session = tmp_path / "sess"
+    session.mkdir()
+    (session / "meta.json").write_text("{not json", encoding="utf-8")
+    ok, detail, reason = rbg.classify_meta(str(session))
+    assert ok is False
+    assert reason == "unparseable"
+    assert detail.startswith("meta.json not parseable:")
+
+
+def test_classify_meta_not_an_object(tmp_path):
+    session = tmp_path / "sess"
+    session.mkdir()
+    (session / "meta.json").write_text("[]", encoding="utf-8")
+    ok, detail, reason = rbg.classify_meta(str(session))
+    assert ok is False
+    assert reason == "not-an-object"
+    assert detail == "meta.json is not a JSON object"
+
+
+def test_classify_meta_ok(tmp_path):
+    session = tmp_path / "sess"
+    session.mkdir()
+    payload = {"mode": "branch"}
+    (session / "meta.json").write_text(json.dumps(payload), encoding="utf-8")
+    ok, data, reason = rbg.classify_meta(str(session))
+    assert ok is True
+    assert reason is None
+    assert data == payload
+
+
+def test_read_meta_preserves_prose_via_classify_meta(tmp_path):
+    session = tmp_path / "sess"
+    session.mkdir()
+    (session / "meta.json").write_bytes(b"\xff\xfe")
+    ok, detail = rbg.read_meta(str(session))
+    assert ok is False
+    assert detail.startswith("meta.json not parseable:")
+
+
 def test_meta_no_base_ref_key(git_repo, tmp_path):
     root, _ = git_repo
     session = str(tmp_path / "sess")

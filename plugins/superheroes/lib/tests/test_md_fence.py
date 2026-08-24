@@ -327,3 +327,135 @@ def test_scan_rejects_non_str_line():
 def test_scan_non_str_error_names_offending_type():
     with pytest.raises(TypeError, match="got int"):
         mf.scan([123])
+
+
+CONTEXT_CENSUS = [
+    pytest.param(
+        ["hello", "world"],
+        (mf.TEXT, mf.TEXT),
+        None,
+        None,
+        id="plain_text",
+    ),
+    pytest.param(
+        ["```", "code", "```"],
+        (mf.FENCE_OPENER, mf.FENCE_CONTENT, mf.FENCE_CLOSER),
+        None,
+        None,
+        id="backtick_fence",
+    ),
+    pytest.param(
+        ["~~~", "code", "~~~"],
+        (mf.FENCE_OPENER, mf.FENCE_CONTENT, mf.FENCE_CLOSER),
+        None,
+        None,
+        id="tilde_fence",
+    ),
+    pytest.param(
+        ["```", "line one", "line two"],
+        (mf.FENCE_OPENER, mf.FENCE_CONTENT, mf.FENCE_CONTENT),
+        1,
+        None,
+        id="unterminated_fence",
+    ),
+    pytest.param(
+        ["<pre>", "literal", "</pre>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="pre_block",
+    ),
+    pytest.param(
+        ["<script>", "js();", "</script>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="script_block",
+    ),
+    pytest.param(
+        ["<style>", "body {}", "</style>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="style_block",
+    ),
+    pytest.param(
+        ["<textarea>", "text", "</textarea>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="textarea_block",
+    ),
+    pytest.param(
+        ["<pre>x</pre>"],
+        (mf.HTML_OPEN,),
+        None,
+        None,
+        id="pre_single_line",
+    ),
+    pytest.param(
+        ["<pre>", "still literal"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT),
+        None,
+        1,
+        id="pre_unterminated",
+    ),
+    pytest.param(
+        ["```", "<pre>", "not html", "```"],
+        (mf.FENCE_OPENER, mf.FENCE_CONTENT, mf.FENCE_CONTENT, mf.FENCE_CLOSER),
+        None,
+        None,
+        id="pre_inside_fence",
+    ),
+    pytest.param(
+        ["<pre>", "```", "not a fence", "</pre>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="fence_inside_pre",
+    ),
+    pytest.param(
+        ["<pre>", "x", "</PRE>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="pre_close_mixed_case",
+    ),
+    pytest.param(
+        ["   <pre>", "x", "   </pre>"],
+        (mf.HTML_OPEN, mf.HTML_CONTENT, mf.HTML_CLOSE),
+        None,
+        None,
+        id="pre_indent_3_opens",
+    ),
+    pytest.param(
+        ["    <pre>"],
+        (mf.TEXT,),
+        None,
+        None,
+        id="pre_indent_4_stays_text",
+    ),
+    pytest.param(
+        ["<details>", "<summary>x</summary>", "</details>"],
+        (mf.TEXT, mf.TEXT, mf.TEXT),
+        None,
+        None,
+        id="details_stays_text",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "lines, expected_kinds, expected_unterminated_opener, expected_unterminated_html",
+    CONTEXT_CENSUS,
+)
+def test_context_scan_census(
+    lines, expected_kinds, expected_unterminated_opener, expected_unterminated_html,
+):
+    result = mf.scan_contexts(lines)
+    assert result.kinds == expected_kinds
+    assert set(result.kinds) <= mf.CONTEXT_KINDS
+    for i, kind in enumerate(result.kinds):
+        assert result.inert[i] == (kind != mf.TEXT)
+    assert result.unterminated_opener_line == expected_unterminated_opener
+    assert result.unterminated_html_line == expected_unterminated_html

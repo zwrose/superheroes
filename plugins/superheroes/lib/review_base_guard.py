@@ -40,6 +40,8 @@ REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 # Closed session modes — authoritative set for check_base and grounding_stage.
 SESSION_MODES = frozenset({"pr", "branch"})
 
+META_REASONS = frozenset({"unreadable", "undecodable", "unparseable", "not-an-object"})
+
 _PIN_SHA1 = re.compile(r"^[0-9a-fA-F]{40}$")
 _PIN_SHA256 = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -48,19 +50,33 @@ _PR_URL = re.compile(
 )
 
 
-def read_meta(session_dir):
-    """Read session meta.json. Returns (True, dict) or (False, detail). Never raises."""
+def classify_meta(session_dir):
+    """Classify meta.json read outcome. Returns (ok, data_or_detail, reason)."""
     path = os.path.join(session_dir, "meta.json")
     try:
-        with open(path, encoding="utf-8") as fh:
-            data = json.load(fh)
+        with open(path, "rb") as fh:
+            raw = fh.read()
     except OSError as e:
-        return False, "meta.json not readable: %s" % e
-    except (ValueError, UnicodeDecodeError) as e:
-        return False, "meta.json not parseable: %s" % e
+        return False, "meta.json not readable: %s" % e, "unreadable"
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        return False, "meta.json not parseable: %s" % e, "undecodable"
+    try:
+        data = json.loads(text)
+    except (ValueError, json.JSONDecodeError) as e:
+        return False, "meta.json not parseable: %s" % e, "unparseable"
     if not isinstance(data, dict):
-        return False, "meta.json is not a JSON object"
-    return True, data
+        return False, "meta.json is not a JSON object", "not-an-object"
+    return True, data, None
+
+
+def read_meta(session_dir):
+    """Read session meta.json. Returns (True, dict) or (False, detail). Never raises."""
+    ok, data_or_detail, _reason = classify_meta(session_dir)
+    if ok:
+        return True, data_or_detail
+    return False, data_or_detail
 
 
 def _pin_shape_ok(ref):
