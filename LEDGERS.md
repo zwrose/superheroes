@@ -8,8 +8,7 @@ deliberately do not build are a first-class artifact, cited instead of re-litiga
 The **orientation review** (standing monthly-ish routine, deliberately independent of
 the release path) walks both ledgers each pass: the first against the platform's current
 primitives, the second against its own unlock conditions, and **the project's revisit-trigger
-registry** — the pinned comment on the standing-proposals collector issue, marked
-`<!-- superheroes:revisit-registry -->` — checking each declined item's revisit trigger
+registry** — the pinned comment on the standing-proposals collector issue — checking each declined item's revisit trigger
 against what has since happened, the same way it walks §2's entries against their unlock
 conditions (canonical home:
 `plugins/superheroes/skills/showrunner/reference/owner-decisions.md`); when the harness has been

@@ -499,8 +499,8 @@ above).
      than an evasion, because the attended branch discusses it in the same message. Any session
      processing a field report, and any vet whose evidence includes an observed-in-the-field failure,
      reads the registry. The **revisit-trigger registry** is one pinned, always-current comment on the
-     collector issue, marked `<!-- superheroes:revisit-registry -->` — canonical home:
-     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`; this is
+     collector issue, identified by the marker its canonical home defines — canonical home:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`, where the marker that identifies the registry comment is defined; this is
      the surface that makes the registry reachable from a charter an advisor reads every vet; detail
      lives in the home. **Nothing fires on its own**: no cadence, no
      release-tied default (not every project cuts releases; a cut-tied rule silently does nothing in
