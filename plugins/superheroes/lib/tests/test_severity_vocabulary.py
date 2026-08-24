@@ -2,6 +2,7 @@
 import importlib.util
 import itertools
 import os
+import subprocess
 import sys
 
 import pytest
@@ -12,6 +13,7 @@ if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
 import circuit_breaker as CB  # noqa: E402
+import loop_synthesis as LS  # noqa: E402
 import verification as V  # noqa: E402
 
 
@@ -23,6 +25,7 @@ def _load(name):
 
 
 RD = _load("round_driver")
+RM = _load("review_memory")
 
 DIFF = ("diff --git a/f.py b/f.py\nindex 1..2 100644\n--- a/f.py\n+++ b/f.py\n"
         "@@ -1 +1,2 @@\n-old\n+new\n+more\n")
@@ -33,6 +36,16 @@ EDGE_VALUES = [
 ]
 ALL_VALUES = list(CB.SEVERITY_TIERS) + EDGE_VALUES
 _TIER_RANK = {"Critical": 0, "Important": 1, "Minor": 2, "Nit": 3}
+_FAIL_CLOSED_DEFAULT = "Important"
+_BLOCKING_VALUES = [x for x in ALL_VALUES if CB.is_blocking(x)]
+_NON_BLOCKING_VALUES = [x for x in ALL_VALUES if not CB.is_blocking(x)]
+
+_TIER_VARIANTS = {
+    "Critical": ["critical", "CRITICAL", "cRiTiCaL", "  Critical  "],
+    "Important": ["important", "IMPORTANT", "iMpOrTaNt", "  Important  "],
+    "Minor": ["minor", "MINOR", "mInOr", "  Minor  "],
+    "Nit": ["nit", "NIT", "nIt", "  Nit  "],
+}
 
 
 def _cfg(**over):
@@ -85,18 +98,107 @@ def test_severity_rank_matches_tier_index(x):
     assert CB.severity_rank(x) == _TIER_RANK[eff]
 
 
+def test_fail_closed_default_tier_rank_is_independently_pinned():
+    off_vocab = "something-off-vocabulary"
+    assert CB.effective_severity(off_vocab) == _FAIL_CLOSED_DEFAULT
+    assert CB.severity_rank(off_vocab) == _TIER_RANK[_FAIL_CLOSED_DEFAULT]
+
+
 @pytest.mark.parametrize("x", ALL_VALUES)
 def test_blocking_agrees_with_effective_severity(x):
     assert CB.is_blocking(CB.effective_severity(x)) == CB.is_blocking(x)
 
 
-@pytest.mark.parametrize("a,b", itertools.product(ALL_VALUES, repeat=2))
-def test_blocking_always_ranks_above_non_blocking(a, b):
-    if CB.is_blocking(a) and not CB.is_blocking(b):
-        assert CB.severity_rank(a) < CB.severity_rank(b)
+@pytest.mark.parametrize("blocking,non_blocking",
+                         itertools.product(_BLOCKING_VALUES, _NON_BLOCKING_VALUES))
+def test_blocking_always_ranks_above_non_blocking(blocking, non_blocking):
+    assert CB.severity_rank(blocking) < CB.severity_rank(non_blocking)
 
 
 # --- site-reachability arms ---------------------------------------------------
+
+def test_default_blocking_severity_agrees_across_homes():
+    """Fail-closed blocking default must not drift across circuit_breaker, verification, loop_synthesis."""
+    assert V._DEFAULT_BLOCKING_SEVERITY == LS._DEFAULT_BLOCKING_SEVERITY
+    assert CB.effective_severity("something-off-vocabulary") == V._DEFAULT_BLOCKING_SEVERITY
+
+
+def test_review_memory_imports_first_in_fresh_process():
+    """Cycle-safe: review_memory must not top-level-import circuit_breaker (#1104)."""
+    code = "import sys; sys.path.insert(0, %r); import review_memory" % _LIB
+    result = subprocess.run(
+        [sys.executable, "-c", code],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr or result.stdout
+
+
+@pytest.mark.parametrize("tier", CB.SEVERITY_TIERS)
+@pytest.mark.parametrize("variant_idx", range(4))
+def test_mechanical_compile_canonicalizes_tier_variants(tier, variant_idx):
+    variant = _TIER_VARIANTS[tier][variant_idx]
+    finding = _finding(severity=variant)
+    compiled, drops = RD.mechanical_compile([finding], DIFF)
+    assert drops == []
+    assert len(compiled) == 1
+    assert compiled[0]["severity"] == tier
+
+
+@pytest.mark.parametrize("bad", ["blocker", "high", "Bananas", None, 123, ["Critical"], {"a": 1}])
+def test_mechanical_compile_off_vocabulary_to_important(bad):
+    finding = _finding(severity=bad)
+    compiled, drops = RD.mechanical_compile([finding], DIFF)
+    assert drops == []
+    assert len(compiled) == 1
+    assert compiled[0]["severity"] == "Important"
+
+
+def test_mechanical_compile_stamps_before_dedupe_merge():
+    """Mis-cased blocker must win merge and emerge canonical after ingest."""
+    findings = [
+        _finding(severity="important"),
+        _finding(severity="Minor"),
+    ]
+    compiled, _ = RD.mechanical_compile(findings, DIFF)
+    assert len(compiled) == 1
+    assert compiled[0]["severity"] == "Important"
+
+
+def test_mechanical_compile_nit_cap_overflow_stays_nit():
+    findings = [{"title": "nit%d" % i, "severity": "nit", "file": "f.py", "line": i + 1}
+                for i in range(9)]
+    compiled, _ = RD.mechanical_compile(findings, None)
+    summary = [f for f in compiled if f.get("summaryEntry")]
+    assert len(summary) == 1
+    assert summary[0]["severity"] == "Nit"
+
+
+def test_ingested_important_retains_blocking_in_review_memory():
+    """DoD regression: lowercase important survives ingest and counts blocking cross-round."""
+    raw = _finding(severity="important")
+    compiled, _ = RD.mechanical_compile([raw], DIFF)
+    assert compiled[0]["severity"] == "Important"
+    records = [
+        {"round": 1, "findings": [compiled[0]]},
+        {"round": 2, "findings": [dict(compiled[0])]},
+    ]
+    assert len(RM.recurrent_classes(records)) == 1
+    summary = RM._summarize_dimension({"findings": [compiled[0]]})
+    assert summary["blockingCount"] == 1
+
+
+def test_review_memory_blocking_reads_survive_raw_mis_cased_severity():
+    """Edge 7: recordsPath resume may carry raw severity mechanical_compile never saw."""
+    raw = _finding(severity="important")
+    records = [
+        {"round": 1, "findings": [raw]},
+        {"round": 2, "findings": [dict(raw)]},
+    ]
+    assert len(RM.recurrent_classes(records)) == 1
+    summary = RM._summarize_dimension({"findings": [raw]})
+    assert summary["blockingCount"] == 1
+
 
 @pytest.mark.parametrize("order", [
     ("important", "Minor"),
