@@ -5624,7 +5624,8 @@ def _line_porcelain_to_z(text):
             chunks.append(old_path.strip())
         else:
             chunks.append(line)
-    return "\0".join(chunks) + ("\0" if chunks else "")
+    text = "\0".join(chunks) + ("\0" if chunks else "")
+    return text.encode("utf-8", errors="surrogateescape")
 
 
 @pytest.mark.parametrize("open_enum_ok", [True, False])
@@ -5649,7 +5650,8 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         "?? %s/sibling.txt\n"
         "?? %s/extra.txt\n"
     ) % (sibling_rel, sibling_rel)
-    real_git = ED._git_scrubbed
+    real_text_git = ED._git_scrubbed
+    real_bytes_git = ED._git_scrubbed_bytes
     foreign_call = {"n": 0}
     status_call = {"n": 0}
 
@@ -5663,7 +5665,7 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
             return None
         return _lease_state_roots(sibling_real, forfeit_lease)
 
-    def fake_git(cwd_real, *args, timeout=None):
+    def fake_status_git(cwd_real, *args, timeout=None):
         if args[:2] == ("status", "--porcelain=v1"):
             status_call["n"] += 1
             plain = plain_porcelain
@@ -5676,12 +5678,18 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
                 plain = plain_porcelain + sibling_plain
                 uall = uall_porcelain + sibling_uall
             if "-uall" in args:
-                return subprocess.CompletedProcess(args, 0, _line_porcelain_to_z(uall), "")
-            return subprocess.CompletedProcess(args, 0, _line_porcelain_to_z(plain), "")
-        return real_git(cwd_real, *args, timeout=timeout)
+                return subprocess.CompletedProcess(
+                    args, 0, _line_porcelain_to_z(uall), b"",
+                )
+            return subprocess.CompletedProcess(
+                args, 0, _line_porcelain_to_z(plain), b"",
+            )
+        if args and args[0] == "rev-parse":
+            return real_text_git(cwd_real, *args, timeout=timeout)
+        return real_bytes_git(cwd_real, *args, timeout=timeout)
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
-    monkeypatch.setattr(ED, "_git_scrubbed", fake_git)
+    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_status_git)
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
     verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
@@ -5692,6 +5700,7 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         "forfeit_lease": forfeit_lease,
         "baseline": baseline,
     }
+    assert status_call["n"] > 0
     assert sibling_real.startswith(cwd + os.sep)
 
 
@@ -6203,13 +6212,26 @@ def test_worktree_baseline_overflow_producer_bound(tmp_path, monkeypatch):
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
 
 
+def test_worktree_baseline_entry_bytes_overflow_producer_bound(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    monkeypatch.setattr(ED, "MAX_BASELINE_ENTRY_BYTES", 10)
+    with open(os.path.join(wt, "one-file.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline.get("entriesOverflow") is True
+    assert baseline.get("entries") == []
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+
 def test_worktree_dirt_unsupported_entries_version_fail_closed(tmp_path):
     wt, _main = _linked_worktree_pair(tmp_path)
     cwd = os.path.realpath(wt)
     modern = ED._worktree_baseline(cwd, timeout=5)
     assert modern is not None
     head = modern["headSha"]
-    for bad_version in (1, 99, "2", None):
+    for bad_version in (1, 99, "2", None, ED.BASELINE_ENTRIES_VERSION - 1):
         baseline = dict(modern)
         baseline["entriesVersion"] = bad_version
         assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
@@ -6456,6 +6478,19 @@ def test_probe_dirt_verdict_cr_lf_swap_reads_dirty(tmp_path):
     with open(os.path.join(wt, lf_name), "wb") as fh:
         fh.write(b"lf-content\n")
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_parse_and_filter_shims_surrogate_str_no_raise(tmp_path):
+    surrogate_path = b"/tmp/foo\x80bar".decode("utf-8", errors="surrogateescape")
+    porcelain_str = "worktree " + surrogate_path + "\nbranch refs/heads/main"
+    worktrees = ED._parse_git_worktree_list(porcelain_str)
+    assert len(worktrees) == 1
+    cwd = os.path.realpath(str(tmp_path / "wt"))
+    os.makedirs(cwd, exist_ok=True)
+    rel = b"a\x80b".decode("utf-8", errors="surrogateescape")
+    porcelain = "?? " + rel + "\n"
+    filtered = ED._filter_porcelain_for_foreign_worktrees(porcelain, cwd, set())
+    assert filtered
 
 
 def test_parse_git_worktree_list_preserves_cr_in_path():

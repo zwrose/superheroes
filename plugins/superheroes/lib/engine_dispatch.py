@@ -520,7 +520,7 @@ def _parse_git_worktree_list(porcelain_data):
     elif isinstance(porcelain_data, bytes):
         porcelain_bytes = porcelain_data
     else:
-        porcelain_bytes = porcelain_data.encode("utf-8")
+        porcelain_bytes = porcelain_data.encode("utf-8", errors="surrogateescape")
     worktrees = []
     current = None
     for line in porcelain_bytes.split(b"\n"):
@@ -596,7 +596,7 @@ def _path_under_excluded_root(entry_abs, excluded_roots):
 def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots):
     cwd_real = os.path.realpath(cwd_real)
     if isinstance(porcelain, str):
-        porcelain = porcelain.encode("utf-8")
+        porcelain = porcelain.encode("utf-8", errors="surrogateescape")
     kept = []
     for line in porcelain.split(b"\n"):
         if not line.strip():
