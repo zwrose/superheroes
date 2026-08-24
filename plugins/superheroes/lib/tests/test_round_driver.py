@@ -2841,6 +2841,7 @@ _ALL_CHANNELS = {
     "recordOrphansIgnored": ["code-reviewer"],
     "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
                                    "storeKey": "architecture-reviewer", "occurrence": 0}],
+    "priorCommentsUnavailable": True,
     "pluginVersionSkew": [{
         "constraint": version_skew.CONSTRAINT,
         "status": version_skew.STATUS_CHECKED_DEGRADED,
@@ -2993,6 +2994,26 @@ def test_resume_drops_a_wrong_typed_channel_and_still_resumes(tmp_path):
     assert "vacuous-seat" not in prose and "canary-failed" not in prose
     assert "reviewer-fell-open (round 1)" not in prose
     assert "order-vendor-provenance-gap" not in prose
+
+
+def test_prior_comments_unavailable_discloses_on_receipt_and_survives_resume(tmp_path):
+    """PR-mode absence of prior-comments.json is a provenance gap that must ride the receipt and
+    resume path — not only live in state where build_receipt and recordsPath resume drop it."""
+    session_dir = str(tmp_path / "pr-session")
+    os.makedirs(session_dir)
+    os.makedirs(os.path.join(session_dir, "repo"))
+    state = RD.new_state(_cfg())
+    RD._resolve_prior_comments_path(session_dir, state)
+    assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
+    receipt = RD.build_receipt(state)
+    assert _round_channels(receipt, 1).get("priorCommentsUnavailable") is True
+
+    records = tmp_path / "round-records.json"
+    records.write_text(json.dumps([_seed_record(1, {"priorCommentsUnavailable": True})]))
+    resumed = RD.new_state(_cfg(recordsPath=str(records)))
+    assert resumed["rounds"]["1"]["priorCommentsUnavailable"] is True
+    resumed_receipt = RD.build_receipt(resumed)
+    assert _round_channels(resumed_receipt, 1).get("priorCommentsUnavailable") is True
 
 
 def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():

@@ -217,6 +217,10 @@ def _dict_list(value):
     return isinstance(value, list) and all(isinstance(x, dict) for x in value)
 
 
+def _bool_value(value):
+    return isinstance(value, bool)
+
+
 def _canary_failed_shape(value):
     # build_receipt joins cf["seats"] into prose, so the seat names must be strings.
     return isinstance(value, dict) and _str_list(value.get("seats") or [])
@@ -300,6 +304,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "adapterProvenance": _adapter_provenance_shape,
     "recordOrphansIgnored": _str_list,
     "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
+    "priorCommentsUnavailable": _bool_value,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
@@ -310,7 +315,7 @@ SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 # Per-round disclosure channels recorded during order emission (`orders-emit`, not `_fold_panel`).
 # Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt`
 # share the same one home.
-ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps",)
+ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps", "priorCommentsUnavailable")
 
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
@@ -4817,9 +4822,8 @@ def _max_used_attempt(session_dir, rnd, phase):
 def _next_dispatch_attempt(session_dir, rnd, phase, state):
     """Allocate the next unused attempt for a `(round, phase)` dispatch wave.
 
-    Takes the maximum over every durable source — accepted submit journal entries, on-disk seat
-    store slots, and ``lastAccepted`` when its phase and round match — then allocates above that
-    high-water mark."""
+    Takes the maximum over accepted submit journal entries and ``lastAccepted`` when its phase
+    and round match — then allocates above that high-water mark."""
     candidates = [
         _max_used_attempt(session_dir, rnd, phase),
     ]
@@ -5283,7 +5287,7 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
 def _materialize_order_sidecars(session_dir, rnd, phase, roster, pending_payload):
     """Write every order-input sidecar for ``phase`` from the single ``_order_sidecar_writes`` derivation."""
     for path, content in _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
-        _ensure_bytes_at_path(path, content)
+        _ensure_bytes_at_path(session_dir, path, content)
 
 
 def _session_meta(session_dir):
@@ -5291,8 +5295,14 @@ def _session_meta(session_dir):
     return obj if (err is None and isinstance(obj, dict)) else {}
 
 
-def _ensure_bytes_at_path(path, expected):
+def _ensure_bytes_at_path(session_dir, path, expected):
     """Write ``path`` when absent or content differs — atomic tmp+rename."""
+    try:
+        round_records._guard_within(session_dir, path)
+    except ValueError as exc:
+        if "path escapes the session dir" not in str(exc):
+            raise
+        raise ValueError("order-render-refused:path-escapes-session") from exc
     needs_write = True
     if os.path.isfile(path):
         try:
@@ -5314,7 +5324,7 @@ def _ensure_round_diff(session_dir, rnd, state):
     if not isinstance(diff_text, str):
         raise ValueError("reviewed-diff-unavailable")
     expected = diff_text.encode("utf-8")
-    return _ensure_bytes_at_path(diff_path, expected)
+    return _ensure_bytes_at_path(session_dir, diff_path, expected)
 
 
 def _ensure_round_head_diff(session_dir, rnd, state):
@@ -5324,7 +5334,7 @@ def _ensure_round_head_diff(session_dir, rnd, state):
         raise ValueError("order-render-refused:head-diff-unavailable")
     rdir = round_records.round_dir(session_dir, rnd)
     head_path = os.path.join(rdir, "head.diff")
-    return _ensure_bytes_at_path(head_path, head_text.encode("utf-8"))
+    return _ensure_bytes_at_path(session_dir, head_path, head_text.encode("utf-8"))
 
 
 def _ensure_fix_batch_file(session_dir, rnd, state):
@@ -5336,7 +5346,7 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
         batch = state.get("fixBatch")
     if not isinstance(batch, list):
         batch = []
-    return _ensure_bytes_at_path(path, round_records.canonical(batch).encode("utf-8"))
+    return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
 
 
 def _prior_comments_unavailable_marker():

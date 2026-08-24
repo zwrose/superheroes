@@ -183,6 +183,25 @@ def test_prior_comments_branch_mode_absent_is_empty_not_refusal(tmp_path):
     assert RD._readable_file_input_refusal(ph) is None
 
 
+def test_materialize_order_sidecars_refuses_symlinked_clusters_parent(tmp_path):
+    # axis: pre-commit sidecar writes must be containment-checked before any byte hits disk
+    session_dir = str(tmp_path / "session")
+    os.makedirs(session_dir)
+    rdir = RR.round_dir(session_dir, 2)
+    os.makedirs(rdir)
+    external = tmp_path / "external-clusters"
+    external.mkdir()
+    clusters_link = os.path.join(rdir, RD.ORDER_SIDECAR_CLUSTERS_DIR)
+    os.symlink(str(external), clusters_link)
+    payload = {"clusters": [{"key": "f.py:0", "findings": []}]}
+    external_target = external / "0.json"
+    with pytest.raises(ValueError, match="order-render-refused:path-escapes-session"):
+        RD._materialize_order_sidecars(
+            session_dir, 2, RP.P_VERIFIERS, ["verifier:f.py:0"], payload,
+        )
+    assert not external_target.exists()
+
+
 def test_pre_emit_and_commit_sidecar_bytes_match(tmp_path):
     # axis: pre-emit materialization and orders-emit commit write identical sidecar bytes
     session_dir = str(tmp_path / "sidecar-session")
