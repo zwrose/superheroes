@@ -1252,7 +1252,8 @@ def test_order_sidecar_paths_match_placeholder_paths(tmp_path):
         "envelope_stub_path": os.path.join(session_dir, "stub.json"),
         "order_path": os.path.join(session_dir, "order.md"),
     }
-    state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n"}
+    state = {"config": {"repoRoot": str(tmp_path)}, "reviewedDiff": "diff --git a/f b/f\n",
+             "headDiff": "diff --git a/f b/f\n"}
     ph = RD._order_placeholders(
         RP.P_VERIFIERS, "verifier:f.py:0", 0, state, state["config"],
         {"clusters": payload["clusters"]}, session_dir, 2, paths, RD.CHANNEL_FILE,)

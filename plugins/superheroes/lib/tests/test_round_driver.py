@@ -1711,7 +1711,7 @@ def test_stall_self_recovery_unknown_fixer_does_not_stamp_escalated_rung():
     assert state["config"]["fixerVendor"] is None
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
     assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_TERMINAL
     assert state.get("_escalatedRung") is None
     # #620 R3a: the null-rung self-recovery decision detail must be honest — never "escalated to None".
     sr = [d for d in state["decisions"] if d["kind"] == "self-recovery"]
@@ -1725,7 +1725,7 @@ def test_stall_self_recovery_known_fixer_stamps_escalated_rung():
     state = RD.new_state({"leg": "code", "vendors": ["claude"], "fixerVendor": "claude"})
     RD._handle_stall(state, state["config"], _STALL_BREAKER)
     assert state["selfRecovered"] is True
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_TERMINAL
     escalated = state.get("_escalatedRung")
     assert escalated is not None
     assert escalated["rung"] is not None
@@ -2841,6 +2841,13 @@ _ALL_CHANNELS = {
     "recordOrphansIgnored": ["code-reviewer"],
     "orderVendorProvenanceGaps": [{"seat": "architecture-reviewer",
                                    "storeKey": "architecture-reviewer", "occurrence": 0}],
+    "pluginVersionSkew": [{
+        "constraint": version_skew.CONSTRAINT,
+        "status": version_skew.STATUS_CHECKED_DEGRADED,
+        "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
+        "reason": "plugin-version-skew: seeded resume fixture skew",
+        "inspectedRoot": "/tmp/repo",
+    }],
 }
 
 
@@ -2901,6 +2908,7 @@ def test_resume_restores_every_disclosure_channel_with_its_prose(tmp_path):
         "order-vendor-provenance-gap (round 1): seat(s) architecture-reviewer"
         in "\n".join(_round_disclosures(receipt, 1))
     )
+    assert "plugin-version-skew: seeded resume fixture skew" in "\n".join(receipt["degraded"])
     # adapter-provenance names the phase as `(round N, phase)` — outside the `(round 1)` filter.
     degraded_all = "\n".join(receipt["degraded"])
     assert ("adapter-provenance (round 1, unknown-phase): vendor echo mismatch"
@@ -4031,7 +4039,8 @@ def test_fix_with_guidance_attaches_guidance():
     assert state["step"] == RD.P_FIXER
     b = state["_fixBatch"][0]
     assert b["judgmentDisposition"] == "fix-with-guidance"
-    assert b["guidance"] == "keep it backward compatible"
+    assert b[RD.FIX_BATCH_GUIDANCE_KEY] == "keep it backward compatible"
+    assert "guidance" not in b
 
 
 def test_skip_with_reason_records_ledger_and_rides_disclosure():
@@ -6074,7 +6083,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
         "converged", "capped-with-open-critical", "capped-with-open-blocker",
     )
 
-    # audit-stall — _handle_stall self-recovery legitimately routes to the fixer.
+    # audit-stall — discharged targets leave no open work; self-recovery settles via confirmation.
     state = _delta_settle_state_for_breaker(monkeypatch, {
         "halt": True, "reason": "audit-stall", "detail": "stalled",
         "stalledIdentities": ["x"],
@@ -6082,7 +6091,7 @@ def test_settle_delta_breaker_reasons_reachable_and_claimed(monkeypatch):
     state["_auditTargets"] = [{"id": "x", "identity": "x", "severity": "Important",
                                "file": "f.py", "line": 1}]
     RD._settle_delta(state, state["config"])
-    assert state["step"] == RD.P_FIXER
+    assert state["step"] == RD.P_PANEL
     assert any(d["kind"] == "self-recovery" for d in state["decisions"])
 
     # round-ceiling — unreachable at _settle_delta; enforced on the round-advance boundary only.

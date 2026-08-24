@@ -804,6 +804,32 @@ def _skew_record_identity(rec):
     )
 
 
+def _enrich_skew_degradation(deg, seat_map):
+    """One seat-map skew degradation row, with tri-state fields filled from ``pluginVersionSkew``."""
+    if not isinstance(deg, dict) or deg.get("constraint") != version_skew.CONSTRAINT:
+        return None
+    rec = dict(deg)
+    pvs = seat_map.get("pluginVersionSkew") if isinstance(seat_map, dict) else None
+    if not isinstance(pvs, dict):
+        pvs = {}
+    for field, pvs_key in (("status", "status"), ("detail", "detail"),
+                           ("inspectedRoot", "inspectedRoot")):
+        if rec.get(field) in (None, ""):
+            val = pvs.get(pvs_key)
+            if val not in (None, ""):
+                rec[field] = val
+    status = rec.get("status")
+    if status not in version_skew.STATUSES:
+        if status in (None, ""):
+            rec["status"] = version_skew.STATUS_CHECKED_DEGRADED
+            status = rec["status"]
+        else:
+            return None
+    if not version_skew.is_degrading(status):
+        return None
+    return rec
+
+
 def _skew_records_from_seat_map(seat_map):
     """Plugin-version-skew degradations from one seat map's degradations list."""
     degradations = seat_map.get("degradations") if isinstance(seat_map, dict) else None
@@ -811,15 +837,10 @@ def _skew_records_from_seat_map(seat_map):
         return []
     records = []
     for deg in degradations:
-        key = _skew_record_identity(deg)
-        if key is None:
+        rec = _enrich_skew_degradation(deg, seat_map)
+        if rec is None:
             continue
-        status = deg.get("status")
-        if status not in version_skew.STATUSES:
-            continue
-        if not version_skew.is_degrading(status):
-            continue
-        records.append(deg)
+        records.append(rec)
     return records
 
 
@@ -4656,9 +4677,11 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
 
 
 def _journal_max_attempt(session_dir, rnd, phase):
-    """Highest attempt logged for `(rnd, phase)` in the session journal, or -1 when none."""
+    """Highest **accepted** submit attempt logged for `(rnd, phase)`, or -1 when none."""
     max_attempt = -1
     for event in read_journal(session_dir):
+        if event.get("cmd") != "submit" or event.get("outcome") != "accepted":
+            continue
         if event.get("round") != rnd or event.get("phase") != phase:
             continue
         att = event.get("attempt")
@@ -4668,39 +4691,23 @@ def _journal_max_attempt(session_dir, rnd, phase):
     return max_attempt
 
 
-def _manifest_max_attempt_on_disk(session_dir, rnd, phase):
-    """Highest attempt with an on-disk orders manifest for `(rnd, phase)`, or -1 when none."""
-    max_attempt = -1
-    try:
-        phase_dir = os.path.join(round_records.round_dir(session_dir, rnd), ORDERS_DIRNAME, phase)
-        for name in os.listdir(phase_dir):
-            if not (name.startswith("manifest.a") and name.endswith(".json")):
-                continue
-            try:
-                att = int(name[len("manifest.a"):-len(".json")])
-            except ValueError:
-                continue
-            if att >= 0:
-                max_attempt = max(max_attempt, att)
-    except OSError:
-        pass
-    return max_attempt
-
-
 def _max_used_attempt(session_dir, rnd, phase):
-    """Durable high-water attempt for `(rnd, phase)` — journal plus on-disk orders manifests."""
-    return max(_journal_max_attempt(session_dir, rnd, phase),
-               _manifest_max_attempt_on_disk(session_dir, rnd, phase))
+    """Durable high-water attempt for `(rnd, phase)` — accepted submit journal entries only.
+
+    On-disk orders manifests are intentionally excluded: every emitted wave writes a manifest,
+    accepted or not, so counting manifests would bump the attempt after a cleared/refused pending
+    re-emission. Resume without in-memory ``lastAccepted`` still sees accepted history when the
+    journal is readable; when it is not, ``_next_dispatch_attempt`` fails closed toward attempt 0
+    or ``lastAccepted + 1`` rather than inferring from unaccepted emission artifacts."""
+    return _journal_max_attempt(session_dir, rnd, phase)
 
 
 def _next_dispatch_attempt(session_dir, rnd, phase, state):
     """Allocate the next unused attempt for a `(round, phase)` dispatch wave.
 
-    Reads the session journal (primary — every emitted/accepted/recorded wave is logged with its
-    attempt) and on-disk orders manifests (resume fallback when in-memory ``lastAccepted`` is
-    absent but manifests from an earlier CLI process remain). Fail-closed toward a fresh slot:
-    when nothing durable is readable, attempt 0; otherwise ``max_used + 1`` so a second wave in
-    the same round never reuses storage."""
+    Reads accepted submit journal entries (primary — only a folded wave allocates the next slot).
+    Fail-closed toward a fresh slot: when nothing durable is readable, attempt 0; otherwise
+    ``max_used + 1`` so a second accepted wave in the same round never reuses storage."""
     max_used = _max_used_attempt(session_dir, rnd, phase)
     if max_used < 0:
         prior = state.get("lastAccepted")
@@ -5156,6 +5163,12 @@ def _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
     return writes
 
 
+def _materialize_order_sidecars(session_dir, rnd, phase, roster, pending_payload):
+    """Write every order-input sidecar for ``phase`` from the single ``_order_sidecar_writes`` derivation."""
+    for path, content in _order_sidecar_writes(session_dir, rnd, phase, roster, pending_payload):
+        _ensure_bytes_at_path(path, content)
+
+
 def _session_meta(session_dir):
     obj, err = round_records.read_json(os.path.join(session_dir, round_records.META_FILE))
     return obj if (err is None and isinstance(obj, dict)) else {}
@@ -5234,7 +5247,7 @@ def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_se
 
 
 def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payload,
-                        session_dir, rnd, paths, channel):
+                        session_dir, rnd, paths, channel, roster=None):
     """Phase-specific placeholder dict for `round_orders.render_order`.
 
     Raises `ValueError("order-render-refused:...")` when a slot cannot be filled truthfully
@@ -5252,6 +5265,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     layer_path = _calibration_path_placeholder(layer_resolved, "Review-crew layer",
                                               root_refusal)
     payload = pending_payload if isinstance(pending_payload, dict) else {}
+    sidecar_roster = roster if isinstance(roster, list) else [seat_key]
     ph = {}
 
     if phase == P_PANEL:
@@ -5288,8 +5302,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         cluster = (payload.get("clusters") or [])[cluster_index]
         if not isinstance(cluster, dict):
             cluster = {}
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         cluster_path = _order_cluster_sidecar_path(rdir, cluster_index)
-        _ensure_bytes_at_path(cluster_path, round_records.canonical(cluster).encode("utf-8"))
         ph = {
             "CLUSTER_FINDINGS_PATH": cluster_path,
             "DIFF_PATH": diff_path,
@@ -5301,9 +5315,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         findings = payload.get("findings")
         if not isinstance(findings, list):
             findings = []
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         verified_path = _order_verified_sidecar_path(rdir)
-        _ensure_bytes_at_path(verified_path,
-                              round_records.canonical({"findings": findings}).encode("utf-8"))
         ph = {
             "VERIFIED_FINDINGS_PATH": verified_path,
             "DIFF_PATH": diff_path,
@@ -5349,8 +5362,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         hunks = payload.get("hunks")
         if not isinstance(hunks, dict):
             hunks = {}
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         hunks_path = _order_scoped_hunks_sidecar_path(rdir)
-        _ensure_bytes_at_path(hunks_path, round_records.canonical(hunks).encode("utf-8"))
         head_diff_path = _ensure_round_head_diff(session_dir, rnd, state)
         ph = {
             "HUNKS_PATH": hunks_path,
@@ -5378,7 +5391,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
 
 
 def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_key, occurrence,
-                                pending_payload, row):
+                                pending_payload, row, roster=None):
     """Render the order context for one seat/occurrence, using the CALLER's resolved transport row.
 
     `row` is required — never re-resolved here. `_seat_transport_row` is not pure for the
@@ -5423,7 +5436,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "host_seat": host_seat,
         "placeholders": _order_placeholders(phase, seat_key, occurrence, state,
                                               cfg, pending_payload,
-                                              session_dir, rnd, paths, channel),
+                                              session_dir, rnd, paths, channel, roster=roster),
     }, paths
 
 
@@ -5552,7 +5565,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
                 vendor_gaps.append({"seat": seat_key, "storeKey": skey, "occurrence": occurrence,
                                     "phase": phase, "vendorSource": row.get("vendorSource")})
         context, paths = _build_order_render_context(session_dir, state, rnd, phase, attempt,
-                                                     seat_key, occurrence, pending_payload, row)
+                                                     seat_key, occurrence, pending_payload, row,
+                                                     roster=roster)
         resource_reason = _order_input_refusal(context.get("placeholders"))
         if resource_reason is not None:
             raise ValueError("order-render-refused:%s:%s" % (skey, resource_reason))
@@ -5562,8 +5576,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         #   driver materializes before emit: diff.txt, head.diff, fix-batch.json, phase sidecars,
         #   prior-comments.json (empty array when orchestrator did not supply one)
         # STUB(#723): readable-input registry + fail-closed existence guard now cover driver-owned
-        # file inputs; sidecar set still duplicates _order_sidecar_writes for the orders-emit commit
-        # — closing that single-source seam remains open.
+        # file inputs; sidecar bytes are derived once in ``_order_sidecar_writes`` and materialized
+        # via ``_materialize_order_sidecars`` before render and again at the orders-emit commit.
         order_text, render_reason = round_orders.render_order(phase, seat_key, context)
         if render_reason is not None or not isinstance(order_text, str):
             raise ValueError("order-render-refused:%s:%s" % (skey, render_reason or "empty"))

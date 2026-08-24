@@ -149,6 +149,35 @@ def test_readable_input_refusal_when_registered_path_missing(tmp_path):
     assert reason == "order-input-missing:DIFF_PATH"
 
 
+def test_pre_emit_and_commit_sidecar_bytes_match(tmp_path):
+    # axis: pre-emit materialization and orders-emit commit write identical sidecar bytes
+    session_dir = str(tmp_path / "sidecar-session")
+    os.makedirs(session_dir)
+    rdir = os.path.join(session_dir, "round-2")
+    os.makedirs(rdir)
+    roster = ["finding::auth.py::12", "finding::other.py::3"]
+    payload = {
+        "targets": [
+            {"id": "finding::other.py::3", "summary": "other target"},
+            {"id": "finding::auth.py::12", "summary": "auth target"},
+        ],
+    }
+    commit_writes = dict(RD._order_sidecar_writes(session_dir, 2, RP.P_AUDITS, roster, payload))
+    paths = _minimal_paths(session_dir)
+    state = {
+        "config": {"repoRoot": str(tmp_path)},
+        "reviewedDiff": "diff --git a/f b/f\n",
+        "headDiff": "diff --git a/f b/f\n",
+    }
+    RD._order_placeholders(
+        RP.P_AUDITS, "finding::auth.py::12", 0, state, state["config"],
+        payload, session_dir, 2, paths, RD.CHANNEL_FILE, roster=roster,
+    )
+    for path, expected in commit_writes.items():
+        with open(path, "rb") as fh:
+            assert fh.read() == expected
+
+
 # --- registry census (bite axis: every rendered placeholder is partitioned) ---------------
 
 

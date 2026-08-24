@@ -475,10 +475,14 @@ def test_stalled_open_targets_legacy_empty_fix_batch_returns_empty():
     assert RD._stalled_open_targets(state, breaker) == []
 
 
-def test_handle_stall_legacy_empty_fix_batch_falls_back_to_fix_batch():
-    # axis: empty legacy selection must preserve batch-or-fixBatch fallback
+def test_handle_stall_legacy_empty_fix_batch_parks_unresolvable_open_set():
+    # axis: legacy session with empty fixBatch and no _auditOutcome parks — no prior-batch fallback
     state = RD.new_state(_cfg())
     state["fixBatch"] = []
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
     RD._handle_stall(state, state["config"], breaker)
-    assert state.get("_fixBatch") == []
+    assert state["terminal"] == "cannot-certify"
+    assert state["step"] == RD.P_TERMINAL
+    assert any(d["kind"] == "cannot-certify" for d in state["decisions"])
+    detail = next(d["detail"] for d in state["decisions"] if d["kind"] == "cannot-certify")
+    assert "open audit target set unresolvable" in detail
