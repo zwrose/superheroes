@@ -12,6 +12,7 @@ import itertools
 import math
 
 from model_registry import family_for, is_allowed, matrix_config, vendors
+import version_skew
 
 LENS_SEATS = (
     "architecture-reviewer",
@@ -960,6 +961,7 @@ def build_parser():
     cc.add_argument(c, "--narrative-family", contract="free-text", default=None)
     cc.add_argument(c, "--pr-number", contract="free-text", default=None)
     cc.add_argument(c, "--head-sha", contract="free-text", default=None)
+    cc.add_argument(c, "--repo-root", contract="free-text", default=".")
     cc.add_argument(
         c,
         "--live-vendors",
@@ -998,6 +1000,7 @@ def main(argv):
 
     args = build_parser().parse_args(argv[1:])
     if args.cmd == "compose":
+        import os
         import time
 
         import liveness_cache
@@ -1053,10 +1056,17 @@ def main(argv):
             live_cells=live_cells,
             live_cells_source=live_cells_source,
         )
+        extra_degradations: list[dict[str, str]] = []
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        skew_record = version_skew.detect(args.repo_root, plugin_root)
+        if skew_record is not None:
+            extra_degradations.append(skew_record)
         if notes:
+            extra_degradations.extend(notes)
+        if extra_degradations:
             # merge BEFORE to_receipt: the evidence check reads sm["degradations"], so a note that
             # lands after the receipt is derived can never be seen by it (#670 review, two seats).
-            sm["degradations"] = list(sm.get("degradations", [])) + list(notes)
+            sm["degradations"] = list(sm.get("degradations", [])) + extra_degradations
         receipt = to_receipt(sm)
         if "liveCellsSource" not in receipt:
             receipt["liveCellsSource"] = (

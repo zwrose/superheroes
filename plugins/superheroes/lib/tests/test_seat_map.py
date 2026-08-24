@@ -2042,3 +2042,77 @@ def test_to_receipt_always_emits_live_cells_fields():
     for receipt in receipts:
         assert "liveCells" in receipt
         assert "liveCellsSource" in receipt
+
+
+_PLUGIN_ROOT = os.path.join(_LIB, "..")
+
+
+def _write_superheroes_fixture_repo(tmp_path, divergent=True):
+    repo = tmp_path / "fixture_repo"
+    sh = repo / "plugins" / "superheroes"
+    manifest = sh / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True, exist_ok=True)
+    manifest.write_text(
+        json.dumps({"name": "superheroes", "version": "0.31.0"}),
+        encoding="utf-8",
+    )
+    (sh / "version.txt").write_text("0.31.0\n", encoding="utf-8")
+    lib = sh / "lib"
+    lib.mkdir(parents=True, exist_ok=True)
+    for entry in ("model_registry.py", "seat_map.py"):
+        src = os.path.join(_PLUGIN_ROOT, "lib", entry)
+        content = open(src, encoding="utf-8").read()
+        if divergent and entry == "model_registry.py":
+            content = content + "# fixture skew marker\n"
+        (lib / entry).write_text(content, encoding="utf-8")
+    return str(repo)
+
+
+def test_cli_compose_repo_root_superheroes_skew_emits_plugin_version_skew(tmp_path, capsys):
+    repo_root = _write_superheroes_fixture_repo(tmp_path, divergent=True)
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            repo_root,
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    assert len(skew) == 1
+
+
+def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_path, capsys):
+    repo_root = tmp_path / "other_repo"
+    repo_root.mkdir()
+    (repo_root / "README.md").write_text("not superheroes\n", encoding="utf-8")
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            str(repo_root),
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    assert skew == []

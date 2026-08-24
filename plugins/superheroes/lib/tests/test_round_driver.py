@@ -5049,6 +5049,82 @@ def test_canary_failed_record_stable_two_failing_probe_orders():
     assert records[0] == records[1]
 
 
+def _panel_seat_map_with_skew(detail="semantics-divergent", reason="plugin semantics differ from repo"):
+    seat_map = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    seat_map["degradations"] = [{
+        "constraint": "plugin-version-skew",
+        "detail": detail,
+        "reason": reason,
+    }]
+    return seat_map
+
+
+def test_skew_alone_degrades_certification_three_projections():
+    reason = "running plugin 0.30.0 semantics differ from repository 0.31.0"
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMap"] = _panel_seat_map_with_skew(reason=reason)
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
+    receipt = RD.build_receipt(state)
+    skew_lines = [d for d in receipt["degraded"] if d.startswith("plugin-version-skew:")]
+    assert len(skew_lines) == 1
+    assert reason in skew_lines[0]
+
+
+def test_skew_with_unexcused_violation_constraint_violated_shape_driver_persists():
+    reason = "skew alongside maker-family breach"
+    seat_map = _seat_map_receipt_with_unexcused_maker_family()
+    seat_map["degradations"] = [{
+        "constraint": "plugin-version-skew",
+        "detail": "semantics-divergent",
+        "reason": reason,
+    }]
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMap"] = seat_map
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-constraint-violated")
+    assert "-degraded" not in state["certification"]["shape"]
+    assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
+    assert "seat-map-violation" in state["certification"]["shapeDrivers"]
+
+
+def test_skew_evidence_unreadable_degrades_identically():
+    reason = "skew evidence unreadable"
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMap"] = _panel_seat_map_with_skew(
+        detail="evidence-unreadable", reason=reason)
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert state["certification"]["shape"].endswith("-degraded")
+    assert "plugin-version-skew" in state["certification"]["shapeDrivers"]
+    receipt = RD.build_receipt(state)
+    skew_lines = [d for d in receipt["degraded"] if d.startswith("plugin-version-skew:")]
+    assert len(skew_lines) == 1
+    assert reason in skew_lines[0]
+
+
+def test_skew_malformed_seat_map_is_safe():
+    for sm in (None, {}, {"degradations": "not-a-list"},
+               {"degradations": [None, 42, {"constraint": "other"}]}):
+        state = {"seatMap": sm}
+        assert RD._skew_degraded(state) is False
+        assert RD._skew_records(state) == []
+
+
+def test_no_skew_record_absent_from_shape_drivers_and_degraded():
+    cfg = _cfg(leg="panel", vendors=["codex", "cursor"])
+    state = RD.new_state(cfg)
+    state["seatMap"] = _seat_map_vendors({d: "claude" for d in RD.DIMENSIONS})
+    RD._terminal_converged(state, state["config"], full_panel=True)
+    assert "plugin-version-skew" not in state["certification"]["shapeDrivers"]
+    receipt = RD.build_receipt(state)
+    skew_lines = [d for d in receipt["degraded"] if "plugin-version-skew" in d]
+    assert skew_lines == []
+
+
 _RETIRED_RUN_CONFIG_KEYS = ("docMode", "fixerModel", "fixerEffort")
 _ROUND_DRIVER_PATH = os.path.join(_LIB, "round_driver.py")
 

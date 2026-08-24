@@ -765,6 +765,25 @@ def _same_family_degraded(state):
     return bool(_same_family_seats(state))
 
 
+def _skew_records(state):
+    """Plugin-version-skew degradations from the seat map's own receipt (#677). A disclosed
+    degradation when the running plugin's review semantics differ from the repository's own —
+    never recomputed here."""
+    sm = state.get("seatMap")
+    degradations = sm.get("degradations") if isinstance(sm, dict) else None
+    if not isinstance(degradations, list):
+        return []
+    records = []
+    for deg in degradations:
+        if isinstance(deg, dict) and deg.get("constraint") == "plugin-version-skew":
+            records.append(deg)
+    return records
+
+
+def _skew_degraded(state):
+    return bool(_skew_records(state))
+
+
 def _seat_map_violations(state):
     """Unexcused seat-map constraint violations — a BREACH channel, distinct from the disclosed
     degradations (#680). The UNION of what each round recorded and what the live merged seat map
@@ -865,6 +884,7 @@ def _cert_shape(state, base):
         _degraded(state)
         or _base_degraded(state)
         or _same_family_degraded(state)
+        or _skew_degraded(state)
         or _seat_pin_excused(state)
     ):
         return base + "-degraded"
@@ -3023,6 +3043,8 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("base")
     if _same_family_degraded(state):
         shape_drivers.append("same-family")
+    if _skew_degraded(state):
+        shape_drivers.append("plugin-version-skew")
     if _seat_pin_excused(state):
         shape_drivers.append("seat-pin")
     if _seat_map_violated(state):
@@ -3110,6 +3132,16 @@ def build_receipt(state, session_dir=None):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(_same_family_seats(state)))
+    if _skew_degraded(state):
+        _skew_reasons = []
+        for rec in _skew_records(state):
+            reason = rec.get("reason")
+            if isinstance(reason, str) and reason:
+                _skew_reasons.append(reason)
+        degraded.append(
+            "plugin-version-skew: the review ran under a plugin/repository semantics skew (%s); "
+            "disclosed by the seat map and named in the certification shape"
+            % "; ".join(_skew_reasons))
     _pin_seats = _seat_pin_excused_seats(state)
     if _pin_seats:
         degraded.append(
