@@ -7,7 +7,11 @@ deliberately do not build are a first-class artifact, cited instead of re-litiga
 
 The **orientation review** (standing monthly-ish routine, deliberately independent of
 the release path) walks both ledgers each pass: the first against the platform's current
-primitives, the second against its own unlock conditions; when the harness has been
+primitives, the second against its own unlock conditions, and **the project's revisit-trigger
+registry** — the pinned comment on the standing-proposals collector issue — checking each declined item's revisit trigger
+against what has since happened, the same way it walks §2's entries against their unlock
+conditions (canonical home:
+`plugins/superheroes/skills/showrunner/reference/owner-decisions.md`); when the harness has been
 upgraded since the previous pass, the pass also runs
 `plugins/superheroes/lib/harness_probe.py` so the native project-context tripwire (#629)
 has an owner and a cadence instead of sitting unplayed. Changes land by PR. An entry
@@ -258,7 +262,8 @@ panel-penetrating boundary escape, or guardian-sweep evidence).
 Known, owner-accepted gaps between a guarantee's prose and its enforcement — each with
 its bound, why it was accepted, and the trigger that reopens it. Promise 5 applied to
 ourselves: a residual risk we carry knowingly is a trade; one nobody wrote down is a
-hidden defect. The orientation review walks this section too.
+hidden defect. The orientation review walks this section too, and the revisit-trigger registry
+beside it in the same pass.
 
 | Residual | Bound | Why accepted (owner-ratified) | Re-check trigger |
 |---|---|---|---|

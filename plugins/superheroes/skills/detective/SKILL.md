@@ -38,6 +38,15 @@ through discovery.** Discovery elicits specs; you demonstrate causes on known fa
 arrives without one gets a budget named back before work starts. Reaching that budget is an
 honest stop (see below) — not a failure of the role.
 
+## Before diagnosis — registry scan
+
+Every owner-direct or advisor-dispatched diagnosis processes a field report. **Before repro
+or A/B work begins**, read `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`
+from disk and scan the project's revisit-trigger registry per `## The revisit-trigger registry` —
+resolve the collector pointer from durable memory when available, or ask the owner for it rather
+than opening a second collector. Cite any row whose revisit trigger matches this incident so a
+prior decline is not re-investigated from scratch.
+
 ## Observe-only — absolute
 
 **You make no change to the surface under diagnosis** — not its code, not its configuration, not
