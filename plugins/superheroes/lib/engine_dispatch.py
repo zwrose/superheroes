@@ -476,8 +476,19 @@ def _stdout_truncation_marker(observed_bytes):
     )
 
 
+_STDOUT_TRUNCATION_MARKER_RE = re.compile(
+    r"^%s(\d+)%s\n" % (
+        re.escape(STDOUT_TRUNCATION_MARKER_PREFIX),
+        re.escape(STDOUT_TRUNCATION_MARKER_SUFFIX),
+    )
+)
+
+
 def _stdout_capture_truncated(text):
-    return bool(text) and STDOUT_TRUNCATION_MARKER_PREFIX in text
+    """True when the runner wrote its truncation marker at the capture head (not engine-forged)."""
+    if not text:
+        return False
+    return _STDOUT_TRUNCATION_MARKER_RE.match(text) is not None
 
 
 def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None):
@@ -582,7 +593,7 @@ def _worktree_porcelain_snapshot(cwd_real, mode, excluded_roots, timeout=None):
     if status.returncode != 0:
         return None
     porcelain = status.stdout or ""
-    if mode == "filtered" and excluded_roots:
+    if excluded_roots:
         porcelain = _filter_porcelain_for_foreign_worktrees(
             porcelain, cwd_real, set(excluded_roots),
         )
@@ -616,11 +627,64 @@ def _worktree_baseline(cwd_real, timeout=None):
     }
 
 
+def _legacy_worktree_porcelain_sha256(cwd_real, timeout=None):
+    """Porcelain digest using the pre-mode dynamic algorithm (legacy baselines)."""
+    excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if excluded is None:
+        try:
+            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        if status.returncode != 0:
+            return None
+        porcelain = status.stdout or ""
+    else:
+        try:
+            status = _git_scrubbed(
+                cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if status.returncode != 0:
+            return None
+        porcelain = status.stdout or ""
+        if excluded:
+            porcelain = _filter_porcelain_for_foreign_worktrees(
+                porcelain, cwd_real, excluded,
+            )
+    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+
+
+def _baseline_head_sha_readable(baseline):
+    head_sha = baseline.get("headSha")
+    if not isinstance(head_sha, str):
+        return False
+    return bool(_BASE_SHA_OBJECT_ID_RE.match(head_sha.strip()))
+
+
 def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
     """Return True if dirtied, False if clean, None if unreadable (fail-closed)."""
-    if baseline is None:
+    if not isinstance(baseline, dict):
+        return None
+    if not _baseline_head_sha_readable(baseline):
         return None
     mode = baseline.get("mode")
+    if mode is None:
+        try:
+            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        if head.returncode != 0:
+            return None
+        porcelain_sha256 = _legacy_worktree_porcelain_sha256(cwd_real, timeout=timeout)
+        if porcelain_sha256 is None:
+            return None
+        current_head = (head.stdout or "").strip()
+        if current_head != baseline.get("headSha"):
+            return True
+        if porcelain_sha256 != baseline.get("porcelainSha256"):
+            return True
+        return False
     if mode not in ("plain", "filtered"):
         return None
     try:
@@ -630,10 +694,9 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
     if head.returncode != 0:
         return None
     excluded_roots = set(baseline.get("excludedRoots") or [])
-    if mode == "filtered":
-        live_excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
-        if live_excluded is not None:
-            excluded_roots |= live_excluded
+    live_excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if live_excluded is not None:
+        excluded_roots |= live_excluded
     porcelain_sha256 = _worktree_porcelain_snapshot(
         cwd_real, mode, sorted(excluded_roots) if excluded_roots else None, timeout=timeout,
     )
@@ -2804,20 +2867,21 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     return _fold_run(run_dir_real, state, result)
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
+                if run_kind == RUN_KIND_WRITE:
+                    truncated_bytes = _attempt_stdout_truncated(
+                        run_dir_real, state, latest,
+                    )
+                    if truncated_bytes is not None:
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            _stdout_capped_forfeit(
+                                engine, truncated_bytes,
+                                run_dir_real=run_dir_real, state=state,
+                                attempts=latest,
+                            ),
+                            run_dir=run_dir_real, argv=argv,
+                        ))
                 if latest < MAX_ATTEMPTS:
                     if run_kind == RUN_KIND_WRITE:
-                        truncated_bytes = _attempt_stdout_truncated(
-                            run_dir_real, state, latest,
-                        )
-                        if truncated_bytes is not None:
-                            return _fold_run(run_dir_real, state, _with_run_fields(
-                                _stdout_capped_forfeit(
-                                    engine, truncated_bytes,
-                                    run_dir_real=run_dir_real, state=state,
-                                    attempts=latest,
-                                ),
-                                run_dir=run_dir_real, argv=argv,
-                            ))
                         baseline = opened.get("worktreeBaseline")
                         dirt_verdict = _worktree_dirt_verdict(baseline, opened["cwd"])
                         if dirt_verdict is None or dirt_verdict:

@@ -5303,6 +5303,29 @@ def test_short_stdout_capture_unmarked(tmp_path):
     assert not ED._stdout_capture_truncated(text)
 
 
+def test_engine_stdout_marker_prefix_under_cap_not_truncated():
+    forged = (
+        "Receipt prose mentioning %s in the body\n"
+        % ED.STDOUT_TRUNCATION_MARKER_PREFIX
+    )
+    assert not ED._stdout_capture_truncated(forged)
+
+
+def test_genuine_truncation_detected_without_stdout_bytes(tmp_path):
+    path = tmp_path / "stdout.txt"
+    over = ED.MAX_STDOUT_CAPTURE + 512
+    path.write_bytes(b"x" * over)
+    ED._cap_file_tail(str(path), ED.MAX_STDOUT_CAPTURE)
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    assert ED._stdout_capture_truncated(text)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    shutil.copy2(str(path), stdout_path)
+    state = {"attempts": {1: {"ended": {}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
+
+
 def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
     wt, _main = _linked_worktree_pair(tmp_path)
     over = ED.MAX_STDOUT_CAPTURE + 4096
@@ -5318,6 +5341,24 @@ def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
     assert res["detail"] != "worktree-dirtied-by-attempt"
     assert "truncated" in res["disclosure"].lower()
     assert len(fake.calls) == 1
+
+
+def test_truncated_final_attempt_stdout_capped_forfeit(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    fake = FakeRunner([
+        ("not gradeable", True, 0, ""),
+        (truncated, False, 0, ""),
+    ])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["attempts"] == ED.MAX_ATTEMPTS
+    assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
+    assert res["detail"] != "worktree-dirtied-by-attempt"
+    assert "truncated" in res["disclosure"].lower()
+    assert len(fake.calls) == 2
 
 
 def test_nested_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
@@ -5578,31 +5619,48 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
 ):
     wt, _main = _linked_worktree_pair(tmp_path)
     cwd = os.path.realpath(wt)
-    sibling_real = os.path.realpath(str(tmp_path / "foreign-sibling"))
+    sibling_rel = ".claude/worktrees/foreign-sibling"
+    sibling_real = os.path.realpath(os.path.join(cwd, sibling_rel))
     plain_porcelain = "?? stable-only.txt\n?? stable-nested/\n"
     uall_porcelain = (
         "?? stable-only.txt\n"
         "?? stable-nested/a.txt\n"
         "?? stable-nested/b.txt\n"
     )
+    sibling_plain = "?? %s/sibling.txt\n" % sibling_rel
+    sibling_uall = (
+        "?? %s/sibling.txt\n"
+        "?? %s/extra.txt\n"
+    ) % (sibling_rel, sibling_rel)
     real_git = ED._git_scrubbed
     foreign_call = {"n": 0}
+    status_call = {"n": 0}
 
     def fake_foreign(cwd_real, timeout=None):
         foreign_call["n"] += 1
         if foreign_call["n"] == 1:
             if not open_enum_ok:
                 return None
-            return _lease_state_roots(str(tmp_path / "foreign-sibling"), open_lease)
+            return _lease_state_roots(sibling_real, open_lease)
         if not forfeit_enum_ok:
             return None
-        return _lease_state_roots(str(tmp_path / "foreign-sibling"), forfeit_lease)
+        return _lease_state_roots(sibling_real, forfeit_lease)
 
     def fake_git(cwd_real, *args, timeout=None):
         if args[:2] == ("status", "--porcelain=v1"):
+            status_call["n"] += 1
+            plain = plain_porcelain
+            uall = uall_porcelain
+            if (
+                status_call["n"] >= 2
+                and forfeit_enum_ok
+                and forfeit_lease in ("live", "appeared")
+            ):
+                plain = plain_porcelain + sibling_plain
+                uall = uall_porcelain + sibling_uall
             if "-uall" in args:
-                return subprocess.CompletedProcess(args, 0, uall_porcelain, "")
-            return subprocess.CompletedProcess(args, 0, plain_porcelain, "")
+                return subprocess.CompletedProcess(args, 0, uall, "")
+            return subprocess.CompletedProcess(args, 0, plain, "")
         return real_git(cwd_real, *args, timeout=timeout)
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
@@ -5617,7 +5675,32 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         "forfeit_lease": forfeit_lease,
         "baseline": baseline,
     }
-    assert sibling_real.startswith(os.path.realpath(str(tmp_path)))
+    assert sibling_real.startswith(cwd + os.sep)
+
+
+def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    modern = ED._worktree_baseline(cwd, timeout=5)
+    assert modern is not None
+    legacy = {
+        "headSha": modern["headSha"],
+        "porcelainSha256": modern["porcelainSha256"],
+    }
+    assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
+
+
+def test_unreadable_worktree_baseline_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    assert ED._worktree_dirt_verdict(None, cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict("not-a-dict", cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict({}, cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict(
+        {"headSha": "not-a-sha", "porcelainSha256": "abc"},
+        cwd,
+        timeout=5,
+    ) is None
 
 
 def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
