@@ -1475,6 +1475,61 @@ def test_live_vendors_for_composition_provenance_per_branch(tmp_path, monkeypatc
     assert fresh_prov == "probed"
 
 
+def test_live_vendors_for_composition_provenance_values_in_vocabulary_home(tmp_path, monkeypatch):
+    """Every provenance value the producer returns is a member of the vocabulary home."""
+    import liveness_cache as lc
+
+    monkeypatch.delenv(lc._ENV_TTL, raising=False)
+    vocab = lc.LIVE_CELLS_SOURCES
+    needed = pp.needed_configs_for(("reviewer-deep", "reviewer"), ["codex"])
+    liveness = {
+        "codex": {
+            "live": True,
+            "models": {m: {"ok": True, "detail": ""} for m, _ in needed["codex"]},
+            "cells": [
+                {"model": m, "effort": e, "ok": True, "detail": ""}
+                for m, e in needed["codex"]
+            ],
+        },
+        "claude": {"live": True, "models": {}, "cells": []},
+    }
+    cache_path = str(tmp_path / "composition-liveness.json")
+    now = 1000.0
+    lc.write(liveness, needed, path=cache_path, now=now)
+
+    def _boom(argv, **kwargs):
+        raise AssertionError("run must not be called")
+
+    provenance_values = []
+    _live, _cells, _liv, _notes, cache_hit_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_boom,
+        cache_path=cache_path,
+        now=now + 1,
+    )
+    provenance_values.append(cache_hit_prov)
+
+    _live, _cells, _liv, _notes, cache_only_miss_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=_boom,
+        probe_mode="cache-only",
+        cache_path="/nonexistent/path.json",
+        now=now,
+    )
+    provenance_values.append(cache_only_miss_prov)
+
+    _live, _cells, _liv, _notes, fresh_prov = pp.live_vendors_for_composition(
+        ["codex"],
+        run=fake0,
+        cache_path=str(tmp_path / "fresh-cache.json"),
+        now=now,
+    )
+    provenance_values.append(fresh_prov)
+
+    for prov in provenance_values:
+        assert prov in vocab
+
+
 def test_live_vendors_for_composition_cache_only_hit_reuses(tmp_path, monkeypatch):
     import liveness_cache
 

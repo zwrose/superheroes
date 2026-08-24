@@ -11,7 +11,10 @@ import hashlib
 import itertools
 import math
 
+import liveness_cache
 from model_registry import family_for, is_allowed, matrix_config, vendors
+
+LIVE_CELLS_SOURCES = liveness_cache.LIVE_CELLS_SOURCES
 
 LENS_SEATS = (
     "architecture-reviewer",
@@ -41,10 +44,6 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     "preflight-cache-only",   # --post / receipt-only path: vendors were never probed
     "compose-failed",         # compose blew up and every seat fell open to Claude
 })
-# probed = per-cell probe evidence (fresh or TTL-cached); synthesized = derived from a
-# vendor-level rollup, never probed per cell; unprobed = no probe evidence of any kind exists
-# and the cells carry no verification weight.
-LIVE_CELLS_SOURCES = ("probed", "synthesized", "unprobed")
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
@@ -111,8 +110,8 @@ def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, str]:
     if isinstance(live, list) and live:
         roster = tuple(seat_map.get("seats", {}).keys()) or PANEL_ROSTER
         synthesized = _synthesize_live_cells(live, roster, None)
-        return sorted([list(c) for c in synthesized]), "synthesized"
-    return [], "synthesized"
+        return sorted([list(c) for c in synthesized]), liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
+    return [], liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
 
 
 def _resolvable_families_for_seat(
@@ -133,12 +132,12 @@ def _resolvable_families_for_seat(
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
             return None
     cells_source = seat_map.get("liveCellsSource")
+    if cells_source == liveness_cache.LIVE_CELLS_SOURCE_UNPROBED:
+        return None
     known_vendors = set(vendors())
     tier = tier or _seat_tier(seat, cfg)
     families: set[str] = set()
-    if cells_source == "unprobed":
-        return None
-    if cells_source == "probed":
+    if cells_source == liveness_cache.LIVE_CELLS_SOURCE_PROBED:
         raw_cells = seat_map.get("liveCells")
         if not isinstance(raw_cells, list):
             return None
@@ -1006,8 +1005,6 @@ def main(argv):
     args = build_parser().parse_args(argv[1:])
     if args.cmd == "compose":
         import time
-
-        import liveness_cache
 
         notes: list[dict[str, str]] = []
 

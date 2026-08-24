@@ -505,7 +505,13 @@ def live_vendors_for_composition(
                 "reason": "reused liveness receipt (age %ds)" % int(now - rec["probedAt"]),
             })
             notes.extend(dead_notes)
-            return (live, live_cells, rec["liveness"], notes, "probed")
+            return (
+                live,
+                live_cells,
+                rec["liveness"],
+                notes,
+                liveness_cache.LIVE_CELLS_SOURCE_PROBED,
+            )
 
     if probe_mode == "cache-only":
         notes.append({
@@ -515,7 +521,13 @@ def live_vendors_for_composition(
                 "vendors not probed; panel falls open to Claude"
             ),
         })
-        return (["claude"], [], {"claude": {"live": True, "models": {}, "cells": []}}, notes, "unprobed")
+        return (
+            ["claude"],
+            [],
+            {"claude": {"live": True, "models": {}, "cells": []}},
+            notes,
+            liveness_cache.LIVE_CELLS_SOURCE_UNPROBED,
+        )
 
     liveness = composition_liveness({**needed, "claude": []}, run)
     if cache_path is not None and now is not None:
@@ -530,7 +542,7 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
-    return (live, live_cells, liveness, notes, "probed")
+    return (live, live_cells, liveness, notes, liveness_cache.LIVE_CELLS_SOURCE_PROBED)
 
 
 def configured_cross_vendor_engines(prefs):

@@ -672,6 +672,22 @@ def test_live_from_novel_unhashable_effort_disclosed():
     assert "malformed needed cell entry" in dead_notes[0]["reason"]
 
 
+def test_live_from_malformed_cell_unhashable_effort_returns():
+    """Bite-proof: unhashable effort inside a cell must disclose, not raise."""
+    liveness = {
+        "codex": {
+            "models": {},
+            "cells": [{"model": "m", "effort": [], "ok": True}],
+        },
+    }
+    needed = {"codex": [["m", None]]}
+    live, live_cells, dead_notes = lc.live_from(liveness, needed)
+    assert "codex" not in live
+    assert live_cells == []
+    assert len(dead_notes) == 1
+    assert dead_notes[0]["vendor"] == "codex"
+
+
 class _RaisingOnGet(dict):
     """Liveness dict whose .get raises — forces the cell loop to die."""
 
@@ -710,6 +726,15 @@ def test_live_from_reconcile_runs_when_loop_raises():
             {"codex": ["not-a-pair"]},
         ),
         ({}, {"codex": [["gpt-m", {"effort": "high"}]]}),
+        (
+            {
+                "codex": {
+                    "models": {},
+                    "cells": [{"model": "m", "effort": [], "ok": True}],
+                },
+            },
+            {"codex": [["m", None]]},
+        ),
         (
             _good_liveness(),
             {"codex": [["gpt-5.6-sol", "medium"], ["missing", "high"]]},

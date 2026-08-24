@@ -20,6 +20,18 @@ SCHEMA_VERSION = 3
 DEFAULT_TTL_SECONDS = 600
 _ENV_TTL = "SUPERHEROES_LIVENESS_TTL_SECONDS"
 
+# probed = per-cell probe evidence (fresh or TTL-cached); synthesized = derived from a
+# vendor-level rollup, never probed per cell; unprobed = no probe evidence of any kind exists
+# and the cells carry no verification weight.
+LIVE_CELLS_SOURCE_PROBED = "probed"
+LIVE_CELLS_SOURCE_SYNTHESIZED = "synthesized"
+LIVE_CELLS_SOURCE_UNPROBED = "unprobed"
+LIVE_CELLS_SOURCES = (
+    LIVE_CELLS_SOURCE_PROBED,
+    LIVE_CELLS_SOURCE_SYNTHESIZED,
+    LIVE_CELLS_SOURCE_UNPROBED,
+)
+
 
 def ttl_seconds():
     """Reader TTL in seconds; env override when a positive int, else default. Never raises."""
@@ -226,6 +238,21 @@ def covers(receipt_needed, needed):
         return False
 
 
+def _slot_key_from_cell(cell):
+    """Return (model, effort) or _UNKEYABLE. Never raises."""
+    if not isinstance(cell, dict):
+        return _UNKEYABLE
+    model = cell.get("model")
+    if not isinstance(model, str):
+        return _UNKEYABLE
+    effort = cell.get("effort")
+    try:
+        hash((model, effort))
+    except TypeError:
+        return _UNKEYABLE
+    return (model, effort)
+
+
 def _cells_by_key(info):
     out = {}
     if not isinstance(info, dict):
@@ -234,12 +261,10 @@ def _cells_by_key(info):
     if not isinstance(cells, list):
         return out
     for cell in cells:
-        if not isinstance(cell, dict):
+        key = _slot_key_from_cell(cell)
+        if key is _UNKEYABLE:
             continue
-        model = cell.get("model")
-        if not isinstance(model, str):
-            continue
-        out[(model, cell.get("effort"))] = cell
+        out[key] = cell
     return out
 
 

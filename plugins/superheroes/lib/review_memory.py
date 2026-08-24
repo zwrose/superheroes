@@ -14,6 +14,7 @@ _WS = re.compile(r"\s+")
 
 
 def _is_blocking_severity(severity):
+    # lazy: circuit_breaker imports review_memory at module scope — top-level import is a cycle
     from circuit_breaker import is_blocking
     return is_blocking(severity)
 
