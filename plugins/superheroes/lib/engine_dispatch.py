@@ -93,7 +93,7 @@ RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceil
 ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
 ITEM_IDENTITY_MAX_BYTES = 8 * 1024 * 1024
 MAX_EXPECTED_ITEMS = 1000
-BASELINE_ENTRIES_VERSION = 1
+BASELINE_ENTRIES_VERSION = 2
 MAX_BASELINE_ENTRIES = 20000
 MAX_BASELINE_ENTRY_BYTES = 2 * 1024 * 1024
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
@@ -548,6 +548,9 @@ def _foreign_leased_worktree_roots(cwd_real, timeout=None):
         wt_path = wt["path"]
         if wt_path == cwd_real:
             continue
+        # Axis: a root at or above cwd must never be an exclusion root — it filters the whole tree to empty.
+        if not wt_path.startswith(cwd_real + os.sep):
+            continue
         lease_path = _worktree_lease_path(wt_path)
         if not os.path.exists(lease_path):
             continue
@@ -587,32 +590,69 @@ def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots)
     return "\n".join(kept) + "\n"
 
 
+def _parse_porcelain_z_entries(data):
+    """Walk ``git status --porcelain=v1 -z`` records; yield (canonical_record, paths)."""
+    text = data if isinstance(data, str) else (data or "").decode("utf-8", errors="surrogateescape")
+    parts = text.split("\0")
+    index = 0
+    while index < len(parts):
+        entry = parts[index]
+        if not entry:
+            index += 1
+            continue
+        status_xy = entry[:2]
+        path = entry[3:] if len(entry) > 2 and entry[2] == " " else entry[2:]
+        if status_xy[0] in ("R", "C") or status_xy[1] in ("R", "C"):
+            index += 1
+            old_path = parts[index] if index < len(parts) else ""
+            paths = [path]
+            if old_path:
+                paths.append(old_path)
+            record = status_xy + "\x1f" + "\x1f".join(paths)
+            yield record, paths
+        else:
+            paths = [path]
+            record = status_xy + "\x1f" + path
+            yield record, paths
+        index += 1
+
+
 def _worktree_entry_set(cwd_real, timeout=None):
     try:
         status = _git_scrubbed(
-            cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+            cwd_real, "status", "--porcelain=v1", "-z", "-uall", timeout=timeout,
         )
     except subprocess.TimeoutExpired:
         return None
     if status.returncode != 0:
         return None
-    return [line for line in (status.stdout or "").splitlines() if line.strip()]
+    return [record for record, _paths in _parse_porcelain_z_entries(status.stdout or "")]
 
 
 def _filter_entry_list(entries, cwd_real, excluded_roots):
     if not excluded_roots:
         return entries
     kept = []
-    for line in entries:
-        if not line.strip():
+    for record in entries:
+        if not record.strip():
             continue
-        rel = _porcelain_entry_path(line)
-        if rel is None:
-            kept.append(line)
+        parts = record.split("\x1f")
+        if len(parts) < 2:
+            kept.append(record)
             continue
-        entry_abs = os.path.normpath(os.path.join(cwd_real, rel))
-        if not _path_under_excluded_root(entry_abs, excluded_roots):
-            kept.append(line)
+        paths = parts[1:]
+        if not paths:
+            kept.append(record)
+            continue
+        # Axis: a record is excluded only when *all* of its endpoints are inside an excluded root.
+        all_excluded = True
+        for rel in paths:
+            entry_abs = os.path.normpath(os.path.join(cwd_real, rel))
+            if not _path_under_excluded_root(entry_abs, excluded_roots):
+                all_excluded = False
+                break
+        if not all_excluded:
+            kept.append(record)
     return kept
 
 
@@ -716,7 +756,11 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
         return None
     if not _baseline_head_sha_readable(baseline):
         return None
-    if baseline.get("entriesVersion") == BASELINE_ENTRIES_VERSION:
+    if "entriesVersion" in baseline:
+        entries_version = baseline.get("entriesVersion")
+        if entries_version != BASELINE_ENTRIES_VERSION:
+            # Axis: an unrecognised record version is refused rather than graded by rules for a different shape.
+            return None
         if baseline.get("entriesOverflow"):
             return None
         entries_before = baseline.get("entries")

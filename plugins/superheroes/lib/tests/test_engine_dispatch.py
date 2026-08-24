@@ -5610,6 +5610,22 @@ def _lease_state_roots(sibling, state):
     raise ValueError(state)
 
 
+def _line_porcelain_to_z(text):
+    """Convert line-oriented porcelain fixture text to ``-z`` NUL-delimited form."""
+    chunks = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        if len(line) >= 3 and line[0] in "RC" and " -> " in line:
+            status = line[:3]
+            new_path, old_path = line[3:].strip().split(" -> ", 1)
+            chunks.append(status + new_path.strip())
+            chunks.append(old_path.strip())
+        else:
+            chunks.append(line)
+    return "\0".join(chunks) + ("\0" if chunks else "")
+
+
 @pytest.mark.parametrize("open_enum_ok", [True, False])
 @pytest.mark.parametrize("forfeit_enum_ok", [True, False])
 @pytest.mark.parametrize("open_lease", ["none", "live", "dead"])
@@ -5659,8 +5675,8 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
                 plain = plain_porcelain + sibling_plain
                 uall = uall_porcelain + sibling_uall
             if "-uall" in args:
-                return subprocess.CompletedProcess(args, 0, uall, "")
-            return subprocess.CompletedProcess(args, 0, plain, "")
+                return subprocess.CompletedProcess(args, 0, _line_porcelain_to_z(uall), "")
+            return subprocess.CompletedProcess(args, 0, _line_porcelain_to_z(plain), "")
         return real_git(cwd_real, *args, timeout=timeout)
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
@@ -5829,12 +5845,12 @@ def test_filter_entry_list_drops_entries_under_excluded_root(tmp_path):
     os.makedirs(cwd, exist_ok=True)
     root = os.path.join(cwd, "leased")
     entries = [
-        "?? leased/file.txt",
-        "?? leased/nested/deep.txt",
-        "?? outside.txt",
+        "??\x1fleased/file.txt",
+        "??\x1fleased/nested/deep.txt",
+        "??\x1foutside.txt",
     ]
     filtered = ED._filter_entry_list(entries, cwd, {root})
-    assert filtered == ["?? outside.txt"]
+    assert filtered == ["??\x1foutside.txt"]
 
 
 def test_worktree_dirt_exclusion_union_baseline_and_verdict_roots(tmp_path, monkeypatch):
@@ -5859,17 +5875,22 @@ def test_worktree_dirt_exclusion_union_baseline_and_verdict_roots(tmp_path, monk
     assert ED._worktree_dirt_verdict(baseline_only, cwd, timeout=5) is False
 
     call["n"] = 0
+    sib_real_verdict = {"path": None}
 
     def foreign_verdict_only(cwd_real, timeout=None):
         call["n"] += 1
         if call["n"] == 1:
             return set()
-        return {sib_real}
+        return {sib_real_verdict["path"]}
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", foreign_verdict_only)
-    verdict_only = ED._worktree_baseline(cwd, timeout=5)
-    assert verdict_only is not None
-    assert ED._worktree_dirt_verdict(verdict_only, cwd, timeout=5) is False
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    sib_verdict = _nested_sibling_worktree(main, cwd, name="verdict-only")
+    sib_real_verdict["path"] = os.path.realpath(sib_verdict)
+    with open(os.path.join(sib_verdict, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
 
 
 def test_worktree_dirt_symlink_to_leased_root_reads_dirty(tmp_path):
@@ -5948,4 +5969,202 @@ def test_worktree_dirt_head_movement_reads_dirty(tmp_path):
         check=True,
     )
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+# --- WO-D (#1122): false-clean path fixes ------------------------------------
+
+
+def test_worktree_dirt_ancestor_exclusion_root_not_admitted(tmp_path):
+    main = str(tmp_path / "main")
+    _git_init(main)
+    nested = os.path.join(main, ".claude", "worktrees", "build")
+    os.makedirs(os.path.dirname(nested), exist_ok=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", nested], check=True)
+    cwd = os.path.realpath(nested)
+    main_real = os.path.realpath(main)
+    ancestor_proc = _install_foreign_lease(main)
+    try:
+        roots = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+        assert roots is not None
+        assert main_real not in roots
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        with open(os.path.join(cwd, "attempt-left-this.txt"), "w", encoding="utf-8") as fh:
+            fh.write("x\n")
+        with open(os.path.join(cwd, "and-this.txt"), "w", encoding="utf-8") as fh:
+            fh.write("y\n")
+        assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+    finally:
+        ED._terminate_process_group(ancestor_proc.pid)
+        ancestor_proc.wait(timeout=2)
+
+
+def test_worktree_dirt_rename_out_of_excluded_root_reads_dirty(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    secret = os.path.join(leased_dir, "secret.txt")
+    with open(secret, "w", encoding="utf-8") as fh:
+        fh.write("secret\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/secret.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add secret"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    subprocess.run(
+        ["git", "-C", cwd, "mv", "leased/secret.txt", "escaped.txt"],
+        check=True,
+    )
+    porcelain = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1", "-z"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert "escaped.txt" in porcelain
+    assert "leased/secret.txt" in porcelain
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_worktree_dirt_rename_inside_excluded_root_still_excluded(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    with open(os.path.join(leased_dir, "a.txt"), "w", encoding="utf-8") as fh:
+        fh.write("a\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/a.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add leased files"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    subprocess.run(
+        ["git", "-C", cwd, "mv", "leased/a.txt", "leased/b.txt"],
+        check=True,
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_worktree_dirt_quoted_path_inside_excluded_root_still_excluded(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    quoted_name = "café file.txt"
+    with open(os.path.join(leased_dir, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("quoted\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add quoted"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+@pytest.mark.parametrize("baseline_lease", ["none", "leased", "unreadable"])
+@pytest.mark.parametrize("verdict_lease", ["none", "leased", "unreadable"])
+def test_worktree_dirt_by_construction_dirty_outside_excluded_root_cross_product(
+    tmp_path, monkeypatch, baseline_lease, verdict_lease,
+):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    sib_proc = None
+    if baseline_lease == "leased" or verdict_lease == "leased":
+        sib_proc = _install_foreign_lease(sib)
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return _lease_state_value(baseline_lease, sib_real)
+        return _lease_state_value(verdict_lease, sib_real)
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    try:
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        with open(os.path.join(cwd, "outside-dirty.txt"), "w", encoding="utf-8") as fh:
+            fh.write("dirty\n")
+        verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+        assert verdict is True, (
+            "cell baseline_lease=%r verdict_lease=%r baseline=%r"
+            % (baseline_lease, verdict_lease, baseline)
+        )
+    finally:
+        if sib_proc is not None:
+            ED._terminate_process_group(sib_proc.pid)
+            sib_proc.wait(timeout=2)
+
+
+def test_worktree_baseline_overflow_producer_bound(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    monkeypatch.setattr(ED, "MAX_BASELINE_ENTRIES", 3)
+    for idx in range(5):
+        with open(os.path.join(wt, "overflow-%d.txt" % idx), "w", encoding="utf-8") as fh:
+            fh.write("%d\n" % idx)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline.get("entriesOverflow") is True
+    assert baseline.get("entries") == []
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+
+def test_worktree_dirt_unsupported_entries_version_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    modern = ED._worktree_baseline(cwd, timeout=5)
+    assert modern is not None
+    head = modern["headSha"]
+    for bad_version in (1, 99, "2", None):
+        baseline = dict(modern)
+        baseline["entriesVersion"] = bad_version
+        assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+    legacy = {
+        "headSha": head,
+        "porcelainSha256": ED._legacy_worktree_porcelain_sha256(cwd, timeout=5),
+    }
+    assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is not None
 
