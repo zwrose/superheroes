@@ -40,6 +40,7 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     base = str(tmp_path / "sanitized-temp-base")
     os.makedirs(base, exist_ok=True)
     monkeypatch.setattr(_SV_MOD.tempfile, "gettempdir", lambda: base)
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: base)
     journal_root = str(tmp_path / "dispatch-journal-root")
     os.makedirs(journal_root, exist_ok=True)
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
@@ -159,7 +160,10 @@ class FakeRunner:
         idx = len(self.calls) - 1
         if idx >= len(self.responses):
             raise AssertionError("fake called too many times")
-        return self.responses[idx]
+        resp = self.responses[idx]
+        if callable(resp):
+            return resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        return resp
 
 
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
@@ -5059,4 +5063,192 @@ def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
     assert res["ok"] is False
     assert res.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
     assert res.get("payloadShape") is not None
+
+
+# --- WO-B2 (#1109): stdout cap naming + sibling worktree baseline ----------------
+
+
+def _linked_worktree_pair(tmp_path):
+    main = str(tmp_path / "main")
+    _git_init(main)
+    wt = str(tmp_path / "wt")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt], check=True)
+    return wt, main
+
+
+def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):
+    if cwd is None:
+        cwd, _main = _linked_worktree_pair(tmp_path)
+    if run_dir is None:
+        run_dir = str(tmp_path / "run")
+    defaults = {
+        "model": "sonnet",
+        "effort": "high",
+        "prompt_path": _valid_prompt(tmp_path, "Build this.\n"),
+        "cwd": cwd,
+        "run_dir": run_dir,
+        "order_id": "order-1",
+        "run_engine": fake,
+    }
+    defaults.update(kwargs)
+    return ED.dispatch_write("codex", **defaults)
+
+
+def _install_foreign_lease(wt_path):
+    import socket
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        start_new_session=True,
+    )
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt_path))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    import file_lock
+    holder = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "acquiredAt": "2026-01-01T00:00:00Z",
+        "enginePgid": proc.pid,
+        "dispatchToken": "foreign-dispatch-token",
+    }
+    with open(lease_path, "w", encoding="utf-8") as fh:
+        json.dump(holder, fh)
+    return proc
+
+
+def test_stdout_cap_truncation_marker_in_file_tail(tmp_path):
+    path = tmp_path / "stdout.txt"
+    over = ED.MAX_STDOUT_CAPTURE + 512
+    path.write_bytes(b"x" * over)
+    ED._cap_file_tail(str(path), ED.MAX_STDOUT_CAPTURE)
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
+    assert path.stat().st_size <= ED.MAX_STDOUT_CAPTURE
+    assert ED._stdout_capture_truncated(text)
+
+
+def test_stdout_cap_truncation_marker_in_read_capped_text(tmp_path):
+    path = tmp_path / "stdout.txt"
+    over = ED.MAX_STDOUT_CAPTURE + 256
+    path.write_bytes(b"y" * over)
+    text = ED._read_capped_text(str(path))
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
+    assert ED._stdout_capture_truncated(text)
+
+
+def test_short_stdout_capture_unmarked(tmp_path):
+    path = tmp_path / "stdout.txt"
+    path.write_text("short report\n", encoding="utf-8")
+    text = ED._read_capped_text(str(path))
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX not in text
+    assert not ED._stdout_capture_truncated(text)
+
+
+def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    fake = FakeRunner([
+        (truncated, False, 0, ""),
+        (_build_ok_stdout(), False, 0, ""),
+    ])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
+    assert res["detail"] != "worktree-dirtied-by-attempt"
+    assert "truncated" in res["disclosure"].lower()
+    assert len(fake.calls) == 1
+
+
+def test_nested_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
+    parent, main = _linked_worktree_pair(tmp_path)
+
+    class NestedSiblingUngradeableRunner:
+        def __init__(self):
+            self.sib_proc = None
+
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            sib = os.path.join(cwd, ".claude", "worktrees", "sib")
+            os.makedirs(os.path.dirname(sib), exist_ok=True)
+            subprocess.run(
+                ["git", "-C", main, "worktree", "add", "-q", sib], check=True,
+            )
+            with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+                fh.write("peer\n")
+            self.sib_proc = _install_foreign_lease(sib)
+            return "", True, 0, ""
+
+    runner = NestedSiblingUngradeableRunner()
+    try:
+        fake = FakeRunner([
+            runner,
+            (_build_ok_stdout(), False, 0, ""),
+        ])
+        res = _dispatch_write(tmp_path, fake, cwd=parent, max_wait=120)
+        assert res.get("detail") != "worktree-dirtied-by-attempt", res
+        assert res["ok"] is True, res
+        assert len(fake.calls) == 2
+    finally:
+        if runner.sib_proc is not None:
+            ED._terminate_process_group(runner.sib_proc.pid)
+            runner.sib_proc.wait(timeout=2)
+
+
+def test_peer_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
+    """Regression guard — peer siblings do not move the dispatching baseline (green on base too)."""
+    main = str(tmp_path / "main")
+    _git_init(main)
+    wt0 = str(tmp_path / "wt0")
+    wt1 = str(tmp_path / "wt1")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt0], check=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
+    sib_proc = _install_foreign_lease(wt1)
+    try:
+        fake = FakeRunner([
+            ("", True, 0, ""),
+            (_build_ok_stdout(), False, 0, ""),
+        ])
+        res = _dispatch_write(tmp_path, fake, cwd=wt0, max_wait=120)
+        assert res["ok"] is True
+        assert res.get("detail") != "worktree-dirtied-by-attempt"
+    finally:
+        ED._terminate_process_group(sib_proc.pid)
+        sib_proc.wait(timeout=2)
+
+
+def test_self_created_worktree_without_foreign_lease_still_dirties(tmp_path):
+    parent, main = _linked_worktree_pair(tmp_path)
+
+    class SelfWorktreeDirtyRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            sib = os.path.join(cwd, ".claude", "worktrees", "self")
+            os.makedirs(os.path.dirname(sib), exist_ok=True)
+            subprocess.run(
+                ["git", "-C", main, "worktree", "add", "-q", sib], check=True,
+            )
+            return "", True, 0, ""
+
+    fake = FakeRunner([SelfWorktreeDirtyRunner(), (_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=parent, max_wait=120)
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert len(fake.calls) == 1
+
+
+def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    real_git = ED._git_scrubbed
+
+    def fail_worktree_list(cwd_real, *args, timeout=None):
+        if args[:2] == ("worktree", "list"):
+            raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
+        return real_git(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", fail_worktree_list)
+    baseline = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
+    assert baseline is not None
+    with open(os.path.join(wt, "dirty.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    current = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
+    assert current != baseline
 
