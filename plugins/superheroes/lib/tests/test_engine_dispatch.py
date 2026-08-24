@@ -6319,21 +6319,29 @@ def test_worktree_dirt_consumer_root_guard_bad_persisted_root_reads_dirty(
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
 
 
-def test_worktree_entry_set_unicode_decode_error_fail_closed(tmp_path, monkeypatch):
+def test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit(tmp_path, monkeypatch):
     wt, _main = _linked_worktree_pair(tmp_path)
     cwd = os.path.realpath(wt)
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
-    real_scrubbed = ED._git_scrubbed
+    real_bytes = ED._git_scrubbed_bytes
 
-    def scrubbed_status_raises(cwd_real, *git_args, timeout=None):
-        if git_args and git_args[0] == "status":
-            raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid")
-        return real_scrubbed(cwd_real, *git_args, timeout=timeout)
+    def fake_timeout(cwd_real, *args, timeout=None):
+        if args and args[0] == "status" and "-z" in args:
+            raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
+        return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed", scrubbed_status_raises)
+    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_timeout)
     assert ED._worktree_entry_set(cwd, timeout=5) is None
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+    def fake_nonzero(cwd_real, *args, timeout=None):
+        if args and args[0] == "status" and "-z" in args:
+            return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
+        return real_bytes(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_nonzero)
+    assert ED._worktree_entry_set(cwd, timeout=5) is None
 
 
 # --- WO-E (#1122): retained mode-branch coverage + de-tautologized legacy pin ---

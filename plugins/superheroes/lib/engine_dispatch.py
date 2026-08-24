@@ -409,16 +409,8 @@ def _git_scrubbed(cwd, *args, timeout=None):
     )
 
 
-_GIT_SCRUBBED_IMPL = _git_scrubbed
-
-
 def _git_scrubbed_bytes(cwd, *args, timeout=None):
     """Byte-exact git for the dirt probe: pathnames are bytes, and no channel may rewrite them."""
-    if args and args[0] == "status" and _git_scrubbed is not _GIT_SCRUBBED_IMPL:
-        try:
-            _git_scrubbed(cwd, *args, timeout=timeout)
-        except UnicodeDecodeError:
-            raise
     return subprocess.run(
         ["git", "-C", cwd, *args],
         capture_output=True, env=_scrub_env(), timeout=timeout,
@@ -660,8 +652,9 @@ def _worktree_entry_set(cwd_real, timeout=None):
         status = _git_scrubbed_bytes(
             cwd_real, "status", "--porcelain=v1", "-z", "-uall", timeout=timeout,
         )
-    except (subprocess.TimeoutExpired, UnicodeDecodeError):
-        # Disclosure: pathname bytes use surrogateescape; UnicodeDecodeError is retained for callers that simulate decode failure.
+    except subprocess.TimeoutExpired:
+        # Pathnames are bytes decoded with surrogateescape; undecodable trees grade rather than refuse.
+        # Fail-closed edges: timeout and non-zero returncode.
         return None
     if status.returncode != 0:
         return None
