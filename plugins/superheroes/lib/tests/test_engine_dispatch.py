@@ -2816,6 +2816,108 @@ def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
     assert "findings" not in grade
 
 
+_VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"]}]})
+_VALID_RULING_STDOUT = json.dumps(
+    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
+)
+
+
+def _census_review_stdout(kind):
+    if kind == "findings":
+        return _VALID_FINDINGS_STDOUT
+    if kind == "verdicts":
+        return _VALID_VERDICTS_STDOUT
+    if kind == "grouping":
+        return _VALID_GROUPING_STDOUT
+    if kind == "ruling":
+        return _VALID_RULING_STDOUT
+    raise AssertionError("unsupported kind %r" % kind)
+
+
+def _review_result_kind_census_kinds():
+    return ED.REVIEW_RESULT_KINDS
+
+
+@pytest.mark.parametrize("kind", _review_result_kind_census_kinds())
+def test_review_result_kind_census_survives_consumers(tmp_path, kind):
+    stdout = _census_review_stdout(kind)
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == kind
+    has_payload, _ = ED._review_result_payload(res, kind)
+    assert has_payload is True
+    assert kind in res
+    opened = {"runKind": ED.RUN_KIND_REVIEW}
+    stages = ED._ledger_stages(res, {}, str(tmp_path / "run"), opened)
+    assert stages["delivered"] is True
+
+    run_dir = str(tmp_path / ("run-graded-%s" % kind))
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "runKind": ED.RUN_KIND_REVIEW,
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+            2: {"ended": None},
+        },
+    }
+    graded = ED._build_running_graded(run_dir, state)
+    assert len(graded) == 1
+    assert graded[0]["resultKind"] == kind
+    has_graded_payload, _ = ED._review_result_payload(graded[0], kind)
+    assert has_graded_payload is True
+    assert kind in graded[0]
+
+
+def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_RULING_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "ruling"
+    assert res["ruling"] == "discharged"
+    assert res["id"] == "f1"
+    assert res["reason"] == "resolved in diff"
+
+
+def test_expected_result_kind_contract_derives_from_review_result_kinds():
+    _CC = importlib.util.spec_from_file_location(
+        "cli_contract", os.path.join(_HERE, "..", "cli_contract.py"))
+    cc = importlib.util.module_from_spec(_CC)
+    _CC.loader.exec_module(cc)
+    parser = ED.build_parser()
+    action = next(
+        action for path, action in cc.iter_caller_supplied_actions(parser)
+        if path == ("dispatch-review",) and action.dest == "expected_result_kind"
+    )
+    expected = "choices:" + ",".join(str(kind) for kind in ED.REVIEW_RESULT_KINDS)
+    declared = getattr(action, cc.ACTION_CONTRACT_ATTR)
+    assert declared == expected
+    assert tuple(action.choices) == ED.REVIEW_RESULT_KINDS
+
+
 def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     """Attempt 1 ended with clean findings; attempt 2 started but not ended."""
     repo_root, view = _manual_open_review_run(tmp_path, run_dir)

@@ -79,6 +79,9 @@ PROGRESS_NAME = "progress.jsonl"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
+_REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
+    "choices:" + ",".join(str(kind) for kind in REVIEW_RESULT_KINDS)
+)
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
@@ -1366,8 +1369,8 @@ def _ledger_stages(result, state, run_dir_real, opened):
         if result.get("ok"):
             kind = result.get("resultKind")
             if kind in REVIEW_RESULT_KINDS:
-                payload = result.get(kind)
-                if isinstance(payload, list) and payload:
+                has_payload, payload = _review_result_payload(result, kind)
+                if has_payload and (not isinstance(payload, list) or payload or payload is None):
                     delivered = True
             if not delivered and result.get("investigated"):
                 delivered = True
@@ -2078,11 +2081,8 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
 def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
     """Attach engagement.read from observed attempt evidence. Never raises."""
     read_input = {"investigated": investigated, "engagement": engagement}
-    if items is not None:
-        if result_kind == "verdicts":
-            read_input["verdicts"] = items
-        else:
-            read_input["findings"] = items
+    if items is not None and result_kind in REVIEW_RESULT_KINDS:
+        read_input[result_kind] = items
     out = dict(engagement)
     out["read"] = engine_adapter.engagement_read(read_input)
     return out
@@ -2112,15 +2112,42 @@ def _attach_review_rejection_fields(result, rejected_records=(), rejected_reason
     return result
 
 
+def _review_result_payload(result, kind):
+    """Whether a review result carries a payload for kind, and the value to copy. Never raises."""
+    if kind not in REVIEW_RESULT_KINDS:
+        return False, None
+    if result.get("resultKind") != kind:
+        return False, None
+    if kind == "ruling":
+        ruling_val = result.get("ruling")
+        if isinstance(ruling_val, str) and ruling_val:
+            return True, ruling_val
+        return False, None
+    if kind == "grouping":
+        if "grouping" not in result:
+            return False, None
+        return True, result.get("grouping")
+    payload = result.get(kind)
+    if isinstance(payload, list):
+        return True, payload
+    return False, None
+
+
 def _parse_review_has_payload(res):
-    """True when a review parse result carries a non-empty findings or verdicts payload."""
+    """True when a review parse result carries a non-empty payload for its resultKind."""
     if not res.get("ok"):
         return False
     kind = res.get("resultKind")
     if kind not in REVIEW_RESULT_KINDS:
         return False
-    payload = res.get(kind)
-    return isinstance(payload, list) and bool(payload)
+    has_payload, payload = _review_result_payload(res, kind)
+    if not has_payload:
+        return False
+    if kind in ("findings", "verdicts"):
+        return bool(payload)
+    if kind == "grouping":
+        return payload is None or bool(payload)
+    return True
 
 
 def _review_parse_kind_invalid(res):
@@ -2149,8 +2176,8 @@ def _build_running_graded(run_dir_real, state):
                 kind = grade.get("resultKind")
                 if kind in REVIEW_RESULT_KINDS:
                     entry["resultKind"] = kind
-                    payload = grade.get(kind)
-                    if isinstance(payload, list):
+                    has_payload, payload = _review_result_payload(grade, kind)
+                    if has_payload:
                         entry[kind] = payload
                 elif run_kind == RUN_KIND_WRITE:
                     entry["signal"] = grade.get("signal", "ok")
@@ -2259,7 +2286,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         return result
 
     kind = res["resultKind"]
-    payload = res.get(kind)
+    has_payload, payload = _review_result_payload(res, kind)
 
     view_meta = opened.get("viewMeta")
     generated = ()
@@ -2273,7 +2300,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
-    if not payload and not accepted:
+    if not _parse_review_has_payload(res) and not accepted:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
         return {
             "forfeit": True,
@@ -2286,7 +2313,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     expected_kind = opened.get("expectedResultKind")
     if expected_kind in REVIEW_RESULT_KINDS and kind != expected_kind:
         engagement = _engagement_with_read(
-            engagement, result_kind=kind, items=payload or [])
+            engagement, result_kind=kind, items=payload if has_payload else [])
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
@@ -2294,9 +2321,13 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             "engagement": engagement,
         }
 
-    if payload:
+    if has_payload:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
+        if kind == "ruling":
+            for field in ("id", "reason"):
+                if isinstance(res.get(field), str) and res.get(field):
+                    result[field] = res[field]
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(
@@ -2668,9 +2699,13 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         kind = grade.get("resultKind")
                         if kind in REVIEW_RESULT_KINDS:
                             terminal_ok["resultKind"] = kind
-                            payload = grade.get(kind)
-                            if isinstance(payload, list):
+                            has_payload, payload = _review_result_payload(grade, kind)
+                            if has_payload:
                                 terminal_ok[kind] = payload
+                            if kind == "ruling":
+                                for field in ("id", "reason"):
+                                    if field in grade:
+                                        terminal_ok[field] = grade[field]
                         result = _with_run_fields(
                             terminal_ok,
                             run_dir=run_dir_real, argv=argv,
@@ -3781,7 +3816,7 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
-    cc.add_argument(d, "--expected-result-kind", contract="choices:findings,verdicts",
+    cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
 
