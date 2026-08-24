@@ -93,6 +93,9 @@ MAX_EXPECTED_ITEMS = 1000
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
 ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
 ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED = "report-missing-items-delivered"
+ITEM_DETAIL_STDOUT_CAPPED = "stdout-capped-by-attempt"
+STDOUT_TRUNCATION_MARKER_PREFIX = "<<<SUPERHEROES-STDOUT-TRUNCATED:"
+STDOUT_TRUNCATION_MARKER_SUFFIX = ">>>"
 ITEM_CHECK_FIELDS = frozenset(("declared", "expected", "delivered", "missing"))
 ITEM_EVIDENCE_CAUSE_FALSY_BASE = "falsy-base-sha"
 ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT = "diff-timeout"
@@ -464,15 +467,127 @@ def _validate_linked_build_cwd(cwd, timeout=None):
     return True, cwd_real
 
 
+def _stdout_truncation_marker(observed_bytes):
+    return "%s%d%s\n" % (
+        STDOUT_TRUNCATION_MARKER_PREFIX, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX,
+    )
+
+
+def _stdout_capture_truncated(text):
+    return bool(text) and STDOUT_TRUNCATION_MARKER_PREFIX in text
+
+
+def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None):
+    """Keep the last max_bytes of stdout content, prefixing a truncation marker when capped."""
+    if observed_bytes is None:
+        observed_bytes = len(data)
+    if len(data) <= max_bytes:
+        return data, False
+    marker = _stdout_truncation_marker(observed_bytes).encode("utf-8")
+    content_budget = max(0, max_bytes - len(marker))
+    tail = data[-content_budget:] if content_budget else b""
+    return marker + tail, True
+
+
+def _parse_git_worktree_list(porcelain_text):
+    worktrees = []
+    current = None
+    for line in (porcelain_text or "").splitlines():
+        if line.startswith("worktree "):
+            if current is not None:
+                worktrees.append(current)
+            current = {"path": os.path.realpath(line[len("worktree "):].strip())}
+        elif current is not None and line.startswith("branch "):
+            current["branch"] = line[len("branch "):].strip()
+    if current is not None:
+        worktrees.append(current)
+    return worktrees
+
+
+def _porcelain_entry_path(line):
+    if len(line) < 4:
+        return None
+    return line[3:].strip()
+
+
+def _foreign_leased_worktree_roots(cwd_real, timeout=None):
+    """Registered worktrees (other than cwd) with a live foreign lease, or None on fallback."""
+    try:
+        wt_list = _git_scrubbed(cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if wt_list.returncode != 0:
+        return None
+    cwd_real = os.path.realpath(cwd_real)
+    excluded = set()
+    for wt in _parse_git_worktree_list(wt_list.stdout):
+        wt_path = wt["path"]
+        if wt_path == cwd_real:
+            continue
+        lease_path = _worktree_lease_path(wt_path)
+        if not os.path.exists(lease_path):
+            continue
+        try:
+            holder = file_lock.read_holder(lease_path)
+        except Exception:
+            return None
+        if not _worktree_lease_holder_live(holder):
+            continue
+        excluded.add(wt_path)
+    return excluded
+
+
+def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots):
+    cwd_real = os.path.realpath(cwd_real)
+    kept = []
+    for line in porcelain.splitlines():
+        if not line.strip():
+            continue
+        rel = _porcelain_entry_path(line)
+        if rel is None:
+            kept.append(line)
+            continue
+        abs_path = os.path.realpath(os.path.join(cwd_real, rel))
+        excluded = False
+        for root in excluded_roots:
+            if abs_path == root or abs_path.startswith(root + os.sep):
+                excluded = True
+                break
+        if not excluded:
+            kept.append(line)
+    if not kept:
+        return ""
+    return "\n".join(kept) + "\n"
+
+
 def _worktree_baseline(cwd_real, timeout=None):
     try:
         head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
-        status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
     except subprocess.TimeoutExpired:
         return None
-    if head.returncode != 0 or status.returncode != 0:
+    if head.returncode != 0:
         return None
-    porcelain = status.stdout or ""
+    excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if excluded is None:
+        try:
+            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        if status.returncode != 0:
+            return None
+        porcelain = status.stdout or ""
+    else:
+        try:
+            status = _git_scrubbed(
+                cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if status.returncode != 0:
+            return None
+        porcelain = status.stdout or ""
+        if excluded:
+            porcelain = _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded)
     return {
         "headSha": (head.stdout or "").strip(),
         "porcelainSha256": hashlib.sha256(porcelain.encode("utf-8")).hexdigest(),
@@ -1532,14 +1647,13 @@ def _cleanup(proc, pgid):
 def _cap_file_tail(path, max_bytes):
     """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises."""
     try:
-        size = os.path.getsize(path)
-        if size <= max_bytes:
-            return
         with open(path, "rb") as fh:
-            fh.seek(-max_bytes, os.SEEK_END)
-            tail = fh.read()
+            data = fh.read()
+        capped, truncated = _bytes_with_stdout_cap(data, max_bytes, len(data))
+        if not truncated:
+            return
         with open(path, "wb") as fh:
-            fh.write(tail)
+            fh.write(capped)
     except OSError:
         pass
 
@@ -1548,13 +1662,9 @@ def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE):
     """Read at most the last max_bytes of a text file. Never raises."""
     try:
         with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            if size > max_bytes:
-                fh.seek(-max_bytes, os.SEEK_END)
-            else:
-                fh.seek(0, os.SEEK_SET)
-            return fh.read().decode("utf-8", errors="ignore")
+            data = fh.read()
+        capped, _truncated = _bytes_with_stdout_cap(data, max_bytes, len(data))
+        return capped.decode("utf-8", errors="ignore")
     except OSError:
         return ""
 
@@ -1589,11 +1699,17 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     err = bytearray()
 
     def _drain(stream, sink, cap):
+        total_observed = 0
         try:
             for chunk in iter(lambda: stream.read(4096), b""):
+                total_observed += len(chunk)
                 sink.extend(chunk)
-                if len(sink) > cap:
-                    del sink[:len(sink) - cap]   # keep the last `cap` bytes (result is at the tail)
+                if total_observed > cap or len(sink) > cap:
+                    capped, _truncated = _bytes_with_stdout_cap(
+                        bytes(sink), cap, total_observed,
+                    )
+                    sink.clear()
+                    sink.extend(capped)
         except Exception:
             pass
 
@@ -2271,6 +2387,47 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
 
+def _attempt_stdout_truncated(run_dir_real, state, attempt):
+    """Return observed stdout byte count when attempt output hit the capture cap; else None."""
+    slot = (state.get("attempts") or {}).get(attempt) or {}
+    ended = slot.get("ended") or {}
+    observed = ended.get("stdoutBytes")
+    if observed is not None and observed > MAX_STDOUT_CAPTURE:
+        return observed
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    if not os.path.exists(stdout_path):
+        return None
+    try:
+        size = os.path.getsize(stdout_path)
+    except OSError:
+        return None
+    if size > MAX_STDOUT_CAPTURE:
+        return size
+    text = _read_capped_text(stdout_path)
+    if _stdout_capture_truncated(text):
+        return observed if observed is not None else size
+    return None
+
+
+def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=None, attempts=1):
+    terminal = {
+        "ok": False,
+        "terminal": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "%s:%d" % (ITEM_DETAIL_STDOUT_CAPPED, int(observed_bytes)),
+        "attempts": attempts,
+        "forfeited": True,
+        "disclosure": (
+            "%s attempt 1 report was truncated at the %d-byte stdout capture cap; "
+            "the retry was refused because the gradeable tail was lost. "
+            "The work may nevertheless be complete on disk — inspect the worktree "
+            "and reconstruct from the diff rather than re-running the order."
+            % (engine, int(observed_bytes))
+        ),
+    }
+    return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
+
+
 def _review_terminal_forfeit(engine, reason, attempts, *, engagement=None,
                             investigated_rejected=None, investigated_rejected_records=None,
                             payload_shape=None, detail=None):
@@ -2544,6 +2701,18 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
                 if latest < MAX_ATTEMPTS:
                     if run_kind == RUN_KIND_WRITE:
+                        truncated_bytes = _attempt_stdout_truncated(
+                            run_dir_real, state, latest,
+                        )
+                        if truncated_bytes is not None:
+                            return _fold_run(run_dir_real, state, _with_run_fields(
+                                _stdout_capped_forfeit(
+                                    engine, truncated_bytes,
+                                    run_dir_real=run_dir_real, state=state,
+                                    attempts=latest,
+                                ),
+                                run_dir=run_dir_real, argv=argv,
+                            ))
                         baseline = opened.get("worktreeBaseline")
                         current = _worktree_baseline(opened["cwd"])
                         if baseline is None or current is None or current != baseline:
