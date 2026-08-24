@@ -40,6 +40,14 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
     "source-body-stale",
+    "staged-body-source-mismatch",
+    "stage-unreachable-for-vendor",
+    "attest-result-outside-session",
+    "attest-result-unreadable",
+    "attest-token-missing",
+    "attest-token-mismatch",
+    "attest-claim-unanswered",
+    "attest-verdict-out-of-enum",
     "region-marker-duplicated",
     "dod-table-rows-unadmitted",
     "invalid-invocation",
@@ -78,8 +86,14 @@ def _happy_body():
     )
 
 
-def _invoke(cmd, session_dir):
+def _invoke(cmd, session_dir, vendor_path="engine", result_path=None):
     argv = ["grounding_stage.py", cmd, "--session-dir", session_dir]
+    if cmd in ("check", "attest"):
+        argv.extend(["--vendor-path", vendor_path])
+    if cmd == "attest":
+        if result_path is None:
+            raise ValueError("attest requires result_path")
+        argv.extend(["--result-path", result_path])
     out = io.StringIO()
     old = sys.stdout
     sys.stdout = out
@@ -100,6 +114,10 @@ def _manifest(session):
 
 def _manifest_token(session):
     return _manifest(session)["stageToken"]
+
+
+def _projected_claims(manifest):
+    return GS._project_claims(manifest["claims"])
 
 
 def _staged_body_text(session):
@@ -676,6 +694,117 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
 
     cases["source-body-stale"] = case_source_body_stale
 
+    def case_staged_body_source_mismatch():
+        session = _session(
+            tmp_path, body=_happy_body(), name="case-staged-body-source-mismatch",
+        )
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        _tamper_staged_body_preserve_source_sha(
+            session,
+            lambda body: body.replace(
+                "Ship grounding stage.", "Ship grounding stage!", 1,
+            ),
+        )
+        return _invoke("check", session)
+
+    cases["staged-body-source-mismatch"] = case_staged_body_source_mismatch
+
+    def case_stage_unreachable_for_vendor():
+        session = _session(
+            tmp_path, body=_happy_body(), name="case-stage-unreachable-for-vendor",
+        )
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        result = GS.check(session, "bogus")
+        rc_out = 1 if not result.get("ok") else 0
+        return rc_out, result
+
+    cases["stage-unreachable-for-vendor"] = case_stage_unreachable_for_vendor
+
+    def _staged_for_attest(name):
+        session = _session(tmp_path, body=_happy_body(), name=name)
+        rc, _ = _invoke("stage", session)
+        assert rc == 0
+        return session, _manifest(session)
+
+    def _attest_verdicts(manifest, mutate=None):
+        rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+        for claim in manifest["claims"]:
+            if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
+                rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+        if mutate:
+            mutate(rows)
+        return rows
+
+    def _write_attest_result(session, manifest, mutate=None):
+        path = os.path.join(session, "grounding", "attest-result.json")
+        payload = {"verdicts": _attest_verdicts(manifest, mutate=mutate)}
+        open(path, "w", encoding="utf-8").write(json.dumps(payload))
+        return path
+
+    def case_attest_result_outside_session():
+        session, manifest = _staged_for_attest("case-attest-result-outside-session")
+        outside = tmp_path / "outside-result.json"
+        outside.write_text(json.dumps({"verdicts": []}), encoding="utf-8")
+        return _invoke("attest", session, result_path=str(outside))
+
+    cases["attest-result-outside-session"] = case_attest_result_outside_session
+
+    def case_attest_result_unreadable():
+        session, manifest = _staged_for_attest("case-attest-result-unreadable")
+        path = os.path.join(session, "grounding", "attest-result.json")
+        open(path, "w", encoding="utf-8").write("{not json")
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-result-unreadable"] = case_attest_result_unreadable
+
+    def case_attest_token_missing():
+        session, manifest = _staged_for_attest("case-attest-token-missing")
+        path = _write_attest_result(session, manifest, mutate=lambda rows: rows.clear())
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-token-missing"] = case_attest_token_missing
+
+    def case_attest_token_mismatch():
+        session, manifest = _staged_for_attest("case-attest-token-mismatch")
+
+        def mutate(rows):
+            for row in rows:
+                if row["id"].startswith("stage-token:"):
+                    row["id"] = "stage-token:0000-0000-0000-0000"
+
+        path = _write_attest_result(session, manifest, mutate=mutate)
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-token-mismatch"] = case_attest_token_mismatch
+
+    def case_attest_claim_unanswered():
+        session, manifest = _staged_for_attest("case-attest-claim-unanswered")
+
+        def mutate(rows):
+            rows[:] = [
+                {"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"},
+            ]
+
+        path = _write_attest_result(session, manifest, mutate=mutate)
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-claim-unanswered"] = case_attest_claim_unanswered
+
+    def case_attest_verdict_out_of_enum():
+        session, manifest = _staged_for_attest("case-attest-verdict-out-of-enum")
+
+        def mutate(rows):
+            for row in rows:
+                if not row["id"].startswith("stage-token:"):
+                    row["verdict"] = "BOGUS"
+
+        path = _write_attest_result(session, manifest, mutate=mutate)
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-verdict-out-of-enum"] = case_attest_verdict_out_of_enum
+
     def case_region_marker_duplicated():
         marker = GS.REGION_MARKERS["dod-table"]
         session = _session(
@@ -876,7 +1005,8 @@ def test_stage_check_round_trip_full_envelope(tmp_path):
     assert rc2 == 0
     assert check_body["ok"] is True
     assert check_body["applicable"] is True
-    assert check_body["claims"] == manifest["claims"]
+    assert check_body["claims"] == _projected_claims(manifest)
+    assert all("text" not in c for c in check_body["claims"])
     assert check_body["files"] == manifest["files"]
     assert check_body.get("noSubstantiveClaims") is not True
     assert len(manifest["claims"]) >= 1
@@ -1017,7 +1147,7 @@ def test_c5_unicode_decode_error_maps_to_staged_file_unreadable(tmp_path):
     pr_body = os.path.join(session, "grounding", "pr-body.md")
     with open(pr_body, "wb") as fh:
         fh.write(b"\xff\xfe invalid utf-8\n")
-    result = GS.check(session)
+    result = GS.check(session, "engine")
     assert result.get("reason") == "staged-file-unreadable"
     rc_cli, body_cli = _invoke("check", session)
     _assert_refusal(rc_cli, body_cli, "staged-file-unreadable")
@@ -1510,3 +1640,290 @@ def test_body_refusal_surfaces_own_token_not_internal_error(tmp_path):
         rc, body_out = _invoke("stage", session)
     _assert_refusal(rc, body_out, "dod-table-rows-unadmitted")
     assert body_out.get("reason") != "internal-error"
+
+
+def _grounding_stage_ast():
+    module_path = os.path.join(_LIB, "grounding_stage.py")
+    with open(module_path, encoding="utf-8") as fh:
+        return ast.parse(fh.read(), filename=module_path)
+
+
+def _function_index(tree):
+    return {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+
+
+def _calls_function(node, name):
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            func = sub.func
+            if isinstance(func, ast.Name) and func.id == name:
+                return True
+    return False
+
+
+def _callable_names(node):
+    names = set()
+    for sub in ast.walk(node):
+        if isinstance(sub, ast.Call):
+            func = sub.func
+            if isinstance(func, ast.Name):
+                names.add(func.id)
+    return names
+
+
+def _callers_of(tree, target):
+    func_index = _function_index(tree)
+    callers = set()
+    for name, node in func_index.items():
+        if target in _callable_names(node):
+            callers.add(name)
+    return callers
+
+
+def _discover_staging_access(tree):
+    manifest_ops = {
+        "_load_manifest",
+        "_verify_manifest_files",
+        "_validate_manifest_shape",
+        "_bind_three_way_source",
+    }
+    func_index = _function_index(tree)
+    access = set(manifest_ops)
+    exempt = {"check", "attest", "main", "stage", "_trust_boundary"}
+    changed = True
+    while changed:
+        changed = False
+        for name, node in func_index.items():
+            if name in access or name in exempt:
+                continue
+            if _callable_names(node) & access:
+                access.add(name)
+                changed = True
+                continue
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.Name) and sub.id in ("STAGE_MANIFEST", "PR_BODY_STAGED"):
+                    access.add(name)
+                    changed = True
+                    break
+    return access
+
+
+def _refresh_manifest_file_entry(session):
+    import hashlib
+    pr_body_path = os.path.join(session, "grounding", "pr-body.md")
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    on_disk = open(pr_body_path, "rb").read()
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    manifest["files"][0]["sha256"] = hashlib.sha256(on_disk).hexdigest()
+    manifest["files"][0]["bytes"] = len(on_disk)
+    open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
+
+
+def _tamper_staged_body_preserve_source_sha(session, tamper):
+    import hashlib
+    pr_body_path = os.path.join(session, "grounding", "pr-body.md")
+    manifest_path = os.path.join(session, "grounding", "stage.json")
+    manifest = json.loads(open(manifest_path, encoding="utf-8").read())
+    original_sha = manifest["sourceBodySha256"]
+    staged = open(pr_body_path, encoding="utf-8").read()
+    raw = GS._extract_untrusted_pr_body(staged)
+    canonical = GS._canonical_staged_body_for_sha(raw)
+    tampered = tamper(canonical)
+    nonce = GS._parse_fence_nonce(staged)
+    token = GS._parse_staged_stage_token(staged)
+    open(pr_body_path, "w", encoding="utf-8").write(
+        GS._staged_pr_body(token, tampered, nonce),
+    )
+    scan = GS._context_scan(tampered)
+    regions = GS._detect_regions(tampered, scan)
+    region_map = {r["name"]: r for r in regions}
+    claims = GS._enumerate_claims(tampered, region_map, scan)
+    on_disk = open(pr_body_path, "rb").read()
+    manifest["files"][0]["sha256"] = hashlib.sha256(on_disk).hexdigest()
+    manifest["files"][0]["bytes"] = len(on_disk)
+    manifest["regions"] = regions
+    manifest["claims"] = claims
+    manifest["sourceBodySha256"] = original_sha
+    open(manifest_path, "w", encoding="utf-8").write(
+        json.dumps(manifest, sort_keys=True) + "\n",
+    )
+
+
+def _reachable_functions(tree, root):
+    func_index = _function_index(tree)
+    seen = set()
+    stack = [root]
+    while stack:
+        fn = stack.pop()
+        if fn in seen or fn not in func_index:
+            continue
+        seen.add(fn)
+        for callee in _callable_names(func_index[fn]):
+            if callee in func_index:
+                stack.append(callee)
+    return seen
+
+
+def test_trust_boundary_chokepoint_census():
+    # bite-axis: chokepoint census — manifest load/validate must be reachable only from _trust_boundary.
+    tree = _grounding_stage_ast()
+    access = _discover_staging_access(tree)
+    assert access, "staging-access set must not be empty"
+    trusted = _reachable_functions(tree, "_trust_boundary")
+    orphan_access = sorted(access - trusted)
+    assert orphan_access == [], "staging-access outside _trust_boundary reachability: %s" % orphan_access
+    violations = {}
+    for fn in sorted(access):
+        callers = _callers_of(tree, fn) - {fn}
+        bad = sorted(callers - trusted)
+        if bad:
+            violations[fn] = bad
+    assert violations == {}, "staging-access with callers outside _trust_boundary: %s" % violations
+
+    validated_sites = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "_Validated":
+                validated_sites.append(node.lineno)
+    assert len(validated_sites) == 1, "_Validated must be constructed at exactly one site: %s" % validated_sites
+
+
+def test_check_and_attest_require_validated_instance(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
+            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+
+    with patch.object(GS, "_trust_boundary", return_value={"ok": True, "applicable": True}):
+        check_out = GS.check(session, "engine")
+        assert check_out.get("reason") == "internal-error"
+        attest_out = GS.attest(session, result_path, "engine")
+        assert attest_out.get("reason") == "internal-error"
+
+
+def test_attest_happy_path(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+    repo_ids = []
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
+            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+            repo_ids.append(claim["claimId"])
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+    rc2, body = _invoke("attest", session, result_path=result_path)
+    assert rc2 == 0
+    assert body["ok"] is True
+    assert body["attested"] is True
+    assert body["confirmed"] == sorted(repo_ids)
+
+
+def test_attest_duplicate_row_id_first_wins(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    repo_claim = next(
+        c for c in manifest["claims"] if c.get("verifiability") == GS.VERIFIABILITY_REPO
+    )
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [
+        {"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"},
+        {"id": repo_claim["claimId"], "verdict": "REFUTED"},
+        {"id": repo_claim["claimId"], "verdict": "CONFIRMED"},
+    ]
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO and claim is not repo_claim:
+            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+    rc2, body = _invoke("attest", session, result_path=result_path)
+    assert rc2 == 0 and body["ok"]
+    assert repo_claim["claimId"] in body["refuted"]
+    assert repo_claim["claimId"] not in body["confirmed"]
+
+
+def test_biteproof_staged_body_source_mismatch_guard(tmp_path):
+    session = _session(tmp_path, body=_happy_body(), name="bite-staged-body")
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    _tamper_staged_body_preserve_source_sha(
+        session,
+        lambda body: body.replace("Ship grounding stage.", "Ship grounding stage!", 1),
+    )
+    rc2, body = _invoke("check", session)
+    _assert_refusal(rc2, body, "staged-body-source-mismatch")
+
+
+def test_biteproof_attest_pr_json_leg_guard(tmp_path):
+    session = _session(tmp_path, body=_happy_body(), name="bite-pr-json-leg")
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    pr_path = os.path.join(session, "pr.json")
+    pr_data = json.loads(open(pr_path, encoding="utf-8").read())
+    pr_data["body"] = pr_data["body"] + "\nEdited after staging."
+    open(pr_path, "w", encoding="utf-8").write(json.dumps(pr_data))
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
+            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+    rc2, body = _invoke("attest", session, result_path=result_path)
+    _assert_refusal(rc2, body, "source-body-stale")
+
+
+def test_biteproof_vendor_path_gate_guard(tmp_path):
+    session = _session(tmp_path, body=_happy_body(), name="bite-vendor-path")
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    result = GS.check(session, "not-a-vendor")
+    assert result.get("reason") == "stage-unreachable-for-vendor"
+
+
+def test_biteproof_result_path_confinement_guard(tmp_path):
+    session = _session(tmp_path, body=_happy_body(), name="bite-result-path")
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    outside = tmp_path / "outside-attest.json"
+    outside.write_text('{"verdicts": []}', encoding="utf-8")
+    rc2, body = _invoke("attest", session, result_path=str(outside))
+    _assert_refusal(rc2, body, "attest-result-outside-session")
+
+
+def test_biteproof_chokepoint_census_detects_bypass():
+    # bite-axis: chokepoint census mutation proof — a direct manifest reader must fail the census.
+    tree = _grounding_stage_ast()
+    bypass = ast.FunctionDef(
+        name="_biteproof_direct_manifest_reader",
+        args=ast.arguments(
+            posonlyargs=[], args=[], kwonlyargs=[], kw_defaults=[], defaults=[],
+        ),
+        body=[
+            ast.Return(
+                value=ast.Call(
+                    func=ast.Name(id="_load_manifest", ctx=ast.Load()),
+                    args=[ast.Constant(value="/tmp/session")],
+                    keywords=[],
+                ),
+            ),
+        ],
+        decorator_list=[],
+        returns=None,
+        type_comment=None,
+    )
+    tree.body.append(bypass)
+    access = _discover_staging_access(tree)
+    reachable = _reachable_functions(tree, "_trust_boundary")
+    assert "_biteproof_direct_manifest_reader" in access
+    assert "_biteproof_direct_manifest_reader" not in reachable

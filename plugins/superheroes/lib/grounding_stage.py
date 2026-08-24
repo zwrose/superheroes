@@ -88,11 +88,22 @@ REFUSAL_REASONS = frozenset({
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
     "source-body-stale",
+    "staged-body-source-mismatch",
+    "stage-unreachable-for-vendor",
+    "attest-result-outside-session",
+    "attest-result-unreadable",
+    "attest-token-missing",
+    "attest-token-mismatch",
+    "attest-claim-unanswered",
+    "attest-verdict-out-of-enum",
     "region-marker-duplicated",
     "dod-table-rows-unadmitted",
     "invalid-invocation",
     "internal-error",
 })
+
+VENDOR_PATHS = frozenset({"engine", "native"})
+VALID_VERDICTS = frozenset({"CONFIRMED", "PLAUSIBLE", "REFUTED"})
 
 REFUSAL_INTERNAL_ERROR = "internal-error"
 
@@ -218,20 +229,20 @@ def _neutralize_claim_text(text):
 def _read_meta(session_dir):
     # bite-axis: meta.json must be readable and carry a known session mode before staging.
     try:
-        ok, data = review_base_guard.read_meta(session_dir)
+        ok, data, reason = review_base_guard.classify_meta(session_dir)
     except Exception as exc:
         return _refuse("meta-unreadable", str(exc))
     if not ok:
         detail = data
-        if isinstance(detail, str) and detail.startswith("meta.json not readable:"):
+        if reason == "unreadable":
             return _refuse("meta-unreadable", detail)
-        if isinstance(detail, str) and detail.startswith("meta.json not parseable:"):
-            # read_meta classifies UnicodeDecodeError as parseable; this module's contract
+        if reason == "undecodable":
+            # classify_meta distinguishes decode from parse; this module's contract
             # keeps corrupt file bytes under meta-unreadable.
-            if "codec can't decode" in detail or "invalid start byte" in detail:
-                return _refuse("meta-unreadable", detail)
+            return _refuse("meta-unreadable", detail)
+        if reason == "unparseable":
             return _refuse("meta-mode-unknown", detail)
-        if detail == "meta.json is not a JSON object":
+        if reason == "not-an-object":
             return _refuse("meta-mode-unknown", detail)
         return _refuse("meta-unreadable", detail)
     mode = data.get("mode")
@@ -669,7 +680,7 @@ def _extract_untrusted_pr_body(staged_text):
     if not nonce:
         return None
     pattern = (
-        r"<!-- BEGIN UNTRUSTED PR BODY %s[^\n]*\n"
+        r"<!-- BEGIN UNTRUSTED PR BODY %s.*?-->\n"
         r"(.*)"
         r"<!-- END UNTRUSTED PR BODY %s -->"
     ) % (re.escape(nonce), re.escape(nonce))
@@ -943,22 +954,43 @@ def _load_manifest(session_dir):
     return _validate_manifest_shape(manifest, session_dir)
 
 
-def check(session_dir):
-    abs_check = _require_absolute_session_dir(session_dir)
-    if not abs_check.get("ok"):
-        return abs_check
-    meta = _read_meta(session_dir)
-    if not meta.get("ok"):
-        return meta
-    if meta["mode"] == "branch":
-        return _branch_mode_result()
-    loaded = _load_manifest(session_dir)
-    if not loaded.get("ok"):
-        return loaded
-    verified = _verify_manifest_files(loaded["manifest"], session_dir)
-    if not verified.get("ok"):
-        return verified
-    manifest = verified["manifest"]
+class _Validated(object):
+    """A manifest that has passed the trust boundary. Constructible only by _trust_boundary."""
+    __slots__ = ("manifest", "claims", "mode")
+
+    def __init__(self, manifest, claims, mode):
+        self.manifest = manifest
+        self.claims = claims
+        self.mode = mode
+
+
+def _project_claims(claims):
+    # Claim text is author-controlled; the orchestrator composes the seat's order from
+    # whatever check returns — interpolating author text into a trusted order is an injection
+    # surface. The text stays inside the nonce-fenced staged body the seat reads as data.
+    projected = []
+    for claim in claims or []:
+        if not isinstance(claim, dict):
+            continue
+        projected.append({
+            "claimId": claim.get("claimId"),
+            "kind": claim.get("kind"),
+            "verifiability": claim.get("verifiability"),
+        })
+    return projected
+
+
+def _canonical_staged_body_for_sha(raw_body):
+    # _staged_pr_body writes the fenced author bytes as "%s\n" before the END marker.
+    if isinstance(raw_body, str) and raw_body.endswith("\n"):
+        return raw_body[:-1]
+    return raw_body
+
+
+def _bind_three_way_source(session_dir, manifest):
+    # The staged body and sourceBodySha256 both live in files an attacker who can write the
+    # session dir controls, so checking them against each other alone is self-consistency, not
+    # integrity. Only binding both to the live pr.json closes the coordinated two-file forge.
     pr_path = os.path.join(session_dir, "pr.json")
     try:
         pr_data = _read_json(pr_path)
@@ -976,14 +1008,87 @@ def check(session_dir):
     if current_body is None or not isinstance(current_body, str):
         return _refuse("source-body-stale", "body absent or not a string")
     current_sha = _sha256_text(current_body)
-    if current_sha != manifest.get("sourceBodySha256"):
+    manifest_sha = manifest.get("sourceBodySha256")
+    if current_sha != manifest_sha:
         return _refuse(
             "source-body-stale",
             "pr.json body changed since staging",
         )
-    claims = manifest.get("claims") or []
+    staged_path = manifest["files"][0]["path"]
+    try:
+        resolved_path = os.path.realpath(staged_path)
+    except OSError as exc:
+        return _refuse("staged-file-unreadable", str(exc))
+    try:
+        on_disk = _read_text(resolved_path)
+    except OSError as exc:
+        return _refuse("staged-file-unreadable", str(exc))
+    except UnicodeDecodeError as exc:
+        return _refuse("staged-file-unreadable", str(exc))
+    raw_body = _extract_untrusted_pr_body(on_disk)
+    if raw_body is None:
+        return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
+    staged_sha = _sha256_text(_canonical_staged_body_for_sha(raw_body))
+    if staged_sha != manifest_sha:
+        return _refuse(
+            "staged-body-source-mismatch",
+            "staged body sha256 != manifest sourceBodySha256",
+        )
+    return {"ok": True}
+
+
+def _trust_boundary(session_dir, *, vendor_path, result_path=None):
+    """The single trust boundary. Returns _Validated, a branch-mode marker, or a refusal dict."""
+    abs_check = _require_absolute_session_dir(session_dir)
+    if not abs_check.get("ok"):
+        return abs_check
+    meta = _read_meta(session_dir)
+    if not meta.get("ok"):
+        return meta
+    if meta["mode"] == "branch":
+        return _branch_mode_result()
+    if vendor_path not in VENDOR_PATHS:
+        return _refuse("stage-unreachable-for-vendor", repr(vendor_path))
+    loaded = _load_manifest(session_dir)
+    if not loaded.get("ok"):
+        return loaded
+    verified = _verify_manifest_files(loaded["manifest"], session_dir)
+    if not verified.get("ok"):
+        return verified
+    manifest = verified["manifest"]
+    bound = _bind_three_way_source(session_dir, manifest)
+    if not bound.get("ok"):
+        return bound
+    if result_path is not None:
+        try:
+            resolved = os.path.realpath(result_path)
+        except OSError as exc:
+            return _refuse("attest-result-outside-session", str(exc))
+        session_real = os.path.realpath(session_dir)
+        if not path_is_confidently_under(resolved, session_real):
+            return _refuse(
+                "attest-result-outside-session",
+                "result path %r outside session dir %r" % (resolved, session_real),
+            )
+    return _Validated(
+        manifest=manifest,
+        claims=_project_claims(manifest.get("claims")),
+        mode=meta["mode"],
+    )
+
+
+def check(session_dir, vendor_path):
+    validated = _trust_boundary(session_dir, vendor_path=vendor_path)
+    if isinstance(validated, dict):
+        if validated.get("ok") is False or validated.get("applicable") is False:
+            return validated
+        return _refuse("internal-error", "trust boundary returned unexpected dict")
+    if not isinstance(validated, _Validated):
+        return _refuse("internal-error", "trust boundary returned unexpected type")
+    manifest = validated.manifest
+    claims = validated.claims
     region_map = _region_map(manifest.get("regions"))
-    computed_flag = _no_substantive_claims(claims, region_map)
+    computed_flag = _no_substantive_claims(manifest.get("claims") or [], region_map)
     if computed_flag:
         if manifest.get("noSubstantiveClaims") is not True:
             return _refuse(
@@ -998,6 +1103,108 @@ def check(session_dir):
     return _success_envelope(claims, manifest.get("files") or [], region_map)
 
 
+def _grade_attest_result(validated, result_path):
+    manifest = validated.manifest
+    try:
+        result = _read_json(result_path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        return _refuse("attest-result-unreadable", str(exc))
+    if not isinstance(result, dict):
+        return _refuse("attest-result-unreadable", "result root is not an object")
+    verdicts = result.get("verdicts")
+    if not isinstance(verdicts, list):
+        return _refuse("attest-result-unreadable", "verdicts missing or not a list")
+    token_rows = []
+    seen_ids = {}
+    for index, row in enumerate(verdicts):
+        if not isinstance(row, dict):
+            return _refuse("attest-result-unreadable", "verdicts[%d] not an object" % index)
+        row_id = row.get("id")
+        if isinstance(row_id, str) and row_id.startswith("stage-token:"):
+            token_rows.append(row)
+        verdict = row.get("verdict")
+        if verdict is not None and verdict not in VALID_VERDICTS:
+            return _refuse(
+                "attest-verdict-out-of-enum",
+                "verdicts[%d] verdict invalid: %r" % (index, verdict),
+            )
+        if isinstance(row_id, str) and row_id not in seen_ids:
+            seen_ids[row_id] = row
+    if len(token_rows) != 1:
+        return _refuse("attest-token-missing", "expected exactly one stage-token row")
+    token_suffix = token_rows[0]["id"][len("stage-token:"):]
+    if token_suffix != manifest.get("stageToken"):
+        return _refuse(
+            "attest-token-mismatch",
+            "stage-token suffix %r != manifest stageToken %r"
+            % (token_suffix, manifest.get("stageToken")),
+        )
+    repo_claim_ids = {
+        c["claimId"]
+        for c in (manifest.get("claims") or [])
+        if isinstance(c, dict) and c.get("verifiability") == VERIFIABILITY_REPO
+    }
+    answered = set()
+    for row_id, row in seen_ids.items():
+        if row_id.startswith("stage-token:"):
+            continue
+        claim_id = row_id
+        if claim_id in repo_claim_ids:
+            answered.add(claim_id)
+    missing = repo_claim_ids - answered
+    if missing:
+        return _refuse(
+            "attest-claim-unanswered",
+            "repo-verifiability claims without verdict rows: %s"
+            % sorted(missing),
+        )
+    refuted = []
+    plausible = []
+    confirmed = []
+    for claim_id in sorted(repo_claim_ids):
+        row = seen_ids.get(claim_id)
+        if row is None:
+            continue
+        verdict = row.get("verdict")
+        if verdict == "REFUTED":
+            refuted.append(claim_id)
+        elif verdict == "PLAUSIBLE":
+            plausible.append(claim_id)
+        elif verdict == "CONFIRMED":
+            confirmed.append(claim_id)
+        else:
+            return _refuse(
+                "attest-verdict-out-of-enum",
+                "claim %r verdict invalid: %r" % (claim_id, verdict),
+            )
+    result_out = {
+        "ok": True,
+        "attested": True,
+        "refuted": refuted,
+        "plausible": plausible,
+        "confirmed": confirmed,
+    }
+    region_map = _region_map(manifest.get("regions"))
+    if manifest.get("noSubstantiveClaims") is True:
+        result_out["noSubstantiveClaims"] = True
+    elif _no_substantive_claims(manifest.get("claims") or [], region_map):
+        result_out["noSubstantiveClaims"] = True
+    return result_out
+
+
+def attest(session_dir, result_path, vendor_path):
+    validated = _trust_boundary(
+        session_dir, vendor_path=vendor_path, result_path=result_path,
+    )
+    if isinstance(validated, dict):
+        if validated.get("ok") is False or validated.get("applicable") is False:
+            return validated
+        return _refuse("internal-error", "trust boundary returned unexpected dict")
+    if not isinstance(validated, _Validated):
+        return _refuse("internal-error", "trust boundary returned unexpected type")
+    return _grade_attest_result(validated, result_path)
+
+
 def main(argv):
     try:
         ap = argparse.ArgumentParser(description="grounding stage PR-body staging")
@@ -1006,6 +1213,11 @@ def main(argv):
         st.add_argument("--session-dir", required=True)
         ck = sub.add_parser("check")
         ck.add_argument("--session-dir", required=True)
+        ck.add_argument("--vendor-path", required=True, choices=sorted(VENDOR_PATHS))
+        at = sub.add_parser("attest")
+        at.add_argument("--session-dir", required=True)
+        at.add_argument("--result-path", required=True)
+        at.add_argument("--vendor-path", required=True, choices=sorted(VENDOR_PATHS))
         args = ap.parse_args(argv[1:])
         if args.cmd == "stage":
             result = stage(args.session_dir)
@@ -1014,7 +1226,13 @@ def main(argv):
                 return 1
             return 0
         if args.cmd == "check":
-            result = check(args.session_dir)
+            result = check(args.session_dir, args.vendor_path)
+            _emit(result)
+            if not result.get("ok"):
+                return 1
+            return 0
+        if args.cmd == "attest":
+            result = attest(args.session_dir, args.result_path, args.vendor_path)
             _emit(result)
             if not result.get("ok"):
                 return 1
