@@ -1303,14 +1303,18 @@ def test_last_json_object_stray_braces_bounded_raw_decode(monkeypatch):
     n_lines = 20000
     blob = noise_line * n_lines + '{"findings": [{"severity":"Minor","title":"t","body":"b"}]}'
     brace_count = blob.count("{") - 1  # exclude the final real object opener from rough bound
-    import time
-    t0 = time.monotonic()
     result = EA._last_json_object(blob)
-    elapsed = time.monotonic() - t0
     assert result is not None and result.get("findings")
+    # #1132: the guarded property is BOUNDED WORK, not duration. The scan must attempt a decode
+    # only at a plausible container start ('{' / '['), so raw_decode calls track the brace count
+    # and NOT the blob length — the per-char exception storm of #563 would need one call per
+    # character. Both legs below are operation counts against same-input bounds, so they hold
+    # identically on an idle and on a loaded machine. The former `elapsed < 20.0` wall-clock
+    # assertion measured the machine, not the code: it went red under sibling-build load with
+    # this function untouched (two same-day specimens, PRs #1129 / #1130).
     assert calls[0] <= brace_count + 5, (
-        "raw_decode count %d should track '{' count (~%d), not chars" % (calls[0], brace_count))
-    assert elapsed < 20.0
+        "raw_decode count %d should track '{' count (~%d), not blob length (%d chars)"
+        % (calls[0], brace_count, len(blob)))
 
 
 # ---------------------------------------------------------------------------
