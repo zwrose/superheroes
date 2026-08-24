@@ -29,6 +29,7 @@ if _LIB not in sys.path:
 # PLAIN imports, not importlib side-loads: the driver imports `round_adapters` at CALL time through
 # `sys.modules`, so the module objects this test asserts about must be the very ones the driver
 # reaches. A side-loaded copy would let a stub sit in `sys.modules` unnoticed.
+import payload_contracts  # noqa: E402
 import round_adapters  # noqa: E402
 import round_driver  # noqa: E402
 import round_records  # noqa: E402
@@ -297,12 +298,14 @@ def test_adapter_module_is_not_stubbed_in_this_module():
     """A future author who stubs `round_adapters` back into this module fails HERE.
 
     Both halves matter: the object this module holds must be the one `sys.modules` hands the
-    driver, and its functions must come from `round_adapters` itself (a per-function patch leaves
-    the module identity intact but re-hides the seam)."""
+    driver, and its functions must come from the real modules (a per-function patch leaves the
+    module identity intact but re-hides the seam). The payload validator's real home is now
+    `payload_contracts`; a stub of either module still fails here."""
     _assert_adapters_are_real()
     assert round_adapters.__name__ == "round_adapters"
     assert round_adapters.missing_policy.__module__ == "round_adapters"
-    assert round_adapters.payload_fault.__module__ == "round_adapters"
+    assert round_adapters.payload_fault.__module__ == "payload_contracts"
+    assert round_adapters.payload_fault is payload_contracts.payload_fault
     # and the driver's own call-time lookup resolves to that same module
     assert round_driver._adapters() is round_adapters
 

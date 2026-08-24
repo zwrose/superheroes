@@ -5146,11 +5146,11 @@ def test_r8_closure_receipt_elements_exactly_once_in_in_repo_copy_holders():
     )
 
 
-def test_grouping_payload_valid_delegates_to_round_adapters_not_hand_copy():
-    """§11: engine_adapter._grouping_payload_valid must delegate to round_adapters P_SYNTHESIS."""
+def test_grouping_payload_valid_delegates_to_payload_contracts_not_hand_copy():
+    """§11: engine_adapter._grouping_payload_valid must delegate to payload_contracts P_SYNTHESIS."""
     text = _read("lib/engine_adapter.py")
-    assert "round_adapters.payload_fault" in text
-    assert "round_adapters.P_SYNTHESIS" in text
+    assert "payload_contracts.payload_fault" in text
+    assert "payload_contracts.P_SYNTHESIS" in text
     for marker in _HANDWRITTEN_GROUPING_VALIDATION_MARKERS:
         assert marker not in text, (
             "hand-written P_SYNTHESIS grouping validation reappeared: %r" % marker
@@ -5167,19 +5167,26 @@ def test_grouping_contract_copy_census():
     """Census: P_SYNTHESIS grouping shape rule has exactly one home plus delegation in engine_adapter."""
     engine_text = _read("lib/engine_adapter.py")
     round_text = _read("lib/round_adapters.py")
+    payload_text = _read("lib/payload_contracts.py")
     copies = []
-    if "member_ids-non-empty-strings" in round_text:
-        copies.append("round_adapters")
+    if ("member_ids-non-empty-strings" in payload_text
+            and "member_ids-non-empty-strings" not in round_text):
+        copies.append("payload_contracts-home")
+    elif "member_ids-non-empty-strings" in round_text:
+        copies.append("duplicate-home")
+    else:
+        copies.append("missing-home")
     for marker in _HANDWRITTEN_GROUPING_VALIDATION_MARKERS:
         if marker in engine_text:
             copies.append("engine_adapter-hand-copy:%s" % marker)
-    if "round_adapters.payload_fault" in engine_text and "round_adapters.P_SYNTHESIS" in engine_text:
+    if ("payload_contracts.payload_fault" in engine_text
+            and "payload_contracts.P_SYNTHESIS" in engine_text):
         copies.append("engine_adapter-delegation")
-    assert copies.count("round_adapters") == 1, (
+    assert copies.count("payload_contracts-home") == 1, (
         "P_SYNTHESIS grouping rule home missing or duplicated: %r" % copies
     )
     assert "engine_adapter-delegation" in copies, (
-        "engine_adapter must delegate grouping validation to round_adapters: %r" % copies
+        "engine_adapter must delegate grouping validation to payload_contracts: %r" % copies
     )
     hand_copies = [c for c in copies if c.startswith("engine_adapter-hand-copy:")]
     assert not hand_copies, (

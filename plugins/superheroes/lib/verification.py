@@ -8,8 +8,9 @@ a model's silence or malformed verdict never drops a finding.
 """
 import circuit_breaker
 import panel_tally
+import round_phases
 
-VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
+VERDICTS = round_phases.VERDICTS
 _DEFAULT_BLOCKING_SEVERITY = "Important"
 CLUSTER_LINE_SPAN = 100
 _BODY_SEP = "\n\n---\n\n"
