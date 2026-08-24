@@ -28,12 +28,25 @@ def _top_level_functions(tree):
     return [n for n in tree.body if isinstance(n, ast.FunctionDef)]
 
 
+def _function_sources(source, tree):
+    """(name, source_text) per top-level function — line-sliced once, not re-split per node."""
+    lines = source.splitlines(True)
+    out = []
+    for n in _top_level_functions(tree):
+        # Slice starts at `def`; decorator lines above lineno are excluded.
+        if n.end_lineno is None:
+            fn_src = ""
+        else:
+            fn_src = "".join(lines[n.lineno - 1:n.end_lineno])
+        out.append((n.name, fn_src))
+    return out
+
+
 def _functions_with_literal(source, tree, needle):
     hits = []
-    for node in _top_level_functions(tree):
-        fn_src = ast.get_source_segment(source, node) or ""
+    for name, fn_src in _function_sources(source, tree):
         if needle in fn_src:
-            hits.append(node.name)
+            hits.append(name)
     return hits
 
 

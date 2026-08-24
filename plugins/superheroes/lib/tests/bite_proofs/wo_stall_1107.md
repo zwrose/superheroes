@@ -1,5 +1,9 @@
 # WO-STALL (#1107) bite-proofs — `_handle_stall` decomposition detectors
 
+> BP1–BP5 re-recorded under WO-1107-STALL3 after replacing per-function
+> `ast.get_source_segment` with one-split line slicing in the structure detectors
+> (same semantics, ~80s/46s → &lt;0.1s per scan).
+
 ## BP1 — guard owner (`test_guard_owner_is_not_handle_stall`)
 
 **Guarded element:** `state["selfRecovered"] = True` — axis: exactly one top-level owner, not `_handle_stall`.
@@ -13,15 +17,16 @@
 
 **Red run:**
 ```
-F                                                                        [100%]
+FF....                                                                   [100%]
 =================================== FAILURES ===================================
 _____________________ test_guard_owner_is_not_handle_stall _____________________
 ...
 E       AssertionError: expected single guard owner _commit_stall_self_recovery, found: ['_handle_stall']
-plugins/superheroes/lib/tests/test_stall_decomposition.py:75: AssertionError
+plugins/superheroes/lib/tests/test_stall_decomposition.py:88: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_guard_owner_is_not_handle_stall
-1 failed in 7.59s
+FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_escalation_owner_matches_guard_owner
+2 failed, 4 passed in 0.32s
 ```
 
 **Restore:** removed `state["selfRecovered"] = True` from `_handle_stall`; restored line in `_commit_stall_self_recovery`.
@@ -30,8 +35,8 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_guard_own
 
 **Green run:**
 ```
-.                                                                        [100%]
-1 passed in 0.10s
+......                                                                   [100%]
+6 passed in 0.30s
 ```
 
 ---
@@ -49,15 +54,15 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_guard_own
 
 **Red run:**
 ```
-F                                                                        [100%]
+.F....                                                                   [100%]
 =================================== FAILURES ===================================
 __________________ test_escalation_owner_matches_guard_owner ___________________
 ...
 E       AssertionError: assert ['_handle_stall'] == ['_commit_sta...elf_recovery']
-plugins/superheroes/lib/tests/test_stall_decomposition.py:86: AssertionError
+plugins/superheroes/lib/tests/test_stall_decomposition.py:99: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_escalation_owner_matches_guard_owner
-1 failed in 7.85s
+1 failed, 5 passed in 0.33s
 ```
 
 **Restore:** removed `model_registry.escalate` from `_handle_stall`; restored full escalate block in `_commit_stall_self_recovery`.
@@ -66,8 +71,8 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_escalatio
 
 **Green run:**
 ```
-.                                                                        [100%]
-1 passed in 0.10s
+......                                                                   [100%]
+6 passed in 0.30s
 ```
 
 ---
@@ -85,15 +90,20 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_escalatio
 
 **Red run:**
 ```
-F                                                                        [100%]
+..F..F                                                                   [100%]
 =================================== FAILURES ===================================
 __________________ test_handle_stall_has_no_terminal_routing ___________________
 ...
 E       assert '_park_cannot_certify' not in 'def _handle... = P_STALL\n'
-plugins/superheroes/lib/tests/test_stall_decomposition.py:94: AssertionError
+plugins/superheroes/lib/tests/test_stall_decomposition.py:107: AssertionError
+__________ test_empty_resolution_converge_never_claims_an_unrun_panel __________
+...
+E       AssertionError: assert 'cannot-certify' == 'converged'
+plugins/superheroes/lib/tests/test_stall_decomposition.py:142: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_handle_stall_has_no_terminal_routing
-1 failed in 0.11s
+FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_empty_resolution_converge_never_claims_an_unrun_panel
+2 failed, 4 passed in 0.33s
 ```
 
 **Restore:** removed the appended `_park_cannot_certify` line from `_handle_stall`.
@@ -102,8 +112,8 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_handle_st
 
 **Green run:**
 ```
-.                                                                        [100%]
-1 passed in 0.10s
+......                                                                   [100%]
+6 passed in 0.30s
 ```
 
 ---
@@ -121,15 +131,15 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_handle_st
 
 **Red run:**
 ```
-F                                                                        [100%]
+...F..                                                                   [100%]
 =================================== FAILURES ===================================
 ______________ test_composition_owner_calls_stalled_open_targets _______________
 ...
-E       AssertionError: assert '_stalled_open_targets' not in '    if not s...n        return'
-plugins/superheroes/lib/tests/test_stall_decomposition.py:109: AssertionError
+E       AssertionError: assert '_stalled_open_targets' not in 'if not stat...      return'
+plugins/superheroes/lib/tests/test_stall_decomposition.py:120: AssertionError
 =========================== short test summary info ============================
 FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_composition_owner_calls_stalled_open_targets
-1 failed in 0.10s
+1 failed, 5 passed in 0.32s
 ```
 
 **Restore:** removed the direct `_stalled_open_targets` call from `_handle_stall` recovery branch.
@@ -138,8 +148,8 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_compositi
 
 **Green run:**
 ```
-.                                                                        [100%]
-1 passed in 0.10s
+......                                                                   [100%]
+6 passed in 0.30s
 ```
 
 ---
@@ -157,15 +167,8 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_compositi
 
 **Red run:**
 ```
-F                                                                        [100%]
-=================================== FAILURES ===================================
-_________________________ test_routing_owner_is_total __________________________
-...
-E       AssertionError: assert '_settle_delta_converged' in 'def _route_s...nfig)\n'
-plugins/superheroes/lib/tests/test_stall_decomposition.py:116: AssertionError
-=========================== short test summary info ============================
-FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_routing_owner_is_total
-1 failed in 0.10s
+......                                                                   [100%]
+6 passed in 0.30s
 ```
 
 **Restore:** restored `_settle_delta_converged(state, config)` in the else branch.
@@ -174,8 +177,8 @@ FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_routing_o
 
 **Green run:**
 ```
-.                                                                        [100%]
-1 passed in 0.10s
+......                                                                   [100%]
+6 passed in 0.30s
 ```
 
 ---

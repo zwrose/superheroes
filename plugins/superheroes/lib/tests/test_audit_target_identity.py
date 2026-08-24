@@ -337,11 +337,16 @@ def test_stalled_callers_share_helper_no_duplicate_alias_loops():
     with open(rd_path, encoding="utf-8") as fh:
         source = fh.read()
     tree = ast.parse(source, filename=rd_path)
+    lines = source.splitlines(True)
     alias_fns = []
     for node in tree.body:
         if not isinstance(node, ast.FunctionDef):
             continue
-        fn_src = ast.get_source_segment(source, node) or ""
+        # Slice starts at `def`; decorator lines above lineno are excluded.
+        if node.end_lineno is None:
+            fn_src = ""
+        else:
+            fn_src = "".join(lines[node.lineno - 1:node.end_lineno])
         if "audit_target_aliases" in fn_src:
             alias_fns.append(node.name)
     assert alias_fns == ["_stalled_open_targets"], (
