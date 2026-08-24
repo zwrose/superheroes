@@ -150,8 +150,10 @@ numbers are assigned once at append, written into the entry itself, and never re
 durable across sessions), otherwise by the determination record the row points to; a writer finding
 its key already in the registry updates that row rather than adding a second, which is what makes a
 repeated write idempotent — and **only then
-is the item struck**; the vet-time reconciliation read completes the pair when it finds a row
-without its strike or a struck item without its row. Striking first is the fail-open order: a crash
+is the item struck**. A strike is an in-place tombstone edit — the entry stays legible in the
+collector's record, marked struck with the ruling's date and pointer — never a deletion, which is
+what keeps both halves of a half-done pair enumerable; the vet-time reconciliation read completes
+the pair when it finds a row without its strike or a struck item without its row. Striking first is the fail-open order: a crash
 between the writes leaves the item reading as handled while its revisit trigger is recorded nowhere
 — reconciliation can flag the struck-without-row shape, but the trigger must then be re-derived from
 the ruling record rather than read from the registry. Row-first fails closed and is the only order
