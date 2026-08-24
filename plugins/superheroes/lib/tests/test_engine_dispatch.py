@@ -10,9 +10,11 @@ import sys
 import time
 
 import pytest
-from _pytest.monkeypatch import notset as _monkeypatch_notset
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
+
+# Sentinel for monkeypatch.setattr two-argument form (target, name) without private pytest API.
+_MONKEYPATCH_SETATTR_DEFAULT = object()
 
 
 def _load():
@@ -5828,15 +5830,18 @@ class _ProbeGitFakeInstallState:
     def __init__(self):
         self.test_name = None
         self.installed_routes = set()
-        self._chokepoint_active = False
+        self.registered_fakes = set()
+        self.helper_snapshots = {}
 
     def begin_test(self, test_name):
         self.test_name = test_name
         self.installed_routes = set()
-        self._chokepoint_active = False
+        self.registered_fakes = set()
+        self.helper_snapshots = {}
 
 
 _PROBE_GIT_STATE = _ProbeGitFakeInstallState()
+_probe_git_chokepoint_depth = 0
 
 
 def _finish_probe_git_fake_route_check(test_name, installed):
@@ -5855,11 +5860,27 @@ def _finish_probe_git_fake_route_check(test_name, installed):
         )
 
 
+def _finish_probe_git_fake_identity_check(test_name, snapshots, registered_fakes):
+    errors = []
+    for helper_name in sorted(_PROBE_GIT_HELPER_NAMES):
+        current = getattr(ED, helper_name)
+        snapshot = snapshots[helper_name]
+        if current is snapshot or current in registered_fakes:
+            continue
+        errors.append(
+            "%s: probe git helper ED.%s has unregistered value %r"
+            % (test_name, helper_name, current)
+        )
+    if errors:
+        raise AssertionError("; ".join(errors))
+
+
 def _register_probe_git_fake(monkeypatch, helper_name, fake, routes):
     """Install a probe-surface git helper fake; record routes at install time."""
+    global _probe_git_chokepoint_depth
     if helper_name not in _PROBE_GIT_HELPER_NAMES:
         raise ValueError("not a probe git helper: %r" % (helper_name,))
-    _PROBE_GIT_STATE._chokepoint_active = True
+    _probe_git_chokepoint_depth += 1
     try:
         for helper, subcommand in routes:
             if helper != helper_name:
@@ -5868,19 +5889,20 @@ def _register_probe_git_fake(monkeypatch, helper_name, fake, routes):
                     % (helper, helper_name)
                 )
             _PROBE_GIT_STATE.installed_routes.add((helper, subcommand))
+        _PROBE_GIT_STATE.registered_fakes.add(fake)
         monkeypatch.setattr(ED, helper_name, fake)
     finally:
-        _PROBE_GIT_STATE._chokepoint_active = False
+        _probe_git_chokepoint_depth -= 1
 
 
 def _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name):
     real_setattr = monkeypatch.setattr
 
-    def guarded_setattr(target, name, value=_monkeypatch_notset, raising=True):
-        if value is _monkeypatch_notset:
+    def guarded_setattr(target, name, value=_MONKEYPATCH_SETATTR_DEFAULT, raising=True):
+        if value is _MONKEYPATCH_SETATTR_DEFAULT:
             return real_setattr(target, name, raising=raising)
         if target is ED and name in _PROBE_GIT_HELPER_NAMES:
-            if not _PROBE_GIT_STATE._chokepoint_active:
+            if _probe_git_chokepoint_depth == 0:
                 pytest.fail(
                     "%s: probe git fake ED.%s installed via setattr bypass; "
                     "use _register_probe_git_fake"
@@ -5891,16 +5913,45 @@ def _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name):
     monkeypatch.setattr(monkeypatch, "setattr", guarded_setattr)
 
 
+@pytest.hookimpl(hookwrapper=True, tryfirst=True)
+def pytest_runtest_makereport(item, call):
+    outcome = yield
+    rep = outcome.get_result()
+    if rep.when == "call":
+        item.rep_call = rep
+
+
 @pytest.fixture(autouse=True)
 def _probe_git_fake_route_registry(request, monkeypatch):
     test_name = request.node.originalname or request.node.name.split("[", 1)[0]
     _PROBE_GIT_STATE.begin_test(test_name)
+    _PROBE_GIT_STATE.helper_snapshots = {
+        name: getattr(ED, name) for name in _PROBE_GIT_HELPER_NAMES
+    }
     _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name)
     yield
-    if test_name in PROBE_GIT_FAKE_ROUTES or _PROBE_GIT_STATE.installed_routes:
-        _finish_probe_git_fake_route_check(
-            test_name, set(_PROBE_GIT_STATE.installed_routes),
+    teardown_errors = []
+    try:
+        _finish_probe_git_fake_identity_check(
+            test_name,
+            _PROBE_GIT_STATE.helper_snapshots,
+            set(_PROBE_GIT_STATE.registered_fakes),
         )
+    except AssertionError as exc:
+        teardown_errors.append(str(exc))
+    rep_call = getattr(request.node, "rep_call", None)
+    skipped = rep_call is not None and rep_call.skipped
+    if not skipped and (
+        test_name in PROBE_GIT_FAKE_ROUTES or _PROBE_GIT_STATE.installed_routes
+    ):
+        try:
+            _finish_probe_git_fake_route_check(
+                test_name, set(_PROBE_GIT_STATE.installed_routes),
+            )
+        except AssertionError as exc:
+            teardown_errors.append(str(exc))
+    if teardown_errors:
+        raise AssertionError("\n".join(teardown_errors))
 
 
 def _install_git_route_recorders(monkeypatch, observed):
@@ -5915,12 +5966,10 @@ def _install_git_route_recorders(monkeypatch, observed):
         observed.append(("_git_scrubbed_bytes", args[0]))
         return real_scrubbed_bytes(cwd_real, *args, timeout=timeout)
 
-    _PROBE_GIT_STATE._chokepoint_active = True
-    try:
-        monkeypatch.setattr(ED, "_git_scrubbed", recording_scrubbed)
-        monkeypatch.setattr(ED, "_git_scrubbed_bytes", recording_scrubbed_bytes)
-    finally:
-        _PROBE_GIT_STATE._chokepoint_active = False
+    _register_probe_git_fake(monkeypatch, "_git_scrubbed", recording_scrubbed, ())
+    _register_probe_git_fake(
+        monkeypatch, "_git_scrubbed_bytes", recording_scrubbed_bytes, (),
+    )
 
 
 def test_probe_git_fake_routes_are_live(tmp_path, monkeypatch):
@@ -5983,6 +6032,40 @@ def test_probe_git_fake_detects_undeclared_wrapped_install(monkeypatch):
 
 
 def test_probe_git_fake_bypass_setattr_fails_by_name(monkeypatch):
+    with pytest.raises(pytest.fail.Exception, match="setattr bypass"):
+        monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+
+
+def test_probe_git_fake_raw_assignment_bypass_detected():
+    real = ED._git_scrubbed_bytes
+    ED._git_scrubbed_bytes = lambda *a, **k: None
+    try:
+        with pytest.raises(AssertionError, match="unregistered value"):
+            _finish_probe_git_fake_identity_check(
+                _PROBE_GIT_STATE.test_name,
+                _PROBE_GIT_STATE.helper_snapshots,
+                set(_PROBE_GIT_STATE.registered_fakes),
+            )
+    finally:
+        ED._git_scrubbed_bytes = real
+
+
+def test_probe_git_fake_builtin_setattr_bypass_detected():
+    real = ED._git_scrubbed_bytes
+    setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
+    try:
+        with pytest.raises(AssertionError, match="unregistered value"):
+            _finish_probe_git_fake_identity_check(
+                _PROBE_GIT_STATE.test_name,
+                _PROBE_GIT_STATE.helper_snapshots,
+                set(_PROBE_GIT_STATE.registered_fakes),
+            )
+    finally:
+        ED._git_scrubbed_bytes = real
+
+
+def test_probe_git_fake_flag_flip_bypass_dead(monkeypatch):
+    assert not hasattr(_PROBE_GIT_STATE, "_chokepoint_active")
     with pytest.raises(pytest.fail.Exception, match="setattr bypass"):
         monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
 
