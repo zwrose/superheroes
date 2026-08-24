@@ -46,6 +46,10 @@ RETIRED_STALL_CHOICE_PREFIX = "stall-choice-retired:"
 # there one-more-round re-enters the fix leg rather than terminating.
 JUDGMENT_DISPOSITIONS = ("fix-as-suggested", "fix-with-guidance", "skip")
 
+# Per-finding verification verdicts — lives here so the payload-contract layer can cite it
+# without importing `verification`; `verification.VERDICTS` re-exports this tuple.
+VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
+
 
 def panel_dimensions(config):
     """Configured panel dimensions, or the default DIMENSIONS list."""

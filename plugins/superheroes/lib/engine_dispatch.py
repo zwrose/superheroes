@@ -2257,19 +2257,7 @@ def _review_result_payload(result, kind):
         return False, None
     if result.get("resultKind") != kind:
         return False, None
-    if kind == "ruling":
-        ruling_val = result.get("ruling")
-        if isinstance(ruling_val, dict) and ruling_val.get("ruling"):
-            return True, ruling_val
-        return False, None
-    if kind == "grouping":
-        if "grouping" not in result:
-            return False, None
-        return True, result.get("grouping")
-    payload = result.get(kind)
-    if isinstance(payload, list):
-        return True, payload
-    return False, None
+    return engine_adapter.review_payload_carried(result, kind)
 
 
 def _parse_review_has_payload(res):
@@ -2282,11 +2270,7 @@ def _parse_review_has_payload(res):
     has_payload, payload = _review_result_payload(res, kind)
     if not has_payload:
         return False
-    if kind in ("findings", "verdicts"):
-        return bool(payload)
-    if kind == "grouping":
-        return bool(payload)
-    return True
+    return engine_adapter.review_payload_nonempty(kind, payload)
 
 
 def _review_parse_kind_invalid(res):
