@@ -448,7 +448,7 @@ def test_cli_compose_probed_path_retains_codex_cell_through_receipt(monkeypatch,
     live_vendors = ["claude", "cursor"]
 
     def fake_live_vendors_for_composition(*_args, **_kwargs):
-        return (live_vendors, aug15_cells, {}, [])
+        return (live_vendors, aug15_cells, {}, [], "probed")
 
     monkeypatch.setattr(pp, "live_vendors_for_composition", fake_live_vendors_for_composition)
 
@@ -1734,6 +1734,58 @@ def test_resolvable_families_live_cells_source_probed_vs_synthesized_vs_absent()
         SM._resolvable_families_for_seat(synthesized_map, seat, cfg)
         == SM._resolvable_families_for_seat(absent_map, seat, cfg)
     )
+
+
+def test_resolvable_families_unprobed_empty_degradations_returns_none():
+    # axis: provenance alone marks evidence unusable — not the preflight-cache-only note
+    seat_map, seat, cfg = _resolvable_families_fixture()
+    seat_map["livenessPinScoped"] = False
+    seat_map["degradations"] = []
+    seat_map["liveCellsSource"] = "unprobed"
+    seat_map["liveCells"] = []
+    seat_map["liveVendors"] = ["claude", "codex", "cursor"]
+    assert SM._resolvable_families_for_seat(seat_map, seat, cfg) is None
+
+
+def test_live_cells_fields_for_receipt_preserves_unprobed():
+    # bite-axis: unprobed source must not be relabelled synthesized or gain synthesized cells
+    seat_map = {
+        "liveCellsSource": "unprobed",
+        "liveCells": [],
+        "liveVendors": ["claude", "codex", "cursor"],
+        "seats": {s: {} for s in SM.PANEL_ROSTER},
+    }
+    cells, source = SM._live_cells_fields_for_receipt(seat_map)
+    assert source == "unprobed"
+    assert cells == []
+
+
+def test_cli_compose_cache_only_emits_unprobed_live_cells_source(monkeypatch, tmp_path, capsys):
+    import liveness_cache
+
+    cache_file = tmp_path / "composition-liveness.json"
+    monkeypatch.setattr(liveness_cache, "receipt_path", lambda cwd=None, root=None: str(cache_file))
+
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--probe-mode",
+            "cache-only",
+            "--configured-engines",
+            "codex,cursor",
+            "--author-family",
+            "cursor",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "610",
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    assert receipt["liveCellsSource"] == "unprobed"
+    assert receipt["liveCells"] == []
 
 
 # --- pin-shape normalization + refusal (#1039) -------------------------------------------------

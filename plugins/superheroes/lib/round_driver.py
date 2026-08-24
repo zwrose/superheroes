@@ -636,6 +636,7 @@ def mechanical_compile(findings, diff_text=None):
                           "title": f.get("title"), "reason": "outside the round diff scope"})
             continue
         fc = dict(f)
+        fc["severity"] = circuit_breaker.effective_severity(fc.get("severity"))
         if "dimension" in fc:
             norm = panel_tally.normalize_dimension(fc["dimension"])
             if norm:
