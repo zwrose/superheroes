@@ -3049,16 +3049,34 @@ def _park_capped_open(state, detail):
     state["step"] = P_TERMINAL
 
 
-def _open_audit_target_ids(state):
-    """Per-location ids still open this round, or None when the open set cannot be determined
-    (legacy persisted session without ``_auditOutcome``)."""
+# Stall self-recovery fix-batch refusal tokens — shared by composition and routing (#1107).
+REFUSAL_UNRESOLVABLE_OPEN_SET = "unresolvable-open-set"
+REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE = "open-blocking-uncomposable"
+
+
+class _OpenAuditTargets:
+    """Tri-state open-audit-target resolution for stall self-recovery (#1107)."""
+
+    __slots__ = ("kind", "ids")
+
+    def __init__(self, kind, ids=None):
+        self.kind = kind  # "resolved", "empty", or "unresolvable"
+        self.ids = ids
+
+
+def _resolve_open_audit_targets(state):
+    """Report whether the per-location open-id set is resolved, genuinely empty, or unresolvable."""
     outcome = state.get("_auditOutcome")
-    if not isinstance(outcome, dict):
-        return None
-    nd = outcome.get("notDischarged")
-    if not isinstance(nd, list):
-        return None
-    return set(nd)
+    if isinstance(outcome, dict):
+        nd = outcome.get("notDischarged")
+        if isinstance(nd, list):
+            return _OpenAuditTargets("resolved", set(nd))
+    audit_targets = state.get("_auditTargets") or []
+    audit_rounds = state.get("auditRounds") or []
+    fix_batch = state.get("fixBatch") or []
+    if not audit_targets and not audit_rounds and not fix_batch:
+        return _OpenAuditTargets("empty")
+    return _OpenAuditTargets("unresolvable")
 
 
 def _stalled_open_targets(state, breaker):
@@ -3067,9 +3085,12 @@ def _stalled_open_targets(state, breaker):
     stalled = set(breaker.get("stalledIdentities") or [])
     if not stalled:
         return []
-    open_ids = _open_audit_target_ids(state)
+    open_set = _resolve_open_audit_targets(state)
+    if open_set.kind == "empty":
+        return []
     matched = []
-    if open_ids is not None:
+    if open_set.kind == "resolved":
+        open_ids = open_set.ids
         for t in state.get("_auditTargets") or []:
             if not isinstance(t, dict):
                 continue
@@ -3098,61 +3119,82 @@ def _stalled_critical(state, config, breaker):
 
 # ---- stall self-recovery + menu -------------------------------------------------------------
 
+def _commit_stall_self_recovery(state, config, breaker):
+    """One-shot guard + escalation record — single owner for both (#1107)."""
+    state["selfRecovered"] = True
+    fixer_vendor = config.get("fixerVendor")
+    rung = model_registry.escalate(
+        fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
+    if rung is not None:
+        # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
+        # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
+        # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
+        state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
+    _decision(state, "self-recovery",
+              "audit-stall — one invisible self-recovery (%s)"
+              % ("fixer escalated to %r" % (rung,) if rung is not None
+                 else "no escalation rung available — fixer unchanged, escalated:false"))
+    _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
+
+
+def _compose_stall_fix_batch(state, breaker):
+    """Compose the stall self-recovery fix batch and any refusal token (#1107)."""
+    batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
+    open_set = _resolve_open_audit_targets(state)
+    if open_set.kind == "unresolvable" and not batch:
+        return [], REFUSAL_UNRESOLVABLE_OPEN_SET
+    outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+    not_discharged = outcome.get("notDischarged") or []
+    new_blocking = _blocking(state.get("findings") or [])
+    if not batch:
+        if not_discharged or new_blocking:
+            nd = set(not_discharged)
+            nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
+                          if t.get("id") in nd]
+            batch = [dict(f) for f in new_blocking]
+            seen = {(finding_identity(f), f.get("line")) for f in batch}
+            for t in nd_targets:
+                ident = t.get("identity") or finding_identity(t)
+                key = (ident, t.get("line"))
+                if ident is not None and key not in seen:
+                    batch.append(t)
+                    seen.add(key)
+            if not batch:
+                return [], REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE
+    return batch, None
+
+
+def _route_stall_self_recovery(state, config, batch, refusal, breaker):
+    """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
+    if batch:
+        state["_fixBatch"] = batch
+        state["step"] = P_FIXER
+    elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
+        _park_cannot_certify(
+            state,
+            "audit-stall self-recovery — open audit target set unresolvable "
+            "(missing or malformed _auditOutcome); cannot dispatch fix batch")
+    elif refusal == REFUSAL_OPEN_BLOCKING_UNCOMPOSABLE:
+        _park_capped_open(
+            state,
+            (breaker.get("detail") or "audit-stall self-recovery")
+            + " — blocking finding(s) remain not-discharged; certification withheld")
+    else:
+        open_set = _resolve_open_audit_targets(state)
+        if open_set.kind == "empty":
+            _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
+        else:
+            _settle_delta_converged(state, config)
+
+
 def _handle_stall(state, config, breaker):
     """audit-stall → ONE invisible self-recovery (fixer re-dispatched one rung up via
     model_registry.escalate and/or another vendor, once, journaled). Still stalled → the stall
     menu."""
     if not state.get("selfRecovered"):
-        batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
-        open_ids = _open_audit_target_ids(state)
-        if open_ids is None and not batch:
-            _park_cannot_certify(
-                state,
-                "audit-stall self-recovery — open audit target set unresolvable "
-                "(missing or malformed _auditOutcome); cannot dispatch fix batch")
-            return
-        outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
-        not_discharged = outcome.get("notDischarged") or []
-        new_blocking = _blocking(state.get("findings") or [])
-        if not batch:
-            if not_discharged or new_blocking:
-                nd = set(not_discharged)
-                nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
-                              if t.get("id") in nd]
-                batch = [dict(f) for f in new_blocking]
-                seen = {(finding_identity(f), f.get("line")) for f in batch}
-                for t in nd_targets:
-                    ident = t.get("identity") or finding_identity(t)
-                    key = (ident, t.get("line"))
-                    if ident is not None and key not in seen:
-                        batch.append(t)
-                        seen.add(key)
-                if not batch:
-                    _park_capped_open(
-                        state,
-                        (breaker.get("detail") or "audit-stall self-recovery")
-                        + " — blocking finding(s) remain not-discharged; certification withheld")
-                    return
-            else:
-                state["selfRecovered"] = True
-                _settle_delta_converged(state, config)
-                return
-        state["selfRecovered"] = True
-        fixer_vendor = config.get("fixerVendor")
-        rung = model_registry.escalate(
-            fixer_vendor, _SELF_RECOVERY_FIXER_MODEL, _SELF_RECOVERY_FIXER_EFFORT)
-        if rung is not None:
-            # A null escalation (unknown fixer vendor, or already top-of-ladder) is NOT recorded as an
-            # escalation — leaving _escalatedRung unset keeps the P_FIXER payload and the fix record
-            # honest (escalated:false), never a null-rung mislabeled escalated:true (#608 review).
-            state["_escalatedRung"] = {"rung": rung, "vendor": fixer_vendor}
-        _decision(state, "self-recovery",
-                  "audit-stall — one invisible self-recovery (%s)"
-                  % ("fixer escalated to %r" % (rung,) if rung is not None
-                     else "no escalation rung available — fixer unchanged, escalated:false"))
-        _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
-        state["_fixBatch"] = batch
-        state["step"] = P_FIXER
+        _commit_stall_self_recovery(state, config, breaker)
+        batch, refusal = _compose_stall_fix_batch(state, breaker)
+        _route_stall_self_recovery(state, config, batch, refusal, breaker)
         return
     # already self-recovered and still stalled → present the stall menu (never judge the dispute).
     accept_eligible = _accept_risk_eligible(state, breaker)
@@ -4732,33 +4774,14 @@ def _journal_max_attempt(session_dir, rnd, phase):
     return max_attempt
 
 
-def _store_max_attempt(session_dir, rnd, phase):
-    """Highest attempt present in the durable seat store for ``(rnd, phase)``, or -1 when none."""
-    try:
-        sdir = round_records.store_dir(session_dir, rnd, phase)
-    except ValueError:
-        return -1
-    max_attempt = -1
-    for entry in round_records._seat_files(sdir).values():
-        att = entry.get("attempt")
-        if isinstance(att, bool) or not isinstance(att, int) or att < 0:
-            continue
-        max_attempt = max(max_attempt, att)
-    return max_attempt
-
-
 def _max_used_attempt(session_dir, rnd, phase):
-    """Durable high-water attempt for `(rnd, phase)` — max over journal, store, and in-memory
-    ``lastAccepted`` when its round/phase match.
+    """Durable high-water attempt for ``(rnd, phase)`` from accepted journal entries only.
 
-    On-disk orders manifests are intentionally excluded: every emitted wave writes a manifest,
-    accepted or not, so counting manifests would bump the attempt after a cleared/refused pending
-    re-emission. The store file is authoritative alongside the journal (#1107)."""
-    candidates = [
-        _journal_max_attempt(session_dir, rnd, phase),
-        _store_max_attempt(session_dir, rnd, phase),
-    ]
-    return max(candidates)
+    The durable seat store is excluded: it records landings, not acceptances, so counting it
+    would advance a re-emitted unaccepted wave and orphan its recorded seats. A lost journal
+    entry therefore surfaces as a loud landing collision at record time rather than silent
+    orphaning (#1107)."""
+    return _journal_max_attempt(session_dir, rnd, phase)
 
 
 def _next_dispatch_attempt(session_dir, rnd, phase, state):

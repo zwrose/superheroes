@@ -329,14 +329,29 @@ def test_stalled_critical_important_open_critical_discharged_returns_empty():
 
 
 def test_stalled_callers_share_helper_no_duplicate_alias_loops():
-    # axis: stall selection must live in one helper — no independent alias loops in callers
+    # axis: stall selection must live in one helper — no independent alias loops in callers;
+    # module-wide census (not per-caller inspect)
+    import ast
     import inspect
-    src_critical = inspect.getsource(RD._stalled_critical)
-    src_stall = inspect.getsource(RD._handle_stall)
-    assert "audit_target_aliases" not in src_critical
-    assert "audit_target_aliases" not in src_stall
-    assert "_stalled_open_targets" in src_critical
-    assert "_stalled_open_targets" in src_stall
+    rd_path = os.path.join(_LIB, "round_driver.py")
+    with open(rd_path, encoding="utf-8") as fh:
+        source = fh.read()
+    tree = ast.parse(source, filename=rd_path)
+    alias_fns = []
+    for node in tree.body:
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        fn_src = ast.get_source_segment(source, node) or ""
+        if "audit_target_aliases" in fn_src:
+            alias_fns.append(node.name)
+    assert alias_fns == ["_stalled_open_targets"], (
+        "audit_target_aliases must appear only in _stalled_open_targets, found: %s" % alias_fns)
+    compose_src = inspect.getsource(RD._compose_stall_fix_batch)
+    assert "_stalled_open_targets" in compose_src
+    stall_src = inspect.getsource(RD._handle_stall)
+    assert "_stalled_open_targets" not in stall_src
+    crit_src = inspect.getsource(RD._stalled_critical)
+    assert "_stalled_open_targets" in crit_src
 
 
 def test_handle_stall_legacy_no_audit_outcome_uses_alias_only():
@@ -476,9 +491,11 @@ def test_stalled_open_targets_legacy_empty_fix_batch_returns_empty():
 
 
 def test_handle_stall_legacy_empty_fix_batch_parks_unresolvable_open_set():
-    # axis: legacy session with empty fixBatch and no _auditOutcome parks — no prior-batch fallback
+    # axis: legacy persisted session with audit history and an unreadable outcome parks — no prior-batch fallback
     state = RD.new_state(_cfg())
     state["fixBatch"] = []
+    state["auditRounds"] = [{"round": 1, "outcomes": [
+        {"identity": "lib/a.py::x", "ruling": "not-discharged"}]}]
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
     RD._handle_stall(state, state["config"], breaker)
     assert state["terminal"] == "cannot-certify"

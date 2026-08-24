@@ -50,9 +50,11 @@ def test_stall_self_recovery_does_not_reemit_discharged_fix_batch():
 
 
 def test_stall_self_recovery_parks_when_open_set_unresolvable():
-    # axis: legacy persisted session without resolvable open set must park, never empty fixer dispatch
+    # axis: legacy persisted session with audit history and an unreadable outcome must park
     state = RD.new_state(_cfg())
     state["fixBatch"] = []
+    state["auditRounds"] = [{"round": 1, "outcomes": [
+        {"identity": "lib/a.py::x", "ruling": "not-discharged"}]}]
     state["selfRecovered"] = False
     breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
     RD._handle_stall(state, state["config"], breaker)
@@ -79,7 +81,31 @@ def test_stall_self_recovery_routes_open_important_not_converged():
 
 
 def test_second_verifier_wave_in_same_round_gets_fresh_attempt(tmp_path):
-    # axis: allocator must exceed every durable source — store at attempt 0 with a lossy journal
+    # axis: a second wave after an accepted wave gets a fresh attempt
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["step"] = RD.P_VERIFIERS
+    state["_toVerify"] = [_finding(title="new-issue")]
+    state["lastAccepted"] = {"phase": RD.P_SCOPED, "round": 2, "attempt": 0, "artifactHash": "x"}
+    RD.save_state(d, state)
+    RD._journal_append(d, {"cmd": "submit", "phase": RD.P_VERIFIERS, "round": 2, "attempt": 0,
+                           "outcome": "accepted"})
+    seat = "verifier:f.py:0"
+    skey = RR.storage_key(seat)
+    spath = RR.store_path(d, 2, RD.P_VERIFIERS, skey, 0)
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    with open(spath, "w", encoding="utf-8") as fh:
+        json.dump({"seat": seat, "attempt": 0, "round": 2, "phase": RD.P_VERIFIERS,
+                   "payloadSha256": "deadbeef"}, fh)
+    n = RD.cmd_next(d)
+    assert n["ok"], n
+    assert n["phase"] == RD.P_VERIFIERS
+    assert n["attempt"] == 1
+
+
+def test_reemit_of_an_unaccepted_wave_reuses_its_attempt(tmp_path):
+    # axis: a landing is not an acceptance, so a re-emit must reuse the attempt its seats landed under
     d = str(tmp_path)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -99,7 +125,7 @@ def test_second_verifier_wave_in_same_round_gets_fresh_attempt(tmp_path):
     n = RD.cmd_next(d)
     assert n["ok"], n
     assert n["phase"] == RD.P_VERIFIERS
-    assert n["attempt"] == 1
+    assert n["attempt"] == 0
 
 
 def test_next_reemit_preserves_pending_attempt(tmp_path):
