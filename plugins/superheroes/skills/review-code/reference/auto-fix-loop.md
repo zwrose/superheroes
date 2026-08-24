@@ -844,7 +844,7 @@ carries `{vendor, model, effort, tier, family, source}`:
   none is live, the seat still fills with the maker family and the map records a disclosed
   `same-family` degradation, which rides the certification shape (`-degraded`) alongside
   `independenceDegraded`, `baseDegraded`, and disclosed `plugin-version-skew` (content
-  divergence of `lib/model_registry.py` and `lib/seat_map.py` against the superheroes
+  divergence of `lib/model_registry.py` or `lib/seat_map.py` against the superheroes
   source repo — detection only, not a version-string compare). The `verify()` result (the #547c
   maker-family-vs-seat check) now separates a **violation** (maker family seated when an
   alternative was reachable) from that unavoidable **degradation**; unusable liveness evidence
