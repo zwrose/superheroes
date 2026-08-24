@@ -13,6 +13,11 @@ BLOCKING = {"Critical", "Important"}
 _WS = re.compile(r"\s+")
 
 
+def _is_blocking_severity(severity):
+    from circuit_breaker import is_blocking
+    return is_blocking(severity)
+
+
 def _norm(value):
     return _WS.sub(" ", str(value or "").strip().lower())
 
@@ -87,7 +92,7 @@ def recurrent_classes(records, coverage_decisions=None):
         for finding in rec.get("findings") or []:
             if finding.get("carried"):
                 continue
-            if finding.get("severity") not in BLOCKING:
+            if not _is_blocking_severity(finding.get("severity")):
                 continue
             key = canonical_class_key(finding)
             if class_key_aliases(finding) & covered:
@@ -265,7 +270,7 @@ def _summarize_dimension(dim):
     out["findings"] = [_skeleton_finding(f) for f in findings]
     out["hasFindings"] = bool(findings) or bool(dim.get("hasFindings"))
     out["blockingCount"] = sum(1 for f in findings
-                               if isinstance(f, dict) and f.get("severity") in BLOCKING)
+                               if isinstance(f, dict) and _is_blocking_severity(f.get("severity")))
     return out
 
 
