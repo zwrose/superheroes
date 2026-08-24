@@ -1,12 +1,14 @@
 """#1107 WO-STALL: structural pins for _handle_stall decomposition — one owner per concern."""
 import ast
 import importlib.util
-import inspect
 import os
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
 _RD_PATH = os.path.join(_LIB, "round_driver.py")
+
+_RD_SOURCE = None
+_RD_TREE = None
 
 
 def _load(name):
@@ -20,34 +22,76 @@ RD = _load("round_driver")
 
 
 def _round_driver_source():
-    with open(_RD_PATH, encoding="utf-8") as fh:
-        return fh.read()
+    global _RD_SOURCE, _RD_TREE
+    if _RD_SOURCE is None:
+        with open(_RD_PATH, encoding="utf-8") as fh:
+            _RD_SOURCE = fh.read()
+        _RD_TREE = ast.parse(_RD_SOURCE, filename=_RD_PATH)
+    return _RD_SOURCE
+
+
+def _round_driver_tree():
+    _round_driver_source()
+    return _RD_TREE
 
 
 def _top_level_functions(tree):
     return [n for n in tree.body if isinstance(n, ast.FunctionDef)]
 
 
-def _function_sources(source, tree):
-    """(name, source_text) per top-level function — line-sliced once, not re-split per node."""
-    lines = source.splitlines(True)
-    out = []
-    for n in _top_level_functions(tree):
-        # Slice starts at `def`; decorator lines above lineno are excluded.
-        if n.end_lineno is None:
-            fn_src = ""
-        else:
-            fn_src = "".join(lines[n.lineno - 1:n.end_lineno])
-        out.append((n.name, fn_src))
-    return out
+def _top_level_function(tree, name):
+    for node in _top_level_functions(tree):
+        if node.name == name:
+            return node
+    return None
 
 
-def _functions_with_literal(source, tree, needle):
-    hits = []
-    for name, fn_src in _function_sources(source, tree):
-        if needle in fn_src:
-            hits.append(name)
-    return hits
+def _state_subscript_key(subscript):
+    """Return the string key for ``state[<key>]`` or None."""
+    if not isinstance(subscript, ast.Subscript):
+        return None
+    if not isinstance(subscript.value, ast.Name) or subscript.value.id != "state":
+        return None
+    sl = subscript.slice
+    if isinstance(sl, ast.Constant) and isinstance(sl.value, str):
+        return sl.value
+    if isinstance(sl, ast.Index) and isinstance(sl.value, ast.Constant):
+        val = sl.value.value
+        return val if isinstance(val, str) else None
+    return None
+
+
+def _subtree_has_bare_name_call(node, name):
+    """True if ``node``'s subtree contains ``name(...)``."""
+    for child in ast.walk(node):
+        if (isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                and child.func.id == name):
+            return True
+    return False
+
+
+def _subtree_has_name_load(node, name):
+    """True if ``node``'s subtree contains a load of ``name``."""
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id == name and isinstance(child.ctx, ast.Load):
+            return True
+    return False
+
+
+def _subtree_has_state_key_assignment(node, key, value=None):
+    """True if ``node``'s subtree assigns to ``state[key]``, optionally with ``value``."""
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Assign):
+            continue
+        for target in child.targets:
+            if _state_subscript_key(target) != key:
+                continue
+            if value is None:
+                return True
+            val = child.value
+            if isinstance(val, ast.Constant) and val.value == value:
+                return True
+    return False
 
 
 def _functions_with_call(source, tree, module_name, attr_name):
@@ -65,26 +109,34 @@ def _functions_with_call(source, tree, module_name, attr_name):
     return hits
 
 
-def _recovery_branch_source(source, tree):
-    """Source of the ``if not state.get("selfRecovered"):`` block inside _handle_stall."""
+def _functions_with_state_key_assignment(tree, key, value=None):
+    """Return top-level function names assigning to ``state[key]``."""
+    hits = []
     for node in _top_level_functions(tree):
-        if node.name != "_handle_stall":
+        if _subtree_has_state_key_assignment(node, key, value):
+            hits.append(node.name)
+    return hits
+
+
+def _recovery_branch_node(tree):
+    """``If`` node for ``if not state.get("selfRecovered"):`` inside _handle_stall."""
+    handle = _top_level_function(tree, "_handle_stall")
+    if handle is None:
+        return None
+    for child in handle.body:
+        if not isinstance(child, ast.If):
             continue
-        for child in node.body:
-            if not isinstance(child, ast.If):
-                continue
-            test = child.test
-            if (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
-                    and isinstance(test.operand, ast.Call)):
-                return ast.get_source_segment(source, child) or ""
-    return ""
+        test = child.test
+        if (isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not)
+                and isinstance(test.operand, ast.Call)):
+            return child
+    return None
 
 
 def test_guard_owner_is_not_handle_stall():
     # axis: selfRecovered assignment has exactly one owner outside _handle_stall
-    source = _round_driver_source()
-    tree = ast.parse(source, filename=_RD_PATH)
-    owners = _functions_with_literal(source, tree, 'state["selfRecovered"] = True')
+    tree = _round_driver_tree()
+    owners = _functions_with_state_key_assignment(tree, "selfRecovered", True)
     assert owners == ["_commit_stall_self_recovery"], (
         "expected single guard owner _commit_stall_self_recovery, found: %s" % owners)
     assert "_handle_stall" not in owners
@@ -92,10 +144,9 @@ def test_guard_owner_is_not_handle_stall():
 
 def test_escalation_owner_matches_guard_owner():
     # axis: model_registry.escalate has exactly one owner, same as the guard owner
-    source = _round_driver_source()
-    tree = ast.parse(source, filename=_RD_PATH)
-    escalate_fns = _functions_with_call(source, tree, "model_registry", "escalate")
-    guard_fns = _functions_with_literal(source, tree, 'state["selfRecovered"] = True')
+    tree = _round_driver_tree()
+    escalate_fns = _functions_with_call(_round_driver_source(), tree, "model_registry", "escalate")
+    guard_fns = _functions_with_state_key_assignment(tree, "selfRecovered", True)
     assert escalate_fns == ["_commit_stall_self_recovery"]
     assert escalate_fns == guard_fns
     assert "_handle_stall" not in escalate_fns
@@ -103,30 +154,35 @@ def test_escalation_owner_matches_guard_owner():
 
 def test_handle_stall_has_no_terminal_routing():
     # axis: _handle_stall does not park, converge, or assign _fixBatch directly
-    src = inspect.getsource(RD._handle_stall)
-    assert "_park_cannot_certify" not in src
-    assert "_park_capped_open" not in src
-    assert "_settle_delta_converged" not in src
-    assert 'state["_fixBatch"]' not in src
+    tree = _round_driver_tree()
+    handle = _top_level_function(tree, "_handle_stall")
+    assert handle is not None
+    assert not _subtree_has_bare_name_call(handle, "_park_cannot_certify")
+    assert not _subtree_has_bare_name_call(handle, "_park_capped_open")
+    assert not _subtree_has_bare_name_call(handle, "_settle_delta_converged")
+    assert not _subtree_has_state_key_assignment(handle, "_fixBatch")
 
 
 def test_composition_owner_calls_stalled_open_targets():
     # axis: fix-batch composition is owned outside _handle_stall recovery branch
-    compose_src = inspect.getsource(RD._compose_stall_fix_batch)
-    assert "_stalled_open_targets" in compose_src
-    source = _round_driver_source()
-    tree = ast.parse(source, filename=_RD_PATH)
-    recovery_src = _recovery_branch_source(source, tree)
-    assert "_stalled_open_targets" not in recovery_src
+    tree = _round_driver_tree()
+    compose = _top_level_function(tree, "_compose_stall_fix_batch")
+    assert compose is not None
+    assert _subtree_has_bare_name_call(compose, "_stalled_open_targets")
+    recovery = _recovery_branch_node(tree)
+    assert recovery is not None
+    assert not _subtree_has_bare_name_call(recovery, "_stalled_open_targets")
 
 
 def test_routing_owner_is_total():
     # axis: routing owner names all four terminal routes (fixer, both parks, converge)
-    route_src = inspect.getsource(RD._route_stall_self_recovery)
-    assert "P_FIXER" in route_src
-    assert "_park_cannot_certify" in route_src
-    assert "_park_capped_open" in route_src
-    assert "_settle_delta_converged" in route_src
+    tree = _round_driver_tree()
+    route = _top_level_function(tree, "_route_stall_self_recovery")
+    assert route is not None
+    assert _subtree_has_name_load(route, "P_FIXER")
+    assert _subtree_has_bare_name_call(route, "_park_cannot_certify")
+    assert _subtree_has_bare_name_call(route, "_park_capped_open")
+    assert _subtree_has_bare_name_call(route, "_settle_delta_converged")
 
 
 def test_empty_resolution_converge_never_claims_an_unrun_panel():
