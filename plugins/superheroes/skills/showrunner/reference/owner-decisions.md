@@ -145,8 +145,11 @@ item has a collector entry, its strike (a Tier-1 craft decline that never reache
 only the row, which lands at determination time). The order is fixed (owner ruling 2026-08-24,
 recorded on the collector —
 [issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
-the **registry row lands first** — keyed by the item's collector number where one exists, otherwise
-by the determination record the row points to, so a repeated write is idempotent — and **only then
+the **registry row lands first** — keyed by the item's collector number where one exists (collector
+numbers are assigned once at append, written into the entry itself, and never reused, so the key is
+durable across sessions), otherwise by the determination record the row points to; a writer finding
+its key already in the registry updates that row rather than adding a second, which is what makes a
+repeated write idempotent — and **only then
 is the item struck**; the vet-time reconciliation read completes the pair when it finds a row
 without its strike or a struck item without its row. Striking first is the fail-open order: a crash
 between the writes leaves the item reading as handled while its revisit trigger is recorded nowhere
