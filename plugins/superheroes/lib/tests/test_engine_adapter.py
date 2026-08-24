@@ -3096,3 +3096,211 @@ def test_review_payload_shape_bare_array_placeholder_literal_refusal():
         "parsed": EA.SHAPE_PLACEHOLDER_LITERAL_REFUSAL,
         "topLevelKeys": [], "keysTruncated": False,
     }
+
+
+# ---------------------------------------------------------------------------
+# #1109: review payload contract recognition (findings / verdicts / grouping / ruling)
+
+
+_ENGINE_ADAPTER_REL = "plugins/superheroes/lib/engine_adapter.py"
+_REPO_ROOT = os.path.abspath(os.path.join(_HERE, "..", "..", "..", ".."))
+
+
+_WELL_FORMED_REVIEW_PAYLOADS = {
+    "findings": {"findings": [], "investigated": []},
+    "verdicts": {"verdicts": [], "investigated": []},
+    "grouping": {"grouping": [{"member_ids": ["f1"]}]},
+    "ruling": {"id": "f1", "ruling": "discharged", "reason": "fixed"},
+}
+
+_DOUBLE_MATCH_REVIEW_PAYLOADS = {
+    "findings": {"findings": [], "verdicts": []},
+    "verdicts": {"findings": [], "verdicts": []},
+    "grouping": {"grouping": [{"member_ids": ["f1"]}], "findings": []},
+    "ruling": {
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "fixed",
+        "grouping": [{"member_ids": ["g1"]}],
+    },
+}
+
+
+@pytest.mark.parametrize("kind", EA.REVIEW_RESULT_KINDS)
+def test_review_result_kind_census_recognises_declared_contract(kind):
+    """Each registered kind is recognised against its own contract and no other."""
+    res = EA.parse_result("codex", "review", json.dumps(_WELL_FORMED_REVIEW_PAYLOADS[kind]))
+    assert res["ok"] is True
+    assert res["resultKind"] == kind
+
+
+@pytest.mark.parametrize("kind", EA.REVIEW_RESULT_KINDS)
+def test_review_result_kind_census_refuses_multiple_contracts(kind):
+    """A payload matching more than one registered contract is unreadable."""
+    res = EA.parse_result("codex", "review", json.dumps(_DOUBLE_MATCH_REVIEW_PAYLOADS[kind]))
+    assert res == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_grouping_recognised():
+    stdout = json.dumps({"grouping": [{"member_ids": ["f1"]}]})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {
+        "ok": True,
+        "resultKind": "grouping",
+        "grouping": [{"member_ids": ["f1"]}],
+        "investigated": [],
+    }
+
+
+@pytest.mark.parametrize("grouping", [
+    [{"member_ids": []}],
+    [{"member_ids": [1]}],
+    [{"member_ids": "not-a-list"}],
+    "not-a-list",
+])
+def test_parse_result_review_grouping_invalid_unreadable(grouping):
+    stdout = json.dumps({"grouping": grouping})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_grouping_null_is_clean():
+    stdout = json.dumps({"grouping": None})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {
+        "ok": True,
+        "resultKind": "grouping",
+        "grouping": None,
+        "investigated": [],
+    }
+
+
+def test_parse_result_review_ruling_recognised():
+    stdout = json.dumps({"id": "f1", "ruling": "discharged", "reason": "resolved in diff"})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res == {
+        "ok": True,
+        "resultKind": "ruling",
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "resolved in diff",
+        "investigated": [],
+    }
+
+
+def test_parse_result_review_ruling_out_of_enum_not_recognised():
+    stdout = json.dumps({"id": "f1", "ruling": "maybe-discharged", "reason": "x"})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+@pytest.mark.parametrize("payload", [
+    {"id": "f1", "ruling": "discharged"},
+    {"id": "f1", "reason": "x"},
+    {"ruling": "discharged", "reason": "x"},
+])
+def test_parse_result_review_ruling_two_of_three_keys_not_recognised(payload):
+    assert EA.parse_result("codex", "review", json.dumps(payload)) == {
+        "ok": False, "reason": "unreadable",
+    }
+
+
+def test_parse_result_review_ruling_new_issue_without_usable_new_issues_unreadable():
+    stdout = json.dumps({
+        "id": "f1",
+        "ruling": "discharged-but-new-issue",
+        "reason": "introduced regression",
+        "newIssues": [],
+    })
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+@pytest.mark.parametrize("entry,expected_accepted", [
+    (_ENGINE_ADAPTER_REL, _ENGINE_ADAPTER_REL),
+    ("./" + _ENGINE_ADAPTER_REL, "./" + _ENGINE_ADAPTER_REL),
+    (_ENGINE_ADAPTER_REL + ":77", _ENGINE_ADAPTER_REL),
+    ("  " + _ENGINE_ADAPTER_REL + "  ", _ENGINE_ADAPTER_REL),
+    ("`" + _ENGINE_ADAPTER_REL + "`", _ENGINE_ADAPTER_REL),
+])
+def test_spot_check_investigated_entry_format_normalization(entry, expected_accepted):
+    ok, accepted, rejected = EA.spot_check_investigated([entry], _REPO_ROOT)
+    assert ok is True
+    assert accepted == [expected_accepted]
+    assert rejected == []
+
+def test_spot_check_investigated_directory_stays_rejected():
+    ok, accepted, rejected = EA.spot_check_investigated(
+        ["plugins/superheroes/lib"], _REPO_ROOT)
+    assert ok is False
+    assert accepted == []
+    assert any(r["reason"] == "not-a-file" for r in rejected)
+
+
+def test_spot_check_investigated_absolute_path_stays_rejected():
+    ok, accepted, rejected = EA.spot_check_investigated(
+        [os.path.join(_REPO_ROOT, _ENGINE_ADAPTER_REL)], _REPO_ROOT)
+    assert ok is False
+    assert accepted == []
+    assert any(r["reason"] == "absolute" for r in rejected)
+
+
+@pytest.mark.parametrize("stdout", [
+    json.dumps({"findings": [], "investigated": ["plugins/superheroes/lib"]}),
+    json.dumps({"verdicts": [], "investigated": ["plugins/superheroes/lib"]}),
+    json.dumps({"grouping": None, "investigated": ["plugins/superheroes/lib"]}),
+    json.dumps({
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "ok",
+        "investigated": ["plugins/superheroes/lib"],
+    }),
+])
+def test_spot_check_empty_kind_only_directory_does_not_clear_floor(stdout):
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    ok, accepted, rejected = EA.spot_check_investigated(res["investigated"], _REPO_ROOT)
+    assert ok is False
+    assert accepted == []
+    assert any(r["reason"] == "not-a-file" for r in rejected)
+
+
+@pytest.mark.parametrize("stdout", [
+    json.dumps({"findings": [], "investigated": [os.path.join(_REPO_ROOT, _ENGINE_ADAPTER_REL)]}),
+    json.dumps({"verdicts": [], "investigated": [os.path.join(_REPO_ROOT, _ENGINE_ADAPTER_REL)]}),
+    json.dumps({
+        "grouping": [],
+        "investigated": [os.path.join(_REPO_ROOT, _ENGINE_ADAPTER_REL)],
+    }),
+    json.dumps({
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "ok",
+        "investigated": [os.path.join(_REPO_ROOT, _ENGINE_ADAPTER_REL)],
+    }),
+])
+def test_spot_check_empty_kind_only_absolute_path_does_not_clear_floor(stdout):
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    ok, accepted, rejected = EA.spot_check_investigated(res["investigated"], _REPO_ROOT)
+    assert ok is False
+    assert accepted == []
+    assert any(r["reason"] == "absolute" for r in rejected)
+
+
+def test_engagement_read_grouping_engaged():
+    assert EA.engagement_read({
+        "resultKind": "grouping",
+        "grouping": [{"member_ids": ["f1"]}],
+    }) == "engaged"
+
+
+def test_engagement_read_ruling_engaged():
+    assert EA.engagement_read({
+        "resultKind": "ruling",
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "fixed",
+    }) == "engaged"
+
+
+def test_engagement_read_empty_grouping_not_engaged():
+    assert EA.engagement_read({"resultKind": "grouping", "grouping": None}) == "unknown"
+    assert EA.engagement_read({"resultKind": "grouping", "grouping": []}) == "unknown"
