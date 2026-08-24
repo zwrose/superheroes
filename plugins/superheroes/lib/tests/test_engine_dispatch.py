@@ -5685,7 +5685,7 @@ def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
     assert modern is not None
     legacy = {
         "headSha": modern["headSha"],
-        "porcelainSha256": modern["porcelainSha256"],
+        "porcelainSha256": ED._legacy_worktree_porcelain_sha256(cwd, timeout=5),
     }
     assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
 
@@ -5710,5 +5710,242 @@ def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
     assert baseline is not None
     with open(os.path.join(wt, "attempt-write.txt"), "w", encoding="utf-8") as fh:
         fh.write("dirty\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+# --- WO-B (#1122): dirt probe by-construction tests + bite-proof detectors ----------
+
+
+def _nested_sibling_worktree(main, cwd, name="sib"):
+    sib = os.path.join(cwd, ".claude", "worktrees", name)
+    os.makedirs(os.path.dirname(sib), exist_ok=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", sib], check=True)
+    return sib
+
+
+def _lease_state_value(state, sibling_real):
+    if state == "none":
+        return set()
+    if state == "leased":
+        return {sibling_real}
+    if state == "unreadable":
+        return None
+    raise ValueError(state)
+
+
+@pytest.mark.parametrize("baseline_lease", ["none", "leased", "unreadable"])
+@pytest.mark.parametrize("verdict_lease", ["none", "leased", "unreadable"])
+def test_worktree_dirt_by_construction_invariant_transition_cross_product(
+    tmp_path, monkeypatch, baseline_lease, verdict_lease,
+):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    sib_proc = None
+    if baseline_lease == "leased" or verdict_lease == "leased":
+        sib_proc = _install_foreign_lease(sib)
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return _lease_state_value(baseline_lease, sib_real)
+        return _lease_state_value(verdict_lease, sib_real)
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    try:
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+        assert verdict is False, (
+            "cell baseline_lease=%r verdict_lease=%r baseline=%r"
+            % (baseline_lease, verdict_lease, baseline)
+        )
+    finally:
+        if sib_proc is not None:
+            ED._terminate_process_group(sib_proc.pid)
+            sib_proc.wait(timeout=2)
+
+
+def test_worktree_dirt_exclusion_grows_between_snapshots(tmp_path, monkeypatch):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return set()
+        return {sib_real}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_worktree_dirt_ancestor_collapse_real_git_porcelain(tmp_path, monkeypatch):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib_real_holder = {"path": None}
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            return None
+        return {sib_real_holder["path"]}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real_holder["path"] = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+    plain = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    uall = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1", "-uall"],
+        check=True, capture_output=True, text=True,
+    ).stdout
+    assert "?? .claude/\n" in plain or plain.strip() == "?? .claude/"
+    assert ".claude/worktrees/sib/" in uall
+    assert "?? .claude/\n" not in uall
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+def test_filter_entry_list_drops_entries_under_excluded_root(tmp_path):
+    cwd = os.path.realpath(str(tmp_path / "cwd"))
+    os.makedirs(cwd, exist_ok=True)
+    root = os.path.join(cwd, "leased")
+    entries = [
+        "?? leased/file.txt",
+        "?? leased/nested/deep.txt",
+        "?? outside.txt",
+    ]
+    filtered = ED._filter_entry_list(entries, cwd, {root})
+    assert filtered == ["?? outside.txt"]
+
+
+def test_worktree_dirt_exclusion_union_baseline_and_verdict_roots(tmp_path, monkeypatch):
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_real = os.path.realpath(sib)
+    with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+        fh.write("peer\n")
+
+    call = {"n": 0}
+
+    def foreign_baseline_only(cwd_real, timeout=None):
+        call["n"] += 1
+        if call["n"] == 1:
+            return {sib_real}
+        return set()
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", foreign_baseline_only)
+    baseline_only = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline_only is not None
+    assert ED._worktree_dirt_verdict(baseline_only, cwd, timeout=5) is False
+
+    call["n"] = 0
+
+    def foreign_verdict_only(cwd_real, timeout=None):
+        call["n"] += 1
+        if call["n"] == 1:
+            return set()
+        return {sib_real}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", foreign_verdict_only)
+    verdict_only = ED._worktree_baseline(cwd, timeout=5)
+    assert verdict_only is not None
+    assert ED._worktree_dirt_verdict(verdict_only, cwd, timeout=5) is False
+
+
+def test_worktree_dirt_symlink_to_leased_root_reads_dirty(tmp_path):
+    # Axis: path shape, not resolved target — a symlink must not be silently discarded.
+    wt, main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sib = _nested_sibling_worktree(main, cwd)
+    sib_proc = _install_foreign_lease(sib)
+    try:
+        baseline = ED._worktree_baseline(cwd, timeout=5)
+        assert baseline is not None
+        os.symlink(".claude/worktrees/sib", os.path.join(cwd, "alias"))
+        assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+    finally:
+        ED._terminate_process_group(sib_proc.pid)
+        sib_proc.wait(timeout=2)
+
+
+def test_worktree_dirt_verdict_overflow_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    head = subprocess.run(
+        ["git", "-C", cwd, "rev-parse", "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.strip()
+    baseline = {
+        "headSha": head,
+        "entriesVersion": ED.BASELINE_ENTRIES_VERSION,
+        "entriesOverflow": True,
+        "entries": [],
+    }
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+    malformed_entries = {
+        "headSha": head,
+        "entriesVersion": ED.BASELINE_ENTRIES_VERSION,
+        "entriesOverflow": False,
+        "entries": ["?? ok.txt", 1],
+    }
+    assert ED._worktree_dirt_verdict(malformed_entries, cwd, timeout=5) is None
+    malformed_type = {
+        "headSha": head,
+        "entriesVersion": ED.BASELINE_ENTRIES_VERSION,
+        "entriesOverflow": False,
+        "entries": "not-a-list",
+    }
+    assert ED._worktree_dirt_verdict(malformed_type, cwd, timeout=5) is None
+
+
+def test_worktree_baseline_has_entry_set_not_digest_or_mode(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline.get("entriesVersion") == ED.BASELINE_ENTRIES_VERSION
+    assert isinstance(baseline.get("entries"), list)
+    assert "porcelainSha256" not in baseline
+    assert "mode" not in baseline
+
+
+def test_worktree_dirt_head_movement_reads_dirty(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    new_file = os.path.join(wt, "head-move.txt")
+    with open(new_file, "w", encoding="utf-8") as fh:
+        fh.write("move\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "head-move.txt"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "head move"],
+        check=True,
+    )
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
 
