@@ -944,8 +944,8 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
     else:
         # build()-only maps never ran compose skew detection — not-checked, never checked-clean.
         plugin_version_skew = {
-            "status": "not-checked",
-            "detail": "not-composed",
+            "status": version_skew.STATUS_NOT_CHECKED,
+            "detail": version_skew.DETAIL_NOT_COMPOSED,
             "inspectedRoot": "",
         }
     out = {
@@ -1085,7 +1085,7 @@ def main(argv):
         # bite-axis: only checked-degraded records reach degradations — checked-clean and
         # not-checked stay off the list so a clean or skipped check never reads as degraded
         # (#677; if-and-only-if with the consumer rule in CONVENTIONS §6).
-        if skew_record.get("status") == "checked-degraded":
+        if skew_record.get("status") == version_skew.STATUS_CHECKED_DEGRADED:
             extra_degradations.append(skew_record)
         if notes:
             extra_degradations.extend(notes)

@@ -10,6 +10,8 @@ _LIB = os.path.join(_HERE, "..")
 if _LIB not in sys.path:
     sys.path.insert(0, _LIB)
 
+import version_skew
+
 _MOD = os.path.join(_LIB, "seat_map.py")
 
 
@@ -561,6 +563,14 @@ def test_review_code_skill_wires_seat_pins_from_ep_to_compose():
     compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
     assert "SEAT_PINS" in compose_line or "PINS_ARGS" in compose_line
     assert "seat_map.py" in compose_line and '"${PINS_ARGS[@]}"' in compose_line
+    assert '--repo-root "$REPO_ROOT"' in compose_line
+
+
+def test_review_code_skill_wires_repo_root_to_compose():
+    from skill_surface import surface_text
+    text = surface_text("review-code")
+    compose_line = text[text.index("SEAT_MAP=$(python3"):text.index("SEAT_MAP=$(python3") + 500]
+    assert '--repo-root "$REPO_ROOT"' in compose_line
 
 
 def test_cli_compose_pins_json_error(capsys):
@@ -2090,7 +2100,7 @@ def test_cli_compose_repo_root_superheroes_skew_emits_plugin_version_skew(tmp_pa
     receipt = json.loads(capsys.readouterr().out)
     skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
     assert len(skew) == 1
-    assert skew[0]["detail"] == "semantics-divergent"
+    assert skew[0]["detail"] == version_skew.DETAIL_SEMANTICS_DIVERGENT
     assert "lib/model_registry.py" in skew[0]["reason"]
 
 
@@ -2116,8 +2126,8 @@ def test_cli_compose_repo_root_superheroes_clean_emits_no_skew_degradation(tmp_p
     receipt = json.loads(capsys.readouterr().out)
     skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
     assert skew == []
-    assert receipt["pluginVersionSkew"]["status"] == "checked-clean"
-    assert receipt["pluginVersionSkew"]["detail"] == "no-divergence"
+    assert receipt["pluginVersionSkew"]["status"] == version_skew.STATUS_CHECKED_CLEAN
+    assert receipt["pluginVersionSkew"]["detail"] == version_skew.DETAIL_NO_DIVERGENCE
 
 
 def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_path, capsys):
@@ -2144,5 +2154,5 @@ def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_
     receipt = json.loads(capsys.readouterr().out)
     skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
     assert skew == []
-    assert receipt["pluginVersionSkew"]["status"] == "not-checked"
-    assert receipt["pluginVersionSkew"]["detail"] == "not-source-repo"
+    assert receipt["pluginVersionSkew"]["status"] == version_skew.STATUS_NOT_CHECKED
+    assert receipt["pluginVersionSkew"]["detail"] == version_skew.DETAIL_NOT_SOURCE_REPO

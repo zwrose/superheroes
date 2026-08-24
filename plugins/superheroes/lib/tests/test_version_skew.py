@@ -80,8 +80,8 @@ def test_identity_gate_missing_manifest_not_checked(tmp_path):
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     _assert_record_shape(record)
-    assert record["status"] == "not-checked"
-    assert record["detail"] == "not-source-repo"
+    assert record["status"] == VS.STATUS_NOT_CHECKED
+    assert record["detail"] == VS.DETAIL_NOT_SOURCE_REPO
     assert record["inspectedRoot"] == ""
 
 
@@ -93,8 +93,8 @@ def test_identity_gate_wrong_name_not_checked(tmp_path):
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     _assert_record_shape(record)
-    assert record["status"] == "not-checked"
-    assert record["detail"] == "not-source-repo"
+    assert record["status"] == VS.STATUS_NOT_CHECKED
+    assert record["detail"] == VS.DETAIL_NOT_SOURCE_REPO
     assert record["inspectedRoot"] == ""
 
 
@@ -110,8 +110,8 @@ def test_identity_gate_manifest_symlink_not_checked(tmp_path):
     _copy_semantics_to(repo)
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "not-checked"
-    assert record["detail"] == "not-source-repo"
+    assert record["status"] == VS.STATUS_NOT_CHECKED
+    assert record["detail"] == VS.DETAIL_NOT_SOURCE_REPO
 
 
 def test_self_gate_repo_plugin_not_checked(tmp_path):
@@ -122,8 +122,8 @@ def test_self_gate_repo_plugin_not_checked(tmp_path):
     plugin = str(repo / "plugins" / "superheroes")
     record = VS.detect(str(repo), plugin)
     _assert_record_shape(record)
-    assert record["status"] == "not-checked"
-    assert record["detail"] == "self"
+    assert record["status"] == VS.STATUS_NOT_CHECKED
+    assert record["detail"] == VS.DETAIL_SELF
     assert record["inspectedRoot"] == ""
 
 
@@ -135,8 +135,8 @@ def test_no_skew_identical_semantics_checked_clean(tmp_path):
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
     _assert_record_shape(record)
-    assert record["status"] == "checked-clean"
-    assert record["detail"] == "no-divergence"
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
+    assert record["detail"] == VS.DETAIL_NO_DIVERGENCE
     assert record["inspectedRoot"] == os.path.abspath(str(repo))
     assert "0.29.0" in record["reason"]
     assert "0.31.0" in record["reason"]
@@ -150,8 +150,8 @@ def test_skew_model_registry_divergent(tmp_path):
     plugin = _plugin_tree(tmp_path, suffix="# skew marker\n")
     record = VS.detect(str(repo), plugin)
     _assert_record_shape(record)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "semantics-divergent"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_SEMANTICS_DIVERGENT
     assert record["inspectedRoot"] == os.path.abspath(str(repo))
     assert "0.29.0" in record["reason"]
     assert "0.31.0" in record["reason"]
@@ -176,8 +176,8 @@ def test_skew_seat_map_divergent(tmp_path):
         (lib / os.path.basename(entry)).write_text(content, encoding="utf-8")
     record = VS.detect(str(repo), str(plugin_root))
     _assert_record_shape(record)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "semantics-divergent"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_SEMANTICS_DIVERGENT
     assert "lib/seat_map.py" in record["reason"]
 
 
@@ -196,8 +196,8 @@ def test_evidence_unreadable_plugin_side_missing(tmp_path):
     (lib / "model_registry.py").write_text(open(src, encoding="utf-8").read(), encoding="utf-8")
     record = VS.detect(str(repo), str(plugin_root))
     _assert_record_shape(record)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "evidence-unreadable"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
     assert record["inspectedRoot"] == os.path.abspath(str(repo))
 
 
@@ -213,8 +213,8 @@ def test_evidence_unreadable_one_watched_refused(tmp_path):
     seat_map_path.unlink()
     os.symlink(real_file, seat_map_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "evidence-unreadable"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
     assert "lib/seat_map.py" in record["reason"]
 
 
@@ -227,9 +227,9 @@ def test_fail_closed_unreadable_never_checked_clean(tmp_path):
     seat_map_path = repo / "plugins" / "superheroes" / "lib" / "seat_map.py"
     seat_map_path.unlink()
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "evidence-unreadable"
-    assert record["status"] != "checked-clean"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
+    assert record["status"] != VS.STATUS_CHECKED_CLEAN
 
 
 def test_versions_unreadable_identical_semantics_checked_clean(tmp_path):
@@ -242,7 +242,7 @@ def test_versions_unreadable_identical_semantics_checked_clean(tmp_path):
         src = os.path.join(_PLUGIN_ROOT, entry)
         (lib / os.path.basename(entry)).write_text(open(src, encoding="utf-8").read(), encoding="utf-8")
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-clean"
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
     assert "unknown" in record["reason"]
 
 
@@ -267,7 +267,7 @@ def test_versions_unreadable_divergent_semantics_contains_unknown(tmp_path):
             content = content + "# divergent\n"
         (lib_p / os.path.basename(entry)).write_text(content, encoding="utf-8")
     record = VS.detect(str(repo), str(plugin_root))
-    assert record["status"] == "checked-degraded"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
     assert "unknown" in record["reason"]
 
 
@@ -275,8 +275,8 @@ def test_repo_root_missing_not_checked(tmp_path):
     repo = tmp_path / "missing-repo"
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "not-checked"
-    assert record["detail"] == "not-source-repo"
+    assert record["status"] == VS.STATUS_NOT_CHECKED
+    assert record["detail"] == VS.DETAIL_NOT_SOURCE_REPO
 
 
 def test_version_txt_absent_reason_uses_unknown(tmp_path):
@@ -285,7 +285,7 @@ def test_version_txt_absent_reason_uses_unknown(tmp_path):
     _copy_semantics_to(repo)
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-clean"
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
     assert "unknown" in record["reason"]
 
 
@@ -300,7 +300,7 @@ def test_version_txt_symlink_refused_not_in_reason(tmp_path):
     os.symlink(secret, version_path)
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-clean"
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
     assert "SECRET_LEAKED_CONTENT" not in record["reason"]
     assert "unknown" in record["reason"]
 
@@ -317,8 +317,8 @@ def test_watched_file_symlink_refused(tmp_path):
     model_path.unlink()
     os.symlink(real_file, model_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "evidence-unreadable"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="mkfifo unavailable")
@@ -332,8 +332,8 @@ def test_watched_file_fifo_refused(tmp_path):
     fifo_path.unlink()
     os.mkfifo(fifo_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "evidence-unreadable"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
 
 
 def test_oversized_watched_file_refused(tmp_path):
@@ -345,21 +345,86 @@ def test_oversized_watched_file_refused(tmp_path):
     model_path = repo / "plugins" / "superheroes" / "lib" / "model_registry.py"
     model_path.write_bytes(b"x" * (VS._MAX_READ_BYTES + 1))
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-degraded"
-    assert record["detail"] == "evidence-unreadable"
+    assert record["status"] == VS.STATUS_CHECKED_DEGRADED
+    assert record["detail"] == VS.DETAIL_EVIDENCE_UNREADABLE
 
 
-def test_version_sanitization_multiline_oversized_non_printable(tmp_path):
+def test_version_sanitization_truncates_long_first_line(tmp_path):
     repo = tmp_path / "repo"
     _write_manifest(repo)
     _copy_semantics_to(repo)
     version_path = repo / "plugins" / "superheroes" / "version.txt"
     version_path.parent.mkdir(parents=True, exist_ok=True)
-    bad = "0.99.0\nsecond line ignored\x00\x07" + ("Z" * 200)
-    version_path.write_text(bad, encoding="utf-8")
+    long_version = "1." + ("2" * VS._MAX_VERSION_CHARS)
+    version_path.write_text(long_version, encoding="utf-8")
     plugin = _plugin_tree(tmp_path)
     record = VS.detect(str(repo), plugin)
-    assert record["status"] == "checked-clean"
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
+    assert long_version[:VS._MAX_VERSION_CHARS] in record["reason"]
+    assert long_version not in record["reason"]
+
+
+def test_version_sanitization_strips_non_printable_before_newline(tmp_path):
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    _copy_semantics_to(repo)
+    version_path = repo / "plugins" / "superheroes" / "version.txt"
+    version_path.parent.mkdir(parents=True, exist_ok=True)
+    version_path.write_bytes(b"0.\x0099.0\nignored tail")
+    plugin = _plugin_tree(tmp_path)
+    record = VS.detect(str(repo), plugin)
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
+    assert "\x00" not in record["reason"]
+    assert "0.99.0" in record["reason"]
+
+
+def test_version_sanitization_multiline_ignores_second_line(tmp_path):
+    repo = tmp_path / "repo"
+    _write_manifest(repo)
+    _copy_semantics_to(repo)
+    version_path = repo / "plugins" / "superheroes" / "version.txt"
+    version_path.parent.mkdir(parents=True, exist_ok=True)
+    version_path.write_text("0.99.0\nsecond line ignored", encoding="utf-8")
+    plugin = _plugin_tree(tmp_path)
+    record = VS.detect(str(repo), plugin)
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
     assert "second line ignored" not in record["reason"]
     assert "0.99.0" in record["reason"]
-    assert "\x00" not in record["reason"]
+
+
+def test_repo_plugin_dir_symlink_refused_not_in_reason(tmp_path):
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    secret = tmp_path / "outside"
+    secret.mkdir()
+    manifest = secret / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir(parents=True)
+    manifest.write_text(json.dumps({"name": "superheroes", "version": "0.30.0"}), encoding="utf-8")
+    (secret / "version.txt").write_text("SECRET_LEAKED_CONTENT\n", encoding="utf-8")
+    secret_lib = secret / "lib"
+    secret_lib.mkdir()
+    for entry in VS.SEMANTICS_FILES:
+        src = os.path.join(_PLUGIN_ROOT, entry)
+        (secret_lib / os.path.basename(entry)).write_text(
+            open(src, encoding="utf-8").read(),
+            encoding="utf-8",
+        )
+    plugins_dir = repo / "plugins"
+    plugins_dir.mkdir(parents=True)
+    os.symlink(secret, plugins_dir / "superheroes")
+    plugin = _plugin_tree(tmp_path)
+    record = VS.detect(str(repo), plugin)
+    assert "SECRET_LEAKED_CONTENT" not in record["reason"]
+
+
+def test_containment_valid_read_when_repo_root_is_symlink(tmp_path):
+    real_repo = tmp_path / "real-repo"
+    _write_manifest(real_repo)
+    _write_version_txt(real_repo)
+    _copy_semantics_to(real_repo)
+    link_repo = tmp_path / "link-repo"
+    os.symlink(real_repo, link_repo)
+    plugin = _plugin_tree(tmp_path)
+    record = VS.detect(str(link_repo), plugin)
+    assert record["status"] == VS.STATUS_CHECKED_CLEAN
+    assert record["detail"] == VS.DETAIL_NO_DIVERGENCE

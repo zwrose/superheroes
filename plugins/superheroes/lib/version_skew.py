@@ -19,6 +19,22 @@ import string
 CONSTRAINT = "plugin-version-skew"
 SEMANTICS_FILES = ("lib/model_registry.py", "lib/seat_map.py")
 
+STATUS_NOT_CHECKED = "not-checked"
+STATUS_CHECKED_DEGRADED = "checked-degraded"
+STATUS_CHECKED_CLEAN = "checked-clean"
+STATUSES = frozenset({
+    STATUS_NOT_CHECKED,
+    STATUS_CHECKED_DEGRADED,
+    STATUS_CHECKED_CLEAN,
+})
+
+DETAIL_NOT_SOURCE_REPO = "not-source-repo"
+DETAIL_SELF = "self"
+DETAIL_NOT_COMPOSED = "not-composed"
+DETAIL_SEMANTICS_DIVERGENT = "semantics-divergent"
+DETAIL_EVIDENCE_UNREADABLE = "evidence-unreadable"
+DETAIL_NO_DIVERGENCE = "no-divergence"
+
 # bite-axis: bounded reads — streamed rather than read-whole so a repo-controlled symlink to an
 # endless device cannot hang compose or exhaust the reviewer (#677).
 # Max bytes read from any single evidence file; comfortably above legitimate semantics files.
@@ -28,7 +44,20 @@ _MAX_READ_BYTES = 512 * 1024
 _MAX_VERSION_CHARS = 64
 
 
-def _open_regular_file(path: str) -> int | None:
+def _repo_plugin_dir(repo_root: str) -> str:
+    return os.path.join(repo_root, "plugins", "superheroes")
+
+
+def _path_contained(path: str, root: str) -> bool:
+    resolved_path = os.path.realpath(path)
+    resolved_root = os.path.realpath(root)
+    try:
+        return os.path.commonpath([resolved_path, resolved_root]) == resolved_root
+    except ValueError:
+        return False
+
+
+def _open_regular_file(path: str, *, expected_root: str | None = None) -> int | None:
     """Open a regular file read-only without following symlinks."""
     # bite-axis: symlink and non-regular-file refusal — O_NOFOLLOW refuses a symlink only at the
     # final path component, so the fstat regular-file check is what stops a fifo or device file (#677).
@@ -51,6 +80,12 @@ def _open_regular_file(path: str) -> int | None:
             os.close(fd)
             return None
     except OSError:
+        os.close(fd)
+        return None
+    # bite-axis: parent-directory symlink containment — final-component guards alone cannot stop a
+    # plugins/superheroes directory symlink from redirecting every evidence read outside repo_root
+    # (#677).
+    if expected_root is not None and not _path_contained(path, expected_root):
         os.close(fd)
         return None
     return fd
@@ -77,8 +112,8 @@ def _read_bounded(fd: int, max_bytes: int) -> bytes | None:
     return b"".join(chunks)
 
 
-def _read_json(path: str) -> dict | None:
-    fd = _open_regular_file(path)
+def _read_json(path: str, *, expected_root: str | None = None) -> dict | None:
+    fd = _open_regular_file(path, expected_root=expected_root)
     if fd is None:
         return None
     try:
@@ -93,8 +128,8 @@ def _read_json(path: str) -> dict | None:
         os.close(fd)
 
 
-def _file_digest(path: str) -> str | None:
-    fd = _open_regular_file(path)
+def _file_digest(path: str, *, expected_root: str | None = None) -> str | None:
+    fd = _open_regular_file(path, expected_root=expected_root)
     if fd is None:
         return None
     try:
@@ -136,15 +171,18 @@ def _sanitize_version_text(raw: bytes) -> str:
 
 
 def _read_installed_version(plugin_root: str) -> str:
-    manifest = _read_json(os.path.join(plugin_root, ".claude-plugin", "plugin.json"))
+    manifest = _read_json(
+        os.path.join(plugin_root, ".claude-plugin", "plugin.json"),
+        expected_root=plugin_root,
+    )
     if manifest is not None and isinstance(manifest.get("version"), str):
         return _sanitize_version_text(manifest["version"].encode("utf-8"))
     return "unknown"
 
 
 def _read_repo_version(repo_root: str) -> str:
-    path = os.path.join(repo_root, "plugins", "superheroes", "version.txt")
-    fd = _open_regular_file(path)
+    path = os.path.join(_repo_plugin_dir(repo_root), "version.txt")
+    fd = _open_regular_file(path, expected_root=repo_root)
     if fd is None:
         return "unknown"
     try:
@@ -173,16 +211,16 @@ def _make_record(
 
 def detect(repo_root: str, plugin_root: str) -> dict:
     manifest_path = os.path.join(
-        repo_root, "plugins", "superheroes", ".claude-plugin", "plugin.json",
+        _repo_plugin_dir(repo_root), ".claude-plugin", "plugin.json",
     )
-    manifest = _read_json(manifest_path)
+    manifest = _read_json(manifest_path, expected_root=repo_root)
     # bite-axis: silence outside the source repository — a consuming project's installed cache is
     # its only semantics source, so skew is not provable here; this path returns a not-checked /
     # not-source-repo record rather than checked-clean (#677).
     if manifest is None or manifest.get("name") != "superheroes":
         return _make_record(
-            "not-checked",
-            "not-source-repo",
+            STATUS_NOT_CHECKED,
+            DETAIL_NOT_SOURCE_REPO,
             (
                 "plugin-version-skew: this path is not a superheroes source repository, "
                 "so installed-plugin semantics cannot be compared against a repo working tree."
@@ -190,11 +228,11 @@ def detect(repo_root: str, plugin_root: str) -> dict:
             "",
         )
 
-    repo_plugin = os.path.join(repo_root, "plugins", "superheroes")
+    repo_plugin = _repo_plugin_dir(repo_root)
     if os.path.realpath(plugin_root) == os.path.realpath(repo_plugin):
         return _make_record(
-            "not-checked",
-            "self",
+            STATUS_NOT_CHECKED,
+            DETAIL_SELF,
             (
                 "plugin-version-skew: the running plugin is this repository's own "
                 "plugins/superheroes tree, so there is no separate installed copy to compare."
@@ -210,9 +248,9 @@ def detect(repo_root: str, plugin_root: str) -> dict:
     differing: list[str] = []
     for entry in SEMANTICS_FILES:
         plugin_path = os.path.join(plugin_root, entry)
-        repo_path = os.path.join(repo_root, "plugins", "superheroes", entry)
-        plugin_digest = _file_digest(plugin_path)
-        repo_digest = _file_digest(repo_path)
+        repo_path = os.path.join(_repo_plugin_dir(repo_root), entry)
+        plugin_digest = _file_digest(plugin_path, expected_root=plugin_root)
+        repo_digest = _file_digest(repo_path, expected_root=repo_root)
         if plugin_digest is None or repo_digest is None:
             unreadable.append(entry)
         # bite-axis: content divergence — digest comparison on the watched semantics files, not a
@@ -230,7 +268,9 @@ def detect(repo_root: str, plugin_root: str) -> dict:
             "plugin-version-skew: installed %s, this repository's version at %s — skew evidence "
             "unreadable (%s); cannot prove the running plugin matches this repository's semantics."
         ) % (installed_version, repo_version, entries)
-        return _make_record("checked-degraded", "evidence-unreadable", reason, inspected_root)
+        return _make_record(
+            STATUS_CHECKED_DEGRADED, DETAIL_EVIDENCE_UNREADABLE, reason, inspected_root,
+        )
 
     if differing:
         entries = ", ".join(differing)
@@ -240,11 +280,13 @@ def detect(repo_root: str, plugin_root: str) -> dict:
             "this repository). The guard cannot know the semantic delta, only that one may exist: "
             "apply ratified deltas by hand or wait for the release cut."
         ) % (installed_version, repo_version, entries)
-        return _make_record("checked-degraded", "semantics-divergent", reason, inspected_root)
+        return _make_record(
+            STATUS_CHECKED_DEGRADED, DETAIL_SEMANTICS_DIVERGENT, reason, inspected_root,
+        )
 
     reason = (
         "plugin-version-skew: installed %s, this repository's version at %s — the watched "
         "semantics files are identical between the running plugin and this repository's "
         "working tree."
     ) % (installed_version, repo_version)
-    return _make_record("checked-clean", "no-divergence", reason, inspected_root)
+    return _make_record(STATUS_CHECKED_CLEAN, DETAIL_NO_DIVERGENCE, reason, inspected_root)

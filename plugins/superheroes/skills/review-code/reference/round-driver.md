@@ -544,8 +544,11 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
-  `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted channel names that
-  fired for the certification shape (`independence`, `base`, `same-family`,
+  `degraded` | `not-checked`, optional `note`/`reason`, `pluginVersionSkew` — tri-state skew
+  disclosure: `checked-clean`, `checked-degraded`, `not-checked`, or `absent` when the seat map
+  carries no usable `pluginVersionSkew` receipt (distinct from `seatMap.pluginVersionSkew`, the
+  compose receipt object with `status`, `detail`, and `inspectedRoot`), `shapeDrivers` — sorted
+  channel names that fired for the certification shape (`independence`, `base`, `same-family`,
   `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)

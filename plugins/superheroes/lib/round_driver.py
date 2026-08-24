@@ -796,7 +796,7 @@ def _plugin_version_skew_status(state):
     if not isinstance(pvs, dict):
         return "absent"
     status = pvs.get("status")
-    if status in ("checked-clean", "checked-degraded", "not-checked"):
+    if status in version_skew.STATUSES:
         return status
     return "absent"
 
