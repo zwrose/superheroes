@@ -247,6 +247,18 @@ def _order_vendor_provenance_gaps_shape(value):
     return True
 
 
+def _plugin_version_skew_shape(value):
+    # build_receipt reads constraint/status/detail/inspectedRoot/reason off each skew row.
+    if not _dict_list(value):
+        return False
+    for row in value:
+        if row.get("constraint") != version_skew.CONSTRAINT:
+            return False
+        if not isinstance(row.get("status"), str):
+            return False
+    return True
+
+
 def _normalize_adapter_provenance(prov):
     """Return {phase: disclosures} for either the per-phase `byPhase` shape or the legacy flat
     value (keyed as `unknown-phase`). Non-dict / corrupt `byPhase` → empty."""
@@ -274,6 +286,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "fellOpenProvenanceMissing": _str_list,
     "seatMapUnavailable": _str_list,
     "seatMapViolations": _dict_list,
+    "pluginVersionSkew": _plugin_version_skew_shape,
     "vacuousSeats": _str_list,
     "engagedArtifactSeats": _str_list,
     "canaryUnverified": _str_list,
@@ -767,19 +780,108 @@ def _same_family_degraded(state):
     return bool(_same_family_seats(state))
 
 
-def _skew_records(state):
-    """Plugin-version-skew degradations from the seat map's own receipt (#677). A disclosed
-    degradation when the running plugin's review semantics differ from the repository's own —
-    never recomputed here."""
-    sm = state.get("seatMap")
-    degradations = sm.get("degradations") if isinstance(sm, dict) else None
+def _skew_record_identity(rec):
+    """Union key for plugin-version-skew disclosures — (constraint, status, detail, inspectedRoot).
+    All skew records share one constraint and carry no seat, so the breach channel's (constraint,
+    seat) key would collapse distinct disclosures (#1107)."""
+    if not isinstance(rec, dict):
+        return None
+    if rec.get("constraint") != version_skew.CONSTRAINT:
+        return None
+    return (
+        str(rec.get("constraint", "")),
+        str(rec.get("status", "")),
+        str(rec.get("detail", "")),
+        str(rec.get("inspectedRoot", "")),
+    )
+
+
+def _skew_records_from_seat_map(seat_map):
+    """Plugin-version-skew degradations from one seat map's degradations list."""
+    degradations = seat_map.get("degradations") if isinstance(seat_map, dict) else None
     if not isinstance(degradations, list):
         return []
     records = []
     for deg in degradations:
-        if isinstance(deg, dict) and deg.get("constraint") == version_skew.CONSTRAINT:
-            records.append(deg)
+        key = _skew_record_identity(deg)
+        if key is None:
+            continue
+        status = deg.get("status")
+        if status not in version_skew.STATUSES:
+            continue
+        if not version_skew.is_degrading(status):
+            continue
+        records.append(deg)
     return records
+
+
+def _union_skew_disclosures(existing, new):
+    """Deduped union of skew disclosure lists, keyed on ``_skew_record_identity``."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for source in (existing or []), (new or []):
+        for rec in source:
+            key = _skew_record_identity(rec)
+            if key is None:
+                continue
+            status = rec.get("status")
+            if status not in version_skew.STATUSES:
+                continue
+            if not version_skew.is_degrading(status):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(rec)
+    merged.sort(
+        key=lambda item: (
+            str(item.get("constraint", "")),
+            str(item.get("status", "")),
+            str(item.get("detail", "")),
+            str(item.get("inspectedRoot", "")),
+        ),
+    )
+    return merged
+
+
+def _skew_records(state):
+    """Plugin-version-skew degradations — the UNION of what each round recorded and what the live
+    merged seat map carries, so neither channel alone is load-bearing: ``state["rounds"]`` is lost
+    across a ``recordsPath`` resume, and ``state["seatMap"].update()`` lets a later round's map
+    overwrite an earlier one. Deduped by (constraint, status, detail, inspectedRoot), sorted."""
+    seen: set[tuple] = set()
+    merged: list[dict] = []
+    for rec in (state.get("rounds") or {}).values():
+        if not isinstance(rec, dict):
+            continue
+        for row in rec.get("pluginVersionSkew") or []:
+            key = _skew_record_identity(row)
+            if key is None:
+                continue
+            status = row.get("status")
+            if status not in version_skew.STATUSES:
+                continue
+            if not version_skew.is_degrading(status):
+                continue
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(row)
+    for row in _skew_records_from_seat_map(state.get("seatMap") or {}):
+        key = _skew_record_identity(row)
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        merged.append(row)
+    merged.sort(
+        key=lambda item: (
+            str(item.get("constraint", "")),
+            str(item.get("status", "")),
+            str(item.get("detail", "")),
+            str(item.get("inspectedRoot", "")),
+        ),
+    )
+    return merged
 
 
 def _skew_degraded(state):
@@ -1814,6 +1916,14 @@ def _fold_panel(state, config, artifact):
             _parts.append("%s@%s" % (c, s) if s else c)
         _decision(state, "seat-map-constraint-violated",
                   "unexcused seat-map constraint violation(s): %s" % ", ".join(_parts))
+    _sm_skew = _skew_records_from_seat_map(state.get("seatMap") or {})
+    if _sm_skew:
+        rnd_rec = state["rounds"].setdefault(str(state["round"]), {})
+        _record_round(
+            state,
+            "pluginVersionSkew",
+            _union_skew_disclosures(rnd_rec.get("pluginVersionSkew"), _sm_skew),
+        )
     _record_round(state, "compileDrops", drops)
     if unverified:
         _record_round(state, "unverified", unverified)

@@ -1090,7 +1090,7 @@ def main(argv):
         # bite-axis: only checked-degraded records reach degradations — checked-clean and
         # not-checked stay off the list so a clean or skipped check never reads as degraded
         # (#677; if-and-only-if with the consumer rule in CONVENTIONS §6).
-        if skew_record.get("status") == version_skew.STATUS_CHECKED_DEGRADED:
+        if version_skew.is_degrading(skew_record.get("status")):
             extra_degradations.append(skew_record)
         if notes:
             extra_degradations.extend(notes)
