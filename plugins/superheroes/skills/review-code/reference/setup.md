@@ -36,6 +36,10 @@
 
 **Resolve `$INTERACTIVE` first, for the whole run.** Two later steps consume it — `decide-location` (below) and the `--review-only` presentation channel (`SKILL.md` § Read-Only Paths) — so it is decided once, here, before anything is dispatched, not re-derived per consumer. Set `INTERACTIVE=true` only when a human is present to answer a question this run; set it to `false` on a headless/non-interactive run (`claude -p`, a spawned subagent, any caller with no one at the other end). **When you cannot tell, set it to `false`** — the consumers fail open in that direction on purpose (a headless-by-mistake run still completes; an interactive-by-mistake headless run stalls on a question nobody sees). It is orchestrator-resolved, not sniffed from a tty: the orchestrator's own calls are never on one.
 
+```bash
+INTERACTIVE=true   # a human is present to answer this run; set false when headless/non-interactive, and false when you cannot tell
+```
+
 **Resolve the base rubric path once.** The base rubric is bundled at `$ROOT_DIR/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
 
 ```bash
