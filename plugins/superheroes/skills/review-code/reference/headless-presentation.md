@@ -77,7 +77,7 @@ undecided set would teach the profile from a silence.
 Of the three end-of-run steps in `SKILL.md` § Learning Loop & Staleness Nudge, run **only the
 staleness nudge** — it is a print, and it blocks nothing. The **learning-loop proposal** and
 the **provisional-profile confirmation** are both `AskUserQuestion`-gated: skip both, exactly
-as `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/reference/review-loop.md` already rules for the
+as `reference/review-loop.md` already rules for the
 provisional-profile confirmation. Running either here would reintroduce the stall this file
 exists to remove, one step past the finish line.
 
