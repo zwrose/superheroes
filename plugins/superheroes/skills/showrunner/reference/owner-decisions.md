@@ -101,6 +101,14 @@ could want), and gate-uncertain items are Tier 2.
 
 **Each append carries its gate verdict and its venue recommendation, so the owner's batch is one word per item.**
 
+An append made outside a vet — `/superheroes:discuss-open-decisions`, a park sitting, any non-vet
+session applying these primitives — carries the **latest existing vet ordinal, marked non-vet**
+beside the stamp, so age stays a subtraction over ordinals and no phantom vet is minted; before
+appending, the session checks the collector for an existing entry covering the same residual and
+**updates that entry in place** rather than adding a second (owner ruling 2026-08-24, recorded on
+the collector —
+[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)).
+
 Deferring the append is what two independent sessions did on 2026-08-02, and it is the evaporation
 class recorded as we#526 and we#527 — items that lived only in individual receipts while the
 collector read empty. That history is why append-always is unconditional; it is not a live branching
@@ -126,6 +134,15 @@ graduate rows into it, and that is optional.
 
 Both tiers are archived here. Tier-1 craft declines land in the registry too — which is what makes
 them visible and veto-able — and Tier-2 declines land after the owner's word.
+
+Archiving a decline is two writes with no transaction — the registry row and the collector strike.
+The order is fixed (owner ruling 2026-08-24, recorded on the collector —
+[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
+the **registry row lands first**, keyed by the item's collector number so a repeated write is
+idempotent, and **only then is the item struck**; the vet-time reconciliation read completes the
+pair when it finds a row without its strike or a struck item without its row. Striking before the
+row is written is the fail-open order — a crash there loses the decline entirely — and is never
+used.
 
 **Any session processing a field report, and any vet whose evidence includes an observed-in-the-field failure, reads the registry.**
 

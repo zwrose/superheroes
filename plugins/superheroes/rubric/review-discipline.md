@@ -330,6 +330,13 @@ remaining the gate. A residual larger than that bound routes to one bounded buil
 the lane's existing route, and the standalone micro lane's per-change owner word is explicitly unchanged.
 The preservation is checkable in place at `### Micro — owner authorization` above.
 
+Who types the fold splits by surface (owner ruling 2026-08-24, recorded on the collector —
+[issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
+a **docs or tests** fold the advisor types in-session under the full micro floor above; a fold that
+touches **code** routes to one bounded builder re-dispatch — the same shape as the over-size route —
+so quiet-failure surfaces keep a maker independent of the vet. Doubt about which side a surface
+falls on resolves toward the builder.
+
 ### Mechanical guards over prose — the byte-literal floor
 
 Mechanical guards over prose are scoped to the **byte-literal floor** — four kept classes and nothing
