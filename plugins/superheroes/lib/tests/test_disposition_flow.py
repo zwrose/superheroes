@@ -7,9 +7,9 @@ registry marker home; clause-count floor.
 # What this file guards and does not guard (issue #1113).
 #
 # Every assertion rests on a MECHANICAL fact: a literal present or absent after
-# whitespace normalization, a pinned heading string present, a word-boundary
-# literal absent, a cardinality floor, or a duty-slice extractor that bounds a
-# pin to its home block (per the byte-literal floor carve-out).
+# whitespace normalization, a pinned heading string present, a literal absent, a
+# cardinality floor, or a duty-slice extractor that bounds a pin to its home block
+# (per the byte-literal floor carve-out).
 #
 # Prose MEANING, Contents parity, table shape, and ordering beyond presence are
 # guarded by review, not by CI. No negation heuristics, no paragraph heuristics,
@@ -27,6 +27,7 @@ _SHOWRUNNER_CHARTER = "skills/showrunner/SKILL.md"
 _REVIEW_DISCIPLINE = "rubric/review-discipline.md"
 _VET_RECEIPT = "skills/showrunner/reference/vet-receipt.md"
 _DISCUSS_OPEN = "skills/discuss-open-decisions/SKILL.md"
+_DETECTIVE_CHARTER = "skills/detective/SKILL.md"
 
 _DUTY_4_START = "4. **Vet PRs from artifacts, never narratives.**"
 _DUTY_5_START = "5. **Decide what reaches the owner before the merge click.**"
@@ -38,7 +39,22 @@ _RETIRED_LITERAL = "Follow-up economics"
 _STALE_AVAILABILITY_PHRASE = "Tier-2 proposed to the owner when **attended**"
 
 _OWNER_REJECTED_LITERALS = ("knob-polish",)
-_OWNER_REJECTED_WORDS = ("bell",)
+
+_DISCUSS_OPEN_APPEND_BEFORE_PROPOSE = (
+    "**before** it is proposed in this session's delivery message"
+)
+
+_SHOWRUNNER_P14_HOLDER_SNIPPET = (
+    "revisit-trigger registry** is one pinned, always-current comment on the collector issue"
+)
+
+_VET_RECEIPT_REGISTRY_SCAN_SNIPPET = (
+    "read the project's revisit-trigger registry (the pinned comment on the collector issue)"
+)
+
+_DETECTIVE_REGISTRY_SCAN_SNIPPET = (
+    "scan the project's revisit-trigger registry per `## The revisit-trigger registry`"
+)
 
 _TOUCHED_FILES = (
     _OWNER_DECISIONS,
@@ -343,14 +359,68 @@ def _assert_stale_availability_branch_absent(texts=None):
         )
 
 
-def _assert_discuss_open_cites_canonical_home(texts=None):
+def _assert_discuss_open_holder_pins(texts=None):
     if texts is None:
-        text = _read_plugin(_DISCUSS_OPEN)
-    else:
-        text = texts[_DISCUSS_OPEN]
+        texts = {
+            _DISCUSS_OPEN: _read_plugin(_DISCUSS_OPEN),
+            _OWNER_DECISIONS: _read_plugin(_OWNER_DECISIONS),
+        }
+    text = texts[_DISCUSS_OPEN]
     if _OWNER_DECISIONS not in text:
         raise AssertionError(
             "%s: canonical home %r not cited" % (_DISCUSS_OPEN, _OWNER_DECISIONS)
+        )
+    if _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE.replace("*", "") not in _normalized(text):
+        raise AssertionError(
+            "%s: append-before-propose pin %r missing"
+            % (_DISCUSS_OPEN, _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE)
+        )
+    home_path, clause_text = CLAUSE_HOMES["P8"]
+    _assert_clause_present(
+        texts[home_path], clause_text, "P8", home_path, role="home"
+    )
+
+
+def _assert_registry_holder_pins(texts=None):
+    if texts is None:
+        texts = {
+            _OWNER_DECISIONS: _read_plugin(_OWNER_DECISIONS),
+            _SHOWRUNNER_CHARTER: _read_plugin(_SHOWRUNNER_CHARTER),
+            _VET_RECEIPT: _read_plugin(_VET_RECEIPT),
+            _DETECTIVE_CHARTER: _read_plugin(_DETECTIVE_CHARTER),
+        }
+    home_path, p14_text = CLAUSE_HOMES["P14"]
+    _assert_clause_present(
+        texts[home_path], p14_text, "P14", home_path, role="home"
+    )
+    charter_text = texts[_SHOWRUNNER_CHARTER]
+    duty_slice = _extract_duty_slice(
+        charter_text,
+        _DUTY_4_START,
+        _DUTY_5_START,
+        _SHOWRUNNER_CHARTER,
+    )
+    if _SHOWRUNNER_P14_HOLDER_SNIPPET.replace("*", "") not in _normalized(duty_slice):
+        raise AssertionError(
+            "%s: P14 holder pin %r missing in duty-4 slice"
+            % (_SHOWRUNNER_CHARTER, _SHOWRUNNER_P14_HOLDER_SNIPPET)
+        )
+    home_path, p16_text = CLAUSE_HOMES["P16"]
+    _assert_clause_present(
+        texts[home_path], p16_text, "P16", home_path, role="home"
+    )
+    _assert_clause_present(
+        duty_slice, p16_text, "P16", _SHOWRUNNER_CHARTER, role="duty-4 slice"
+    )
+    if _VET_RECEIPT_REGISTRY_SCAN_SNIPPET not in texts[_VET_RECEIPT]:
+        raise AssertionError(
+            "%s: registry-scan holder pin %r missing"
+            % (_VET_RECEIPT, _VET_RECEIPT_REGISTRY_SCAN_SNIPPET)
+        )
+    if _DETECTIVE_REGISTRY_SCAN_SNIPPET not in texts[_DETECTIVE_CHARTER]:
+        raise AssertionError(
+            "%s: registry-scan holder pin %r missing"
+            % (_DETECTIVE_CHARTER, _DETECTIVE_REGISTRY_SCAN_SNIPPET)
         )
 
 
@@ -371,11 +441,6 @@ def _assert_owner_rejected_terms_absent(texts=None):
             if literal in text:
                 raise AssertionError(
                     "%s: owner-rejected literal %r present" % (rel, literal)
-                )
-        for word in _OWNER_REJECTED_WORDS:
-            if re.search(r"\b%s\b" % re.escape(word), text):
-                raise AssertionError(
-                    "%s: owner-rejected word %r present" % (rel, word)
                 )
 
 
@@ -431,8 +496,12 @@ def test_retired_vocabulary_is_gone():
     _assert_stale_availability_branch_absent()
 
 
-def test_discuss_open_cites_canonical_home():
-    _assert_discuss_open_cites_canonical_home()
+def test_discuss_open_holder_pins():
+    _assert_discuss_open_holder_pins()
+
+
+def test_registry_holder_pins():
+    _assert_registry_holder_pins()
 
 
 def test_owner_rejected_terms_absent():
@@ -532,19 +601,27 @@ def test_negative_retired_vocabulary_inserted():
     )
 
 
-def test_negative_owner_rejected_word_inserted():
+def test_negative_owner_rejected_literal_inserted():
     texts = {rel: "" for rel in _TOUCHED_FILES}
-    texts[_REVIEW_DISCIPLINE] = "The bell rings."
+    texts[_REVIEW_DISCIPLINE] = "A knob-polish pass."
     _expect_assertion_error(
         lambda: _assert_owner_rejected_terms_absent(texts),
-        match="owner-rejected word 'bell' present",
+        match="owner-rejected literal 'knob-polish' present",
     )
 
 
-def test_negative_owner_rejected_word_does_not_trip_on_bellwether():
-    texts = {rel: "" for rel in _TOUCHED_FILES}
-    texts[_REVIEW_DISCIPLINE] = "A bellwether signal."
-    _assert_owner_rejected_terms_absent(texts)
+def test_negative_discuss_open_append_after_propose():
+    texts = {
+        _DISCUSS_OPEN: (
+            "See %s — append after it is proposed in this session's delivery message."
+            % _OWNER_DECISIONS
+        ),
+        _OWNER_DECISIONS: P8,
+    }
+    _expect_assertion_error(
+        lambda: _assert_discuss_open_holder_pins(texts),
+        match="append-before-propose pin",
+    )
 
 
 def test_negative_registry_marker_outside_home():

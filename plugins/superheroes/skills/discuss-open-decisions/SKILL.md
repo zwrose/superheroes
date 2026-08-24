@@ -44,7 +44,11 @@ Read the collector before searching parks — it is authoritative and may alread
 
 Apply `## The filter — what is the owner's, and on what grounds`; present filtered items per that section before batch 1.
 
+For each Tier-2 item that will be delivered in batch 1 or batch 2, apply `## The worth-it gate and the venue ladder` and append it to the collector immediately, **before** it is proposed in this session's delivery message. This skill is owner-present by construction; the canonical append-always rule lives in `skills/showrunner/reference/owner-decisions.md`, and this skill applies it at delivery time rather than at vet time.
+
 ## Step 4 — Deliver batch 1
+
+Each batch-1 item has already passed the worth-it gate and been appended per Step 3.
 
 Deliver per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`; write the numbered batch-1 list to a durable artifact now — the collector entry where the item has one, otherwise a durable note on the issue or PR it belongs to — and resume from that record, not session memory.
 
@@ -60,19 +64,13 @@ Partial batch-1 answers still block batch-1 execution for the items left unanswe
 
 ## Step 6 — Deliver batch 2
 
-Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`; extend the durable numbered list with batch-2 items before presenting them.
+Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them. Each batch-2 item passes the worth-it gate and is appended per Step 3 immediately before it is added to the durable numbered list and presented — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`.
 
 ## Step 7 — Execute and close
 
 Execute what batch 1 unblocked per `## What batch-1 execution may and may not do` while the owner rules on batch 2; receipt what you executed, in plain language.
 
-This skill is owner-present by construction, so every Tier-2 item is appended to the collector
-immediately, **before** it is proposed in this session's delivery message, then discussed inline —
-items the owner rules on are struck immediately. The canonical append-always rule lives in
-`skills/showrunner/reference/owner-decisions.md`; this skill applies it at delivery time rather
-than at vet time.
-
-Apply `## The worth-it gate and the venue ladder` to each proposed follow-up and record each batch-2 ruling to the durable artifact as it lands.
+Record each batch-2 ruling to the durable artifact as it lands.
 
 When a batch-2 ruling closes or declines a collector-backed item, strike it from the collector per showrunner duty 4.
 
