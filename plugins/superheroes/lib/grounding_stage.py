@@ -279,22 +279,35 @@ def _bare_lines_from_body(body):
     return lines, bare
 
 
-def _find_standalone_marker(body, marker, start=0):
-    """Return byte offset of the first standalone marker line at or after start."""
+def _context_scan(body):
+    """Return one combined live/inert classification for every line of ``body``."""
+    _, bare = _bare_lines_from_body(body)
+    return md_fence.scan_contexts(bare)
+
+
+def _find_all_standalone_markers(body, marker):
+    """Return byte offsets of every live standalone ``marker`` line in ``body``."""
     lines, bare = _bare_lines_from_body(body)
-    fence_scan = md_fence.scan(bare)
+    scan = _context_scan(body)
+    offsets = []
     offset = 0
     for i, line in enumerate(lines):
-        if offset >= start and not fence_scan.inert[i]:
-            # axis: indented code block (4+ columns) — marker lines inside are not live regions.
-            if md_fence.indent_width(bare[i]) >= md_fence.INDENT_CODE_BLOCK_COLUMNS:
+        if not scan.inert[i]:
+            if md_fence.indent_width(bare[i]) != 0:
                 offset += len(line)
                 continue
-            stripped = bare[i].strip()
-            if stripped == marker:
+            if bare[i].rstrip() == marker:
                 leading = len(bare[i]) - len(bare[i].lstrip())
-                return offset + leading
+                offsets.append(offset + leading)
         offset += len(line)
+    return offsets
+
+
+def _find_standalone_marker(body, marker, start=0):
+    """Return byte offset of the first standalone marker line at or after start."""
+    for off in _find_all_standalone_markers(body, marker):
+        if off >= start:
+            return off
     return -1
 
 

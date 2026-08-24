@@ -1232,3 +1232,67 @@ def test_tampered_manifest_claim_refuses_check(tmp_path):
     open(manifest_path, "w", encoding="utf-8").write(json.dumps(manifest))
     rc2, body = _invoke("check", session)
     _assert_refusal(rc2, body, "stage-manifest-invalid")
+
+
+def _marker_body(case_id, marker):
+    """Build a PR body placing ``marker`` in the census context named by ``case_id``."""
+    if case_id == "column_0":
+        return marker + "\n"
+    if case_id == "indent_1":
+        return " " + marker + "\n"
+    if case_id == "indent_2":
+        return "  " + marker + "\n"
+    if case_id == "indent_3":
+        return "   " + marker + "\n"
+    if case_id == "indent_4":
+        return "    " + marker + "\n"
+    if case_id == "inside_fence":
+        return "```\n" + marker + "\n```\n"
+    if case_id == "inside_pre":
+        return "<pre>\n" + marker + "\n</pre>\n"
+    if case_id == "inside_details":
+        return "<details>\n" + marker + "\n</details>\n"
+    if case_id == "blockquote":
+        return "> " + marker + "\n"
+    if case_id == "list_item":
+        return "- " + marker + "\n"
+    if case_id == "trailing_whitespace":
+        return marker + "   \n"
+    if case_id == "other_text_on_line":
+        return marker + " extra\n"
+    raise ValueError("unknown marker census case: %r" % case_id)
+
+
+_MARKER_CENSUS_CASES = [
+    pytest.param("column_0", True, id="column_0"),
+    pytest.param("indent_1", False, id="indent_1"),
+    pytest.param("indent_2", False, id="indent_2"),
+    pytest.param("indent_3", False, id="indent_3"),
+    pytest.param("indent_4", False, id="indent_4"),
+    pytest.param("inside_fence", False, id="inside_fence"),
+    pytest.param("inside_pre", False, id="inside_pre"),
+    pytest.param("inside_details", True, id="inside_details"),
+    pytest.param("blockquote", False, id="blockquote"),
+    pytest.param("list_item", False, id="list_item"),
+    pytest.param("trailing_whitespace", True, id="trailing_whitespace"),
+    pytest.param("other_text_on_line", False, id="other_text_on_line"),
+]
+
+
+@pytest.mark.parametrize("region_name", sorted(GS.REGION_MARKERS))
+@pytest.mark.parametrize("case_id,live", _MARKER_CENSUS_CASES)
+def test_marker_census(region_name, case_id, live):
+    marker = GS.REGION_MARKERS[region_name]
+    body = _marker_body(case_id, marker)
+    idx = GS._find_standalone_marker(body, marker)
+    if live:
+        assert idx >= 0, "expected live marker for %s/%s" % (region_name, case_id)
+    else:
+        assert idx < 0, "expected inert marker for %s/%s" % (region_name, case_id)
+
+
+def test_find_all_standalone_markers_returns_every_live_occurrence():
+    marker = GS.REGION_MARKERS["dod-table"]
+    body = marker + "\ncontent\n" + marker + "\n"
+    offsets = GS._find_all_standalone_markers(body, marker)
+    assert offsets == [0, len(marker) + 1 + len("content\n")]
