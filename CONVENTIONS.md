@@ -933,17 +933,18 @@ The principle-level checker is the **advisor's vet**, not step 8 — step 8 runs
 session that wrote the body, so it is the author checking whether the author forgot: fine
 for presence-matching, weak for judgment. Adopted for the vet: scoped to the **principle
 only** (the vet does not re-run the floor's presence match); lands as a **mandatory receipt
-field with an explicit `None`**; **#609 does not retire it** — when the dispatched grounding
-seat lands, the vet becomes the backstop for that seat being absent, vacuous, or
+field with an explicit `None`**; **#609 does not retire it** — with the dispatched grounding
+seat shipped, the vet is the backstop for that seat being absent, vacuous, or
 misconfigured, so **the principle is not sequenced behind #609**. `agents/grounding-seat.md`
 is deliberately narrow (beyond pointer fixes elsewhere); that narrowness is what makes the
 seat reliable.
 
 This self-claims / DoD-grounding check is formalized as the **grounding seat**
 (`plugins/superheroes/agents/grounding-seat.md`, `reviewer` tier — never `mechanical`,
-since a false "claims check out" is a silence nothing downstream re-checks); it is
-currently instantiated by the **review-code** orchestrator inline (the interim
-mechanism — the PR-body honesty check above), with live dispatch owned by #609.
+since a false "claims check out" is a silence nothing downstream re-checks); on the
+**review-code** leg it is **live-dispatched under #609** (the seat emits verdicts; the
+orchestrator mints findings from `REFUTED` rows), with the orchestrator-inline PR-body
+honesty check above retained as a second leg.
 
 Markers and the omission floor are cited by `rubric/review-discipline.md`, the canonical
 statement of the band's review convention (no unreviewed PRs, §7.4).

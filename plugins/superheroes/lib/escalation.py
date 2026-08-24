@@ -121,6 +121,8 @@ SAFETY_MACHINERY = (
     "panel_tally.py",         # terminal/accounting decider + rounds-assembler + resume + fail-closed
     "loop_synthesis.py",      # panel synthesis drop/keep/normalize decider
     "verification.py",          # per-finding verification 3-state verdict fold (#506)
+    "round_phases.py",          # verifier-verdict enum + verify submit-shape guard (#1123)
+    "payload_contracts.py",     # per-seat payload contracts engine_adapter enforces (#1123)
     "verify_gate.py",         # code-leg verify gate decider
     "review_result.py",       # the durable terminal-record writer (UFR-9)
     "round_driver.py",        # the one-entrypoint loop orchestration (#507)

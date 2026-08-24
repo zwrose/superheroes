@@ -29,6 +29,33 @@ FenceScan = collections.namedtuple(
     "FenceScan", ("kinds", "inert", "unterminated_opener_line")
 )
 
+TEXT = "TEXT"
+FENCE_OPENER = "FENCE_OPENER"
+FENCE_CONTENT = "FENCE_CONTENT"
+FENCE_CLOSER = "FENCE_CLOSER"
+HTML_OPEN = "HTML_OPEN"
+HTML_CONTENT = "HTML_CONTENT"
+HTML_CLOSE = "HTML_CLOSE"
+CONTEXT_KINDS = frozenset({
+    TEXT,
+    FENCE_OPENER,
+    FENCE_CONTENT,
+    FENCE_CLOSER,
+    HTML_OPEN,
+    HTML_CONTENT,
+    HTML_CLOSE,
+})
+
+ContextScan = collections.namedtuple(
+    "ContextScan",
+    ("kinds", "inert", "unterminated_opener_line", "unterminated_html_line"),
+)
+
+# CommonMark raw-text containers — contents are displayed literally, not interpreted.
+# <details>, <summary>, and every other HTML tag stay live so the workhorse PR
+# template can nest <!-- superheroes:degradations --> inside <details>.
+RAW_TEXT_TAGS = frozenset({"pre", "script", "style", "textarea"})
+
 INDENT_CODE_BLOCK_COLUMNS = 4
 
 
@@ -157,3 +184,92 @@ def scan(lines):
 
     inert = tuple(kind != KIND_TEXT for kind in kinds)
     return FenceScan(tuple(kinds), inert, unterminated_opener_line)
+
+
+def _try_html_opener(line):
+    """If ``line`` opens a type-1 raw-text HTML block, return the tag name. Else None."""
+    indent, rest = _split_indent(line)
+    if indent > 3:
+        return None
+    if not rest or rest[0] != "<":
+        return None
+    tail = rest[1:]
+    lower = tail.lower()
+    for tag in RAW_TEXT_TAGS:
+        if lower.startswith(tag):
+            after = tail[len(tag):]
+            if not after or after[0] in (" ", "\t", ">"):
+                return tag
+    return None
+
+
+def _line_has_html_close(line):
+    """True when ``line`` contains a type-1 raw-text closing tag anywhere."""
+    lower = line.lower()
+    for tag in RAW_TEXT_TAGS:
+        if ("</" + tag + ">") in lower:
+            return True
+    return False
+
+
+def scan_contexts(lines):
+    """Classify each line as live text or inert fence/HTML context. Returns a ContextScan."""
+    kinds = []
+    in_fence = False
+    in_html = False
+    opener_char = None
+    opener_len = 0
+    opener_line_no = None
+    html_opener_line_no = None
+    unterminated_opener_line = None
+    unterminated_html_line = None
+
+    for i, raw_line in enumerate(lines):
+        if not isinstance(raw_line, str):
+            raise TypeError(
+                "each line must be a str, got %s" % type(raw_line).__name__
+            )
+        line = raw_line[:-1] if raw_line.endswith("\r") else raw_line
+
+        if in_fence:
+            if _is_closer(line, opener_char, opener_len):
+                kinds.append(FENCE_CLOSER)
+                in_fence = False
+                opener_char = None
+                opener_len = 0
+            else:
+                kinds.append(FENCE_CONTENT)
+        elif in_html:
+            if _line_has_html_close(line):
+                kinds.append(HTML_CLOSE)
+                in_html = False
+            else:
+                kinds.append(HTML_CONTENT)
+        else:
+            # Fence opener is tested before HTML start; the two conditions are disjoint.
+            opener = _try_opener(line)
+            if opener is not None:
+                kinds.append(FENCE_OPENER)
+                in_fence = True
+                opener_char = opener[0]
+                opener_len = opener[1]
+                opener_line_no = i + 1
+            elif _try_html_opener(line) is not None:
+                if _line_has_html_close(line):
+                    kinds.append(HTML_OPEN)
+                else:
+                    kinds.append(HTML_OPEN)
+                    in_html = True
+                    html_opener_line_no = i + 1
+            else:
+                kinds.append(TEXT)
+
+    if in_fence:
+        unterminated_opener_line = opener_line_no
+    if in_html:
+        unterminated_html_line = html_opener_line_no
+
+    inert = tuple(kind != TEXT for kind in kinds)
+    return ContextScan(
+        tuple(kinds), inert, unterminated_opener_line, unterminated_html_line,
+    )

@@ -48,7 +48,7 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     yield
 
 
-def _never_build_view(_repo, *, diff_base=None):
+def _never_build_view(_repo, *, diff_base=None, pr_body_path=None, session_dir=None):
     raise AssertionError("build_view should not be called")
 
 
@@ -56,7 +56,7 @@ def _fake_build_view(tmp_path, *, source_dirty=False, stripped=None):
     counter = {"n": 0}
     meta = {"repo_arg": None, "view_path": None, "build_count": 0}
 
-    def build_view(repo_real, *, diff_base=None):
+    def build_view(repo_real, *, diff_base=None, pr_body_path=None, session_dir=None):
         counter["n"] += 1
         meta["build_count"] = counter["n"]
         meta["repo_arg"] = repo_real
@@ -109,6 +109,8 @@ def _fake_view_receipt(**overrides):
         "diffPath": None,
         "diffBytes": None,
         "diffWithheldCount": None,
+        "prBodyPath": None,
+        "prBodyBytes": None,
     }
     base.update(overrides)
     return base
@@ -1162,7 +1164,7 @@ def test_sanitized_view_build_error_refusal_no_spawn(tmp_path):
     repo_root = _repo(tmp_path)
     fake = FakeRunner([])
 
-    def fail_build(_repo, *, diff_base=None):
+    def fail_build(_repo, *, diff_base=None, pr_body_path=None, session_dir=None):
         raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
 
     res = ED.dispatch_review(
@@ -1224,7 +1226,7 @@ def test_view_destroyed_after_dispatch(tmp_path):
     repo_root = _repo(tmp_path)
     captured_path = []
 
-    def capture_build(repo_real, *, diff_base=None):
+    def capture_build(repo_real, *, diff_base=None, pr_body_path=None, session_dir=None):
         view = _fake_build_view(tmp_path)(repo_real, diff_base=diff_base)
         captured_path.append(view["path"])
         return view
@@ -1275,7 +1277,7 @@ def test_view_destroyed_across_dispatch_outcomes(tmp_path, case, run_engine, kwa
     captured_path = []
     build_view_fn = _fake_build_view(tmp_path)
 
-    def capture_build(repo_real, *, diff_base=None):
+    def capture_build(repo_real, *, diff_base=None, pr_body_path=None, session_dir=None):
         view = build_view_fn(repo_real, diff_base=diff_base)
         captured_path.append(view["path"])
         return view
@@ -3584,7 +3586,7 @@ def _capture_build_view(tmp_path, *, diff_keys=None):
     inner = _fake_build_view(tmp_path)
     captured = {"kwargs": []}
 
-    def build_view(repo_real, *, diff_base=None):
+    def build_view(repo_real, *, diff_base=None, pr_body_path=None, session_dir=None):
         captured["kwargs"].append({"repo": repo_real, "diff_base": diff_base})
         view = inner(repo_real)
         if diff_keys:
@@ -4766,7 +4768,7 @@ def test_dispatch_review_every_outcome_carries_mode(
     elif setup == "engine_config":
         base_kwargs["build_view"] = _fake_build_view(tmp_path)
     elif setup == "view_error":
-        def fail_build(_repo, *, diff_base=None):
+        def fail_build(_repo, *, diff_base=None, pr_body_path=None, session_dir=None):
             raise ED.sanitized_view.SanitizedViewError("sanitized-view-export-failed")
         base_kwargs["build_view"] = fail_build
         base_kwargs["run_engine"] = FakeRunner([])
@@ -6560,4 +6562,139 @@ def test_probe_digest_compatibility_ordinary_tree(tmp_path):
     )
     expected_legacy = hashlib.sha256(status_uall.stdout).hexdigest()
     assert ED._legacy_worktree_porcelain_sha256(cwd, timeout=5) == expected_legacy
+
+
+# --- #609 stage 2: inseparable PR-body / session-dir staging ---
+
+
+def _session_with_pr_body(tmp_path, content=b"PR body\n"):
+    session = tmp_path / "session"
+    session.mkdir()
+    body = session / "pr-body.md"
+    body.write_bytes(content)
+    return str(session), str(body)
+
+
+def test_dispatch_review_pr_body_unpaired_pr_only(tmp_path):
+    repo_root = _repo(tmp_path)
+    session, body = _session_with_pr_body(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, pr_body_path=body,
+    )
+    assert res["detail"] == "pr-body-args-unpaired"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+
+
+def test_dispatch_review_pr_body_unpaired_session_only(tmp_path):
+    repo_root = _repo(tmp_path)
+    session, _body = _session_with_pr_body(tmp_path)
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, session_dir=session,
+    )
+    assert res["detail"] == "pr-body-args-unpaired"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+
+
+def test_dispatch_review_pr_body_confinement_refusal(tmp_path):
+    repo_root = _repo(tmp_path)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    body = outside / "pr-body.md"
+    body.write_text("outside session\n", encoding="utf-8")
+    session = tmp_path / "session"
+    session.mkdir()
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view,
+        pr_body_path=str(body), session_dir=str(session),
+    )
+    assert res["detail"] == "sanitized-view-pr-body-outside-session"
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+
+
+def _manual_open_review_run_with_pr_body(tmp_path, run_dir, *, pr_body_source):
+    repo_root = _repo(tmp_path)
+    build_view = _fake_build_view(tmp_path)
+    view = build_view(os.path.realpath(repo_root))
+    view["prBodyPath"] = _SV_MOD.PR_BODY_FILE_NAME
+    view["prBodyBytes"] = 12
+    cwd = os.path.realpath(view["path"])
+    built = EA.build_argv_result(
+        "codex", "review", "high", {"model": "sonnet", "cwd": cwd},
+    )
+    argv = built["argv"]
+    prompt_path = _valid_prompt(tmp_path)
+    with open(prompt_path, encoding="utf-8") as fh:
+        base = fh.read()
+    fed = ED.ANTIHIJACK_PREAMBLE + _SV_MOD.sanitized_view_notice(view) + base
+    os.makedirs(run_dir, exist_ok=True)
+    ok, detail = ED._open_review_run(
+        run_dir, engine="codex", argv=argv, cwd=cwd,
+        timeout=ED.RETRY_MIN_TIMEOUT, retry_timeout=ED.RETRY_MIN_TIMEOUT,
+        prompt_path=prompt_path, view_path=view["path"], view_meta=view,
+        fed_prompt=fed, order_id="test-order", progress_path=os.path.join(run_dir, "progress.jsonl"),
+        repo_root=os.path.realpath(repo_root),
+        pr_body_source_path=pr_body_source,
+    )
+    assert ok, detail
+    return repo_root, view, pr_body_source
+
+
+def test_continuation_pr_body_run_dir_mismatch_refused(tmp_path):
+    run_dir = str(tmp_path / "run")
+    session, body = _session_with_pr_body(tmp_path)
+    repo_root, _view, journaled = _manual_open_review_run_with_pr_body(
+        tmp_path, run_dir, pr_body_source=body,
+    )
+    other_body = os.path.join(session, "other.md")
+    with open(other_body, "w", encoding="utf-8") as fh:
+        fh.write("other body\n")
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=_never_call,
+        build_view=_never_build_view, run_dir=run_dir, order_id="test-order",
+        pr_body_path=other_body, session_dir=session, max_wait=0,
+    )
+    assert res["detail"] == ED.PR_BODY_REFUSAL_RUN_DIR_MISMATCH
+    assert res["attempts"] == 0
+    assert res["terminal"] is True
+
+
+def test_sanitized_view_receipt_includes_pr_body_keys():
+    receipt = ED._sanitized_view_receipt(_fake_view_receipt(
+        prBodyPath="SUPERHEROES_PR_BODY.md", prBodyBytes=42,
+    ))
+    assert receipt["prBodyPath"] == "SUPERHEROES_PR_BODY.md"
+    assert receipt["prBodyBytes"] == 42
+
+
+def test_grade_review_pr_body_payload_without_investigation_forfeit(tmp_path):
+    run_dir, state = _grade_state_with_view_meta(
+        tmp_path,
+        {"prBodyPath": _SV_MOD.PR_BODY_FILE_NAME, "headSha": "abc"},
+    )
+    stdout = json.dumps({"findings": [{"id": "f1", "message": "issue"}]})
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    records, _ = ED._journal_read(run_dir)
+    for rec in records:
+        if rec.get("kind") == "run-opened":
+            rec["prBodySourcePath"] = os.path.join(str(tmp_path), "session", "pr-body.md")
+    path = ED._journal_path(run_dir)
+    with open(path, "w", encoding="utf-8") as fh:
+        for rec in records:
+            fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+    records, _ = ED._journal_read(run_dir)
+    state = ED._journal_state(records)
+    grade = ED._grade_review_attempt(run_dir, state, 1)
+    assert grade.get("forfeit") is True
+    assert grade.get("reason") == ED.engine_adapter.REVIEW_FORFEIT_VACUOUS
 
