@@ -372,16 +372,15 @@ named in its issue. A guard with no named failure is speculation dressed as auto
 
 ### The safety-machinery route — the guard refuses the fixer
 
-Some of this plugin's own files are **safety machinery**. `lib/escalation.py` owns the set and
-states the inclusion criterion in its own words — *"any module whose edit could disable a floor /
-gate / halt / escalation guarantee"* — and `is_safety_machinery` is the function that decides
-membership. The auto-fix loop gates every file the fixer is about to edit through that function, and
-its instruction is unambiguous: *"If `allow` is false, the fixer MUST NOT edit that file"* —
-`skills/review-code/reference/auto-fix-loop.md` carries the full refusal, including the `degraded`
-case. **Read those two files for the mechanism; it is deliberately not repeated here, so that this
-section cannot drift from the guard it describes.** This section is only about **what happens to the
-findings afterwards** — the part that lived in session memory and issue history until it was written
-down here, so that each new session re-derived it at the cost of a panel plus a fixer round.
+Some of this plugin's own files are **safety machinery**. Two files own that fact between them, and
+this section quotes them rather than explaining them: `lib/escalation.py` owns the set, its
+inclusion criterion — *"any module whose edit could disable a floor / gate / halt / escalation
+guarantee"* — and the membership test; `skills/review-code/reference/auto-fix-loop.md` owns the
+refusal the auto-fix loop's fixer hits on one of them — *"If `allow` is false, the fixer MUST NOT
+edit that file"*. **Read those two for the mechanism; it is deliberately not restated here, so this
+section cannot drift from the guard it describes.** What this section owns is only **what happens to
+the findings afterwards** — the part that lived in session memory and issue history until it was
+written down here, so that each new session re-derived it at the cost of a panel plus a fixer round.
 
 **What the refusal means, and what it does not.** The guard bars the **automated fixer**, not the
 change. Safety machinery is edited all the time — under a ratified issue, by a builder or an
