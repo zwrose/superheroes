@@ -1,6 +1,6 @@
 """Detector for the `--review-only` headless stall shape (#1133).
 
-The shape this pins: a headless `claude -f`-style run reaches the `--review-only`
+The shape this pins: a headless `claude -p` run reaches the `--review-only`
 tiered presentation, opens an ``AskUserQuestion`` nobody can answer, and stalls
 until its harness kills it (observed live on PR #1130). The disposition ratified
 for #1133 is a **prose degradation** — the presentation is written to a durable
@@ -62,6 +62,9 @@ def review_only():
     return _section(_read(_SKILL_MD), "\n### `--review-only`\n")
 
 
+# axis: reachability of an interactive question from a headless run — a question present in the
+# `--review-only` section with no interactivity gate ahead of it. Not phrasing, not flag presence
+# anywhere in the file: the gate must sit upstream of the first question in that section.
 def test_every_question_on_the_review_only_path_is_interactivity_gated(review_only):
     """The stall shape: a question reached with nothing gating it on interactivity.
 
@@ -87,6 +90,8 @@ def test_every_question_on_the_review_only_path_is_interactivity_gated(review_on
     )
 
 
+# axis: the gated-away branch has somewhere to go and something to write — a named contract that
+# resolves on disk, and a durable artifact path inside it. Not the contract's wording.
 def test_review_only_names_a_reachable_headless_contract(review_only):
     """The disposition is a degradation: a named contract, and a durable artifact."""
     assert _CONTRACT_CITATION in review_only, (
@@ -104,6 +109,8 @@ def test_review_only_names_a_reachable_headless_contract(review_only):
     )
 
 
+# axis: drift between the path table and the section — the table's `--review-only` row silent on a
+# headless behavior the section defines. Not the row's wording.
 def test_invocation_table_states_the_headless_behavior():
     """DoD row 3: the chosen disposition is stated in the skill's own path table."""
     rows = [
@@ -117,6 +124,8 @@ def test_invocation_table_states_the_headless_behavior():
     )
 
 
+# axis: regression in the interactive path — a question tier or the review gate's partition lost
+# while adding the headless branch. Not the headless branch itself.
 def test_interactive_presentation_is_intact(review_only):
     """DoD row 2: interactive behavior unchanged — the tiered presentation still stands.
 
