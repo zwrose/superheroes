@@ -75,10 +75,6 @@ payload_contract = payload_contracts.payload_contract
 payload_fault = payload_contracts.payload_fault
 _label = payload_contracts._label
 _type_name = payload_contracts._type_name
-_check_declared = payload_contracts._check_declared
-_PAYLOAD_CHECKERS = payload_contracts._PAYLOAD_CHECKERS
-_PAYLOAD_CONTRACTS = payload_contracts._PAYLOAD_CONTRACTS
-_PAYLOAD_FIELD_BINDINGS = payload_contracts._PAYLOAD_FIELD_BINDINGS
 
 # Single-seat phases: one dispatch, one seat, one payload.
 _SINGLE_SEAT = {

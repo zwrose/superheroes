@@ -15,6 +15,7 @@ import os
 import pytest
 
 import audits
+import payload_contracts as PC
 import round_adapters as RA
 import round_driver as RD
 import round_records as RR
@@ -998,7 +999,7 @@ def test_fixer_store_path_head_diff_folds_through_the_real_driver(tmp_path):
 # payload_contract — conformance with checkers
 # =============================================================================
 
-_CONTRACT_PHASES = tuple(p for p in RA.ADAPTER_PHASES if p in RA._PAYLOAD_CHECKERS)
+_CONTRACT_PHASES = tuple(p for p in RA.ADAPTER_PHASES if p in PC._PAYLOAD_CHECKERS)
 
 _SEAT_KEYS = {
     RD.P_PANEL: "code-reviewer",
@@ -1068,7 +1069,7 @@ def test_payload_contract_unknown_phase():
 
 
 def test_payload_contract_every_checker_phase_has_data():
-    for phase in RA._PAYLOAD_CHECKERS:
+    for phase in PC._PAYLOAD_CHECKERS:
         contract, reason = RA.payload_contract(phase)
         assert reason is None, reason
         assert isinstance(contract.get("required"), list)
@@ -1151,15 +1152,15 @@ def test_declared_top_level_type_fixes_is_list():
 
 
 def test_unknown_type_token_refuses_loudly():
-    contract = dict(RA._PAYLOAD_CONTRACTS[RD.P_SCOPED])
+    contract = dict(PC._PAYLOAD_CONTRACTS[RD.P_SCOPED])
     contract["types"] = dict(contract["types"])
     contract["types"]["findings"] = "not-a-real-type"
     with pytest.raises(ValueError, match="unknown type token"):
-        RA._check_declared({"findings": []}, contract)
+        PC._check_declared({"findings": []}, contract)
 
 
 def test_payload_contract_bindings_match_declared_contracts():
-    for phase, binding in RA._PAYLOAD_FIELD_BINDINGS.items():
+    for phase, binding in PC._PAYLOAD_FIELD_BINDINGS.items():
         contract, reason = RA.payload_contract(phase)
         assert reason is None, reason
         assert contract.get("required") == binding.get("required")

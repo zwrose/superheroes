@@ -32,7 +32,6 @@ def test_every_registered_kind_has_payload_semantics():
         "matchers": {kind for kind, _ in EA._REVIEW_CONTRACT_MATCHERS},
         "parsers": set(EA._REVIEW_CONTRACT_PARSERS),
         "_REVIEW_PAYLOAD_SEMANTICS": set(EA._REVIEW_PAYLOAD_SEMANTICS),
-        "REVIEW_PAYLOAD_SEMANTIC_KINDS": set(EA.REVIEW_PAYLOAD_SEMANTIC_KINDS),
     }
     union = set()
     for registry_set in registries.values():
@@ -141,7 +140,10 @@ _CARRIES_NOT_CARRIED_WRONG_TYPED = {
     "grouping": "oops",
     "ruling": "oops",
 }
-assert set(_CARRIES_NOT_CARRIED_WRONG_TYPED) == set(EA._REVIEW_PAYLOAD_SEMANTICS)
+
+
+def test_wrong_typed_fixture_covers_every_registered_kind():
+    assert set(_CARRIES_NOT_CARRIED_WRONG_TYPED) == set(EA._REVIEW_PAYLOAD_SEMANTICS)
 
 
 def _absent_payload_result(kind):

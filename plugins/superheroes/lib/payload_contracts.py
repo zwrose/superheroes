@@ -68,42 +68,12 @@ def _field_type(field, value, expected):
     return "`%s` is %s, not %s" % (field, _type_name(value), expected)
 
 
-def _optional_str(payload, field):
-    if field not in payload:
-        return None
-    value = payload.get(field)
-    if not isinstance(value, str) or not value:
-        return _field_type(field, value, "a non-empty string")
-    return None
-
-
-def _optional_bool(payload, field):
-    if field not in payload:
-        return None
-    value = payload.get(field)
-    if not isinstance(value, bool):
-        return _field_type(field, value, "a boolean")
-    return None
-
-
 def _list_of_objects(value, field):
     if not isinstance(value, list):
         return _field_type(field, value, "a list")
     for index, member in enumerate(value):
         if not isinstance(member, dict):
             return "`%s`[%d] is %s, not an object" % (field, index, _type_name(member))
-    return None
-
-
-def _abs_path(payload, field):
-    if field not in payload:
-        return None
-    value = payload.get(field)
-    if not isinstance(value, str) or not value:
-        return _field_type(field, value, "a non-empty string")
-    if not os.path.isabs(value):
-        return ("`%s` is not an absolute path (%r) — the driver reads it at FOLD time and treats a "
-                "non-absolute path as an unknown surface" % (field, value))
     return None
 
 
@@ -355,14 +325,6 @@ def _apply_predicate(pred, payload, seat_key, *, record_boundary=False):
             return detail
     else:
         raise ValueError("unknown predicate %r" % name)
-    return None
-
-
-def _apply_predicates(payload, contract, seat_key, *, record_boundary=False):
-    for pred in contract.get("predicates") or []:
-        fault = _apply_predicate(pred, payload, seat_key, record_boundary=record_boundary)
-        if fault:
-            return fault
     return None
 
 

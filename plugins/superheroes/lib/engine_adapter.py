@@ -33,6 +33,7 @@ TASK_ID_TRAILER = "Task-Id"
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
 import payload_contracts  # noqa: E402  (single contract home below this layer; no upward import)
+import round_phases  # noqa: E402  (verifier-verdict enum home; verification.VERDICTS re-exports same tuple)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
@@ -74,8 +75,8 @@ REVIEW_PAYLOAD_SHAPES = (
     SHAPE_PROMPT_ECHO_ONLY,             # the seat emitted only an echo of its prompt — graded text empty after strip
 )
 
-# Mirror verification.VERDICTS without importing verification (stdlib-lean chokepoint).
-VERDICTS = ("CONFIRMED", "PLAUSIBLE", "REFUTED")
+# Single home is round_phases.VERDICTS; verification.VERDICTS re-exports the same tuple.
+VERDICTS = round_phases.VERDICTS
 
 # review-base.md findings JSON template literals — field-exact placeholder refusal (#763).
 REVIEW_BASE_TEMPLATE_ID = "<agent-name>-001"
@@ -1149,8 +1150,6 @@ _REVIEW_PAYLOAD_SEMANTICS = {
     "ruling": _ReviewPayloadSemantics("ruling", _carries_ruling,
                                       _nonempty_ruling, _engaged_ruling),
 }
-
-REVIEW_PAYLOAD_SEMANTIC_KINDS = tuple(_REVIEW_PAYLOAD_SEMANTICS)
 
 
 def review_payload_carried(result, kind):
