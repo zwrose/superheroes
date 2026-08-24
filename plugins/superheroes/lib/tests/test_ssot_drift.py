@@ -278,8 +278,8 @@ def _review_result_kind_quoted_tokens_from_doc_block(block):
 
 
 _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
-    "skills/review-code/reference/auto-fix-loop.md": 2,
-    "skills/workhorse/reference/dispatch-mechanics.md": 1,
+    "skills/review-code/reference/auto-fix-loop.md": 3,
+    "skills/workhorse/reference/dispatch-mechanics.md": 2,
 }
 
 
@@ -297,6 +297,10 @@ def _review_result_kind_enum_copies_from_doc(doc):
         (
             r'exactly ((?:`"[^"]+"`)(?:\s+or\s+`"[^"]+"`)+)',
             _review_result_kind_quoted_tokens_from_doc_block,
+        ),
+        (
+            r"\(`REVIEW_RESULT_KINDS`:\s*([^)]*)\)",
+            _review_result_kind_tokens_from_doc_block,
         ),
     ]
     copies = []
@@ -359,6 +363,10 @@ def test_review_result_kind_enum_recognizer_cardinality_independent():
         (
             'exactly `"findings"` or `"verdicts"`',
             'exactly `"findings"` or `"verdicts"` or `"grouping"` or `"ruling"`',
+        ),
+        (
+            "(`REVIEW_RESULT_KINDS`: `findings`, `verdicts`)",
+            "(`REVIEW_RESULT_KINDS`: `findings`, `verdicts`, `grouping`, `ruling`)",
         ),
     ]
     for two_member, four_member in shape_pairs:
