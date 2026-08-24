@@ -5579,7 +5579,12 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
     wt, _main = _linked_worktree_pair(tmp_path)
     cwd = os.path.realpath(wt)
     sibling_real = os.path.realpath(str(tmp_path / "foreign-sibling"))
-    fixed_porcelain = "?? stable-only.txt\n"
+    plain_porcelain = "?? stable-only.txt\n?? stable-nested/\n"
+    uall_porcelain = (
+        "?? stable-only.txt\n"
+        "?? stable-nested/a.txt\n"
+        "?? stable-nested/b.txt\n"
+    )
     real_git = ED._git_scrubbed
     foreign_call = {"n": 0}
 
@@ -5595,7 +5600,9 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
 
     def fake_git(cwd_real, *args, timeout=None):
         if args[:2] == ("status", "--porcelain=v1"):
-            return subprocess.CompletedProcess(args, 0, fixed_porcelain, "")
+            if "-uall" in args:
+                return subprocess.CompletedProcess(args, 0, uall_porcelain, "")
+            return subprocess.CompletedProcess(args, 0, plain_porcelain, "")
         return real_git(cwd_real, *args, timeout=timeout)
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
