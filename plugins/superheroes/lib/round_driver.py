@@ -57,13 +57,13 @@ import circuit_breaker  # noqa: E402
 import mode_registry  # noqa: E402
 import delta_surface  # noqa: E402
 import dispatch_outcome  # noqa: E402
+import diff_scope  # noqa: E402
 import engine_adapter  # noqa: E402
 import engine_pref  # noqa: E402
 import model_tier_overrides  # noqa: E402
 import loop_plan_common  # noqa: E402
 import model_registry  # noqa: E402
 import panel_tally  # noqa: E402
-import resolve_diff_lines  # noqa: E402
 import review_base_guard  # noqa: E402
 import review_loop_plan  # noqa: E402
 import review_memory  # noqa: E402
@@ -548,7 +548,7 @@ _NIT_CAP = 5
 
 def _diff_scope_ok(finding, valid):
     """A finding is in diff scope iff its (file, line) is an anchorable RIGHT-side line of the
-    round diff — the same hunk-walking `resolve_diff_lines.parse_diff_lines` uses. `valid` is None
+    round diff — the same hunk-walking `diff_scope.parse_diff_lines` uses. `valid` is None
     when no diff was supplied (scope check skipped)."""
     if valid is None:
         return True
@@ -622,7 +622,7 @@ def mechanical_compile(findings, diff_text=None):
     Returns (compiled, drops) where each drop names WHY (never silently dropped)."""
     if not isinstance(findings, list):
         findings = []
-    valid = resolve_diff_lines.parse_diff_lines(diff_text) if diff_text is not None else None
+    valid = diff_scope.parse_diff_lines(diff_text) if diff_text is not None else None
     kept, drops = [], []
     for f in findings:
         if not isinstance(f, dict):
@@ -4679,7 +4679,7 @@ def _panel_dimension_label(seat_key):
 
 
 def _session_pr_checkout_path(session_dir):
-    """Detached PR checkout path when the read-only paths created one; else empty."""
+    """Detached PR checkout path when the read-only path created one; else empty."""
     path = os.path.join(session_dir, "repo")
     return path if os.path.isdir(path) else ""
 

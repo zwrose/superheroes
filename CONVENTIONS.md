@@ -715,7 +715,7 @@ disabled, and these limits are not owner-configurable through `enginePreferences
 
 **Seat-map preflight economics** (#610, #795): the composition preflight that decides which
 **(vendor, model, effort)** cells are live for the panel is **gated, cached, and pin-scoped**. It
-runs only on panel-dispatching entries — `--post` and any receipt-only path reuse a fresh
+runs only on panel-dispatching entries — a receipt-only path reuses a fresh
 **short-TTL machine-readable liveness receipt** or fall open to Claude, never re-probing; a compose
 within the TTL rides the receipt (the workhorse intake preflight can seed it); and only
 **pin-reachable** models are probed. The **fail-direction is unchanged**: a probe failure still
@@ -728,7 +728,7 @@ panel preflight never probed — and **`liveCells`**, the per-cell verdicts that
 currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
 be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
 correct, not a bug. `liveCells` records provenance (`probed`, `synthesized`, or `unprobed`); only
-`probed` counts as verification evidence — `unprobed` is the receipt-only/`--post` path where
+`probed` counts as verification evidence — `unprobed` is the receipt-only path where
 vendors were never probed. Claude is never probed and is live by construction — a stated exception,
 not an oversight.
 
@@ -744,7 +744,7 @@ Claude Code hook (`LEDGERS.md` §1.1) denies git commands that would irrecoverab
 discard uncommitted worktree content — the checkout-revert wipe class every implementer
 and mutation-probe path can trigger. All external
 free-text is secret-scrubbed at the adapter boundary (`engine_adapter.parse_result`) so
-every downstream surface — including a `/review-code --post` PR comment — is clean. The
+every downstream surface that copies that free-text onward is clean. The
 merge authorization is the owner's to grant; the band shows it and never applies it.
 
 **Headless builder launch contract.** A headless builder launch is composed through
