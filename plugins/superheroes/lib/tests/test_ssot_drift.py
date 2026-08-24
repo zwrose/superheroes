@@ -273,28 +273,38 @@ def _review_result_kind_tokens_from_doc_block(block):
     return set(re.findall(r"`([^`]+)`", block))
 
 
+def _review_result_kind_quoted_tokens_from_doc_block(block):
+    return set(re.findall(r'`"([^"]+)"`', block))
+
+
 _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
-    "skills/review-code/reference/auto-fix-loop.md": 3,
-    "skills/workhorse/reference/dispatch-mechanics.md": 2,
+    "skills/review-code/reference/auto-fix-loop.md": 2,
+    "skills/workhorse/reference/dispatch-mechanics.md": 1,
 }
 
 
 def _review_result_kind_enum_copies_from_doc(doc):
     """Every resultKind enumeration copy in a doc file."""
-    patterns = [
-        r"\(one of\s*(.*?)\)\s*naming the payload",
-        r"\(`([^`]+)` or `([^`]+)`\) naming which payload",
-        r'exactly `"([^"]+)"` or `"([^"]+)"`',
+    pattern_specs = [
+        (
+            r"\(one of\s*([^)]*)\)\s*naming the payload",
+            _review_result_kind_tokens_from_doc_block,
+        ),
+        (
+            r"\(([^)]*)\)\s*naming which payload",
+            _review_result_kind_tokens_from_doc_block,
+        ),
+        (
+            r'exactly ((?:`"[^"]+"`)(?:\s+or\s+`"[^"]+"`)+)',
+            _review_result_kind_quoted_tokens_from_doc_block,
+        ),
     ]
     copies = []
-    for pat in patterns:
-        for m in re.finditer(pat, doc, re.DOTALL):
-            if m.lastindex == 2:
-                copies.append({m.group(1), m.group(2)})
-            else:
-                tokens = _review_result_kind_tokens_from_doc_block(m.group(1))
-                if tokens:
-                    copies.append(tokens)
+    for pat, tokens_from_block in pattern_specs:
+        for m in re.finditer(pat, doc):
+            tokens = tokens_from_block(m.group(1))
+            if tokens:
+                copies.append(tokens)
     assert copies, (
         "doc: no resultKind enumeration copies found (moved or reworded?)"
     )
@@ -333,6 +343,31 @@ def test_review_result_kind_enum_in_dispatch_mechanics_doc():
     """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
     _assert_review_result_kind_enum_copies_match_home(
         "skills/workhorse/reference/dispatch-mechanics.md")
+
+
+def test_review_result_kind_enum_recognizer_cardinality_independent():
+    """Recognizer yields full token sets for two-member and four-member phrasings."""
+    shape_pairs = [
+        (
+            "(one of `findings`, `verdicts`) naming the payload",
+            "(one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload",
+        ),
+        (
+            "(`findings` or `verdicts`) naming which payload",
+            "(`findings` or `verdicts` or `grouping` or `ruling`) naming which payload",
+        ),
+        (
+            'exactly `"findings"` or `"verdicts"`',
+            'exactly `"findings"` or `"verdicts"` or `"grouping"` or `"ruling"`',
+        ),
+    ]
+    for two_member, four_member in shape_pairs:
+        two_tokens = _review_result_kind_enum_copies_from_doc(two_member)[0]
+        four_tokens = _review_result_kind_enum_copies_from_doc(four_member)[0]
+        assert two_tokens == {"findings", "verdicts"}
+        assert four_tokens == {
+            "findings", "verdicts", "grouping", "ruling",
+        }
 
 
 # --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---
