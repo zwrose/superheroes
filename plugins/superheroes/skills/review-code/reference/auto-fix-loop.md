@@ -636,6 +636,13 @@ If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery �
 membership is the `SAFETY_MACHINERY` tuple in `escalation.py`); surface it as a finding for the owner instead. A `degraded:true`
 result also refuses (fail-closed). The fixer never pushes/merges/deploys (those stay user-gated).
 
+**Where those findings go next.** A refusal here means this loop **cannot converge on that surface** —
+that is the guard's designed bound, not a defect, an engine failure, or an escalation trigger. The
+route from the refusal to a fix — ordered implementer work orders, the owner authorization a blocking
+finding needs first, and the park branch when that authorization is unavailable — is
+`rubric/review-discipline.md` § *The safety-machinery route — the guard refuses the fixer*. Follow it
+rather than re-deriving it; do not retry the fixer, and never narrow the guard to converge a round.
+
 > **Enforcement boundary (review-flagged residual, design-consistent).** In F5 this guard is invoked
 > by skill prose — a subagent *could* skip it, the same rationalize-past-prose risk `loop_state` was
 > built to remove. F5 deliberately ships the deterministic guard *function* (tested, §8) + this
