@@ -934,6 +934,20 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
             seen.add(key)
             degradations.append(rec)
     receipt_live_cells, receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
+    raw_skew = seat_map.get("pluginVersionSkew")
+    if isinstance(raw_skew, dict) and isinstance(raw_skew.get("status"), str):
+        plugin_version_skew = {
+            "status": raw_skew["status"],
+            "detail": raw_skew.get("detail", ""),
+            "inspectedRoot": raw_skew.get("inspectedRoot", ""),
+        }
+    else:
+        # build()-only maps never ran compose skew detection — not-checked, never checked-clean.
+        plugin_version_skew = {
+            "status": "not-checked",
+            "detail": "not-composed",
+            "inspectedRoot": "",
+        }
     out = {
         "seats": seat_map.get("seats", {}),
         "degradations": degradations,
@@ -945,6 +959,7 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
+        "pluginVersionSkew": plugin_version_skew,
     }
     return out
 
@@ -1062,7 +1077,15 @@ def main(argv):
         # appended after can never be seen by the evidence check (#677; same ordering bound as
         # the preflight notes merge below).
         skew_record = version_skew.detect(args.repo_root, plugin_root)
-        if skew_record is not None:
+        sm["pluginVersionSkew"] = {
+            "status": skew_record["status"],
+            "detail": skew_record["detail"],
+            "inspectedRoot": skew_record["inspectedRoot"],
+        }
+        # bite-axis: only checked-degraded records reach degradations — checked-clean and
+        # not-checked stay off the list so a clean or skipped check never reads as degraded
+        # (#677; if-and-only-if with the consumer rule in CONVENTIONS §6).
+        if skew_record.get("status") == "checked-degraded":
             extra_degradations.append(skew_record)
         if notes:
             extra_degradations.extend(notes)

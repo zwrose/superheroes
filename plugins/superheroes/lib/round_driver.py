@@ -76,6 +76,7 @@ import round_phases  # noqa: E402
 import seat_map  # noqa: E402
 import store_core  # noqa: E402
 import verification  # noqa: E402
+import version_skew  # noqa: E402
 from finding_identity import finding_identity, normalize_title  # noqa: E402
 
 _seat_map_unexcused_violations = seat_map.unexcused_violations
@@ -775,13 +776,29 @@ def _skew_records(state):
         return []
     records = []
     for deg in degradations:
-        if isinstance(deg, dict) and deg.get("constraint") == "plugin-version-skew":
+        if isinstance(deg, dict) and deg.get("constraint") == version_skew.CONSTRAINT:
             records.append(deg)
     return records
 
 
 def _skew_degraded(state):
     return bool(_skew_records(state))
+
+
+def _plugin_version_skew_status(state):
+    """Seat-map tri-state status for certification disclosure (#677). ``absent`` when the seat map
+    carries no ``pluginVersionSkew`` receipt — an older map or one built without the field — so the
+    certification block never claims a skew check ran."""
+    sm = state.get("seatMap")
+    if not isinstance(sm, dict):
+        return "absent"
+    pvs = sm.get("pluginVersionSkew")
+    if not isinstance(pvs, dict):
+        return "absent"
+    status = pvs.get("status")
+    if status in ("checked-clean", "checked-degraded", "not-checked"):
+        return status
+    return "absent"
 
 
 def _seat_map_violations(state):
@@ -3056,9 +3073,12 @@ def _terminal_converged(state, config, full_panel, note=None):
     if _seat_map_unproven_liveness(state):
         shape_drivers.append("unproven-liveness")
     state["terminal"] = "converged"
+    # bite-axis: skew tri-state rides certification beside shape/shapeDrivers so a vetter sees
+    # whether the seat map checked skew — independent of the three -degraded projections (#677).
     cert = {"shape": shape, "fullPanel": bool(full_panel),
             "independence": "degraded" if _degraded(state) else "independent",
             "base": _certification_base(state),
+            "pluginVersionSkew": _plugin_version_skew_status(state),
             "shapeDrivers": sorted(shape_drivers)}
     if note:
         cert["note"] = note
@@ -3144,10 +3164,15 @@ def build_receipt(state, session_dir=None):
             reason = rec.get("reason")
             if isinstance(reason, str) and reason:
                 _skew_reasons.append(reason)
-        degraded.append(
-            "plugin-version-skew: the review ran under a plugin/repository semantics skew (%s); "
-            "disclosed by the seat map and named in the certification shape"
-            % "; ".join(_skew_reasons))
+        if _skew_reasons:
+            degraded.append(
+                "%s; disclosed by the seat map and named in the certification shape"
+                % "; ".join(_skew_reasons))
+        else:
+            degraded.append(
+                "plugin-version-skew: the review ran under a plugin/repository semantics skew "
+                "but no usable reason text was recorded; disclosed by the seat map and named in "
+                "the certification shape")
     _pin_seats = _seat_pin_excused_seats(state)
     if _pin_seats:
         degraded.append(

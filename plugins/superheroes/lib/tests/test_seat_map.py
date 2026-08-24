@@ -2090,6 +2090,34 @@ def test_cli_compose_repo_root_superheroes_skew_emits_plugin_version_skew(tmp_pa
     receipt = json.loads(capsys.readouterr().out)
     skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
     assert len(skew) == 1
+    assert skew[0]["detail"] == "semantics-divergent"
+    assert "lib/model_registry.py" in skew[0]["reason"]
+
+
+def test_cli_compose_repo_root_superheroes_clean_emits_no_skew_degradation(tmp_path, capsys):
+    repo_root = _write_superheroes_fixture_repo(tmp_path, divergent=False)
+    rc = SM.main(
+        [
+            "x",
+            "compose",
+            "--live-vendors",
+            "claude,codex,cursor",
+            "--author-family",
+            "xai",
+            "--narrative-family",
+            "anthropic",
+            "--pr-number",
+            "677",
+            "--repo-root",
+            repo_root,
+        ]
+    )
+    assert rc == 0
+    receipt = json.loads(capsys.readouterr().out)
+    skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
+    assert skew == []
+    assert receipt["pluginVersionSkew"]["status"] == "checked-clean"
+    assert receipt["pluginVersionSkew"]["detail"] == "no-divergence"
 
 
 def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_path, capsys):
@@ -2116,3 +2144,5 @@ def test_cli_compose_repo_root_not_superheroes_emits_no_plugin_version_skew(tmp_
     receipt = json.loads(capsys.readouterr().out)
     skew = [d for d in receipt["degradations"] if d.get("constraint") == "plugin-version-skew"]
     assert skew == []
+    assert receipt["pluginVersionSkew"]["status"] == "not-checked"
+    assert receipt["pluginVersionSkew"]["detail"] == "not-source-repo"

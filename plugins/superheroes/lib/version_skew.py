@@ -19,6 +19,8 @@ import string
 CONSTRAINT = "plugin-version-skew"
 SEMANTICS_FILES = ("lib/model_registry.py", "lib/seat_map.py")
 
+# bite-axis: bounded reads — streamed rather than read-whole so a repo-controlled symlink to an
+# endless device cannot hang compose or exhaust the reviewer (#677).
 # Max bytes read from any single evidence file; comfortably above legitimate semantics files.
 _MAX_READ_BYTES = 512 * 1024
 
@@ -28,13 +30,20 @@ _MAX_VERSION_CHARS = 64
 
 def _open_regular_file(path: str) -> int | None:
     """Open a regular file read-only without following symlinks."""
+    # bite-axis: symlink and non-regular-file refusal — O_NOFOLLOW refuses a symlink only at the
+    # final path component, so the fstat regular-file check is what stops a fifo or device file (#677).
     try:
         if not stat.S_ISREG(os.lstat(path).st_mode):
             return None
     except OSError:
         return None
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+        # O_NONBLOCK prevents blocking on a fifo swapped in between lstat and open; without it the
+        # post-open fstat check never runs.
+        fd = os.open(
+            path,
+            os.O_RDONLY | os.O_NOFOLLOW | getattr(os, "O_NONBLOCK", 0),
+        )
     except OSError:
         return None
     try:
@@ -167,6 +176,9 @@ def detect(repo_root: str, plugin_root: str) -> dict:
         repo_root, "plugins", "superheroes", ".claude-plugin", "plugin.json",
     )
     manifest = _read_json(manifest_path)
+    # bite-axis: silence outside the source repository — a consuming project's installed cache is
+    # its only semantics source, so skew is not provable here; this path returns a not-checked /
+    # not-source-repo record rather than checked-clean (#677).
     if manifest is None or manifest.get("name") != "superheroes":
         return _make_record(
             "not-checked",
@@ -203,9 +215,15 @@ def detect(repo_root: str, plugin_root: str) -> dict:
         repo_digest = _file_digest(repo_path)
         if plugin_digest is None or repo_digest is None:
             unreadable.append(entry)
+        # bite-axis: content divergence — digest comparison on the watched semantics files, not a
+        # version-string compare (release tooling only advances version.txt at merge, so versions
+        # match throughout the skew window this guard exists for) (#677).
         elif plugin_digest != repo_digest:
             differing.append(entry)
 
+    # bite-axis: fail-closed — once the identity gate has passed, unreadable or unsafe evidence
+    # returns checked-degraded / evidence-unreadable, never checked-clean and never not-checked;
+    # a guard that falls silent on a refused read has fallen open (#677).
     if unreadable:
         entries = ", ".join(unreadable)
         reason = (
