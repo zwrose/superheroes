@@ -10,6 +10,7 @@ import sys
 import time
 
 import pytest
+from _pytest.monkeypatch import notset as _monkeypatch_notset
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -5449,7 +5450,12 @@ def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch
             raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
         return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fail_worktree_list)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fail_worktree_list,
+        {("_git_scrubbed_bytes", "worktree")},
+    )
     baseline = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert baseline is not None
     with open(os.path.join(wt, "dirty.txt"), "w", encoding="utf-8") as fh:
@@ -5694,7 +5700,12 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
         return real_bytes_git(cwd_real, *args, timeout=timeout)
 
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
-    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_status_git)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_status_git,
+        {("_git_scrubbed_bytes", "status")},
+    )
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
     verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
@@ -5786,6 +5797,7 @@ def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
 
 
 # --- WO-B (#1122): dirt probe by-construction tests + bite-proof detectors ----------
+# --- WO-M (#1122): runtime probe git fake route registration -----------------------
 
 
 PROBE_GIT_FAKE_ROUTES = {
@@ -5803,6 +5815,93 @@ PROBE_GIT_FAKE_ROUTES = {
     },
 }
 
+PROBE_PRODUCTION_GIT_ROUTES = frozenset({
+    ("_git_scrubbed", "rev-parse"),
+    ("_git_scrubbed_bytes", "worktree"),
+    ("_git_scrubbed_bytes", "status"),
+})
+
+_PROBE_GIT_HELPER_NAMES = frozenset({"_git_scrubbed", "_git_scrubbed_bytes"})
+
+
+class _ProbeGitFakeInstallState:
+    def __init__(self):
+        self.test_name = None
+        self.installed_routes = set()
+        self._chokepoint_active = False
+
+    def begin_test(self, test_name):
+        self.test_name = test_name
+        self.installed_routes = set()
+        self._chokepoint_active = False
+
+
+_PROBE_GIT_STATE = _ProbeGitFakeInstallState()
+
+
+def _finish_probe_git_fake_route_check(test_name, installed):
+    declared = PROBE_GIT_FAKE_ROUTES.get(test_name)
+    if declared is not None:
+        if installed != declared:
+            raise AssertionError(
+                "%s: installed probe git fake routes %r != declared %r"
+                % (test_name, sorted(installed), sorted(declared))
+            )
+        return
+    if installed:
+        raise AssertionError(
+            "%s: undeclared probe git fake routes installed %r"
+            % (test_name, sorted(installed))
+        )
+
+
+def _register_probe_git_fake(monkeypatch, helper_name, fake, routes):
+    """Install a probe-surface git helper fake; record routes at install time."""
+    if helper_name not in _PROBE_GIT_HELPER_NAMES:
+        raise ValueError("not a probe git helper: %r" % (helper_name,))
+    _PROBE_GIT_STATE._chokepoint_active = True
+    try:
+        for helper, subcommand in routes:
+            if helper != helper_name:
+                raise ValueError(
+                    "route helper %r does not match install target %r"
+                    % (helper, helper_name)
+                )
+            _PROBE_GIT_STATE.installed_routes.add((helper, subcommand))
+        monkeypatch.setattr(ED, helper_name, fake)
+    finally:
+        _PROBE_GIT_STATE._chokepoint_active = False
+
+
+def _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name):
+    real_setattr = monkeypatch.setattr
+
+    def guarded_setattr(target, name, value=_monkeypatch_notset, raising=True):
+        if value is _monkeypatch_notset:
+            return real_setattr(target, name, raising=raising)
+        if target is ED and name in _PROBE_GIT_HELPER_NAMES:
+            if not _PROBE_GIT_STATE._chokepoint_active:
+                pytest.fail(
+                    "%s: probe git fake ED.%s installed via setattr bypass; "
+                    "use _register_probe_git_fake"
+                    % (test_name, name)
+                )
+        return real_setattr(target, name, value, raising=raising)
+
+    monkeypatch.setattr(monkeypatch, "setattr", guarded_setattr)
+
+
+@pytest.fixture(autouse=True)
+def _probe_git_fake_route_registry(request, monkeypatch):
+    test_name = request.node.originalname or request.node.name.split("[", 1)[0]
+    _PROBE_GIT_STATE.begin_test(test_name)
+    _wrap_monkeypatch_for_probe_git_fakes(monkeypatch, test_name)
+    yield
+    if test_name in PROBE_GIT_FAKE_ROUTES or _PROBE_GIT_STATE.installed_routes:
+        _finish_probe_git_fake_route_check(
+            test_name, set(_PROBE_GIT_STATE.installed_routes),
+        )
+
 
 def _install_git_route_recorders(monkeypatch, observed):
     real_scrubbed = ED._git_scrubbed
@@ -5816,34 +5915,23 @@ def _install_git_route_recorders(monkeypatch, observed):
         observed.append(("_git_scrubbed_bytes", args[0]))
         return real_scrubbed_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed", recording_scrubbed)
-    monkeypatch.setattr(ED, "_git_scrubbed_bytes", recording_scrubbed_bytes)
-
-
-def _scan_probe_surface_git_fake_sites():
-    test_path = os.path.join(_HERE, "test_engine_dispatch.py")
-    with open(test_path, encoding="utf-8") as fh:
-        lines = fh.readlines()
-    sites = set()
-    current_test = None
-    setattr_prefix = "setattr(ED, " + '"_git_scrubbed'
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith("def test_"):
-            current_test = stripped.split("(")[0].replace("def ", "")
-        elif line and not line[0].isspace() and stripped.startswith("def "):
-            current_test = None
-        if setattr_prefix in line and current_test is not None:
-            sites.add(current_test)
-    return sites
+    _PROBE_GIT_STATE._chokepoint_active = True
+    try:
+        monkeypatch.setattr(ED, "_git_scrubbed", recording_scrubbed)
+        monkeypatch.setattr(ED, "_git_scrubbed_bytes", recording_scrubbed_bytes)
+    finally:
+        _PROBE_GIT_STATE._chokepoint_active = False
 
 
 def test_probe_git_fake_routes_are_live(tmp_path, monkeypatch):
-    """Guard: every git route faked by a dirt-probe test is live on the production path.
+    """Guard: declared probe git fake routes match production observation pin."""
+    for test_name in PROBE_GIT_FAKE_ROUTES:
+        fn = globals().get(test_name)
+        assert callable(fn), (
+            "PROBE_GIT_FAKE_ROUTES key %r is not a test function in this module"
+            % (test_name,)
+        )
 
-    A fake installed indirectly (through a helper function rather than a literal
-    ``setattr`` in the test body) is not seen by the source scan in step 4.
-    """
     observed = []
     _install_git_route_recorders(monkeypatch, observed)
 
@@ -5855,7 +5943,10 @@ def test_probe_git_fake_routes_are_live(tmp_path, monkeypatch):
     assert verdict is False
 
     observed_set = set(observed)
-    assert observed_set, "observation recorded no git routes"
+    assert observed_set == PROBE_PRODUCTION_GIT_ROUTES, (
+        "observed production git routes %r != expected %r"
+        % (sorted(observed_set), sorted(PROBE_PRODUCTION_GIT_ROUTES))
+    )
 
     for test_name, declared_routes in PROBE_GIT_FAKE_ROUTES.items():
         for route in declared_routes:
@@ -5864,18 +5955,36 @@ def test_probe_git_fake_routes_are_live(tmp_path, monkeypatch):
                 % (test_name, route, sorted(observed_set))
             )
 
-    scanned_tests = _scan_probe_surface_git_fake_sites()
-    assert scanned_tests, "source scan found no probe-surface git fake sites"
 
-    declared_tests = set(PROBE_GIT_FAKE_ROUTES.keys())
-    undeclared = scanned_tests - declared_tests
-    assert not undeclared, (
-        "fake sites without PROBE_GIT_FAKE_ROUTES entry: %r" % sorted(undeclared)
-    )
-    absent = declared_tests - scanned_tests
-    assert not absent, (
-        "PROBE_GIT_FAKE_ROUTES entries with no fake site: %r" % sorted(absent)
-    )
+def test_probe_git_fake_declaration_binding_detects_helper_mismatch():
+    with pytest.raises(AssertionError, match="!="):
+        _finish_probe_git_fake_route_check(
+            "test_worktree_baseline_fallback_on_enumeration_failure",
+            {("_git_scrubbed", "worktree")},
+        )
+
+
+def test_probe_git_fake_detects_undeclared_wrapped_install(monkeypatch):
+    def _install_from_helper():
+        _register_probe_git_fake(
+            monkeypatch,
+            "_git_scrubbed_bytes",
+            lambda *args, **kwargs: None,
+            {("_git_scrubbed_bytes", "status")},
+        )
+
+    _install_from_helper()
+    with pytest.raises(AssertionError, match="undeclared"):
+        _finish_probe_git_fake_route_check(
+            _PROBE_GIT_STATE.test_name,
+            set(_PROBE_GIT_STATE.installed_routes),
+        )
+    _PROBE_GIT_STATE.installed_routes.clear()
+
+
+def test_probe_git_fake_bypass_setattr_fails_by_name(monkeypatch):
+    with pytest.raises(pytest.fail.Exception, match="setattr bypass"):
+        monkeypatch.setattr(ED, "_git_scrubbed_bytes", lambda *a, **k: None)
 
 
 def _nested_sibling_worktree(main, cwd, name="sib"):
@@ -6448,7 +6557,12 @@ def test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit(tmp_path, mo
             raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
         return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_timeout)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_timeout,
+        {("_git_scrubbed_bytes", "status")},
+    )
     assert ED._worktree_entry_set(cwd, timeout=5) is None
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
 
@@ -6457,7 +6571,12 @@ def test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit(tmp_path, mo
             return subprocess.CompletedProcess(args, 1, stdout=b"", stderr=b"")
         return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_nonzero)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_nonzero,
+        {("_git_scrubbed_bytes", "status")},
+    )
     assert ED._worktree_entry_set(cwd, timeout=5) is None
 
 
@@ -6625,7 +6744,12 @@ def test_worktree_baseline_non_utf8_pathname_no_raise(tmp_path, monkeypatch):
             return subprocess.CompletedProcess(args, 0, stdout=porcelain, stderr=b"")
         return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_status)
+    _register_probe_git_fake(
+        monkeypatch,
+        "_git_scrubbed_bytes",
+        fake_status,
+        {("_git_scrubbed_bytes", "status")},
+    )
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
     assert baseline["entries"]
