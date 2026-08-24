@@ -1,5 +1,6 @@
 import argparse
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -5694,6 +5695,41 @@ def test_worktree_dirt_invariant_unchanged_tree_cross_product(
     assert sibling_real.startswith(cwd + os.sep)
 
 
+def _independent_legacy_porcelain_sha256(cwd):
+    """Porcelain digest from raw git, not from _legacy_worktree_porcelain_sha256."""
+    status = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    if status.returncode != 0:
+        return None
+    porcelain = status.stdout or ""
+    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+
+
+def _mode_worktree_baseline(cwd, mode):
+    head = ED._git_scrubbed(cwd, "rev-parse", "HEAD", timeout=5)
+    assert head.returncode == 0
+    live_excluded = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+    if live_excluded is None:
+        excluded_roots = None
+    else:
+        excluded_roots = sorted(live_excluded)
+    porcelain_sha256 = ED._worktree_porcelain_snapshot(
+        cwd, mode, excluded_roots, timeout=5,
+    )
+    assert porcelain_sha256 is not None
+    return {
+        "headSha": (head.stdout or "").strip(),
+        "porcelainSha256": porcelain_sha256,
+        "mode": mode,
+        "excludedRoots": excluded_roots,
+    }
+
+
 def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
     wt, _main = _linked_worktree_pair(tmp_path)
     cwd = os.path.realpath(wt)
@@ -5701,9 +5737,15 @@ def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
     assert modern is not None
     legacy = {
         "headSha": modern["headSha"],
-        "porcelainSha256": ED._legacy_worktree_porcelain_sha256(cwd, timeout=5),
+        "porcelainSha256": _independent_legacy_porcelain_sha256(cwd),
     }
     assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
+    wrong_digest = hashlib.sha256(b"not-the-porcelain").hexdigest()
+    legacy_wrong = {
+        "headSha": modern["headSha"],
+        "porcelainSha256": wrong_digest,
+    }
+    assert ED._worktree_dirt_verdict(legacy_wrong, cwd, timeout=5) is True
 
 
 def test_unreadable_worktree_baseline_fail_closed(tmp_path):
@@ -6167,4 +6209,67 @@ def test_worktree_dirt_unsupported_entries_version_fail_closed(tmp_path):
         "porcelainSha256": ED._legacy_worktree_porcelain_sha256(cwd, timeout=5),
     }
     assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is not None
+
+
+# --- WO-E (#1122): retained mode-branch coverage + de-tautologized legacy pin ---
+
+
+@pytest.mark.parametrize("mode", ["plain", "filtered"])
+def test_mode_worktree_baseline_unchanged_tree_not_dirty(tmp_path, mode):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, mode)
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+@pytest.mark.parametrize("mode", ["plain", "filtered"])
+def test_mode_worktree_baseline_dirtied_tree_reads_dirty(tmp_path, mode):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, mode)
+    with open(os.path.join(wt, "mode-dirt-%s.txt" % mode), "w", encoding="utf-8") as fh:
+        fh.write("dirty\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+@pytest.mark.parametrize("mode", ["plain", "filtered"])
+def test_mode_worktree_baseline_head_movement_reads_dirty(tmp_path, mode):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, mode)
+    new_file = os.path.join(wt, "mode-head-%s.txt" % mode)
+    with open(new_file, "w", encoding="utf-8") as fh:
+        fh.write("move\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", os.path.basename(new_file)],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "mode head move"],
+        check=True,
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_mode_worktree_baseline_bogus_mode_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = _mode_worktree_baseline(cwd, "plain")
+    baseline["mode"] = "bogus"
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
+
+
+def test_mode_worktree_baseline_none_mode_uses_legacy_branch(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    modern = ED._worktree_baseline(cwd, timeout=5)
+    assert modern is not None
+    legacy = {
+        "headSha": modern["headSha"],
+        "porcelainSha256": _independent_legacy_porcelain_sha256(cwd),
+        "mode": None,
+    }
+    assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
 
