@@ -40,8 +40,12 @@ STATUS_DISPOSITIONS = {
 def is_degrading(status: object) -> bool:
     """True when ``status`` is a degrading skew disclosure. Unknown statuses and members with no
     disposition fail closed (read as degrading) so a future enum member cannot ship silently
-    non-degrading (#1107)."""
-    if status not in STATUSES:
+    non-degrading (#1107). Unhashable values (malformed seat maps) fail closed too."""
+    try:
+        known = status in STATUSES
+    except TypeError:
+        return True
+    if not known:
         return True
     if status not in STATUS_DISPOSITIONS:
         return True

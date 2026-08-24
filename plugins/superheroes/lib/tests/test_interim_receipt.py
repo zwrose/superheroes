@@ -208,7 +208,34 @@ def test_attest_allowed_when_only_interim_on_disk(tmp_path, monkeypatch):
     out = RD.cmd_attest(d, "1", "orphaned record; handing back uncertified")
     assert out["ok"] is False
     assert out["reason"] != "terminal-receipt-exists"
+    assert out["reason"] != "terminal-receipt-unreadable"
     assert calls == ["1"]
+
+
+def test_attest_refuses_unreadable_on_disk_receipt(tmp_path):
+    # axis: unreadable on-disk receipt is never permission to overwrite
+    d = _session(tmp_path)
+    path = os.path.join(d, RD.RECEIPT_FILE)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write("not-json{{")
+    out = RD.cmd_attest(d, "1", "orphaned record; handing back uncertified")
+    assert out["ok"] is False
+    assert out["reason"] == "terminal-receipt-unreadable"
+
+
+def test_checkpoint_calls_commit_recover_before_write(tmp_path, monkeypatch):
+    # axis: checkpoint must replay a sealed-unapplied commit before opening its own
+    d = _session(tmp_path)
+    calls = []
+    orig = RD._commit_recover_or_refuse
+
+    def track(sd, cmd, **kw):
+        calls.append(cmd)
+        return orig(sd, cmd, **kw)
+
+    monkeypatch.setattr(RD, "_commit_recover_or_refuse", track)
+    assert RD.cmd_checkpoint(d, "tripwire")["ok"] is True
+    assert calls == ["checkpoint"]
 
 
 # --- handback_gate ---------------------------------------------------------------------------

@@ -148,6 +148,7 @@ def test_malformed_skew_record_skipped_not_crashing():
                     None,
                     42,
                     {"status": version_skew.STATUS_CHECKED_DEGRADED},
+                    {"constraint": version_skew.CONSTRAINT, "status": ["unhashable"]},
                     _skew_record(version_skew.DETAIL_SEMANTICS_DIVERGENT),
                 ],
             },
@@ -155,27 +156,32 @@ def test_malformed_skew_record_skipped_not_crashing():
         "seatMap": {},
     }
     records = RD._skew_records(state)
-    assert len(records) == 1
+    assert len(records) == 2
+    assert any(r.get("status") == ["unhashable"] for r in records)
+    assert any(r.get("status") == version_skew.STATUS_CHECKED_DEGRADED for r in records)
     receipt = RD.build_receipt(
         {**state, "config": {}, "findings": [], "decisions": [], "certification": {}},
     )
     assert isinstance(receipt, dict)
 
 
-def test_invalid_skew_status_not_counted_as_degrading_disclosure():
+def test_invalid_skew_status_disclosed_as_degrading():
+    # axis: unknown skew status fails closed at every consumer — same disposition as is_degrading
     bogus = {
         "constraint": version_skew.CONSTRAINT,
         "status": "bogus-status",
         "detail": version_skew.DETAIL_SEMANTICS_DIVERGENT,
-        "reason": "should not disclose",
+        "reason": "future seat-map token",
         "inspectedRoot": "/tmp/repo",
     }
     state = {
         "rounds": {"1": {"pluginVersionSkew": [bogus]}},
         "seatMap": {"degradations": [bogus]},
     }
-    assert RD._skew_records(state) == []
-    assert RD._skew_degraded(state) is False
+    records = RD._skew_records(state)
+    assert len(records) == 1
+    assert records[0]["status"] == "bogus-status"
+    assert RD._skew_degraded(state) is True
 
 
 # --- Part 2: disposition census and is_degrading ---

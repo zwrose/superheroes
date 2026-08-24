@@ -149,6 +149,40 @@ def test_readable_input_refusal_when_registered_path_missing(tmp_path):
     assert reason == "order-input-missing:DIFF_PATH"
 
 
+def test_emitted_path_with_space_is_file(tmp_path):
+    # axis: driver-generated paths are tested raw — never shell-split on spaces
+    spaced = tmp_path / "my dir"
+    spaced.mkdir()
+    target = spaced / "diff.txt"
+    target.write_text("diff\n", encoding="utf-8")
+    assert RD._emitted_path_is_file(str(target)) is True
+
+
+def test_prior_comments_pr_mode_absent_disclosed_not_fabricated(tmp_path):
+    # axis: PR-mode absence must not write [] — disclose instead
+    session_dir = str(tmp_path / "pr-session")
+    os.makedirs(session_dir)
+    repo = os.path.join(session_dir, "repo")
+    os.makedirs(repo)
+    state = RD.new_state(_cfg(tmp_path))
+    path = RD._resolve_prior_comments_path(session_dir, state)
+    assert path.startswith("(")
+    assert not os.path.exists(os.path.join(session_dir, "prior-comments.json"))
+    assert state["rounds"]["1"]["priorCommentsUnavailable"] is True
+    ph = {"PRIOR_COMMENTS_PATH": path, "RUBRIC_PATH": RD._shipped_rubric_path()}
+    assert RD._readable_file_input_refusal(ph) is None
+
+
+def test_prior_comments_branch_mode_absent_is_empty_not_refusal(tmp_path):
+    # axis: branch mode legitimately has no prior-comments file
+    session_dir = str(tmp_path / "branch-session")
+    os.makedirs(session_dir)
+    state = RD.new_state(_cfg(tmp_path))
+    assert RD._resolve_prior_comments_path(session_dir, state) == ""
+    ph = {"PRIOR_COMMENTS_PATH": "", "RUBRIC_PATH": RD._shipped_rubric_path()}
+    assert RD._readable_file_input_refusal(ph) is None
+
+
 def test_pre_emit_and_commit_sidecar_bytes_match(tmp_path):
     # axis: pre-emit materialization and orders-emit commit write identical sidecar bytes
     session_dir = str(tmp_path / "sidecar-session")

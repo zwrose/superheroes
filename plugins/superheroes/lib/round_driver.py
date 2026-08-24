@@ -819,12 +819,9 @@ def _enrich_skew_degradation(deg, seat_map):
             if val not in (None, ""):
                 rec[field] = val
     status = rec.get("status")
-    if status not in version_skew.STATUSES:
-        if status in (None, ""):
-            rec["status"] = version_skew.STATUS_CHECKED_DEGRADED
-            status = rec["status"]
-        else:
-            return None
+    if status in (None, ""):
+        rec["status"] = version_skew.STATUS_CHECKED_DEGRADED
+        status = rec["status"]
     if not version_skew.is_degrading(status):
         return None
     return rec
@@ -854,8 +851,6 @@ def _union_skew_disclosures(existing, new):
             if key is None:
                 continue
             status = rec.get("status")
-            if status not in version_skew.STATUSES:
-                continue
             if not version_skew.is_degrading(status):
                 continue
             if key in seen:
@@ -888,8 +883,6 @@ def _skew_records(state):
             if key is None:
                 continue
             status = row.get("status")
-            if status not in version_skew.STATUSES:
-                continue
             if not version_skew.is_degrading(status):
                 continue
             if key in seen:
@@ -3110,6 +3103,40 @@ def _handle_stall(state, config, breaker):
     model_registry.escalate and/or another vendor, once, journaled). Still stalled → the stall
     menu."""
     if not state.get("selfRecovered"):
+        batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
+        open_ids = _open_audit_target_ids(state)
+        if open_ids is None and not batch:
+            _park_cannot_certify(
+                state,
+                "audit-stall self-recovery — open audit target set unresolvable "
+                "(missing or malformed _auditOutcome); cannot dispatch fix batch")
+            return
+        outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
+        not_discharged = outcome.get("notDischarged") or []
+        new_blocking = _blocking(state.get("findings") or [])
+        if not batch:
+            if not_discharged or new_blocking:
+                nd = set(not_discharged)
+                nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
+                              if t.get("id") in nd]
+                batch = [dict(f) for f in new_blocking]
+                seen = {(finding_identity(f), f.get("line")) for f in batch}
+                for t in nd_targets:
+                    ident = t.get("identity") or finding_identity(t)
+                    key = (ident, t.get("line"))
+                    if ident is not None and key not in seen:
+                        batch.append(t)
+                        seen.add(key)
+                if not batch:
+                    _park_capped_open(
+                        state,
+                        (breaker.get("detail") or "audit-stall self-recovery")
+                        + " — blocking finding(s) remain not-discharged; certification withheld")
+                    return
+            else:
+                state["selfRecovered"] = True
+                _settle_delta_converged(state, config)
+                return
         state["selfRecovered"] = True
         fixer_vendor = config.get("fixerVendor")
         rung = model_registry.escalate(
@@ -3124,17 +3151,6 @@ def _handle_stall(state, config, breaker):
                   % ("fixer escalated to %r" % (rung,) if rung is not None
                      else "no escalation rung available — fixer unchanged, escalated:false"))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
-        batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
-        open_ids = _open_audit_target_ids(state)
-        if open_ids is None and not batch:
-            _park_cannot_certify(
-                state,
-                "audit-stall self-recovery — open audit target set unresolvable "
-                "(missing or malformed _auditOutcome); cannot dispatch fix batch")
-            return
-        if not batch:
-            _settle_delta_converged(state, config)
-            return
         state["_fixBatch"] = batch
         state["step"] = P_FIXER
         return
@@ -3549,13 +3565,38 @@ def _read_on_disk_receipt(session_dir):
         return None
 
 
-def _terminal_receipt_on_disk(session_dir):
-    """True when a certified or attested receipt sits at the terminal path (not an interim)."""
+def _on_disk_receipt_class(session_dir):
+    """Classify the on-disk receipt for overwrite policy.
+
+    Returns ``absent``, ``interim``, ``terminal``, or ``untrusted`` (unreadable, unparseable, or
+    unknown schema). Only ``interim`` and ``absent`` permit a new write."""
+    path = os.path.join(session_dir, RECEIPT_FILE)
+    if not os.path.exists(path):
+        return "absent"
     receipt = _read_on_disk_receipt(session_dir)
     if receipt is None:
-        return False
+        return "untrusted"
     kind = receipt_kind(receipt)
-    return kind is not None and kind != RECEIPT_INTERIM_SCHEMA
+    if kind == RECEIPT_INTERIM_SCHEMA:
+        return "interim"
+    if kind is not None:
+        return "terminal"
+    return "untrusted"
+
+
+def _receipt_write_refusal(session_dir, *, terminal_reason, untrusted_reason):
+    """Refusal token when an on-disk receipt blocks overwrite, else None."""
+    cls = _on_disk_receipt_class(session_dir)
+    if cls == "terminal":
+        return terminal_reason
+    if cls == "untrusted":
+        return untrusted_reason
+    return None
+
+
+def _terminal_receipt_on_disk(session_dir):
+    """True when a certified or attested receipt sits at the terminal path (not an interim)."""
+    return _on_disk_receipt_class(session_dir) == "terminal"
 
 
 def _write_interim_receipt(session_dir, state, stop_reason):
@@ -4691,28 +4732,51 @@ def _journal_max_attempt(session_dir, rnd, phase):
     return max_attempt
 
 
+def _store_max_attempt(session_dir, rnd, phase):
+    """Highest attempt present in the durable seat store for ``(rnd, phase)``, or -1 when none."""
+    try:
+        sdir = round_records.store_dir(session_dir, rnd, phase)
+    except ValueError:
+        return -1
+    max_attempt = -1
+    for entry in round_records._seat_files(sdir).values():
+        att = entry.get("attempt")
+        if isinstance(att, bool) or not isinstance(att, int) or att < 0:
+            continue
+        max_attempt = max(max_attempt, att)
+    return max_attempt
+
+
 def _max_used_attempt(session_dir, rnd, phase):
-    """Durable high-water attempt for `(rnd, phase)` — accepted submit journal entries only.
+    """Durable high-water attempt for `(rnd, phase)` — max over journal, store, and in-memory
+    ``lastAccepted`` when its round/phase match.
 
     On-disk orders manifests are intentionally excluded: every emitted wave writes a manifest,
     accepted or not, so counting manifests would bump the attempt after a cleared/refused pending
-    re-emission. Resume without in-memory ``lastAccepted`` still sees accepted history when the
-    journal is readable; when it is not, ``_next_dispatch_attempt`` fails closed toward attempt 0
-    or ``lastAccepted + 1`` rather than inferring from unaccepted emission artifacts."""
-    return _journal_max_attempt(session_dir, rnd, phase)
+    re-emission. The store file is authoritative alongside the journal (#1107)."""
+    candidates = [
+        _journal_max_attempt(session_dir, rnd, phase),
+        _store_max_attempt(session_dir, rnd, phase),
+    ]
+    return max(candidates)
 
 
 def _next_dispatch_attempt(session_dir, rnd, phase, state):
     """Allocate the next unused attempt for a `(round, phase)` dispatch wave.
 
-    Reads accepted submit journal entries (primary — only a folded wave allocates the next slot).
-    Fail-closed toward a fresh slot: when nothing durable is readable, attempt 0; otherwise
-    ``max_used + 1`` so a second accepted wave in the same round never reuses storage."""
-    max_used = _max_used_attempt(session_dir, rnd, phase)
+    Takes the maximum over every durable source — accepted submit journal entries, on-disk seat
+    store slots, and ``lastAccepted`` when its phase and round match — then allocates above that
+    high-water mark."""
+    candidates = [
+        _max_used_attempt(session_dir, rnd, phase),
+    ]
+    prior = state.get("lastAccepted")
+    if prior and prior.get("phase") == phase and prior.get("round") == rnd:
+        att = prior.get("attempt", 0)
+        if not isinstance(att, bool) and isinstance(att, int) and att >= 0:
+            candidates.append(att)
+    max_used = max(candidates)
     if max_used < 0:
-        prior = state.get("lastAccepted")
-        if prior and prior.get("phase") == phase and prior.get("round") == rnd:
-            return prior.get("attempt", 0) + 1
         return 0
     return max_used + 1
 
@@ -5023,13 +5087,10 @@ def _order_profile_path_is_file(value):
 
 
 def _emitted_path_is_file(emitted):
-    """True when ``emitted`` names an existing file, whether shell-quoted or raw."""
+    """True when ``emitted`` names an existing file — a raw driver-generated path, never shell-parsed."""
     if not isinstance(emitted, str) or not emitted:
         return False
-    parts = shlex.split(emitted)
-    if len(parts) != 1:
-        return False
-    return os.path.isfile(parts[0])
+    return os.path.isfile(emitted)
 
 
 def _readable_file_input_refusal(placeholders):
@@ -5042,6 +5103,9 @@ def _readable_file_input_refusal(placeholders):
             continue
         if name == "PROFILE_PATH" and not _order_profile_path_is_file(emitted):
             continue
+        if name == "PRIOR_COMMENTS_PATH":
+            if not emitted or (isinstance(emitted, str) and emitted.strip().startswith("(")):
+                continue
         if not _emitted_path_is_file(emitted):
             return "order-input-missing:%s" % name
     return None
@@ -5222,12 +5286,22 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
     return _ensure_bytes_at_path(path, round_records.canonical(batch).encode("utf-8"))
 
 
-def _ensure_prior_comments_file(session_dir):
-    """Materialize prior-comments.json when absent so panel orders cite a real path."""
+def _prior_comments_unavailable_marker():
+    return "(prior-comments-unavailable — orchestrator did not supply prior-comments.json)"
+
+
+def _resolve_prior_comments_path(session_dir, state):
+    """Panel prior-comments path — never fabricates ``[]``.
+
+    Branch mode (no detached PR checkout): empty path — legitimately no prior comments.
+    PR mode: real file when present; otherwise a prose marker plus a round disclosure."""
     path = os.path.join(session_dir, "prior-comments.json")
-    if not os.path.isfile(path):
-        _ensure_bytes_at_path(path, b"[]")
-    return path
+    if os.path.isfile(path):
+        return path
+    if _session_pr_checkout_path(session_dir):
+        _record_round(state, "priorCommentsUnavailable", True)
+        return _prior_comments_unavailable_marker()
+    return ""
 
 
 def _order_paths(session_dir, rnd, phase, attempt, seat_key, occurrence, host_seat):
@@ -5282,7 +5356,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CORE_PATH": core_path,
             "LAYER_PATH": layer_path,
             "PR_CHECKOUT_PATH": pr_checkout,
-            "PRIOR_COMMENTS_PATH": _ensure_prior_comments_file(session_dir),
+            "PRIOR_COMMENTS_PATH": _resolve_prior_comments_path(session_dir, state),
             "FOCUS_NOTES": _normalize_focus_notes(meta.get("focusNotes") or cfg.get("focusNotes")),
             "DIMENSION": dim_label,
             "CHANNEL": channel,
@@ -5568,8 +5642,8 @@ def _emit_orders_manifest(session_dir, state, rnd, phase, attempt, roster, journ
         # Order-input ownership at emission (see also round-driver.md §Emitted orders):
         #   driver commits in orders-emit: clusters/<i>.json, audit-targets/<skey>.json,
         #   scoped-hunks.json, verified.json
-        #   driver materializes before emit: diff.txt, head.diff, fix-batch.json, phase sidecars,
-        #   prior-comments.json (empty array when orchestrator did not supply one)
+        #   driver materializes before emit: diff.txt, head.diff, fix-batch.json, phase sidecars;
+        #   prior-comments.json only when orchestrator supplied it (PR-mode absence is disclosed)
         # STUB(#723): readable-input registry + fail-closed existence guard now cover driver-owned
         # file inputs; sidecar bytes are derived once in ``_order_sidecar_writes`` and materialized
         # via ``_materialize_order_sidecars`` before render and again at the orders-emit commit.
@@ -7273,8 +7347,13 @@ def cmd_attest(session_dir, failure_ref, note, git=None):
             state, refusal = _load_driver_state(session_dir, "attest")
             if refusal is not None:
                 return refusal
-            if _terminal_receipt_on_disk(session_dir) or state.get("terminal"):
-                return _refuse_cmd(session_dir, "attest", "terminal-receipt-exists")
+            receipt_refusal = _receipt_write_refusal(
+                session_dir,
+                terminal_reason="terminal-receipt-exists",
+                untrusted_reason="terminal-receipt-unreadable",
+            )
+            if receipt_refusal or state.get("terminal"):
+                return _refuse_cmd(session_dir, "attest", receipt_refusal or "terminal-receipt-exists")
             binding, why = _resolve_failure_ref(session_dir, failure_ref)
             if why is not None:
                 return _refuse_cmd(session_dir, "attest", why, detail=str(failure_ref))
@@ -7360,13 +7439,21 @@ def cmd_checkpoint(session_dir, stop_reason):
                            detail=stop_reason)
     try:
         with round_records.session_lock(session_dir):
+            refusal = _commit_recover_or_refuse(session_dir, "checkpoint")
+            if refusal is not None:
+                return refusal
             state, refusal = _load_driver_state(session_dir, "checkpoint")
             if refusal is not None:
                 return refusal
             if state.get("terminal"):
                 return _refuse_cmd(session_dir, "checkpoint", "checkpoint-session-terminal")
-            if _terminal_receipt_on_disk(session_dir):
-                return _refuse_cmd(session_dir, "checkpoint", "checkpoint-terminal-receipt-exists")
+            receipt_refusal = _receipt_write_refusal(
+                session_dir,
+                terminal_reason="checkpoint-terminal-receipt-exists",
+                untrusted_reason="checkpoint-terminal-receipt-unreadable",
+            )
+            if receipt_refusal:
+                return _refuse_cmd(session_dir, "checkpoint", receipt_refusal)
             receipt = build_interim_receipt(state, session_dir, stop_reason)
             ok, invalid = validate_receipt(receipt)
             if not ok:

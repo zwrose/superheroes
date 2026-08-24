@@ -1,5 +1,6 @@
 """#1107 WO-B: fix-batch stall bookkeeping and per-round verifier-wave attempt allocation."""
 import importlib.util
+import json
 import os
 
 import pytest
@@ -60,8 +61,25 @@ def test_stall_self_recovery_parks_when_open_set_unresolvable():
     assert any(d.get("kind") == "cannot-certify" for d in state.get("decisions") or [])
 
 
+def test_stall_self_recovery_routes_open_important_not_converged():
+    # axis: discharged stalled targets with an open Important still not-discharged must fix, not certify
+    ident = FI.finding_identity(_finding(title="open-important"))
+    open_target = {"id": "%s@L1" % ident, "identity": ident, "file": "f.py", "line": 1,
+                   "title": "open-important", "severity": "Important"}
+    state = RD.new_state(_cfg())
+    state["_auditTargets"] = [open_target]
+    state["_auditOutcome"] = {"notDischarged": [open_target["id"]], "discharged": []}
+    state["selfRecovered"] = False
+    other_ident = FI.finding_identity(_finding(title="stalled-other"))
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [other_ident]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state.get("step") == RD.P_FIXER
+    assert state.get("terminal") != "converged"
+    assert state.get("_fixBatch")
+
+
 def test_second_verifier_wave_in_same_round_gets_fresh_attempt(tmp_path):
-    # axis: two verifier dispatch waves in one (round, phase) must not share a storage attempt slot
+    # axis: allocator must exceed every durable source — store at attempt 0 with a lossy journal
     d = str(tmp_path)
     state = RD.new_state(_cfg())
     state["round"] = 2
@@ -71,17 +89,17 @@ def test_second_verifier_wave_in_same_round_gets_fresh_attempt(tmp_path):
     RD.save_state(d, state)
     RD._journal_append(d, {"cmd": "next", "phase": RD.P_VERIFIERS, "round": 2, "attempt": 0,
                            "outcome": "emitted"})
-    RD._journal_append(d, {"cmd": "submit", "phase": RD.P_VERIFIERS, "round": 2, "attempt": 0,
-                           "outcome": "accepted"})
+    seat = "verifier:f.py:0"
+    skey = RR.storage_key(seat)
+    spath = RR.store_path(d, 2, RD.P_VERIFIERS, skey, 0)
+    os.makedirs(os.path.dirname(spath), exist_ok=True)
+    with open(spath, "w", encoding="utf-8") as fh:
+        json.dump({"seat": seat, "attempt": 0, "round": 2, "phase": RD.P_VERIFIERS,
+                   "payloadSha256": "deadbeef"}, fh)
     n = RD.cmd_next(d)
     assert n["ok"], n
     assert n["phase"] == RD.P_VERIFIERS
     assert n["attempt"] == 1
-    seat = "verifier:f.py:0"
-    skey = RR.storage_key(seat)
-    path0 = RR.store_path(d, 2, RD.P_VERIFIERS, skey, 0)
-    path1 = RR.store_path(d, 2, RD.P_VERIFIERS, skey, 1)
-    assert path0 != path1
 
 
 def test_next_reemit_preserves_pending_attempt(tmp_path):
