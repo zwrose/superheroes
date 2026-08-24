@@ -3067,13 +3067,23 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
         "time.sleep(0.12)\n"
         "sys.stdout.write('b')\n"
     )
-    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+    ended, stdout_path, _ = _wo2_run_engine(
+        run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
     assert ended["exit"] == 0
     assert ended.get("signal") is None
     assert ended.get("signalSource") is None
     assert ended.get("activityStream") == "stdout"
     assert ended.get("silenceSeconds") is not None
-    assert ended["silenceSeconds"] < 0.5
+    # #1132: freshness is asserted against a SAME-RUN baseline, not an absolute second count.
+    # The child writes twice with a gap; whichever path credits the activity moment — a
+    # heartbeat tick that sampled the grown file, or the post-reap mtime fold — must land at or
+    # after the final stdout write. The file is under the capture cap, so _cap_file_tail leaves
+    # it (and its mtime) alone, and the comparison moves with the machine instead of against it.
+    # The former `silenceSeconds < 0.5` bound measured load: it went red at load average 82 with
+    # the telemetry code untouched (PR #1129's build).
+    assert ended["lastActivityAt"] >= os.path.getmtime(stdout_path), (
+        "activity credited at %r, before the final stdout write at %r"
+        % (ended["lastActivityAt"], os.path.getmtime(stdout_path)))
 
 
 def test_run_engine_files_telemetry_stderr_activity(tmp_path, monkeypatch):
