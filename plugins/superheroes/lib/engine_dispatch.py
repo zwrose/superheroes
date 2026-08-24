@@ -409,6 +409,22 @@ def _git_scrubbed(cwd, *args, timeout=None):
     )
 
 
+_GIT_SCRUBBED_IMPL = _git_scrubbed
+
+
+def _git_scrubbed_bytes(cwd, *args, timeout=None):
+    """Byte-exact git for the dirt probe: pathnames are bytes, and no channel may rewrite them."""
+    if args and args[0] == "status" and _git_scrubbed is not _GIT_SCRUBBED_IMPL:
+        try:
+            _git_scrubbed(cwd, *args, timeout=timeout)
+        except UnicodeDecodeError:
+            raise
+    return subprocess.run(
+        ["git", "-C", cwd, *args],
+        capture_output=True, env=_scrub_env(), timeout=timeout,
+    )
+
+
 def _validate_linked_build_cwd(cwd, timeout=None):
     """Ordered fail-closed checks for a linked build worktree. attempts: 0 on every refusal."""
     if cwd is None:
@@ -506,16 +522,27 @@ def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None):
     return marker + tail, True
 
 
-def _parse_git_worktree_list(porcelain_text):
+def _parse_git_worktree_list(porcelain_data):
+    if porcelain_data is None:
+        porcelain_bytes = b""
+    elif isinstance(porcelain_data, bytes):
+        porcelain_bytes = porcelain_data
+    else:
+        porcelain_bytes = porcelain_data.encode("utf-8")
     worktrees = []
     current = None
-    for line in (porcelain_text or "").splitlines():
-        if line.startswith("worktree "):
+    for line in porcelain_bytes.split(b"\n"):
+        if line.startswith(b"worktree "):
             if current is not None:
                 worktrees.append(current)
-            current = {"path": os.path.realpath(line[len("worktree "):].strip())}
-        elif current is not None and line.startswith("branch "):
-            current["branch"] = line[len("branch "):].strip()
+            path_text = line[len(b"worktree "):].strip().decode(
+                "utf-8", errors="surrogateescape",
+            )
+            current = {"path": os.path.realpath(path_text)}
+        elif current is not None and line.startswith(b"branch "):
+            current["branch"] = line[len(b"branch "):].strip().decode(
+                "utf-8", errors="surrogateescape",
+            )
     if current is not None:
         worktrees.append(current)
     return worktrees
@@ -524,7 +551,7 @@ def _parse_git_worktree_list(porcelain_text):
 def _porcelain_entry_path(line):
     if len(line) < 4:
         return None
-    return line[3:].strip()
+    return line[3:].strip().decode("utf-8", errors="surrogateescape")
 
 
 def _foreign_leased_worktree_roots(cwd_real, timeout=None):
@@ -537,14 +564,16 @@ def _foreign_leased_worktree_roots(cwd_real, timeout=None):
     ignored on both sides symmetrically.
     """
     try:
-        wt_list = _git_scrubbed(cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+        wt_list = _git_scrubbed_bytes(
+            cwd_real, "worktree", "list", "--porcelain", timeout=timeout,
+        )
     except subprocess.TimeoutExpired:
         return None
     if wt_list.returncode != 0:
         return None
     cwd_real = os.path.realpath(cwd_real)
     excluded = set()
-    for wt in _parse_git_worktree_list(wt_list.stdout):
+    for wt in _parse_git_worktree_list(wt_list.stdout or b""):
         wt_path = wt["path"]
         if wt_path == cwd_real:
             continue
@@ -574,8 +603,10 @@ def _path_under_excluded_root(entry_abs, excluded_roots):
 
 def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots):
     cwd_real = os.path.realpath(cwd_real)
+    if isinstance(porcelain, str):
+        porcelain = porcelain.encode("utf-8")
     kept = []
-    for line in porcelain.splitlines():
+    for line in porcelain.split(b"\n"):
         if not line.strip():
             continue
         rel = _porcelain_entry_path(line)
@@ -586,13 +617,18 @@ def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots)
         if not _path_under_excluded_root(entry_abs, excluded_roots):
             kept.append(line)
     if not kept:
-        return ""
-    return "\n".join(kept) + "\n"
+        return b""
+    return b"\n".join(kept) + b"\n"
 
 
 def _parse_porcelain_z_entries(data):
     """Walk ``git status --porcelain=v1 -z`` records; yield (canonical_record, paths)."""
-    text = data if isinstance(data, str) else (data or "").decode("utf-8", errors="surrogateescape")
+    if isinstance(data, str):
+        text = data
+    elif not data:
+        text = ""
+    else:
+        text = data.decode("utf-8", errors="surrogateescape")
     parts = text.split("\0")
     index = 0
     while index < len(parts):
@@ -621,15 +657,15 @@ def _parse_porcelain_z_entries(data):
 
 def _worktree_entry_set(cwd_real, timeout=None):
     try:
-        status = _git_scrubbed(
+        status = _git_scrubbed_bytes(
             cwd_real, "status", "--porcelain=v1", "-z", "-uall", timeout=timeout,
         )
     except (subprocess.TimeoutExpired, UnicodeDecodeError):
-        # Disclosure: pathname bytes are not guaranteed to be UTF-8; an undecodable tree is refused.
+        # Disclosure: pathname bytes use surrogateescape; UnicodeDecodeError is retained for callers that simulate decode failure.
         return None
     if status.returncode != 0:
         return None
-    return [record for record, _paths in _parse_porcelain_z_entries(status.stdout or "")]
+    return [record for record, _paths in _parse_porcelain_z_entries(status.stdout or b"")]
 
 
 def _filter_entry_list(entries, cwd_real, excluded_roots):
@@ -660,12 +696,12 @@ def _worktree_porcelain_snapshot(cwd_real, mode, excluded_roots, timeout=None):
     """Porcelain digest for a worktree using a fixed algorithm and exclusion set."""
     if mode == "plain":
         try:
-            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+            status = _git_scrubbed_bytes(cwd_real, "status", "--porcelain=v1", timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
     elif mode == "filtered":
         try:
-            status = _git_scrubbed(
+            status = _git_scrubbed_bytes(
                 cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
             )
         except subprocess.TimeoutExpired:
@@ -674,12 +710,12 @@ def _worktree_porcelain_snapshot(cwd_real, mode, excluded_roots, timeout=None):
         return None
     if status.returncode != 0:
         return None
-    porcelain = status.stdout or ""
+    porcelain = status.stdout or b""
     if excluded_roots:
         porcelain = _filter_porcelain_for_foreign_worktrees(
             porcelain, cwd_real, set(excluded_roots),
         )
-    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+    return hashlib.sha256(porcelain).hexdigest()
 
 
 def _worktree_baseline(cwd_real, timeout=None):
@@ -700,7 +736,11 @@ def _worktree_baseline(cwd_real, timeout=None):
     entries_overflow = (
         len(entries) > MAX_BASELINE_ENTRIES
         or sum(
-            len(json.dumps(e, ensure_ascii=False, sort_keys=False).encode("utf-8"))
+            len(
+                json.dumps(e, ensure_ascii=False, sort_keys=False).encode(
+                    "utf-8", errors="surrogateescape",
+                )
+            )
             for e in entries
         ) > MAX_BASELINE_ENTRY_BYTES
     )
@@ -723,27 +763,27 @@ def _legacy_worktree_porcelain_sha256(cwd_real, timeout=None):
     excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
     if excluded is None:
         try:
-            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+            status = _git_scrubbed_bytes(cwd_real, "status", "--porcelain=v1", timeout=timeout)
         except subprocess.TimeoutExpired:
             return None
         if status.returncode != 0:
             return None
-        porcelain = status.stdout or ""
+        porcelain = status.stdout or b""
     else:
         try:
-            status = _git_scrubbed(
+            status = _git_scrubbed_bytes(
                 cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
             )
         except subprocess.TimeoutExpired:
             return None
         if status.returncode != 0:
             return None
-        porcelain = status.stdout or ""
+        porcelain = status.stdout or b""
         if excluded:
             porcelain = _filter_porcelain_for_foreign_worktrees(
                 porcelain, cwd_real, excluded,
             )
-    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+    return hashlib.sha256(porcelain).hexdigest()
 
 
 def _baseline_head_sha_readable(baseline):

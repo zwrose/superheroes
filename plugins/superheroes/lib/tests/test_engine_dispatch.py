@@ -6398,3 +6398,123 @@ def test_mode_worktree_baseline_none_mode_uses_legacy_branch(tmp_path):
     }
     assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
 
+
+# --- WO-I (#1122): probe-scoped byte-level enumeration -----------------------------
+
+
+def _probe_producer_output(cwd, producer):
+    if producer == "entry_set":
+        return ED._worktree_entry_set(cwd, timeout=5)
+    if producer == "legacy":
+        return ED._legacy_worktree_porcelain_sha256(cwd, timeout=5)
+    excluded = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+    excluded_roots = sorted(excluded) if excluded is not None else None
+    return ED._worktree_porcelain_snapshot(cwd, producer, excluded_roots, timeout=5)
+
+
+def _cr_lf_probe_repo(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    cr_name = "a\rb"
+    with open(os.path.join(wt, cr_name), "wb") as fh:
+        fh.write(b"cr-content\n")
+    return wt, cwd, cr_name
+
+
+@pytest.mark.parametrize(
+    "producer",
+    ["entry_set", "filtered", "plain", "legacy"],
+    ids=["entry_set", "snapshot_filtered", "snapshot_plain", "legacy"],
+)
+def test_probe_producers_distinguish_cr_from_lf_in_pathnames(tmp_path, producer):
+    wt, cwd, cr_name = _cr_lf_probe_repo(tmp_path)
+    before = _probe_producer_output(cwd, producer)
+    assert before is not None
+    os.remove(os.path.join(wt, cr_name))
+    lf_name = "a\nb"
+    with open(os.path.join(wt, lf_name), "wb") as fh:
+        fh.write(b"lf-content\n")
+    after = _probe_producer_output(cwd, producer)
+    assert after is not None
+    assert before != after
+
+
+def test_probe_dirt_verdict_cr_lf_swap_reads_dirty(tmp_path):
+    wt, cwd, cr_name = _cr_lf_probe_repo(tmp_path)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    os.remove(os.path.join(wt, cr_name))
+    lf_name = "a\nb"
+    with open(os.path.join(wt, lf_name), "wb") as fh:
+        fh.write(b"lf-content\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_parse_git_worktree_list_preserves_cr_in_path():
+    raw_path = b"/tmp/example\rpath"
+    porcelain = b"worktree " + raw_path + b"\nbranch refs/heads/main"
+    worktrees = ED._parse_git_worktree_list(porcelain)
+    assert len(worktrees) == 1
+    decoded_path = raw_path.decode("utf-8", errors="surrogateescape")
+    assert worktrees[0]["path"] == os.path.realpath(decoded_path)
+    assert "\r" in decoded_path
+
+
+def test_parse_git_worktree_list_empty_bytes():
+    assert ED._parse_git_worktree_list(b"") == []
+
+
+def test_filter_porcelain_preserves_cr_in_pathname(tmp_path):
+    cwd = os.path.realpath(str(tmp_path / "wt"))
+    os.makedirs(cwd, exist_ok=True)
+    porcelain = b"?? a\rb\n"
+    filtered = ED._filter_porcelain_for_foreign_worktrees(porcelain, cwd, set())
+    assert filtered == porcelain
+
+
+def test_parse_porcelain_z_entries_empty_bytes():
+    assert list(ED._parse_porcelain_z_entries(b"")) == []
+
+
+def test_worktree_baseline_non_utf8_pathname_no_raise(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    real_bytes = ED._git_scrubbed_bytes
+
+    def fake_status(cwd_real, *args, timeout=None):
+        if args and args[0] == "status" and "-z" in args:
+            porcelain = b"?? a\x80b\0"
+            return subprocess.CompletedProcess(args, 0, stdout=porcelain, stderr=b"")
+        return real_bytes(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fake_status)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert baseline["entries"]
+
+
+def test_probe_digest_compatibility_ordinary_tree(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    with open(os.path.join(wt, "ordinary.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x\n")
+    status_plain = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1"],
+        capture_output=True,
+        timeout=5,
+    )
+    expected_plain = hashlib.sha256(status_plain.stdout).hexdigest()
+    excluded = ED._foreign_leased_worktree_roots(cwd, timeout=5)
+    excluded_roots = sorted(excluded) if excluded is not None else None
+    assert (
+        ED._worktree_porcelain_snapshot(cwd, "plain", excluded_roots, timeout=5)
+        == expected_plain
+    )
+    status_uall = subprocess.run(
+        ["git", "-C", cwd, "status", "--porcelain=v1", "-uall"],
+        capture_output=True,
+        timeout=5,
+    )
+    expected_legacy = hashlib.sha256(status_uall.stdout).hexdigest()
+    assert ED._legacy_worktree_porcelain_sha256(cwd, timeout=5) == expected_legacy
+
