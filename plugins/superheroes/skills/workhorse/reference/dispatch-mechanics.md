@@ -158,13 +158,27 @@ seat's delivery contract is in `rubric/review-base.md` ("Findings output format"
 documents the runner's result mechanics — read both before authoring seat prompts; this subsection is
 the at-dispatch-time summary only.
 
+### Findings-only review prompts
+
+A review prompt that constrains the seat's stdout to a **single JSON object** must also require a
+**populated `investigated` array** and tell the seat that an **empty `findings` array alongside a
+real investigation record is a valid, welcome answer**. Without it, the runner's investigation floor
+(`engine_adapter.spot_check_investigated`) forfeits an empty payload as **vacuous** — a
+findings-only prompt that omits the requirement guarantees that forfeit whenever the honest answer
+is no findings. An entry survives the floor only when it is a **repo-relative path to an existing
+regular file** inside the reviewed view; directories, absolute paths, and generated artifacts
+(including the staged diff patch) do not count. Seat-side wording lives in `rubric/review-base.md`
+("Findings output format").
+
 Every `dispatch-review` result is a **top-level** object. **Always present:** `ok`, `terminal`,
 `runDir`, and `argv`; on a failure, `reason` (and usually `detail`). On success: **`resultKind`**
-(one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name.
+(one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload, plus **exactly one**
+payload key of that name.
 **`investigated`** is present only when at least one claimed path survives spot-checking; a normal
 `{"verdicts": [...]}` reply omits it. **Outcome-dependent:** `engagement` and `sanitizedView` — do **not** read an
-absent `findings` as "zero findings"; an absent `findings` may mean a `verdicts`-kind result
-instead. An object carrying **both** `findings` and `verdicts` is refused as `unreadable`. An item
+absent `findings` as "zero findings"; an absent `findings` may mean a different `resultKind`
+instead. An object carrying **more than one** payload key from `REVIEW_RESULT_KINDS` is refused as
+`unreadable`. An item
 whose `id` is exactly `<agent-name>-001` or whose `severity` is exactly
 `Critical | Important | Minor | Nit` — the `review-base.md` template literals — is refused as
 `unreadable` (field-exact; an honest finding that *quotes* those literals in its prose survives). An
@@ -187,15 +201,20 @@ omitted, or under `--mode brief-check`). On a continuation (`--run-dir` naming a
 invocation also asserts `--mode brief-check` explicitly, which refuses
 `mode-brief-check-with-diff-base` before the journal is read. Full contract — refusals,
 withheld stripped-config paths, investigation-floor rejection — is in `auto-fix-loop.md`.
-The runner accepts **two** result kinds on stdout. Every `ok: true` review result carries
-**`resultKind`** — exactly `"findings"` or `"verdicts"` — plus **exactly one** payload key of that
-name; **`investigated`** is attached only when at least one claimed path survives spot-checking.
-Callers may pin the expected kind via **`--expected-result-kind {findings,verdicts}`**; a mismatch
-refuses with `detail: result-kind-mismatch`. The pin is journaled when the run is **opened**; on a
+The runner accepts **four** result kinds on stdout (`REVIEW_RESULT_KINDS`: `findings`, `verdicts`,
+`grouping`, `ruling`). Every `ok: true` review result carries **`resultKind`** naming exactly one
+payload key of that name; **`investigated`** is attached only when at least one claimed path
+survives spot-checking. **Recognition is not gradeability** — widening what the transport can read
+changes nothing about what it will certify: the investigation floor still forfeits an empty
+payload with no surviving `investigated` path for **every** kind including `grouping`, and an
+`--expected-result-kind` mismatch still forfeits. Callers may pin the expected kind via
+**`--expected-result-kind {findings,verdicts,grouping,ruling}`**; a mismatch refuses with
+`detail: result-kind-mismatch`. The pin is journaled when the run is **opened**; on a
 continuation an omitted pin inherits the journaled value, while a supplied pin that disagrees —
 including on a run opened without one — refuses `run-dir-result-kind-mismatch` (`attempts: 0`, no
-spawn); a run's identity is fixed at open. **Panel** seats pass the **`findings`** pin; the
-**verify phase** passes the **`verdicts`** pin. When unset, both kinds are accepted. Per-id audit rulings still
+spawn); a run's identity is fixed at open. **Panel** seats pass the **`findings`** pin; the **verify
+phase** passes the **`verdicts`** pin; synthesis judges emit `{"grouping": [...]}`; fix auditors
+emit `{id, ruling, reason}`. When unset, all four kinds are accepted. Per-id audit rulings still
 do not travel through this verb. A non-terminal `{"reason": "running", "terminal": false}` is **not**
 a forfeit. It carries a **`graded`** list describing each attempt that has already ended — each entry
 names `resultKind` and its payload when that attempt graded `ok`. Re-invoke **`dispatch-review`**
@@ -441,7 +460,10 @@ evidence could not be collected — causes include `falsy-base-sha`, `diff-timeo
 when a declared run's `--base-sha` does not resolve. A dispatch that declares nothing cannot earn
 `report-missing-items-delivered` and keeps the ordinary fail-closed details (`worktree-dirtied-by-attempt`
 and the rest) — declaring items is what buys the distinction. Other forfeits, `unrunnable`, and
-`worktree-dirtied-by-attempt` never carry `itemCheck`. Every forfeit detail above remains `ok: false`,
+`worktree-dirtied-by-attempt` never carry `itemCheck`. When engine stdout exceeds the **8 MiB
+capture cap**, the terminal forfeit carries a **stdout-capture-cap** reason class of its own (exact
+detail token pinned by sibling order WO-B) with an explicit truncation marker in the captured stdout —
+it no longer surfaces under `worktree-dirtied-by-attempt`. Every forfeit detail above remains `ok: false`,
 `forfeited: true` — `report-missing-items-delivered` renames a condition; it never converts a forfeit
 into a success.
 
