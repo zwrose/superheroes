@@ -12,7 +12,7 @@
 
 | Path                                                | Written by     | Purpose                                                                                     |
 | --------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
-| `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes       |
+| `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes, `interactive` (this run's resolved `$INTERACTIVE`, boolean)       |
 | `$SESSION_DIR/repo/`                                | orchestrator   | `--post`/`--review-only` PR paths only: detached `git worktree` at the PR head SHA          |
 | `$SESSION_DIR/prior-comments.json`                  | orchestrator   | PR-mode only: prior review comments + threads (for author justifications)                   |
 | `$SESSION_DIR/round-<N>/diff.txt`                   | orchestrator   | Round `<N>` unified diff (`git diff <pinned baseRef>...HEAD`). **Never read by the main context.** |
@@ -37,8 +37,10 @@
 **Resolve `$INTERACTIVE` first, for the whole run.** Two later steps consume it — `decide-location` (below) and the `--review-only` presentation channel (`SKILL.md` § Read-Only Paths) — so it is decided once, here, before anything is dispatched, not re-derived per consumer. Set `INTERACTIVE=true` only when a human is present to answer a question this run; set it to `false` on a headless/non-interactive run (`claude -p`, a spawned subagent, any caller with no one at the other end). **When you cannot tell, set it to `false`** — the consumers fail open in that direction on purpose (a headless-by-mistake run still completes; an interactive-by-mistake headless run stalls on a question nobody sees). It is orchestrator-resolved, not sniffed from a tty: the orchestrator's own calls are never on one.
 
 ```bash
-INTERACTIVE=true   # a human is present to answer this run; set false when headless/non-interactive, and false when you cannot tell
+INTERACTIVE=false   # ← promote to `true` ONLY on positive evidence that a human is present to answer this run
 ```
+
+**The literal above is `false` on purpose — it is the fail-closed rung, not a placeholder to copy past.** A block copied verbatim into a headless run then behaves correctly; the same block copied verbatim into an interactive run costs that run its questions (`decide-location` takes the provisional, re-askable `global` instead of asking, and `--review-only` writes prose instead of presenting) and nothing more. The reverse default trades a recoverable annoyance for an unrecoverable stall, which is why it is not the one shipped here.
 
 **Resolve the base rubric path once.** The base rubric is bundled at `$ROOT_DIR/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
 
@@ -174,7 +176,7 @@ if [ "$LOCATION" = "none" ]; then
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. Headless runs get a provisional profile from detected defaults.
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above — **inheriting this run's already-resolved `$INTERACTIVE`, never reassigning it.** That skill's own bootstrap block opens with `INTERACTIVE=true` for the case where it is the entry point; run inline it is not, and re-running that line would raise the flag a headless run just lowered and hand review-init's interview questions to nobody — the stall this file's resolve-once rule exists to prevent. Its own headless branch (skip the interview, provisional profile from detected defaults) is the one that applies.
 
 **Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate and fixer:
 

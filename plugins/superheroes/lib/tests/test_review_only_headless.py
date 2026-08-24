@@ -27,6 +27,7 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 _PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
 _REVIEW_CODE = os.path.join(_PLUGIN_ROOT, "skills", "review-code")
 _SKILL_MD = os.path.join(_REVIEW_CODE, "SKILL.md")
+_SETUP_MD = os.path.join(_REVIEW_CODE, "reference", "setup.md")
 _HEADLESS_MD = os.path.join(_REVIEW_CODE, "reference", "headless-presentation.md")
 
 # The interactive question tool, and the flag any question on this path must be gated on.
@@ -118,9 +119,54 @@ def test_invocation_table_states_the_headless_behavior():
         if line.startswith("|") and "--review-only`" in line
     ]
     assert rows, "no `--review-only` row found in review-code's invocation table"
-    assert any("eadless" in row for row in rows), (
-        "the invocation table's `--review-only` row does not state the headless behavior — "
-        "the path table and the section would drift (#1133 DoD). Rows seen: %r" % rows
+    # The row must state the behavior, not merely say the word: it names the artifact the
+    # degradation writes. "Headless: refuses" or "not supported headless" cannot satisfy this.
+    stating = [row for row in rows if "eadless" in row and _ARTIFACT in row]
+    assert stating, (
+        "the invocation table's `--review-only` row does not state the headless behavior "
+        "concretely — it must name the artifact `%s` the degradation writes, so the table "
+        "cannot drift into describing some other disposition (#1133 DoD). Rows seen: %r"
+        % (_ARTIFACT, rows)
+    )
+
+
+# axis: the flag the gate reads is resolved fail-closed at Setup — the executable assignment in
+# setup.md, not the prose around it. A `true` literal there is a headless run that copies its way
+# back into the stall, which is where this defect actually lived (#1133 review round 1).
+def test_setup_resolves_the_flag_fail_closed():
+    setup = _read(_SETUP_MD)
+    assignments = re.findall(r"^\s*INTERACTIVE=(\S+)", setup, re.MULTILINE)
+    assert assignments, (
+        "reference/setup.md contains no `INTERACTIVE=` assignment — the gate in SKILL.md reads a "
+        "flag nothing sets, and an unset flag is decided by whatever the orchestrator improvises (#1133)"
+    )
+    assert all(value == "false" for value in assignments), (
+        "reference/setup.md assigns INTERACTIVE=%r — every shipped literal must be `false`, the "
+        "fail-closed rung, promoted to true only on positive evidence a human is present. A `true` "
+        "literal copied verbatim into a headless run walks it straight into the stall (#1133)"
+        % assignments
+    )
+
+
+# axis: the resolved flag survives compaction — the presentation gate routes *unknown* to the
+# degradation, so a cold-resumed interactive run that cannot recover the flag silently loses its
+# questions. Pins the persisted field, not the prose describing it.
+def test_interactivity_survives_compaction():
+    skill = _read(_SKILL_MD)
+    assert "interactive:$interactive" in skill, (
+        "meta.json's writer does not persist an `interactive` field — after compaction the "
+        "channel is unknown, unknown takes the degradation, and an interactive run loses its "
+        "tiered presentation (#1133 review round 1)"
+    )
+    review_only = _section(skill, "\n### `--review-only`\n")
+    compaction = [
+        para for para in review_only.split("\n\n")
+        if "compacted between dispatch and presentation" in para
+    ]
+    assert compaction, "the `--review-only` compaction-recovery paragraph is gone"
+    assert "$INTERACTIVE" in compaction[0], (
+        "the compaction-recovery step does not restore `$INTERACTIVE` — it restores everything "
+        "the gate needs except the flag the gate branches on (#1133 review round 1)"
     )
 
 

@@ -148,13 +148,14 @@ jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg bran
   --arg headSha "$HEAD_SHA" --arg baseRef "$BASE_REF" --arg baseBranch "$BASE_BRANCH" --arg repoRoot "$REPO_ROOT" \
   --arg baseFetch "$BASE_FETCH" --arg sessionDir "$SESSION_DIR" --arg verify "${VERIFY_CMD:-unverified}" \
   --argjson pr "$PR_ARG" --argjson focusNotes "$FOCUS_ARG" \
-  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes}' \
+  --argjson interactive "$([ "$INTERACTIVE" = "true" ] && echo true || echo false)" \
+  '{mode:$mode,path:$path,pr:$pr,repo:$repo,branch:$branch,headSha:$headSha,baseRef:$baseRef,baseBranch:$baseBranch,baseFetch:$baseFetch,repoRoot:$repoRoot,sessionDir:$sessionDir,verify:$verify,focusNotes:$focusNotes,interactive:$interactive}' \
   > "$SESSION_DIR/meta.json.tmp" \
   && mv "$SESSION_DIR/meta.json.tmp" "$SESSION_DIR/meta.json" \
   || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
-`REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story.
+`REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story. The `interactive` field records this run's resolved `$INTERACTIVE` as a **boolean**, for the same reason: the `--review-only` presentation gate routes an *unknown* channel to the headless degradation, so a cold-resumed interactive run that could not recover the flag would silently lose its tiered questions. A resumed orchestrator restores `$INTERACTIVE` from this field; a field that is **absent or not a boolean** is not a recovered flag — that run's channel is unknown, and unknown takes the degradation.
 
 Size the round-1 diff for the dispatch summary (after writing it to `round-1/diff.txt` per the command above):
 
@@ -346,7 +347,7 @@ After the single pass, run the interactive tiered presentation and a terminal re
 
 **Decide the presentation channel before forming any question.** The tiered presentation below is the **interactive** form; enter it only when `$INTERACTIVE` is true (resolved once in `reference/setup.md` § Setup resolution). When `$INTERACTIVE` is **false** — or when this run's interactivity is **unknown** — take the **headless prose degradation** instead: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/headless-presentation.md`, which writes the presentation to `$SESSION_DIR/round-1/presentation.md` and exits cleanly. Unknown falls to the degradation deliberately: a run wrongly sent there still finishes and says what went undecided, while a headless run sent to the interactive presentation **stalls** on a question nobody can answer until its harness kills it (observed live on PR #1130). Never open an `AskUserQuestion` on this path unless `$INTERACTIVE` is true.
 
-**If context was compacted between dispatch and presentation**, re-read `$SESSION_DIR/round-1/compiled.json` and `$SESSION_DIR/meta.json` to restore state. The skill is resumable from disk.
+**If context was compacted between dispatch and presentation**, re-read `$SESSION_DIR/round-1/compiled.json` and `$SESSION_DIR/meta.json` to restore state — **including `$INTERACTIVE`, from `meta.json`'s boolean `interactive` field** (§ Session Directory), before the channel decision below. The skill is resumable from disk.
 
 **Form the orchestrator POV before presenting.** Per the base rubric's "Orchestrator POV", for each Critical/Important finding open the cited file at the cited line (in `$SESSION_DIR/repo/` for the PR path, working tree otherwise) and form a **Fix / Skip / Defer + one-sentence rationale + High/Low confidence** take. This is the coordinator's own judgment from a small targeted read — not a re-review. For batched Minor/Nit, derive the POV from the finding text (read the file only if the text is insufficient).
 
