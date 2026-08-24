@@ -40,6 +40,8 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
     "source-body-stale",
+    "region-marker-duplicated",
+    "dod-table-rows-unadmitted",
     "invalid-invocation",
     "internal-error",
 })
@@ -335,7 +337,7 @@ def test_dod_rows_exact_set_and_verifiability(tmp_path):
     assert "Ship the thing|done|tests/test_a.py" in repo_texts
 
 
-def test_dod_table_without_separator_mints_all_rows(tmp_path):
+def test_dod_table_without_separator_refuses_unadmitted(tmp_path):
     body = (
         "<!-- superheroes:dod-table -->\n"
         "| Ship the thing | done | tests/test_a.py |\n"
@@ -343,17 +345,7 @@ def test_dod_table_without_separator_mints_all_rows(tmp_path):
     )
     session = _session(tmp_path, body=body)
     rc, body_out = _invoke("stage", session)
-    assert rc == 0 and body_out["ok"]
-    manifest = _manifest(session)
-    dod = _dod_claims(manifest)
-    assert len(dod) == 2
-    texts = {c["text"] for c in dod}
-    assert texts == {
-        "Ship the thing|done|tests/test_a.py",
-        "Second thing|done|tests/b.py",
-    }
-    assert manifest.get("noSubstantiveClaims") is not True
-    assert body_out.get("noSubstantiveClaims") is not True
+    _assert_refusal(rc, body_out, "dod-table-rows-unadmitted")
 
 
 def test_dod_table_with_separator_excludes_header_only(tmp_path):
@@ -684,6 +676,25 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
 
     cases["source-body-stale"] = case_source_body_stale
 
+    def case_region_marker_duplicated():
+        marker = GS.REGION_MARKERS["dod-table"]
+        session = _session(
+            tmp_path, body=_duplicate_marker_body(marker), name="case-region-marker-duplicated",
+        )
+        return _invoke("stage", session)
+
+    cases["region-marker-duplicated"] = case_region_marker_duplicated
+
+    def case_dod_table_rows_unadmitted():
+        body = (
+            "<!-- superheroes:dod-table -->\n"
+            "| lone row | done | tests/a.py |\n"
+        )
+        session = _session(tmp_path, body=body, name="case-dod-table-rows-unadmitted")
+        return _invoke("stage", session)
+
+    cases["dod-table-rows-unadmitted"] = case_dod_table_rows_unadmitted
+
     def case_invalid_invocation():
         session = _session(tmp_path, body=_happy_body(), name="case-invalid-invocation")
         argv = ["grounding_stage.py", "nope", "--session-dir", session]
@@ -875,8 +886,7 @@ def test_stage_check_round_trip_no_substantive_claims(tmp_path):
     body = (
         "## Summary\n"
         "<!-- superheroes:dod-table -->\n"
-        "| DoD | Status | Evidence |\n"
-        "| --- | --- | --- |\n\n"
+        "No DoD rows in this region.\n\n"
         "<!-- superheroes:build-record -->\n"
         "<details><summary>Build record</summary></details>\n\n"
         "<!-- superheroes:degradations -->\n"
@@ -1079,17 +1089,14 @@ def test_refuse_call_sites_use_registered_string_literals():
     assert not unregistered, "_refuse unregistered literals: %s" % unregistered
 
 
-def test_nonstandard_dod_status_with_issue_ref_stays_repo(tmp_path):
+def test_nonstandard_dod_status_with_issue_ref_refuses_unadmitted(tmp_path):
     body = (
         "<!-- superheroes:dod-table -->\n"
         "| all tests pass | shipped | fixes #609 |\n"
     )
     session = _session(tmp_path, body=body)
     rc, body_out = _invoke("stage", session)
-    assert rc == 0 and body_out["ok"]
-    dod = [c for c in body_out["claims"] if c["kind"] == "dod-row"]
-    assert len(dod) == 1
-    assert dod[0]["verifiability"] == "repo"
+    _assert_refusal(rc, body_out, "dod-table-rows-unadmitted")
 
 
 def test_dod_table_without_outer_pipes_parses_rows(tmp_path):
@@ -1296,3 +1303,210 @@ def test_find_all_standalone_markers_returns_every_live_occurrence():
     body = marker + "\ncontent\n" + marker + "\n"
     offsets = GS._find_all_standalone_markers(body, marker)
     assert offsets == [0, len(marker) + 1 + len("content\n")]
+
+
+def _duplicate_marker_body(marker):
+    return (
+        marker + "\n"
+        "decoy content\n\n"
+        + marker + "\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| real row | done | tests/a.py |\n"
+    )
+
+
+@pytest.mark.parametrize("region_name", sorted(GS.REGION_MARKERS))
+def test_duplicate_marker_refuses(region_name, tmp_path):
+    marker = GS.REGION_MARKERS[region_name]
+    body = _duplicate_marker_body(marker)
+    session = _session(tmp_path, body=body, name="dup-%s" % region_name)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "region-marker-duplicated")
+
+
+def test_duplicate_dod_table_marker_live_case_refuses(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "decoy above the real table\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| tests pass | done | plugins/superheroes/lib/tests/test_grounding_stage.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "region-marker-duplicated")
+
+
+_TABLE_CENSUS_CASES = [
+    pytest.param(
+        "well_formed",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "| DoD | Status | Evidence |\n"
+            "| --- | --- | --- |\n"
+            "| Ship it | done | tests/a.py |\n"
+        ),
+        1,
+        None,
+        id="well_formed",
+    ),
+    pytest.param(
+        "fenced_table",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "```\n"
+            "| DoD | Status | Evidence |\n"
+            "| --- | --- | --- |\n"
+            "| fake | done | planted |\n"
+            "```\n"
+        ),
+        0,
+        None,
+        id="fenced_table",
+    ),
+    pytest.param(
+        "pipe_prose_no_delimiter",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "| Ship the thing | done | tests/test_a.py |\n"
+            "| Second thing | done | tests/b.py |\n"
+        ),
+        None,
+        "dod-table-rows-unadmitted",
+        id="pipe_prose_no_delimiter",
+    ),
+    pytest.param(
+        "lone_headerless_row",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "| lone row | done | tests/a.py |\n"
+        ),
+        None,
+        "dod-table-rows-unadmitted",
+        id="lone_headerless_row",
+    ),
+    pytest.param(
+        "cell_count_mismatch",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "| A | B |\n"
+            "| --- |\n"
+            "| x | done |\n"
+        ),
+        None,
+        "dod-table-rows-unadmitted",
+        id="cell_count_mismatch",
+    ),
+    pytest.param(
+        "table_plus_prose_pipe",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "| DoD | Status | Evidence |\n"
+            "| --- | --- | --- |\n"
+            "| Ship it | done | tests/a.py |\n\n"
+            "See also: foo | bar | context\n"
+        ),
+        1,
+        None,
+        id="table_plus_prose_pipe",
+    ),
+    pytest.param(
+        "escaped_pipes",
+        (
+            "<!-- superheroes:dod-table -->\n"
+            "| DoD | Status | Evidence |\n"
+            "| --- | --- | --- |\n"
+            "| path \\| pipe | done | tests/a.py |\n"
+        ),
+        1,
+        None,
+        id="escaped_pipes",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "case_id,body,expected_rows,refusal_reason",
+    _TABLE_CENSUS_CASES,
+)
+def test_table_census(case_id, body, expected_rows, refusal_reason, tmp_path):
+    session = _session(tmp_path, body=body, name="table-%s" % case_id)
+    rc, body_out = _invoke("stage", session)
+    if refusal_reason:
+        _assert_refusal(rc, body_out, refusal_reason)
+        return
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == expected_rows
+
+
+def test_region_boundary_fenced_heading_does_not_truncate(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "```\n"
+        "## sample\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| fake | done | planted |\n"
+        "```\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| real row | done | tests/a.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "real row|done|tests/a.py"
+
+
+def test_region_boundary_live_heading_truncates(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| first row | done | tests/a.py |\n"
+        "## Next\n"
+        "| later | done | tests/b.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "first row|done|tests/a.py"
+
+
+def test_fenced_bullet_not_minted_as_degradation(tmp_path):
+    body = (
+        "<!-- superheroes:degradations -->\n"
+        "### Disclosed degradations\n"
+        "- real degradation\n"
+        "```\n"
+        "- fenced fake degradation\n"
+        "```\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    deg = _degradation_claims(manifest)
+    assert [c["text"] for c in deg] == ["real degradation"]
+
+
+def test_body_refusal_surfaces_own_token_not_internal_error(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    with patch.object(
+        GS,
+        "_parse_dod_rows",
+        side_effect=GS._BodyRefusal("dod-table-rows-unadmitted", "probe"),
+    ):
+        rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "dod-table-rows-unadmitted")
+    assert body_out.get("reason") != "internal-error"

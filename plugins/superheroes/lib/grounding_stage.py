@@ -88,11 +88,20 @@ REFUSAL_REASONS = frozenset({
     "staged-stage-token-mismatch",
     "manifest-flag-mismatch",
     "source-body-stale",
+    "region-marker-duplicated",
+    "dod-table-rows-unadmitted",
     "invalid-invocation",
     "internal-error",
 })
 
 REFUSAL_INTERNAL_ERROR = "internal-error"
+
+
+class _BodyRefusal(Exception):
+    def __init__(self, reason, detail=None):
+        super().__init__(reason)
+        self.reason = reason
+        self.detail = detail
 
 
 def _iso8601_utc():
@@ -112,6 +121,14 @@ def _refuse(reason, detail=None):
     if reason not in REFUSAL_REASONS:
         raise ValueError("unregistered refusal reason: %r" % reason)
     return {"ok": False, "signal": "cannot-certify", "reason": reason, "detail": detail}
+
+
+def _convert_body_refusal(exc):
+    if exc.reason == "region-marker-duplicated":
+        return _refuse("region-marker-duplicated", exc.detail)
+    if exc.reason == "dod-table-rows-unadmitted":
+        return _refuse("dod-table-rows-unadmitted", exc.detail)
+    raise ValueError("unregistered body refusal reason: %r" % exc.reason)
 
 
 def _emit(result):
@@ -229,11 +246,15 @@ def _heading_level(line):
     return len(match.group(1)) if match else None
 
 
-def _next_heading_boundary(text, section_level):
-    """Offset in text where a same-or-higher-level heading begins after the opener."""
+def _next_heading_boundary(text, section_level, scan, start_line):
+    """Offset in text where a same-or-higher-level live heading begins after the opener."""
     offset = 0
     first_heading_seen = False
-    for line in text.splitlines(keepends=True):
+    for i, line in enumerate(text.splitlines(keepends=True)):
+        body_line = start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            offset += len(line)
+            continue
         stripped = line.strip()
         if stripped:
             level = _heading_level(stripped)
@@ -246,10 +267,14 @@ def _next_heading_boundary(text, section_level):
     return len(text)
 
 
-def _first_any_heading_offset(text):
-    """Offset in text where the first heading of any level begins."""
+def _first_any_heading_offset(text, scan, start_line):
+    """Offset in text where the first live heading of any level begins."""
     offset = 0
-    for line in text.splitlines(keepends=True):
+    for i, line in enumerate(text.splitlines(keepends=True)):
+        body_line = start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            offset += len(line)
+            continue
         stripped = line.strip()
         if stripped and _heading_level(stripped) is not None:
             return offset
@@ -257,11 +282,22 @@ def _first_any_heading_offset(text):
     return len(text)
 
 
-def _region_heading_bound(text, opening_level):
+def _region_heading_bound(text, opening_level, scan, start_line):
     """Offset where the region's heading-boundary ends (exclusive)."""
     if opening_level is not None:
-        return _next_heading_boundary(text, opening_level)
-    return _first_any_heading_offset(text)
+        return _next_heading_boundary(text, opening_level, scan, start_line)
+    return _first_any_heading_offset(text, scan, start_line)
+
+
+def _line_index_at_offset(lines, offset):
+    pos = 0
+    for i, line in enumerate(lines):
+        if pos == offset:
+            return i
+        if pos < offset < pos + len(line):
+            return i
+        pos += len(line)
+    return len(lines)
 
 
 def _bare_lines_from_body(body):
@@ -285,10 +321,11 @@ def _context_scan(body):
     return md_fence.scan_contexts(bare)
 
 
-def _find_all_standalone_markers(body, marker):
+def _find_all_standalone_markers(body, marker, scan=None):
     """Return byte offsets of every live standalone ``marker`` line in ``body``."""
     lines, bare = _bare_lines_from_body(body)
-    scan = _context_scan(body)
+    if scan is None:
+        scan = _context_scan(body)
     offsets = []
     offset = 0
     for i, line in enumerate(lines):
@@ -303,19 +340,26 @@ def _find_all_standalone_markers(body, marker):
     return offsets
 
 
-def _find_standalone_marker(body, marker, start=0):
+def _find_standalone_marker(body, marker, start=0, scan=None):
     """Return byte offset of the first standalone marker line at or after start."""
-    for off in _find_all_standalone_markers(body, marker):
+    for off in _find_all_standalone_markers(body, marker, scan):
         if off >= start:
             return off
     return -1
 
 
-def _extract_region(body, marker):
+def _extract_region(body, marker, scan, marker_name):
     # bite-axis: region markers must be standalone comment lines outside code fences.
-    idx = _find_standalone_marker(body, marker)
-    if idx < 0:
-        return None, 0
+    offsets = _find_all_standalone_markers(body, marker, scan)
+    if len(offsets) >= 2:
+        raise _BodyRefusal(
+            "region-marker-duplicated",
+            "%s: %d live occurrences" % (marker_name, len(offsets)),
+        )
+    if not offsets:
+        return None, 0, 0
+    lines, _ = _bare_lines_from_body(body)
+    idx = offsets[0]
     start = idx + len(marker)
     rest = body[start:]
     if rest.startswith("\r\n"):
@@ -324,29 +368,34 @@ def _extract_region(body, marker):
     elif rest.startswith("\n"):
         start += 1
         rest = body[start:]
+    region_start_line = _line_index_at_offset(lines, start)
     next_markers = [
-        _find_standalone_marker(body, m, start)
+        _find_standalone_marker(body, m, start, scan)
         for m in REGION_MARKERS.values()
     ]
     next_markers = [pos for pos in next_markers if pos >= 0]
     marker_end = min(next_markers) if next_markers else len(body)
     section_level = None
-    for line in rest.splitlines():
+    for i, line in enumerate(rest.splitlines()):
+        body_line = region_start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            continue
         stripped = line.strip()
         if not stripped:
             continue
         section_level = _heading_level(stripped)
         break
-    heading_end = start + _region_heading_bound(rest, section_level)
+    heading_end = start + _region_heading_bound(rest, section_level, scan, region_start_line)
     end = min(marker_end, heading_end)
     region_text = body[start:end]
-    lines = region_text.splitlines()
-    while lines and not lines[0].strip():
-        lines.pop(0)
-    while lines and not lines[-1].strip():
-        lines.pop()
-    line_count = len(lines)
-    return region_text, line_count
+    region_lines = region_text.splitlines()
+    while region_lines and not region_lines[0].strip():
+        region_lines.pop(0)
+        region_start_line += 1
+    while region_lines and not region_lines[-1].strip():
+        region_lines.pop()
+    line_count = len(region_lines)
+    return region_text, line_count, region_start_line
 
 
 def _split_table_cells(line):
@@ -394,19 +443,23 @@ def _is_table_row_line(line):
 
 
 def _parse_dod_table_block(block_lines):
-    """Return data rows from a consecutive run of pipe-bearing lines."""
-    if not block_lines:
+    """Return data rows from a maximal run of consecutive live pipe-bearing lines.
+
+    Within a region, a maximal run of consecutive live pipe-bearing lines yields data
+    rows if and only if it is a GFM table: a header line, immediately followed by a
+    delimiter row whose cell count equals the header's. Its rows are then every line
+    after the delimiter. Otherwise the run yields no rows.
+    """
+    if len(block_lines) < 2:
         return []
-    start = 0
-    if (
-        len(block_lines) >= 2
-        and _is_separator_cells(_split_table_cells(block_lines[1]))
-    ):
-        start = 2
-    elif len(block_lines) == 1 and not block_lines[0].lstrip().startswith("|"):
+    header_cells = _split_table_cells(block_lines[0])
+    delim_cells = _split_table_cells(block_lines[1])
+    if not _is_separator_cells(delim_cells):
+        return []
+    if len(header_cells) != len(delim_cells):
         return []
     rows = []
-    for line in block_lines[start:]:
+    for line in block_lines[2:]:
         cells = _split_table_cells(line)
         if _is_separator_cells(cells) or not any(cells):
             continue
@@ -414,30 +467,45 @@ def _parse_dod_table_block(block_lines):
     return rows
 
 
-def _parse_dod_rows(body, marker):
-    # bite-axis: DoD table rows — optional outer pipes, separator row skipped, escaped pipes kept.
-    region_text, _ = _extract_region(body, marker)
+def _parse_dod_rows(body, marker, scan, marker_name):
+    # bite-axis: DoD table rows — GFM table with delimiter, escaped pipes kept, scan-aware.
+    region_text, _, region_start_line = _extract_region(body, marker, scan, marker_name)
     if region_text is None:
         return []
     rows = []
     block_lines = []
-    for line in region_text.splitlines():
+    has_live_pipe_line = False
+    for i, line in enumerate(region_text.splitlines()):
+        body_line = region_start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            rows.extend(_parse_dod_table_block(block_lines))
+            block_lines = []
+            continue
         if _is_table_row_line(line):
+            has_live_pipe_line = True
             block_lines.append(line.strip())
             continue
         rows.extend(_parse_dod_table_block(block_lines))
         block_lines = []
     rows.extend(_parse_dod_table_block(block_lines))
+    if has_live_pipe_line and not rows:
+        raise _BodyRefusal(
+            "dod-table-rows-unadmitted",
+            "dod-table region has live pipe-bearing lines but zero admitted rows",
+        )
     return rows
 
 
-def _parse_degradation_bullets(body, marker):
+def _parse_degradation_bullets(body, marker, scan, marker_name):
     # bite-axis: degradation bullets — list items bounded by the region heading fence.
-    region_text, _ = _extract_region(body, marker)
+    region_text, _, region_start_line = _extract_region(body, marker, scan, marker_name)
     if region_text is None:
         return []
     bullets = []
-    for line in region_text.splitlines():
+    for i, line in enumerate(region_text.splitlines()):
+        body_line = region_start_line + i
+        if body_line < len(scan.inert) and scan.inert[body_line]:
+            continue
         stripped = line.strip()
         if stripped.startswith("- "):
             bullets.append(stripped[2:].strip())
@@ -459,7 +527,7 @@ def _dod_row_verifiability(row_text):
     return VERIFIABILITY_REPO
 
 
-def _enumerate_claims(body, regions):
+def _enumerate_claims(body, regions, scan):
     # bite-axis: claim enumeration — regions, DoD rows, degradations, and stub markers minted.
     claims = []
     ordinal = 0
@@ -480,10 +548,12 @@ def _enumerate_claims(body, regions):
         text = "region %s present=%s" % (name, present)
         append_claim(CLAIM_KIND_REGION_PRESENT, text, VERIFIABILITY_STAGER)
     if regions.get("dod-table", {}).get("present"):
-        for row in _parse_dod_rows(body, REGION_MARKERS["dod-table"]):
+        for row in _parse_dod_rows(body, REGION_MARKERS["dod-table"], scan, "dod-table"):
             append_claim(CLAIM_KIND_DOD_ROW, row, _dod_row_verifiability(row))
     if regions.get("degradations", {}).get("present"):
-        for bullet in _parse_degradation_bullets(body, REGION_MARKERS["degradations"]):
+        for bullet in _parse_degradation_bullets(
+            body, REGION_MARKERS["degradations"], scan, "degradations",
+        ):
             append_claim(CLAIM_KIND_DEGRADATION, bullet, VERIFIABILITY_REPO)
     for marker in stub_markers.find_markers(body):
         text = "%s(#%d): %s" % (_STUB_LABEL, marker["issue"], marker["description"])
@@ -491,11 +561,11 @@ def _enumerate_claims(body, regions):
     return claims
 
 
-def _detect_regions(body):
+def _detect_regions(body, scan):
     # bite-axis: region presence — standalone marker comments outside code fences.
     regions = []
     for name, marker in REGION_MARKERS.items():
-        region_text, line_count = _extract_region(body, marker)
+        region_text, line_count, _ = _extract_region(body, marker, scan, name)
         present = region_text is not None
         regions.append({
             "name": name,
@@ -745,10 +815,19 @@ def _verify_manifest_files(manifest, session_dir):
         raw_body = _extract_untrusted_pr_body(on_disk)
         if raw_body is None:
             return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
-        derived_regions = _detect_regions(raw_body)
+        body_scan = _context_scan(raw_body)
+        try:
+            derived_regions = _detect_regions(raw_body, body_scan)
+        except _BodyRefusal as exc:
+            return _convert_body_refusal(exc)
         if derived_regions != manifest.get("regions"):
             return _refuse("stage-manifest-invalid", "regions do not match staged body")
-        derived_claims = _enumerate_claims(raw_body, _region_map(derived_regions))
+        try:
+            derived_claims = _enumerate_claims(
+                raw_body, _region_map(derived_regions), body_scan,
+            )
+        except _BodyRefusal as exc:
+            return _convert_body_refusal(exc)
         if derived_claims != manifest.get("claims"):
             return _refuse("stage-manifest-invalid", "claims do not match staged body")
     return {"ok": True, "manifest": manifest}
@@ -790,9 +869,16 @@ def stage(session_dir):
         )
     token = _stage_token()
     fence_nonce = _fence_nonce()
-    regions = _detect_regions(body)
+    body_scan = _context_scan(body)
+    try:
+        regions = _detect_regions(body, body_scan)
+    except _BodyRefusal as exc:
+        return _convert_body_refusal(exc)
     region_map = {r["name"]: r for r in regions}
-    claims = _enumerate_claims(body, region_map)
+    try:
+        claims = _enumerate_claims(body, region_map, body_scan)
+    except _BodyRefusal as exc:
+        return _convert_body_refusal(exc)
     # bite-axis: claim budget — minted claim count must not exceed the seat ceiling.
     if len(claims) > CLAIM_COUNT_MAX:
         return _refuse(
