@@ -108,6 +108,8 @@ appending, the session checks the collector for an existing entry covering the s
 **updates that entry in place** rather than adding a second (owner ruling 2026-08-24, recorded on
 the collector —
 [issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)).
+On a project with no vet yet, the append carries ordinal 0, marked non-vet — the first real vet is
+ordinal 1 and the age subtraction proceeds unchanged.
 
 Deferring the append is what two independent sessions did on 2026-08-02, and it is the evaporation
 class recorded as we#526 and we#527 — items that lived only in individual receipts while the
@@ -135,13 +137,18 @@ graduate rows into it, and that is optional.
 Both tiers are archived here. Tier-1 craft declines land in the registry too — which is what makes
 them visible and veto-able — and Tier-2 declines land after the owner's word.
 
-Archiving a decline is two writes with no transaction — the registry row and the collector strike.
-The order is fixed (owner ruling 2026-08-24, recorded on the collector —
+Archiving a decline is two writes with no transaction — the registry row and, where the declined
+item has a collector entry, its strike (a Tier-1 craft decline that never reached the collector has
+only the row, which lands at determination time). The order is fixed (owner ruling 2026-08-24,
+recorded on the collector —
 [issue #695 comment](https://github.com/zwrose/superheroes/issues/695#issuecomment-5390859217)):
-the **registry row lands first**, keyed by the item's collector number so a repeated write is
-idempotent, and **only then is the item struck**; the vet-time reconciliation read completes the
-pair when it finds a row without its strike or a struck item without its row. Striking before the
-row is written is the fail-open order — a crash there loses the decline entirely — and is never
+the **registry row lands first** — keyed by the item's collector number where one exists, otherwise
+by the determination record the row points to, so a repeated write is idempotent — and **only then
+is the item struck**; the vet-time reconciliation read completes the pair when it finds a row
+without its strike or a struck item without its row. Striking first is the fail-open order: a crash
+between the writes leaves the item reading as handled while its revisit trigger is recorded nowhere
+— reconciliation can flag the struck-without-row shape, but the trigger must then be re-derived from
+the ruling record rather than read from the registry. Row-first fails closed and is the only order
 used.
 
 **Any session processing a field report, and any vet whose evidence includes an observed-in-the-field failure, reads the registry.**
