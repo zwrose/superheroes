@@ -640,3 +640,194 @@ def test_live_from_dead_note_redacts_absolute_paths():
     _, _, dead_notes = lc.live_from(liveness, {"codex": [["gpt-5.6-sol", "xhigh"]]})
     assert secret_path not in dead_notes[0]["reason"]
     assert pp._REDACTED_ABS_PATH in dead_notes[0]["reason"]
+
+
+# --- reconcile-after-loop disclosure (#1104 WO-B) ---
+
+
+def _count_non_claude_needed_slots(needed):
+    """Slots for census: one per positional entry, or 1 for unreachable vendor."""
+    if not isinstance(needed, dict):
+        return 0
+    total = 0
+    for vendor, entries in needed.items():
+        if vendor == "claude":
+            continue
+        if not isinstance(entries, (list, tuple)) or len(entries) == 0:
+            total += 1
+        else:
+            total += len(entries)
+    return total
+
+
+def test_live_from_novel_unhashable_effort_disclosed():
+    """Bite-proof: unhashable effort passes if-arms but was silent via outer except."""
+    needed = {"codex": [["gpt-m", {"effort": "high"}]]}
+    live, live_cells, dead_notes = lc.live_from({}, needed)
+    assert "codex" not in live
+    assert live_cells == []
+    assert len(dead_notes) == 1
+    assert dead_notes[0]["vendor"] == "codex"
+    assert dead_notes[0]["model"] is None
+    assert "malformed needed cell entry" in dead_notes[0]["reason"]
+
+
+class _RaisingOnGet(dict):
+    """Liveness dict whose .get raises — forces the cell loop to die."""
+
+    def get(self, key, default=None):
+        raise RuntimeError("loop died")
+
+
+def test_live_from_reconcile_runs_when_loop_raises():
+    """Bite-proof: reconcile discloses even when the cell-evidence loop raises."""
+    needed = {"codex": [["gpt-m", None]]}
+    liveness = _RaisingOnGet()
+    live, live_cells, dead_notes = lc.live_from(liveness, needed)
+    assert "codex" not in live
+    assert live_cells == []
+    assert len(dead_notes) == 1
+    assert dead_notes[0]["vendor"] == "codex"
+    assert dead_notes[0]["model"] == "gpt-m"
+
+
+@pytest.mark.parametrize(
+    "liveness,needed",
+    [
+        (_good_liveness(), {"codex": [], "cursor": []}),
+        (_aug15_liveness(), {"codex": [["gpt-5.6-sol", "xhigh"], ["gpt-5.6-terra", "high"]]}),
+        (_good_liveness(), {"cursor": [["grok", None]]}),
+        (_good_liveness(), {"codex": "not-a-list"}),
+        (
+            {
+                "codex": {
+                    "live": True,
+                    "models": {"m": {"ok": True, "detail": "x"}},
+                    "cells": [{"model": "m", "effort": None, "ok": True, "detail": "x"}],
+                },
+                "claude": {"live": True, "models": {}, "cells": []},
+            },
+            {"codex": ["not-a-pair"]},
+        ),
+        ({}, {"codex": [["gpt-m", {"effort": "high"}]]}),
+        (
+            _good_liveness(),
+            {"codex": [["gpt-5.6-sol", "medium"], ["missing", "high"]]},
+        ),
+        (
+            {
+                "codex": {
+                    "live": True,
+                    "models": {"m": {"ok": "true", "detail": ""}},
+                    "cells": [{"model": "m", "effort": None, "ok": "true", "detail": ""}],
+                },
+            },
+            {"codex": [["m", None]]},
+        ),
+        (_good_liveness(), {"codex": [[{"a": 1}, None]]}),
+        (
+            {
+                "codex": {
+                    "live": True,
+                    "models": {"m": {"ok": False, "detail": "down"}},
+                    "cells": [{"model": "m", "effort": None, "ok": False, "detail": "down"}],
+                },
+            },
+            {"codex": [["m", None]]},
+        ),
+        ("not-a-dict", {"codex": [["m", None]]}),
+    ],
+)
+def test_live_from_census_every_needed_slot_live_or_disclosed(liveness, needed):
+    """Every non-claude needed slot is either live or has a disclosure note."""
+    live_vendors, live_cells, dead_notes = lc.live_from(liveness, needed)
+    if not isinstance(needed, dict):
+        assert live_vendors == ["claude"]
+        assert live_cells == []
+        assert dead_notes == []
+        return
+    expected_slots = _count_non_claude_needed_slots(needed)
+    assert len(live_cells) + len(dead_notes) == expected_slots
+
+
+def test_live_from_dead_note_reason_bounded():
+    long_detail = "x" * 500
+    liveness = {
+        "codex": {
+            "live": False,
+            "models": {"m": {"ok": False, "detail": long_detail}},
+            "cells": [{"model": "m", "effort": None, "ok": False, "detail": long_detail}],
+        },
+    }
+    _, _, dead_notes = lc.live_from(liveness, {"codex": [["m", None]]})
+    assert len(dead_notes) == 1
+    reason = dead_notes[0]["reason"]
+    assert len(reason) < 500
+    assert "\u2026" in reason or len(lc._bounded_reason(long_detail)) <= 200
+
+
+def test_live_from_edge_empty_or_non_list_entries():
+    live, _, notes = lc.live_from(_good_liveness(), {"codex": []})
+    assert "codex" not in live
+    assert len(notes) == 1
+    assert "no needed cell is reachable" in notes[0]["reason"]
+
+    live2, _, notes2 = lc.live_from(_good_liveness(), {"codex": {"m": "high"}})
+    assert "codex" not in live2
+    assert len(notes2) == 1
+    assert "no needed cell is reachable" in notes2[0]["reason"]
+
+
+def test_live_from_edge_malformed_entry():
+    live, _, notes = lc.live_from(_good_liveness(), {"codex": ["not-a-pair"]})
+    assert "codex" not in live
+    assert len(notes) == 1
+    assert notes[0]["model"] is None
+    assert "malformed needed cell entry" in notes[0]["reason"]
+
+
+def test_live_from_edge_unhashable_entry_members():
+    live, _, notes = lc.live_from(_good_liveness(), {"codex": [[{"a": 1}, None]]})
+    assert "codex" not in live
+    assert len(notes) == 1
+    assert notes[0]["model"] is None
+    assert "malformed needed cell entry" in notes[0]["reason"]
+
+
+def test_live_from_edge_malformed_liveness():
+    need = {"codex": [["m", None]], "cursor": [["g", None]]}
+    live, live_cells, notes = lc.live_from("not-a-dict", need)
+    assert "codex" not in live
+    assert "cursor" not in live
+    assert live_cells == []
+    assert len(notes) == 2
+
+
+def test_live_from_edge_non_bool_ok():
+    liv = {
+        "codex": {
+            "live": True,
+            "models": {"m": {"ok": "true", "detail": ""}},
+            "cells": [{"model": "m", "effort": None, "ok": "true", "detail": ""}],
+        },
+    }
+    live, _, notes = lc.live_from(liv, {"codex": [["m", None]]})
+    assert "codex" not in live
+    assert len(notes) == 1
+
+
+def test_live_from_edge_needed_not_dict():
+    live, live_cells, notes = lc.live_from(_good_liveness(), "not-a-dict")
+    assert live == ["claude"]
+    assert live_cells == []
+    assert notes == []
+
+
+def test_live_from_edge_duplicate_model_effort_slots():
+    """Duplicate (model, effort) in one vendor: multiset reconcile, deterministic."""
+    liv = _good_liveness()
+    need = {"codex": [["gpt-5.6-sol", "medium"], ["gpt-5.6-sol", "medium"]]}
+    live, live_cells, notes = lc.live_from(liv, need)
+    assert "codex" in live
+    assert len(live_cells) == 2
+    assert notes == []
