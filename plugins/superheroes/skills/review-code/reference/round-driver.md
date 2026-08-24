@@ -253,6 +253,30 @@ Paths (round `N`, phase `P`, attempt `K`, storage key `skey`):
 Both shapes present → `landing-ambiguous`. The order's landing block names the paths; seats copy
 stub header fields verbatim and never recompute hashes.
 
+**`seat-result/1` envelope fields** (engine-seat full envelope — the orchestrator writes every field
+below when landing a `dispatch-review` stdout result):
+
+| Field | Carries |
+| --- | --- |
+| `schema` | Literal `seat-result/1` |
+| `session` | Session id from `meta.json` |
+| `round` | Round number |
+| `phase` | Phase name (e.g. `dispatch-panel`) |
+| `seat` | Roster seat key |
+| `attempt` | Attempt counter for this phase |
+| `vendor` | Seat vendor string |
+| `model` | Seat model string |
+| `dispatchRef` | Dispatch reference id |
+| `orderSha256` | SHA-256 of the order file, or `not-emitted` when no emission anchor exists |
+| `manifestSha256` | SHA-256 of the orders manifest, or `not-emitted` when no emission anchor exists |
+| `recordedAt` | ISO-8601 timestamp when the envelope was stamped |
+| `payloadSha256` | SHA-256 over the canonical JSON of `payload`; an envelope **without** this field, or with a hash that does not match `payload`, is refused **`landing-torn`** at ingest |
+| `payload` | The seat's artifact (JSON object) |
+
+The **`seat-missing/1`** shape is deliberately different: it records a seat that produced no artifact
+and carries **no** `payload` or `payloadSha256` — instead `reason` (one of `forfeit`, `timeout`,
+`refusal`, `killed`, `malformed-output`) and optional `evidence`.
+
 **The order's output contract follows the seat's channel** (`round_driver._seat_channel`, the one
 home for the choice): an order names a landing path to **write** only when the seat's transport row
 carries a vendor positively known to be a host seat, and every other case — an engine vendor, or a
@@ -535,6 +559,10 @@ every replay — re-verifies receipt integrity before answering: the fault-marke
 `validate_receipt` over the on-disk `round-receipt.json` **re-read fresh from disk** (never a cached
 copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "detail": …}` with a
 **nonzero exit** (never `terminal`-with-ok), the same fail-loud family as `journal-fault-unrecordable`.
+
+When the driver cannot continue — a refusal, a park, `journal-fault-unrecordable`, `receipt-fault`,
+or any other halt — park citing the blocker and never hand-drive the remainder; `rubric/review-discipline.md`
+is the home for the driver-or-park valve.
 
 **Receipt (`round-receipt.json`).** Required keys (shape-checked by `validate_receipt`, fail-closed):
 
