@@ -884,6 +884,8 @@ def _cert_shape(state, base):
         _degraded(state)
         or _base_degraded(state)
         or _same_family_degraded(state)
+        # bite-axis: skewed review never reads unqualified-clean — projection 1 of 3 independent
+        # skew guards (_cert_shape here; shapeDrivers and degraded prose are the other two, #677).
         or _skew_degraded(state)
         or _seat_pin_excused(state)
     ):
@@ -3043,6 +3045,8 @@ def _terminal_converged(state, config, full_panel, note=None):
         shape_drivers.append("base")
     if _same_family_degraded(state):
         shape_drivers.append("same-family")
+    # bite-axis: skewed review never reads unqualified-clean — projection 2 of 3 independent skew
+    # guards (shapeDrivers here; _cert_shape and degraded prose are the other two, #677).
     if _skew_degraded(state):
         shape_drivers.append("plugin-version-skew")
     if _seat_pin_excused(state):
@@ -3132,6 +3136,8 @@ def build_receipt(state, session_dir=None):
             "panel independence: seat(s) %s were filled with the MAKER's own model family — no "
             "alternative family was live; disclosed by the seat map and named in the certification "
             "shape" % ", ".join(_same_family_seats(state)))
+    # bite-axis: skewed review never reads unqualified-clean — projection 3 of 3 independent skew
+    # guards (degraded prose here; _cert_shape and shapeDrivers are the other two, #677).
     if _skew_degraded(state):
         _skew_reasons = []
         for rec in _skew_records(state):

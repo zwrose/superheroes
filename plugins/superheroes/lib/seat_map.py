@@ -1058,6 +1058,9 @@ def main(argv):
         )
         extra_degradations: list[dict[str, str]] = []
         plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # bite-axis: skew record reaches the receipt before to_receipt derives it — a record
+        # appended after can never be seen by the evidence check (#677; same ordering bound as
+        # the preflight notes merge below).
         skew_record = version_skew.detect(args.repo_root, plugin_root)
         if skew_record is not None:
             extra_degradations.append(skew_record)

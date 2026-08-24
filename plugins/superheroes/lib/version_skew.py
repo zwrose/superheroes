@@ -64,6 +64,8 @@ def detect(repo_root: str, plugin_root: str) -> dict | None:
         repo_root, "plugins", "superheroes", ".claude-plugin", "plugin.json",
     )
     manifest = _read_json(manifest_path)
+    # bite-axis: silence outside the source repository — a consuming project's installed cache is
+    # its only semantics source, so skew is not provable and this path returns None by design.
     if manifest is None or manifest.get("name") != "superheroes":
         return None
 
@@ -83,9 +85,14 @@ def detect(repo_root: str, plugin_root: str) -> dict | None:
         repo_digest = _file_digest(repo_path)
         if plugin_digest is None or repo_digest is None:
             unreadable.append(entry)
+        # bite-axis: content divergence — digest comparison on semantics files, not a version-string
+        # compare (release tooling only advances version.txt at merge, so versions match throughout
+        # the skew window this guard exists for).
         elif plugin_digest != repo_digest:
             differing.append(entry)
 
+    # bite-axis: fail-closed — once the identity gate has passed, unreadable evidence returns a
+    # record, never None; a guard that falls silent on a missing file has fallen open.
     if unreadable:
         entries = ", ".join(unreadable)
         reason = (
