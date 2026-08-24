@@ -3060,19 +3060,42 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
     """axis: which stream is observed for activity sampling (stdout participation)."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    # Two writes separated by a gap, and a trailing gap before exit, so the sampler's poll loop
-    # gets a turn BETWEEN the writes and again after the second one. The old 0.12 s child died
-    # inside a single poll period, which left the activity moment credited by one post-exit tick
-    # and made any freshness assertion vacuous (#1132).
+    # The child HANDSHAKES with the sampler through the progress file instead of sleeping (#1132):
+    # it writes its first byte and blocks until a heartbeat record reports having observed exactly
+    # that byte, then writes its second and blocks until a record reports that one too. Each
+    # heartbeat writes its progress line from the SAME sample it credited activity from, so the
+    # handshake makes "the sampler saw the first write, then saw the second" a precondition of the
+    # run rather than a scheduling accident. A timed child could not do that: on a loaded machine
+    # the poll loop can be descheduled past both writes, and the run then proves nothing (the
+    # 0.12 s child this replaced died inside a single 0.2 s poll period every time). The child
+    # gives up well inside the runner's own 30 s cap and exits non-zero, so a broken handshake
+    # surfaces as a loud failure on the `exit == 0` assertion rather than a hang.
+    progress_path = os.path.join(run_dir, "progress.jsonl")
     script = (
-        "import sys, time\n"
+        "import json, sys, time\n"
+        "progress = %r\n"
+        "def observed(n):\n"
+        "    deadline = time.time() + 20\n"
+        "    while time.time() < deadline:\n"
+        "        try:\n"
+        "            with open(progress, 'r') as fh:\n"
+        "                for line in fh:\n"
+        "                    line = line.strip()\n"
+        "                    if line and json.loads(line).get('stdout_bytes', 0) >= n:\n"
+        "                        return True\n"
+        "        except (OSError, ValueError):\n"
+        "            pass\n"
+        "        time.sleep(0.01)\n"
+        "    return False\n"
         "sys.stdout.write('a')\n"
         "sys.stdout.flush()\n"
-        "time.sleep(0.4)\n"
+        "if not observed(1):\n"
+        "    sys.exit(3)\n"
         "sys.stdout.write('b')\n"
         "sys.stdout.flush()\n"
-        "time.sleep(0.4)\n"
-    )
+        "if not observed(2):\n"
+        "    sys.exit(4)\n"
+    ) % (progress_path,)
     ended, stdout_path, _ = _wo2_run_engine(
         run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
     assert ended["exit"] == 0
@@ -3081,12 +3104,11 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
     assert ended.get("activityStream") == "stdout"
     assert ended.get("silenceSeconds") is not None
     # #1132: freshness is asserted against a SAME-RUN baseline, not an absolute second count.
-    # The child writes twice with a gap; whichever path credits the activity moment — a
-    # heartbeat tick that sampled the grown file, or the post-reap mtime fold — must land at or
-    # after the final stdout write. The file is under the capture cap, so _cap_file_tail leaves
-    # it (and its mtime) alone, and the comparison moves with the machine instead of against it.
-    # The former `silenceSeconds < 0.5` bound measured load: it went red at load average 82 with
-    # the telemetry code untouched (PR #1129's build).
+    # The handshake above guarantees the sampler observed BOTH writes, so the credited activity
+    # moment must land at or after the final stdout write. The file is under the capture cap, so
+    # _cap_file_tail leaves it (and its mtime) alone, and the comparison moves with the machine
+    # instead of against it. The former `silenceSeconds < 0.5` bound measured load: it went red at
+    # load average 82 with the telemetry code untouched (PR #1129's build).
     assert ended["lastActivityAt"] >= os.path.getmtime(stdout_path), (
         "activity credited at %r, before the final stdout write at %r"
         % (ended["lastActivityAt"], os.path.getmtime(stdout_path)))
