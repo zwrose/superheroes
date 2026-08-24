@@ -77,12 +77,18 @@ shape is wrong and the thinking wins.
 7. **Dispositions — completed, and pending.** **Completed first**, because that is the primary path:
    this PR's follow-ups are dispositioned at *this* vet, before this receipt posts. Then the
    **pending** set under `<!-- superheroes:pending-proposals -->` — only what genuinely could not
-   close in this session. On an owner-absent vet (showrunner charter duty 4 owns the availability
-   rule), pending items here have **already been appended to the collector at this vet**, stamped with
-   this vet's ordinal — not a promise to append later — **except where the collector pointer could
-   not be resolved**: then the receipt carries the item **and** the disclosed degradation, and the
-   item keeps **this vet's ordinal as its proposing ordinal** for the later deferred append. Each
-   pending item carries
+   close in this session. Every Tier-2 item is appended to the collector at vet time,
+   unconditionally, so the collector is the complete register by construction; owner attendance
+   governs only when discussion happens — attended, the item is proposed in the vet-delivery message
+   and may be struck minutes after it was appended; absent, it awaits the batch. The receipt
+   therefore records an **append that already happened**, never a promise to append — **except where
+   the collector pointer could not be resolved**: then the receipt carries the item **and** the
+   disclosed degradation, and the item keeps **this vet's ordinal as its proposing ordinal** for the
+   later deferred append. Every disposition names its gate verdict and its venue. Each append carries
+   its gate verdict and its venue recommendation, so the owner's batch is one word per item.
+   **Known limit, carried knowingly:** this contract is prose-bound — nothing mechanical checks that
+   a disposition names a gate verdict and a venue, and a reader who wants to know can only read the
+   receipt. Each pending item carries
    **what it is**, **your recommendation** (so the owner's batch pass is one word rather than a
    re-derivation), and **the vet ordinal it was proposed at** — a monotonic integer, one per vet,
    assigned at the vet that proposed the item (the same vet when proposed and appended together; the
@@ -113,6 +119,7 @@ are never holding the inventory in working memory.
 | the issue carries a **lane call** | the lane-call backstop, **both directions** |
 | a **prior receipt on this PR is being corrected** | a dated correction, **edited in place** — never a superseding comment |
 | the collector holds an item whose **proposing ordinal is two or more below this vet's ordinal** | an **escalation line** naming that item and stating plainly that **the owner batch is not happening** |
+| the vet's evidence includes an **observed-in-the-field failure** — a real incident, a field report, or a reproduction — rather than a hypothetical. | the **revisit-registry scan** — read the project's revisit-trigger registry (the pinned comment on the collector issue) and state whether this vet's evidence fires any recorded revisit trigger, naming the row if it does. Cite the registry's canonical home, `skills/showrunner/reference/owner-decisions.md`. |
 | the PR is a **child of a spec package that has a contract register** | the **register-conformance row** — the change conforms to the register, or the drift is disclosed; undisclosed drift is a blocker |
 | this vet is the one whose merge closes the spec's last open child (or whose close, where the last open child closes without a PR) | the **closure receipt** — on the merge path it rides this same receipt in the same sitting; its elements live at `skills/showrunner/reference/closure.md` |
 | the build record records a **full-lane** pre-handback review | the **certified-loop check** — the driver's own round receipt, or a skip disclosure citing an open `driver-blocker` issue by number, or a skip disclosure citing an explicit owner direction as a dated record (the venue-citation convention, `skills/showrunner/reference/issue-contract.md` § Anchor resolution; the subordinated owner-directed ending). A citation that is absent, or that names a closed issue, is a finding; whether a cited skip still passes at all is governed by the driver-mandate flip in `rubric/review-discipline.md`, which is the one home for that timing — post-flip, an owner-direction citation is recorded in this receipt **named as the owner's override** of driver-or-park, never as a citation-pass |
@@ -121,10 +128,11 @@ are never holding the inventory in working memory.
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
 
-The collector-escalation row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
-the path. Each pending item's **proposing ordinal** is what makes its age inspectable — a subtraction
-against this vet's ordinal, not a count of anything — so the escalation is raised by a number the
-artifacts carry rather than by your memory of having carried the item.
+Every Tier-2 item is appended before this receipt posts; the collector-escalation row is the tripwire
+when items still live only in receipts or age without owner batch — **not** a substitute for the
+append-always rule at attended vets. Each pending item's **proposing ordinal** is what makes its age
+inspectable — a subtraction against this vet's ordinal, not a count of anything — so the escalation
+is raised by a number the artifacts carry rather than by your memory of having carried the item.
 
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather

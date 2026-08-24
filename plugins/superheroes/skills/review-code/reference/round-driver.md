@@ -544,9 +544,12 @@ copy). Any fault → the CLI answers `{"ok": false, "reason": "receipt-fault", "
 - `verdict` — `converged`, `halted`, `held`, `stalled`, `cannot-certify`, `capped-with-open-critical`, …
 - `certificationShape` — e.g. `full-panel-confirmed`, `audited-chain`, or `*-degraded` variants
 - `certification` — full block (`shape`, `fullPanel`, `independence`, `base` — `fetched` |
-  `degraded` | `not-checked`, optional `note`/`reason`, `shapeDrivers` — sorted channel names that
-  fired for the certification shape (`independence`, `base`, `same-family`, `seat-map-violation`,
-  `unproven-liveness`, `seat-pin`))
+  `degraded` | `not-checked`, optional `note`/`reason`, `pluginVersionSkew` — tri-state skew
+  disclosure: `checked-clean`, `checked-degraded`, `not-checked`, or `absent` when the seat map
+  carries no usable `pluginVersionSkew` receipt (distinct from `seatMap.pluginVersionSkew`, the
+  compose receipt object with `status`, `detail`, and `inspectedRoot`), `shapeDrivers` — sorted
+  channel names that fired for the certification shape (`independence`, `base`, `same-family`,
+  `plugin-version-skew`, `seat-map-violation`, `unproven-liveness`, `seat-pin`))
 - `rounds` — per-round `kind`, `seatStatus`, `lensCoverage` (`{ran, expected, floor}` — partial rounds report `floor: true`, never a bare total; the receipt validator refuses a **full-panel-anchored** `converged` claim whose anchor round is floor-marked or missing coverage), `blockingCount`, `verifyResult`, `audits`, `auditProvenance` (`collection-manifest` when the round ran fix audits — the manifest-keyed provenance boundary, visible at vet), `fellOpen`, `fellOpenProvenanceMissing`, `seatMapUnavailable`, `seatMapViolations`, `vacuousSeats`, `canaryUnverified`, `canaryFailed`, `canaryVerified`, `orderVendorProvenanceGaps`, `unverified`, `authorJustifiedDrops`, `compileDrops`, `selfRecovery`, `stallChoice`
 - `findings`, `decisions`, `seatMap`, `scriptRan`, `degraded` (disclosure list)
 
@@ -600,7 +603,7 @@ as one.** Codex (`hooks-codex.json`) wires no PreToolUse hooks — the asymmetry
 | --- | --- |
 | `full-panel-confirmed` | A qualifying full `reviewer-deep` confirmation panel ran before exit. |
 | `audited-chain` | Scoped certifying finish — fixes discharged via audits + scoped verification; **no** final full panel. Surface this honestly; never imply a pristine fresh pass. |
-| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, or the seat map disclosed same-family self-review. |
+| `*-degraded` | Appended when `independence` is degraded (single live vendor — auditor is fixer's vendor), base fetch degraded, the seat map disclosed same-family self-review, or compose disclosed `plugin-version-skew` (content divergence of `lib/model_registry.py` or `lib/seat_map.py` against the superheroes source repo — detection only, not a version-string compare). |
 | `*-constraint-violated` | Appended when the seat map carries unexcused constraint violation(s) (#680); supersedes `*-degraded` when both would apply. |
 | `null` / withheld | Verify fail, stall unresolved (`stalled`), capped-with-open-Critical park, round-ceiling halt, owner `hold`, or `cannot-certify` (including an unresolvable `one-more-round` stall-target snapshot). |
 

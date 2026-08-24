@@ -217,6 +217,44 @@ def test_base_guard_reason_tokens_in_round_driver_doc():
         % [(n, reasons[n]) for n in missing])
 
 
+# --- Cluster: plugin-version-skew status vocabulary (version_skew → setup.md, CONVENTIONS.md) -
+
+
+def _plugin_version_skew_statuses_from_home():
+    import version_skew
+
+    return set(version_skew.STATUSES)
+
+
+def test_plugin_version_skew_status_vocabulary_in_docs():
+    """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES."""
+    import version_skew
+
+    home = _plugin_version_skew_statuses_from_home()
+    setup = _read("skills/review-code/reference/setup.md")
+    missing_setup = sorted(token for token in home if token not in setup)
+    assert not missing_setup, (
+        "setup.md missing plugin-version-skew status token(s) from version_skew.STATUSES: %r"
+        % missing_setup
+    )
+    conventions = _read("../../CONVENTIONS.md")
+    missing_conventions = []
+    for token in (version_skew.STATUS_CHECKED_CLEAN, version_skew.STATUS_CHECKED_DEGRADED):
+        if token not in conventions:
+            missing_conventions.append(token)
+    if (
+        version_skew.STATUS_NOT_CHECKED not in conventions
+        and "never-checked" not in conventions
+    ):
+        missing_conventions.append(
+            "%s (CONVENTIONS prose uses never-checked)" % version_skew.STATUS_NOT_CHECKED
+        )
+    assert not missing_conventions, (
+        "CONVENTIONS.md missing plugin-version-skew status vocabulary from "
+        "version_skew.STATUSES: %r" % missing_conventions
+    )
+
+
 # --- Cluster: review payload shape tokens (engine_adapter → auto-fix-loop.md) ---
 
 

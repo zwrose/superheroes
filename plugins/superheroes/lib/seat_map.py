@@ -11,7 +11,11 @@ import hashlib
 import itertools
 import math
 
+import liveness_cache
 from model_registry import family_for, is_allowed, matrix_config, vendors
+import version_skew
+
+LIVE_CELLS_SOURCES = liveness_cache.LIVE_CELLS_SOURCES
 
 LENS_SEATS = (
     "architecture-reviewer",
@@ -101,14 +105,14 @@ def _synthesize_live_cells(
 def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, str]:
     raw_cells = seat_map.get("liveCells")
     raw_source = seat_map.get("liveCellsSource")
-    if isinstance(raw_cells, list) and raw_source in ("probed", "synthesized"):
+    if isinstance(raw_cells, list) and raw_source in LIVE_CELLS_SOURCES:
         return list(raw_cells), raw_source
     live = seat_map.get("liveVendors")
     if isinstance(live, list) and live:
         roster = tuple(seat_map.get("seats", {}).keys()) or PANEL_ROSTER
         synthesized = _synthesize_live_cells(live, roster, None)
-        return sorted([list(c) for c in synthesized]), "synthesized"
-    return [], "synthesized"
+        return sorted([list(c) for c in synthesized]), liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
+    return [], liveness_cache.LIVE_CELLS_SOURCE_SYNTHESIZED
 
 
 def _resolvable_families_for_seat(
@@ -129,10 +133,12 @@ def _resolvable_families_for_seat(
         if isinstance(deg, dict) and deg.get("constraint") in UNPROVEN_LIVENESS_CONSTRAINTS:
             return None
     cells_source = seat_map.get("liveCellsSource")
+    if cells_source == liveness_cache.LIVE_CELLS_SOURCE_UNPROBED:
+        return None
     known_vendors = set(vendors())
     tier = tier or _seat_tier(seat, cfg)
     families: set[str] = set()
-    if cells_source == "probed":
+    if cells_source == liveness_cache.LIVE_CELLS_SOURCE_PROBED:
         raw_cells = seat_map.get("liveCells")
         if not isinstance(raw_cells, list):
             return None
@@ -370,6 +376,7 @@ def build(
             normalized = _normalize_live_cell(entry)
             if normalized is not None:
                 live_cells_normalized.add(normalized)
+        # Advisory default for callers that pass live_cells without a source; main() never reaches this.
         resolved_cells_source = live_cells_source or "probed"
 
     seating_vendors = sorted({v for (v, _m, _e) in live_cells_normalized})
@@ -933,6 +940,20 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
             seen.add(key)
             degradations.append(rec)
     receipt_live_cells, receipt_cells_source = _live_cells_fields_for_receipt(seat_map)
+    raw_skew = seat_map.get("pluginVersionSkew")
+    if isinstance(raw_skew, dict) and isinstance(raw_skew.get("status"), str):
+        plugin_version_skew = {
+            "status": raw_skew["status"],
+            "detail": raw_skew.get("detail", ""),
+            "inspectedRoot": raw_skew.get("inspectedRoot", ""),
+        }
+    else:
+        # build()-only maps never ran compose skew detection — not-checked, never checked-clean.
+        plugin_version_skew = {
+            "status": version_skew.STATUS_NOT_CHECKED,
+            "detail": version_skew.DETAIL_NOT_COMPOSED,
+            "inspectedRoot": "",
+        }
     out = {
         "seats": seat_map.get("seats", {}),
         "degradations": degradations,
@@ -944,6 +965,7 @@ def to_receipt(seat_map: dict, author_family: str | None = None) -> dict:
         "authorFamily": af,
         "livenessPinScoped": bool(seat_map.get("livenessPinScoped")),
         "violations": verify(seat_map, af),
+        "pluginVersionSkew": plugin_version_skew,
     }
     return out
 
@@ -960,6 +982,7 @@ def build_parser():
     cc.add_argument(c, "--narrative-family", contract="free-text", default=None)
     cc.add_argument(c, "--pr-number", contract="free-text", default=None)
     cc.add_argument(c, "--head-sha", contract="free-text", default=None)
+    cc.add_argument(c, "--repo-root", contract="free-text", default=".")
     cc.add_argument(
         c,
         "--live-vendors",
@@ -998,9 +1021,8 @@ def main(argv):
 
     args = build_parser().parse_args(argv[1:])
     if args.cmd == "compose":
+        import os
         import time
-
-        import liveness_cache
 
         notes: list[dict[str, str]] = []
 
@@ -1033,14 +1055,15 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(configured, pins) if pins else None
             liveness_pin_scoped = needed_override is not None
-            live, live_cells, _liveness, notes = preflight_probe.live_vendors_for_composition(
-                configured,
-                needed_override=needed_override,
-                probe_mode=args.probe_mode,
-                cache_path=cache_path,
-                now=now,
+            live, live_cells, _liveness, notes, live_cells_source = (
+                preflight_probe.live_vendors_for_composition(
+                    configured,
+                    needed_override=needed_override,
+                    probe_mode=args.probe_mode,
+                    cache_path=cache_path,
+                    now=now,
+                )
             )
-            live_cells_source = "probed"
         seed = seed_from(args.pr_number, args.head_sha)
         sm = build(
             PANEL_ROSTER,
@@ -1053,10 +1076,28 @@ def main(argv):
             live_cells=live_cells,
             live_cells_source=live_cells_source,
         )
+        extra_degradations: list[dict[str, str]] = []
+        plugin_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        # bite-axis: skew record reaches the receipt before to_receipt derives it — a record
+        # appended after can never be seen by the evidence check (#677; same ordering bound as
+        # the preflight notes merge below).
+        skew_record = version_skew.detect(args.repo_root, plugin_root)
+        sm["pluginVersionSkew"] = {
+            "status": skew_record["status"],
+            "detail": skew_record["detail"],
+            "inspectedRoot": skew_record["inspectedRoot"],
+        }
+        # bite-axis: only checked-degraded records reach degradations — checked-clean and
+        # not-checked stay off the list so a clean or skipped check never reads as degraded
+        # (#677; if-and-only-if with the consumer rule in CONVENTIONS §6).
+        if skew_record.get("status") == version_skew.STATUS_CHECKED_DEGRADED:
+            extra_degradations.append(skew_record)
         if notes:
+            extra_degradations.extend(notes)
+        if extra_degradations:
             # merge BEFORE to_receipt: the evidence check reads sm["degradations"], so a note that
             # lands after the receipt is derived can never be seen by it (#670 review, two seats).
-            sm["degradations"] = list(sm.get("degradations", [])) + list(notes)
+            sm["degradations"] = list(sm.get("degradations", [])) + extra_degradations
         receipt = to_receipt(sm)
         if "liveCellsSource" not in receipt:
             receipt["liveCellsSource"] = (

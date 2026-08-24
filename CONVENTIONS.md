@@ -678,6 +678,15 @@ family simply never seats through rotation. Where **no** alternative family is l
 with the maker family and the map records a disclosed `same-family` degradation, which
 rides the certification shape (`-degraded`) alongside `independenceDegraded` and
 `baseDegraded` — a single-vendor panel still certifies degraded, it does not halt.
+Compose may also record a disclosed `plugin-version-skew` degradation when the running
+plugin's `lib/model_registry.py` or `lib/seat_map.py` content-diverges from the
+superheroes source repository (not a version-string compare — throughout the skew window
+the repo's `version.txt` still matches a correctly-updated cache); detection only, never
+blocks, and resolving it is human (apply ratified deltas by hand, or wait for the cut).
+The compose receipt always carries a separate `pluginVersionSkew` field (`status`, `detail`,
+`inspectedRoot`) so a receipt distinguishes checked-clean from never-checked — the negative
+is on the record, not inferred from silence; only `checked-degraded` appends to
+`degradations`. That channel too rides `-degraded` and appears in `certification.shapeDrivers`.
 `verify()` treats a maker-family seat as a **violation** when an alternative family was
 reachable, and as **not** a violation when unavoidable (the degradation path); unusable
 liveness evidence — pin-scoped probes, synthesized liveness defaults, a malformed
@@ -718,8 +727,9 @@ needed cell (unchanged from today); this is the **audit vendor pool** that `revi
 panel preflight never probed — and **`liveCells`**, the per-cell verdicts that are the **seating**
 currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
 be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
-correct, not a bug. `liveCells` records provenance (`probed` vs `synthesized`); only `probed` counts
-as verification evidence. Claude is never probed and is live by construction — a stated exception,
+correct, not a bug. `liveCells` records provenance (`probed`, `synthesized`, or `unprobed`); only
+`probed` counts as verification evidence — `unprobed` is the receipt-only/`--post` path where
+vendors were never probed. Claude is never probed and is live by construction — a stated exception,
 not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run

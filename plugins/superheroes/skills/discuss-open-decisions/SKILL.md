@@ -34,6 +34,8 @@ Gather candidate items per `## Where the items come from, and the bound on that 
 
 Refresh the collector preamble per `## The collector preamble — canonical snippet` when it has drifted or is missing.
 
+Read the project's revisit-trigger registry per `## The revisit-trigger registry` before proposing a decline, so a decline already ruled on is cited rather than re-argued.
+
 Resolve the collector's issue pointer from the advisor's durable memory (showrunner duty 4); when the pointer cannot be resolved, ask the owner for the issue number and never open a second collector; record the pointer once found.
 
 Read the collector before searching parks — it is authoritative and may already subsume an in-session duplicate.
@@ -42,7 +44,11 @@ Read the collector before searching parks — it is authoritative and may alread
 
 Apply `## The filter — what is the owner's, and on what grounds`; present filtered items per that section before batch 1.
 
+For each Tier-2 item that will be delivered in batch 1 or batch 2, apply `## The worth-it gate and the venue ladder` and append it to the collector immediately, **before** it is proposed in this session's delivery message. This skill is owner-present by construction; the canonical append-always rule lives in `skills/showrunner/reference/owner-decisions.md`, and this skill applies it at delivery time rather than at vet time.
+
 ## Step 4 — Deliver batch 1
+
+Each batch-1 item has already passed the worth-it gate and been appended per Step 3.
 
 Deliver per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`; write the numbered batch-1 list to a durable artifact now — the collector entry where the item has one, otherwise a durable note on the issue or PR it belongs to — and resume from that record, not session memory.
 
@@ -58,15 +64,13 @@ Partial batch-1 answers still block batch-1 execution for the items left unanswe
 
 ## Step 6 — Deliver batch 2
 
-Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`; extend the durable numbered list with batch-2 items before presenting them.
+Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs alongside batch-2 rulings, not ahead of them. Each batch-2 item passes the worth-it gate and is appended per Step 3 immediately before it is added to the durable numbered list and presented — per `## Delivery mechanics`, `## The per-item spine`, and `## Formatting — one block per spine section`.
 
 ## Step 7 — Execute and close
 
 Execute what batch 1 unblocked per `## What batch-1 execution may and may not do` while the owner rules on batch 2; receipt what you executed, in plain language.
 
-Apply showrunner duty 4's attended branch to follow-ups — this skill is owner-present by construction: propose inline, discuss, and append to the collector only what genuinely cannot close in this session.
-
-Apply `## Follow-up economics` to each proposed follow-up and record each batch-2 ruling to the durable artifact as it lands.
+Record each batch-2 ruling to the durable artifact as it lands.
 
 When a batch-2 ruling closes or declines a collector-backed item, strike it from the collector per showrunner duty 4.
 
@@ -81,4 +85,4 @@ When a batch-2 ruling closes or declines a collector-backed item, strike it from
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every invocation. |
 | "I'll deliver batch 2 after execution finishes" | see `## Delivery mechanics` |
 | "The numbers live in the chat — I'll remember" | see Step 4 |
-| "I'll append follow-ups to the collector — the owner can review them later" | see `## Follow-up economics`; showrunner duty 4's attended branch. |
+| "I'll append follow-ups to the collector — the owner can review them later" | see `## The worth-it gate and the venue ladder`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every Tier-2 item is appended **before** it is proposed in this session's delivery message and discussed now. |
