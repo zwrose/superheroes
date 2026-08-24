@@ -14,6 +14,7 @@ import re
 import stat as _stat
 import subprocess
 import sys
+from collections import namedtuple
 
 _LIB_DIR = os.path.dirname(os.path.abspath(__file__))
 if _LIB_DIR not in sys.path:
@@ -1066,6 +1067,128 @@ _REVIEW_CONTRACT_PARSERS = {
 }
 
 
+def _carries_findings(result):
+    value = result.get("findings")
+    return isinstance(value, list), value
+
+
+def _nonempty_findings(value):
+    return bool(value)
+
+
+def _engaged_findings(value):
+    return isinstance(value, list) and bool(value)
+
+
+def _carries_verdicts(result):
+    value = result.get("verdicts")
+    return isinstance(value, list), value
+
+
+def _nonempty_verdicts(value):
+    return bool(value)
+
+
+def _engaged_verdicts(value):
+    return isinstance(value, list) and bool(value)
+
+
+def _carries_grouping(result):
+    if "grouping" not in result:
+        return False, None
+    value = result.get("grouping")
+    return True, value
+
+
+def _nonempty_grouping(value):
+    return bool(value)
+
+
+def _engaged_grouping(value):
+    return isinstance(value, list) and bool(value)
+
+
+def _carries_ruling(result):
+    value = result.get("ruling")
+    if isinstance(value, dict) and value.get("ruling"):
+        return True, value
+    return False, None
+
+
+def _nonempty_ruling(value):
+    return True
+
+
+def _engaged_ruling(value):
+    if not isinstance(value, dict):
+        return False
+    return bool(isinstance(value.get("id"), str) and value.get("id")
+                and isinstance(value.get("ruling"), str) and value.get("ruling")
+                and isinstance(value.get("reason"), str) and value.get("reason"))
+
+
+_ReviewPayloadSemantics = namedtuple(
+    "_ReviewPayloadSemantics", ("key", "carries", "nonempty", "engaged"))
+
+# Third registry beside recognition (_REVIEW_CONTRACT_MATCHERS) and parsing
+# (_REVIEW_CONTRACT_PARSERS). A kind registered in either of those without an entry here is
+# caught by the exhaustiveness census, not by a runtime branch; runtime behaviour for an
+# unregistered kind is fail-closed, and that is deliberate — the loud failure belongs in the
+# test, not in production.
+_REVIEW_PAYLOAD_SEMANTICS = {
+    "findings": _ReviewPayloadSemantics("findings", _carries_findings,
+                                         _nonempty_findings, _engaged_findings),
+    "verdicts": _ReviewPayloadSemantics("verdicts", _carries_verdicts,
+                                        _nonempty_verdicts, _engaged_verdicts),
+    "grouping": _ReviewPayloadSemantics("grouping", _carries_grouping,
+                                          _nonempty_grouping, _engaged_grouping),
+    "ruling": _ReviewPayloadSemantics("ruling", _carries_ruling,
+                                      _nonempty_ruling, _engaged_ruling),
+}
+
+REVIEW_PAYLOAD_SEMANTIC_KINDS = tuple(_REVIEW_PAYLOAD_SEMANTICS)
+
+
+def review_payload_carried(result, kind):
+    """Whether a review result carries a payload for kind, and the value. Never raises."""
+    try:
+        if not isinstance(result, dict):
+            return False, None
+        record = _REVIEW_PAYLOAD_SEMANTICS.get(kind)
+        if record is None:
+            return False, None
+        return record.carries(result)
+    except Exception:
+        return False, None
+
+
+def review_payload_nonempty(kind, value):
+    """Whether a carried payload counts as non-empty for kind. Never raises."""
+    try:
+        record = _REVIEW_PAYLOAD_SEMANTICS.get(kind)
+        if record is None:
+            return False
+        return record.nonempty(value)
+    except Exception:
+        return False
+
+
+def review_payload_engaged(result, kind):
+    """Whether a result carries positive-engagement evidence for kind. Never raises."""
+    try:
+        if not isinstance(result, dict):
+            return False
+        record = _REVIEW_PAYLOAD_SEMANTICS.get(kind)
+        if record is None:
+            return False
+        carried, value = record.carries(result)
+        if not carried:
+            return False
+        return record.engaged(value)
+    except Exception:
+        return False
+
+
 def _attach_investigated_parse_rejections(result, rejected):
     if rejected:
         result["investigatedRejectedRecords"] = rejected
@@ -1473,25 +1596,8 @@ def engagement_read(result):
         if not isinstance(result, dict):
             return "unknown"
         for kind in REVIEW_RESULT_KINDS:
-            if kind == "findings":
-                payload = result.get("findings")
-                if isinstance(payload, list) and payload:
-                    return "engaged"
-            elif kind == "verdicts":
-                payload = result.get("verdicts")
-                if isinstance(payload, list) and payload:
-                    return "engaged"
-            elif kind == "grouping":
-                payload = result.get("grouping")
-                if isinstance(payload, list) and payload:
-                    return "engaged"
-            elif kind == "ruling":
-                payload = result.get("ruling")
-                if isinstance(payload, dict):
-                    if (isinstance(payload.get("id"), str) and payload.get("id")
-                            and isinstance(payload.get("ruling"), str) and payload.get("ruling")
-                            and isinstance(payload.get("reason"), str) and payload.get("reason")):
-                        return "engaged"
+            if review_payload_engaged(result, kind):
+                return "engaged"
         investigated = result.get("investigated")
         if isinstance(investigated, list) and investigated:
             return "engaged"
