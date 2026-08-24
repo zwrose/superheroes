@@ -27,18 +27,23 @@ ED = _load_engine_dispatch()
 
 
 def test_every_registered_kind_has_payload_semantics():
-    kinds_result = set(EA.REVIEW_RESULT_KINDS)
-    kinds_matchers = {kind for kind, _ in EA._REVIEW_CONTRACT_MATCHERS}
-    kinds_parsers = set(EA._REVIEW_CONTRACT_PARSERS)
-    kinds_semantics = set(EA._REVIEW_PAYLOAD_SEMANTICS)
-    kinds_public = set(EA.REVIEW_PAYLOAD_SEMANTIC_KINDS)
-    all_sets = (kinds_result, kinds_matchers, kinds_parsers, kinds_semantics, kinds_public)
-    if len({frozenset(s) for s in all_sets}) != 1:
-        symdiff = set()
-        for left in all_sets:
-            symdiff ^= left
-        raise AssertionError(
-            "review result kind registries differ; symmetric difference=%r" % sorted(symdiff))
+    registries = {
+        "REVIEW_RESULT_KINDS": set(EA.REVIEW_RESULT_KINDS),
+        "matchers": {kind for kind, _ in EA._REVIEW_CONTRACT_MATCHERS},
+        "parsers": set(EA._REVIEW_CONTRACT_PARSERS),
+        "_REVIEW_PAYLOAD_SEMANTICS": set(EA._REVIEW_PAYLOAD_SEMANTICS),
+        "REVIEW_PAYLOAD_SEMANTIC_KINDS": set(EA.REVIEW_PAYLOAD_SEMANTIC_KINDS),
+    }
+    union = set()
+    for registry_set in registries.values():
+        union |= registry_set
+    if len({frozenset(s) for s in registries.values()}) != 1:
+        parts = ["review result kind registries differ; union=%r" % sorted(union)]
+        for name in sorted(registries):
+            registry_set = registries[name]
+            if registry_set != union:
+                parts.append("%s missing=%r" % (name, sorted(union - registry_set)))
+        raise AssertionError("; ".join(parts))
 
 
 def test_every_semantics_record_declares_all_three_predicates():
