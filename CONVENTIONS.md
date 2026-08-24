@@ -718,8 +718,9 @@ needed cell (unchanged from today); this is the **audit vendor pool** that `revi
 panel preflight never probed — and **`liveCells`**, the per-cell verdicts that are the **seating**
 currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
 be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
-correct, not a bug. `liveCells` records provenance (`probed` vs `synthesized`); only `probed` counts
-as verification evidence. Claude is never probed and is live by construction — a stated exception,
+correct, not a bug. `liveCells` records provenance (`probed`, `synthesized`, or `unprobed`); only
+`probed` counts as verification evidence — `unprobed` is the receipt-only/`--post` path where
+vendors were never probed. Claude is never probed and is live by construction — a stated exception,
 not an oversight.
 
 **Confinement + hygiene.** External reviewers run read-only; external implementers run
