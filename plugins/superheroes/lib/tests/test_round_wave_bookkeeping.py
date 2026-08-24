@@ -1,0 +1,96 @@
+"""#1107 WO-B: fix-batch stall bookkeeping and per-round verifier-wave attempt allocation."""
+import importlib.util
+import os
+
+import pytest
+
+_HERE = os.path.dirname(os.path.abspath(__file__))
+_LIB = os.path.dirname(_HERE)
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name, os.path.join(_LIB, name + ".py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+RD = _load("round_driver")
+RR = _load("round_records")
+FI = _load("finding_identity")
+
+
+def _cfg(**over):
+    base = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "claude"}
+    base.update(over)
+    return base
+
+
+def _finding(file="f.py", line=1, title="bug", severity="Important", **extra):
+    f = {"file": file, "line": line, "title": title, "severity": severity}
+    f.update(extra)
+    return f
+
+
+def test_stall_self_recovery_does_not_reemit_discharged_fix_batch():
+    # axis: stall self-recovery must not seed _fixBatch from the prior round's discharged fixBatch
+    ident = FI.finding_identity(_finding(title="stale"))
+    discharged = {"id": "%s@L1" % ident, "identity": ident, "file": "f.py", "line": 1,
+                  "title": "stale", "severity": "Important"}
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = [dict(discharged)]
+    state["_auditTargets"] = [discharged]
+    state["_auditOutcome"] = {"notDischarged": [], "discharged": [discharged["id"]]}
+    state["selfRecovered"] = False
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": [ident]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state.get("step") != RD.P_FIXER
+    assert state.get("_fixBatch") != state["fixBatch"]
+
+
+def test_stall_self_recovery_parks_when_open_set_unresolvable():
+    # axis: legacy persisted session without resolvable open set must park, never empty fixer dispatch
+    state = RD.new_state(_cfg())
+    state["fixBatch"] = []
+    state["selfRecovered"] = False
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state["terminal"] == "cannot-certify"
+    assert state["step"] == RD.P_TERMINAL
+    assert any(d.get("kind") == "cannot-certify" for d in state.get("decisions") or [])
+
+
+def test_second_verifier_wave_in_same_round_gets_fresh_attempt(tmp_path):
+    # axis: two verifier dispatch waves in one (round, phase) must not share a storage attempt slot
+    d = str(tmp_path)
+    state = RD.new_state(_cfg())
+    state["round"] = 2
+    state["step"] = RD.P_VERIFIERS
+    state["_toVerify"] = [_finding(title="new-issue")]
+    state["lastAccepted"] = {"phase": RD.P_SCOPED, "round": 2, "attempt": 0, "artifactHash": "x"}
+    RD.save_state(d, state)
+    RD._journal_append(d, {"cmd": "next", "phase": RD.P_VERIFIERS, "round": 2, "attempt": 0,
+                           "outcome": "emitted"})
+    RD._journal_append(d, {"cmd": "submit", "phase": RD.P_VERIFIERS, "round": 2, "attempt": 0,
+                           "outcome": "accepted"})
+    n = RD.cmd_next(d)
+    assert n["ok"], n
+    assert n["phase"] == RD.P_VERIFIERS
+    assert n["attempt"] == 1
+    seat = "verifier:f.py:0"
+    skey = RR.storage_key(seat)
+    path0 = RR.store_path(d, 2, RD.P_VERIFIERS, skey, 0)
+    path1 = RR.store_path(d, 2, RD.P_VERIFIERS, skey, 1)
+    assert path0 != path1
+
+
+def test_next_reemit_preserves_pending_attempt(tmp_path):
+    # axis: idempotent pending re-emit must return the same attempt without recomputing allocation
+    d = str(tmp_path)
+    n1 = RD.cmd_next(d, _cfg())
+    assert n1["ok"], n1
+    n2 = RD.cmd_next(d)
+    assert n2["ok"], n2
+    assert n1["attempt"] == n2["attempt"]
+    assert n1["phase"] == n2["phase"]
+    assert n1["expectedStateHash"] == n2["expectedStateHash"]

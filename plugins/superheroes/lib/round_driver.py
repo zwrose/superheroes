@@ -2777,15 +2777,13 @@ def _settle_delta(state, config):
         state["step"] = P_FIXER
         return
 
-    # converged candidate: last round's fixes all discharged + verify pass. Apply the #174
-    # confirmation economics before certifying — a Critical surfaced since the last qualifying
-    # panel, or cross-cutting rework, owes one more full confirmation panel (budget 2).
+    _settle_delta_converged(state, config)
+
+
+def _settle_delta_converged(state, config):
+    """Converged candidate tail shared by `_settle_delta` and stall self-recovery when no open work
+    remains — confirmation economics, then terminal converged or re-arm."""
     surfaced = list(state.get("surfacedSinceLastPanel") or [])
-    # Cross-cutting fires when EITHER the round's own resolving fix is cross-cutting (the single-round
-    # signal) OR the UNION of delta rework since the last full panel is (reset in _fold_panel,
-    # accumulated in _fold_fixer). The union disjunct is additive — it catches rework that spreads
-    # across MULTIPLE post-confirmation fixes where no single fix is broad (#507 R2 residual-5),
-    # without ever suppressing a re-arm the single-round signal already earns.
     cross = (review_round_policy.is_cross_cutting(state.get("_changedSubjects"))
              or review_round_policy.is_cross_cutting(state.get("_changedSubjectsSincePanel")))
     followup = review_round_policy.confirmation_followup(
@@ -2966,7 +2964,17 @@ def _handle_stall(state, config, breaker):
                      else "no escalation rung available — fixer unchanged, escalated:false"))
         _record_round(state, "selfRecovery", {"rung": rung, "reason": breaker.get("detail")})
         batch = [dict(t) for t in _stalled_open_targets(state, breaker)]
-        state["_fixBatch"] = batch or [dict(f) for f in (state.get("fixBatch") or [])]
+        open_ids = _open_audit_target_ids(state)
+        if open_ids is None and not batch:
+            _park_cannot_certify(
+                state,
+                "audit-stall self-recovery — open audit target set unresolvable "
+                "(missing or malformed _auditOutcome); cannot dispatch fix batch")
+            return
+        if not batch:
+            _settle_delta_converged(state, config)
+            return
+        state["_fixBatch"] = batch
         state["step"] = P_FIXER
         return
     # already self-recovered and still stalled → present the stall menu (never judge the dispute).
@@ -3731,10 +3739,7 @@ def _cmd_next_locked(session_dir, config_overrides=None):
                 return _receipt_fault_response(fault)
         return _next_response(pend, state_hash(state))
     step = _advance(state, state["config"])
-    attempt = 0
-    prior = state.get("lastAccepted")
-    if prior and prior.get("phase") == step["phase"] and prior.get("round") == step["round"]:
-        attempt = prior.get("attempt", 0) + 1
+    attempt = _next_dispatch_attempt(session_dir, step["round"], step["phase"], state)
     pending = {"action": step["action"], "round": step["round"], "phase": step["phase"],
                "attempt": attempt, "payload": step["payload"]}
     state["pending"] = pending
@@ -4417,6 +4422,61 @@ def _orders_manifest_path(session_dir, rnd, phase, attempt):
         raise ValueError("attempt must be a non-negative int, got %r" % (attempt,))
     return os.path.join(round_records.round_dir(session_dir, rnd), ORDERS_DIRNAME, phase,
                         "manifest.a%d.json" % attempt)
+
+
+def _journal_max_attempt(session_dir, rnd, phase):
+    """Highest attempt logged for `(rnd, phase)` in the session journal, or -1 when none."""
+    max_attempt = -1
+    for event in read_journal(session_dir):
+        if event.get("round") != rnd or event.get("phase") != phase:
+            continue
+        att = event.get("attempt")
+        if isinstance(att, bool) or not isinstance(att, int) or att < 0:
+            continue
+        max_attempt = max(max_attempt, att)
+    return max_attempt
+
+
+def _manifest_max_attempt_on_disk(session_dir, rnd, phase):
+    """Highest attempt with an on-disk orders manifest for `(rnd, phase)`, or -1 when none."""
+    max_attempt = -1
+    try:
+        phase_dir = os.path.join(round_records.round_dir(session_dir, rnd), ORDERS_DIRNAME, phase)
+        for name in os.listdir(phase_dir):
+            if not (name.startswith("manifest.a") and name.endswith(".json")):
+                continue
+            try:
+                att = int(name[len("manifest.a"):-len(".json")])
+            except ValueError:
+                continue
+            if att >= 0:
+                max_attempt = max(max_attempt, att)
+    except OSError:
+        pass
+    return max_attempt
+
+
+def _max_used_attempt(session_dir, rnd, phase):
+    """Durable high-water attempt for `(rnd, phase)` — journal plus on-disk orders manifests."""
+    return max(_journal_max_attempt(session_dir, rnd, phase),
+               _manifest_max_attempt_on_disk(session_dir, rnd, phase))
+
+
+def _next_dispatch_attempt(session_dir, rnd, phase, state):
+    """Allocate the next unused attempt for a `(round, phase)` dispatch wave.
+
+    Reads the session journal (primary — every emitted/accepted/recorded wave is logged with its
+    attempt) and on-disk orders manifests (resume fallback when in-memory ``lastAccepted`` is
+    absent but manifests from an earlier CLI process remain). Fail-closed toward a fresh slot:
+    when nothing durable is readable, attempt 0; otherwise ``max_used + 1`` so a second wave in
+    the same round never reuses storage."""
+    max_used = _max_used_attempt(session_dir, rnd, phase)
+    if max_used < 0:
+        prior = state.get("lastAccepted")
+        if prior and prior.get("phase") == phase and prior.get("round") == rnd:
+            return prior.get("attempt", 0) + 1
+        return 0
+    return max_used + 1
 
 
 def _plugin_resource_root():
