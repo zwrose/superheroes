@@ -66,6 +66,9 @@ SANITIZED_VIEW_MAX_SYMLINK_TARGET_BYTES = 8 * 1024
 REVIEW_DIFF_FILE_NAME = "SUPERHEROES_REVIEW_DIFF.patch"
 REVIEW_DIFF_MAX_BYTES = 8 * 1024 * 1024
 
+PR_BODY_FILE_NAME = "SUPERHEROES_PR_BODY.md"
+PR_BODY_MAX_BYTES = 1 * 1024 * 1024
+
 MODE_REVIEW = "review"
 MODE_BRIEF_CHECK = "brief-check"
 REVIEW_MODES = (MODE_REVIEW, MODE_BRIEF_CHECK)
@@ -1860,6 +1863,76 @@ def _write_review_patch_file(view_root, patch_bytes):
     _assert_no_stripped_paths_in_view(view_root)
 
 
+def _write_pr_body_file(view_root, body_bytes):
+    body_path = os.path.join(view_root, PR_BODY_FILE_NAME)
+    if os.path.lexists(body_path):
+        raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        fd = os.open(body_path, flags, 0o600)
+    except FileExistsError:
+        raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-unwritable")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(body_bytes)
+    except Exception:
+        try:
+            os.unlink(body_path)
+        except OSError:
+            pass
+        raise SanitizedViewError("sanitized-view-pr-body-unwritable")
+
+
+def _stage_pr_body(view_root, pr_body_path, session_dir):
+    """Stage a PR body file at the view root (before ``git init``).
+
+    ``session_dir`` is required — callers that cannot name a session directory must
+    not reach this function (the pairing gate lives in ``build_sanitized_view``).
+    """
+    try:
+        source_real = os.path.realpath(pr_body_path)
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-missing")
+    if not os.path.isfile(source_real):
+        raise SanitizedViewError("sanitized-view-pr-body-missing")
+
+    try:
+        session_real = os.path.realpath(session_dir)
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-outside-session")
+    if not path_is_confidently_under(source_real, session_real):
+        raise SanitizedViewError("sanitized-view-pr-body-outside-session")
+
+    dest_path = os.path.join(view_root, PR_BODY_FILE_NAME)
+    if os.path.lexists(dest_path):
+        raise SanitizedViewError("sanitized-view-pr-body-name-collision")
+
+    try:
+        with open(source_real, "rb") as fh:
+            body_bytes = fh.read(PR_BODY_MAX_BYTES + 1)
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-unreadable")
+
+    if not body_bytes:
+        raise SanitizedViewError("sanitized-view-pr-body-empty")
+    if len(body_bytes) > PR_BODY_MAX_BYTES:
+        raise SanitizedViewError("sanitized-view-pr-body-too-large")
+
+    _write_pr_body_file(view_root, body_bytes)
+
+    try:
+        with open(dest_path, "rb") as fh:
+            read_back = fh.read()
+    except OSError:
+        raise SanitizedViewError("sanitized-view-pr-body-unwritable")
+    if read_back != body_bytes:
+        raise SanitizedViewError("sanitized-view-pr-body-readback-mismatch")
+
+    return {"prBodyPath": PR_BODY_FILE_NAME, "prBodyBytes": len(body_bytes)}
+
+
 def _git_diff_batch_output(argv, started, total_bytes):
     """Stream one pathspec-restricted diff batch; bound bytes and subprocess lifetime."""
     _check_export_deadline(started)
@@ -2021,7 +2094,7 @@ def _stage_review_diff(repo_real, head_sha, view_root, diff_base, started):
 SANITIZED_VIEW_PARTIAL_CLONE = "sanitized-view-partial-clone"
 
 
-def build_sanitized_view(repo_root, *, diff_base=None):
+def build_sanitized_view(repo_root, *, diff_base=None, pr_body_path=None, session_dir=None):
     """Materialize a stripped copy of ``repo_root`` at HEAD from the git tree.
 
     ``sourceDirty`` in the returned dict is ``True`` when tracked files differ
@@ -2030,6 +2103,12 @@ def build_sanitized_view(repo_root, *, diff_base=None):
     """
     if diff_base is not None:
         diff_base = _require_pinned_commit_oid(diff_base)
+    pr_body_set = pr_body_path is not None
+    session_set = session_dir is not None
+    if pr_body_set != session_set:
+        raise SanitizedViewError("sanitized-view-pr-body-args-unpaired")
+    if not pr_body_set:
+        pr_body_info = {"prBodyPath": None, "prBodyBytes": None}
     repo_real = os.path.realpath(repo_root)
     # bite-axis: unsupported checkout shape — refused BEFORE any object is read, so no
     # code path can reach an on-demand fetch and no later failure has to be re-attributed.
@@ -2060,6 +2139,8 @@ def build_sanitized_view(repo_root, *, diff_base=None):
             diff_info = _stage_review_diff(
                 repo_real, head_sha, view_root, diff_base, started
             )
+        if pr_body_set:
+            pr_body_info = _stage_pr_body(view_root, pr_body_path, session_dir)
         _init_view_git(view_root)
 
         build_seconds = time.monotonic() - started
@@ -2075,6 +2156,7 @@ def build_sanitized_view(repo_root, *, diff_base=None):
             "bytes": total_bytes,
             "fileCount": file_count,
             **diff_info,
+            **pr_body_info,
         }
     except SanitizedViewError as exc:
         if view_root is not None:
