@@ -5342,13 +5342,8 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         if not any(isinstance(t, dict) and t.get("id") == seat_key for t in targets):
             raise ValueError("order-render-refused:unmatched-audit-target:%s" % seat_key)
         skey = round_records.storage_key(seat_key, occurrence)
-        target = {}
-        for t in targets:
-            if isinstance(t, dict) and t.get("id") == seat_key:
-                target = t
-                break
+        _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         target_path = _order_audit_target_sidecar_path(rdir, skey)
-        _ensure_bytes_at_path(target_path, round_records.canonical(target).encode("utf-8"))
         head_diff_path = _ensure_round_head_diff(session_dir, rnd, state)
         ph = {
             "TARGET_SUMMARY_PATH": target_path,
