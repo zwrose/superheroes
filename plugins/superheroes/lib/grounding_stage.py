@@ -98,6 +98,9 @@ REFUSAL_REASONS = frozenset({
     "attest-verdict-out-of-enum",
     "region-marker-duplicated",
     "dod-table-rows-unadmitted",
+    "body-context-unterminated",
+    "attest-duplicate-claim-verdict",
+    "attest-verdict-reason-missing",
     "invalid-invocation",
     "internal-error",
 })
@@ -135,11 +138,7 @@ def _refuse(reason, detail=None):
 
 
 def _convert_body_refusal(exc):
-    if exc.reason == "region-marker-duplicated":
-        return _refuse("region-marker-duplicated", exc.detail)
-    if exc.reason == "dod-table-rows-unadmitted":
-        return _refuse("dod-table-rows-unadmitted", exc.detail)
-    raise ValueError("unregistered body refusal reason: %r" % exc.reason)
+    return _refuse(exc.reason, exc.detail)
 
 
 def _emit(result):
@@ -332,6 +331,19 @@ def _context_scan(body):
     return md_fence.scan_contexts(bare)
 
 
+def _refuse_unterminated_body_context(scan):
+    if scan.unterminated_opener_line is not None:
+        raise _BodyRefusal(
+            "body-context-unterminated",
+            "unterminated code fence at line %d" % scan.unterminated_opener_line,
+        )
+    if scan.unterminated_html_line is not None:
+        raise _BodyRefusal(
+            "body-context-unterminated",
+            "unterminated raw HTML block at line %d" % scan.unterminated_html_line,
+        )
+
+
 def _find_all_standalone_markers(body, marker, scan=None):
     """Return byte offsets of every live standalone ``marker`` line in ``body``."""
     lines, bare = _bare_lines_from_body(body)
@@ -344,7 +356,7 @@ def _find_all_standalone_markers(body, marker, scan=None):
             if md_fence.indent_width(bare[i]) != 0:
                 offset += len(line)
                 continue
-            if bare[i].rstrip() == marker:
+            if bare[i].strip() == marker:
                 leading = len(bare[i]) - len(bare[i].lstrip())
                 offsets.append(offset + leading)
         offset += len(line)
@@ -405,6 +417,7 @@ def _extract_region(body, marker, scan, marker_name):
         region_start_line += 1
     while region_lines and not region_lines[-1].strip():
         region_lines.pop()
+    region_text = "\n".join(region_lines)
     line_count = len(region_lines)
     return region_text, line_count, region_start_line
 
@@ -454,28 +467,28 @@ def _is_table_row_line(line):
 
 
 def _parse_dod_table_block(block_lines):
-    """Return data rows from a maximal run of consecutive live pipe-bearing lines.
+    """Return (admitted, data_rows) for a run of consecutive live pipe-bearing lines.
 
-    Within a region, a maximal run of consecutive live pipe-bearing lines yields data
-    rows if and only if it is a GFM table: a header line, immediately followed by a
-    delimiter row whose cell count equals the header's. Its rows are then every line
-    after the delimiter. Otherwise the run yields no rows.
+    Within a region, a maximal run of consecutive live pipe-bearing lines is admitted
+    as a GFM table when it has a header line immediately followed by a delimiter row
+    whose cell count equals the header's. Its data rows are then every line after the
+    delimiter. Otherwise the run is not admitted and yields no rows.
     """
     if len(block_lines) < 2:
-        return []
+        return False, []
     header_cells = _split_table_cells(block_lines[0])
     delim_cells = _split_table_cells(block_lines[1])
     if not _is_separator_cells(delim_cells):
-        return []
+        return False, []
     if len(header_cells) != len(delim_cells):
-        return []
+        return False, []
     rows = []
     for line in block_lines[2:]:
         cells = _split_table_cells(line)
         if _is_separator_cells(cells) or not any(cells):
             continue
         rows.append("|".join(cells))
-    return rows
+    return True, rows
 
 
 def _parse_dod_rows(body, marker, scan, marker_name):
@@ -486,23 +499,33 @@ def _parse_dod_rows(body, marker, scan, marker_name):
     rows = []
     block_lines = []
     has_live_pipe_line = False
+    admitted_any_table = False
     for i, line in enumerate(region_text.splitlines()):
         body_line = region_start_line + i
         if body_line < len(scan.inert) and scan.inert[body_line]:
-            rows.extend(_parse_dod_table_block(block_lines))
+            admitted, block_rows = _parse_dod_table_block(block_lines)
+            if admitted:
+                admitted_any_table = True
+            rows.extend(block_rows)
             block_lines = []
             continue
         if _is_table_row_line(line):
             has_live_pipe_line = True
             block_lines.append(line.strip())
             continue
-        rows.extend(_parse_dod_table_block(block_lines))
+        admitted, block_rows = _parse_dod_table_block(block_lines)
+        if admitted:
+            admitted_any_table = True
+        rows.extend(block_rows)
         block_lines = []
-    rows.extend(_parse_dod_table_block(block_lines))
-    if has_live_pipe_line and not rows:
+    admitted, block_rows = _parse_dod_table_block(block_lines)
+    if admitted:
+        admitted_any_table = True
+    rows.extend(block_rows)
+    if has_live_pipe_line and not admitted_any_table:
         raise _BodyRefusal(
             "dod-table-rows-unadmitted",
-            "dod-table region has live pipe-bearing lines but zero admitted rows",
+            "dod-table region has live pipe-bearing lines but no admitted GFM table",
         )
     return rows
 
@@ -828,6 +851,10 @@ def _verify_manifest_files(manifest, session_dir):
             return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
         body_scan = _context_scan(raw_body)
         try:
+            _refuse_unterminated_body_context(body_scan)
+        except _BodyRefusal as exc:
+            return _convert_body_refusal(exc)
+        try:
             derived_regions = _detect_regions(raw_body, body_scan)
         except _BodyRefusal as exc:
             return _convert_body_refusal(exc)
@@ -881,6 +908,10 @@ def stage(session_dir):
     token = _stage_token()
     fence_nonce = _fence_nonce()
     body_scan = _context_scan(body)
+    try:
+        _refuse_unterminated_body_context(body_scan)
+    except _BodyRefusal as exc:
+        return _convert_body_refusal(exc)
     try:
         regions = _detect_regions(body, body_scan)
     except _BodyRefusal as exc:
@@ -1128,10 +1159,22 @@ def _grade_attest_result(validated, result_path):
                 "attest-verdict-out-of-enum",
                 "verdicts[%d] verdict invalid: %r" % (index, verdict),
             )
-        if isinstance(row_id, str) and row_id not in seen_ids:
+        if isinstance(row_id, str):
+            if row_id in seen_ids:
+                return _refuse(
+                    "attest-duplicate-claim-verdict",
+                    "duplicate verdict id: %r" % row_id,
+                )
             seen_ids[row_id] = row
     if len(token_rows) != 1:
         return _refuse("attest-token-missing", "expected exactly one stage-token row")
+    stage_token_row = token_rows[0]
+    reason = stage_token_row.get("reason")
+    if not isinstance(reason, str) or not reason.strip():
+        return _refuse(
+            "attest-verdict-reason-missing",
+            "stage-token row missing non-empty reason",
+        )
     token_suffix = token_rows[0]["id"][len("stage-token:"):]
     if token_suffix != manifest.get("stageToken"):
         return _refuse(
@@ -1148,6 +1191,12 @@ def _grade_attest_result(validated, result_path):
     for row_id, row in seen_ids.items():
         if row_id.startswith("stage-token:"):
             continue
+        reason = row.get("reason")
+        if not isinstance(reason, str) or not reason.strip():
+            return _refuse(
+                "attest-verdict-reason-missing",
+                "verdict row %r missing non-empty reason" % row_id,
+            )
         claim_id = row_id
         if claim_id in repo_claim_ids:
             answered.add(claim_id)
@@ -1202,7 +1251,11 @@ def attest(session_dir, result_path, vendor_path):
         return _refuse("internal-error", "trust boundary returned unexpected dict")
     if not isinstance(validated, _Validated):
         return _refuse("internal-error", "trust boundary returned unexpected type")
-    return _grade_attest_result(validated, result_path)
+    try:
+        resolved_result = os.path.realpath(result_path)
+    except OSError as exc:
+        return _refuse("attest-result-unreadable", str(exc))
+    return _grade_attest_result(validated, resolved_result)
 
 
 def main(argv):

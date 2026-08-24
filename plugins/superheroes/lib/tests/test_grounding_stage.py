@@ -50,6 +50,9 @@ EXPECTED_REFUSAL_REASONS = frozenset({
     "attest-verdict-out-of-enum",
     "region-marker-duplicated",
     "dod-table-rows-unadmitted",
+    "body-context-unterminated",
+    "attest-duplicate-claim-verdict",
+    "attest-verdict-reason-missing",
     "invalid-invocation",
     "internal-error",
 })
@@ -729,10 +732,18 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
         return session, _manifest(session)
 
     def _attest_verdicts(manifest, mutate=None):
-        rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+        rows = [{
+            "id": "stage-token:%s" % manifest["stageToken"],
+            "verdict": "CONFIRMED",
+            "reason": "read stage token from staged body",
+        }]
         for claim in manifest["claims"]:
             if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
-                rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+                rows.append({
+                    "id": claim["claimId"],
+                    "verdict": "CONFIRMED",
+                    "reason": "verified in repository",
+                })
         if mutate:
             mutate(rows)
         return rows
@@ -784,7 +795,11 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
 
         def mutate(rows):
             rows[:] = [
-                {"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"},
+                {
+                    "id": "stage-token:%s" % manifest["stageToken"],
+                    "verdict": "CONFIRMED",
+                    "reason": "read stage token from staged body",
+                },
             ]
 
         path = _write_attest_result(session, manifest, mutate=mutate)
@@ -823,6 +838,52 @@ def test_every_registered_refusal_reason_is_observably_emitted(tmp_path):
         return _invoke("stage", session)
 
     cases["dod-table-rows-unadmitted"] = case_dod_table_rows_unadmitted
+
+    def case_body_context_unterminated():
+        body = (
+            "# PR\n\n"
+            "<pre>\n"
+            "example never closed\n\n"
+            "<!-- superheroes:dod-table -->\n"
+            "| DoD | Status | Evidence |\n"
+            "|---|---|---|\n"
+            "| Ship it | done | tests pass |\n"
+        )
+        session = _session(tmp_path, body=body, name="case-body-context-unterminated")
+        return _invoke("stage", session)
+
+    cases["body-context-unterminated"] = case_body_context_unterminated
+
+    def case_attest_duplicate_claim_verdict():
+        session, manifest = _staged_for_attest("case-attest-duplicate-claim-verdict")
+        repo_claim = next(
+            c for c in manifest["claims"] if c.get("verifiability") == GS.VERIFIABILITY_REPO
+        )
+
+        def mutate(rows):
+            rows.append({
+                "id": repo_claim["claimId"],
+                "verdict": "REFUTED",
+                "reason": "duplicate probe",
+            })
+
+        path = _write_attest_result(session, manifest, mutate=mutate)
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-duplicate-claim-verdict"] = case_attest_duplicate_claim_verdict
+
+    def case_attest_verdict_reason_missing():
+        session, manifest = _staged_for_attest("case-attest-verdict-reason-missing")
+
+        def mutate(rows):
+            for row in rows:
+                if not row["id"].startswith("stage-token:"):
+                    row.pop("reason", None)
+
+        path = _write_attest_result(session, manifest, mutate=mutate)
+        return _invoke("attest", session, result_path=path)
+
+    cases["attest-verdict-reason-missing"] = case_attest_verdict_reason_missing
 
     def case_invalid_invocation():
         session = _session(tmp_path, body=_happy_body(), name="case-invalid-invocation")
@@ -1197,6 +1258,18 @@ def test_refuse_call_sites_use_registered_string_literals():
     with open(module_path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), filename=module_path)
 
+    func_index = _function_index(tree)
+    exempt = set()
+    convert_fn = func_index.get("_convert_body_refusal")
+    if convert_fn is not None:
+        for node in ast.walk(convert_fn):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "_refuse"
+            ):
+                exempt.add(node.lineno)
+
     non_literal = []
     unregistered = []
 
@@ -1205,6 +1278,8 @@ def test_refuse_call_sites_use_registered_string_literals():
             continue
         func = node.func
         if not isinstance(func, ast.Name) or func.id != "_refuse":
+            continue
+        if node.lineno in exempt:
             continue
         if not node.args:
             continue
@@ -1795,10 +1870,18 @@ def test_check_and_attest_require_validated_instance(tmp_path):
     assert rc == 0
     manifest = _manifest(session)
     result_path = os.path.join(session, "grounding", "attest-result.json")
-    rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+    rows = [{
+        "id": "stage-token:%s" % manifest["stageToken"],
+        "verdict": "CONFIRMED",
+        "reason": "read stage token from staged body",
+    }]
     for claim in manifest["claims"]:
         if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
-            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+            rows.append({
+                "id": claim["claimId"],
+                "verdict": "CONFIRMED",
+                "reason": "verified in repository",
+            })
     open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
 
     with patch.object(GS, "_trust_boundary", return_value={"ok": True, "applicable": True}):
@@ -1814,11 +1897,19 @@ def test_attest_happy_path(tmp_path):
     assert rc == 0
     manifest = _manifest(session)
     result_path = os.path.join(session, "grounding", "attest-result.json")
-    rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+    rows = [{
+        "id": "stage-token:%s" % manifest["stageToken"],
+        "verdict": "CONFIRMED",
+        "reason": "read stage token from staged body",
+    }]
     repo_ids = []
     for claim in manifest["claims"]:
         if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
-            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+            rows.append({
+                "id": claim["claimId"],
+                "verdict": "CONFIRMED",
+                "reason": "verified in repository",
+            })
             repo_ids.append(claim["claimId"])
     open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
     rc2, body = _invoke("attest", session, result_path=result_path)
@@ -1828,7 +1919,7 @@ def test_attest_happy_path(tmp_path):
     assert body["confirmed"] == sorted(repo_ids)
 
 
-def test_attest_duplicate_row_id_first_wins(tmp_path):
+def test_attest_duplicate_row_id_refuses(tmp_path):
     session = _session(tmp_path, body=_happy_body())
     rc, _ = _invoke("stage", session)
     assert rc == 0
@@ -1838,18 +1929,168 @@ def test_attest_duplicate_row_id_first_wins(tmp_path):
     )
     result_path = os.path.join(session, "grounding", "attest-result.json")
     rows = [
-        {"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"},
-        {"id": repo_claim["claimId"], "verdict": "REFUTED"},
-        {"id": repo_claim["claimId"], "verdict": "CONFIRMED"},
+        {
+            "id": "stage-token:%s" % manifest["stageToken"],
+            "verdict": "CONFIRMED",
+            "reason": "read stage token from staged body",
+        },
+        {
+            "id": repo_claim["claimId"],
+            "verdict": "REFUTED",
+            "reason": "first verdict",
+        },
+        {
+            "id": repo_claim["claimId"],
+            "verdict": "CONFIRMED",
+            "reason": "conflicting second verdict",
+        },
     ]
     for claim in manifest["claims"]:
         if claim.get("verifiability") == GS.VERIFIABILITY_REPO and claim is not repo_claim:
+            rows.append({
+                "id": claim["claimId"],
+                "verdict": "CONFIRMED",
+                "reason": "verified in repository",
+            })
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+    rc2, body = _invoke("attest", session, result_path=result_path)
+    _assert_refusal(rc2, body, "attest-duplicate-claim-verdict")
+
+
+def test_attest_verdict_reason_missing_refuses(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [{
+        "id": "stage-token:%s" % manifest["stageToken"],
+        "verdict": "CONFIRMED",
+        "reason": "read stage token from staged body",
+    }]
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
             rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
     open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
     rc2, body = _invoke("attest", session, result_path=result_path)
+    _assert_refusal(rc2, body, "attest-verdict-reason-missing")
+
+
+def test_body_context_unterminated_html_refuses(tmp_path):
+    body = (
+        "# PR\n\n"
+        "<pre>\n"
+        "example never closed\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "|---|---|---|\n"
+        "| Ship it | done | tests pass |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "body-context-unterminated")
+
+
+def test_body_context_unterminated_fence_refuses(tmp_path):
+    body = (
+        "# PR\n\n"
+        "```\n"
+        "unclosed fence\n\n"
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship it | done | tests pass |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "body-context-unterminated")
+
+
+def test_convert_body_refusal_unregistered_raises():
+    with pytest.raises(ValueError, match="unregistered refusal reason"):
+        GS._convert_body_refusal(GS._BodyRefusal("not-a-real-reason", "probe"))
+
+
+def test_dod_empty_table_accepted(tmp_path):
+    body = (
+        "# PR\n"
+        "<!-- superheroes:dod-table -->\n\n"
+        "| DoD | Status | Evidence |\n"
+        "|---|---|---|\n\n"
+        "<!-- superheroes:build-record -->\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    assert _dod_claims(manifest) == []
+
+
+def test_region_start_line_aligns_with_region_text(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "\n"
+        "\n"
+        "```\n"
+        "| fake | done | planted |\n"
+        "```\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| real row | done | tests/a.py |\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+    manifest = _manifest(session)
+    dod = _dod_claims(manifest)
+    assert len(dod) == 1
+    assert dod[0]["text"] == "real row|done|tests/a.py"
+    scan = GS._context_scan(body)
+    region_text, _, region_start_line = GS._extract_region(
+        body, GS.REGION_MARKERS["dod-table"], scan, "dod-table",
+    )
+    _, bare = GS._bare_lines_from_body(body)
+    region_lines = region_text.splitlines()
+    for i, line in enumerate(region_lines):
+        assert bare[region_start_line + i] == line
+
+
+def test_attest_opens_resolved_result_path(tmp_path, monkeypatch):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [{
+        "id": "stage-token:%s" % manifest["stageToken"],
+        "verdict": "CONFIRMED",
+        "reason": "read stage token from staged body",
+    }]
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
+            rows.append({
+                "id": claim["claimId"],
+                "verdict": "CONFIRMED",
+                "reason": "verified in repository",
+            })
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+    resolved = os.path.realpath(result_path)
+    parent = os.path.dirname(resolved)
+    basename = os.path.basename(resolved)
+    dotted = os.path.join(parent, "dot", "..", basename)
+    opened = []
+    real_read_json = GS._read_json
+
+    def track_read_json(path):
+        opened.append(path)
+        return real_read_json(path)
+
+    monkeypatch.setattr(GS, "_read_json", track_read_json)
+    rc2, body = _invoke("attest", session, result_path=dotted)
     assert rc2 == 0 and body["ok"]
-    assert repo_claim["claimId"] in body["refuted"]
-    assert repo_claim["claimId"] not in body["confirmed"]
+    result_reads = [p for p in opened if p.endswith("attest-result.json")]
+    assert result_reads
+    assert result_reads[0] == resolved
 
 
 def test_biteproof_staged_body_source_mismatch_guard(tmp_path):
@@ -1874,10 +2115,18 @@ def test_biteproof_attest_pr_json_leg_guard(tmp_path):
     pr_data["body"] = pr_data["body"] + "\nEdited after staging."
     open(pr_path, "w", encoding="utf-8").write(json.dumps(pr_data))
     result_path = os.path.join(session, "grounding", "attest-result.json")
-    rows = [{"id": "stage-token:%s" % manifest["stageToken"], "verdict": "CONFIRMED"}]
+    rows = [{
+        "id": "stage-token:%s" % manifest["stageToken"],
+        "verdict": "CONFIRMED",
+        "reason": "read stage token from staged body",
+    }]
     for claim in manifest["claims"]:
         if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
-            rows.append({"id": claim["claimId"], "verdict": "CONFIRMED"})
+            rows.append({
+                "id": claim["claimId"],
+                "verdict": "CONFIRMED",
+                "reason": "verified in repository",
+            })
     open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
     rc2, body = _invoke("attest", session, result_path=result_path)
     _assert_refusal(rc2, body, "source-body-stale")

@@ -80,6 +80,11 @@ orchestrator **halts**; it never proceeds. This is the exact fail-direction a re
 Critical protected when an earlier unstaged version of the seat was reverted: a sandboxed
 seat with no PR-body access would have certified self-claims it could not read.
 
+`plausible[]` is **disclosure-bearing**, not a silent pass: the orchestrator must surface
+a non-empty `plausible[]` in the review's disclosures. An **all-`PLAUSIBLE`** result over
+a non-empty claim set is a seat that settled nothing and must be reported as such — not read
+as clean.
+
 `check`:
 
 ```bash
@@ -91,8 +96,15 @@ python3 -B "$ROOT_DIR/lib/grounding_stage.py" check --session-dir "$SESSION_DIR"
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B "$ROOT_DIR/lib/grounding_stage.py" attest --session-dir "$SESSION_DIR" --vendor-path <engine|native>
+python3 -B "$ROOT_DIR/lib/grounding_stage.py" attest \
+  --session-dir "$SESSION_DIR" \
+  --vendor-path <engine|native> \
+  --result-path "$SESSION_DIR/round-<N>/landing/<phase>/grounding-seat.a<K>.json"
 ```
+
+The folded seat result must land under the session directory — write it to the landing path
+the orchestrator uses (`$SESSION_DIR/round-<N>/landing/<phase>/<seat>.a<K>.json`) so
+`attest-result-outside-session` cannot fire.
 
 ## Orchestrator mints findings
 
