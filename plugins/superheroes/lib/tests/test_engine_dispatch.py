@@ -5440,20 +5440,23 @@ def test_self_created_worktree_without_foreign_lease_still_dirties(tmp_path):
 
 def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch):
     wt, _main = _linked_worktree_pair(tmp_path)
-    real_git = ED._git_scrubbed
+    real_bytes = ED._git_scrubbed_bytes
+    worktree_list_call = {"n": 0}
 
     def fail_worktree_list(cwd_real, *args, timeout=None):
         if args[:2] == ("worktree", "list"):
+            worktree_list_call["n"] += 1
             raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
-        return real_git(cwd_real, *args, timeout=timeout)
+        return real_bytes(cwd_real, *args, timeout=timeout)
 
-    monkeypatch.setattr(ED, "_git_scrubbed", fail_worktree_list)
+    monkeypatch.setattr(ED, "_git_scrubbed_bytes", fail_worktree_list)
     baseline = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert baseline is not None
     with open(os.path.join(wt, "dirty.txt"), "w", encoding="utf-8") as fh:
         fh.write("x")
     current = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert current != baseline
+    assert worktree_list_call["n"] > 0
 
 
 # --- WO-R4-A (#1109): bounded stdout cap + like-with-like dirt comparison ----------
@@ -5783,6 +5786,96 @@ def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
 
 
 # --- WO-B (#1122): dirt probe by-construction tests + bite-proof detectors ----------
+
+
+PROBE_GIT_FAKE_ROUTES = {
+    "test_worktree_baseline_fallback_on_enumeration_failure": {
+        ("_git_scrubbed_bytes", "worktree"),
+    },
+    "test_worktree_dirt_invariant_unchanged_tree_cross_product": {
+        ("_git_scrubbed_bytes", "status"),
+    },
+    "test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit": {
+        ("_git_scrubbed_bytes", "status"),
+    },
+    "test_worktree_baseline_non_utf8_pathname_no_raise": {
+        ("_git_scrubbed_bytes", "status"),
+    },
+}
+
+
+def _install_git_route_recorders(monkeypatch, observed):
+    real_scrubbed = ED._git_scrubbed
+    real_scrubbed_bytes = ED._git_scrubbed_bytes
+
+    def recording_scrubbed(cwd_real, *args, timeout=None):
+        observed.append(("_git_scrubbed", args[0]))
+        return real_scrubbed(cwd_real, *args, timeout=timeout)
+
+    def recording_scrubbed_bytes(cwd_real, *args, timeout=None):
+        observed.append(("_git_scrubbed_bytes", args[0]))
+        return real_scrubbed_bytes(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", recording_scrubbed)
+    monkeypatch.setattr(ED, "_git_scrubbed_bytes", recording_scrubbed_bytes)
+
+
+def _scan_probe_surface_git_fake_sites():
+    test_path = os.path.join(_HERE, "test_engine_dispatch.py")
+    with open(test_path, encoding="utf-8") as fh:
+        lines = fh.readlines()
+    sites = set()
+    current_test = None
+    setattr_prefix = "setattr(ED, " + '"_git_scrubbed'
+    for line in lines:
+        stripped = line.strip()
+        if stripped.startswith("def test_"):
+            current_test = stripped.split("(")[0].replace("def ", "")
+        elif line and not line[0].isspace() and stripped.startswith("def "):
+            current_test = None
+        if setattr_prefix in line and current_test is not None:
+            sites.add(current_test)
+    return sites
+
+
+def test_probe_git_fake_routes_are_live(tmp_path, monkeypatch):
+    """Guard: every git route faked by a dirt-probe test is live on the production path.
+
+    A fake installed indirectly (through a helper function rather than a literal
+    ``setattr`` in the test body) is not seen by the source scan in step 4.
+    """
+    observed = []
+    _install_git_route_recorders(monkeypatch, observed)
+
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+    assert verdict is False
+
+    observed_set = set(observed)
+    assert observed_set, "observation recorded no git routes"
+
+    for test_name, declared_routes in PROBE_GIT_FAKE_ROUTES.items():
+        for route in declared_routes:
+            assert route in observed_set, (
+                "%s declares route %r but probe path never issued it; observed %r"
+                % (test_name, route, sorted(observed_set))
+            )
+
+    scanned_tests = _scan_probe_surface_git_fake_sites()
+    assert scanned_tests, "source scan found no probe-surface git fake sites"
+
+    declared_tests = set(PROBE_GIT_FAKE_ROUTES.keys())
+    undeclared = scanned_tests - declared_tests
+    assert not undeclared, (
+        "fake sites without PROBE_GIT_FAKE_ROUTES entry: %r" % sorted(undeclared)
+    )
+    absent = declared_tests - scanned_tests
+    assert not absent, (
+        "PROBE_GIT_FAKE_ROUTES entries with no fake site: %r" % sorted(absent)
+    )
 
 
 def _nested_sibling_worktree(main, cwd, name="sib"):
