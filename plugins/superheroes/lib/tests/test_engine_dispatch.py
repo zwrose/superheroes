@@ -40,6 +40,7 @@ def _pin_temp_base_to_tmp_path(tmp_path, monkeypatch):
     base = str(tmp_path / "sanitized-temp-base")
     os.makedirs(base, exist_ok=True)
     monkeypatch.setattr(_SV_MOD.tempfile, "gettempdir", lambda: base)
+    monkeypatch.setattr(ED.tempfile, "gettempdir", lambda: base)
     journal_root = str(tmp_path / "dispatch-journal-root")
     os.makedirs(journal_root, exist_ok=True)
     monkeypatch.setenv(ED.JOURNAL_ROOT_ENV, journal_root)
@@ -159,7 +160,10 @@ class FakeRunner:
         idx = len(self.calls) - 1
         if idx >= len(self.responses):
             raise AssertionError("fake called too many times")
-        return self.responses[idx]
+        resp = self.responses[idx]
+        if callable(resp):
+            return resp(argv, prompt_bytes, timeout, progress_cb, cwd)
+        return resp
 
 
 def _expect_view_cwd(fake, build_view, expected_repo_realpath):
@@ -865,6 +869,44 @@ def test_dispatch_empty_findings_with_valid_investigated_accepted(tmp_path):
     )
     assert res["ok"] is True
     assert res["findings"] == []
+    assert res["investigated"] == [rel]
+    assert res["attempts"] == 1
+
+
+@pytest.mark.parametrize("grouping", [None, []])
+def test_dispatch_empty_grouping_no_investigated_is_vacuous_forfeit(tmp_path, grouping):
+    repo_root = _repo(tmp_path)
+    empty = json.dumps({"grouping": grouping})
+    fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res["forfeited"] is True
+    assert res["attempts"] == 2
+
+
+@pytest.mark.parametrize("grouping", [None, []])
+def test_dispatch_empty_grouping_with_valid_investigated_accepted(tmp_path, grouping):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "main.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    rel = "src/main.py"
+    stdout = json.dumps({"grouping": grouping, "investigated": [rel]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "grouping"
+    assert res["grouping"] == grouping
     assert res["investigated"] == [rel]
     assert res["attempts"] == 1
 
@@ -2812,6 +2854,112 @@ def test_grade_review_attempt_verdicts_payload_grades_ok(tmp_path):
     assert "findings" not in grade
 
 
+_VALID_GROUPING_STDOUT = json.dumps({"grouping": [{"member_ids": ["f1"]}]})
+_VALID_RULING_STDOUT = json.dumps(
+    {"id": "f1", "ruling": "discharged", "reason": "resolved in diff"},
+)
+
+
+def _census_review_stdout(kind):
+    if kind == "findings":
+        return _VALID_FINDINGS_STDOUT
+    if kind == "verdicts":
+        return _VALID_VERDICTS_STDOUT
+    if kind == "grouping":
+        return _VALID_GROUPING_STDOUT
+    if kind == "ruling":
+        return _VALID_RULING_STDOUT
+    raise AssertionError("unsupported kind %r" % kind)
+
+
+def _review_result_kind_census_kinds():
+    return ED.REVIEW_RESULT_KINDS
+
+
+@pytest.mark.parametrize("kind", _review_result_kind_census_kinds())
+def test_review_result_kind_census_survives_consumers(tmp_path, kind):
+    stdout = _census_review_stdout(kind)
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == kind
+    has_payload, _ = ED._review_result_payload(res, kind)
+    assert has_payload is True
+    assert kind in res
+    opened = {"runKind": ED.RUN_KIND_REVIEW}
+    stages = ED._ledger_stages(res, {}, str(tmp_path / "run"), opened)
+    assert stages["delivered"] is True
+
+    run_dir = str(tmp_path / ("run-graded-%s" % kind))
+    os.makedirs(run_dir, exist_ok=True)
+    with open(os.path.join(run_dir, "attempt-1.stdout"), "w", encoding="utf-8") as fh:
+        fh.write(stdout)
+    state = {
+        "opened": {
+            "engine": "codex",
+            "runKind": ED.RUN_KIND_REVIEW,
+            "roleKind": ED.RUN_KIND_REVIEW,
+            "cwd": repo_root,
+            "fedPrompt": "",
+        },
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0, "timedOut": False, "refusal": None,
+                    "stdoutBytes": len(stdout), "wallSeconds": 1.0,
+                },
+            },
+            2: {"ended": None},
+        },
+    }
+    graded = ED._build_running_graded(run_dir, state)
+    assert len(graded) == 1
+    assert graded[0]["resultKind"] == kind
+    has_graded_payload, _ = ED._review_result_payload(graded[0], kind)
+    assert has_graded_payload is True
+    assert kind in graded[0]
+
+
+def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
+    repo_root = _repo(tmp_path)
+    fake = FakeRunner([(_VALID_RULING_STDOUT, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "ruling"
+    assert res["ruling"] == {
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "resolved in diff",
+    }
+    assert "id" not in res
+    assert "reason" not in res
+
+
+def test_expected_result_kind_contract_derives_from_review_result_kinds():
+    _CC = importlib.util.spec_from_file_location(
+        "cli_contract", os.path.join(_HERE, "..", "cli_contract.py"))
+    cc = importlib.util.module_from_spec(_CC)
+    _CC.loader.exec_module(cc)
+    parser = ED.build_parser()
+    action = next(
+        action for path, action in cc.iter_caller_supplied_actions(parser)
+        if path == ("dispatch-review",) and action.dest == "expected_result_kind"
+    )
+    expected = "choices:" + ",".join(str(kind) for kind in ED.REVIEW_RESULT_KINDS)
+    declared = getattr(action, cc.ACTION_CONTRACT_ATTR)
+    assert declared == expected
+    assert tuple(action.choices) == ED.REVIEW_RESULT_KINDS
+
+
 def _manual_two_attempt_review_poll_fixture(tmp_path, run_dir):
     """Attempt 1 ended with clean findings; attempt 2 started but not ended."""
     repo_root, view = _manual_open_review_run(tmp_path, run_dir)
@@ -4685,25 +4833,40 @@ def _other_review_result_kind(kind):
 
 
 def _matrix_clean_payload_stdout(kind):
-    if kind == "findings":
-        return _VALID_FINDINGS_STDOUT
-    return _VALID_VERDICTS_STDOUT
+    return _census_review_stdout(kind)
 
 
 def _matrix_empty_payload_stdout(kind):
     if kind == "findings":
         return json.dumps({"findings": []})
-    return json.dumps({"verdicts": []})
+    if kind == "verdicts":
+        return json.dumps({"verdicts": []})
+    if kind == "grouping":
+        return json.dumps({"grouping": []})
+    if kind == "ruling":
+        return json.dumps({"findings": []})
+    raise AssertionError("unsupported kind %r" % kind)
 
 
 def _matrix_investigated_only_stdout(kind, path="good.py"):
     if kind == "findings":
         return json.dumps({"findings": [], "investigated": [path]})
-    return json.dumps({"verdicts": [], "investigated": [path]})
+    if kind == "verdicts":
+        return json.dumps({"verdicts": [], "investigated": [path]})
+    if kind == "grouping":
+        return json.dumps({"grouping": [], "investigated": [path]})
+    if kind == "ruling":
+        return json.dumps({
+            "id": "f1",
+            "ruling": "discharged",
+            "reason": "resolved in diff",
+            "investigated": [path],
+        })
+    raise AssertionError("unsupported kind %r" % kind)
 
 
 def _matrix_placeholder_stdout(kind):
-    if kind == "findings":
+    if kind in ("findings", "grouping"):
         return json.dumps({"findings": [{
             "id": EA.REVIEW_BASE_TEMPLATE_ID,
             "severity": "Minor", "title": "t", "body": "b",
@@ -5059,4 +5222,493 @@ def test_dispatch_review_unreadable_not_masked_by_kind_pin(tmp_path):
     assert res["ok"] is False
     assert res.get("detail") != ED.RESULT_KIND_MISMATCH_DETAIL
     assert res.get("payloadShape") is not None
+
+
+# --- WO-B2 (#1109): stdout cap naming + sibling worktree baseline ----------------
+
+
+def _linked_worktree_pair(tmp_path):
+    main = str(tmp_path / "main")
+    _git_init(main)
+    wt = str(tmp_path / "wt")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt], check=True)
+    return wt, main
+
+
+def _dispatch_write(tmp_path, fake, *, cwd=None, run_dir=None, **kwargs):
+    if cwd is None:
+        cwd, _main = _linked_worktree_pair(tmp_path)
+    if run_dir is None:
+        run_dir = str(tmp_path / "run")
+    defaults = {
+        "model": "sonnet",
+        "effort": "high",
+        "prompt_path": _valid_prompt(tmp_path, "Build this.\n"),
+        "cwd": cwd,
+        "run_dir": run_dir,
+        "order_id": "order-1",
+        "run_engine": fake,
+    }
+    defaults.update(kwargs)
+    return ED.dispatch_write("codex", **defaults)
+
+
+def _install_foreign_lease(wt_path):
+    import socket
+
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(300)"],
+        start_new_session=True,
+    )
+    lease_path = ED._worktree_lease_path(os.path.realpath(wt_path))
+    os.makedirs(os.path.dirname(lease_path), exist_ok=True)
+    import file_lock
+    holder = {
+        "pid": os.getpid(),
+        "host": socket.gethostname(),
+        "acquiredAt": "2026-01-01T00:00:00Z",
+        "enginePgid": proc.pid,
+        "dispatchToken": "foreign-dispatch-token",
+    }
+    with open(lease_path, "w", encoding="utf-8") as fh:
+        json.dump(holder, fh)
+    return proc
+
+
+def test_stdout_cap_truncation_marker_in_file_tail(tmp_path):
+    path = tmp_path / "stdout.txt"
+    over = ED.MAX_STDOUT_CAPTURE + 512
+    path.write_bytes(b"x" * over)
+    ED._cap_file_tail(str(path), ED.MAX_STDOUT_CAPTURE)
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
+    assert path.stat().st_size <= ED.MAX_STDOUT_CAPTURE
+    assert ED._stdout_capture_truncated(text)
+
+
+def test_stdout_cap_truncation_marker_in_read_capped_text(tmp_path):
+    path = tmp_path / "stdout.txt"
+    over = ED.MAX_STDOUT_CAPTURE + 256
+    path.write_bytes(b"y" * over)
+    text = ED._read_capped_text(str(path))
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
+    assert ED._stdout_capture_truncated(text)
+
+
+def test_short_stdout_capture_unmarked(tmp_path):
+    path = tmp_path / "stdout.txt"
+    path.write_text("short report\n", encoding="utf-8")
+    text = ED._read_capped_text(str(path))
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX not in text
+    assert not ED._stdout_capture_truncated(text)
+
+
+def test_engine_stdout_marker_prefix_under_cap_not_truncated():
+    forged = (
+        "Receipt prose mentioning %s in the body\n"
+        % ED.STDOUT_TRUNCATION_MARKER_PREFIX
+    )
+    assert not ED._stdout_capture_truncated(forged)
+
+
+def test_genuine_truncation_detected_without_stdout_bytes(tmp_path):
+    path = tmp_path / "stdout.txt"
+    over = ED.MAX_STDOUT_CAPTURE + 512
+    path.write_bytes(b"x" * over)
+    ED._cap_file_tail(str(path), ED.MAX_STDOUT_CAPTURE)
+    text = path.read_text(encoding="utf-8", errors="ignore")
+    assert ED._stdout_capture_truncated(text)
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    shutil.copy2(str(path), stdout_path)
+    state = {"attempts": {1: {"ended": {}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
+
+
+def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    fake = FakeRunner([
+        (truncated, False, 0, ""),
+        (_build_ok_stdout(), False, 0, ""),
+    ])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
+    assert res["detail"] != "worktree-dirtied-by-attempt"
+    assert "truncated" in res["disclosure"].lower()
+    assert len(fake.calls) == 1
+
+
+def test_truncated_final_attempt_stdout_capped_forfeit(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    over = ED.MAX_STDOUT_CAPTURE + 4096
+    truncated = "z" * over + "ungradeable tail without contract"
+    fake = FakeRunner([
+        ("not gradeable", True, 0, ""),
+        (truncated, False, 0, ""),
+    ])
+    res = _dispatch_write(tmp_path, fake, cwd=wt, max_wait=120)
+    assert res["terminal"] is True
+    assert res["forfeited"] is True
+    assert res["attempts"] == ED.MAX_ATTEMPTS
+    assert res["detail"].startswith("%s:" % ED.ITEM_DETAIL_STDOUT_CAPPED)
+    assert res["detail"] != "worktree-dirtied-by-attempt"
+    assert "truncated" in res["disclosure"].lower()
+    assert len(fake.calls) == 2
+
+
+def test_nested_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
+    parent, main = _linked_worktree_pair(tmp_path)
+
+    class NestedSiblingUngradeableRunner:
+        def __init__(self):
+            self.sib_proc = None
+
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            sib = os.path.join(cwd, ".claude", "worktrees", "sib")
+            os.makedirs(os.path.dirname(sib), exist_ok=True)
+            subprocess.run(
+                ["git", "-C", main, "worktree", "add", "-q", sib], check=True,
+            )
+            with open(os.path.join(sib, "sibling.txt"), "w", encoding="utf-8") as fh:
+                fh.write("peer\n")
+            self.sib_proc = _install_foreign_lease(sib)
+            return "", True, 0, ""
+
+    runner = NestedSiblingUngradeableRunner()
+    try:
+        fake = FakeRunner([
+            runner,
+            (_build_ok_stdout(), False, 0, ""),
+        ])
+        res = _dispatch_write(tmp_path, fake, cwd=parent, max_wait=120)
+        assert res.get("detail") != "worktree-dirtied-by-attempt", res
+        assert res["ok"] is True, res
+        assert len(fake.calls) == 2
+    finally:
+        if runner.sib_proc is not None:
+            ED._terminate_process_group(runner.sib_proc.pid)
+            runner.sib_proc.wait(timeout=2)
+
+
+def test_peer_foreign_leased_sibling_no_dirt_forfeit(tmp_path):
+    """Regression guard — peer siblings do not move the dispatching baseline (green on base too)."""
+    main = str(tmp_path / "main")
+    _git_init(main)
+    wt0 = str(tmp_path / "wt0")
+    wt1 = str(tmp_path / "wt1")
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt0], check=True)
+    subprocess.run(["git", "-C", main, "worktree", "add", "-q", wt1], check=True)
+    sib_proc = _install_foreign_lease(wt1)
+    try:
+        fake = FakeRunner([
+            ("", True, 0, ""),
+            (_build_ok_stdout(), False, 0, ""),
+        ])
+        res = _dispatch_write(tmp_path, fake, cwd=wt0, max_wait=120)
+        assert res["ok"] is True
+        assert res.get("detail") != "worktree-dirtied-by-attempt"
+    finally:
+        ED._terminate_process_group(sib_proc.pid)
+        sib_proc.wait(timeout=2)
+
+
+def test_self_created_worktree_without_foreign_lease_still_dirties(tmp_path):
+    parent, main = _linked_worktree_pair(tmp_path)
+
+    class SelfWorktreeDirtyRunner:
+        def __call__(self, argv, prompt_bytes, timeout, progress_cb, cwd):
+            sib = os.path.join(cwd, ".claude", "worktrees", "self")
+            os.makedirs(os.path.dirname(sib), exist_ok=True)
+            subprocess.run(
+                ["git", "-C", main, "worktree", "add", "-q", sib], check=True,
+            )
+            return "", True, 0, ""
+
+    fake = FakeRunner([SelfWorktreeDirtyRunner(), (_build_ok_stdout(), False, 0, "")])
+    res = _dispatch_write(tmp_path, fake, cwd=parent, max_wait=120)
+    assert res["detail"] == "worktree-dirtied-by-attempt"
+    assert len(fake.calls) == 1
+
+
+def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    real_git = ED._git_scrubbed
+
+    def fail_worktree_list(cwd_real, *args, timeout=None):
+        if args[:2] == ("worktree", "list"):
+            raise subprocess.TimeoutExpired(cmd=args, timeout=timeout or 1)
+        return real_git(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", fail_worktree_list)
+    baseline = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
+    assert baseline is not None
+    with open(os.path.join(wt, "dirty.txt"), "w", encoding="utf-8") as fh:
+        fh.write("x")
+    current = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
+    assert current != baseline
+
+
+# --- WO-R4-A (#1109): bounded stdout cap + like-with-like dirt comparison ----------
+
+
+class _MeteredBinaryFile:
+    def __init__(self, fh, read_sizes, total_reads):
+        self._fh = fh
+        self._read_sizes = read_sizes
+        self._total_reads = total_reads
+
+    def read(self, size=-1):
+        data = self._fh.read(size)
+        nbytes = len(data)
+        self._read_sizes.append(nbytes)
+        self._total_reads[0] += nbytes
+        return data
+
+    def seek(self, *args, **kwargs):
+        return self._fh.seek(*args, **kwargs)
+
+    def tell(self):
+        return self._fh.tell()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._fh.close()
+
+
+def _meter_reads_for_path(monkeypatch, path):
+    read_sizes = []
+    total_reads = [0]
+    real_open = open
+    path_real = os.path.realpath(str(path))
+
+    def metered_open(file, mode="r", *args, **kwargs):
+        fh = real_open(file, mode, *args, **kwargs)
+        if (
+            "r" in mode
+            and os.path.realpath(str(file)) == path_real
+        ):
+            return _MeteredBinaryFile(fh, read_sizes, total_reads)
+        return fh
+
+    monkeypatch.setattr("builtins.open", metered_open)
+    return read_sizes, total_reads
+
+
+def test_bounded_stdout_cap_read_never_exceeds_budget(tmp_path, monkeypatch):
+    cap = 4096
+    over = cap * 8
+    path = tmp_path / "big.bin"
+    path.write_bytes(b"z" * over)
+    read_sizes, total_reads = _meter_reads_for_path(monkeypatch, path)
+    marker = ED._stdout_truncation_marker(over).encode("utf-8")
+    byte_budget = cap + len(marker)
+
+    ED._read_capped_text(str(path), cap)
+
+    assert read_sizes, "expected at least one read"
+    assert max(read_sizes) <= byte_budget
+    assert total_reads[0] <= byte_budget
+
+
+def test_bounded_stdout_cap_file_tail_never_exceeds_budget(tmp_path, monkeypatch):
+    cap = 2048
+    over = cap * 6
+    path = tmp_path / "tail.bin"
+    path.write_bytes(b"t" * over)
+    read_sizes, total_reads = _meter_reads_for_path(monkeypatch, path)
+    marker = ED._stdout_truncation_marker(over).encode("utf-8")
+    byte_budget = cap + len(marker)
+
+    ED._cap_file_tail(str(path), cap)
+
+    assert read_sizes, "expected at least one read"
+    assert max(read_sizes) <= byte_budget
+    assert total_reads[0] <= byte_budget
+
+
+def test_stdout_cap_marker_parity_over_and_under_budget(tmp_path):
+    cap = 8192
+    under = tmp_path / "under.bin"
+    under.write_bytes(b"u" * (cap - 64))
+    under_before = under.read_bytes()
+    ED._read_capped_text(str(under), cap)
+    assert under.read_bytes() == under_before
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX not in ED._read_capped_text(str(under), cap)
+
+    over = cap + 1024
+    over_path = tmp_path / "over.bin"
+    over_path.write_bytes(b"v" * over)
+    text = ED._read_capped_text(str(over_path), cap)
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
+    assert len(text.encode("utf-8")) <= cap
+    assert text.endswith("v" * min(1024, cap))
+
+
+def test_read_capped_text_memory_error_degrades_like_oserror(tmp_path, monkeypatch):
+    path = tmp_path / "mem.bin"
+    path.write_bytes(b"x" * 64)
+
+    class _OomFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def seek(self, *args, **kwargs):
+            return 0
+
+        def tell(self):
+            return 64
+
+        def read(self, size=-1):
+            raise MemoryError("simulated oom")
+
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: _OomFile())
+    assert ED._read_capped_text(str(path)) == ""
+
+
+def test_cap_file_tail_memory_error_degrades_like_oserror(tmp_path, monkeypatch):
+    path = tmp_path / "mem-tail.bin"
+    original = b"y" * (ED.MAX_STDOUT_CAPTURE + 512)
+    path.write_bytes(original)
+
+    class _OomFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def seek(self, *args, **kwargs):
+            return 0
+
+        def tell(self):
+            return len(original)
+
+        def read(self, size=-1):
+            raise MemoryError("simulated oom")
+
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: _OomFile())
+    ED._cap_file_tail(str(path), ED.MAX_STDOUT_CAPTURE)
+    assert path.read_bytes() == original
+
+
+def _lease_state_roots(sibling, state):
+    sibling_real = os.path.realpath(sibling)
+    if state in ("none", "dead"):
+        return set()
+    if state in ("live", "appeared"):
+        return {sibling_real}
+    raise ValueError(state)
+
+
+@pytest.mark.parametrize("open_enum_ok", [True, False])
+@pytest.mark.parametrize("forfeit_enum_ok", [True, False])
+@pytest.mark.parametrize("open_lease", ["none", "live", "dead"])
+@pytest.mark.parametrize("forfeit_lease", ["none", "live", "dead", "appeared"])
+def test_worktree_dirt_invariant_unchanged_tree_cross_product(
+    tmp_path, monkeypatch, open_enum_ok, forfeit_enum_ok, open_lease, forfeit_lease,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sibling_rel = ".claude/worktrees/foreign-sibling"
+    sibling_real = os.path.realpath(os.path.join(cwd, sibling_rel))
+    plain_porcelain = "?? stable-only.txt\n?? stable-nested/\n"
+    uall_porcelain = (
+        "?? stable-only.txt\n"
+        "?? stable-nested/a.txt\n"
+        "?? stable-nested/b.txt\n"
+    )
+    sibling_plain = "?? %s/sibling.txt\n" % sibling_rel
+    sibling_uall = (
+        "?? %s/sibling.txt\n"
+        "?? %s/extra.txt\n"
+    ) % (sibling_rel, sibling_rel)
+    real_git = ED._git_scrubbed
+    foreign_call = {"n": 0}
+    status_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            if not open_enum_ok:
+                return None
+            return _lease_state_roots(sibling_real, open_lease)
+        if not forfeit_enum_ok:
+            return None
+        return _lease_state_roots(sibling_real, forfeit_lease)
+
+    def fake_git(cwd_real, *args, timeout=None):
+        if args[:2] == ("status", "--porcelain=v1"):
+            status_call["n"] += 1
+            plain = plain_porcelain
+            uall = uall_porcelain
+            if (
+                status_call["n"] >= 2
+                and forfeit_enum_ok
+                and forfeit_lease in ("live", "appeared")
+            ):
+                plain = plain_porcelain + sibling_plain
+                uall = uall_porcelain + sibling_uall
+            if "-uall" in args:
+                return subprocess.CompletedProcess(args, 0, uall, "")
+            return subprocess.CompletedProcess(args, 0, plain, "")
+        return real_git(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    monkeypatch.setattr(ED, "_git_scrubbed", fake_git)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+    assert verdict is False, {
+        "open_enum_ok": open_enum_ok,
+        "forfeit_enum_ok": forfeit_enum_ok,
+        "open_lease": open_lease,
+        "forfeit_lease": forfeit_lease,
+        "baseline": baseline,
+    }
+    assert sibling_real.startswith(cwd + os.sep)
+
+
+def test_legacy_worktree_baseline_unchanged_tree_not_dirty(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    modern = ED._worktree_baseline(cwd, timeout=5)
+    assert modern is not None
+    legacy = {
+        "headSha": modern["headSha"],
+        "porcelainSha256": modern["porcelainSha256"],
+    }
+    assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is False
+
+
+def test_unreadable_worktree_baseline_fail_closed(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    assert ED._worktree_dirt_verdict(None, cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict("not-a-dict", cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict({}, cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict(
+        {"headSha": "not-a-sha", "porcelainSha256": "abc"},
+        cwd,
+        timeout=5,
+    ) is None
+
+
+def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    with open(os.path.join(wt, "attempt-write.txt"), "w", encoding="utf-8") as fh:
+        fh.write("dirty\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
 

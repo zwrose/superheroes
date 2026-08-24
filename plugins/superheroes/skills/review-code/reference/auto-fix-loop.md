@@ -49,10 +49,14 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > `codex` or `cursor`, a specialist is dispatched through `engine_adapter.py` (read-only sandbox)
 > instead of a named subagent, and it returns its payload on **stdout** rather than writing a
 > findings file. Panel seats emit `{"findings": [...], "investigated": [...]}`; verifier seats emit
-> `{"verdicts": [...], "investigated": [...]}`. The graded result carries **`resultKind`**
-> (`findings` or `verdicts`) naming which payload key survived. A non-empty `findings` or
-> `verdicts` payload succeeds without `investigated`; only an **empty** payload needs a surviving
-> `investigated` path (see below). The contract shape also lives in the base rubric's
+> `{"verdicts": [...], "investigated": [...]}`; synthesis judges emit `{"grouping": [...]}`; fix
+> auditors emit `{id, ruling, reason}`. The graded result carries **`resultKind`** (one of
+> `findings`, `verdicts`, `grouping`, `ruling`) naming which payload key survived. A non-empty
+> payload succeeds without `investigated`; only an **empty** payload needs a surviving
+> `investigated` path (see below). **Findings-only prompt authoring** (caller side): cite
+> `skills/workhorse/reference/dispatch-mechanics.md` § *Findings-only review prompts* — a prompt
+> that demands a single JSON object without requiring `investigated` guarantees a vacuous forfeit
+> when the honest answer is no findings. The contract shape also lives in the base rubric's
 > "Findings output format" section; the
 > dispatch prompt's `## Output` block names the seat's channel — this block is how the runner grades
 > what the rubric already specified. `engine_adapter.parse_result` scans stdout for the **last
@@ -286,13 +290,15 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > **Result shape — top-level, no wrapper (#687).** Every `dispatch-review` result object carries
 > **`ok`**, **`terminal`**, **`runDir`**, **`argv`**, and **`mode`** at the top level. On a failure it also
 > carries **`reason`** (and usually **`detail`**). On success it also carries **`resultKind`**
-> (one of `findings`, `verdicts`) naming the payload, plus **exactly one** payload key of that name.
+> (one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload, plus **exactly one**
+> payload key of that name.
 > **`investigated`** is present only when at least one claimed path survives the runner's spot-check
-> (resolves inside the sanitized review view and exists on disk); a normal `{"verdicts": [...]}`
-> reply omits it. Outcome-dependent keys also include **`engagement`** and
+> (resolves inside the sanitized review view and exists on disk); a normal non-empty payload reply
+> omits it. Outcome-dependent keys also include **`engagement`** and
 > **`sanitizedView`**. A consumer must **not** read an absent `findings` as "zero findings" — an
-> absent `findings` may mean a `verdicts`-kind result instead; that is the fail-open reading this
-> subsystem exists to prevent. An object carrying **both** `findings` and `verdicts` is refused as
+> absent `findings` may mean a different `resultKind` instead; that is the fail-open reading this
+> subsystem exists to prevent. An object carrying **more than one** payload key from
+> `REVIEW_RESULT_KINDS` is refused as
 > `unreadable`. An item whose `id` is exactly `<agent-name>-001` or whose `severity` is exactly
 > `Critical | Important | Minor | Nit` — the `review-base.md` template literals — is refused as
 > `unreadable` (field-exact; an honest finding that *quotes* those literals in its prose survives).
@@ -303,27 +309,32 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > forfeit carries no `findings`/`investigated`. There is no `result` wrapper; parsing
 > `result.findings` reads nothing.
 >
-> **Review payload transport (#687).** The runner accepts **two** result kinds on stdout. Every
-> `ok: true` review result carries **`resultKind`** — exactly `"findings"` or `"verdicts"` — plus
-> **exactly one** payload key of that name; **`investigated`** is attached only when at least one
-> claimed path survives spot-checking. Every other top-level key the
+> **Review payload transport (#687).** The runner accepts **four** result kinds on stdout
+> (`REVIEW_RESULT_KINDS`: `findings`, `verdicts`, `grouping`, `ruling`). Every
+> `ok: true` review result carries **`resultKind`** naming exactly one payload key of that name;
+> **`investigated`** is attached only when at least one claimed path survives spot-checking.
+> **Recognition is not gradeability** — widening what the transport can read changes nothing about
+> what it will certify: the investigation floor still forfeits an empty payload with no surviving
+> `investigated` path for **every** kind including `grouping`, and an `--expected-result-kind`
+> mismatch still forfeits. Every other top-level key the
 > seat emits is dropped. Callers may pin the expected kind mechanically via
-> `dispatch-review --expected-result-kind {findings,verdicts}` (library:
+> `dispatch-review --expected-result-kind {findings,verdicts,grouping,ruling}` (library:
 > `expected_result_kind=`); a mismatched kind is refused with `detail: result-kind-mismatch`, not
 > `unreadable`. The pin is journaled when the run is **opened**; on a continuation an **omitted** pin
 > inherits the journaled value, while a **supplied** pin that disagrees with the journaled one —
 > including supplying a pin on a run opened without one — refuses `run-dir-result-kind-mismatch`,
 > `attempts: 0`, no spawn — a run's identity is fixed at open. **Review panel** seats pass the
 > **`findings`** pin; the **verify phase** passes the
-> **`verdicts`** pin. When no pin is set the transport accepts either kind, each graded by its own
-> engagement floor; #687's findings-only posture for panel seats is carried by the pin those seats
-> pass, not by a transport default. Any other `expected_result_kind` value is refused before dispatch
-> on either route — neither silently ignores it. The **library** API (`expected_result_kind=`)
+> **`verdicts`** pin. When no pin is set the transport accepts any of the four kinds, each graded by
+> its own engagement floor; #687's findings-only posture for panel seats is carried by the pin those
+> seats pass, not by a transport default. Any other `expected_result_kind` value is refused before
+> dispatch on either route — neither silently ignores it. The **library** API (`expected_result_kind=`)
 > returns a structured refusal with `attempts: 0`, `detail: "expected-result-kind-invalid"`, and the
 > rejected value under `rejectedResultKind`; the **CLI** (`--expected-result-kind`) is rejected by
-> argparse before dispatch with a usage error, a non-zero exit, and no result object. A **`verdicts`** payload now travels
-> through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}` stdout no longer
-> parses `unreadable` by construction. **Per-id audit rulings** (`dispatch-audits`) still do not
+> argparse before dispatch with a usage error, a non-zero exit, and no result object. A **`verdicts`**
+> payload now travels through `dispatch-review` for verifier seats — a correct `{"verdicts": [...]}`
+> stdout no longer parses `unreadable` by construction; **`grouping`** and **`ruling`** payloads are
+> likewise recognised for synthesis judges and fix auditors. **Per-id audit rulings** (`dispatch-audits`) still do not
 > travel through this verb; encode those inside audit result objects or use the file-writing auditor
 > path. For verifier delivery channels, see `verification-pass.md`.
 >

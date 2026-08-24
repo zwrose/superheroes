@@ -311,6 +311,10 @@ def _review_result_kind_tokens_from_doc_block(block):
     return set(re.findall(r"`([^`]+)`", block))
 
 
+def _review_result_kind_quoted_tokens_from_doc_block(block):
+    return set(re.findall(r'`"([^"]+)"`', block))
+
+
 _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
     "skills/review-code/reference/auto-fix-loop.md": 3,
     "skills/workhorse/reference/dispatch-mechanics.md": 2,
@@ -319,20 +323,30 @@ _REVIEW_RESULT_KIND_ENUM_COPY_COUNTS = {
 
 def _review_result_kind_enum_copies_from_doc(doc):
     """Every resultKind enumeration copy in a doc file."""
-    patterns = [
-        r"\(one of\s*(.*?)\)\s*naming the payload",
-        r"\(`([^`]+)` or `([^`]+)`\) naming which payload",
-        r'exactly `"([^"]+)"` or `"([^"]+)"`',
+    pattern_specs = [
+        (
+            r"\(one of\s*([^)]*)\)\s*naming the payload",
+            _review_result_kind_tokens_from_doc_block,
+        ),
+        (
+            r"\(([^)]*)\)\s*naming which payload",
+            _review_result_kind_tokens_from_doc_block,
+        ),
+        (
+            r'exactly ((?:`"[^"]+"`)(?:\s+or\s+`"[^"]+"`)+)',
+            _review_result_kind_quoted_tokens_from_doc_block,
+        ),
+        (
+            r"\(`REVIEW_RESULT_KINDS`:\s*([^)]*)\)",
+            _review_result_kind_tokens_from_doc_block,
+        ),
     ]
     copies = []
-    for pat in patterns:
-        for m in re.finditer(pat, doc, re.DOTALL):
-            if m.lastindex == 2:
-                copies.append({m.group(1), m.group(2)})
-            else:
-                tokens = _review_result_kind_tokens_from_doc_block(m.group(1))
-                if tokens:
-                    copies.append(tokens)
+    for pat, tokens_from_block in pattern_specs:
+        for m in re.finditer(pat, doc):
+            tokens = tokens_from_block(m.group(1))
+            if tokens:
+                copies.append(tokens)
     assert copies, (
         "doc: no resultKind enumeration copies found (moved or reworded?)"
     )
@@ -371,6 +385,35 @@ def test_review_result_kind_enum_in_dispatch_mechanics_doc():
     """§11: every resultKind enum copy in dispatch-mechanics.md matches engine_adapter."""
     _assert_review_result_kind_enum_copies_match_home(
         "skills/workhorse/reference/dispatch-mechanics.md")
+
+
+def test_review_result_kind_enum_recognizer_cardinality_independent():
+    """Recognizer yields full token sets for two-member and four-member phrasings."""
+    shape_pairs = [
+        (
+            "(one of `findings`, `verdicts`) naming the payload",
+            "(one of `findings`, `verdicts`, `grouping`, `ruling`) naming the payload",
+        ),
+        (
+            "(`findings` or `verdicts`) naming which payload",
+            "(`findings` or `verdicts` or `grouping` or `ruling`) naming which payload",
+        ),
+        (
+            'exactly `"findings"` or `"verdicts"`',
+            'exactly `"findings"` or `"verdicts"` or `"grouping"` or `"ruling"`',
+        ),
+        (
+            "(`REVIEW_RESULT_KINDS`: `findings`, `verdicts`)",
+            "(`REVIEW_RESULT_KINDS`: `findings`, `verdicts`, `grouping`, `ruling`)",
+        ),
+    ]
+    for two_member, four_member in shape_pairs:
+        two_tokens = _review_result_kind_enum_copies_from_doc(two_member)[0]
+        four_tokens = _review_result_kind_enum_copies_from_doc(four_member)[0]
+        assert two_tokens == {"findings", "verdicts"}
+        assert four_tokens == {
+            "findings", "verdicts", "grouping", "ruling",
+        }
 
 
 # --- Cluster: configRead CLI field set (preflight_probe → preflight.md §B) ---
@@ -5100,6 +5143,47 @@ def test_r8_closure_receipt_elements_exactly_once_in_in_repo_copy_holders():
     """§11.2: R8 closure-receipt element sentence is byte-identical in every in-repo copy-holder."""
     _assert_literal_exactly_once_across_holders(
         R8_CLOSURE_RECEIPT_ELEMENTS, _R8_IN_REPO_COPY_HOLDERS
+    )
+
+
+def test_grouping_payload_valid_delegates_to_round_adapters_not_hand_copy():
+    """§11: engine_adapter._grouping_payload_valid must delegate to round_adapters P_SYNTHESIS."""
+    text = _read("lib/engine_adapter.py")
+    assert "round_adapters.payload_fault" in text
+    assert "round_adapters.P_SYNTHESIS" in text
+    for marker in _HANDWRITTEN_GROUPING_VALIDATION_MARKERS:
+        assert marker not in text, (
+            "hand-written P_SYNTHESIS grouping validation reappeared: %r" % marker
+        )
+
+
+_HANDWRITTEN_GROUPING_VALIDATION_MARKERS = (
+    "for member in member_ids:",
+    "if not isinstance(member_ids, list) or not member_ids:",
+)
+
+
+def test_grouping_contract_copy_census():
+    """Census: P_SYNTHESIS grouping shape rule has exactly one home plus delegation in engine_adapter."""
+    engine_text = _read("lib/engine_adapter.py")
+    round_text = _read("lib/round_adapters.py")
+    copies = []
+    if "member_ids-non-empty-strings" in round_text:
+        copies.append("round_adapters")
+    for marker in _HANDWRITTEN_GROUPING_VALIDATION_MARKERS:
+        if marker in engine_text:
+            copies.append("engine_adapter-hand-copy:%s" % marker)
+    if "round_adapters.payload_fault" in engine_text and "round_adapters.P_SYNTHESIS" in engine_text:
+        copies.append("engine_adapter-delegation")
+    assert copies.count("round_adapters") == 1, (
+        "P_SYNTHESIS grouping rule home missing or duplicated: %r" % copies
+    )
+    assert "engine_adapter-delegation" in copies, (
+        "engine_adapter must delegate grouping validation to round_adapters: %r" % copies
+    )
+    hand_copies = [c for c in copies if c.startswith("engine_adapter-hand-copy:")]
+    assert not hand_copies, (
+        "hand-written P_SYNTHESIS grouping validation copies found: %r" % hand_copies
     )
 
 

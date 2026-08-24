@@ -29,13 +29,15 @@ TASK_ID_TRAILER = "Task-Id"
 # Re-export vacuous forfeit reason from dispatch_outcome (CONVENTIONS §11 Pattern 1). The
 # dispatch runner produces it; round_driver and seat_canary compare against it — consumers
 # import this name, never restate the literal.
+import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
+import round_adapters  # noqa: E402  (P_SYNTHESIS / P_AUDITS contracts; no import cycle)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
 # Re-export result-kind enum for consumers (CONVENTIONS §11 Pattern 1). Producers emit these
 # literals; engine_dispatch and drift tests import this name, never restate the tuple.
-REVIEW_RESULT_KINDS = ("findings", "verdicts")
+REVIEW_RESULT_KINDS = ("findings", "verdicts", "grouping", "ruling")
 
 # Rubric severity tiers — structural pin for verdicts[].severity (G-4); findings path unchanged.
 REVIEW_SEVERITY_TIERS = frozenset({"Critical", "Important", "Minor", "Nit"})
@@ -677,9 +679,18 @@ def normalize_review_stdout(stdout, fed_prompt=None):
     }
 
 
-def _outer_envelope_error_makes_unreadable(outer_envelope_error, payload_list):
+def _review_payload_is_usable(payload):
+    """True when a parsed review payload carries substantive content past the #949 gate."""
+    if payload is None:
+        return False
+    if isinstance(payload, (list, dict)):
+        return bool(payload)
+    return bool(payload)
+
+
+def _outer_envelope_error_makes_unreadable(outer_envelope_error, payload):
     """Single gate for #949: outer error/control envelope + no usable payload → unreadable."""
-    return outer_envelope_error and not payload_list
+    return outer_envelope_error and not _review_payload_is_usable(payload)
 
 
 def _findings_reply_has_hollow_member(rejected):
@@ -762,6 +773,42 @@ def scrub_salvage_block(salvage):
     return _scrub_mapping(salvage)
 
 
+_INVESTIGATED_LOCATOR_SUFFIX_RE = re.compile(r":(\d+)(?::(\d+))?$")
+
+
+def _normalize_investigated_path_string(path_val):
+    """Strip surrounding whitespace and wrapping backticks. Never raises."""
+    if not isinstance(path_val, str):
+        return path_val
+    path_val = path_val.strip()
+    if len(path_val) >= 2 and path_val[0] == "`" and path_val[-1] == "`":
+        path_val = path_val[1:-1].strip()
+    return path_val
+
+
+def _strip_investigated_locator_suffix(path_val, repo_root):
+    """Strip a trailing :line or :line:col only when the remainder is an existing regular file."""
+    if not repo_root or not isinstance(path_val, str) or not path_val:
+        return path_val
+    match = _INVESTIGATED_LOCATOR_SUFFIX_RE.search(path_val)
+    if not match:
+        return path_val
+    candidate = path_val[:match.start()]
+    if not candidate:
+        return path_val
+    try:
+        root_real = os.path.realpath(repo_root)
+        root_prefix = root_real + os.sep
+        real = os.path.realpath(os.path.join(repo_root, candidate))
+        if real != root_real and not real.startswith(root_prefix):
+            return path_val
+        if os.path.isfile(real):
+            return candidate
+    except (OSError, ValueError):
+        pass
+    return path_val
+
+
 def _scrub_investigated(investigated):
     """Return (accepted, rejected) — normalize or reject, never drop. Never raises."""
     rejected = []
@@ -791,7 +838,8 @@ def _scrub_investigated(investigated):
         else:
             _reject(entry, "not-a-string")
             continue
-        if not path_val.strip():
+        path_val = _normalize_investigated_path_string(path_val)
+        if not isinstance(path_val, str) or not path_val:
             _reject(entry, "empty-path")
             continue
         accepted.append(_scrub(path_val))
@@ -848,6 +896,174 @@ def _parse_review_verdicts_object(obj, outer_envelope_error):
     result = {"ok": True, "resultKind": "verdicts",
               "verdicts": verdicts_list, "investigated": investigated}
     return _attach_investigated_parse_rejections(result, inv_rejected)
+
+
+def _matches_review_findings(obj):
+    if "findings" in obj:
+        return True
+    return "investigated" in obj and set(obj.keys()) == _REVIEW_NEAR_MISS_ALLOWED_KEYS
+
+
+def _matches_review_verdicts(obj):
+    return "verdicts" in obj
+
+
+def _matches_review_grouping(obj):
+    return "grouping" in obj
+
+
+def _audit_ruling_payload_valid(obj):
+    """Validate ruling per round_adapters P_AUDITS contract. Never raises."""
+    audit_id = obj.get("id")
+    if isinstance(audit_id, str) and not audit_id.strip():
+        return False
+    return round_adapters.payload_fault(round_adapters.P_AUDITS, obj, "") is None
+
+
+def _matches_review_ruling(obj):
+    if not all(key in obj for key in ("id", "ruling", "reason")):
+        return False
+    ruling = obj.get("ruling")
+    if not isinstance(ruling, str) or ruling not in audits.AUDIT_RULINGS:
+        return False
+    return _audit_ruling_payload_valid(obj)
+
+
+_REVIEW_CONTRACT_MATCHERS = (
+    ("findings", _matches_review_findings),
+    ("verdicts", _matches_review_verdicts),
+    ("grouping", _matches_review_grouping),
+    ("ruling", _matches_review_ruling),
+)
+
+
+def _recognised_review_kinds(obj):
+    """Return the registered review result kinds that structurally match `obj`. Never raises."""
+    matched = []
+    for kind, matcher in _REVIEW_CONTRACT_MATCHERS:
+        try:
+            if matcher(obj):
+                matched.append(kind)
+        except Exception:
+            pass
+    return matched
+
+
+def _grouping_payload_valid(grouping):
+    """Validate synthesis grouping per round_adapters P_SYNTHESIS contract. Never raises."""
+    return round_adapters.payload_fault(
+        round_adapters.P_SYNTHESIS,
+        {"grouping": grouping},
+        round_adapters.SEAT_SYNTHESIS,
+    ) is None
+
+
+def _scrub_grouping(grouping):
+    """Scrub synthesis grouping free-text fields. Never raises."""
+    if grouping is None:
+        return None
+    return _scrub_mapping(grouping)
+
+
+def _parse_review_grouping_object(obj, outer_envelope_error):
+    """Parse a review object carrying a `grouping` key. Never raises."""
+    grouping = obj.get("grouping")
+    if not _grouping_payload_valid(grouping):
+        return {"ok": False, "reason": "unreadable"}
+    if _outer_envelope_error_makes_unreadable(outer_envelope_error, grouping):
+        return {"ok": False, "reason": "unreadable"}
+    grouping_scrubbed = _scrub_grouping(grouping)
+    investigated = []
+    inv_rejected = []
+    if "investigated" in obj:
+        investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+    result = {"ok": True, "resultKind": "grouping",
+              "grouping": grouping_scrubbed, "investigated": investigated}
+    return _attach_investigated_parse_rejections(result, inv_rejected)
+
+
+def _scrub_ruling_object(obj):
+    """Scrub a ruling payload's free-text fields. Never raises."""
+    out = {
+        "id": _scrub(obj["id"]) if isinstance(obj.get("id"), str) else obj.get("id"),
+        "ruling": obj.get("ruling"),
+        "reason": _scrub(obj["reason"]) if isinstance(obj.get("reason"), str) else obj.get("reason"),
+    }
+    for opt in ("newIssues", "evidence", "auditorVendor"):
+        if opt in obj:
+            val = obj.get(opt)
+            if opt == "newIssues" and isinstance(val, list):
+                out[opt] = [_scrub_mapping(x) if isinstance(x, dict) else _scrub_finding_value(x)
+                            for x in val]
+            elif isinstance(val, str):
+                out[opt] = _scrub(val)
+            else:
+                out[opt] = val
+    return out
+
+
+def _parse_review_ruling_object(obj, outer_envelope_error):
+    """Parse a review object recognised as an audit ruling. Never raises."""
+    if not _audit_ruling_payload_valid(obj):
+        return {"ok": False, "reason": "unreadable"}
+    if _outer_envelope_error_makes_unreadable(outer_envelope_error, obj):
+        return {"ok": False, "reason": "unreadable"}
+    ruling_record = _scrub_ruling_object(obj)
+    investigated = []
+    inv_rejected = []
+    if "investigated" in obj:
+        investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+    result = {
+        "ok": True,
+        "resultKind": "ruling",
+        "ruling": ruling_record,
+        "investigated": investigated,
+    }
+    return _attach_investigated_parse_rejections(result, inv_rejected)
+
+
+def _parse_review_findings_object(obj, outer_envelope_error):
+    """Parse a review object recognised as findings. Never raises."""
+    if "findings" not in obj and "investigated" in obj:
+        if (_outer_envelope_error_makes_unreadable(outer_envelope_error, [])
+                or set(obj.keys()) != _REVIEW_NEAR_MISS_ALLOWED_KEYS):
+            return {"ok": False, "reason": "unreadable"}
+        investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+        if not investigated:
+            return {"ok": False, "reason": "unreadable"}
+        result = {"ok": True, "resultKind": "findings",
+                  "findings": [], "investigated": investigated}
+        return _attach_investigated_parse_rejections(result, inv_rejected)
+    findings = obj.get("findings")
+    if findings is None:
+        return {"ok": False, "reason": "unreadable"}
+    if not isinstance(findings, list):
+        return {"ok": False, "reason": "unreadable"}
+    if _review_items_have_placeholder_literal(findings):
+        return {"ok": False, "reason": "unreadable"}
+    findings_list, findings_rejected = _scrub_findings(findings)
+    if _findings_reply_has_hollow_member(findings_rejected):
+        return {"ok": False, "reason": "unreadable"}
+    if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
+        return {"ok": False, "reason": "unreadable"}
+    if findings and not findings_list:
+        return {"ok": False, "reason": "unreadable"}
+    investigated = []
+    inv_rejected = []
+    if "investigated" in obj:
+        investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
+    result = {"ok": True, "resultKind": "findings",
+              "findings": findings_list, "investigated": investigated}
+    result = _attach_findings_parse_rejections(result, findings_rejected)
+    return _attach_investigated_parse_rejections(result, inv_rejected)
+
+
+_REVIEW_CONTRACT_PARSERS = {
+    "findings": _parse_review_findings_object,
+    "verdicts": _parse_review_verdicts_object,
+    "grouping": _parse_review_grouping_object,
+    "ruling": _parse_review_ruling_object,
+}
 
 
 def _attach_investigated_parse_rejections(result, rejected):
@@ -1243,7 +1459,7 @@ def engagement_read(result):
     and an "engagement" mapping with "toolCalls").
 
     Returns "engaged" when there is POSITIVE evidence of action:
-      - at least one finding returned, OR
+      - a non-empty payload of any registered review result kind, OR
       - at least one accepted `investigated` path, OR
       - engagement.toolCalls is not None and >= 1
     Otherwise returns "unknown".
@@ -1256,12 +1472,26 @@ def engagement_read(result):
     try:
         if not isinstance(result, dict):
             return "unknown"
-        findings = result.get("findings")
-        if isinstance(findings, list) and findings:
-            return "engaged"
-        verdicts = result.get("verdicts")
-        if isinstance(verdicts, list) and verdicts:
-            return "engaged"
+        for kind in REVIEW_RESULT_KINDS:
+            if kind == "findings":
+                payload = result.get("findings")
+                if isinstance(payload, list) and payload:
+                    return "engaged"
+            elif kind == "verdicts":
+                payload = result.get("verdicts")
+                if isinstance(payload, list) and payload:
+                    return "engaged"
+            elif kind == "grouping":
+                payload = result.get("grouping")
+                if isinstance(payload, list) and payload:
+                    return "engaged"
+            elif kind == "ruling":
+                payload = result.get("ruling")
+                if isinstance(payload, dict):
+                    if (isinstance(payload.get("id"), str) and payload.get("id")
+                            and isinstance(payload.get("ruling"), str) and payload.get("ruling")
+                            and isinstance(payload.get("reason"), str) and payload.get("reason")):
+                        return "engaged"
         investigated = result.get("investigated")
         if isinstance(investigated, list) and investigated:
             return "engaged"
@@ -1350,9 +1580,15 @@ def spot_check_investigated(investigated, repo_root, *, generated_artifacts=()):
     artifact_reals = _resolve_generated_artifact_reals(generated_artifacts, repo_root)
 
     for entry in investigated:
-        if not isinstance(entry, str) or not entry.strip():
-            _reject(entry, "not-a-path")
+        raw_entry = entry
+        if not isinstance(entry, str):
+            _reject(raw_entry, "not-a-path")
             continue
+        entry = _normalize_investigated_path_string(entry)
+        if not entry:
+            _reject(raw_entry, "not-a-path")
+            continue
+        entry = _strip_investigated_locator_suffix(entry, repo_root)
         if "\x00" in entry:
             _reject(entry, "invalid-path")
             continue
@@ -1427,44 +1663,12 @@ def parse_result(engine, role_kind, stdout, *, raw_envelope_error=None):
                 return {"ok": False, "reason": "unreadable"}
             if not isinstance(obj, dict):
                 return {"ok": False, "reason": "unreadable"}
-            has_findings = "findings" in obj
-            has_verdicts = "verdicts" in obj
-            if has_findings and has_verdicts:
+            matched = _recognised_review_kinds(obj)
+            if len(matched) > 1:
                 return {"ok": False, "reason": "unreadable"}
-            if has_verdicts:
-                return _parse_review_verdicts_object(obj, outer_envelope_error)
-            if "findings" not in obj and "investigated" in obj:
-                if (_outer_envelope_error_makes_unreadable(outer_envelope_error, [])
-                        or set(obj.keys()) != _REVIEW_NEAR_MISS_ALLOWED_KEYS):
-                    return {"ok": False, "reason": "unreadable"}
-                investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
-                if not investigated:
-                    return {"ok": False, "reason": "unreadable"}
-                result = {"ok": True, "resultKind": "findings",
-                          "findings": [], "investigated": investigated}
-                return _attach_investigated_parse_rejections(result, inv_rejected)
-            findings = obj.get("findings")
-            if findings is None:
-                return {"ok": False, "reason": "unreadable"}
-            if not isinstance(findings, list):
-                return {"ok": False, "reason": "unreadable"}
-            if _review_items_have_placeholder_literal(findings):
-                return {"ok": False, "reason": "unreadable"}
-            findings_list, findings_rejected = _scrub_findings(findings)
-            if _findings_reply_has_hollow_member(findings_rejected):
-                return {"ok": False, "reason": "unreadable"}
-            if _outer_envelope_error_makes_unreadable(outer_envelope_error, findings_list):
-                return {"ok": False, "reason": "unreadable"}
-            if findings and not findings_list:
-                return {"ok": False, "reason": "unreadable"}
-            investigated = []
-            inv_rejected = []
-            if "investigated" in obj:
-                investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
-            result = {"ok": True, "resultKind": "findings",
-                      "findings": findings_list, "investigated": investigated}
-            result = _attach_findings_parse_rejections(result, findings_rejected)
-            return _attach_investigated_parse_rejections(result, inv_rejected)
+            if len(matched) == 1:
+                return _REVIEW_CONTRACT_PARSERS[matched[0]](obj, outer_envelope_error)
+            return {"ok": False, "reason": "unreadable"}
         outer_envelope_error = _raw_stream_envelope_has_error_control(stdout)
         stdout = _unwrap_stream_envelope(stdout)   # #347: see the unwrap's docstring
         obj = _last_json_object(stdout)

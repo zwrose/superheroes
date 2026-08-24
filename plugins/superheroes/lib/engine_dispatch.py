@@ -79,6 +79,9 @@ PROGRESS_NAME = "progress.jsonl"
 RUN_KIND_REVIEW = "review"
 # Consumers import engine_adapter.REVIEW_RESULT_KINDS — never restate the tuple (CONVENTIONS §11).
 REVIEW_RESULT_KINDS = engine_adapter.REVIEW_RESULT_KINDS
+_REVIEW_RESULT_KINDS_CHOICES_CONTRACT = (
+    "choices:" + ",".join(str(kind) for kind in REVIEW_RESULT_KINDS)
+)
 RESULT_KIND_MISMATCH_DETAIL = "result-kind-mismatch"
 RUN_KIND_WRITE = "write"
 _DISPATCH_SCRIPT = os.path.abspath(__file__)
@@ -93,6 +96,9 @@ MAX_EXPECTED_ITEMS = 1000
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
 ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
 ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED = "report-missing-items-delivered"
+ITEM_DETAIL_STDOUT_CAPPED = "stdout-capped-by-attempt"
+STDOUT_TRUNCATION_MARKER_PREFIX = "<<<SUPERHEROES-STDOUT-TRUNCATED:"
+STDOUT_TRUNCATION_MARKER_SUFFIX = ">>>"
 ITEM_CHECK_FIELDS = frozenset(("declared", "expected", "delivered", "missing"))
 ITEM_EVIDENCE_CAUSE_FALSY_BASE = "falsy-base-sha"
 ITEM_EVIDENCE_CAUSE_DIFF_TIMEOUT = "diff-timeout"
@@ -464,19 +470,244 @@ def _validate_linked_build_cwd(cwd, timeout=None):
     return True, cwd_real
 
 
+def _stdout_truncation_marker(observed_bytes):
+    return "%s%d%s\n" % (
+        STDOUT_TRUNCATION_MARKER_PREFIX, int(observed_bytes), STDOUT_TRUNCATION_MARKER_SUFFIX,
+    )
+
+
+_STDOUT_TRUNCATION_MARKER_RE = re.compile(
+    r"^%s(\d+)%s\n" % (
+        re.escape(STDOUT_TRUNCATION_MARKER_PREFIX),
+        re.escape(STDOUT_TRUNCATION_MARKER_SUFFIX),
+    )
+)
+
+
+def _stdout_capture_truncated(text):
+    """True when the runner wrote its truncation marker at the capture head (not engine-forged)."""
+    if not text:
+        return False
+    return _STDOUT_TRUNCATION_MARKER_RE.match(text) is not None
+
+
+def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None):
+    """Keep the last max_bytes of stdout content, prefixing a truncation marker when capped."""
+    if observed_bytes is None:
+        observed_bytes = len(data)
+    if len(data) <= max_bytes:
+        return data, False
+    marker = _stdout_truncation_marker(observed_bytes).encode("utf-8")
+    content_budget = max(0, max_bytes - len(marker))
+    tail = data[-content_budget:] if content_budget else b""
+    return marker + tail, True
+
+
+def _parse_git_worktree_list(porcelain_text):
+    worktrees = []
+    current = None
+    for line in (porcelain_text or "").splitlines():
+        if line.startswith("worktree "):
+            if current is not None:
+                worktrees.append(current)
+            current = {"path": os.path.realpath(line[len("worktree "):].strip())}
+        elif current is not None and line.startswith("branch "):
+            current["branch"] = line[len("branch "):].strip()
+    if current is not None:
+        worktrees.append(current)
+    return worktrees
+
+
+def _porcelain_entry_path(line):
+    if len(line) < 4:
+        return None
+    return line[3:].strip()
+
+
+def _foreign_leased_worktree_roots(cwd_real, timeout=None):
+    """Registered worktrees (other than cwd) with a live foreign lease, or None on fallback."""
+    try:
+        wt_list = _git_scrubbed(cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if wt_list.returncode != 0:
+        return None
+    cwd_real = os.path.realpath(cwd_real)
+    excluded = set()
+    for wt in _parse_git_worktree_list(wt_list.stdout):
+        wt_path = wt["path"]
+        if wt_path == cwd_real:
+            continue
+        lease_path = _worktree_lease_path(wt_path)
+        if not os.path.exists(lease_path):
+            continue
+        try:
+            holder = file_lock.read_holder(lease_path)
+        except Exception:
+            return None
+        if not _worktree_lease_holder_live(holder):
+            continue
+        excluded.add(wt_path)
+    return excluded
+
+
+def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots):
+    cwd_real = os.path.realpath(cwd_real)
+    kept = []
+    for line in porcelain.splitlines():
+        if not line.strip():
+            continue
+        rel = _porcelain_entry_path(line)
+        if rel is None:
+            kept.append(line)
+            continue
+        abs_path = os.path.realpath(os.path.join(cwd_real, rel))
+        excluded = False
+        for root in excluded_roots:
+            if abs_path == root or abs_path.startswith(root + os.sep):
+                excluded = True
+                break
+        if not excluded:
+            kept.append(line)
+    if not kept:
+        return ""
+    return "\n".join(kept) + "\n"
+
+
+def _worktree_porcelain_snapshot(cwd_real, mode, excluded_roots, timeout=None):
+    """Porcelain digest for a worktree using a fixed algorithm and exclusion set."""
+    if mode == "plain":
+        try:
+            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+    elif mode == "filtered":
+        try:
+            status = _git_scrubbed(
+                cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+    else:
+        return None
+    if status.returncode != 0:
+        return None
+    porcelain = status.stdout or ""
+    if excluded_roots:
+        porcelain = _filter_porcelain_for_foreign_worktrees(
+            porcelain, cwd_real, set(excluded_roots),
+        )
+    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+
+
 def _worktree_baseline(cwd_real, timeout=None):
     try:
         head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
-        status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
     except subprocess.TimeoutExpired:
         return None
-    if head.returncode != 0 or status.returncode != 0:
+    if head.returncode != 0:
         return None
-    porcelain = status.stdout or ""
+    excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if excluded is None:
+        mode = "plain"
+        excluded_roots = None
+    else:
+        mode = "filtered"
+        excluded_roots = sorted(excluded)
+    porcelain_sha256 = _worktree_porcelain_snapshot(
+        cwd_real, mode, excluded_roots, timeout=timeout,
+    )
+    if porcelain_sha256 is None:
+        return None
     return {
         "headSha": (head.stdout or "").strip(),
-        "porcelainSha256": hashlib.sha256(porcelain.encode("utf-8")).hexdigest(),
+        "porcelainSha256": porcelain_sha256,
+        "mode": mode,
+        "excludedRoots": excluded_roots,
     }
+
+
+def _legacy_worktree_porcelain_sha256(cwd_real, timeout=None):
+    """Porcelain digest using the pre-mode dynamic algorithm (legacy baselines)."""
+    excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if excluded is None:
+        try:
+            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        if status.returncode != 0:
+            return None
+        porcelain = status.stdout or ""
+    else:
+        try:
+            status = _git_scrubbed(
+                cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+        if status.returncode != 0:
+            return None
+        porcelain = status.stdout or ""
+        if excluded:
+            porcelain = _filter_porcelain_for_foreign_worktrees(
+                porcelain, cwd_real, excluded,
+            )
+    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+
+
+def _baseline_head_sha_readable(baseline):
+    head_sha = baseline.get("headSha")
+    if not isinstance(head_sha, str):
+        return False
+    return bool(_BASE_SHA_OBJECT_ID_RE.match(head_sha.strip()))
+
+
+def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
+    """Return True if dirtied, False if clean, None if unreadable (fail-closed)."""
+    if not isinstance(baseline, dict):
+        return None
+    if not _baseline_head_sha_readable(baseline):
+        return None
+    mode = baseline.get("mode")
+    if mode is None:
+        try:
+            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        if head.returncode != 0:
+            return None
+        porcelain_sha256 = _legacy_worktree_porcelain_sha256(cwd_real, timeout=timeout)
+        if porcelain_sha256 is None:
+            return None
+        current_head = (head.stdout or "").strip()
+        if current_head != baseline.get("headSha"):
+            return True
+        if porcelain_sha256 != baseline.get("porcelainSha256"):
+            return True
+        return False
+    if mode not in ("plain", "filtered"):
+        return None
+    try:
+        head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if head.returncode != 0:
+        return None
+    excluded_roots = set(baseline.get("excludedRoots") or [])
+    live_excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+    if live_excluded is not None:
+        excluded_roots |= live_excluded
+    porcelain_sha256 = _worktree_porcelain_snapshot(
+        cwd_real, mode, sorted(excluded_roots) if excluded_roots else None, timeout=timeout,
+    )
+    if porcelain_sha256 is None:
+        return None
+    current_head = (head.stdout or "").strip()
+    if current_head != baseline.get("headSha"):
+        return True
+    if porcelain_sha256 != baseline.get("porcelainSha256"):
+        return True
+    return False
 
 
 _BASE_SHA_OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
@@ -1251,8 +1482,7 @@ def _ledger_stages(result, state, run_dir_real, opened):
         if result.get("ok"):
             kind = result.get("resultKind")
             if kind in REVIEW_RESULT_KINDS:
-                payload = result.get(kind)
-                if isinstance(payload, list) and payload:
+                if _parse_review_has_payload(result):
                     delivered = True
             if not delivered and result.get("investigated"):
                 delivered = True
@@ -1528,19 +1758,42 @@ def _cleanup(proc, pgid):
             pass
 
 
+def _bounded_stdout_cap_from_file(fh, max_bytes):
+    """Read at most max_bytes (+ marker) from fh without loading an oversized file. Never raises."""
+    try:
+        fh.seek(0, os.SEEK_END)
+        observed = fh.tell()
+        if observed == 0:
+            return b"", False, 0
+        if observed <= max_bytes:
+            fh.seek(0)
+            return fh.read(observed), False, observed
+        marker = _stdout_truncation_marker(observed).encode("utf-8")
+        content_budget = max(0, max_bytes - len(marker))
+        if content_budget > 0:
+            fh.seek(-content_budget, os.SEEK_END)
+            tail = fh.read(content_budget)
+        else:
+            tail = b""
+        capped = marker + tail
+        if len(capped) > max_bytes:
+            capped = capped[:max_bytes]
+        return capped, True, observed
+    except (OSError, MemoryError):
+        return None, False, 0
+
+
 # Injected-seam sentinel; tests call this directly.
 def _cap_file_tail(path, max_bytes):
     """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises."""
     try:
-        size = os.path.getsize(path)
-        if size <= max_bytes:
-            return
         with open(path, "rb") as fh:
-            fh.seek(-max_bytes, os.SEEK_END)
-            tail = fh.read()
+            capped, truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+        if capped is None or not truncated:
+            return
         with open(path, "wb") as fh:
-            fh.write(tail)
-    except OSError:
+            fh.write(capped)
+    except (OSError, MemoryError):
         pass
 
 
@@ -1548,14 +1801,11 @@ def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE):
     """Read at most the last max_bytes of a text file. Never raises."""
     try:
         with open(path, "rb") as fh:
-            fh.seek(0, os.SEEK_END)
-            size = fh.tell()
-            if size > max_bytes:
-                fh.seek(-max_bytes, os.SEEK_END)
-            else:
-                fh.seek(0, os.SEEK_SET)
-            return fh.read().decode("utf-8", errors="ignore")
-    except OSError:
+            capped, _truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+        if capped is None:
+            return ""
+        return capped.decode("utf-8", errors="ignore")
+    except (OSError, MemoryError):
         return ""
 
 
@@ -1589,11 +1839,17 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
     err = bytearray()
 
     def _drain(stream, sink, cap):
+        total_observed = 0
         try:
             for chunk in iter(lambda: stream.read(4096), b""):
+                total_observed += len(chunk)
                 sink.extend(chunk)
-                if len(sink) > cap:
-                    del sink[:len(sink) - cap]   # keep the last `cap` bytes (result is at the tail)
+                if total_observed > cap or len(sink) > cap:
+                    capped, _truncated = _bytes_with_stdout_cap(
+                        bytes(sink), cap, total_observed,
+                    )
+                    sink.clear()
+                    sink.extend(capped)
         except Exception:
             pass
 
@@ -1962,11 +2218,8 @@ def _spawn_attempt(run_dir_real, state, attempt, *, run_engine=None):
 def _engagement_with_read(engagement, *, result_kind=None, items=None, investigated=None):
     """Attach engagement.read from observed attempt evidence. Never raises."""
     read_input = {"investigated": investigated, "engagement": engagement}
-    if items is not None:
-        if result_kind == "verdicts":
-            read_input["verdicts"] = items
-        else:
-            read_input["findings"] = items
+    if items is not None and result_kind in REVIEW_RESULT_KINDS:
+        read_input[result_kind] = items
     out = dict(engagement)
     out["read"] = engine_adapter.engagement_read(read_input)
     return out
@@ -1996,15 +2249,42 @@ def _attach_review_rejection_fields(result, rejected_records=(), rejected_reason
     return result
 
 
+def _review_result_payload(result, kind):
+    """Whether a review result carries a payload for kind, and the value to copy. Never raises."""
+    if kind not in REVIEW_RESULT_KINDS:
+        return False, None
+    if result.get("resultKind") != kind:
+        return False, None
+    if kind == "ruling":
+        ruling_val = result.get("ruling")
+        if isinstance(ruling_val, dict) and ruling_val.get("ruling"):
+            return True, ruling_val
+        return False, None
+    if kind == "grouping":
+        if "grouping" not in result:
+            return False, None
+        return True, result.get("grouping")
+    payload = result.get(kind)
+    if isinstance(payload, list):
+        return True, payload
+    return False, None
+
+
 def _parse_review_has_payload(res):
-    """True when a review parse result carries a non-empty findings or verdicts payload."""
+    """True when a review parse result carries a non-empty payload for its resultKind."""
     if not res.get("ok"):
         return False
     kind = res.get("resultKind")
     if kind not in REVIEW_RESULT_KINDS:
         return False
-    payload = res.get(kind)
-    return isinstance(payload, list) and bool(payload)
+    has_payload, payload = _review_result_payload(res, kind)
+    if not has_payload:
+        return False
+    if kind in ("findings", "verdicts"):
+        return bool(payload)
+    if kind == "grouping":
+        return bool(payload)
+    return True
 
 
 def _review_parse_kind_invalid(res):
@@ -2033,8 +2313,8 @@ def _build_running_graded(run_dir_real, state):
                 kind = grade.get("resultKind")
                 if kind in REVIEW_RESULT_KINDS:
                     entry["resultKind"] = kind
-                    payload = grade.get(kind)
-                    if isinstance(payload, list):
+                    has_payload, payload = _review_result_payload(grade, kind)
+                    if has_payload:
                         entry[kind] = payload
                 elif run_kind == RUN_KIND_WRITE:
                     entry["signal"] = grade.get("signal", "ok")
@@ -2143,7 +2423,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
         return result
 
     kind = res["resultKind"]
-    payload = res.get(kind)
+    has_payload, payload = _review_result_payload(res, kind)
 
     view_meta = opened.get("viewMeta")
     generated = ()
@@ -2157,7 +2437,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     findings_rejected_records = list(res.get("findingsRejectedRecords") or [])
     findings_rejected_reasons = list(res.get("findingsRejected") or [])
 
-    if not payload and not accepted:
+    if not _parse_review_has_payload(res) and not accepted:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=[], investigated=None)
         return {
             "forfeit": True,
@@ -2170,7 +2450,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     expected_kind = opened.get("expectedResultKind")
     if expected_kind in REVIEW_RESULT_KINDS and kind != expected_kind:
         engagement = _engagement_with_read(
-            engagement, result_kind=kind, items=payload or [])
+            engagement, result_kind=kind, items=payload if has_payload else [])
         return {
             "forfeit": True,
             "reason": dispatch_outcome.REASON_FORFEITED,
@@ -2178,7 +2458,7 @@ def _grade_review_attempt(run_dir_real, state, attempt):
             "engagement": engagement,
         }
 
-    if payload:
+    if has_payload:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
         if accepted:
@@ -2266,6 +2546,47 @@ def _worktree_dirtied_forfeit(engine, *, run_dir_real=None, state=None, attempts
             "refused because a second attempt on a dirtied tree can contaminate or commit "
             "partial work. The worktree is left exactly as the engine left it — inspect "
             "and clean it yourself." % engine
+        ),
+    }
+    return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
+
+
+def _attempt_stdout_truncated(run_dir_real, state, attempt):
+    """Return observed stdout byte count when attempt output hit the capture cap; else None."""
+    slot = (state.get("attempts") or {}).get(attempt) or {}
+    ended = slot.get("ended") or {}
+    observed = ended.get("stdoutBytes")
+    if observed is not None and observed > MAX_STDOUT_CAPTURE:
+        return observed
+    stdout_path = os.path.join(run_dir_real, "attempt-%d.stdout" % attempt)
+    if not os.path.exists(stdout_path):
+        return None
+    try:
+        size = os.path.getsize(stdout_path)
+    except OSError:
+        return None
+    if size > MAX_STDOUT_CAPTURE:
+        return size
+    text = _read_capped_text(stdout_path)
+    if _stdout_capture_truncated(text):
+        return observed if observed is not None else size
+    return None
+
+
+def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=None, attempts=1):
+    terminal = {
+        "ok": False,
+        "terminal": True,
+        "reason": dispatch_outcome.REASON_FORFEITED,
+        "detail": "%s:%d" % (ITEM_DETAIL_STDOUT_CAPPED, int(observed_bytes)),
+        "attempts": attempts,
+        "forfeited": True,
+        "disclosure": (
+            "%s attempt 1 report was truncated at the %d-byte stdout capture cap; "
+            "the retry was refused because the gradeable tail was lost. "
+            "The work may nevertheless be complete on disk — inspect the worktree "
+            "and reconstruct from the diff rather than re-running the order."
+            % (engine, int(observed_bytes))
         ),
     }
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
@@ -2511,9 +2832,13 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                         kind = grade.get("resultKind")
                         if kind in REVIEW_RESULT_KINDS:
                             terminal_ok["resultKind"] = kind
-                            payload = grade.get(kind)
-                            if isinstance(payload, list):
+                            has_payload, payload = _review_result_payload(grade, kind)
+                            if has_payload:
                                 terminal_ok[kind] = payload
+                            if kind == "ruling":
+                                for field in ("id", "reason"):
+                                    if field in grade:
+                                        terminal_ok[field] = grade[field]
                         result = _with_run_fields(
                             terminal_ok,
                             run_dir=run_dir_real, argv=argv,
@@ -2542,11 +2867,24 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                     return _fold_run(run_dir_real, state, result)
 
                 reason = grade.get("reason", dispatch_outcome.REASON_FORFEITED)
+                if run_kind == RUN_KIND_WRITE:
+                    truncated_bytes = _attempt_stdout_truncated(
+                        run_dir_real, state, latest,
+                    )
+                    if truncated_bytes is not None:
+                        return _fold_run(run_dir_real, state, _with_run_fields(
+                            _stdout_capped_forfeit(
+                                engine, truncated_bytes,
+                                run_dir_real=run_dir_real, state=state,
+                                attempts=latest,
+                            ),
+                            run_dir=run_dir_real, argv=argv,
+                        ))
                 if latest < MAX_ATTEMPTS:
                     if run_kind == RUN_KIND_WRITE:
                         baseline = opened.get("worktreeBaseline")
-                        current = _worktree_baseline(opened["cwd"])
-                        if baseline is None or current is None or current != baseline:
+                        dirt_verdict = _worktree_dirt_verdict(baseline, opened["cwd"])
+                        if dirt_verdict is None or dirt_verdict:
                             return _fold_run(run_dir_real, state, _with_run_fields(
                                 _worktree_dirtied_forfeit(
                                     engine, run_dir_real=run_dir_real, state=state,
@@ -3612,7 +3950,7 @@ def build_parser():
                          "expression, branch name or tag is refused")
     cc.add_argument(d, "--mode", contract="choices:review,brief-check", default=None,
                     choices=sanitized_view.REVIEW_MODES)
-    cc.add_argument(d, "--expected-result-kind", contract="choices:findings,verdicts",
+    cc.add_argument(d, "--expected-result-kind", contract=_REVIEW_RESULT_KINDS_CHOICES_CONTRACT,
                     default=None, choices=REVIEW_RESULT_KINDS,
                     help="mechanical pin: refuse attempts whose parsed resultKind differs")
 
