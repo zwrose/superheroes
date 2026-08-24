@@ -303,6 +303,33 @@ affirmatively call converged. Where the build cannot truthfully hand back, **a f
 rather than the builder's own call. Two field specimens deviated from the letter while honouring
 the substance, which is what prompted the ruling.
 
+### Continuation and the advisor-resolution valve
+
+This is **venue 1** of the residual venue ladder; the ladder's canonical home is
+`skills/showrunner/reference/owner-decisions.md` — not restated here. Continuation applies when the
+residual is off any tripwired seam, its fix shape is settled, and it fits the floor economics of who
+types it; ambiguity resolves toward continuing. The third-rework tripwire's builder stop is untouched
+and unconditional: the design question it hands up gets the advisor-resolution valve — craft, and the
+advisor rules it, records the determination for veto, and the residual becomes settled-shape; product,
+and it routes up as consequences; doubt resolves upward. The craft-versus-product test in that valve is
+**the same test** as the tier principle in the canonical home, not a second one; and the
+advisor-rules-then-vets shape is **disclosed doctrine**, checked by three things — the dated record
+of the determination, the cross-vendor review floor, and the owner's click. **Nothing here weakens the
+builder's stop**: the builder still refuses the fourth patch and still hands the design signal up, and
+the valve governs only what the **advisor** does with that signal once it arrives.
+
+### Standing authorization — venue-1 folds
+
+Post-review folds on an open PR need no per-fold owner word when they are micro-sized at roughly 100
+non-test lines or fewer, run under the full micro floor of a cross-vendor seat, the planted-defect
+control probe, and the salvage valve, and are disclosed in the PR body and the owner half; the owner's
+click remains the gate. The four bounds, checkable one at a time: **micro-sized** at roughly 100
+non-test lines or fewer; the **full micro floor** — a cross-vendor seat, the planted-defect control
+probe, the salvage valve; **disclosure** in the PR body **and** the owner half; and the **owner's click**
+remaining the gate. A residual larger than that bound routes to one bounded builder re-dispatch under
+the lane's existing route, and the standalone micro lane's per-change owner word is explicitly unchanged.
+The preservation is checkable in place at `### Micro — owner authorization` above.
+
 ### Mechanical guards over prose — the byte-literal floor
 
 Mechanical guards over prose are scoped to the **byte-literal floor** — four kept classes and nothing

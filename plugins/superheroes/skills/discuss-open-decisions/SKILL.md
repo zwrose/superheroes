@@ -34,6 +34,8 @@ Gather candidate items per `## Where the items come from, and the bound on that 
 
 Refresh the collector preamble per `## The collector preamble — canonical snippet` when it has drifted or is missing.
 
+Read the project's revisit-trigger registry per `## The revisit-trigger registry` before proposing a decline, so a decline already ruled on is cited rather than re-argued.
+
 Resolve the collector's issue pointer from the advisor's durable memory (showrunner duty 4); when the pointer cannot be resolved, ask the owner for the issue number and never open a second collector; record the pointer once found.
 
 Read the collector before searching parks — it is authoritative and may already subsume an in-session duplicate.
@@ -64,9 +66,9 @@ Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs along
 
 Execute what batch 1 unblocked per `## What batch-1 execution may and may not do` while the owner rules on batch 2; receipt what you executed, in plain language.
 
-Apply showrunner duty 4's attended branch to follow-ups — this skill is owner-present by construction: propose inline, discuss, and append to the collector only what genuinely cannot close in this session.
+This skill is owner-present by construction, so every Tier-2 item is appended at vet time and then proposed inline and discussed, with items the owner rules on struck immediately.
 
-Apply `## Follow-up economics` to each proposed follow-up and record each batch-2 ruling to the durable artifact as it lands.
+Apply `## The worth-it gate and the venue ladder` to each proposed follow-up and record each batch-2 ruling to the durable artifact as it lands.
 
 When a batch-2 ruling closes or declines a collector-backed item, strike it from the collector per showrunner duty 4.
 
@@ -81,4 +83,4 @@ When a batch-2 ruling closes or declines a collector-backed item, strike it from
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every invocation. |
 | "I'll deliver batch 2 after execution finishes" | see `## Delivery mechanics` |
 | "The numbers live in the chat — I'll remember" | see Step 4 |
-| "I'll append follow-ups to the collector — the owner can review them later" | see `## Follow-up economics`; showrunner duty 4's attended branch. |
+| "I'll append follow-ups to the collector — the owner can review them later" | see `## The worth-it gate and the venue ladder` and showrunner duty 4 — every Tier-2 item is appended at vet time regardless; when the owner is present the item is also proposed in the vet-delivery message and discussed now. |

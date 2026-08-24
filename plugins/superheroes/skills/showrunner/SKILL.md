@@ -454,25 +454,33 @@ above).
      for the advisor* section; you own what becomes of it, and a routing you only *intend* is a claim
      without a receipt — it evaporates in working context (weekly-eats: ~8 routings recorded as
      intent evaporated across four rapid vets until an owner-forced sweep found 2 genuinely dropped,
-     filed late as we#526/we#527). Complete a **two-tier disposition before you post the vet
-     receipt**: **Tier 1 — record-keeping writes** (append to an owning issue, an owner-owed or
-     relay memory entry, a declined-with-reason) happen **immediately**; **Tier 2 — board decisions**
-     (new issues, scope changes) reach the project's **standing proposals collector** — one open
-     issue per project (auto-filing per proposal was rejected as overcorrection) — according to
-     **owner availability within this session**. Read availability from whether the owner is
-     actually reachable here, never inferred from who launched the advisor (duty 9's three states
-     are independent axes, not a proxy for absence):
-     - **Attended** — the owner is here now; the vet-delivery message reaches them in this session.
-       **Proposed to the owner in the vet-delivery message**; discuss; **only what genuinely cannot
-       close in this session** — typically an item awaiting the owner's word — is appended **after
-       that discussion**, **filed after discussion**. This phrase belongs **here, and only here**.
-     - **Asleep** — unreachable for this session — or **reachable-with-latency** — reachable but not
-       within this session's end. The session ends before a deferred answer arrives, so deferring the
-       append is the same failure two independent sessions made on 2026-08-02, only later. There is no
-       discussion to defer to: append what cannot close **at vet time, before the vet receipt posts**,
-       stamped with **this vet's ordinal**. **"Filed after discussion" does not license waiting for the
-       owner to reconnect** — that misreading is precisely what left collectors empty while pending items
-       lived only in individual receipts.
+     filed late as we#526/we#527). Tier 1 is craft — the resolution follows from already-ratified
+     intent and no plausible product preference distinguishes the options — and the advisor executes
+     it now and records the determination dated and reasoned for cheap owner veto; Tier 2 is product
+     — taste, trade, or commitment — and it is the owner's word, via the collector. Doubt resolves
+     upward. **Tier 1 — record-keeping writes** — appending to an owning issue, an owner-owed or
+     relay memory entry, a declined-with-reason — happen **immediately**; **Tier 2 — board
+     decisions** — new issues, scope changes — are the owner's word. Venue-3 filings are always Tier
+     2 — a new issue spends board attention, a commitment call by definition, even when its content is
+     craft. The project's **standing proposals collector** is one open issue per project
+     (auto-filing per proposal was rejected as overcorrection). Every Tier-2 item is appended to the
+     collector at vet time, unconditionally, so the collector is the complete register by
+     construction; owner attendance governs only when discussion happens — attended, the item is
+     proposed in the vet-delivery message and may be struck minutes after it was appended; absent,
+     it awaits the batch. This replaces the previous availability-branching rule. Each append
+     carries its gate verdict and its venue recommendation, so the owner's batch is one word per
+     item. Read attendance from whether the owner is actually reachable here, never inferred from who
+     launched the advisor (duty 9's three states are independent axes, not a proxy for absence) —
+     attendance governs **discussion**, not appending:
+     - **Attended** — the owner is here now and the vet-delivery message reaches them in this session.
+       The item has **already been appended**; it is then proposed to the owner in that message,
+       discussed, and — if they rule — **struck minutes after it was appended**. Striking a
+       just-appended item is the normal attended outcome, not churn.
+     - **Absent** — unreachable for this session, or reachable-with-latency, meaning reachable but not
+       within this session's end. There is no discussion to defer to, so the item **awaits the batch**,
+       carrying this vet's ordinal. Deferring the append is the same failure two independent sessions
+       made on 2026-08-02, only later; waiting for the owner to reconnect is precisely what left
+       collectors empty while pending items lived only in individual receipts.
      When the collector pointer **cannot be resolved** — the owner is asleep and cannot supply it, and
      opening a second collector is forbidden (see reconcile bullet below) — record the item and the
      **disclosed degradation** in the vet receipt; **no duplicate collector is opened**. Nothing is lost,
@@ -486,10 +494,15 @@ above).
      stamped on it immutably**, and is **struck when the owner rules** — closing or declining an
      item **removes it from the collector**; nothing re-numbers what remains. A
      vet receipt states only **completed dispositions and live proposals — never the future tense**.
-     **The collector is a fallback, not the path** — *"the next vet will pick it up"* is the failure
-     this prevents, not a workflow it licenses — and an owner-absent append is the collector doing its
-     job at the only moment available, not a licence to route items there when the owner *is* present.
-     **Nothing fires on its own**: no cadence, no
+     *"The next vet will pick it up"* is a failure and never a workflow; the collector is now the
+     **complete register by construction**, and appending when the owner is present is the rule rather
+     than an evasion, because the attended branch discusses it in the same message. Any session
+     processing a field report, and any vet whose evidence includes an observed-in-the-field failure,
+     reads the registry. The **revisit-trigger registry** is one pinned, always-current comment on the
+     collector issue, marked `<!-- superheroes:revisit-registry -->` — canonical home:
+     `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/showrunner/reference/owner-decisions.md`; this is
+     the surface that makes the registry reachable from a charter an advisor reads every vet; detail
+     lives in the home. **Nothing fires on its own**: no cadence, no
      release-tied default (not every project cuts releases; a cut-tied rule silently does nothing in
      some projects, which reads as covered), no scheduled routine.
    - **Reconcile the collector at every vet — you are the backstop's actor.** Disposition above

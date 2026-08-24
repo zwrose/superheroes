@@ -3,7 +3,8 @@
 - [The owner-decisions delivery contract](#the-owner-decisions-delivery-contract)
 - [The filter — what is the owner's, and on what grounds](#the-filter--what-is-the-owners-and-on-what-grounds)
 - [The per-item spine](#the-per-item-spine)
-- [Follow-up economics](#follow-up-economics)
+- [The worth-it gate and the venue ladder](#the-worth-it-gate-and-the-venue-ladder)
+- [The revisit-trigger registry](#the-revisit-trigger-registry)
 - [Delivery mechanics](#delivery-mechanics)
 - [Formatting — one block per spine section](#formatting--one-block-per-spine-section)
 - [Where the items come from, and the bound on that sweep](#where-the-items-come-from-and-the-bound-on-that-sweep)
@@ -72,20 +73,63 @@ Five parts, in this order, on every item that passes the filter:
 `skills/showrunner/reference/vet-receipt.md` insists on for an explicit `None` applies here. An
 omitted section is exactly what a reader cannot interpret.
 
-## Follow-up economics
+## The worth-it gate and the venue ladder
 
-Every proposed **filing** answers the spine's **Cost of inaction** question. An item that cannot
-answer that has not earned its keep — *"pressure test them for actual impact... make sure they earn
-their keep"* is the floor, not decoration.
+A **residual** is anything a review or vet leaves behind that is not fixed in-lane — a finding, a
+follow-up idea, a hardening proposal. Every residual is dispositioned through one vocabulary: the
+worth-it gate, then the venue ladder.
 
-**Decline-to-file is a first-class recommendation**, not a failure to find work. Recommend it by name
-when the answer to the **Cost of inaction** question is *nothing much* — *"we don't need to file and fix every tiny
-bug ever"* is permission to say no, not an excuse to omit the recommendation.
+**Every residual first passes the worth-it gate: what breaks, for whom, has it ever actually happened, and what ignoring it costs — weighed against the cost of the cheapest available venue, with observed-in-the-field evidence outweighing hypotheticals.** The **cheapest available venue** is the lowest rung of the ladder that could actually carry this item — not the venue you wish existed, but the one that fits.
 
-**A declined owner-named risk carries a mechanical tripwire** — when the owner has named a risk and
-the recommendation is to decline, the decline ships with a mechanical trigger that would surface it
-if the risk materialises, set at a threshold no looser than twice the worst observed instance. A
-decline without a tripwire is a bet nobody is watching.
+**A residual that fails the gate at every venue's cost is declined with a revisit trigger — a named, mechanical re-open condition.** A **revisit trigger** is not "revisit someday" — it is a named, mechanical condition that reopens the decision when it fires. When the owner has named a risk and the recommendation is to decline, a declined owner-named risk ships with a mechanical tripwire set at a threshold no looser than twice the worst observed instance, because a decline without a tripwire is a bet nobody is watching.
+
+**A residual that passes only at continuation cost is a ride-along — eligible for the continue and fold venues only, explicitly droppable, and never a ticket.**
+
+**A residual that passes the gate descends the venue ladder: continue the PR, then fold into an existing issue by editing its body rather than filing a new ticket, then a new issue, bundled by shared surface before filing.**
+
+**No target disposition mix exists: a walk where everything passes the gate, or everything fails it, is a signal to inspect the interrogation itself rather than a success in either direction.** Inspecting the interrogation means re-reading how the items were questioned — not re-scoring them.
+
+**Tier 1 is craft — the resolution follows from already-ratified intent and no plausible product preference distinguishes the options — and the advisor executes it now and records the determination dated and reasoned for cheap owner veto; Tier 2 is product — taste, trade, or commitment — and it is the owner's word, via the collector. Doubt resolves upward.**
+
+**Venue-3 filings are always Tier 2 — a new issue spends board attention, a commitment call by definition, even when its content is craft.**
+
+Venue-1 continuations and craft declines are Tier 1 — the advisor executes and records for veto.
+Venue-2 scope changes, product declines (any decline that trades away something a product reading
+could want), and gate-uncertain items are Tier 2.
+
+**Every Tier-2 item is appended to the collector at vet time, unconditionally, so the collector is the complete register by construction; owner attendance governs only when discussion happens — attended, the item is proposed in the vet-delivery message and may be struck minutes after it was appended; absent, it awaits the batch.**
+
+**Each append carries its gate verdict and its venue recommendation, so the owner's batch is one word per item.**
+
+Deferring the append is what two independent sessions did on 2026-08-02, and it is the evaporation
+class recorded as we#526 and we#527 — items that lived only in individual receipts while the
+collector read empty. That history is why append-always is unconditional; it is not a live branching
+rule.
+
+## The revisit-trigger registry
+
+**The revisit-trigger registry is one pinned, always-current comment on the project's collector issue, one line per declined item — what was declined, the worth-it verdict, the revisit trigger, and the date with a pointer to the full record — archiving declines from both tiers.**
+
+**The collector is the pre-ruling queue and the registry is the post-ruling archive.**
+
+The registry comment is identified by the marker `<!-- superheroes:revisit-registry -->` placed on its
+own first line. An advisor updating it **reads that comment, edits it in place, and writes it back**
+— finding it by its marker rather than by position, so a project grows exactly one registry. When no
+comment on the collector carries the marker, the advisor **creates one and pins it**; when more than
+one does, that is a defect to repair by consolidating into the oldest rather than by adding a third.
+
+Each registry row is one line per declined item carrying what was declined, the worth-it verdict,
+the revisit trigger, and the date with a pointer to the full record. This row shape follows the ledger
+family — cite-instead-of-re-arguing, and a named condition that reopens the decision — and it
+assumes no `LEDGERS.md` file in a consuming project; a project that keeps a strategic ledger may
+graduate rows into it, and that is optional.
+
+Both tiers are archived here. Tier-1 craft declines land in the registry too — which is what makes
+them visible and veto-able — and Tier-2 declines land after the owner's word.
+
+**Any session processing a field report, and any vet whose evidence includes an observed-in-the-field failure, reads the registry.**
+
+**The registry scan is prose-bound and nothing mechanical enforces it; the registry's floor value is that whether we already declined something is one comment away.** This limit is known and carried knowingly — not a defect to be fixed later.
 
 ## Delivery mechanics
 
@@ -170,8 +214,15 @@ not per batch.
 consequences (lettered a, b, c…), (4) cost of inaction, (5) recommendation by key, with the why and
 the cost named — Recommendation: b — …. Empty sections stated empty, never dropped.
 
-**Follow-up economics:** filings earn their keep or get decline-to-file; declined owner-named risks
-ship with a mechanical tripwire (≥2× worst observed).
+**Residual disposition:** worth-it gate (what breaks / for whom / has it happened / cost of ignoring,
+vs cheapest venue) → venue ladder (continue → fold → file, bundled by surface); decline with a
+revisit trigger when every venue fails the gate.
+**Tier:** Tier 1 craft — advisor executes and records for veto; Tier 2 product — owner's word;
+filings always Tier 2; doubt upward.
+**Append-always at vet:** every Tier-2 item to the collector with gate verdict and venue on each
+append.
+**Registry:** `<!-- superheroes:revisit-registry -->` — one pinned comment, one line per declined
+item.
 
 **Delivery:** chat prose only — never structured-question tools; stable item numbers and option letters
 (1 - a, 2 - b); batch 1 = blocks advisor next action (never new-issue filings), alone first; as soon
