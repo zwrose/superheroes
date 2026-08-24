@@ -370,6 +370,82 @@ for. You are not dodging a finding when you cite the ruling; you are applying a 
 **Named-failure-first:** no new prose guard ships without a **field failure it would have caught**,
 named in its issue. A guard with no named failure is speculation dressed as automation.
 
+### The safety-machinery route — the guard refuses the fixer
+
+Some of this plugin's own files are **safety machinery**. Two files own that fact between them, and
+this section quotes them rather than explaining them: `lib/escalation.py` owns the set, its
+inclusion criterion — *"any module whose edit could disable a floor / gate / halt / escalation
+guarantee"* — and the membership test; `skills/review-code/reference/auto-fix-loop.md` owns the
+refusal the auto-fix loop's fixer hits on one of them — *"If `allow` is false, the fixer MUST NOT
+edit that file"*. **Read those two for the mechanism; it is deliberately not restated here, so this
+section cannot drift from the guard it describes.** What this section owns is only **what happens to
+the findings afterwards** — the part that lived in session memory and issue history until it was
+written down here, so that each new session re-derived it at the cost of a panel plus a fixer round.
+
+**What the refusal means, and what it does not.** The guard bars the **automated fixer**, not the
+change. Safety machinery is edited all the time — under a ratified issue, by a builder or an
+implementer under a work order, reviewed like anything else. What may never happen is the review
+loop reaching into a guard **on its own authority** mid-round. So when a panel finds real defects in
+safety machinery, the fixer is forbidden to act on them, and `review-code`'s auto-fix loop **cannot
+converge on that surface — ever**. A loop that stalls there has hit its bound, not a bug: that is the
+guard working as designed, and it is not evidence of engine fragility, a bad order, or a transport
+defect. Retrying the fixer, re-dispatching at a higher rung, or reading the stall as an escalation
+trigger are all wrong reads of the same event.
+
+**Narrowing the guard to converge a loop is never the route.** `escalation-base.md` carries the
+invariant above its own floor — *"the agent may never grant itself authority or bypass a gate.
+Skipping or auto-resolving its own GATE is self-granting and is forbidden"* — and it applies with
+full force to a session that would relax the very control keeping autonomous agents out of the
+guards, including the guard that would catch the relaxation.
+
+**The sanctioned path is ordered implementer work orders.** The findings leave the loop and come back
+as builder-dispatched work, in this shape:
+
+- **One order per finding cluster** — clustered by the surface and the contract the findings share,
+  not one order per finding. The first execution below sent six findings as **one** ordered round
+  against two files holding two sides of one contract.
+- **The order carries the finding text**, so the implementer fixes a stated defect rather than
+  re-deriving it from the file.
+- **The orchestrator verifies independently**, re-running every receipt itself, exactly as it does
+  for any implementer work order — and re-review below, the full local gates, and CI all still
+  apply unchanged. Nothing about the refusal lowers that bar or shifts any part of it onto the
+  loop; how the loop's own stages behave around an escalated finding is the driver's business
+  (`skills/review-code/reference/round-driver.md`), not this route's.
+- **Re-review is unchanged** — the fixed surface goes back through the review loop like any other
+  fix, and the loop's convergence bar and the third-rework tripwire both still bind.
+
+**Owner authorization is required when the findings are blocking.** The guard's own prescribed
+remedy is owner escalation, so for a **Critical or Important** finding on safety machinery the
+owner's word comes **before** the ordered round, not after it. That authorization is **scoped to the
+findings' own surfaces and nothing wider** — it is permission to fix these defects here, never a
+standing licence to edit safety machinery for the rest of the build. **Non-blocking** findings on the same
+surface are **disclosed residuals** — recorded in the dispositions table, and never auto-fixed either,
+because the guard refuses the fixer at every severity. Folding one into an ordered round is available
+only when that round is already authorized **and** the finding's surface sits inside what the owner
+authorized or the issue already ratified. A non-blocking finding is never the reason a build reaches
+into safety machinery it was not sent to touch.
+
+**When authorization is unavailable, park.** A headless or owner-absent build that reaches blocking
+findings on safety machinery **parks with receipts** — what the panel found, that the guard refused
+the fixer, and that the remaining findings need the owner's word. It does not narrow the guard, does
+not type the fix to get moving, and does not hand back claiming convergence it did not reach. A
+builder cannot lift its own park; resumption is the owner's or the advisor's call.
+
+**Evidence — the route was executed twice before it was written down.** On #1109, **round 2**'s
+five-seat panel left six Important findings in `engine_adapter.py` / `engine_dispatch.py`, verified
+the guard's refusal directly, and **parked** rather than improvising ([park
+comment](https://github.com/zwrose/superheroes/issues/1109#issuecomment-5390550698)); the owner then
+authorized ordered implementer work orders — *"the guard's sanctioned path; the auto-fix loop remains
+forbidden on this surface"* — scoped to exactly those six findings' surfaces ([item-78
+authorization](https://github.com/zwrose/superheroes/issues/1109#issuecomment-5390711707)). **Round
+4** executed that route again under the **same scoped authorization, carried forward unchanged**
+across an intervening session death — a scoped authorization survives across rounds on the findings'
+own surfaces, which is precisely what keeps it different from a licence to edit safety machinery at
+large — and converged; its build record
+on [PR #1120](https://github.com/zwrose/superheroes/pull/1120) is what asked for the route to be
+written down (*Follow-ups for the advisor*, item 9). Two executions, both successful, neither
+reconstructable from the plugin surfaces at the time.
+
 ## Prose-driven review (`--post`, `--review-only`)
 
 A **prose-driven review** is a sanctioned lane on the read-only paths — not a shortcut, not a
