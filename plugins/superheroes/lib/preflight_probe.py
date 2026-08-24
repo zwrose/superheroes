@@ -505,7 +505,7 @@ def live_vendors_for_composition(
                 "reason": "reused liveness receipt (age %ds)" % int(now - rec["probedAt"]),
             })
             notes.extend(dead_notes)
-            return (live, live_cells, rec["liveness"], notes)
+            return (live, live_cells, rec["liveness"], notes, "probed")
 
     if probe_mode == "cache-only":
         notes.append({
@@ -515,7 +515,7 @@ def live_vendors_for_composition(
                 "vendors not probed; panel falls open to Claude"
             ),
         })
-        return (["claude"], [], {"claude": {"live": True, "models": {}, "cells": []}}, notes)
+        return (["claude"], [], {"claude": {"live": True, "models": {}, "cells": []}}, notes, "unprobed")
 
     liveness = composition_liveness({**needed, "claude": []}, run)
     if cache_path is not None and now is not None:
@@ -530,7 +530,7 @@ def live_vendors_for_composition(
             })
     live, live_cells, dead_notes = liveness_cache.live_from(liveness, needed)
     notes.extend(dead_notes)
-    return (live, live_cells, liveness, notes)
+    return (live, live_cells, liveness, notes, "probed")
 
 
 def configured_cross_vendor_engines(prefs):
@@ -573,7 +573,7 @@ def main(argv):
             needed_override = seat_map.reachable_configs(configured, pins)
         now = time.time()
         cache_path = liveness_cache.receipt_path(args.cwd)
-        live, live_cells, liveness, notes = live_vendors_for_composition(
+        live, live_cells, liveness, notes, _provenance = live_vendors_for_composition(
             configured,
             needed_override=needed_override,
             probe_mode="probe",

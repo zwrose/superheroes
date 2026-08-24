@@ -41,6 +41,10 @@ UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     "preflight-cache-only",   # --post / receipt-only path: vendors were never probed
     "compose-failed",         # compose blew up and every seat fell open to Claude
 })
+# probed = per-cell probe evidence (fresh or TTL-cached); synthesized = derived from a
+# vendor-level rollup, never probed per cell; unprobed = no probe evidence of any kind exists
+# and the cells carry no verification weight.
+LIVE_CELLS_SOURCES = ("probed", "synthesized", "unprobed")
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
 DEFAULT_TIER_BY_SEAT[GROUNDING_SEAT] = "reviewer"
 
@@ -101,7 +105,7 @@ def _synthesize_live_cells(
 def _live_cells_fields_for_receipt(seat_map: dict) -> tuple[list, str]:
     raw_cells = seat_map.get("liveCells")
     raw_source = seat_map.get("liveCellsSource")
-    if isinstance(raw_cells, list) and raw_source in ("probed", "synthesized"):
+    if isinstance(raw_cells, list) and raw_source in LIVE_CELLS_SOURCES:
         return list(raw_cells), raw_source
     live = seat_map.get("liveVendors")
     if isinstance(live, list) and live:
@@ -132,6 +136,8 @@ def _resolvable_families_for_seat(
     known_vendors = set(vendors())
     tier = tier or _seat_tier(seat, cfg)
     families: set[str] = set()
+    if cells_source == "unprobed":
+        return None
     if cells_source == "probed":
         raw_cells = seat_map.get("liveCells")
         if not isinstance(raw_cells, list):
@@ -370,6 +376,7 @@ def build(
             normalized = _normalize_live_cell(entry)
             if normalized is not None:
                 live_cells_normalized.add(normalized)
+        # Advisory default for callers that pass live_cells without a source; main() never reaches this.
         resolved_cells_source = live_cells_source or "probed"
 
     seating_vendors = sorted({v for (v, _m, _e) in live_cells_normalized})
@@ -1033,14 +1040,15 @@ def main(argv):
             configured = [e for e in args.configured_engines.split(",") if e]
             needed_override = reachable_configs(configured, pins) if pins else None
             liveness_pin_scoped = needed_override is not None
-            live, live_cells, _liveness, notes = preflight_probe.live_vendors_for_composition(
-                configured,
-                needed_override=needed_override,
-                probe_mode=args.probe_mode,
-                cache_path=cache_path,
-                now=now,
+            live, live_cells, _liveness, notes, live_cells_source = (
+                preflight_probe.live_vendors_for_composition(
+                    configured,
+                    needed_override=needed_override,
+                    probe_mode=args.probe_mode,
+                    cache_path=cache_path,
+                    now=now,
+                )
             )
-            live_cells_source = "probed"
         seed = seed_from(args.pr_number, args.head_sha)
         sm = build(
             PANEL_ROSTER,
