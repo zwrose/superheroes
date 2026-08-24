@@ -2,6 +2,7 @@
 
 - [The one entrypoint](#the-one-entrypoint)
 - [next / submit protocol](#next--submit-protocol)
+- [checkpoint](#checkpoint)
 - [Durable-record path](#durable-record-path)
 - [Base guard](#base-guard)
 - [Batch concurrency — an independent batch goes out together](#batch-concurrency--an-independent-batch-goes-out-together)
@@ -97,6 +98,46 @@ step and hash. An exact duplicate `submit` (same phase/attempt/artifact) returns
 Persist state under `$SESSION_DIR/loop-state.json`. Append every `next`/`submit` to
 `$SESSION_DIR/driver-journal.jsonl` (the `scriptRan` evidence). On `terminal`, the driver writes
 `$SESSION_DIR/round-receipt.json` — validate with `round_driver.validate_receipt`.
+
+## checkpoint
+
+Orchestrator-invoked verb at a **non-terminal** stop — like `next`, `submit`, and `advance`, the
+driver does not observe tripwire doctrine itself; the orchestrator decides the stop and calls
+`checkpoint`.
+
+```bash
+python3 -B "$ROOT_DIR/lib/round_driver.py" checkpoint \
+  --session-dir "$SESSION_DIR" \
+  --stop-reason <tripwire|park|held>
+```
+
+`--stop-reason` is required; the only accepted values are `tripwire`, `park`, and `held`
+(`CHECKPOINT_STOP_REASONS`).
+
+**What it writes.** An interim `round-receipt.json` built by `build_interim_receipt`: it starts from
+`build_receipt` (journal-derived `rounds`, `findings`, `decisions`, `seatMap`, `scriptRan`,
+`degraded`, `skippedBlockers` — including **per-pass verdict totals** on each round as
+`rounds[].verifyPasses`), then strips terminal-only keys (`certification`, `certificationShape`,
+`schemaVersion`, `verdict`), sets `schema` to `receipt-interim/1`, and adds a `stop` block
+(`reason`, `writtenAt`). `_validate_interim_receipt` enforces that interim receipts carry **no**
+`certification`, `certificationShape`, `verdict`, or `attestation` — an interim is not a
+certification.
+
+**Which stops invoke it.** Call `checkpoint` when the orchestrator parks at a non-terminal stop
+with `--stop-reason` matching the stop: **tripwire** (third-rework tripwire), **park** (owner gate
+park before the owner rules), or **held** (terminal `held` verdict — certification withheld, but the
+orchestrator still checkpoints progress before handback). These are orchestrator doctrine; the
+driver only validates the reason against `CHECKPOINT_STOP_REASONS`.
+
+**Terminal receipt preserved.** `cmd_checkpoint` refuses when the session is already terminal
+(`checkpoint-session-terminal`) or when a **terminal** certified/attested receipt sits on disk
+(`checkpoint-terminal-receipt-exists`). Re-invoking `checkpoint` after an earlier interim receipt is
+allowed — each write supersedes the previous interim. The write-once rule applies only to terminal
+receipts, not interim supersession.
+
+**Not handback evidence.** `handback_gate` refuses an interim receipt at the receipt-binding check
+with `receipt-interim-not-handback-evidence` — progress evidence for the operator, not valid
+handback.
 
 ## Durable-record path
 
@@ -311,18 +352,25 @@ The manifest and per-order hashes are mirrored into state (`_ordersAnchors`) and
 they disagree).
 
 **Order-input ownership.** Orders cite round-scoped paths that must exist before a seat can run.
-The driver writes these in the `orders-emit` commit when it emits dispatch orders:
-`round-<N>/clusters/<i>.json`, `round-<N>/audit-targets/<skey>.json`, `round-<N>/scoped-hunks.json`,
-and `round-<N>/verified.json` (phase-dependent — see `_order_sidecar_writes`). When
-`round-<N>/diff.txt` is absent or its bytes do not match loop state (`reviewedDiff`),
-`_ensure_round_diff` writes it via `round_commit.atomic_write_bytes` (atomic tmp+rename) —
-outside the `orders-emit` commit, not inside it. The orchestrator still produces the real round diff (`git diff <pinned baseRef>...HEAD`; see
-`setup.md`'s session-artifact table). The orchestrator must write these **before** dispatching a
-fixer, audits, or scoped order: `round-<N>/fix-batch.json` (the review-code loop's session-artifact
-table in `setup.md`). `round-<N>/head.diff` is named by audits/scoped orders — it is
-**not** produced by the driver; the orchestrator must write it before dispatching those phases (the
-driver only names the path in rendered orders). The driver never creates `head.diff` or
-`fix-batch.json`.
+The driver materializes them before order emit (see also the inline comment at
+`_emit_orders_for_phase`):
+
+- **Phase sidecars** — written in the `orders-emit` commit and materialized before render from the
+  single `_order_sidecar_writes` derivation: `round-<N>/clusters/<i>.json` (verifiers),
+  `round-<N>/audit-targets/<skey>.json` (audits), `round-<N>/scoped-hunks.json` (scoped),
+  `round-<N>/verified.json` (synthesis).
+- **`round-<N>/diff.txt`** — `_ensure_round_diff` when absent or its bytes do not match loop state
+  (`reviewedDiff`), via `round_commit.atomic_write_bytes` (atomic tmp+rename) **outside** the
+  `orders-emit` commit. The orchestrator still owns the real round diff: produce the bytes with
+  `git diff <pinned baseRef>...HEAD` and bind them on the first `next` via `--diff-path` (see
+  `setup.md`'s session-artifact table).
+- **`round-<N>/head.diff`** — `_ensure_round_head_diff` from state `headDiff` when audits or scoped
+  orders render (the orchestrator supplies `headDiff` inline or via `headDiffPath` at fixer
+  `submit`; the driver then materializes the file the audit/scoped order cites).
+- **`round-<N>/fix-batch.json`** — `_ensure_fix_batch_file` from state `_fixBatch` / `fixBatch` when
+  the fixer order renders. If the orchestrator pre-writes this file and the bytes differ from the
+  driver's re-derivation, the driver **replaces** it silently — do not treat a hand-written
+  `fix-batch.json` as authoritative over loop state.
 
 ## Base guard
 
