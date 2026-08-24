@@ -35,6 +35,8 @@ _REGISTRY_MARKER = "<!-- superheroes:revisit-registry -->"
 
 _RETIRED_LITERAL = "Follow-up economics"
 
+_STALE_AVAILABILITY_PHRASE = "Tier-2 proposed to the owner when **attended**"
+
 _OWNER_REJECTED_LITERALS = ("knob-polish",)
 _OWNER_REJECTED_WORDS = ("bell",)
 
@@ -317,16 +319,39 @@ def _assert_pinned_headings_present(texts=None):
             _OWNER_DECISIONS: _read_plugin(_OWNER_DECISIONS),
             _REVIEW_DISCIPLINE: _read_plugin(_REVIEW_DISCIPLINE),
         }
+    owner_lines = set(texts[_OWNER_DECISIONS].splitlines())
     for heading in _PINNED_OWNER_DECISIONS_HEADINGS:
-        if heading not in texts[_OWNER_DECISIONS]:
+        if heading not in owner_lines:
             raise AssertionError(
                 "%s: pinned heading missing: %r" % (_OWNER_DECISIONS, heading)
             )
+    review_lines = set(texts[_REVIEW_DISCIPLINE].splitlines())
     for heading in _PINNED_REVIEW_DISCIPLINE_HEADINGS:
-        if heading not in texts[_REVIEW_DISCIPLINE]:
+        if heading not in review_lines:
             raise AssertionError(
                 "%s: pinned heading missing: %r" % (_REVIEW_DISCIPLINE, heading)
             )
+
+
+def _assert_stale_availability_branch_absent(texts=None):
+    if texts is None:
+        texts = {_SHOWRUNNER_CHARTER: _read_plugin(_SHOWRUNNER_CHARTER)}
+    if _STALE_AVAILABILITY_PHRASE in texts[_SHOWRUNNER_CHARTER]:
+        raise AssertionError(
+            "%s: stale availability-branch phrase %r present"
+            % (_SHOWRUNNER_CHARTER, _STALE_AVAILABILITY_PHRASE)
+        )
+
+
+def _assert_discuss_open_cites_canonical_home(texts=None):
+    if texts is None:
+        text = _read_plugin(_DISCUSS_OPEN)
+    else:
+        text = texts[_DISCUSS_OPEN]
+    if _OWNER_DECISIONS not in text:
+        raise AssertionError(
+            "%s: canonical home %r not cited" % (_DISCUSS_OPEN, _OWNER_DECISIONS)
+        )
 
 
 def _assert_retired_vocabulary_absent(texts=None):
@@ -403,6 +428,11 @@ def test_new_section_headings_present():
 
 def test_retired_vocabulary_is_gone():
     _assert_retired_vocabulary_absent()
+    _assert_stale_availability_branch_absent()
+
+
+def test_discuss_open_cites_canonical_home():
+    _assert_discuss_open_cites_canonical_home()
 
 
 def test_owner_rejected_terms_absent():
@@ -477,10 +507,19 @@ def test_negative_pinned_heading_renamed():
         "## The worth-it gate and the venue ladder (old)",
         "## The revisit-trigger registry",
     ])
-    texts = {_OWNER_DECISIONS: synthetic, _REVIEW_DISCIPLINE: ""}
+    review_disc = "\n".join(_PINNED_REVIEW_DISCIPLINE_HEADINGS)
+    texts = {_OWNER_DECISIONS: synthetic, _REVIEW_DISCIPLINE: review_disc}
     _expect_assertion_error(
         lambda: _assert_pinned_headings_present(texts),
-        match="pinned heading missing",
+        match=r"owner-decisions\.md: pinned heading missing: '## The worth-it gate and the venue ladder'",
+    )
+
+
+def test_negative_stale_availability_branch_survives():
+    texts = {_SHOWRUNNER_CHARTER: "Stale row: " + _STALE_AVAILABILITY_PHRASE}
+    _expect_assertion_error(
+        lambda: _assert_stale_availability_branch_absent(texts),
+        match="stale availability-branch phrase",
     )
 
 

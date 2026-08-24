@@ -128,10 +128,11 @@ are never holding the inventory in working memory.
 Where the last open child closes without a PR there is no vet receipt to ride; the receipt
 reaches the owner by the no-PR presentation rule in `skills/showrunner/reference/closure.md`.
 
-The collector-escalation row is the tripwire for this design's own load-bearing risk — the fallback quietly becoming
-the path. Each pending item's **proposing ordinal** is what makes its age inspectable — a subtraction
-against this vet's ordinal, not a count of anything — so the escalation is raised by a number the
-artifacts carry rather than by your memory of having carried the item.
+Every Tier-2 item is appended before this receipt posts; the collector-escalation row is the tripwire
+when items still live only in receipts or age without owner batch — **not** a substitute for the
+append-always rule at attended vets. Each pending item's **proposing ordinal** is what makes its age
+inspectable — a subtraction against this vet's ordinal, not a count of anything — so the escalation
+is raised by a number the artifacts carry rather than by your memory of having carried the item.
 
 **Known limit, carried knowingly:** a trigger is weaker than a check. A build record that omits a
 sequential-order run raises no field. You read the diff too, so the trigger is a second chance rather

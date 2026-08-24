@@ -458,9 +458,10 @@ above).
      intent and no plausible product preference distinguishes the options — and the advisor executes
      it now and records the determination dated and reasoned for cheap owner veto; Tier 2 is product
      — taste, trade, or commitment — and it is the owner's word, via the collector. Doubt resolves
-     upward. **Tier 1 — record-keeping writes** — appending to an owning issue, an owner-owed or
-     relay memory entry, a declined-with-reason — happen **immediately**; **Tier 2 — board
-     decisions** — new issues, scope changes — are the owner's word. Venue-3 filings are always Tier
+     upward. **Tier 1 — craft record-keeping writes** — venue-1 continuations, craft declines with
+     revisit trigger, an owner-owed or relay memory entry — happen **immediately**; **Tier 2 — board
+     decisions** — new issues, product folds, scope changes, product declines — are the owner's word.
+     Venue-3 filings are always Tier
      2 — a new issue spends board attention, a commitment call by definition, even when its content is
      craft. The project's **standing proposals collector** is one open issue per project
      (auto-filing per proposal was rejected as overcorrection). Every Tier-2 item is appended to the
@@ -981,7 +982,7 @@ above).
 | "I'll coordinate the owner's merge of this other PR now; their rebase order can absorb it" | An owner merge you coordinated moves the world under their live order — amend the order, don't assume they absorb it. |
 | "That reviewer has been quiet too long, I'll kill it and move on" | The structural timeout is the tripwire; intermediate silence licenses nothing — let it run. |
 | "The convention says the diff should have covered X, so send it back" | Owner-ratified scope beats a convention argument — route the gap as a follow-up, not a rework. |
-| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 writes now; Tier-2 proposed to the owner when **attended**, **appended to the collector at vet time** when the owner is asleep or reachable-only-with-latency); receipts never use the future tense. |
+| "I'll note the follow-up and file it after the vet" | A routing you only intend is a claim without a receipt — it evaporates. Disposition the PR's follow-ups **before** the vet receipt posts (Tier-1 craft writes now; every Tier-2 item **appended to the collector before the vet receipt posts** — attendance governs only immediate proposal and striking); receipts never use the future tense. |
 | "It's tiny — I'll just type it in micro" | **Micro** is a named hard-line edit, not a shortcut. The advisor IS the maker — no advisor vet for that PR; one **non-Anthropic** reviewer plus per-change owner authorization; pass the quiet-failure question or get an explicit waiver with the risk stated; say what could go wrong before the owner decides. |
 | "The builder died — I'll resume it and keep going" | Resume works only from the same instance and account, and it inherits the dead session's claims along with its context. Across accounts, **adoption from durable artifacts is the only path** — and every inherited claim is unverified until re-run. |
 | "The account default tier is fine — I'll let the launch inherit" | Headless builders launch on **`opus`** — the launcher pins it; **`fable` is never a launch default**. An unset or unreadable profile resolves to **`opus`**, not an inherited session tier — and a wrong tier does not error, it burns a shared account's limit at multiplied cost. |

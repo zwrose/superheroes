@@ -66,7 +66,11 @@ Deliver batch 2 as soon as batch-1 rulings land — batch-1 execution runs along
 
 Execute what batch 1 unblocked per `## What batch-1 execution may and may not do` while the owner rules on batch 2; receipt what you executed, in plain language.
 
-This skill is owner-present by construction, so every Tier-2 item is appended at vet time and then proposed inline and discussed, with items the owner rules on struck immediately.
+This skill is owner-present by construction, so every Tier-2 item is appended to the collector
+immediately, **before** it is proposed in this session's delivery message, then discussed inline —
+items the owner rules on are struck immediately. The canonical append-always rule lives in
+`skills/showrunner/reference/owner-decisions.md`; this skill applies it at delivery time rather
+than at vet time.
 
 Apply `## The worth-it gate and the venue ladder` to each proposed follow-up and record each batch-2 ruling to the durable artifact as it lands.
 
@@ -83,4 +87,4 @@ When a batch-2 ruling closes or declines a collector-backed item, strike it from
 | "The contract is long — I'll work from what I remember" | Step 1 reads the file every invocation. |
 | "I'll deliver batch 2 after execution finishes" | see `## Delivery mechanics` |
 | "The numbers live in the chat — I'll remember" | see Step 4 |
-| "I'll append follow-ups to the collector — the owner can review them later" | see `## The worth-it gate and the venue ladder` and showrunner duty 4 — every Tier-2 item is appended at vet time regardless; when the owner is present the item is also proposed in the vet-delivery message and discussed now. |
+| "I'll append follow-ups to the collector — the owner can review them later" | see `## The worth-it gate and the venue ladder`, showrunner duty 4, and `skills/showrunner/reference/owner-decisions.md` — every Tier-2 item is appended **before** it is proposed in this session's delivery message and discussed now. |
