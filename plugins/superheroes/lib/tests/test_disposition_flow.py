@@ -365,6 +365,13 @@ def _assert_discuss_open_holder_pins(texts=None):
             _DISCUSS_OPEN: _read_plugin(_DISCUSS_OPEN),
             _OWNER_DECISIONS: _read_plugin(_OWNER_DECISIONS),
         }
+    # §11.3 anti-tautology: assert the authoritative home FIRST, then the holder's pins
+    # (owner-ruled fold 2026-08-24, collector item 72 — the prior order checked the copy
+    # before the home).
+    home_path, clause_text = CLAUSE_HOMES["P8"]
+    _assert_clause_present(
+        texts[home_path], clause_text, "P8", home_path, role="home"
+    )
     text = texts[_DISCUSS_OPEN]
     if _OWNER_DECISIONS not in text:
         raise AssertionError(
@@ -375,10 +382,6 @@ def _assert_discuss_open_holder_pins(texts=None):
             "%s: append-before-propose pin %r missing"
             % (_DISCUSS_OPEN, _DISCUSS_OPEN_APPEND_BEFORE_PROPOSE)
         )
-    home_path, clause_text = CLAUSE_HOMES["P8"]
-    _assert_clause_present(
-        texts[home_path], clause_text, "P8", home_path, role="home"
-    )
 
 
 def _assert_registry_holder_pins(texts=None):
@@ -458,6 +461,16 @@ def _assert_registry_marker_home(texts=None):
             raise AssertionError(
                 "%s: registry marker %r present outside home" % (rel, _REGISTRY_MARKER)
             )
+    # Owner-ruled fold 2026-08-24 (collector item 72): LEDGERS.md joins the outside-home
+    # census. It lives at the repo root (not under the plugin), walks the registry at the
+    # orientation review, and must reference — never restate — the marker's home.
+    ledgers_path = os.path.normpath(os.path.join(_PLUGIN_ROOT, "..", "..", "LEDGERS.md"))
+    if os.path.isfile(ledgers_path):
+        with open(ledgers_path, encoding="utf-8") as fh:
+            if _REGISTRY_MARKER in fh.read():
+                raise AssertionError(
+                    "LEDGERS.md: registry marker %r present outside home" % _REGISTRY_MARKER
+                )
 
 
 def _clause_constant_count():
