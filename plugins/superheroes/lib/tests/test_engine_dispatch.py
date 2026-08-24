@@ -3060,12 +3060,18 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
     """axis: which stream is observed for activity sampling (stdout participation)."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
+    # Two writes separated by a gap, and a trailing gap before exit, so the sampler's poll loop
+    # gets a turn BETWEEN the writes and again after the second one. The old 0.12 s child died
+    # inside a single poll period, which left the activity moment credited by one post-exit tick
+    # and made any freshness assertion vacuous (#1132).
     script = (
         "import sys, time\n"
         "sys.stdout.write('a')\n"
         "sys.stdout.flush()\n"
-        "time.sleep(0.12)\n"
+        "time.sleep(0.4)\n"
         "sys.stdout.write('b')\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.4)\n"
     )
     ended, stdout_path, _ = _wo2_run_engine(
         run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
