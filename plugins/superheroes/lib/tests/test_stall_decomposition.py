@@ -114,3 +114,22 @@ def test_routing_owner_is_total():
     assert "_park_cannot_certify" in route_src
     assert "_park_capped_open" in route_src
     assert "_settle_delta_converged" in route_src
+
+
+def test_empty_resolution_converge_never_claims_an_unrun_panel():
+    # axis: behavioural — empty-resolution stall self-recovery converges via _terminal_converged
+    # and carries fullPanel from state, never hard-codes a panel claim
+    cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "claude"}
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["v0"]}
+
+    state_false = RD.new_state(cfg)
+    state_false["fullPanelRan"] = False
+    RD._handle_stall(state_false, state_false["config"], breaker)
+    assert state_false["step"] == RD.P_TERMINAL
+    assert state_false["terminal"] == "converged"
+    assert state_false["certification"]["fullPanel"] is False
+
+    state_true = RD.new_state(cfg)
+    state_true["fullPanelRan"] = True
+    RD._handle_stall(state_true, state_true["config"], breaker)
+    assert state_true["certification"]["fullPanel"] is True

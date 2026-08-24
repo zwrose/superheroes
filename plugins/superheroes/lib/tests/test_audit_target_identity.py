@@ -349,7 +349,9 @@ def test_stalled_callers_share_helper_no_duplicate_alias_loops():
     compose_src = inspect.getsource(RD._compose_stall_fix_batch)
     assert "_stalled_open_targets" in compose_src
     stall_src = inspect.getsource(RD._handle_stall)
-    assert "_stalled_open_targets" not in stall_src
+    # the stall-MENU half still selects through the shared helper; the RECOVERY half's
+    # delegation is pinned separately in test_stall_decomposition.py.
+    assert "_stalled_open_targets" in stall_src
     crit_src = inspect.getsource(RD._stalled_critical)
     assert "_stalled_open_targets" in crit_src
 

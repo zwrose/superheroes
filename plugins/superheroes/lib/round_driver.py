@@ -3181,6 +3181,12 @@ def _route_stall_self_recovery(state, config, batch, refusal, breaker):
             + " — blocking finding(s) remain not-discharged; certification withheld")
     else:
         open_set = _resolve_open_audit_targets(state)
+        # Empty resolution: no audit has ever produced targets in this session, so there is
+        # nothing for a confirmation round to confirm — re-arming would loop a panel over an
+        # empty set. Resolved/unresolvable paths keep full confirmation economics via
+        # _settle_delta_converged. Certification shape is carried from state["fullPanelRan"],
+        # never asserted here: this branch cannot manufacture a full-panel claim (pinned by
+        # test_empty_resolution_converge_never_claims_an_unrun_panel).
         if open_set.kind == "empty":
             _terminal_converged(state, config, full_panel=state.get("fullPanelRan"))
         else:

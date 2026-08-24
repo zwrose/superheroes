@@ -213,3 +213,51 @@ FAILED plugins/superheroes/lib/tests/test_round_wave_bookkeeping.py::test_reemit
 .                                                                        [100%]
 1 passed in 0.12s
 ```
+
+---
+
+## BP7 — empty-resolution converge (`test_empty_resolution_converge_never_claims_an_unrun_panel`)
+
+**Guarded element:** `_terminal_converged(..., full_panel=state.get("fullPanelRan"))` in `_route_stall_self_recovery` empty branch — axis: behavioural; certification fullPanel is carried from state, never hard-coded.
+
+**Neutralization:** changed `full_panel=state.get("fullPanelRan")` to `full_panel=True` (hard-coded full-panel claim).
+
+**Command:**
+```
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_stall_decomposition.py -q -p no:randomly
+```
+
+**Red run:**
+```
+.....F                                                                   [100%]
+=================================== FAILURES ===================================
+__________ test_empty_resolution_converge_never_claims_an_unrun_panel __________
+
+    def test_empty_resolution_converge_never_claims_an_unrun_panel():
+        # axis: behavioural — empty-resolution stall self-recovery converges via _terminal_converged
+        # and carries fullPanel from state, never hard-codes a panel claim
+        cfg = {"leg": "code", "vendors": ["claude", "codex"], "diff": "d", "fixerVendor": "claude"}
+        breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["v0"]}
+
+        state_false = RD.new_state(cfg)
+        state_false["fullPanelRan"] = False
+        RD._handle_stall(state_false, state_false["config"], breaker)
+        assert state_false["step"] == RD.P_TERMINAL
+        assert state_false["terminal"] == "converged"
+>       assert state_false["certification"]["fullPanel"] is False
+E       assert True is False
+
+plugins/superheroes/lib/tests/test_stall_decomposition.py:130: AssertionError
+=========================== short test summary info ============================
+FAILED plugins/superheroes/lib/tests/test_stall_decomposition.py::test_empty_resolution_converge_never_claims_an_unrun_panel
+1 failed, 5 passed in 19.48s
+```
+
+**Restore:** reverted `full_panel=True` to `full_panel=state.get("fullPanelRan")`.
+
+**Restore receipt:** `_route_stall_self_recovery` empty branch reads `_terminal_converged(state, config, full_panel=state.get("fullPanelRan"))`.
+
+**Green run:**
+```
+6 passed in 17.09s
+```
