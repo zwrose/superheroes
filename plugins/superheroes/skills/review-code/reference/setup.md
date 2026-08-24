@@ -25,6 +25,7 @@
 | `$SESSION_DIR/round-<N>/triage.json`                | triage agent   | Per-finding `mechanical`/`judgment` classification + POV for every finding (loop only)      |
 | `$SESSION_DIR/round-<N>/resolutions.json`           | orchestrator   | User decisions on `present-set` findings (loop only; read by `circuit_breaker.py`)          |
 | `$SESSION_DIR/round-<N>/fix-batch.json`             | orchestrator   | Findings handed to the fixer this round (loop only)                                         |
+| `$SESSION_DIR/round-1/presentation.md`              | orchestrator   | `--review-only` headless only: the tiered presentation as prose — approved set + undecided `ask-set` |
 | `$SESSION_DIR/round-<N>/review.json`                | orchestrator   | `--post` only: review body + approved comments (pre-resolve)                                |
 | `$SESSION_DIR/round-<N>/review-resolved.json`       | resolve script | `--post` only: comments after line-anchor resolution                                        |
 | `$SESSION_DIR/loop-state.json`                      | round driver   | Auto-fix loop only: driver state (`next`/`submit` protocol)                                 |
@@ -32,6 +33,8 @@
 | `$SESSION_DIR/round-receipt.json`                   | round driver   | Auto-fix loop only: terminal receipt (`validate_receipt` shape)                             |
 
 ## Setup resolution — run these in order
+
+**Resolve `$INTERACTIVE` first, for the whole run.** Two later steps consume it — `decide-location` (below) and the `--review-only` presentation channel (`SKILL.md` § Read-Only Paths) — so it is decided once, here, before anything is dispatched, not re-derived per consumer. Set `INTERACTIVE=true` only when a human is present to answer a question this run; set it to `false` on a headless/non-interactive run (`claude -p`, a spawned subagent, any caller with no one at the other end). **When you cannot tell, set it to `false`** — the consumers fail open in that direction on purpose (a headless-by-mistake run still completes; an interactive-by-mistake headless run stalls on a question nobody sees). It is orchestrator-resolved, not sniffed from a tty: the orchestrator's own calls are never on one.
 
 **Resolve the base rubric path once.** The base rubric is bundled at `$ROOT_DIR/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
 
@@ -154,7 +157,7 @@ fi
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   # Decide location: env override > ask (interactive) > global (headless).
-  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
+  # $INTERACTIVE was resolved above, for the whole run — do not re-decide it here.
   LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
   # If LOC is already in-repo/global → skip record, go straight to create.
