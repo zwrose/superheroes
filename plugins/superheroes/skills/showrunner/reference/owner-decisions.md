@@ -102,8 +102,11 @@ could want), and gate-uncertain items are Tier 2.
 **Each append carries its gate verdict and its venue recommendation, so the owner's batch is one word per item.**
 
 An append made outside a vet — `/superheroes:discuss-open-decisions`, a park sitting, any non-vet
-session applying these primitives — carries the **latest existing vet ordinal, marked non-vet**
-beside the stamp, so age stays a subtraction over ordinals and no phantom vet is minted; before
+session applying these primitives — is the non-vet complement of the vet-time clause above, not an
+exception to it: append-always still binds at the moment the item arises; only the stamp differs.
+Such an append carries the **latest existing vet ordinal, marked non-vet** beside the stamp — that
+marked ordinal stands in for the proposing vet's ordinal everywhere this contract reads one — so
+age stays a subtraction over ordinals and no phantom vet is minted; before
 appending, the session checks the collector for an existing entry covering the same residual and
 **updates that entry in place** rather than adding a second (owner ruling 2026-08-24, recorded on
 the collector —
