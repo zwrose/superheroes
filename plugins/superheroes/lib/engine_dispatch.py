@@ -93,6 +93,9 @@ RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceil
 ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
 ITEM_IDENTITY_MAX_BYTES = 8 * 1024 * 1024
 MAX_EXPECTED_ITEMS = 1000
+BASELINE_ENTRIES_VERSION = 1
+MAX_BASELINE_ENTRIES = 20000
+MAX_BASELINE_ENTRY_BYTES = 2 * 1024 * 1024
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
 ITEM_DETAIL_EVIDENCE_UNAVAILABLE = "item-evidence-unavailable"
 ITEM_DETAIL_REPORT_MISSING_ITEMS_DELIVERED = "report-missing-items-delivered"
@@ -525,7 +528,14 @@ def _porcelain_entry_path(line):
 
 
 def _foreign_leased_worktree_roots(cwd_real, timeout=None):
-    """Registered worktrees (other than cwd) with a live foreign lease, or None on fallback."""
+    """Registered worktrees (other than cwd) with a live foreign lease, or None on fallback.
+
+    Trust assumption: exclusions derive from an unauthenticated lease file in the shared
+    temp directory; a stale lease with a recycled pgid could widen the exclusion set. This
+    sits outside the declared single-user threat model and is documented, not defended
+    against — its fail direction is bounded because a wrongly-live lease causes entries to be
+    ignored on both sides symmetrically.
+    """
     try:
         wt_list = _git_scrubbed(cwd_real, "worktree", "list", "--porcelain", timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -551,6 +561,14 @@ def _foreign_leased_worktree_roots(cwd_real, timeout=None):
     return excluded
 
 
+def _path_under_excluded_root(entry_abs, excluded_roots):
+    # Lexical path shape, not resolved target: a symlink an attempt creates cannot map onto a leased root and be silently discarded.
+    for root in excluded_roots:
+        if entry_abs == root or entry_abs.startswith(root + os.sep):
+            return True
+    return False
+
+
 def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots):
     cwd_real = os.path.realpath(cwd_real)
     kept = []
@@ -561,17 +579,41 @@ def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots)
         if rel is None:
             kept.append(line)
             continue
-        abs_path = os.path.realpath(os.path.join(cwd_real, rel))
-        excluded = False
-        for root in excluded_roots:
-            if abs_path == root or abs_path.startswith(root + os.sep):
-                excluded = True
-                break
-        if not excluded:
+        entry_abs = os.path.normpath(os.path.join(cwd_real, rel))
+        if not _path_under_excluded_root(entry_abs, excluded_roots):
             kept.append(line)
     if not kept:
         return ""
     return "\n".join(kept) + "\n"
+
+
+def _worktree_entry_set(cwd_real, timeout=None):
+    try:
+        status = _git_scrubbed(
+            cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        return None
+    if status.returncode != 0:
+        return None
+    return [line for line in (status.stdout or "").splitlines() if line.strip()]
+
+
+def _filter_entry_list(entries, cwd_real, excluded_roots):
+    if not excluded_roots:
+        return entries
+    kept = []
+    for line in entries:
+        if not line.strip():
+            continue
+        rel = _porcelain_entry_path(line)
+        if rel is None:
+            kept.append(line)
+            continue
+        entry_abs = os.path.normpath(os.path.join(cwd_real, rel))
+        if not _path_under_excluded_root(entry_abs, excluded_roots):
+            kept.append(line)
+    return kept
 
 
 def _worktree_porcelain_snapshot(cwd_real, mode, excluded_roots, timeout=None):
@@ -609,20 +651,26 @@ def _worktree_baseline(cwd_real, timeout=None):
         return None
     excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
     if excluded is None:
-        mode = "plain"
         excluded_roots = None
     else:
-        mode = "filtered"
         excluded_roots = sorted(excluded)
-    porcelain_sha256 = _worktree_porcelain_snapshot(
-        cwd_real, mode, excluded_roots, timeout=timeout,
-    )
-    if porcelain_sha256 is None:
+    entries = _worktree_entry_set(cwd_real, timeout=timeout)
+    if entries is None:
         return None
+    entries_overflow = (
+        len(entries) > MAX_BASELINE_ENTRIES
+        or sum(len(e.encode("utf-8")) for e in entries) > MAX_BASELINE_ENTRY_BYTES
+    )
+    if entries_overflow:
+        # Overflowed baseline is deliberately unverifiable; verdict time resolves fail-closed, never via digest fallback.
+        entries_stored = []
+    else:
+        entries_stored = entries
     return {
         "headSha": (head.stdout or "").strip(),
-        "porcelainSha256": porcelain_sha256,
-        "mode": mode,
+        "entriesVersion": BASELINE_ENTRIES_VERSION,
+        "entries": entries_stored,
+        "entriesOverflow": entries_overflow,
         "excludedRoots": excluded_roots,
     }
 
@@ -668,6 +716,32 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
         return None
     if not _baseline_head_sha_readable(baseline):
         return None
+    if baseline.get("entriesVersion") == BASELINE_ENTRIES_VERSION:
+        if baseline.get("entriesOverflow"):
+            return None
+        entries_before = baseline.get("entries")
+        if not isinstance(entries_before, list) or not all(
+            isinstance(e, str) for e in entries_before
+        ):
+            return None
+        try:
+            head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+        if head.returncode != 0:
+            return None
+        if (head.stdout or "").strip() != baseline["headSha"]:
+            return True
+        entries_after = _worktree_entry_set(cwd_real, timeout=timeout)
+        if entries_after is None:
+            return None
+        roots = set(baseline.get("excludedRoots") or [])
+        live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+        if live is not None:
+            roots |= live
+        before = _filter_entry_list(entries_before, cwd_real, roots)
+        after = _filter_entry_list(entries_after, cwd_real, roots)
+        return sorted(before) != sorted(after)
     mode = baseline.get("mode")
     if mode is None:
         try:
