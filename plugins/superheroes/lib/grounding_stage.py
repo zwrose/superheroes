@@ -331,17 +331,51 @@ def _context_scan(body):
     return md_fence.scan_contexts(bare)
 
 
-def _refuse_unterminated_body_context(scan):
+def _unterminated_span_start_line(scan):
+    """Return the 1-based line where an unterminated fence or HTML span begins, or None."""
+    start = None
+    if scan.unterminated_opener_line is not None:
+        start = scan.unterminated_opener_line
+    if scan.unterminated_html_line is not None:
+        html_start = scan.unterminated_html_line
+        if start is None or html_start < start:
+            start = html_start
+    return start
+
+
+def _region_marker_shadowed_by_unterminated_span(body, scan):
+    """True when a region marker line falls inside an unterminated fence/HTML span."""
+    span_start = _unterminated_span_start_line(scan)
+    if span_start is None:
+        return False
+    _, bare = _bare_lines_from_body(body)
+    markers = set(REGION_MARKERS.values())
+    for i, line in enumerate(bare):
+        line_no = i + 1
+        if line_no < span_start:
+            continue
+        if md_fence.indent_width(line) != 0:
+            continue
+        if line.strip() in markers:
+            return True
+    return False
+
+
+def _refuse_unterminated_body_context(body, scan):
+    span_start = _unterminated_span_start_line(scan)
+    if span_start is None:
+        return
+    if not _region_marker_shadowed_by_unterminated_span(body, scan):
+        return
     if scan.unterminated_opener_line is not None:
         raise _BodyRefusal(
             "body-context-unterminated",
             "unterminated code fence at line %d" % scan.unterminated_opener_line,
         )
-    if scan.unterminated_html_line is not None:
-        raise _BodyRefusal(
-            "body-context-unterminated",
-            "unterminated raw HTML block at line %d" % scan.unterminated_html_line,
-        )
+    raise _BodyRefusal(
+        "body-context-unterminated",
+        "unterminated raw HTML block at line %d" % scan.unterminated_html_line,
+    )
 
 
 def _find_all_standalone_markers(body, marker, scan=None):
@@ -492,41 +526,40 @@ def _parse_dod_table_block(block_lines):
 
 
 def _parse_dod_rows(body, marker, scan, marker_name):
-    # bite-axis: DoD table rows — GFM table with delimiter, escaped pipes kept, scan-aware.
+    # bite-axis: DoD table rows — every maximal live pipe run admitted per-run as GFM.
     region_text, _, region_start_line = _extract_region(body, marker, scan, marker_name)
     if region_text is None:
         return []
     rows = []
     block_lines = []
-    has_live_pipe_line = False
-    admitted_any_table = False
+    block_start_line = None
+
+    def flush_block():
+        nonlocal block_lines, block_start_line
+        if not block_lines:
+            return
+        admitted, block_rows = _parse_dod_table_block(block_lines)
+        if not admitted:
+            raise _BodyRefusal(
+                "dod-table-rows-unadmitted",
+                "line %d" % block_start_line,
+            )
+        rows.extend(block_rows)
+        block_lines = []
+        block_start_line = None
+
     for i, line in enumerate(region_text.splitlines()):
         body_line = region_start_line + i
         if body_line < len(scan.inert) and scan.inert[body_line]:
-            admitted, block_rows = _parse_dod_table_block(block_lines)
-            if admitted:
-                admitted_any_table = True
-            rows.extend(block_rows)
-            block_lines = []
+            flush_block()
             continue
         if _is_table_row_line(line):
-            has_live_pipe_line = True
+            if not block_lines:
+                block_start_line = body_line + 1
             block_lines.append(line.strip())
             continue
-        admitted, block_rows = _parse_dod_table_block(block_lines)
-        if admitted:
-            admitted_any_table = True
-        rows.extend(block_rows)
-        block_lines = []
-    admitted, block_rows = _parse_dod_table_block(block_lines)
-    if admitted:
-        admitted_any_table = True
-    rows.extend(block_rows)
-    if has_live_pipe_line and not admitted_any_table:
-        raise _BodyRefusal(
-            "dod-table-rows-unadmitted",
-            "dod-table region has live pipe-bearing lines but no admitted GFM table",
-        )
+        flush_block()
+    flush_block()
     return rows
 
 
@@ -851,7 +884,7 @@ def _verify_manifest_files(manifest, session_dir):
             return _refuse("staged-file-unreadable", "cannot extract untrusted PR body")
         body_scan = _context_scan(raw_body)
         try:
-            _refuse_unterminated_body_context(body_scan)
+            _refuse_unterminated_body_context(raw_body, body_scan)
         except _BodyRefusal as exc:
             return _convert_body_refusal(exc)
         try:
@@ -909,7 +942,7 @@ def stage(session_dir):
     fence_nonce = _fence_nonce()
     body_scan = _context_scan(body)
     try:
-        _refuse_unterminated_body_context(body_scan)
+        _refuse_unterminated_body_context(body, body_scan)
     except _BodyRefusal as exc:
         return _convert_body_refusal(exc)
     try:
@@ -1169,6 +1202,12 @@ def _grade_attest_result(validated, result_path):
     if len(token_rows) != 1:
         return _refuse("attest-token-missing", "expected exactly one stage-token row")
     stage_token_row = token_rows[0]
+    stage_verdict = stage_token_row.get("verdict")
+    if stage_verdict != "CONFIRMED":
+        return _refuse(
+            "attest-verdict-out-of-enum",
+            "stage-token row verdict must be CONFIRMED, got %r" % stage_verdict,
+        )
     reason = stage_token_row.get("reason")
     if not isinstance(reason, str) or not reason.strip():
         return _refuse(

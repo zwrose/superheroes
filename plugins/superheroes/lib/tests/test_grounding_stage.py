@@ -1290,8 +1290,34 @@ def test_refuse_call_sites_use_registered_string_literals():
         if first.value not in GS.REFUSAL_REASONS:
             unregistered.append((node.lineno, first.value))
 
+    body_refusal_non_literal = []
+    body_refusal_unregistered = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Raise) or node.exc is None:
+            continue
+        exc = node.exc
+        if not isinstance(exc, ast.Call):
+            continue
+        if not isinstance(exc.func, ast.Name) or exc.func.id != "_BodyRefusal":
+            continue
+        if not exc.args:
+            body_refusal_non_literal.append(node.lineno)
+            continue
+        first = exc.args[0]
+        if not isinstance(first, ast.Constant) or not isinstance(first.value, str):
+            body_refusal_non_literal.append(node.lineno)
+            continue
+        if first.value not in GS.REFUSAL_REASONS:
+            body_refusal_unregistered.append((node.lineno, first.value))
+
     assert not non_literal, "_refuse first arg not a string literal at lines: %s" % non_literal
     assert not unregistered, "_refuse unregistered literals: %s" % unregistered
+    assert not body_refusal_non_literal, (
+        "_BodyRefusal first arg not a string literal at lines: %s" % body_refusal_non_literal
+    )
+    assert not body_refusal_unregistered, (
+        "_BodyRefusal unregistered literals: %s" % body_refusal_unregistered
+    )
 
 
 def test_nonstandard_dod_status_with_issue_ref_refuses_unadmitted(tmp_path):
@@ -1613,8 +1639,8 @@ _TABLE_CENSUS_CASES = [
             "| Ship it | done | tests/a.py |\n\n"
             "See also: foo | bar | context\n"
         ),
-        1,
         None,
+        "dod-table-rows-unadmitted",
         id="table_plus_prose_pipe",
     ),
     pytest.param(
@@ -1989,6 +2015,55 @@ def test_body_context_unterminated_html_refuses(tmp_path):
     session = _session(tmp_path, body=body)
     rc, body_out = _invoke("stage", session)
     _assert_refusal(rc, body_out, "body-context-unterminated")
+
+
+def test_body_context_unterminated_unshadowed_proceeds(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n"
+        "| DoD | Status | Evidence |\n"
+        "| --- | --- | --- |\n"
+        "| Ship it | done | tests/a.py |\n\n"
+        "<textarea> elements are used for notes.\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    assert rc == 0 and body_out["ok"]
+
+
+def test_dod_empty_header_then_data_row_refuses_unadmitted(tmp_path):
+    body = (
+        "<!-- superheroes:dod-table -->\n\n"
+        "| DoD | Status | Evidence |\n"
+        "|---|---|---|\n\n"
+        "| Ship it | done | tests/a.py |\n\n"
+        "<!-- superheroes:build-record -->\n"
+    )
+    session = _session(tmp_path, body=body)
+    rc, body_out = _invoke("stage", session)
+    _assert_refusal(rc, body_out, "dod-table-rows-unadmitted")
+
+
+def test_attest_stage_token_refuted_verdict_refuses(tmp_path):
+    session = _session(tmp_path, body=_happy_body())
+    rc, _ = _invoke("stage", session)
+    assert rc == 0
+    manifest = _manifest(session)
+    result_path = os.path.join(session, "grounding", "attest-result.json")
+    rows = [{
+        "id": "stage-token:%s" % manifest["stageToken"],
+        "verdict": "REFUTED",
+        "reason": "read stage token from staged body",
+    }]
+    for claim in manifest["claims"]:
+        if claim.get("verifiability") == GS.VERIFIABILITY_REPO:
+            rows.append({
+                "id": claim["claimId"],
+                "verdict": "CONFIRMED",
+                "reason": "verified in repository",
+            })
+    open(result_path, "w", encoding="utf-8").write(json.dumps({"verdicts": rows}))
+    rc2, body = _invoke("attest", session, result_path=result_path)
+    _assert_refusal(rc2, body, "attest-verdict-out-of-enum")
 
 
 def test_body_context_unterminated_fence_refuses(tmp_path):

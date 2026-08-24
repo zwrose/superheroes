@@ -94,17 +94,26 @@ python3 -B "$ROOT_DIR/lib/grounding_stage.py" check --session-dir "$SESSION_DIR"
 
 `attest`:
 
+The `--result-path` file must be JSON whose **root** carries a `verdicts` array — the seat
+**payload** shape `_grade_attest_result` reads, not the `seat-result/1` envelope. Each row
+has `id`, `verdict` ∈ `CONFIRMED`/`PLAUSIBLE`/`REFUTED`, and a non-empty `reason`; plus
+exactly one `id = "stage-token:<token>"` row with `verdict: "CONFIRMED"`.
+
+| Seat channel | Path the orchestrator passes to `--result-path` |
+| ------------ | ----------------------------------------------- |
+| **Native host** (`claude`) | `$SESSION_DIR/round-<N>/landing/<phase>/grounding-seat.a<K>.payload.json` — the host writes this file directly; root-level `verdicts`. |
+| **Engine** (`codex`/`cursor`) | After fold, extract `payload` from the `seat-result/1` envelope at `$SESSION_DIR/round-<N>/landing/<phase>/grounding-seat.a<K>.json` and write it to a session-local path (for example `$SESSION_DIR/grounding/attest-result.json`) before calling `attest`. The envelope nests verdicts under `payload`; `attest` refuses when `verdicts` is not at the root. |
+
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/grounding_stage.py" attest \
   --session-dir "$SESSION_DIR" \
   --vendor-path <engine|native> \
-  --result-path "$SESSION_DIR/round-<N>/landing/<phase>/grounding-seat.a<K>.json"
+  --result-path <path from table above>
 ```
 
-The folded seat result must land under the session directory — write it to the landing path
-the orchestrator uses (`$SESSION_DIR/round-<N>/landing/<phase>/<seat>.a<K>.json`) so
-`attest-result-outside-session` cannot fire.
+The folded seat result must land under the session directory — write the attest input there
+so `attest-result-outside-session` cannot fire.
 
 ## Orchestrator mints findings
 
