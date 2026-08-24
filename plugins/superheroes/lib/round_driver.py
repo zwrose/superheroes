@@ -2912,8 +2912,14 @@ def _settle_delta(state, config):
     # dropped when a new blocker arrives in the same round. Targets carry file/line/severity so the
     # next round's split_fix_surface can re-derive its surface.
     if bool(outcome.get("notDischarged")) or bool(new_blocking):
-        nd = set(outcome.get("notDischarged", []))
-        nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd]
+        nd_raw = outcome.get("notDischarged", [])
+        nd_ids = _open_audit_ids_from_not_discharged(nd_raw)
+        if nd_ids is None:
+            _park_cannot_certify(
+                state,
+                "malformed _auditOutcome.notDischarged — cannot dispatch fix batch")
+            return
+        nd_targets = [dict(t) for t in (state.get("_auditTargets") or []) if t.get("id") in nd_ids]
         batch = [dict(f) for f in new_blocking]
         # Dedupe on the per-LOCATION key (line-less identity + line), NOT the line-less identity alone:
         # a new blocker sharing a target's file+title at a DIFFERENT line is a DISTINCT finding, so
@@ -3064,13 +3070,28 @@ class _OpenAuditTargets:
         self.ids = ids
 
 
+def _open_audit_ids_from_not_discharged(not_discharged):
+    """Validated boundary: _auditOutcome.notDischarged list → open-id set (#1107).
+
+    Returns a set of str ids when every member is a usable id; None when unresolvable."""
+    if not isinstance(not_discharged, list):
+        return None
+    for member in not_discharged:
+        if not isinstance(member, str):
+            return None
+    return set(not_discharged)
+
+
 def _resolve_open_audit_targets(state):
     """Report whether the per-location open-id set is resolved, genuinely empty, or unresolvable."""
     outcome = state.get("_auditOutcome")
     if isinstance(outcome, dict):
         nd = outcome.get("notDischarged")
         if isinstance(nd, list):
-            return _OpenAuditTargets("resolved", set(nd))
+            ids = _open_audit_ids_from_not_discharged(nd)
+            if ids is not None:
+                return _OpenAuditTargets("resolved", ids)
+            return _OpenAuditTargets("unresolvable")
     audit_targets = state.get("_auditTargets") or []
     audit_rounds = state.get("auditRounds") or []
     fix_batch = state.get("fixBatch") or []
@@ -3144,13 +3165,16 @@ def _compose_stall_fix_batch(state, breaker):
     if open_set.kind == "unresolvable" and not batch:
         return [], REFUSAL_UNRESOLVABLE_OPEN_SET
     outcome = state.get("_auditOutcome") if isinstance(state.get("_auditOutcome"), dict) else {}
-    not_discharged = outcome.get("notDischarged") or []
+    nd_raw = outcome.get("notDischarged")
+    nd_ids = (_open_audit_ids_from_not_discharged(nd_raw)
+              if isinstance(nd_raw, list) else None)
     new_blocking = _blocking(state.get("findings") or [])
     if not batch:
-        if not_discharged or new_blocking:
-            nd = set(not_discharged)
-            nd_targets = [dict(t) for t in (state.get("_auditTargets") or [])
-                          if t.get("id") in nd]
+        nd_members = nd_ids if nd_ids is not None else set()
+        if nd_members or new_blocking:
+            nd_targets = ([dict(t) for t in (state.get("_auditTargets") or [])
+                           if t.get("id") in nd_ids]
+                          if nd_ids is not None else [])
             batch = [dict(f) for f in new_blocking]
             seen = {(finding_identity(f), f.get("line")) for f in batch}
             for t in nd_targets:

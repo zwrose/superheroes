@@ -1,4 +1,5 @@
 """#1107 WO-B: fix-batch stall bookkeeping and per-round verifier-wave attempt allocation."""
+import ast
 import importlib.util
 import json
 import os
@@ -138,3 +139,93 @@ def test_next_reemit_preserves_pending_attempt(tmp_path):
     assert n1["attempt"] == n2["attempt"]
     assert n1["phase"] == n2["phase"]
     assert n1["expectedStateHash"] == n2["expectedStateHash"]
+
+
+def test_stall_malformed_not_discharged_member_parks_not_raises():
+    # axis: malformed notDischarged member must park via unresolvable tri-state, never raise
+    state = RD.new_state(_cfg())
+    state["_auditOutcome"] = {"notDischarged": [{}]}
+    state["auditRounds"] = [{"round": 1, "outcomes": [
+        {"identity": "lib/a.py::x", "ruling": "not-discharged"}]}]
+    state["selfRecovered"] = False
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state.get("terminal")
+    assert state["step"] == RD.P_TERMINAL
+
+
+def test_not_discharged_to_open_id_set_single_constructor():
+    # Invariant: every conversion of _auditOutcome.notDischarged into an open-id set happens at
+    # one validated construction boundary — no raw set(notDischarged) elsewhere in round_driver.
+    path = os.path.join(_LIB, "round_driver.py")
+    with open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename=path)
+
+    def _expr_references_not_discharged(expr):
+        for sub in ast.walk(expr):
+            if isinstance(sub, ast.Attribute) and sub.attr == "notDischarged":
+                return True
+            if isinstance(sub, ast.Call):
+                func = sub.func
+                if isinstance(func, ast.Attribute) and func.attr == "get":
+                    for arg in sub.args:
+                        if isinstance(arg, ast.Constant) and arg.value == "notDischarged":
+                            return True
+                    for kw in sub.keywords:
+                        if kw.arg in (None, "key") and isinstance(kw.value, ast.Constant):
+                            if kw.value.value == "notDischarged":
+                                return True
+        return False
+
+    converters = []
+
+    class _Visitor(ast.NodeVisitor):
+        def __init__(self):
+            self._current_func = None
+            self._nd_names = set()
+
+        def visit_FunctionDef(self, node):
+            prev_func = self._current_func
+            prev_names = self._nd_names
+            self._current_func = node.name
+            self._nd_names = set()
+            if node.name == "_open_audit_ids_from_not_discharged" and node.args.args:
+                self._nd_names.add(node.args.args[0].arg)
+            self.generic_visit(node)
+            self._current_func = prev_func
+            self._nd_names = prev_names
+
+        def visit_Assign(self, node):
+            if _expr_references_not_discharged(node.value):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        self._nd_names.add(target.id)
+            self.generic_visit(node)
+
+        def visit_Call(self, node):
+            func = node.func
+            if isinstance(func, ast.Name) and func.id == "set" and node.args:
+                arg = node.args[0]
+                derived = _expr_references_not_discharged(arg)
+                if isinstance(arg, ast.Name) and arg.id in self._nd_names:
+                    derived = True
+                if derived:
+                    converters.append(self._current_func)
+            self.generic_visit(node)
+
+    _Visitor().visit(tree)
+    assert converters == ["_open_audit_ids_from_not_discharged"]
+
+
+@pytest.mark.parametrize("bad_member", [{}, 0, None])
+def test_stall_not_discharged_bad_member_type_parks(bad_member):
+    # axis: any non-str notDischarged member routes unresolvable → park, never raises
+    state = RD.new_state(_cfg())
+    state["_auditOutcome"] = {"notDischarged": [bad_member]}
+    state["auditRounds"] = [{"round": 1, "outcomes": [
+        {"identity": "lib/a.py::x", "ruling": "not-discharged"}]}]
+    state["selfRecovered"] = False
+    breaker = {"reason": "audit-stall", "detail": "x", "stalledIdentities": ["lib/a.py::x"]}
+    RD._handle_stall(state, state["config"], breaker)
+    assert state.get("terminal")
+    assert state["step"] == RD.P_TERMINAL
