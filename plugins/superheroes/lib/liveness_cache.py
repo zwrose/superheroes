@@ -238,6 +238,9 @@ def covers(receipt_needed, needed):
         return False
 
 
+_UNKEYABLE = object()
+
+
 def _slot_key_from_cell(cell):
     """Return (model, effort) or _UNKEYABLE. Never raises."""
     if not isinstance(cell, dict):
@@ -257,7 +260,10 @@ def _cells_by_key(info):
     out = {}
     if not isinstance(info, dict):
         return out
-    cells = info.get("cells")
+    try:
+        cells = info.get("cells")
+    except Exception:
+        return out
     if not isinstance(cells, list):
         return out
     for cell in cells:
@@ -279,18 +285,17 @@ def _dead_cell_note(vendor, model, effort, detail):
     }
 
 
-_UNKEYABLE = object()
-
-
 def _slot_key_from_entry(entry):
     """Return (model, effort) or _UNKEYABLE. Never raises."""
     if not isinstance(entry, (list, tuple)) or len(entry) < 1:
         return _UNKEYABLE
+    model = entry[0]
+    if not isinstance(model, str):
+        return _UNKEYABLE
+    effort = entry[1] if len(entry) > 1 else None
     try:
-        model = entry[0]
-        effort = entry[1] if len(entry) > 1 else None
         hash((model, effort))
-    except (TypeError, IndexError):
+    except TypeError:
         return _UNKEYABLE
     return (model, effort)
 
@@ -306,7 +311,10 @@ def _build_needed_inventory(needed):
         if not isinstance(entries, (list, tuple)) or len(entries) == 0:
             inventory[vendor] = None
             continue
-        inventory[vendor] = [_slot_key_from_entry(entry) for entry in entries]
+        inventory[vendor] = [
+            (i, entry, _slot_key_from_entry(entry))
+            for i, entry in enumerate(entries)
+        ]
     return inventory
 
 
@@ -349,14 +357,35 @@ def _unreachable_vendor_note(vendor):
     }
 
 
-def _unkeyable_slot_note(vendor):
+def _unkeyable_slot_note(vendor, slot_index):
     return {
         "constraint": "liveness-cell",
         "vendor": vendor,
         "model": None,
         "effort": None,
-        "reason": "%s not live: malformed needed cell entry" % vendor,
+        "reason": "%s not live: needed slot %d has malformed cell entry" % (vendor, slot_index),
     }
+
+
+def _non_string_model_note(vendor, slot_index):
+    return {
+        "constraint": "liveness-cell",
+        "vendor": vendor,
+        "model": None,
+        "effort": None,
+        "reason": "%s not live: needed slot %d model is not a string" % (vendor, slot_index),
+    }
+
+
+def _live_cell_sort_key(cell):
+    if not isinstance(cell, (list, tuple)) or len(cell) < 3:
+        return ("", "", (False, ""))
+    vendor, model, effort = cell[0], cell[1], cell[2]
+    return (
+        vendor,
+        model,
+        (effort is not None, str(effort) if effort is not None else ""),
+    )
 
 
 def _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live):
@@ -369,10 +398,17 @@ def _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live):
         info = _safe_vendor_info(liveness, vendor)
         cells_by_key = _cells_by_key(info)
         vendor_live = True
-        for key in slots:
+        for slot_index, entry, key in slots:
             if key is _UNKEYABLE:
                 vendor_live = False
-                dead_notes.append(_unkeyable_slot_note(vendor))
+                if (
+                    isinstance(entry, (list, tuple))
+                    and len(entry) >= 1
+                    and not isinstance(entry[0], str)
+                ):
+                    dead_notes.append(_non_string_model_note(vendor, slot_index))
+                else:
+                    dead_notes.append(_unkeyable_slot_note(vendor, slot_index))
                 continue
             model, effort = key
             cell_key = (vendor, model, effort)
@@ -400,25 +436,24 @@ def live_from(liveness, needed):
     inventory = _build_needed_inventory(needed)
 
     try:
-        if isinstance(liveness, dict):
-            for vendor, slots in inventory.items():
-                if slots is None:
+        for vendor, slots in inventory.items():
+            if slots is None:
+                continue
+            info = _safe_vendor_info(liveness, vendor)
+            cells_by_key = _cells_by_key(info)
+            for _slot_index, _entry, key in slots:
+                if key is _UNKEYABLE:
                     continue
-                info = liveness.get(vendor)
-                cells_by_key = _cells_by_key(info)
-                for key in slots:
-                    if key is _UNKEYABLE:
-                        continue
-                    if _cell_is_live(cells_by_key, key):
-                        model, effort = key
-                        live_cells.append([vendor, model, effort])
+                if _cell_is_live(cells_by_key, key):
+                    model, effort = key
+                    live_cells.append([vendor, model, effort])
     except Exception:
         pass
     _reconcile_inventory(inventory, live_cells, liveness, dead_notes, live)
 
     if "claude" not in live:
         live.append("claude")
-    live_cells.sort()
+    live_cells.sort(key=_live_cell_sort_key)
     return (sorted(live), live_cells, dead_notes)
 
 

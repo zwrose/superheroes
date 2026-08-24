@@ -10,6 +10,8 @@ import os
 import tempfile
 
 BLOCKING = {"Critical", "Important"}
+# SSOT §11 copy-holder — read by test_ssot_drift; the live blocking predicate is
+# circuit_breaker.is_blocking, not membership in this set.
 _WS = re.compile(r"\s+")
 
 

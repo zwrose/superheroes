@@ -669,7 +669,7 @@ def test_live_from_novel_unhashable_effort_disclosed():
     assert len(dead_notes) == 1
     assert dead_notes[0]["vendor"] == "codex"
     assert dead_notes[0]["model"] is None
-    assert "malformed needed cell entry" in dead_notes[0]["reason"]
+    assert "needed slot 0 has malformed cell entry" in dead_notes[0]["reason"]
 
 
 def test_live_from_malformed_cell_unhashable_effort_returns():
@@ -753,6 +753,18 @@ def test_live_from_reconcile_runs_when_loop_raises():
         (
             {
                 "codex": {
+                    "models": {},
+                    "cells": [
+                        {"model": "m", "effort": None, "ok": True},
+                        {"model": "m", "effort": "high", "ok": True},
+                    ],
+                },
+            },
+            {"codex": [["m", None], ["m", "high"]]},
+        ),
+        (
+            {
+                "codex": {
                     "live": True,
                     "models": {"m": {"ok": False, "detail": "down"}},
                     "cells": [{"model": "m", "effort": None, "ok": False, "detail": "down"}],
@@ -808,7 +820,7 @@ def test_live_from_edge_malformed_entry():
     assert "codex" not in live
     assert len(notes) == 1
     assert notes[0]["model"] is None
-    assert "malformed needed cell entry" in notes[0]["reason"]
+    assert "needed slot 0 has malformed cell entry" in notes[0]["reason"]
 
 
 def test_live_from_edge_unhashable_entry_members():
@@ -816,7 +828,7 @@ def test_live_from_edge_unhashable_entry_members():
     assert "codex" not in live
     assert len(notes) == 1
     assert notes[0]["model"] is None
-    assert "malformed needed cell entry" in notes[0]["reason"]
+    assert "needed slot 0 model is not a string" in notes[0]["reason"]
 
 
 def test_live_from_edge_malformed_liveness():

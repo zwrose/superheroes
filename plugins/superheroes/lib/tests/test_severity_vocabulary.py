@@ -155,14 +155,28 @@ def test_mechanical_compile_off_vocabulary_to_important(bad):
 
 
 def test_mechanical_compile_stamps_before_dedupe_merge():
-    """Mis-cased blocker must win merge and emerge canonical after ingest."""
-    findings = [
-        _finding(severity="important"),
-        _finding(severity="Minor"),
-    ]
-    compiled, _ = RD.mechanical_compile(findings, DIFF)
+    """Severity must be canonical before _compile_by_anchor runs (ingest chokepoint)."""
+    pre_dedupe = []
+    real_compile_by_anchor = RD._compile_by_anchor
+
+    def spy_compile_by_anchor(findings):
+        pre_dedupe.extend(list(findings))
+        return real_compile_by_anchor(findings)
+
+    RD._compile_by_anchor = spy_compile_by_anchor
+    try:
+        findings = [
+            _finding(severity="important", taxonomy="winner-important"),
+            _finding(severity="Minor", taxonomy="winner-minor", title="NULL DEREF"),
+        ]
+        compiled, drops = RD.mechanical_compile(findings, DIFF)
+    finally:
+        RD._compile_by_anchor = real_compile_by_anchor
+
+    assert drops == []
     assert len(compiled) == 1
-    assert compiled[0]["severity"] == "Important"
+    assert all(f.get("severity") in CB.SEVERITY_TIERS for f in pre_dedupe)
+    assert compiled[0]["taxonomy"] == "winner-important"
 
 
 def test_mechanical_compile_nit_cap_overflow_stays_nit():
