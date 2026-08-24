@@ -121,8 +121,17 @@ PINS_ARGS=()
 # Leg 1 (#610): panel-dispatching paths probe live vendors on a cache miss; the --post path never
 # re-probes — it reuses a fresh short-TTL liveness receipt or falls open to Claude (disclosed).
 PROBE_MODE=probe   # on the --post path ONLY, set PROBE_MODE=cache-only
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --probe-mode "$PROBE_MODE" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --probe-mode "$PROBE_MODE" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
 ```
+
+The compose receipt always carries `pluginVersionSkew` — `{"status", "detail", "inspectedRoot"}`
+with `status` one of `checked-clean`, `checked-degraded`, or `not-checked` — so a receipt
+distinguishes "checked, clean" from "never checked"; only `checked-degraded` appends a disclosed
+`plugin-version-skew` record to `degradations` (detection only, never blocks). The skew
+comparison reads the repository root resolved at Setup (`$REPO_ROOT`), not ambient cwd. On the
+`--post` path the compose step runs before the detached PR-head worktree at `$SESSION_DIR/repo`
+is created, so the comparison describes the operator's checkout rather than the PR head;
+`pluginVersionSkew.inspectedRoot` names which tree was actually compared.
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
 

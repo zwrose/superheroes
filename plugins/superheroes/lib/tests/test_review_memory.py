@@ -748,3 +748,23 @@ def test_load_summary_sweeps_stale_staging_but_keeps_durable_state(tmp_path):
         assert not (tmp_path / name).exists(), f"transient staging {name} must be swept"
     for name in durable + ["round-records.json"]:
         assert (tmp_path / name).exists(), f"durable state {name} must be preserved"
+
+
+def test_recurrent_classes_counts_mis_cased_blocking_severity():
+    rm = load_memory()
+    finding = {"dimension": "Security", "taxonomy": "leak", "title": "Secret leaked",
+               "severity": "important"}
+    records = [
+        {"round": 1, "findings": [finding]},
+        {"round": 2, "findings": [dict(finding)]},
+    ]
+    out = rm.recurrent_classes(records)
+    assert len(out) == 1
+
+
+def test_summarize_dimension_blocking_count_mis_cased_severity():
+    rm = load_memory()
+    finding = {"dimension": "Security", "taxonomy": "leak", "title": "Secret leaked",
+               "severity": "important"}
+    summary = rm._summarize_dimension({"findings": [finding]})
+    assert summary["blockingCount"] == 1
