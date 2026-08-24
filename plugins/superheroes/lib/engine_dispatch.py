@@ -1369,8 +1369,7 @@ def _ledger_stages(result, state, run_dir_real, opened):
         if result.get("ok"):
             kind = result.get("resultKind")
             if kind in REVIEW_RESULT_KINDS:
-                has_payload, payload = _review_result_payload(result, kind)
-                if has_payload and (not isinstance(payload, list) or payload or payload is None):
+                if _parse_review_has_payload(result):
                     delivered = True
             if not delivered and result.get("investigated"):
                 delivered = True
@@ -2120,7 +2119,7 @@ def _review_result_payload(result, kind):
         return False, None
     if kind == "ruling":
         ruling_val = result.get("ruling")
-        if isinstance(ruling_val, str) and ruling_val:
+        if isinstance(ruling_val, dict) and ruling_val.get("ruling"):
             return True, ruling_val
         return False, None
     if kind == "grouping":
@@ -2146,7 +2145,7 @@ def _parse_review_has_payload(res):
     if kind in ("findings", "verdicts"):
         return bool(payload)
     if kind == "grouping":
-        return payload is None or bool(payload)
+        return bool(payload)
     return True
 
 
@@ -2324,10 +2323,6 @@ def _grade_review_attempt(run_dir_real, state, attempt):
     if has_payload:
         engagement = _engagement_with_read(engagement, result_kind=kind, items=payload)
         result = {"ok": True, "resultKind": kind, kind: payload, "engagement": engagement}
-        if kind == "ruling":
-            for field in ("id", "reason"):
-                if isinstance(res.get(field), str) and res.get(field):
-                    result[field] = res[field]
         if accepted:
             result["investigated"] = accepted
         return _attach_review_rejection_fields(

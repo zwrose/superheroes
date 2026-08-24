@@ -873,6 +873,44 @@ def test_dispatch_empty_findings_with_valid_investigated_accepted(tmp_path):
     assert res["attempts"] == 1
 
 
+@pytest.mark.parametrize("grouping", [None, []])
+def test_dispatch_empty_grouping_no_investigated_is_vacuous_forfeit(tmp_path, grouping):
+    repo_root = _repo(tmp_path)
+    empty = json.dumps({"grouping": grouping})
+    fake = FakeRunner([(empty, False, 0, ""), (empty, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is False
+    assert res["reason"] == "vacuous"
+    assert res["forfeited"] is True
+    assert res["attempts"] == 2
+
+
+@pytest.mark.parametrize("grouping", [None, []])
+def test_dispatch_empty_grouping_with_valid_investigated_accepted(tmp_path, grouping):
+    repo_root = _repo(tmp_path)
+    real_file = os.path.join(repo_root, "src", "main.py")
+    os.makedirs(os.path.dirname(real_file), exist_ok=True)
+    with open(real_file, "w", encoding="utf-8") as fh:
+        fh.write("# main\n")
+    rel = "src/main.py"
+    stdout = json.dumps({"grouping": grouping, "investigated": [rel]})
+    fake = FakeRunner([(stdout, False, 0, "")])
+    res = ED.dispatch_review(
+        "codex", model="sonnet", effort="high",
+        prompt_path=_valid_prompt(tmp_path), repo_root=repo_root, run_engine=fake,
+        build_view=_fake_build_view(tmp_path),
+    )
+    assert res["ok"] is True
+    assert res["resultKind"] == "grouping"
+    assert res["grouping"] == grouping
+    assert res["investigated"] == [rel]
+    assert res["attempts"] == 1
+
+
 def test_dispatch_empty_findings_all_investigated_rejected_is_vacuous(tmp_path):
     repo_root = _repo(tmp_path)
     stdout = json.dumps({"findings": [], "investigated": ["/abs/path", "missing.py"]})
@@ -2897,9 +2935,13 @@ def test_dispatch_review_ruling_terminal_carries_payload(tmp_path):
     )
     assert res["ok"] is True
     assert res["resultKind"] == "ruling"
-    assert res["ruling"] == "discharged"
-    assert res["id"] == "f1"
-    assert res["reason"] == "resolved in diff"
+    assert res["ruling"] == {
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "resolved in diff",
+    }
+    assert "id" not in res
+    assert "reason" not in res
 
 
 def test_expected_result_kind_contract_derives_from_review_result_kinds():
@@ -4791,25 +4833,40 @@ def _other_review_result_kind(kind):
 
 
 def _matrix_clean_payload_stdout(kind):
-    if kind == "findings":
-        return _VALID_FINDINGS_STDOUT
-    return _VALID_VERDICTS_STDOUT
+    return _census_review_stdout(kind)
 
 
 def _matrix_empty_payload_stdout(kind):
     if kind == "findings":
         return json.dumps({"findings": []})
-    return json.dumps({"verdicts": []})
+    if kind == "verdicts":
+        return json.dumps({"verdicts": []})
+    if kind == "grouping":
+        return json.dumps({"grouping": []})
+    if kind == "ruling":
+        return json.dumps({"findings": []})
+    raise AssertionError("unsupported kind %r" % kind)
 
 
 def _matrix_investigated_only_stdout(kind, path="good.py"):
     if kind == "findings":
         return json.dumps({"findings": [], "investigated": [path]})
-    return json.dumps({"verdicts": [], "investigated": [path]})
+    if kind == "verdicts":
+        return json.dumps({"verdicts": [], "investigated": [path]})
+    if kind == "grouping":
+        return json.dumps({"grouping": [], "investigated": [path]})
+    if kind == "ruling":
+        return json.dumps({
+            "id": "f1",
+            "ruling": "discharged",
+            "reason": "resolved in diff",
+            "investigated": [path],
+        })
+    raise AssertionError("unsupported kind %r" % kind)
 
 
 def _matrix_placeholder_stdout(kind):
-    if kind == "findings":
+    if kind in ("findings", "grouping"):
         return json.dumps({"findings": [{
             "id": EA.REVIEW_BASE_TEMPLATE_ID,
             "severity": "Minor", "title": "t", "body": "b",

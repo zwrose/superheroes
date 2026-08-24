@@ -3180,9 +3180,11 @@ def test_parse_result_review_ruling_recognised():
     assert res == {
         "ok": True,
         "resultKind": "ruling",
-        "id": "f1",
-        "ruling": "discharged",
-        "reason": "resolved in diff",
+        "ruling": {
+            "id": "f1",
+            "ruling": "discharged",
+            "reason": "resolved in diff",
+        },
         "investigated": [],
     }
 
@@ -3295,9 +3297,11 @@ def test_engagement_read_grouping_engaged():
 def test_engagement_read_ruling_engaged():
     assert EA.engagement_read({
         "resultKind": "ruling",
-        "id": "f1",
-        "ruling": "discharged",
-        "reason": "fixed",
+        "ruling": {
+            "id": "f1",
+            "ruling": "discharged",
+            "reason": "fixed",
+        },
     }) == "engaged"
 
 

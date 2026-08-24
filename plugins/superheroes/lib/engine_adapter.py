@@ -988,19 +988,22 @@ def _parse_review_ruling_object(obj, outer_envelope_error):
     if not audits.has_usable_reason(obj.get("reason")):
         return {"ok": False, "reason": "unreadable"}
     ruling = obj.get("ruling")
-    if ruling == "discharged-but-new-issue" and not audits.has_usable_new_issues(
+    if ruling == audits.AUDIT_RULINGS[2] and not audits.has_usable_new_issues(
             obj.get("newIssues")):
         return {"ok": False, "reason": "unreadable"}
     if _outer_envelope_error_makes_unreadable(outer_envelope_error, []):
         return {"ok": False, "reason": "unreadable"}
-    result = _scrub_ruling_object(obj)
-    result["ok"] = True
-    result["resultKind"] = "ruling"
+    ruling_record = _scrub_ruling_object(obj)
     investigated = []
     inv_rejected = []
     if "investigated" in obj:
         investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
-    result["investigated"] = investigated
+    result = {
+        "ok": True,
+        "resultKind": "ruling",
+        "ruling": ruling_record,
+        "investigated": investigated,
+    }
     return _attach_investigated_parse_rejections(result, inv_rejected)
 
 
@@ -1468,10 +1471,12 @@ def engagement_read(result):
                 if isinstance(payload, list) and payload:
                     return "engaged"
             elif kind == "ruling":
-                if (isinstance(result.get("id"), str) and result.get("id")
-                        and isinstance(result.get("ruling"), str) and result.get("ruling")
-                        and isinstance(result.get("reason"), str) and result.get("reason")):
-                    return "engaged"
+                payload = result.get("ruling")
+                if isinstance(payload, dict):
+                    if (isinstance(payload.get("id"), str) and payload.get("id")
+                            and isinstance(payload.get("ruling"), str) and payload.get("ruling")
+                            and isinstance(payload.get("reason"), str) and payload.get("reason")):
+                        return "engaged"
         investigated = result.get("investigated")
         if isinstance(investigated, list) and investigated:
             return "engaged"
