@@ -836,10 +836,10 @@ carries `{vendor, model, effort, tier, family, source}`:
   the dispatch target.
 - **The grounding seat** (`$SEAT_MAP.seats["grounding-seat"]`) is *assigned* a vendor by the seat map
   — chosen to be independent of both the author (code) and narrative (PR text) families — and that
-  assignment is recorded in the receipt. The code-leg self-claims / DoD-table check (SKILL step 8)
-  currently runs **inline in the orchestrator** (which can read the PR body); dispatching it as a
-  standalone `agents/grounding-seat.md` seat on its assigned vendor is a follow-up that must first
-  stage the PR body as an input the seat can Read.
+  assignment is recorded in the receipt. On the **read-only paths** (`--post`, `--review-only`) it
+  is **live-dispatched under #609** with the PR body staged as seat-readable input — full contract:
+  `grounding-seat.md`. The driver-owned auto-fix loop does **not** run SKILL step 8 today,
+  so on that path the seat does not influence certification.
 - **Independence keys on model family, not the dispatch CLI** (CONVENTIONS §7.5), and **cursor's
   first-party models are ONE family**: the token-efficient implementer and grok judge models both
   carry the `xai` independence-accounting key (#651, owner-ratified 2026-07-26; post-acquisition
