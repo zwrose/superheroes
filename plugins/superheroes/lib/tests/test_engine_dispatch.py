@@ -5411,3 +5411,214 @@ def test_worktree_baseline_fallback_on_enumeration_failure(tmp_path, monkeypatch
     current = ED._worktree_baseline(os.path.realpath(wt), timeout=5)
     assert current != baseline
 
+
+# --- WO-R4-A (#1109): bounded stdout cap + like-with-like dirt comparison ----------
+
+
+class _MeteredBinaryFile:
+    def __init__(self, fh, read_sizes, total_reads):
+        self._fh = fh
+        self._read_sizes = read_sizes
+        self._total_reads = total_reads
+
+    def read(self, size=-1):
+        data = self._fh.read(size)
+        nbytes = len(data)
+        self._read_sizes.append(nbytes)
+        self._total_reads[0] += nbytes
+        return data
+
+    def seek(self, *args, **kwargs):
+        return self._fh.seek(*args, **kwargs)
+
+    def tell(self):
+        return self._fh.tell()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        self._fh.close()
+
+
+def _meter_reads_for_path(monkeypatch, path):
+    read_sizes = []
+    total_reads = [0]
+    real_open = open
+    path_real = os.path.realpath(str(path))
+
+    def metered_open(file, mode="r", *args, **kwargs):
+        fh = real_open(file, mode, *args, **kwargs)
+        if (
+            "r" in mode
+            and os.path.realpath(str(file)) == path_real
+        ):
+            return _MeteredBinaryFile(fh, read_sizes, total_reads)
+        return fh
+
+    monkeypatch.setattr("builtins.open", metered_open)
+    return read_sizes, total_reads
+
+
+def test_bounded_stdout_cap_read_never_exceeds_budget(tmp_path, monkeypatch):
+    cap = 4096
+    over = cap * 8
+    path = tmp_path / "big.bin"
+    path.write_bytes(b"z" * over)
+    read_sizes, total_reads = _meter_reads_for_path(monkeypatch, path)
+    marker = ED._stdout_truncation_marker(over).encode("utf-8")
+    byte_budget = cap + len(marker)
+
+    ED._read_capped_text(str(path), cap)
+
+    assert read_sizes, "expected at least one read"
+    assert max(read_sizes) <= byte_budget
+    assert total_reads[0] <= byte_budget
+
+
+def test_bounded_stdout_cap_file_tail_never_exceeds_budget(tmp_path, monkeypatch):
+    cap = 2048
+    over = cap * 6
+    path = tmp_path / "tail.bin"
+    path.write_bytes(b"t" * over)
+    read_sizes, total_reads = _meter_reads_for_path(monkeypatch, path)
+    marker = ED._stdout_truncation_marker(over).encode("utf-8")
+    byte_budget = cap + len(marker)
+
+    ED._cap_file_tail(str(path), cap)
+
+    assert read_sizes, "expected at least one read"
+    assert max(read_sizes) <= byte_budget
+    assert total_reads[0] <= byte_budget
+
+
+def test_stdout_cap_marker_parity_over_and_under_budget(tmp_path):
+    cap = 8192
+    under = tmp_path / "under.bin"
+    under.write_bytes(b"u" * (cap - 64))
+    under_before = under.read_bytes()
+    ED._read_capped_text(str(under), cap)
+    assert under.read_bytes() == under_before
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX not in ED._read_capped_text(str(under), cap)
+
+    over = cap + 1024
+    over_path = tmp_path / "over.bin"
+    over_path.write_bytes(b"v" * over)
+    text = ED._read_capped_text(str(over_path), cap)
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
+    assert len(text.encode("utf-8")) <= cap
+    assert text.endswith("v" * min(1024, cap))
+
+
+def test_read_capped_text_memory_error_degrades_like_oserror(tmp_path, monkeypatch):
+    path = tmp_path / "mem.bin"
+    path.write_bytes(b"x" * 64)
+
+    class _OomFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def seek(self, *args, **kwargs):
+            return 0
+
+        def tell(self):
+            return 64
+
+        def read(self, size=-1):
+            raise MemoryError("simulated oom")
+
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: _OomFile())
+    assert ED._read_capped_text(str(path)) == ""
+
+
+def test_cap_file_tail_memory_error_degrades_like_oserror(tmp_path, monkeypatch):
+    path = tmp_path / "mem-tail.bin"
+    original = b"y" * (ED.MAX_STDOUT_CAPTURE + 512)
+    path.write_bytes(original)
+
+    class _OomFile:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def seek(self, *args, **kwargs):
+            return 0
+
+        def tell(self):
+            return len(original)
+
+        def read(self, size=-1):
+            raise MemoryError("simulated oom")
+
+    monkeypatch.setattr("builtins.open", lambda *args, **kwargs: _OomFile())
+    ED._cap_file_tail(str(path), ED.MAX_STDOUT_CAPTURE)
+    assert path.read_bytes() == original
+
+
+def _lease_state_roots(sibling, state):
+    sibling_real = os.path.realpath(sibling)
+    if state in ("none", "dead"):
+        return set()
+    if state in ("live", "appeared"):
+        return {sibling_real}
+    raise ValueError(state)
+
+
+@pytest.mark.parametrize("open_enum_ok", [True, False])
+@pytest.mark.parametrize("forfeit_enum_ok", [True, False])
+@pytest.mark.parametrize("open_lease", ["none", "live", "dead"])
+@pytest.mark.parametrize("forfeit_lease", ["none", "live", "dead", "appeared"])
+def test_worktree_dirt_invariant_unchanged_tree_cross_product(
+    tmp_path, monkeypatch, open_enum_ok, forfeit_enum_ok, open_lease, forfeit_lease,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    sibling_real = os.path.realpath(str(tmp_path / "foreign-sibling"))
+    fixed_porcelain = "?? stable-only.txt\n"
+    real_git = ED._git_scrubbed
+    foreign_call = {"n": 0}
+
+    def fake_foreign(cwd_real, timeout=None):
+        foreign_call["n"] += 1
+        if foreign_call["n"] == 1:
+            if not open_enum_ok:
+                return None
+            return _lease_state_roots(str(tmp_path / "foreign-sibling"), open_lease)
+        if not forfeit_enum_ok:
+            return None
+        return _lease_state_roots(str(tmp_path / "foreign-sibling"), forfeit_lease)
+
+    def fake_git(cwd_real, *args, timeout=None):
+        if args[:2] == ("status", "--porcelain=v1"):
+            return subprocess.CompletedProcess(args, 0, fixed_porcelain, "")
+        return real_git(cwd_real, *args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    monkeypatch.setattr(ED, "_git_scrubbed", fake_git)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    verdict = ED._worktree_dirt_verdict(baseline, cwd, timeout=5)
+    assert verdict is False, {
+        "open_enum_ok": open_enum_ok,
+        "forfeit_enum_ok": forfeit_enum_ok,
+        "open_lease": open_lease,
+        "forfeit_lease": forfeit_lease,
+        "baseline": baseline,
+    }
+    assert sibling_real.startswith(os.path.realpath(str(tmp_path)))
+
+
+def test_worktree_dirt_verdict_true_positive_on_write(tmp_path):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    with open(os.path.join(wt, "attempt-write.txt"), "w", encoding="utf-8") as fh:
+        fh.write("dirty\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+

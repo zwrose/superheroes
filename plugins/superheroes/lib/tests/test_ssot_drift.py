@@ -5108,6 +5108,47 @@ def test_r8_closure_receipt_elements_exactly_once_in_in_repo_copy_holders():
     )
 
 
+def test_grouping_payload_valid_delegates_to_round_adapters_not_hand_copy():
+    """§11: engine_adapter._grouping_payload_valid must delegate to round_adapters P_SYNTHESIS."""
+    text = _read("lib/engine_adapter.py")
+    assert "round_adapters.payload_fault" in text
+    assert "round_adapters.P_SYNTHESIS" in text
+    for marker in _HANDWRITTEN_GROUPING_VALIDATION_MARKERS:
+        assert marker not in text, (
+            "hand-written P_SYNTHESIS grouping validation reappeared: %r" % marker
+        )
+
+
+_HANDWRITTEN_GROUPING_VALIDATION_MARKERS = (
+    "for member in member_ids:",
+    "if not isinstance(member_ids, list) or not member_ids:",
+)
+
+
+def test_grouping_contract_copy_census():
+    """Census: P_SYNTHESIS grouping shape rule has exactly one home plus delegation in engine_adapter."""
+    engine_text = _read("lib/engine_adapter.py")
+    round_text = _read("lib/round_adapters.py")
+    copies = []
+    if "member_ids-non-empty-strings" in round_text:
+        copies.append("round_adapters")
+    for marker in _HANDWRITTEN_GROUPING_VALIDATION_MARKERS:
+        if marker in engine_text:
+            copies.append("engine_adapter-hand-copy:%s" % marker)
+    if "round_adapters.payload_fault" in engine_text and "round_adapters.P_SYNTHESIS" in engine_text:
+        copies.append("engine_adapter-delegation")
+    assert copies.count("round_adapters") == 1, (
+        "P_SYNTHESIS grouping rule home missing or duplicated: %r" % copies
+    )
+    assert "engine_adapter-delegation" in copies, (
+        "engine_adapter must delegate grouping validation to round_adapters: %r" % copies
+    )
+    hand_copies = [c for c in copies if c.startswith("engine_adapter-hand-copy:")]
+    assert not hand_copies, (
+        "hand-written P_SYNTHESIS grouping validation copies found: %r" % hand_copies
+    )
+
+
 def test_r8_in_repo_copy_holder_census_drift_missing_paths():
     """§11.2: every listed in-repo R8 copy-holder must exist when any sibling holder is reachable."""
     reachable = []

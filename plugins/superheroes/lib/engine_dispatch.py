@@ -563,6 +563,32 @@ def _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded_roots)
     return "\n".join(kept) + "\n"
 
 
+def _worktree_porcelain_snapshot(cwd_real, mode, excluded_roots, timeout=None):
+    """Porcelain digest for a worktree using a fixed algorithm and exclusion set."""
+    if mode == "plain":
+        try:
+            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
+        except subprocess.TimeoutExpired:
+            return None
+    elif mode == "filtered":
+        try:
+            status = _git_scrubbed(
+                cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
+            )
+        except subprocess.TimeoutExpired:
+            return None
+    else:
+        return None
+    if status.returncode != 0:
+        return None
+    porcelain = status.stdout or ""
+    if mode == "filtered" and excluded_roots:
+        porcelain = _filter_porcelain_for_foreign_worktrees(
+            porcelain, cwd_real, set(excluded_roots),
+        )
+    return hashlib.sha256(porcelain.encode("utf-8")).hexdigest()
+
+
 def _worktree_baseline(cwd_real, timeout=None):
     try:
         head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
@@ -572,29 +598,53 @@ def _worktree_baseline(cwd_real, timeout=None):
         return None
     excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
     if excluded is None:
-        try:
-            status = _git_scrubbed(cwd_real, "status", "--porcelain=v1", timeout=timeout)
-        except subprocess.TimeoutExpired:
-            return None
-        if status.returncode != 0:
-            return None
-        porcelain = status.stdout or ""
+        mode = "plain"
+        excluded_roots = None
     else:
-        try:
-            status = _git_scrubbed(
-                cwd_real, "status", "--porcelain=v1", "-uall", timeout=timeout,
-            )
-        except subprocess.TimeoutExpired:
-            return None
-        if status.returncode != 0:
-            return None
-        porcelain = status.stdout or ""
-        if excluded:
-            porcelain = _filter_porcelain_for_foreign_worktrees(porcelain, cwd_real, excluded)
+        mode = "filtered"
+        excluded_roots = sorted(excluded)
+    porcelain_sha256 = _worktree_porcelain_snapshot(
+        cwd_real, mode, excluded_roots, timeout=timeout,
+    )
+    if porcelain_sha256 is None:
+        return None
     return {
         "headSha": (head.stdout or "").strip(),
-        "porcelainSha256": hashlib.sha256(porcelain.encode("utf-8")).hexdigest(),
+        "porcelainSha256": porcelain_sha256,
+        "mode": mode,
+        "excludedRoots": excluded_roots,
     }
+
+
+def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
+    """Return True if dirtied, False if clean, None if unreadable (fail-closed)."""
+    if baseline is None:
+        return None
+    mode = baseline.get("mode")
+    if mode not in ("plain", "filtered"):
+        return None
+    try:
+        head = _git_scrubbed(cwd_real, "rev-parse", "HEAD", timeout=timeout)
+    except subprocess.TimeoutExpired:
+        return None
+    if head.returncode != 0:
+        return None
+    excluded_roots = set(baseline.get("excludedRoots") or [])
+    if mode == "filtered":
+        live_excluded = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
+        if live_excluded is not None:
+            excluded_roots |= live_excluded
+    porcelain_sha256 = _worktree_porcelain_snapshot(
+        cwd_real, mode, sorted(excluded_roots) if excluded_roots else None, timeout=timeout,
+    )
+    if porcelain_sha256 is None:
+        return None
+    current_head = (head.stdout or "").strip()
+    if current_head != baseline.get("headSha"):
+        return True
+    if porcelain_sha256 != baseline.get("porcelainSha256"):
+        return True
+    return False
 
 
 _BASE_SHA_OBJECT_ID_RE = re.compile(r"^[0-9a-f]{40}$|^[0-9a-f]{64}$")
@@ -1645,18 +1695,42 @@ def _cleanup(proc, pgid):
             pass
 
 
+def _bounded_stdout_cap_from_file(fh, max_bytes):
+    """Read at most max_bytes (+ marker) from fh without loading an oversized file. Never raises."""
+    try:
+        fh.seek(0, os.SEEK_END)
+        observed = fh.tell()
+        if observed == 0:
+            return b"", False, 0
+        if observed <= max_bytes:
+            fh.seek(0)
+            return fh.read(observed), False, observed
+        marker = _stdout_truncation_marker(observed).encode("utf-8")
+        content_budget = max(0, max_bytes - len(marker))
+        if content_budget > 0:
+            fh.seek(-content_budget, os.SEEK_END)
+            tail = fh.read(content_budget)
+        else:
+            tail = b""
+        capped = marker + tail
+        if len(capped) > max_bytes:
+            capped = capped[:max_bytes]
+        return capped, True, observed
+    except (OSError, MemoryError):
+        return None, False, 0
+
+
 # Injected-seam sentinel; tests call this directly.
 def _cap_file_tail(path, max_bytes):
     """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises."""
     try:
         with open(path, "rb") as fh:
-            data = fh.read()
-        capped, truncated = _bytes_with_stdout_cap(data, max_bytes, len(data))
-        if not truncated:
+            capped, truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+        if capped is None or not truncated:
             return
         with open(path, "wb") as fh:
             fh.write(capped)
-    except OSError:
+    except (OSError, MemoryError):
         pass
 
 
@@ -1664,10 +1738,11 @@ def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE):
     """Read at most the last max_bytes of a text file. Never raises."""
     try:
         with open(path, "rb") as fh:
-            data = fh.read()
-        capped, _truncated = _bytes_with_stdout_cap(data, max_bytes, len(data))
+            capped, _truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+        if capped is None:
+            return ""
         return capped.decode("utf-8", errors="ignore")
-    except OSError:
+    except (OSError, MemoryError):
         return ""
 
 
@@ -2744,8 +2819,8 @@ def _supervise(run_dir_real, *, run_kind, deadline, run_engine=None):
                                 run_dir=run_dir_real, argv=argv,
                             ))
                         baseline = opened.get("worktreeBaseline")
-                        current = _worktree_baseline(opened["cwd"])
-                        if baseline is None or current is None or current != baseline:
+                        dirt_verdict = _worktree_dirt_verdict(baseline, opened["cwd"])
+                        if dirt_verdict is None or dirt_verdict:
                             return _fold_run(run_dir_real, state, _with_run_fields(
                                 _worktree_dirtied_forfeit(
                                     engine, run_dir_real=run_dir_real, state=state,

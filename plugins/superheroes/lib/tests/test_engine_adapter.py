@@ -3308,3 +3308,99 @@ def test_engagement_read_ruling_engaged():
 def test_engagement_read_empty_grouping_not_engaged():
     assert EA.engagement_read({"resultKind": "grouping", "grouping": None}) == "unknown"
     assert EA.engagement_read({"resultKind": "grouping", "grouping": []}) == "unknown"
+
+
+# ---------------------------------------------------------------------------
+# #1109r4-b: review trust-boundary parity (id / scrub / envelope / SSOT)
+
+
+_REVIEW_SECRET = "sk-EXAMPLEfakenotarealsecret0"
+
+_REVIEW_KIND_SECRET_PAYLOADS = {
+    "findings": {
+        "findings": [{
+            "id": "f1", "severity": "Minor", "title": "t",
+            "body": "log shows Authorization: Bearer %s" % _REVIEW_SECRET,
+        }],
+    },
+    "verdicts": {
+        "verdicts": [{
+            "id": "v1", "verdict": "CONFIRMED",
+            "reason": "log shows Authorization: Bearer %s" % _REVIEW_SECRET,
+        }],
+    },
+    "grouping": {
+        "grouping": [{
+            "member_ids": ["f1"],
+            "note": "log shows Authorization: Bearer %s" % _REVIEW_SECRET,
+        }],
+    },
+    "ruling": {
+        "id": "f1",
+        "ruling": "discharged",
+        "reason": "log shows Authorization: Bearer %s" % _REVIEW_SECRET,
+    },
+}
+
+_REVIEW_KIND_POPULATED_ENVELOPE_PAYLOADS = {
+    "findings": {
+        "findings": [{"id": "f1", "severity": "Minor", "title": "t", "body": "b"}],
+    },
+    "verdicts": {
+        "verdicts": [{"id": "v1", "verdict": "CONFIRMED", "reason": "ok"}],
+    },
+    "grouping": {
+        "grouping": [{"member_ids": ["f1"]}],
+    },
+    "ruling": {
+        "id": "f1", "ruling": "discharged", "reason": "ok",
+    },
+}
+
+_REVIEW_KIND_EMPTY_ENVELOPE_PAYLOADS = {
+    "findings": [{"findings": []}],
+    "verdicts": [{"verdicts": []}],
+    "grouping": [{"grouping": None}, {"grouping": []}],
+}
+
+
+@pytest.mark.parametrize("kind", EA.REVIEW_RESULT_KINDS)
+def test_review_result_kinds_scrub_known_secret(kind):
+    """Every registered review kind routes payload strings through the scrub seam."""
+    res = EA.parse_result("codex", "review", json.dumps(_REVIEW_KIND_SECRET_PAYLOADS[kind]))
+    assert res["ok"] is True
+    assert _REVIEW_SECRET not in json.dumps(res)
+
+
+@pytest.mark.parametrize("kind", EA.REVIEW_RESULT_KINDS)
+def test_review_result_kind_populated_survives_outer_envelope_error(kind):
+    """Populated payloads survive the #949 outer-envelope gate for every registered kind."""
+    inner = json.dumps(_REVIEW_KIND_POPULATED_ENVELOPE_PAYLOADS[kind])
+    stream = _envelope(inner, subtype="error", is_error=True)
+    res = EA.parse_result("cursor", "review", stream)
+    assert res["ok"] is True
+    assert res["resultKind"] == kind
+
+
+@pytest.mark.parametrize("kind", [k for k in EA.REVIEW_RESULT_KINDS
+                                  if k in _REVIEW_KIND_EMPTY_ENVELOPE_PAYLOADS])
+def test_review_result_kind_empty_payload_outer_envelope_error_unreadable(kind):
+    """Empty payloads stay unreadable under an outer error envelope for every registered kind."""
+    for payload in _REVIEW_KIND_EMPTY_ENVELOPE_PAYLOADS[kind]:
+        inner = json.dumps(payload)
+        stream = _envelope(inner, subtype="error", is_error=True)
+        assert EA.parse_result("cursor", "review", stream) == {"ok": False, "reason": "unreadable"}
+
+
+@pytest.mark.parametrize("bad_id", [None, "", "   ", 42, {}])
+def test_parse_result_review_ruling_invalid_id_unreadable(bad_id):
+    stdout = json.dumps({"id": bad_id, "ruling": "discharged", "reason": "ok"})
+    assert EA.parse_result("codex", "review", stdout) == {"ok": False, "reason": "unreadable"}
+
+
+def test_parse_result_review_ruling_valid_id_still_parses():
+    stdout = json.dumps({"id": "f1", "ruling": "discharged", "reason": "resolved"})
+    res = EA.parse_result("codex", "review", stdout)
+    assert res["ok"] is True
+    assert res["resultKind"] == "ruling"
+    assert res["ruling"]["id"] == "f1"

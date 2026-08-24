@@ -31,6 +31,7 @@ TASK_ID_TRAILER = "Task-Id"
 # import this name, never restate the literal.
 import audits  # noqa: E402  (AUDIT_RULINGS + usability predicates; stdlib-only sibling)
 import dispatch_outcome  # noqa: E402  (stdlib-only chokepoint; must not import engine_adapter)
+import round_adapters  # noqa: E402  (P_SYNTHESIS / P_AUDITS contracts; no import cycle)
 
 REVIEW_FORFEIT_VACUOUS = dispatch_outcome.REASON_VACUOUS
 
@@ -678,9 +679,18 @@ def normalize_review_stdout(stdout, fed_prompt=None):
     }
 
 
-def _outer_envelope_error_makes_unreadable(outer_envelope_error, payload_list):
+def _review_payload_is_usable(payload):
+    """True when a parsed review payload carries substantive content past the #949 gate."""
+    if payload is None:
+        return False
+    if isinstance(payload, (list, dict)):
+        return bool(payload)
+    return bool(payload)
+
+
+def _outer_envelope_error_makes_unreadable(outer_envelope_error, payload):
     """Single gate for #949: outer error/control envelope + no usable payload → unreadable."""
-    return outer_envelope_error and not payload_list
+    return outer_envelope_error and not _review_payload_is_usable(payload)
 
 
 def _findings_reply_has_hollow_member(rejected):
@@ -902,11 +912,21 @@ def _matches_review_grouping(obj):
     return "grouping" in obj
 
 
+def _audit_ruling_payload_valid(obj):
+    """Validate ruling per round_adapters P_AUDITS contract. Never raises."""
+    audit_id = obj.get("id")
+    if isinstance(audit_id, str) and not audit_id.strip():
+        return False
+    return round_adapters.payload_fault(round_adapters.P_AUDITS, obj, "") is None
+
+
 def _matches_review_ruling(obj):
     if not all(key in obj for key in ("id", "ruling", "reason")):
         return False
     ruling = obj.get("ruling")
-    return isinstance(ruling, str) and ruling in audits.AUDIT_RULINGS
+    if not isinstance(ruling, str) or ruling not in audits.AUDIT_RULINGS:
+        return False
+    return _audit_ruling_payload_valid(obj)
 
 
 _REVIEW_CONTRACT_MATCHERS = (
@@ -931,20 +951,18 @@ def _recognised_review_kinds(obj):
 
 def _grouping_payload_valid(grouping):
     """Validate synthesis grouping per round_adapters P_SYNTHESIS contract. Never raises."""
+    return round_adapters.payload_fault(
+        round_adapters.P_SYNTHESIS,
+        {"grouping": grouping},
+        round_adapters.SEAT_SYNTHESIS,
+    ) is None
+
+
+def _scrub_grouping(grouping):
+    """Scrub synthesis grouping free-text fields. Never raises."""
     if grouping is None:
-        return True
-    if not isinstance(grouping, list):
-        return False
-    for group in grouping:
-        if not isinstance(group, dict):
-            return False
-        member_ids = group.get("member_ids")
-        if not isinstance(member_ids, list) or not member_ids:
-            return False
-        for member in member_ids:
-            if not isinstance(member, str) or not member:
-                return False
-    return True
+        return None
+    return _scrub_mapping(grouping)
 
 
 def _parse_review_grouping_object(obj, outer_envelope_error):
@@ -952,14 +970,15 @@ def _parse_review_grouping_object(obj, outer_envelope_error):
     grouping = obj.get("grouping")
     if not _grouping_payload_valid(grouping):
         return {"ok": False, "reason": "unreadable"}
-    if _outer_envelope_error_makes_unreadable(outer_envelope_error, []):
+    if _outer_envelope_error_makes_unreadable(outer_envelope_error, grouping):
         return {"ok": False, "reason": "unreadable"}
+    grouping_scrubbed = _scrub_grouping(grouping)
     investigated = []
     inv_rejected = []
     if "investigated" in obj:
         investigated, inv_rejected = _scrub_investigated(obj.get("investigated"))
     result = {"ok": True, "resultKind": "grouping",
-              "grouping": grouping, "investigated": investigated}
+              "grouping": grouping_scrubbed, "investigated": investigated}
     return _attach_investigated_parse_rejections(result, inv_rejected)
 
 
@@ -985,13 +1004,9 @@ def _scrub_ruling_object(obj):
 
 def _parse_review_ruling_object(obj, outer_envelope_error):
     """Parse a review object recognised as an audit ruling. Never raises."""
-    if not audits.has_usable_reason(obj.get("reason")):
+    if not _audit_ruling_payload_valid(obj):
         return {"ok": False, "reason": "unreadable"}
-    ruling = obj.get("ruling")
-    if ruling == audits.AUDIT_RULINGS[2] and not audits.has_usable_new_issues(
-            obj.get("newIssues")):
-        return {"ok": False, "reason": "unreadable"}
-    if _outer_envelope_error_makes_unreadable(outer_envelope_error, []):
+    if _outer_envelope_error_makes_unreadable(outer_envelope_error, obj):
         return {"ok": False, "reason": "unreadable"}
     ruling_record = _scrub_ruling_object(obj)
     investigated = []
