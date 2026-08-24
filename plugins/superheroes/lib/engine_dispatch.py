@@ -93,7 +93,7 @@ RETRY_MIN_TIMEOUT = 900     # DoD 2: the tight-inline retry gets a generous ceil
 ITEM_EVIDENCE_TIMEOUT = 30  # bounds collection-time declared-item evidence git calls under the run lock
 ITEM_IDENTITY_MAX_BYTES = 8 * 1024 * 1024
 MAX_EXPECTED_ITEMS = 1000
-BASELINE_ENTRIES_VERSION = 2
+BASELINE_ENTRIES_VERSION = 3
 MAX_BASELINE_ENTRIES = 20000
 MAX_BASELINE_ENTRY_BYTES = 2 * 1024 * 1024
 ITEM_DETAIL_UNDELIVERED = "items-undelivered"
@@ -608,11 +608,13 @@ def _parse_porcelain_z_entries(data):
             paths = [path]
             if old_path:
                 paths.append(old_path)
-            record = status_xy + "\x1f" + "\x1f".join(paths)
+            # Axis: structured list — any byte, including a separator, is legal in a pathname.
+            record = [status_xy] + paths
             yield record, paths
         else:
             paths = [path]
-            record = status_xy + "\x1f" + path
+            # Axis: structured list — any byte, including a separator, is legal in a pathname.
+            record = [status_xy] + paths
             yield record, paths
         index += 1
 
@@ -622,7 +624,8 @@ def _worktree_entry_set(cwd_real, timeout=None):
         status = _git_scrubbed(
             cwd_real, "status", "--porcelain=v1", "-z", "-uall", timeout=timeout,
         )
-    except subprocess.TimeoutExpired:
+    except (subprocess.TimeoutExpired, UnicodeDecodeError):
+        # Disclosure: pathname bytes are not guaranteed to be UTF-8; an undecodable tree is refused.
         return None
     if status.returncode != 0:
         return None
@@ -634,13 +637,10 @@ def _filter_entry_list(entries, cwd_real, excluded_roots):
         return entries
     kept = []
     for record in entries:
-        if not record.strip():
-            continue
-        parts = record.split("\x1f")
-        if len(parts) < 2:
+        if not isinstance(record, list) or len(record) < 1:
             kept.append(record)
             continue
-        paths = parts[1:]
+        paths = record[1:]
         if not paths:
             kept.append(record)
             continue
@@ -699,7 +699,10 @@ def _worktree_baseline(cwd_real, timeout=None):
         return None
     entries_overflow = (
         len(entries) > MAX_BASELINE_ENTRIES
-        or sum(len(e.encode("utf-8")) for e in entries) > MAX_BASELINE_ENTRY_BYTES
+        or sum(
+            len(json.dumps(e, ensure_ascii=False, sort_keys=False).encode("utf-8"))
+            for e in entries
+        ) > MAX_BASELINE_ENTRY_BYTES
     )
     if entries_overflow:
         # Overflowed baseline is deliberately unverifiable; verdict time resolves fail-closed, never via digest fallback.
@@ -765,7 +768,8 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
             return None
         entries_before = baseline.get("entries")
         if not isinstance(entries_before, list) or not all(
-            isinstance(e, str) for e in entries_before
+            isinstance(e, list) and len(e) >= 1 and all(isinstance(p, str) for p in e)
+            for e in entries_before
         ):
             return None
         try:
@@ -783,9 +787,15 @@ def _worktree_dirt_verdict(baseline, cwd_real, timeout=None):
         live = _foreign_leased_worktree_roots(cwd_real, timeout=timeout)
         if live is not None:
             roots |= live
+        # Axis: the strict-inside-cwd invariant is enforced where it is load-bearing, because persisted roots arrive from disk and are not trustworthy.
+        roots = {
+            r for r in roots
+            if isinstance(r, str) and r.startswith(cwd_real + os.sep)
+        }
         before = _filter_entry_list(entries_before, cwd_real, roots)
         after = _filter_entry_list(entries_after, cwd_real, roots)
-        return sorted(before) != sorted(after)
+        entry_key = lambda record: json.dumps(record, ensure_ascii=False, sort_keys=False)
+        return sorted(before, key=entry_key) != sorted(after, key=entry_key)
     mode = baseline.get("mode")
     if mode is None:
         try:

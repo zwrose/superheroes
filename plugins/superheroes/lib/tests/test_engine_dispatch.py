@@ -5887,12 +5887,12 @@ def test_filter_entry_list_drops_entries_under_excluded_root(tmp_path):
     os.makedirs(cwd, exist_ok=True)
     root = os.path.join(cwd, "leased")
     entries = [
-        "??\x1fleased/file.txt",
-        "??\x1fleased/nested/deep.txt",
-        "??\x1foutside.txt",
+        ["??", "leased/file.txt"],
+        ["??", "leased/nested/deep.txt"],
+        ["??", "outside.txt"],
     ]
     filtered = ED._filter_entry_list(entries, cwd, {root})
-    assert filtered == ["??\x1foutside.txt"]
+    assert filtered == [["??", "outside.txt"]]
 
 
 def test_worktree_dirt_exclusion_union_baseline_and_verdict_roots(tmp_path, monkeypatch):
@@ -6112,24 +6112,11 @@ def test_worktree_dirt_rename_inside_excluded_root_still_excluded(tmp_path, monk
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
 
 
-def test_worktree_dirt_quoted_path_inside_excluded_root_still_excluded(tmp_path, monkeypatch):
+def test_worktree_dirt_quoted_path_outside_excluded_root_reads_dirty(tmp_path, monkeypatch):
     wt, _main = _linked_worktree_pair(tmp_path)
     cwd = os.path.realpath(wt)
     leased_dir = os.path.join(cwd, "leased")
     os.makedirs(leased_dir, exist_ok=True)
-    quoted_name = "café file.txt"
-    with open(os.path.join(leased_dir, quoted_name), "w", encoding="utf-8") as fh:
-        fh.write("quoted\n")
-    subprocess.run(
-        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
-         "add", "leased/"],
-        check=True,
-    )
-    subprocess.run(
-        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
-         "commit", "-qm", "add quoted"],
-        check=True,
-    )
     leased_root = os.path.realpath(leased_dir)
 
     def fake_foreign(cwd_real, timeout=None):
@@ -6138,6 +6125,28 @@ def test_worktree_dirt_quoted_path_inside_excluded_root_still_excluded(tmp_path,
     monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
     baseline = ED._worktree_baseline(cwd, timeout=5)
     assert baseline is not None
+    quoted_name = "café file.txt"
+    with open(os.path.join(cwd, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("quoted\n")
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_worktree_dirt_quoted_path_inside_excluded_root_still_excluded(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    quoted_name = "café file.txt"
+    with open(os.path.join(leased_dir, quoted_name), "w", encoding="utf-8") as fh:
+        fh.write("quoted\n")
     assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
 
 
@@ -6209,6 +6218,122 @@ def test_worktree_dirt_unsupported_entries_version_fail_closed(tmp_path):
         "porcelainSha256": ED._legacy_worktree_porcelain_sha256(cwd, timeout=5),
     }
     assert ED._worktree_dirt_verdict(legacy, cwd, timeout=5) is not None
+
+
+# --- WO-G (#1122): injective entry records + consumer guards ----------------
+
+
+def test_worktree_dirt_unit_separator_filename_outside_excluded_root_reads_dirty(
+    tmp_path, monkeypatch,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    sep_dir_name = "leased\x1fleased"
+    sep_dir = os.path.join(cwd, sep_dir_name)
+    os.makedirs(sep_dir, exist_ok=True)
+    probe_path = os.path.join(sep_dir, "probe.txt")
+    with open(probe_path, "w", encoding="utf-8") as fh:
+        fh.write("probe\n")
+    created_rel = sep_dir_name + "/probe.txt"
+    assert not ED._path_under_excluded_root(
+        os.path.normpath(os.path.join(cwd, created_rel)), {leased_root},
+    )
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_parse_porcelain_z_entries_rename_endpoints_injective():
+    data = "R  a\x1fb\x00c\x00R  a\x00b\x1fc\x00"
+    records = [record for record, _paths in ED._parse_porcelain_z_entries(data)]
+    assert len(records) == 2
+    assert records[0] != records[1]
+    assert records[0] == ["R ", "a\x1fb", "c"]
+    assert records[1] == ["R ", "a", "b\x1fc"]
+
+
+def test_worktree_dirt_unit_separator_inside_excluded_root_still_excluded(
+    tmp_path, monkeypatch,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    leased_dir = os.path.join(cwd, "leased")
+    os.makedirs(leased_dir, exist_ok=True)
+    sep_name = "inner\x1fprobe.txt"
+    with open(os.path.join(leased_dir, sep_name), "w", encoding="utf-8") as fh:
+        fh.write("inside\n")
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "add", "leased/"],
+        check=True,
+    )
+    subprocess.run(
+        ["git", "-C", cwd, "-c", "user.email=t@t.local", "-c", "user.name=t",
+         "commit", "-qm", "add sep inside leased"],
+        check=True,
+    )
+    leased_root = os.path.realpath(leased_dir)
+
+    def fake_foreign(cwd_real, timeout=None):
+        return {leased_root}
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is False
+
+
+@pytest.mark.parametrize(
+    "bad_roots",
+    [
+        lambda cwd: [cwd],
+        lambda cwd: [""],
+        lambda cwd: ["/"],
+        lambda cwd: [os.path.dirname(cwd)],
+    ],
+    ids=["cwd", "empty", "slash", "ancestor"],
+)
+def test_worktree_dirt_consumer_root_guard_bad_persisted_root_reads_dirty(
+    tmp_path, monkeypatch, bad_roots,
+):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    baseline["excludedRoots"] = bad_roots(cwd)
+    with open(os.path.join(cwd, "consumer-guard-dirty.txt"), "w", encoding="utf-8") as fh:
+        fh.write("dirty\n")
+
+    def fake_foreign(cwd_real, timeout=None):
+        return set()
+
+    monkeypatch.setattr(ED, "_foreign_leased_worktree_roots", fake_foreign)
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is True
+
+
+def test_worktree_entry_set_unicode_decode_error_fail_closed(tmp_path, monkeypatch):
+    wt, _main = _linked_worktree_pair(tmp_path)
+    cwd = os.path.realpath(wt)
+    baseline = ED._worktree_baseline(cwd, timeout=5)
+    assert baseline is not None
+    real_scrubbed = ED._git_scrubbed
+
+    def scrubbed_status_raises(cwd_real, *git_args, timeout=None):
+        if git_args and git_args[0] == "status":
+            raise UnicodeDecodeError("utf-8", b"", 0, 1, "invalid")
+        return real_scrubbed(cwd_real, *git_args, timeout=timeout)
+
+    monkeypatch.setattr(ED, "_git_scrubbed", scrubbed_status_raises)
+    assert ED._worktree_entry_set(cwd, timeout=5) is None
+    assert ED._worktree_dirt_verdict(baseline, cwd, timeout=5) is None
 
 
 # --- WO-E (#1122): retained mode-branch coverage + de-tautologized legacy pin ---
