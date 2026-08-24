@@ -3067,16 +3067,18 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
     # handshake makes "the sampler saw the first write, then saw the second" a precondition of the
     # run rather than a scheduling accident. A timed child could not do that: on a loaded machine
     # the poll loop can be descheduled past both writes, and the run then proves nothing (the
-    # 0.12 s child this replaced died inside a single 0.2 s poll period every time). The child
-    # gives up well inside the runner's own 30 s cap and exits non-zero, so a broken handshake
-    # surfaces as a loud failure on the `exit == 0` assertion rather than a hang.
+    # 0.12 s child this replaced died inside a single 0.2 s poll period every time). ONE monotonic
+    # budget covers BOTH waits — a per-wait budget could sum past the runner's cap and let the
+    # runner kill a correct child, which is the load-sensitive false failure this change exists to
+    # remove — and the fixture's cap is raised well clear of that budget. So a broken handshake
+    # surfaces as a loud failure on the `exit == 0` assertion rather than as a hang or a flake.
     progress_path = os.path.join(run_dir, "progress.jsonl")
     script = (
         "import json, sys, time\n"
         "progress = %r\n"
+        "deadline = time.monotonic() + 20\n"
         "def observed(n):\n"
-        "    deadline = time.time() + 20\n"
-        "    while time.time() < deadline:\n"
+        "    while time.monotonic() < deadline:\n"
         "        try:\n"
         "            with open(progress, 'r') as fh:\n"
         "                for line in fh:\n"
@@ -3097,7 +3099,7 @@ def test_run_engine_files_telemetry_stdout_activity(tmp_path, monkeypatch):
         "    sys.exit(4)\n"
     ) % (progress_path,)
     ended, stdout_path, _ = _wo2_run_engine(
-        run_dir, script, monkeypatch=monkeypatch, heartbeat=0.05)
+        run_dir, script, timeout=50, monkeypatch=monkeypatch, heartbeat=0.05)
     assert ended["exit"] == 0
     assert ended.get("signal") is None
     assert ended.get("signalSource") is None
