@@ -372,16 +372,16 @@ named in its issue. A guard with no named failure is speculation dressed as auto
 
 ### The safety-machinery route — the guard refuses the fixer
 
-Some of this plugin's own files are **safety machinery**. The set and its inclusion criterion live in
-`lib/escalation.py`, which states the criterion in its own words — *"any module whose edit could
-disable a floor / gate / halt / escalation guarantee"* — and decides membership in
-`is_safety_machinery`, keyed by resolved canonical path and failing closed. The auto-fix loop gates
-every file the fixer is about to edit through that function, and its instruction is unambiguous:
-*"If `allow` is false, the fixer MUST NOT edit that file (it is safety machinery … ); surface it as a
-finding for the owner instead"* (`skills/review-code/reference/auto-fix-loop.md`). Read those two
-files for the mechanism. **This section is only about what happens to the findings afterwards** — the
-part that lived in session memory and issue history until it was written down here, so that each new
-session re-derived it at the cost of a panel plus a fixer round.
+Some of this plugin's own files are **safety machinery**. `lib/escalation.py` owns the set and
+states the inclusion criterion in its own words — *"any module whose edit could disable a floor /
+gate / halt / escalation guarantee"* — and `is_safety_machinery` is the function that decides
+membership. The auto-fix loop gates every file the fixer is about to edit through that function, and
+its instruction is unambiguous: *"If `allow` is false, the fixer MUST NOT edit that file"* —
+`skills/review-code/reference/auto-fix-loop.md` carries the full refusal, including the `degraded`
+case. **Read those two files for the mechanism; it is deliberately not repeated here, so that this
+section cannot drift from the guard it describes.** This section is only about **what happens to the
+findings afterwards** — the part that lived in session memory and issue history until it was written
+down here, so that each new session re-derived it at the cost of a panel plus a fixer round.
 
 **What the refusal means, and what it does not.** The guard bars the **automated fixer**, not the
 change. Safety machinery is edited all the time — under a ratified issue, by a builder or an
@@ -407,9 +407,10 @@ as builder-dispatched work, in this shape:
   against two files holding two sides of one contract.
 - **The order carries the finding text**, so the implementer fixes a stated defect rather than
   re-deriving it from the file.
-- **The orchestrator verifies independently**, re-running every receipt itself. This is load-bearing
-  here in a way it is not elsewhere: refusing the fixer also removes the loop's own fix-audit stage,
-  so the orchestrator's re-run is the only verification these fixes get.
+- **The orchestrator verifies independently**, re-running every receipt itself. The refusal removes
+  the loop's own fix-audit stage, and that re-run is what **replaces** it — it replaces nothing
+  else. Re-review below, the full local gates, and CI all still apply exactly as they do to any
+  other fix.
 - **Re-review is unchanged** — the fixed surface goes back through the review loop like any other
   fix, and the loop's convergence bar and the third-rework tripwire both still bind.
 
@@ -417,9 +418,12 @@ as builder-dispatched work, in this shape:
 remedy is owner escalation, so for a **Critical or Important** finding on safety machinery the
 owner's word comes **before** the ordered round, not after it. That authorization is **scoped to the
 findings' own surfaces and nothing wider** — it is permission to fix these defects here, never a
-standing licence to edit safety machinery for the rest of the build. **Non-blocking** findings on the
-same surface need no authorization: they are disclosed residuals, recorded in the dispositions table,
-and folded into a later ordered round only if one is already going out.
+standing licence to edit safety machinery for the rest of the build. **Non-blocking** findings on the same
+surface are **disclosed residuals** — recorded in the dispositions table, and never auto-fixed either,
+because the guard refuses the fixer at every severity. Folding one into an ordered round is available
+only when that round is already authorized **and** the finding's surface sits inside what the owner
+authorized or the issue already ratified. A non-blocking finding is never the reason a build reaches
+into safety machinery it was not sent to touch.
 
 **When authorization is unavailable, park.** A headless or owner-absent build that reaches blocking
 findings on safety machinery **parks with receipts** — what the panel found, that the guard refused
@@ -434,7 +438,10 @@ comment](https://github.com/zwrose/superheroes/issues/1109#issuecomment-53905506
 authorized ordered implementer work orders — *"the guard's sanctioned path; the auto-fix loop remains
 forbidden on this surface"* — scoped to exactly those six findings' surfaces ([item-78
 authorization](https://github.com/zwrose/superheroes/issues/1109#issuecomment-5390711707)). **Round
-4** executed that route again under the same standing authorization and converged; its build record
+4** executed that route again under the **same scoped authorization, carried forward unchanged**
+across an intervening session death — a scoped authorization survives across rounds on the findings'
+own surfaces, which is precisely what keeps it different from a licence to edit safety machinery at
+large — and converged; its build record
 on [PR #1120](https://github.com/zwrose/superheroes/pull/1120) is what asked for the route to be
 written down (*Follow-ups for the advisor*, item 9). Two executions, both successful, neither
 reconstructable from the plugin surfaces at the time.
