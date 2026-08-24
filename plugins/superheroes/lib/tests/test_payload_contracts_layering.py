@@ -46,18 +46,13 @@ _REEXPORT_NAMES = (
     "_type_name",
 )
 
+# finding_identity and review_memory arrive transitively through audits — not a layering slip.
 _PAYLOAD_CONTRACTS_LIB_CLOSURE = frozenset({
     "audits",
     "dispatch_outcome",
+    "finding_identity",
     "payload_contracts",
-    "round_phases",
-})
-
-
-_PAYLOAD_CONTRACTS_LIB_CLOSURE = frozenset({
-    "audits",
-    "dispatch_outcome",
-    "payload_contracts",
+    "review_memory",
     "round_phases",
 })
 

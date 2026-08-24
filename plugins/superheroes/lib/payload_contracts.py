@@ -2,9 +2,10 @@
 """Single home for declared per-seat payload contracts.
 
 Sits below both the round-phase orchestration layer and the engine transport core so
-both may depend on it without either reaching upward. Imports are stdlib plus
-`round_phases`, `audits`, and `dispatch_outcome` only — that constraint is pinned by
-the layering test in test_payload_contracts_layering.py.
+both may depend on it without either reaching upward. Direct imports are stdlib plus
+`round_phases`, `audits`, and `dispatch_outcome`; `audits` brings `finding_identity`
+and `review_memory` transitively. The whole import closure is pinned by
+`test_payload_contracts_import_closure_is_pinned` in test_payload_contracts_layering.py.
 """
 import copy
 import os

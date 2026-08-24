@@ -129,17 +129,6 @@ _MISSING_POLICY = {
     P_FIXER: MISSING_REFUSE_FOLD,
 }
 
-# The one ruling whose claim is unusable without a new-issue payload. `audits` exposes the ENUM
-# (`AUDIT_RULINGS`, which this module validates against and never hand-copies) but no per-member
-# constant, so the member is named here once and `test_new_issue_ruling_is_a_real_member` holds it
-# equal to a real member of that enum.
-
-# The panel payload's never-ran FLAG (`_fold_panel` reads `seat.get(...) is True`). Bound from
-# `dispatch_outcome` rather than spelled as a literal: the flag IS the boolean form of that outcome
-# token, and #747's census keeps every outcome token in that one home.
-# `test_panel_vacuous_flag_marks_a_seat_never_ran` drives the real fold through this exact key, so
-# the binding is pinned by behaviour rather than by a string comparison.
-
 _KIND_RESULT = "result"
 _KIND_MISSING = "missing"
 
