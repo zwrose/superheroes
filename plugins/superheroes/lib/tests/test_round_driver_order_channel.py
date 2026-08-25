@@ -674,17 +674,25 @@ def test_panel_fixture_supplies_realistic_values_and_exact_key_set():
 
 def test_placeholder_fixture_known_table_covers_every_template_placeholder():
     """Drift pin (strong form): every placeholder declared in an order template must have a
-    realistic (non-stub) value in `_KNOWN_REALISTIC_VALUES` for that phase.
+    realistic (non-stub) value in `_KNOWN_REALISTIC_VALUES` for that phase, and every known-table
+    key must still be declared in that phase's template or registered as an auxiliary input.
 
     Adding `{{NEW}}` to any template without extending the known-name table makes this test fail
     without touching the fixture builder — the mirror is derived from the template, not hand-typed.
+    Deleting a placeholder from a template without removing its known-table entry fails the reverse
+    half the same way.
     """
+    phases = sorted(RD._READ_ONLY_CHANNEL_PHASES)
+    assert phases, "read-only channel phases must be nonempty for fixture drift pin"
     gaps = []
     stub_values = []
-    for phase in sorted(RD._READ_ONLY_CHANNEL_PHASES):
+    stale_keys = []
+    for phase in phases:
         declared, reason = _template_declared_placeholders(phase)
         assert reason is None, (phase, reason)
         direct = declared - _DERIVED_PLACEHOLDER_NAMES
+        direct_names, name_reason = _fixture_direct_placeholder_names(phase)
+        assert name_reason is None, (phase, name_reason)
         known = _KNOWN_REALISTIC_VALUES.get(phase, {})
         ph = _phase_placeholders(phase, RD.CHANNEL_FILE)
         for name in sorted(direct):
@@ -696,8 +704,11 @@ def test_placeholder_fixture_known_table_covers_every_template_placeholder():
             value = ph[name]
             if not isinstance(value, str) or not value or value.startswith("STUB:"):
                 stub_values.append("%s:%s=%r" % (phase, name, value))
+        for key in sorted(set(known) - direct_names):
+            stale_keys.append("%s:%s" % (phase, key))
     assert not gaps, "template placeholder(s) missing realistic fixture value: %s" % gaps
     assert not stub_values, "template placeholder(s) with stub or empty fixture value: %s" % stub_values
+    assert not stale_keys, "stale fixture key(s) not declared in template or aux inputs: %s" % stale_keys
 
 
 def _render_phase(phase, host_seat):
