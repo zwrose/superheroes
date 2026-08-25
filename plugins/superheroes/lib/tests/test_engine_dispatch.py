@@ -5384,7 +5384,7 @@ def test_recorded_under_cap_count_overrides_forged_head_marker(tmp_path):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_small_forged_head_marker_capture())
-    state = {"attempts": {1: {"ended": {"stdoutBytes": 58}}}}
+    state = {"attempts": {1: {"ended": {"stdoutBytes": 58, "stdoutBytesPreCap": True}}}}
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
 
 
@@ -5395,12 +5395,21 @@ def test_recorded_cap_boundary_count_overrides_forged_head_marker(tmp_path):
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     with open(stdout_path, "w", encoding="utf-8") as fh:
         fh.write(_small_forged_head_marker_capture())
-    state = {"attempts": {1: {"ended": {"stdoutBytes": ED.MAX_STDOUT_CAPTURE}}}}
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": ED.MAX_STDOUT_CAPTURE,
+                    "stdoutBytesPreCap": True,
+                }
+            }
+        }
+    }
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
 
 
 def test_injected_seam_count_does_not_override_head_marker(tmp_path):
-    """axis: injected-seam post-cap stdoutBytes does not suppress head marker."""
+    """axis: unstamped seam stdoutBytes is not authoritative — marker read decides."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir, exist_ok=True)
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
@@ -5412,6 +5421,26 @@ def test_injected_seam_count_does_not_override_head_marker(tmp_path):
                 "ended": {
                     "stdoutBytes": 58,
                     "activitySource": "injected-seam",
+                }
+            }
+        }
+    }
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == 58
+
+
+def test_unstamped_unknown_producer_count_does_not_override_head_marker(tmp_path):
+    """axis: unstamped stdoutBytes from an unrecognized producer is not authoritative."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": 58,
+                    "activitySource": "some-future-producer",
                 }
             }
         }
@@ -5439,8 +5468,17 @@ def test_file_over_cap_grades_truncated_despite_under_cap_recorded_count(tmp_pat
     over = ED.MAX_STDOUT_CAPTURE + 512
     with open(stdout_path, "wb") as fh:
         fh.write(b"x" * over)
-    state = {"attempts": {1: {"ended": {"stdoutBytes": 58}}}}
+    state = {"attempts": {1: {"ended": {"stdoutBytes": 58, "stdoutBytesPreCap": True}}}}
     assert ED._attempt_stdout_truncated(run_dir, state, 1) == over
+
+
+def test_run_engine_files_stamps_stdout_bytes_pre_cap(tmp_path):
+    """axis: _run_engine_files stamps stdoutBytesPreCap on the attempt-ended record."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    ended, stdout_path, _ = _wo2_run_engine(run_dir, "print('hello stdout')")
+    assert ended["stdoutBytesPreCap"] is True
+    assert ended["stdoutBytes"] == os.path.getsize(stdout_path)
 
 
 def test_complete_marker_mid_body_not_truncated():

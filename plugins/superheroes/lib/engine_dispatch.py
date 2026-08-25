@@ -2237,6 +2237,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         ended_record["promptBytes"] = prompt_bytes
     if pre_cap_stdout_bytes is not None:
         ended_record["stdoutBytes"] = pre_cap_stdout_bytes
+        # Measured before _cap_file_tail — authoritative for truncation grading.
+        ended_record["stdoutBytesPreCap"] = True
     if pre_cap_stderr_bytes is not None:
         ended_record["stderrBytes"] = pre_cap_stderr_bytes
     if last_activity_at is not None:
@@ -2733,9 +2735,10 @@ def _attempt_stdout_truncated(run_dir_real, state, attempt):
     if size > MAX_STDOUT_CAPTURE:
         return size
     # axis: authoritative under-cap recorded count outranks marker text;
-    # provenance matters — real spawn records pre-cap bytes (:2239), injected seam
-    # records post-cap len (:2313) and cannot settle suppression.
-    if observed is not None and ended.get("activitySource") != "injected-seam":
+    # authority is asserted by the producer via stdoutBytesPreCap (_run_engine_files
+    # only — measured before _cap_file_tail); unstamped records (_execute_injected_attempt
+    # or any future producer) fall through to the marker read.
+    if observed is not None and ended.get("stdoutBytesPreCap") is True:
         return None
     text = _read_capped_text(stdout_path)
     if _stdout_capture_truncated(text):
