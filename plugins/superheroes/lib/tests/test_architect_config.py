@@ -261,7 +261,8 @@ def test_write_policy_refuses_over_newer_persisted_with_current_argument(tmp_pat
         assert fh.read() == raw_bytes
 
 
-def test_read_policy_preserves_future_record_in_memory(tmp_path):
+# read_policy projects to known fields; write_policy refuses; nothing downgrades.
+def test_read_policy_returns_known_fields_on_version_99_record(tmp_path):
     store = str(tmp_path / "store")
     _write_future_policy_file(tmp_path, store)
     got = AC.read_policy(str(tmp_path), root=store)
@@ -269,6 +270,11 @@ def test_read_policy_preserves_future_record_in_memory(tmp_path):
     assert got["visibility"] == AC.COMMITTED
     assert got["confirmed"] is True
     assert got["disclosures"] == ["future disclosure"]
+
+
+def test_migrate_preserves_unknown_keys_and_schema_version_on_newer_record(tmp_path):
+    store = str(tmp_path / "store")
+    _write_future_policy_file(tmp_path, store)
     with open(AC.policy_path(str(tmp_path), root=store), encoding="utf-8") as fh:
         raw = json.load(fh)
     migrated = AC._migrate(raw)
