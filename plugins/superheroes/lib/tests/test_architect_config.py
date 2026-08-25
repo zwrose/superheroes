@@ -36,6 +36,44 @@ def test_write_then_read_roundtrips(tmp_path):
     assert got["location"] == "docs/specs"
     assert got["visibility"] == AC.GITIGNORED
     assert got["confirmed"] is True
+    assert got["disclosures"] == []
+
+
+def test_disclosures_survive_roundtrip(tmp_path):
+    store = str(tmp_path / "store")
+    disclosure = (
+        "Recommended docs/superheroes committed; confirmed: false (provisional). "
+        "/superheroes:configure confirms or changes it."
+    )
+    pol = {
+        "location": "docs/superheroes",
+        "visibility": AC.COMMITTED,
+        "confirmed": False,
+        "disclosures": [disclosure],
+    }
+    written = AC.write_policy(str(tmp_path), pol, root=store)
+    assert written["disclosures"] == [disclosure]
+    got = AC.read_policy(str(tmp_path), root=store)
+    assert got["disclosures"] == [disclosure]
+    pol2 = dict(got, disclosures=[disclosure, "second disclosure"])
+    AC.write_policy(str(tmp_path), pol2, root=store)
+    got2 = AC.read_policy(str(tmp_path), root=store)
+    assert got2["disclosures"] == [disclosure, "second disclosure"]
+
+
+def test_old_schema_record_migrates_disclosures_to_empty(tmp_path):
+    store = str(tmp_path / "store")
+    p = AC.policy_path(str(tmp_path), root=store)
+    os.makedirs(os.path.dirname(p), exist_ok=True)
+    with open(p, "w") as fh:
+        json.dump(
+            {"schemaVersion": 1, "location": "docs/superheroes",
+             "visibility": "committed", "confirmed": True},
+            fh,
+        )
+    got = AC.read_policy(str(tmp_path), root=store)
+    assert got["confirmed"] is True
+    assert got["disclosures"] == []
 
 
 def test_read_policy_migrates_missing_fields(tmp_path):
@@ -49,6 +87,7 @@ def test_read_policy_migrates_missing_fields(tmp_path):
     got = AC.read_policy(str(tmp_path), root=store)
     assert got["confirmed"] is False  # defaulted (treated as provisional)
     assert got["location"] == "docs/superheroes"
+    assert got["disclosures"] == []
 
 
 def test_read_policy_corrupt_is_none(tmp_path):

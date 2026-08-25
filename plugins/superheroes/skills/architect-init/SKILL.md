@@ -43,7 +43,8 @@ print(json.dumps(p) if p else 'null')
 **FR-11 idempotency (CONVENTIONS `§2.3`):**
 
 - Policy is absent or `"confirmed": false` (provisional) → proceed to Step 3
-  (run the analysis + interview).
+  (analysis + provisional default). Confirmation or change happens only through
+  `/superheroes:configure`.
 - Policy is `"confirmed": true` → report the current policy (location +
   visibility) and exit unchanged. To change it the owner must explicitly request
   a policy reset.
@@ -62,8 +63,8 @@ print(json.dumps(architect_config.analyze_repo(os.getcwd())))
 "
 ```
 
-Apply the analysis-informed default directly with `confirmed: false` (provisional). Every run takes
-this path — no branch on human presence:
+Apply the analysis-informed default directly with `confirmed: false` (provisional). Every
+non-interactive CLI invocation takes this path — no branch on an unanswered gate:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -71,16 +72,27 @@ python3 -B -c "
 import sys, os; sys.path.insert(0, '$ROOT_DIR/lib')
 import architect_config
 rec = architect_config.analyze_repo(os.getcwd())
-architect_config.write_policy(os.getcwd(),
-    {'location': rec['location'], 'visibility': rec['visibility'], 'confirmed': False})
+disclosure = (
+    'Recommended location: %s; visibility: %s; confirmed: false (provisional). '
+    '/superheroes:configure confirms or changes it. '
+    'Committed shares definition-docs with collaborators; gitignored keeps the repo pristine.'
+) % (rec['location'], rec['visibility'])
+architect_config.write_policy(os.getcwd(), {
+    'location': rec['location'],
+    'visibility': rec['visibility'],
+    'confirmed': False,
+    'disclosures': [disclosure],
+})
 "
 ```
 
-**Disclosure (write into the run output and Step 4 report):** state the recommendation applied
-(location + visibility), that `confirmed: false` means provisional, and that `/superheroes:configure`
-confirms or changes it. Include the trade-offs — committed shares definition-docs with collaborators;
-gitignored keeps the repo pristine — so the owner reading the artifact learns what they would have
-been told interactively.
+<!-- decision-point: id=architect-doc-policy-default mode=proceed kind=owner-gate default="analysis-informed provisional policy" carrier=doc-policy-disclosures -->
+**Disclosure (doc-policy `disclosures` via `write_policy`).** The shell block above persists the
+recommendation applied (location + visibility), that `confirmed: false` means provisional, and that
+`/superheroes:configure` confirms or changes it — plus the trade-offs (committed shares
+definition-docs with collaborators; gitignored keeps the repo pristine) — in the `disclosures`
+field of `doc-policy.json`. The run continues after the write.
+<!-- /decision-point: id=architect-doc-policy-default -->
 
 If `write_policy` returns `None` (config lock contended), surface a notice
 and exit without writing — the caller retries (CONVENTIONS `§4.4`).
@@ -88,7 +100,8 @@ and exit without writing — the caller retries (CONVENTIONS `§4.4`).
 ## Step 4 — Report
 
 Tell the owner what was written (or preserved): location, visibility, confirmed
-or provisional, and the disclosure above when `confirmed` is false. Remind the owner that
+or provisional, and the disclosure strings in `doc-policy.json`'s `disclosures` field when
+`confirmed` is false. Remind the owner that
 `architect-discovery` picks up the policy from here and that `/superheroes:configure` confirms
 or changes it.
 
