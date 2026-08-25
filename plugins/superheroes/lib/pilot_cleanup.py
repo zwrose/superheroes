@@ -782,6 +782,7 @@ def cleanup_effect_receipt(
     identity_strength,
     sentinel_factory=None,
     timeout_seconds=20,
+    sentinel_timeout_seconds=20,
 ):
     """Run the cleanup containment exercise and return a pass/fail receipt.
 
@@ -792,6 +793,13 @@ def cleanup_effect_receipt(
     Residual foreign sentinels are recorded and disclosed rather than silently removed: the
     framework has no remove command, and running the project cleanup against a sibling namespace
     to tidy up would be the exact destruction this exercise exists to prevent.
+
+    Two budgets, not one (#1146). ``timeout_seconds`` bounds the *subject* — the project's own
+    declared cleanup command. ``sentinel_timeout_seconds`` bounds this exercise's *instrumentation*
+    — every plant and probe. They were one knob, and the coupling inverted an attribution: a
+    caller that tightened the budget on the subject also starved the harness steps, so a slow
+    machine returned ``cleanup-sentinel-plant-failed`` for a run whose plant was fine. A generous
+    instrumentation budget only makes a real failure arrive later; a tight one misnames it.
     """
     if sentinel_factory is None:
         sentinel_factory = mint_sentinel_id
@@ -866,7 +874,7 @@ def cleanup_effect_receipt(
         connection_detail=connection_detail,
         reach_roots=reach_roots,
         run_cwd=run_cwd,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=sentinel_timeout_seconds,
     )
     if any(observations["preplant"].values()):
         receipt = _build_receipt(
@@ -912,7 +920,7 @@ def cleanup_effect_receipt(
                     connection_detail=connection_detail,
                     reach_roots=reach_roots,
                     run_cwd=run_cwd,
-                    timeout_seconds=timeout_seconds,
+                    timeout_seconds=sentinel_timeout_seconds,
                 )
                 residual_by_ns[ns]["state"] = "planted"
                 planted_namespaces.append(ns)
@@ -950,7 +958,7 @@ def cleanup_effect_receipt(
         connection_detail=connection_detail,
         reach_roots=reach_roots,
         run_cwd=run_cwd,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=sentinel_timeout_seconds,
     )
     if not all(observations["postplant"].values()):
         receipt = _build_receipt(
@@ -1014,7 +1022,7 @@ def cleanup_effect_receipt(
         connection_detail=connection_detail,
         reach_roots=reach_roots,
         run_cwd=run_cwd,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=sentinel_timeout_seconds,
     )
 
     if observations["postcleanup"].get(namespace):

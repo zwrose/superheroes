@@ -3159,26 +3159,56 @@ def test_run_engine_files_telemetry_timeout(tmp_path, monkeypatch):
     assert ended.get("signalSource") == "runner-timeout"
 
 
+# #1146: a heartbeat interval no run can reach, so the in-loop sampler is switched OFF by
+# construction rather than merely set coarse. The pair below exists to prove the POST-EXIT final
+# sample, and a coarse-but-reachable interval (the 0.5 s this replaced) left that axis at the
+# mercy of the machine: on a loaded host a beat could fire, credit the activity itself, and the
+# post-exit fold would then find no growth to fold — the test passing without ever exercising the
+# thing it names. Off outright makes the fold the ONLY path that can credit activity, so a
+# regression in it is red on every host instead of red on a fast one.
+_SAMPLER_OFF = 10 ** 6
+
+
+def _assert_answer_at_exit(ended, stream, path):
+    """The post-exit sample's answer, graded against SAME-RUN baselines (#1132's pattern).
+
+    The former `silenceSeconds < 0.25` was an absolute wall-clock constant: it graded the machine,
+    not the telemetry, and its sibling went red at load average 82 with the code untouched. Both
+    bounds here move with the host — the credited moment is compared against the run's own final
+    write, and the reported silence against the run's own span from that write to the record.
+    """
+    assert ended.get("silenceSeconds") is not None
+    assert ended.get("activityStream") == stream
+    final_write = os.path.getmtime(path)
+    assert ended["lastActivityAt"] >= final_write, (
+        "activity credited at %r, before the final %s write at %r"
+        % (ended["lastActivityAt"], stream, final_write)
+    )
+    assert 0 <= ended["silenceSeconds"] <= ended["at"] - final_write, (
+        "silence of %r is not within the run's own span from the final %s write (%r) to the "
+        "attempt-ended record (%r)"
+        % (ended["silenceSeconds"], stream, final_write, ended["at"])
+    )
+
+
 def test_run_engine_files_telemetry_answer_at_exit_stdout(tmp_path, monkeypatch):
     """axis: timing accuracy of silenceSeconds (post-exit final sample, stdout)."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.5)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", _SAMPLER_OFF)
     script = "import sys\nsys.stdout.write('final')\n"
-    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
-    assert ended.get("silenceSeconds") is not None
-    assert ended["silenceSeconds"] < 0.25
+    ended, stdout_path, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    _assert_answer_at_exit(ended, "stdout", stdout_path)
 
 
 def test_run_engine_files_telemetry_answer_at_exit_stderr(tmp_path, monkeypatch):
     """axis: timing accuracy of silenceSeconds (post-exit final sample, stderr)."""
     run_dir = str(tmp_path / "run")
     os.makedirs(run_dir)
-    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", 0.5)
+    monkeypatch.setattr(ED, "HEARTBEAT_INTERVAL", _SAMPLER_OFF)
     script = "import sys\nsys.stderr.write('final')\n"
-    ended, _, _ = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
-    assert ended.get("silenceSeconds") is not None
-    assert ended["silenceSeconds"] < 0.25
+    ended, _, stderr_path = _wo2_run_engine(run_dir, script, monkeypatch=monkeypatch)
+    _assert_answer_at_exit(ended, "stderr", stderr_path)
 
 
 def test_journal_state_real_attempt_ended_wins_over_synthetic_second():
