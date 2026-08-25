@@ -1216,6 +1216,11 @@ def test_cleanup_effect_receipt_fails_cleanup_nonzero(private_tmp):
 
 
 def test_cleanup_effect_receipt_fails_cleanup_timeout(private_tmp):
+    # #1146: `timeout_seconds=1` now bounds the CLEANUP COMMAND only. It used to bound the plant
+    # and probe steps too, so under load the plant timed out before this test's path was reached
+    # and the receipt came back `cleanup-sentinel-plant-failed` — a load reading, not a verdict
+    # about the branch under test (observed red in PR #1143's build; green alone and on a settled
+    # tree). The sentinel steps keep their own generous default; see the decoupling test below.
     timeout_cleanup = "#!/bin/sh\n/bin/sleep 5\nexit 0\n"
     reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
         private_tmp
@@ -1238,6 +1243,62 @@ def test_cleanup_effect_receipt_fails_cleanup_timeout(private_tmp):
     )
     assert receipt["result"] == pc.RESULT_FAIL
     assert receipt["reason"] == pc.REASON_CLEANUP_COMMAND_FAILED
+
+
+# --- edge 7b: instrumentation budget vs the budget under test -------------------
+
+def test_cleanup_effect_receipt_sentinel_budget_decoupled_from_cleanup_timeout(
+    private_tmp, monkeypatch
+):
+    # The regression guard for the decoupling the test above relies on (#1146). It reads the
+    # budget each invocation was actually given rather than timing anything, so re-coupling the
+    # two knobs goes red on a fast machine instead of surfacing as a flake on a loaded one. The
+    # sentinel budget is a marker value, never waited on: plant and probe finish in milliseconds.
+    timeout_cleanup = "#!/bin/sh\n/bin/sleep 5\nexit 0\n"
+    reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
+        private_tmp
+    )
+    plant, probe = _write_scripts(bin_dir)
+    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", timeout_cleanup)
+
+    budgets = []
+    real_run_bounded = pc.run_bounded
+
+    def recording_run_bounded(command, *, cwd, env, timeout_seconds=20, max_output_bytes=4096):
+        budgets.append((command[0], timeout_seconds))
+        return real_run_bounded(
+            command,
+            cwd=cwd,
+            env=env,
+            timeout_seconds=timeout_seconds,
+            max_output_bytes=max_output_bytes,
+        )
+
+    monkeypatch.setattr(pc, "run_bounded", recording_run_bounded)
+    receipt = pc.cleanup_effect_receipt(
+        _three_slot_policy(store_dir, plant, probe),
+        _pilot_block(cleanup_script),
+        _SLOT_REF,
+        reach_roots=[reach_root],
+        run_cwd=run_cwd,
+        cleanup_root=cleanup_repo,
+        journal_path=journal_path,
+        now=_NOW,
+        observed_identity="example_dev",
+        identity_provenance="observed",
+        identity_strength="strong",
+        timeout_seconds=1,
+        sentinel_timeout_seconds=17,
+    )
+    assert receipt["reason"] == pc.REASON_CLEANUP_COMMAND_FAILED
+    by_command = {}
+    for argv0, budget in budgets:
+        by_command.setdefault(argv0, set()).add(budget)
+    # Every step ran, so an assertion below cannot pass by never having been exercised.
+    assert set(by_command) == {plant, probe, cleanup_script}
+    assert by_command[cleanup_script] == {1}, "the cleanup command must carry timeout_seconds"
+    assert by_command[plant] == {17}, "the plant step must carry sentinel_timeout_seconds"
+    assert by_command[probe] == {17}, "the probe step must carry sentinel_timeout_seconds"
 
 
 # --- edge 8: own sentinel survives ---------------------------------------------
