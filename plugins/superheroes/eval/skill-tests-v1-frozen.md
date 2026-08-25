@@ -1,7 +1,8 @@
 # review-crew skill-test state matrix (frozen v1 snapshot)
 
-> **Status: frozen v1 evidence.** This file preserves the v1 skill-test state matrix as it stood when the eval harness was retired as historical record (v2 reframe, #478/#479). Names like review-plan/review-tasks/plan/tasks/spine below are retired v1 concepts. **The current oracle matrix is `eval/skill-tests.md`.**
+> **The current oracle matrix is `eval/skill-tests.md`.**
 
+> **Status (v2): historical record.** This eval harness predates the v2 reframe (spine + plan/tasks retired, #478/#479). It is preserved as frozen v1 evidence; a v2 rebuild of the review-eval harness is scheduled in the S2 "Review quality" lane (epic #476 — review benchmark #131, orientation review #318). Names like review-plan/review-tasks/plan/tasks/spine below are retired v1 concepts, kept for the historical record — not the current system.
 A documented, re-runnable **state matrix** of orchestrator behavior across the
 dimensions the review skills branch on: **profile presence × profile status ×
 verify-mode × review-init branches × strict fallback**. For each cell it records
