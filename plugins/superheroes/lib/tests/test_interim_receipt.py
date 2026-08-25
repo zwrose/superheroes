@@ -3,12 +3,18 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import subprocess
 
 import pytest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
 _LIB = os.path.dirname(_HERE)
+_PLUGIN_ROOT = os.path.normpath(os.path.join(_HERE, "..", ".."))
+_ROUND_DRIVER_DOC = os.path.join(
+    _PLUGIN_ROOT, "skills", "review-code", "reference", "round-driver.md")
+_WHICH_STOPS_MARKER = "**Which stops invoke it.**"
+_WHICH_STOPS_END_MARKER = "**Terminal receipt preserved.**"
 
 
 def _load(name):
@@ -249,12 +255,49 @@ def test_checkpoint_stop_reason_held_refuses_terminal(tmp_path):
     assert out["ok"] is False and out["reason"] == "checkpoint-session-terminal"
 
 
-def test_checkpoint_stop_reasons_census_non_terminal(tmp_path):
-    # axis: every CHECKPOINT_STOP_REASONS member must succeed on a non-terminal session.
-    for reason in RD.CHECKPOINT_STOP_REASONS:
-        d = _session(tmp_path, name="s-%s" % reason)
-        out = RD.cmd_checkpoint(d, reason)
-        assert out["ok"] is True, (reason, out)
+def _checkpoint_which_stops_paragraph():
+    """Slice round-driver.md's **Which stops invoke it.** paragraph only."""
+    with open(_ROUND_DRIVER_DOC, encoding="utf-8") as fh:
+        text = fh.read()
+    start = text.find(_WHICH_STOPS_MARKER)
+    assert start != -1, (
+        "round-driver.md missing checkpoint stop-reason paragraph anchor %r"
+        % _WHICH_STOPS_MARKER)
+    rest = text[start + len(_WHICH_STOPS_MARKER):]
+    end = rest.find("\n\n" + _WHICH_STOPS_END_MARKER)
+    assert end != -1, (
+        "round-driver.md missing end anchor %r after %r"
+        % (_WHICH_STOPS_END_MARKER, _WHICH_STOPS_MARKER))
+    return rest[:end]
+
+
+def _checkpoint_stop_reasons_from_doc():
+    """Bold stop-reason tokens in the enumeration clause — not incidental ``held`` elsewhere."""
+    paragraph = _checkpoint_which_stops_paragraph()
+    enum_end = paragraph.find("Once the hold fold")
+    assert enum_end != -1, (
+        "round-driver.md %r paragraph missing enumeration boundary %r"
+        % (_WHICH_STOPS_MARKER, "Once the hold fold"))
+    enumeration = paragraph[:enum_end]
+    documented = frozenset(re.findall(r"\*\*([a-z][a-z0-9-]*)\*\*", enumeration))
+    assert documented, (
+        "round-driver.md %r paragraph has no bold stop-reason tokens in its enumeration"
+        % _WHICH_STOPS_MARKER)
+    return documented
+
+
+def test_checkpoint_stop_reasons_census_matches_which_stops_invoke_paragraph():
+    # axis: CHECKPOINT_STOP_REASONS ↔ round-driver.md "Which stops invoke it" (both directions).
+    coded = frozenset(RD.CHECKPOINT_STOP_REASONS)
+    documented = _checkpoint_stop_reasons_from_doc()
+    only_code = coded - documented
+    only_docs = documented - coded
+    assert not only_code, (
+        "CHECKPOINT_STOP_REASONS member(s) missing from round-driver.md %r paragraph: %s"
+        % (_WHICH_STOPS_MARKER, sorted(only_code)))
+    assert not only_docs, (
+        "round-driver.md %r paragraph names stop reason(s) not in CHECKPOINT_STOP_REASONS: %s"
+        % (_WHICH_STOPS_MARKER, sorted(only_docs)))
 
 
 def test_interim_checkpoint_not_at_terminal_path(tmp_path):

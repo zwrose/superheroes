@@ -294,6 +294,61 @@ stay; only the vacuous proof was removed.
 
 ---
 
+## BP-CR-11 — checkpoint stop-reason vocabulary ↔ round-driver.md "Which stops invoke it"
+
+**Replaces:** the retired tautological census `test_checkpoint_stop_reasons_census_non_terminal`
+(WO-b4) — that test iterated `CHECKPOINT_STOP_REASONS` and asserted `cmd_checkpoint` accepts each
+member, which cannot fail when the only gate is membership in the same constant.
+
+**Guarded element:** `test_checkpoint_stop_reasons_census_matches_which_stops_invoke_paragraph` —
+the doc-derivation census that requires `CHECKPOINT_STOP_REASONS` and the bold stop-reason tokens in
+`round-driver.md`'s **Which stops invoke it.** enumeration clause to agree in both directions.
+
+**Neutralization A (code member missing from doc):** appended `"probe-unreachable-member"` to
+`CHECKPOINT_STOP_REASONS` in `round_driver.py`.
+
+**Red run A:**
+```
+>       assert not only_code, (
+            "CHECKPOINT_STOP_REASONS member(s) missing from round-driver.md %r paragraph: %s"
+            % (_WHICH_STOPS_MARKER, sorted(only_code)))
+E       AssertionError: CHECKPOINT_STOP_REASONS member(s) missing from round-driver.md '**Which stops invoke it.**' paragraph: ['probe-unreachable-member']
+E       assert not frozenset({'probe-unreachable-member'})
+
+plugins/superheroes/lib/tests/test_interim_receipt.py:295: AssertionError
+FAILED …::test_checkpoint_stop_reasons_census_matches_which_stops_invoke_paragraph
+1 failed in 0.96s
+```
+
+**Green run A after inverse revert:** `1 passed in 0.76s`.
+
+**Neutralization B (doc-only invention):** inserted `**probe-doc-fictitious** (bite-proof probe),`
+into the enumeration clause of the **Which stops invoke it.** paragraph in `round-driver.md`.
+
+**Red run B:**
+```
+>       assert not only_docs, (
+            "round-driver.md %r paragraph names stop reason(s) not in CHECKPOINT_STOP_REASONS: %s"
+            % (_WHICH_STOPS_MARKER, sorted(only_docs)))
+E       AssertionError: round-driver.md '**Which stops invoke it.**' paragraph names stop reason(s) not in CHECKPOINT_STOP_REASONS: ['probe-doc-fictitious']
+E       assert not frozenset({'probe-doc-fictitious'})
+
+plugins/superheroes/lib/tests/test_interim_receipt.py:298: AssertionError
+FAILED …::test_checkpoint_stop_reasons_census_matches_which_stops_invoke_paragraph
+1 failed in 0.37s
+```
+
+**Green run B after inverse revert:** `1 passed in 0.91s`.
+
+**Paragraph bounding (stated for the orchestrator).** Start anchor: the unique bold heading
+`**Which stops invoke it.**`. End anchor: the next blank-line + bold heading
+`**Terminal receipt preserved.**` — the same heading pattern used throughout the checkpoint section.
+Within that slice, only the enumeration prefix before the stable sentence boundary `Once the hold fold`
+is scanned for `**token**` names, so incidental ``held`` mentions in backticks later in the paragraph
+do not satisfy the census.
+
+---
+
 ## Closing state
 
 After the full probe sequence:
@@ -304,7 +359,7 @@ grep -c 'if False' plugins/superheroes/lib/handback_gate.py   → 0
 
 test_receipt_schema_declaration.py        6 passed
 test_order_input_ownership_doc_drift.py   6 passed
-test_interim_receipt.py                  26 passed
+test_interim_receipt.py                  29 passed
 test_handback_gate_refusal_census.py     10 passed
 test_handback_gate.py                    96 passed
 ```
