@@ -138,40 +138,70 @@ RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
 RECEIPT_FORM_CERTIFIED = "certified"
 RECEIPT_FORM_ATTESTED = "attested"
 RECEIPT_FORM_INTERIM = "interim"
-# ONE declaration: key → receipt forms that carry it. Required/forbidden per form DERIVE from here.
+RECEIPT_KEY_REQUIRED = "required"
+RECEIPT_KEY_OPTIONAL = "optional"
+_ALL_RECEIPT_FORMS = (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM)
+# ONE declaration: key → {form: required|optional}. A form absent from a key's mapping is FORBIDDEN
+# for that form. Required, optional, and forbidden sets per form DERIVE from here — no second list.
 RECEIPT_KEY_FORMS = {
-    "rounds": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "findings": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "decisions": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "seatMap": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "scriptRan": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "degraded": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "skippedBlockers": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "schemaVersion": (RECEIPT_FORM_CERTIFIED,),
-    "certification": (RECEIPT_FORM_CERTIFIED,),
-    "certificationShape": (RECEIPT_FORM_CERTIFIED,),
-    "verdict": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED),
-    "schema": (RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "attestation": (RECEIPT_FORM_ATTESTED,),
-    "artifacts": (RECEIPT_FORM_ATTESTED,),
-    "roster": (RECEIPT_FORM_ATTESTED,),
-    "stop": (RECEIPT_FORM_INTERIM,),
-    "base": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "policyApplied": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
-    "baseGuard": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "rounds": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+               RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+               RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "findings": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "decisions": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "seatMap": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "scriptRan": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                  RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "degraded": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                 RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "skippedBlockers": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                        RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+                        RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "schemaVersion": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED},
+    "certification": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED},
+    "certificationShape": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED},
+    "verdict": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_REQUIRED,
+                RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "schema": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+               RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED,
+               RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "attestation": {RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "artifacts": {RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "roster": {RECEIPT_FORM_ATTESTED: RECEIPT_KEY_REQUIRED},
+    "stop": {RECEIPT_FORM_INTERIM: RECEIPT_KEY_REQUIRED},
+    "base": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+             RECEIPT_FORM_ATTESTED: RECEIPT_KEY_OPTIONAL,
+             RECEIPT_FORM_INTERIM: RECEIPT_KEY_OPTIONAL},
+    "policyApplied": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+                      RECEIPT_FORM_ATTESTED: RECEIPT_KEY_OPTIONAL,
+                      RECEIPT_FORM_INTERIM: RECEIPT_KEY_OPTIONAL},
+    "baseGuard": {RECEIPT_FORM_CERTIFIED: RECEIPT_KEY_OPTIONAL,
+                  RECEIPT_FORM_ATTESTED: RECEIPT_KEY_OPTIONAL,
+                  RECEIPT_FORM_INTERIM: RECEIPT_KEY_OPTIONAL},
 }
-# Accepted on every form but never required — older receipts stay valid (`baseGuard` is always emitted).
-RECEIPT_OPTIONAL_KEYS = frozenset(("base", "policyApplied", "baseGuard"))
 
 
 def _receipt_required_keys(form):
     return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
-                 if form in forms and key not in RECEIPT_OPTIONAL_KEYS)
+                 if forms.get(form) == RECEIPT_KEY_REQUIRED)
+
+
+def _receipt_optional_keys(form):
+    return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
+                 if forms.get(form) == RECEIPT_KEY_OPTIONAL)
 
 
 def _receipt_forbidden_keys(form):
     return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
-                 if form not in forms and key not in RECEIPT_OPTIONAL_KEYS)
+                 if form not in forms)
 
 
 # Per-round receipt entry keys gated by certified schema version (v2 omits `verifyPasses`).
@@ -393,12 +423,16 @@ VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
 # and `build_receipt` share the same one home.
 FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 
-# Every OTHER per-round key `_fold_panel` records, named here so the census can close the set: a new
-# `_record_round` key lands in one home or the other, deliberately, or the census fails. None of
-# these is restorable on resume — `compileDrops` and `unverified` carry finding-shaped EVIDENCE rows
-# that round-records.json deliberately never stores (review_memory's persist-skeleton contract), and
-# `seatStatus` / `missingSeats` are the panel's own coverage bookkeeping, owned by the round that
-# actually ran its seats (`seatStatus` is emitted unconditionally, not as a disclosure).
+# Every OTHER per-round key `_fold_panel` or `_fold_verifiers` records, named here so the census can
+# close the set: a new `_record_round` key lands in one home or the other, deliberately, or the
+# census fails. None of these is restorable on resume — `compileDrops` and `unverified` carry
+# finding-shaped EVIDENCE rows that round-records.json deliberately never stores (review_memory's
+# persist-skeleton contract); `seatStatus` / `missingSeats` are the panel's own coverage
+# bookkeeping, owned by the round that actually ran its seats (`seatStatus` is emitted
+# unconditionally, not as a disclosure); `lensCoverage` is the panel's per-round coverage anchor
+# owned by the round that ran the panel; `verify` carries finding-shaped verifier evidence (drops,
+# downgrades, unverified, ambiguous) that round-records.json never stores — the receipt gets
+# `verifyPasses` instead (restorable via `VERIFIER_FOLD_DISCLOSURE_CHANNELS`).
 UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
                                "verify")
 
@@ -3462,16 +3496,11 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "stallChoice": rec.get("stallChoice")}
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
-        verify_passes = rec.get("verifyPasses")
-        if verify_passes and _round_entry_key_allowed("verifyPasses", form, state):
-            rd["verifyPasses"] = verify_passes
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
-        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated).
+        # channels named by `_DISCLOSE_ON_PRESENCE`.
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
-            if chan == "verifyPasses":
-                continue
             if not _round_entry_key_allowed(chan, form, state):
                 continue
             value = rec.get(chan)
