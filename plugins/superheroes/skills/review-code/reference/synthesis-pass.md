@@ -54,7 +54,7 @@ The steps below are the reference shape of the fold (the doc-loop acceptance pat
 2. **Dispatch the synthesis judge** — ONE subagent, `model: $SYNTH_MODEL` (the **synthesis
    tier**, resolved via `--role synthesis`; never the session model). Same judge as the spine's
    panel synthesis (`eval/synthesis-leaf.md`). It reads the merged findings and verifies each
-   against the artifact under the **verification root** — `$SESSION_DIR/repo` on `--post`, the
+   against the artifact under the **verification root** — `$SESSION_DIR/repo` on `--review-only`, the
    working tree otherwise — then **writes a bare JSON array** to
    `$SESSION_DIR/round-<N>/synthesis-verdicts.json`. Prompt (embed the absolute paths):
 

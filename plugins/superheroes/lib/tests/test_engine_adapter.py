@@ -296,9 +296,8 @@ def test_parse_result_review_garbled_is_unreadable():
 
 
 def test_parse_result_scrubs_secret_in_finding_body():
-    # Secret-hygiene: an external finding's free-text is scrubbed AT THIS BOUNDARY, so the
-    # standalone /review-code --post PR comment (built from body/suggestion, unscrubbed there)
-    # carries no external secret in the clear.
+    # Secret-hygiene: an external finding's free-text is scrubbed AT THIS BOUNDARY, so every
+    # downstream consumer of body/suggestion inherits a clean value without scrubbing again.
     stdout = json.dumps({"findings": [
         {"severity": "Important", "title": "leak",
          "body": "log shows Authorization: Bearer sk-EXAMPLEfakenotarealsecret0",

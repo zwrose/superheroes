@@ -3,7 +3,7 @@
     "review my code changes before I merge",
     "look over this open pull request for bugs",
     "review the diff on my local branch and auto-fix what you find",
-    "check this PR for correctness issues and post findings to GitHub"
+    "check this PR for correctness issues without touching my working tree"
   ],
   "should_not_fire": [
     "sweep the whole repo for accumulated technical debt",

@@ -25,7 +25,7 @@ runs again only on the #174 re-arm triggers (Critical surfaced since the last qu
 cross-cutting rework) or when the changed surface is **unknown** (fail toward run-everything). On
 the **auto-fix loop**, the orchestrator never plans, records, or decides continuation by eye — it
 calls `next`, dispatches the emitted order (or fulfills a gate action), and `submit`s the
-artifact. **Prose-driven review** on the read-only paths (`--post`, `--review-only`) is a different
+artifact. **Prose-driven review** on the read-only path (`--review-only`) is a different
 lane with its own receipt obligation — see `rubric/review-discipline.md` § Prose-driven review; it
 is not governed by this loop contract.
 

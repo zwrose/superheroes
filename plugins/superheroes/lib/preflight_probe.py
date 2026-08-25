@@ -488,7 +488,6 @@ def live_vendors_for_composition(
     run=None,
     *,
     needed_override=None,
-    probe_mode="probe",
     cache_path=None,
     now=None,
 ):
@@ -512,22 +511,6 @@ def live_vendors_for_composition(
                 notes,
                 liveness_cache.LIVE_CELLS_SOURCE_PROBED,
             )
-
-    if probe_mode == "cache-only":
-        notes.append({
-            "constraint": "preflight-cache-only",
-            "reason": (
-                "receipt-only path (e.g. --post): no fresh liveness cache within TTL — "
-                "vendors not probed; panel falls open to Claude"
-            ),
-        })
-        return (
-            ["claude"],
-            [],
-            {"claude": {"live": True, "models": {}, "cells": []}},
-            notes,
-            liveness_cache.LIVE_CELLS_SOURCE_UNPROBED,
-        )
 
     liveness = composition_liveness({**needed, "claude": []}, run)
     if cache_path is not None and now is not None:
@@ -588,7 +571,6 @@ def main(argv):
         live, live_cells, liveness, notes, _provenance = live_vendors_for_composition(
             configured,
             needed_override=needed_override,
-            probe_mode="probe",
             cache_path=cache_path,
             now=now,
         )
