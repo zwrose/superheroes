@@ -482,15 +482,13 @@ def _assert_investigation_floor_threshold_matches_home(home_token, doc_text, lab
 
 
 def _dispatch_mechanics_investigated_threshold_prose(doc):
-    """Operative at-least-one threshold sentence in dispatch-mechanics — scoped pin."""
+    """Operative threshold sentence in dispatch-mechanics — scoped pin."""
     m = re.search(
-        r"`investigated`\s+is present only when at least one claimed path survives "
-        r"spot-checking",
+        r"`investigated`\s+is present only when\s+(.+?)\s+spot-checking",
         doc,
         re.I,
     ) or re.search(
-        r"\*\*`investigated`\*\*\s+is present only when at least one claimed path survives "
-        r"spot-checking",
+        r"\*\*`investigated`\*\*\s+is present only when\s+(.+?)\s+spot-checking",
         doc,
         re.I,
     )
@@ -519,7 +517,7 @@ def _auto_fix_loop_investigation_floor_block(doc):
     """Vacuous-forfeit requirement block — scoped to the operative clause only."""
     m = re.search(
         r"`findings` array is accepted as \*clean\* \*\*only\*\* when `investigated` lists "
-        r"at least one path.*?\*\*vacuous forfeit\*\*",
+        r".*?\*\*vacuous forfeit\*\*",
         doc,
         re.DOTALL | re.I,
     )
@@ -585,16 +583,16 @@ def test_investigation_floor_prose_matches_spot_check_investigated():
 
     auto_fix_doc = _read(_AUTO_FIX_LOOP_DOC)
     auto_fix_block = _auto_fix_loop_investigation_floor_block(auto_fix_doc)
+    _assert_investigation_floor_threshold_matches_home(
+        home_threshold,
+        auto_fix_block,
+        "auto-fix-loop.md (vacuous-forfeit block)",
+    )
     _assert_auto_fix_loop_investigation_floor_prose(
         auto_fix_block, "auto-fix-loop.md (vacuous-forfeit block)"
     )
     assert re.search(r"at least one path", auto_fix_block, re.I), (
         "auto-fix-loop.md: at-least-one surviving-path threshold drift"
-    )
-    _assert_investigation_floor_threshold_matches_home(
-        home_threshold,
-        auto_fix_block,
-        "auto-fix-loop.md (vacuous-forfeit block)",
     )
 
 
