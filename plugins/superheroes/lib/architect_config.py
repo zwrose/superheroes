@@ -45,9 +45,20 @@ def _normalize_disclosures(raw):
     return [s for s in raw if isinstance(s, str)]
 
 
+def _record_schema_version(rec):
+    """Return the record's declared schemaVersion as int, or None if absent/invalid.
+    A bool is not an int here — reject it."""
+    sv = rec.get("schemaVersion")
+    if type(sv) is int:
+        return sv
+    return None
+
+
 def _migrate(rec):
     """Fill an older/partial record forward to the current shape (migrate-on-read).
-    Returns a normalized dict, or None if it cannot be coerced to a valid policy."""
+    Returns a normalized dict, or None if it cannot be coerced to a valid policy.
+    A record whose schemaVersion is greater than SCHEMA_VERSION is preserved in full
+    (unknown keys and its own version survive); known fields are still normalized."""
     if not isinstance(rec, dict):
         return None
     location = _safe_location(rec.get("location"))
@@ -56,16 +67,26 @@ def _migrate(rec):
         visibility = COMMITTED
     confirmed = bool(rec.get("confirmed", False))
     disclosures = _normalize_disclosures(rec.get("disclosures"))
+    declared = _record_schema_version(rec)
+    if declared is not None and declared > SCHEMA_VERSION:
+        # Path-traversal guard, not a schema opinion — must stay unconditional.
+        result = dict(rec)
+        result["location"] = location
+        result["visibility"] = visibility
+        result["confirmed"] = confirmed
+        result["disclosures"] = disclosures
+        return result
     return {"schemaVersion": SCHEMA_VERSION, "location": location,
             "visibility": visibility, "confirmed": confirmed,
             "disclosures": disclosures}
 
 
 def read_policy(cwd, root=None):
-    """{location, visibility, confirmed, disclosures} or None (absent/corrupt). Migrates an older/partial
-    record forward **in memory only** (no write-back on read) — the next write_policy persists
-    the current shape. This deliberately removes the migrate-write-back failure mode the plan
-    flagged while still satisfying the spec's UFR-5 (migrate on read, no manual re-init)."""
+    """{location, visibility, confirmed, disclosures} or None (absent/corrupt). Migrates an
+    older/partial record forward **in memory only** (no write-back on read) — the next write_policy
+    persists the current shape unless the persisted record declares a newer schemaVersion than this
+    module supports (write_policy then refuses). A newer record's unknown keys and version survive
+    in memory via _migrate; read_policy still returns only the four known fields."""
     try:
         with open(policy_path(cwd, root), encoding="utf-8") as fh:
             rec = json.load(fh)
@@ -83,8 +104,9 @@ def read_policy(cwd, root=None):
 
 def write_policy(cwd, policy, root=None):
     """Record the doc-policy under the project config lock. Returns the written record,
-    or None if the lock is contended, the project store cannot be ensured, or the
-    repository root is unavailable (caller proceeds + surfaces a notice — UFR-1)."""
+    or None if the lock is contended, the project store cannot be ensured, the repository
+    root is unavailable, or the persisted record declares a newer schemaVersion than this
+    module supports (caller proceeds + surfaces a notice — UFR-1)."""
     rec = _migrate(policy)
     if rec is None:
         raise ValueError("invalid doc-policy: %r" % (policy,))
@@ -94,7 +116,16 @@ def write_policy(cwd, policy, root=None):
         with mode_registry.config_lock(cwd, root) as got:
             if not got:
                 return None
-            store_core.atomic_write(policy_path(cwd, root), json.dumps(rec, indent=2))
+            path = policy_path(cwd, root)
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    existing = json.load(fh)
+                declared = _record_schema_version(existing) if isinstance(existing, dict) else None
+                if declared is not None and declared > SCHEMA_VERSION:
+                    return None
+            except (OSError, ValueError):
+                pass
+            store_core.atomic_write(path, json.dumps(rec, indent=2))
             return rec
     except store_core.RepoRootUnavailable:
         return None
