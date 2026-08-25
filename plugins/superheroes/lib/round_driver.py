@@ -3496,11 +3496,18 @@ def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
               "stallChoice": rec.get("stallChoice")}
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
+        # Fossil-channel census requires a literal per-channel round-record read — not a variable
+        # key through the generic loop — so this channel is consumed here (form-gated).
+        verify_passes = rec.get("verifyPasses")
+        if verify_passes and _round_entry_key_allowed("verifyPasses", form, state):
+            rd["verifyPasses"] = verify_passes
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
-        # channels named by `_DISCLOSE_ON_PRESENCE`.
+        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated).
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+            if chan == "verifyPasses":
+                continue
             if not _round_entry_key_allowed(chan, form, state):
                 continue
             value = rec.get(chan)
