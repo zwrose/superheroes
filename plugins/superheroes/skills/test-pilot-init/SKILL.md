@@ -39,20 +39,39 @@ Read `CLAUDE.md` first — the profile is an ADDER over it. Then detect:
 stack/scripts (`package.json` scripts, `pyproject.toml`), dev command and
 port, DB env vars (`.env*` files — names only, never read values into the
 profile), docker-compose services, existing seed scripts, `git remote
-get-url origin`. Check `uv` availability (`command -v uv`); if absent, offer
-to help install it (https://docs.astral.sh/uv/) — without it, blocks are
-limited to stdlib + run-command designs.
+get-url origin`.
+
+<!-- decision-point: id=tp-init-uv mode=proceed kind=interview-step default="record uv absent; blocks limited to stdlib + run-command" carrier=test-pilot-layer -->
+Check `uv` availability (`command -v uv`). When absent, record `uv` absent in
+`## Setup disclosures` and state that blocks are limited to stdlib + run-command
+designs — do not offer to install. When present, record `uv` available. Continue
+detection. Follow-up: `/superheroes:configure`.
+<!-- /decision-point: id=tp-init-uv -->
 
 ## Step 3 — Browser tooling gate
 
 Use ToolSearch to check which browser MCPs are connected (search
-"chrome-devtools", "Claude_in_Chrome", "playwright"). If NONE is available,
-STOP and guide the user through installing one (chrome-devtools MCP,
-Playwright plugin, or the Claude in Chrome extension) before continuing.
-Record the preference order for the profile.
+"chrome-devtools", "Claude_in_Chrome", "playwright").
+
+<!-- decision-point: id=tp-init-browser-tools mode=proceed kind=interview-step default="chrome-devtools, playwright, Claude_in_Chrome — detected subset in that order" carrier=test-pilot-layer -->
+**`browserTools` provisional default.** When one or more tools are detected,
+write `browserTools` as the detected subset in fixed preference order:
+`chrome-devtools`, then `playwright`, then `Claude_in_Chrome` (omit undetected
+names; never write an empty array). Record the chosen order in
+`## Setup disclosures`. Continue. Follow-up: `/superheroes:configure`.
+<!-- /decision-point: id=tp-init-browser-tools -->
+
+<!-- decision-point: id=tp-init-browser-gate mode=gate kind=owner-gate default="hand back; no browser tool connected" carrier=test-pilot-layer -->
+When **no** browser MCP is connected, GATE: write the remediation (install
+chrome-devtools MCP, Playwright plugin, or Claude in Chrome extension) into
+`## Setup disclosures`, record that no browser tool is connected, leave
+`browserTools` **absent** (not an empty array), and **hand back** — do not
+continue init or drive browser tooling. Follow-up: `/superheroes:configure`.
+<!-- /decision-point: id=tp-init-browser-gate -->
 
 ## Step 4 — Decide location
 
+<!-- decision-point: id=tp-init-storage mode=notify kind=storage-location default="returned .mode from store CLI" carrier=test-pilot-layer -->
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 DEC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
@@ -81,14 +100,18 @@ Step 6 — a `## Setup disclosures` section, not the generated provenance block)
 taken, its source, whether it is provisional, and that `/superheroes:configure` changes it. When
 `.provisional` is `true`, also state that it is a provisional default rather than an owner choice
 and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
+NOTIFY: the run continues after the disclosure lands in `## Setup disclosures`.
+<!-- /decision-point: id=tp-init-storage -->
 
 ## Step 5 — Provisional defaults (no interview)
 
+<!-- decision-point: id=tp-init-provisional-defaults mode=proceed kind=interview-step default="named provisional defaults per field list below" carrier=test-pilot-layer -->
 Do not interview. Take named provisional defaults for every field detection + `CLAUDE.md` left
-open. Write which fields were defaulted into the **profile provenance block** (the same durable
-surface Step 6 writes). Never guess a protected target — when detection cannot name a
-production-shaped DB/surface to refuse, state that in the provenance block and leave the gate
-**refusing** rather than inventing a target.
+open. Write which fields were defaulted into `## Setup disclosures` of `$TEST_PILOT_LAYER_BODY`
+(the markdown piped to `core_md.py write-layer --hero test-pilot` in Step 6). Never guess a
+protected target — when detection cannot name a production-shaped DB/surface to refuse, state
+that in `## Setup disclosures` and leave the gate **refusing** rather than inventing a target.
+Continue to Step 6. Follow-up: `/superheroes:configure`.
 
 **Provisional defaults** (when detection + `CLAUDE.md` did not answer):
 
@@ -98,6 +121,20 @@ production-shaped DB/surface to refuse, state that in the provenance block and l
    gate refuses` and do not scaffold a target list.
 3. **Base URL / readiness probe** — detected dev URL/port when present, else
    `http://localhost:<detected-port>` when a port was detected, else refuse to guess.
+4. **`dbEnvVar`** — first database-related env var **name** detected from `.env*` files (names
+   only, never values); if none, omit the field and record `none detected` in
+   `## Setup disclosures`.
+5. **`apiBase`** — `{baseUrl}/api` when `baseUrl` is known; if `baseUrl` is unknown, omit the
+   field and record `none detected` in `## Setup disclosures`.
+6. **`allowedOrigins`** — `[]` (provisional default).
+7. **`devCommand`** — detected from `package.json` scripts (`dev`, then `start`) or
+   `pyproject.toml` `[project.scripts]`; if none detected, omit the field and record
+   `none detected` in `## Setup disclosures`.
+8. **`mayManageServer`** — `false` (provisional default): execute will not start the server
+   without owner confirmation via `/superheroes:configure`.
+9. **`browserTools`** — per Step 3 (`tp-init-browser-tools` / `tp-init-browser-gate`); when none
+   detected, the field stays absent.
+<!-- /decision-point: id=tp-init-provisional-defaults -->
 
 ## Step 6 — Scaffold
 
@@ -115,8 +152,8 @@ production-shaped DB/surface to refuse, state that in the provenance block and l
 4. CREATE path (fresh setup, FR-5): pipe the shared facts JSON (stack, verify command,
    threat model) into `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
    --status provisional` to write the band-wide `core.md`,
-   and pipe test-pilot's own sections (its `json test-pilot-config` block + prose, including the
-   `## Setup disclosures` storage-mode block from Step 4) into
+   and pipe `$TEST_PILOT_LAYER_BODY` (test-pilot's `json test-pilot-config` block + prose,
+   including the `## Setup disclosures` section assembled from Steps 4–5) into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
    layer (FR-3). On reconcile of a pre-existing profile, the legacy `profile.md` is not adopted —
    `resolve_shared` returns the `legacy-profile-unsupported` refusal pointing at
@@ -199,8 +236,11 @@ has answered every one of its no-default fields. Do not scaffold it during init.
 
 ## Step 7 — Reconcile mode
 
-Re-run detection, then DIFF against the existing profile. Present drift to
-the user (changed dev command, new env vars, vanished scripts) and apply
-only what they approve. Hand-edits in the profile are preserved verbatim
-unless the user approves replacing them. Never regenerate from scratch over
-an existing profile.
+<!-- decision-point: id=tp-init-reconcile-drift mode=gate kind=owner-gate default="hand back; apply nothing" carrier=test-pilot-layer -->
+Re-run detection, then DIFF against the existing profile. GATE: write the drift diff (changed
+dev command, new env vars, vanished scripts, and any other detected deltas) into
+`## Setup disclosures` of the test-pilot layer and **hand back** — apply **no** profile changes
+on this init path. Hand-edits in the profile are preserved because nothing is written. Never
+regenerate from scratch over an existing profile. Follow-up: `/superheroes:configure` to apply,
+edit, or skip changes.
+<!-- /decision-point: id=tp-init-reconcile-drift -->
