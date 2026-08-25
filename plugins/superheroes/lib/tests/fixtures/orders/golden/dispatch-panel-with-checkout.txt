@@ -1,4 +1,5 @@
 You are reviewing branch for repo acme/widget, target feature/wo4.
+Review session mode branch (from session metadata).
 
 ## Your assignment
 Review the diff at /tmp/superheroes-session-wo4-golden/round-2/diff.txt for your dimension.

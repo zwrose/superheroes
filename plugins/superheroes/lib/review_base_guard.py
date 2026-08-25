@@ -19,6 +19,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import session_mode  # noqa: E402
 import store_core  # noqa: E402
 
 REASON_META_UNREADABLE = "base-meta-unreadable"
@@ -38,7 +39,7 @@ REASON_REPO_ROOT_MISMATCH = "base-repo-root-mismatch"
 REASON_MODE_UNRECOGNIZED = "base-mode-unrecognized"
 
 # Closed session modes — authoritative set for check_base and grounding_stage.
-SESSION_MODES = frozenset({"pr", "branch"})
+SESSION_MODES = session_mode.MODES
 
 META_REASONS = frozenset({"unreadable", "undecodable", "unparseable", "not-an-object"})
 

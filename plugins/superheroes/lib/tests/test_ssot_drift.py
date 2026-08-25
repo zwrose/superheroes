@@ -5210,3 +5210,22 @@ def test_r8_in_repo_copy_holder_census_drift_missing_paths():
         "R8 in-repo copy-holder census drift: missing path(s): %s"
         % ", ".join(missing)
     )
+
+
+# --- Cluster: session-mode vocabulary (#1151) -----------------------------------
+
+
+def test_session_mode_modes_match_review_base_guard():
+    """§11: review_base_guard.SESSION_MODES derives from session_mode.MODES."""
+    import review_base_guard
+    import session_mode
+
+    assert review_base_guard.SESSION_MODES == session_mode.MODES
+    assert review_base_guard.SESSION_MODES == frozenset({"pr", "branch"})
+
+
+def test_round_driver_no_fail_open_branch_default_for_session_mode():
+    """Chokepoint census: round_driver must not default session mode to branch."""
+    text = _read("lib/round_driver.py")
+    assert 'or "branch"' not in text
+    assert "or 'branch'" not in text
