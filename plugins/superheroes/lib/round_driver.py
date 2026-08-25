@@ -135,6 +135,72 @@ SUPPORTED_STATE_VERSIONS = (2, 3)
 RECEIPT_CERTIFIED_SCHEMA = "receipt-certified/%d"
 RECEIPT_ATTESTED_SCHEMA = "receipt-attested/1"
 RECEIPT_INTERIM_SCHEMA = "receipt-interim/1"
+RECEIPT_FORM_CERTIFIED = "certified"
+RECEIPT_FORM_ATTESTED = "attested"
+RECEIPT_FORM_INTERIM = "interim"
+# ONE declaration: key → receipt forms that carry it. Required/forbidden per form DERIVE from here.
+RECEIPT_KEY_FORMS = {
+    "rounds": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "findings": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "decisions": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "seatMap": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "scriptRan": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "degraded": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "skippedBlockers": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "schemaVersion": (RECEIPT_FORM_CERTIFIED,),
+    "certification": (RECEIPT_FORM_CERTIFIED,),
+    "certificationShape": (RECEIPT_FORM_CERTIFIED,),
+    "verdict": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED),
+    "schema": (RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "attestation": (RECEIPT_FORM_ATTESTED,),
+    "artifacts": (RECEIPT_FORM_ATTESTED,),
+    "roster": (RECEIPT_FORM_ATTESTED,),
+    "stop": (RECEIPT_FORM_INTERIM,),
+    "base": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "policyApplied": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+    "baseGuard": (RECEIPT_FORM_CERTIFIED, RECEIPT_FORM_ATTESTED, RECEIPT_FORM_INTERIM),
+}
+# Accepted on every form but never required — older receipts stay valid (`baseGuard` is always emitted).
+RECEIPT_OPTIONAL_KEYS = frozenset(("base", "policyApplied", "baseGuard"))
+
+
+def _receipt_required_keys(form):
+    return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
+                 if form in forms and key not in RECEIPT_OPTIONAL_KEYS)
+
+
+def _receipt_forbidden_keys(form):
+    return tuple(key for key, forms in RECEIPT_KEY_FORMS.items()
+                 if form not in forms and key not in RECEIPT_OPTIONAL_KEYS)
+
+
+# Per-round receipt entry keys gated by certified schema version (v2 omits `verifyPasses`).
+ROUND_ENTRY_KEY_FORMS = {
+    "verifyPasses": (
+        RECEIPT_CERTIFIED_SCHEMA % 3,
+        RECEIPT_ATTESTED_SCHEMA,
+        RECEIPT_INTERIM_SCHEMA,
+    ),
+}
+
+
+def _round_entry_form_schema(form, state):
+    if form == RECEIPT_FORM_CERTIFIED:
+        return RECEIPT_CERTIFIED_SCHEMA % _receipt_version(state)
+    if form == RECEIPT_FORM_ATTESTED:
+        return RECEIPT_ATTESTED_SCHEMA
+    if form == RECEIPT_FORM_INTERIM:
+        return RECEIPT_INTERIM_SCHEMA
+    raise ValueError("unknown receipt form %r" % form)
+
+
+def _round_entry_key_allowed(key, form, state):
+    allowed = ROUND_ENTRY_KEY_FORMS.get(key)
+    if allowed is None:
+        return True
+    return _round_entry_form_schema(form, state) in allowed
+
+
 ATTESTED_VERDICT = "uncertified-manual"
 CHECKPOINT_STOP_REASONS = ("tripwire", "park", "held")
 # The verdicts a CERTIFIED receipt may carry — every `state["terminal"]` the folds can set. An
@@ -305,6 +371,7 @@ RESUMABLE_DISCLOSURE_CHANNELS = {
     "recordOrphansIgnored": _str_list,
     "orderVendorProvenanceGaps": _order_vendor_provenance_gaps_shape,
     "priorCommentsUnavailable": _bool_value,
+    "verifyPasses": _dict_list,
 }
 
 # Per-round disclosure channels recorded during hand `submit` (not `_fold_panel`). Each name here
@@ -317,6 +384,10 @@ SUBMIT_DISCLOSURE_CHANNELS = ("recordOrphansIgnored",)
 # share the same one home.
 ORDER_EMISSION_DISCLOSURE_CHANNELS = ("orderVendorProvenanceGaps", "priorCommentsUnavailable")
 
+# Per-round disclosure channels `_fold_verifiers` records (not `_fold_panel`). Each name here must
+# also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume and `build_receipt` share the same home.
+VERIFIER_FOLD_DISCLOSURE_CHANNELS = ("verifyPasses",)
+
 # Per-round disclosure channels `_record_adapter_provenance` records in `_fold` (shared across phases,
 # not `_fold_panel`). Each name here must also appear in `RESUMABLE_DISCLOSURE_CHANNELS` so resume
 # and `build_receipt` share the same one home.
@@ -328,7 +399,8 @@ FOLD_PROVENANCE_DISCLOSURE_CHANNELS = ("adapterProvenance",)
 # that round-records.json deliberately never stores (review_memory's persist-skeleton contract), and
 # `seatStatus` / `missingSeats` are the panel's own coverage bookkeeping, owned by the round that
 # actually ran its seats (`seatStatus` is emitted unconditionally, not as a disclosure).
-UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats")
+UNRESTORED_PANEL_ROUND_KEYS = ("seatStatus", "lensCoverage", "compileDrops", "unverified", "missingSeats",
+                               "verify")
 
 # `canaryVerified` is the one channel whose EMPTY value still belongs in the receipt (a control probe
 # that ran and carried an empty evidence object is still a probe that ran), so it emits on PRESENCE.
@@ -3358,7 +3430,7 @@ def _terminal_converged(state, config, full_panel, note=None):
 # the driver receipt + its validator
 # =============================================================================================
 
-def build_receipt(state, session_dir=None):
+def build_receipt(state, session_dir=None, form=RECEIPT_FORM_CERTIFIED):
     """The terminal driver receipt. Per-round schedule (planned vs executed), every finding's
     outcome, the decision ledger, the seat map, the scriptRan summary from the journal, and the
     degraded disclosures. Written to round-receipt.json at the terminal.
@@ -3388,16 +3460,20 @@ def build_receipt(state, session_dir=None):
               "compileDrops": rec.get("compileDrops"),
               "selfRecovery": rec.get("selfRecovery"),
               "stallChoice": rec.get("stallChoice")}
-        verify_passes = rec.get("verifyPasses")
-        if verify_passes:
-            rd["verifyPasses"] = verify_passes
         if rec.get("lensCoverage") is not None:
             rd["lensCoverage"] = rec.get("lensCoverage")
+        verify_passes = rec.get("verifyPasses")
+        if verify_passes and _round_entry_key_allowed("verifyPasses", form, state):
+            rd["verifyPasses"] = verify_passes
         # The per-round disclosure channels ride their ONE home (#720) — the same set a
         # `recordsPath` resume restores, so a resumed round's receipt discloses what its round
         # actually recorded. Emission is unchanged: truthiness, except the presence-emitting
-        # channels named by `_DISCLOSE_ON_PRESENCE`.
+        # channels named by `_DISCLOSE_ON_PRESENCE`. `verifyPasses` emits above (form-gated).
         for chan in RESUMABLE_DISCLOSURE_CHANNELS:
+            if chan == "verifyPasses":
+                continue
+            if not _round_entry_key_allowed(chan, form, state):
+                continue
             value = rec.get(chan)
             if value or (value is not None and chan in _DISCLOSE_ON_PRESENCE):
                 rd[chan] = value
@@ -3627,8 +3703,8 @@ def build_receipt(state, session_dir=None):
 
 def build_interim_receipt(state, session_dir, stop_reason):
     """An interim driver receipt at a non-terminal stop — per-pass verdict totals without certification."""
-    receipt = build_receipt(state, session_dir)
-    for key in ("certification", "certificationShape", "schemaVersion", "verdict"):
+    receipt = build_receipt(state, session_dir, form=RECEIPT_FORM_INTERIM)
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_INTERIM):
         receipt.pop(key, None)
     receipt["schema"] = RECEIPT_INTERIM_SCHEMA
     receipt["stop"] = {
@@ -3692,17 +3768,6 @@ def _write_interim_receipt(session_dir, state, stop_reason):
     return receipt
 
 
-_RECEIPT_REQUIRED = ("schemaVersion", "verdict", "certificationShape", "rounds", "findings",
-                     "decisions", "seatMap", "scriptRan", "degraded", "skippedBlockers")
-
-
-_ATTESTED_REQUIRED = ("schema", "verdict", "attestation", "rounds", "findings", "decisions",
-                      "seatMap", "scriptRan", "degraded", "skippedBlockers", "artifacts", "roster")
-
-_INTERIM_REQUIRED = ("schema", "stop", "rounds", "findings", "decisions", "seatMap", "scriptRan",
-                     "degraded", "skippedBlockers")
-
-
 def validate_receipt(receipt):
     """Validate a driver receipt's SHAPE — version-dispatched since #723.
 
@@ -3727,10 +3792,10 @@ def _validate_attested_receipt(receipt):
     """The `receipt-attested/1` shape: `attestation` REQUIRED, `certification` FORBIDDEN, verdict
     pinned to `uncertified-manual`. A certification block here would be exactly the confusion the
     split exists to prevent (an attested receipt reading as a certified one)."""
-    for key in _ATTESTED_REQUIRED:
+    for key in _receipt_required_keys(RECEIPT_FORM_ATTESTED):
         if key not in receipt:
             return False, "attested receipt missing required key %r" % key
-    for key in ("certification", "certificationShape"):
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_ATTESTED):
         if key in receipt:
             return False, ("attested receipt must not carry %r — an attestation is NOT a "
                            "certification" % key)
@@ -3759,10 +3824,10 @@ def _validate_attested_receipt(receipt):
 def _validate_interim_receipt(receipt):
     """The `receipt-interim/1` shape: a `stop` block REQUIRED, `certification` FORBIDDEN — an interim
     is not a certification and must not be read as terminal evidence."""
-    for key in _INTERIM_REQUIRED:
+    for key in _receipt_required_keys(RECEIPT_FORM_INTERIM):
         if key not in receipt:
             return False, "interim receipt missing required key %r" % key
-    for key in ("certification", "certificationShape", "verdict", "attestation"):
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_INTERIM):
         if key in receipt:
             return False, ("interim receipt must not carry %r — an interim is NOT a certification"
                            % key)
@@ -3875,9 +3940,12 @@ def _validate_certified_receipt(receipt):
     Returns (ok, reason)."""
     if not isinstance(receipt, dict):
         return False, "receipt is not an object"
-    for key in _RECEIPT_REQUIRED:
+    for key in _receipt_required_keys(RECEIPT_FORM_CERTIFIED):
         if key not in receipt:
             return False, "receipt missing required key %r" % key
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_CERTIFIED):
+        if key in receipt:
+            return False, "certified receipt must not carry %r" % key
     if receipt.get("schemaVersion") not in SUPPORTED_STATE_VERSIONS:
         return False, ("receipt schemaVersion must be one of %s"
                        % ", ".join(str(v) for v in SUPPORTED_STATE_VERSIONS))
@@ -5356,6 +5424,14 @@ def _ensure_fix_batch_file(session_dir, rnd, state):
     return _ensure_bytes_at_path(session_dir, path, round_records.canonical(batch).encode("utf-8"))
 
 
+# Round-relative paths the driver materializes for order templates — production reads this registry.
+ROUND_MATERIALIZER_REGISTRY = {
+    "round_diff": _ensure_round_diff,
+    "round_head_diff": _ensure_round_head_diff,
+    "fix_batch": _ensure_fix_batch_file,
+}
+
+
 def _prior_comments_unavailable_marker():
     return "(prior-comments-unavailable — orchestrator did not supply prior-comments.json)"
 
@@ -5402,7 +5478,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
     cfg = config if isinstance(config, dict) else {}
     repo_root = cfg.get("repoRoot") or meta.get("repoRoot") or os.getcwd()
     rdir = round_records.round_dir(session_dir, rnd)
-    diff_path = _ensure_round_diff(session_dir, rnd, state)
+    diff_path = ROUND_MATERIALIZER_REGISTRY["round_diff"](session_dir, rnd, state)
     rubric_path = _shipped_rubric_path()
     core_resolved, layer_resolved, root_refusal = _resolved_calibration_paths(repo_root)
     core_path = _calibration_path_placeholder(core_resolved, "Core", root_refusal)
@@ -5488,7 +5564,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
         skey = round_records.storage_key(seat_key, occurrence)
         _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         target_path = _order_audit_target_sidecar_path(rdir, skey)
-        head_diff_path = _ensure_round_head_diff(session_dir, rnd, state)
+        head_diff_path = ROUND_MATERIALIZER_REGISTRY["round_head_diff"](session_dir, rnd, state)
         ph = {
             "TARGET_SUMMARY_PATH": target_path,
             "HEAD_DIFF_PATH": head_diff_path,
@@ -5503,7 +5579,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             hunks = {}
         _materialize_order_sidecars(session_dir, rnd, phase, sidecar_roster, payload)
         hunks_path = _order_scoped_hunks_sidecar_path(rdir)
-        head_diff_path = _ensure_round_head_diff(session_dir, rnd, state)
+        head_diff_path = ROUND_MATERIALIZER_REGISTRY["round_head_diff"](session_dir, rnd, state)
         ph = {
             "HUNKS_PATH": hunks_path,
             "HEAD_DIFF_PATH": head_diff_path,
@@ -5515,7 +5591,7 @@ def _order_placeholders(phase, seat_key, occurrence, state, config, pending_payl
             "CHANNEL": channel,
         }
     elif phase == P_FIXER:
-        fix_batch_path = _ensure_fix_batch_file(session_dir, rnd, state)
+        fix_batch_path = ROUND_MATERIALIZER_REGISTRY["fix_batch"](session_dir, rnd, state)
         ph = {
             "FIX_BATCH_PATH": fix_batch_path,
             "PROFILE_PATH": _profile_path_for_orders(repo_root),
@@ -5561,7 +5637,7 @@ def _build_order_render_context(session_dir, state, rnd, phase, attempt, seat_ke
         "session_dir": session_dir,
         "round": rnd,
         "attempt": attempt,
-        "diff_path": _ensure_round_diff(session_dir, rnd, state),
+        "diff_path": ROUND_MATERIALIZER_REGISTRY["round_diff"](session_dir, rnd, state),
         "rubric_path": _shipped_rubric_path(),
         "core_path": core_resolved or "",
         "layer_path": layer_resolved or "",
@@ -7381,8 +7457,8 @@ def build_attestation_receipt(session_dir, state, binding, note, roster=None):
     `loop-state.json` are excluded from the digest set — same contract class as STATE_FILE. The
     receipt file itself is excluded because it is written last and cannot hash itself. `roster` may be supplied when `state` is
     already terminal (pending cleared) but was captured from the failure phase beforehand."""
-    receipt = build_receipt(state, session_dir)
-    for key in ("certification", "certificationShape", "schemaVersion"):
+    receipt = build_receipt(state, session_dir, form=RECEIPT_FORM_ATTESTED)
+    for key in _receipt_forbidden_keys(RECEIPT_FORM_ATTESTED):
         receipt.pop(key, None)
     receipt["schema"] = RECEIPT_ATTESTED_SCHEMA
     receipt["verdict"] = ATTESTED_VERDICT
