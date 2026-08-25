@@ -40,9 +40,11 @@ in `escalation.py` (paired with this rubric as `loop_state.py` is paired with `r
      **or** low confidence on something consequential) → **GATE**.
    - Owner-relevant but reversible and high-confidence → **NOTIFY**.
    - Engineering-internal (no trade-off the owner would weigh) → **PROCEED**, record-only.
-4. **Interrupt-cost discipline.** Probe before pinging (resolve with one cheap reversible step
-   first). Batch GATEs to one moment. If you're GATEing on most runs, the threshold is too low —
-   lean PROCEED/NOTIFY. Over-asking is a failure mode: it trains rubber-stamping.
+4. **Hand-back cost discipline.** Probe before GATEing (resolve with one cheap reversible step
+   first). Batch GATEs to one moment — one consolidated write-down. If you're GATEing on most
+   runs, the threshold is too low — lean PROCEED/NOTIFY. Over-GATEing is a failure mode: a GATE
+   ends the run and hands back, so routine GATEs mean the work never finishes and the owner
+   accumulates a backlog of write-downs instead of completed work.
 
 ## The hard floor (always-GATE)
 

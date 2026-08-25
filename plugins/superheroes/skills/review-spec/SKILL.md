@@ -125,21 +125,22 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
-  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location)
+  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  # When PROVISIONAL is "true": disclose in the run output the location taken, that it is provisional,
-  # and that /superheroes:configure changes it (triad part 2).
-  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-  if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-    echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  if [ "$PROVISIONAL" != "true" ]; then
+    REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+    if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
+      echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
+    fi
   fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
-**Storage location.** `decide-location` JSON: `.mode` is `in-repo`|`global` (`ask` gone). When `.provisional` is `true`, disclose location taken, that it is provisional, and `/superheroes:configure` follow-up.
+**Storage location.** `decide-location` JSON: `.mode` is `in-repo`|`global` (`ask` gone). **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is `true`, write into the **terminal summary artifact**: the storage location taken, that it is a provisional default rather than an owner choice, and that `/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.
 
 When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
@@ -396,13 +397,12 @@ Each round:
 3. **Effective findings** = `compiled.findings` whose identity is NOT in the `skip-set`.
 4. **Form POV + classification for every effective finding.** Per the base rubric's "Orchestrator POV", from a targeted read of the cited requirement in `$SESSION_DIR/spec.md`, emit for each finding a **recommendation** (`Fix` = revise the spec; `Defer` = legitimately defer-to-build; `Skip` = not worth a change) + one-sentence rationale + High/Low confidence, and a **classification** (`mechanical` = one obvious edit, e.g. rephrasing a requirement into EARS or adding an acceptance criterion; `judgment` = a real requirements question only the owner can answer — e.g. "what SHOULD happen on a double-submit?").
    **A genuine requirements question is a `judgment` finding for the owner — never invent or fabricate the answer; surface it.**
-5. **Print findings in chat** — grouped by spec section, each with its POV line. Do **not** write these to a file.
+5. **Print findings in chat** — grouped by spec section, each with its POV line. Do **not** write findings to a repo file — chat only. **GATE** write-downs append to `$SESSION_DIR/receipt.md` (step 7).
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the spec at `$SPEC_PATH` directly (EARS rephrasing, adding a missing acceptance criterion, removing leaked tech, splitting a compound requirement). Make these edits without asking. Keep the owner's voice; never invent a behavior the owner didn't state.
 7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each
    **Critical/Important** effective finding, route its disposition with the shared rubric (modes
-   PROCEED/NOTIFY/GATE). **GATE** — durable write-down + hand-back, not a widget: one consolidated
-   disclosure for blockers whose skip-or-fix is the owner's call. For the rest, **verify and proceed**,
-   recording the disposition so `loop_state` still sees it:
+   PROCEED/NOTIFY/GATE). **GATE** — durable write-down + hand-back in `$SESSION_DIR/receipt.md`,
+   then stop and proceed to §6 Report. For the rest, **verify and proceed**, recording the disposition so `loop_state` still sees it:
    - **Fix, one right answer per the project's conventions** → auto-revise `$SPEC_PATH` (a step-6
      auto-revise).
    - **Verifiably-safe skip / believed false-positive** → record a **skip** (add the identity to the
@@ -508,10 +508,9 @@ unreviewed again) and the loop must re-run before any terminal is claimed.
 **Durable receipt — post the round history to the linked issue (non-blocking).** Code review
 leaves its receipts on the PR; a doc review must leave them on the issue, or the loop's whole
 history dies in `$SESSION_DIR` — a multi-round run once had to be reconstructed forensically
-because the only record was the transcript. Assemble `$SESSION_DIR/receipt.md` — the final
-verdict, the per-round schedule (dimensions run + tier each round, from the loop state), every
-finding with its disposition (auto-revised / owner-answered / skipped-with-trace), any open
-requirements question, the count summary (the terminal summary, made durable), and — if the spec was edited after a halt — the post-halt-edit violation notice (the prior terminal is void) — then post
+because the only record was the transcript. Assemble `$SESSION_DIR/receipt.md` (appending to any
+GATE write-downs from step 7) — final verdict, per-round schedule, every finding disposition,
+open requirements questions, count summary, and any post-halt-edit violation — then post
 it to the spec's linked `issue`:
 
 ```bash

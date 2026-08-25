@@ -96,27 +96,24 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
-  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location)
+  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
-  # When PROVISIONAL is "true": disclose in the run output the location taken, that it is provisional,
-  # and that /superheroes:configure changes it (triad part 2).
-  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-  if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-    echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
+  [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
+  if [ "$PROVISIONAL" != "true" ]; then
+    REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
+    if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
+      echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
+    fi
   fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
-**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
-`global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured,
-else the lib's provisional default). **Disclosure:** when `.provisional` is `true`, state in the
-run output which location was taken, that it is provisional, and that `/superheroes:configure`
-confirms or changes it. **Follow-up:** `/superheroes:configure`.
+**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or `global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is `true`, write into the **audit report**: the storage location taken, that it is a provisional default rather than an owner choice, and that `/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
 **Detect the ecosystem.** Mirror review-init's detection: read the profile's `signals` (`dep-set`, `default-branch`, `forge`) and `## Verify` block if present, and detect the manifest/lockfile the same way review-init Step 1 does. The ecosystem drives the dependency audit, the source-dir census, and the dependency-churn pass below.
 
@@ -377,17 +374,18 @@ Render `$SESSION_DIR/report.md`: a markdown report grouped by category (Architec
   `skills/review-code/reference/headless-presentation.md`).
 - **Minor / Nit:** these carry no POV; include them by default.
 
-**Record decisions (learning loop).** This issue-gate is audit-debt's resolution point: append one `decisions.py` record per finding decided here to the resolved decisions store (`$DECISIONS`), per `## Learning Loop & Staleness Nudge`. Map the action: a finding **filed** as an issue (auto-included `Fix`/`Defer`, or **File** on a gated one) → `fix`; a **Drop** / deselected finding → `skip`. (`guidance` does not arise in audit-debt — it files or drops, it never edits code.) This append is non-blocking and never gates the sweep.
+**Record decisions (learning loop).** Append one `decisions.py` `fix` record per finding filed as an issue (auto-included `Fix`/`Defer`) to `$DECISIONS` — per `## Learning Loop & Staleness Nudge`. Undecided findings get no record; the audit report carries them. Non-blocking.
 - **Do not mix tiers within a single issue.** A Critical/Important finding gets its own issue (or is grouped only with closely-related same-tier findings). Minor/Nit findings are consolidated into their own separate lower-tier issue(s) — never folded into a higher-tier issue.
 
 Present the proposed issue set in chat (title + tier + the findings each issue covers).
 
 Per `the-architect/rubric/escalation-base.md`: filing debt issues is reversible (issues can be
 closed/deleted) → **NOTIFY, not GATE**. By default, file the Critical/Important debt items as
-issues and report what was filed (with the issue links = the reverse path). Only **GATE** (ask
-first) when filing would touch the hard floor — e.g. it would post to a public/shared tracker the
-owner hasn't opted into, or spend on a paid tracker. Saving the report locally is **PROCEED**
-(record-only) — write it and state the path.
+issues and report what was filed (with the issue links = the reverse path). Only **GATE** —
+durable write-down + hand-back in the **audit report**, no filing — when filing would touch the
+hard floor — e.g. it would post to a public/shared tracker the owner hasn't opted into, or spend
+on a paid tracker. Saving the report locally is **PROCEED** (record-only) — write it and state
+the path.
 
 For the Minor/Nit findings and any Skip/borderline Critical/Important ones, include the
 Skip/borderline set in the report under **Undecided — needs a human call** (not asked, not
@@ -432,9 +430,7 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 
 ### Learning-loop proposal (end of run)
 
-**Not run.** The learning loop learns from decisions a human made; a gate nobody answered produced
-none, and applying a calibration edit unasked would be the worse failure. Keep the analyze snippet
-below for reference when an owner runs configure interactively; do not invoke it at end of run here:
+**Not run.** Proposals are not surfaced this run — recorded decisions remain in `$DECISIONS` for a future owner review. Keep the analyze snippet for reference only; do not invoke at end of run:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -444,8 +440,7 @@ python3 -B "$ROOT_DIR/lib/decisions.py" \
 
 ### Provisional-profile confirmation (end of run)
 
-**Not run** — same reason as the learning-loop proposal above; confirming a provisional profile
-unasked would apply a calibration edit nobody authorized. `/superheroes:configure` is the follow-up.
+**Not run** — confirming a provisional profile unasked would apply a calibration edit nobody authorized. Recorded decisions and the provisional profile remain for a future owner review.
 
 ### Recording a dismissal (shared)
 
