@@ -171,10 +171,17 @@ findings with a substantive prior justification (quoted in the record); CONFIRME
 
 ## Evidence-or-silence + the advisory disposition
 
-Only a **CONFIRMED** finding — one whose verification trace cites the triggering input — may
-**GATE** the owner during the auto-fix loop (stop, write the decision down with its owner-facing
-framing, hand back — never wait). A **PLAUSIBLE
-Critical never GATEs and never parks**:
+Only a **CONFIRMED** finding — one whose verification trace cites the triggering input — may route
+to **GATE** under the escalation rubric (`escalation-base.md`). **When escalation resolves GATE**
+for a CONFIRMED finding, **stop the auto-fix loop immediately** — write the GATE down per
+`escalation-base.md` § Writing a GATE into the durable artifact into `$SESSION_DIR/round-receipt.json`
+(the terminal receipt the driver writes on exit), force terminal with verdict **`held`**
+(certification withheld — same terminal as an owner `hold` on audit-stall), and hand back — **never
+wait**. **Never** fold a GATE finding into `fix-batch.json`, **never** dispatch `dispatch-fixer`
+past it, and **never** treat it like `present-judgment` (an intervention gate that folds back into
+the fix leg). A GATE is a terminal hand-back, not a mid-run question.
+
+A **PLAUSIBLE Critical never GATEs and never parks** — for unproven blockers, use only:
 
 1. **Fix if safe** — fold into the fix batch when the fix is mechanical and low-risk.
 2. **Confirming probe** — re-dispatch the verifier (`--role verifier`) for that single

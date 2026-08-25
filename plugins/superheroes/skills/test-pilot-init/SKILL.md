@@ -57,14 +57,9 @@ Record the preference order for the profile.
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 DEC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
 LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
 PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
 [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
-if [ "$PROVISIONAL" != "true" ]; then
-  REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-  if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-    echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
-  fi
-fi
 PATHS=$(python3 -B "$ROOT_DIR/lib/store.py" create --location "$LOC") || RC=$?
 RC=${RC:-0}
 if [ "$RC" -ne 0 ]; then
@@ -74,11 +69,15 @@ fi
 ```
 
 **Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
-`global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured,
-else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is
-`true`, write into the **profile provenance block**: the storage location taken, that it is a
-provisional default rather than an owner choice, and that `/superheroes:configure` changes it.
-**Follow-up:** `/superheroes:configure`.
+`global` (`ask` no longer exists); `.source` is where the decision came from (e.g. `recorded`,
+`default`, `env`); `.provisional` is `true` when the mode was not owner-recorded. **Default:**
+the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap
+blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into the
+**test-pilot layer body** (the markdown piped to `core_md.py write-layer --hero test-pilot` in
+Step 6 — a `## Setup disclosures` section, not the generated provenance block): the storage mode
+taken, its source, whether it is provisional, and that `/superheroes:configure` changes it. When
+`.provisional` is `true`, also state that it is a provisional default rather than an owner choice
+and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
 
 ## Step 5 — Provisional defaults (no interview)
 
@@ -113,7 +112,8 @@ production-shaped DB/surface to refuse, state that in the provenance block and l
 4. CREATE path (fresh setup, FR-5): pipe the shared facts JSON (stack, verify command,
    threat model) into `python3 -B "${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/lib/core_md.py" write
    --status provisional` to write the band-wide `core.md`,
-   and pipe test-pilot's own sections (its `json test-pilot-config` block + prose) into
+   and pipe test-pilot's own sections (its `json test-pilot-config` block + prose, including the
+   `## Setup disclosures` storage-mode block from Step 4) into
    `core_md.py write-layer --hero test-pilot --status <s>` so they land in the `test-pilot.md`
    layer (FR-3). On reconcile of a pre-existing profile, the legacy `profile.md` is not adopted —
    `resolve_shared` returns the `legacy-profile-unsupported` refusal pointing at

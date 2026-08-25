@@ -98,20 +98,15 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location) || { echo "decide-location exited non-zero (exit $?); halting rather than taking an undisclosed storage default" >&2; exit 1; }
   LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+  SOURCE=$(printf '%s' "$DEC" | jq -r '.source')
   PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
   [ -n "$LOC" ] && [ -n "$PROVISIONAL" ] || { echo "decide-location returned no usable decision; halting rather than taking an undisclosed storage default" >&2; exit 1; }
-  if [ "$PROVISIONAL" != "true" ]; then
-    REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
-    if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
-      echo "note: couldn't record the band storage mode this run — the provisional default will be taken again next run; change via /superheroes:configure."
-    fi
-  fi
   PROFILE=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind profile --location "$LOC")
   DECISIONS=$(python3 -B "$ROOT_DIR/lib/review_store.py" create --kind decisions --location "$LOC")
 fi
 ```
 
-**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or `global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). **Disclosure (provisional storage).** When `.provisional` is `true`, write into the **audit report**: the storage location taken, that it is a provisional default rather than an owner choice, and that `/superheroes:configure` changes it. **Follow-up:** `/superheroes:configure`.
+**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or `global` (`ask` no longer exists); `.source` is where the decision came from (e.g. `recorded`, `default`, `env`); `.provisional` is `true` when the mode was not owner-recorded. **Default:** the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into the **audit report** (`$SESSION_DIR/report.md`): the storage mode taken, its source, whether it is provisional, and that `/superheroes:configure` changes it. When `.provisional` is `true`, also state that it is a provisional default rather than an owner choice and will be re-taken on the next run when not recorded. **Follow-up:** `/superheroes:configure`.
 
 When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
