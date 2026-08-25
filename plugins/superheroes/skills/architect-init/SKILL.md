@@ -62,24 +62,8 @@ print(json.dumps(architect_config.analyze_repo(os.getcwd())))
 "
 ```
 
-**Interactive run** (`INTERACTIVE=true`, a human is present): present the
-recommendation (location + visibility) via `AskUserQuestion`. Explain the
-trade-offs — committed shares definition-docs with collaborators; gitignored
-keeps the repo pristine. Apply the owner's choice with `confirmed: true`:
-
-```bash
-ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-python3 -B -c "
-import sys, os; sys.path.insert(0, '$ROOT_DIR/lib')
-import architect_config
-# Replace LOCATION and VISIBILITY with the owner's confirmed answers.
-architect_config.write_policy(os.getcwd(),
-    {'location': 'LOCATION', 'visibility': 'VISIBILITY', 'confirmed': True})
-"
-```
-
-**Headless run** (`INTERACTIVE=false`, no human to answer): apply the
-analysis-informed default directly with `confirmed: false` (provisional):
+Apply the analysis-informed default directly with `confirmed: false` (provisional). Every run takes
+this path — no branch on human presence:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -92,16 +76,21 @@ architect_config.write_policy(os.getcwd(),
 "
 ```
 
+**Disclosure (write into the run output and Step 4 report):** state the recommendation applied
+(location + visibility), that `confirmed: false` means provisional, and that `/superheroes:configure`
+confirms or changes it. Include the trade-offs — committed shares definition-docs with collaborators;
+gitignored keeps the repo pristine — so the owner reading the artifact learns what they would have
+been told interactively.
+
 If `write_policy` returns `None` (config lock contended), surface a notice
 and exit without writing — the caller retries (CONVENTIONS `§4.4`).
 
 ## Step 4 — Report
 
 Tell the owner what was written (or preserved): location, visibility, confirmed
-or provisional. On an interactive run with `visibility: committed`, offer to
-commit the policy file (`doc-policy.json` lives in the machine-local project
-store — nothing to commit in the repo itself). Remind the owner that
-`architect-discovery` picks up the policy from here.
+or provisional, and the disclosure above when `confirmed` is false. Remind the owner that
+`architect-discovery` picks up the policy from here and that `/superheroes:configure` confirms
+or changes it.
 
 ## Common mistakes
 
@@ -110,4 +99,4 @@ store — nothing to commit in the repo itself). Remind the owner that
 | Re-deciding the policy when one is already confirmed | Honor FR-11: report and exit; only proceed on an explicit owner reset. |
 | Running Step 3 in `global` mode | `global` mode keeps docs in the project store — no in-repo policy to set. Exit after Step 1. |
 | Blocking on a contended config lock | Return `None` is the signal — surface a notice; never spin-wait. |
-| Setting `confirmed: true` on a headless run | Headless runs are provisional (`confirmed: false`); the owner confirms interactively. |
+| Setting `confirmed: true` without owner confirmation via configure | Every init run is provisional (`confirmed: false`); the owner confirms through `/superheroes:configure`. |

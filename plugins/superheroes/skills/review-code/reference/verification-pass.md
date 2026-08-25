@@ -172,7 +172,8 @@ findings with a substantive prior justification (quoted in the record); CONFIRME
 ## Evidence-or-silence + the advisory disposition
 
 Only a **CONFIRMED** finding — one whose verification trace cites the triggering input — may
-**GATE** the owner during the auto-fix loop (interrupt with `AskUserQuestion`). A **PLAUSIBLE
+**GATE** the owner during the auto-fix loop (stop, write the decision down with its owner-facing
+framing, hand back — never wait). A **PLAUSIBLE
 Critical never GATEs and never parks**:
 
 1. **Fix if safe** — fold into the fix batch when the fix is mechanical and low-risk.

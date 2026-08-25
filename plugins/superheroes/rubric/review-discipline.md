@@ -339,6 +339,16 @@ re-dispatch — the same shape as the over-size route — so quiet-failure surfa
 independent of the vet. Doubt about which side a surface falls on resolves toward the builder, and
 the over-size route is unchanged: a fold past the bound goes to the builder whatever its surface.
 
+**Prose-executed paths are pinned structurally, not driven end-to-end by an executable harness.**
+A skill's prose path is executed by a model reading the prose — there is no process to drive.
+What *can* be pinned is the prose's **structure**: a detector reads the shipped file and asserts
+the shape the contract requires, and that is the instrument this repo uses. This is **not**
+bite-proof vacuity mode 4 (*"delivered through a path the guarded input can never take"*) — for a
+structural pin the path is real and complete: mutate the shipped prose file, the detector reads
+that file, the detector goes red. A structural pin must still satisfy bite-proof **mode 3**: a
+detector guarding N elements owes N separate neutralizations and N reds, not one representative
+(`rubric/bite-proof.md`).
+
 ### Mechanical guards over prose — the byte-literal floor
 
 Mechanical guards over prose are scoped to the **byte-literal floor** — four kept classes and nothing

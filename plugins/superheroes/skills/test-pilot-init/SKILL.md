@@ -55,11 +55,11 @@ Record the preference order for the profile.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-LOC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location --interactive true)
-# "ask" -> AskUserQuestion: in-repo (committed, team-shared) vs global
-# (~/.claude/test-pilot/, zero git footprint). Headless runs get "global".
-# If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
-# If LOC is already in-repo/global → skip record, go straight to create.
+DEC=$(python3 -B "$ROOT_DIR/lib/store.py" decide-location)
+LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
+# When PROVISIONAL is "true": disclose in the run output the location taken, that it is provisional,
+# and that /superheroes:configure changes it (triad part 2).
 REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
 if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
   echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
@@ -71,6 +71,12 @@ if [ "$RC" -ne 0 ]; then
   exit "$RC"
 fi
 ```
+
+**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
+`global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured,
+else the lib's provisional default). **Disclosure:** when `.provisional` is `true`, state in the
+run output which location was taken, that it is provisional, and that `/superheroes:configure`
+confirms or changes it. **Follow-up:** `/superheroes:configure`.
 
 ## Step 5 — Interview only the gaps
 
