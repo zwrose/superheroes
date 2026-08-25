@@ -467,10 +467,10 @@ def test_bite_public_handback_interim_token(tmp_path):
     with open(path, encoding="utf-8") as fh:
         src = fh.read()
     patched = src.replace(
-        '        if bind_why == "verdict-not-allowlisted":\n'
-        '            return _refuse("handback-verdict-not-allowlisted", "",\n'
+        '        if bind_why == "receipt-interim-not-handback-evidence":\n'
+        '            return _refuse("receipt-interim-not-handback-evidence", "",\n'
         '                            subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)\n'
-        '        return _refuse(bind_why, "",\n'
+        '        return _refuse("handback-verdict-not-allowlisted", "",\n'
         '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)',
         '        return _refuse("handback-verdict-not-allowlisted", "",\n'
         '                        subject=subject, sidecar_path=sidecar_path, head_sha=head_sha)',
