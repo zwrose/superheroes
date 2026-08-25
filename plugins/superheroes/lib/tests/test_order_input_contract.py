@@ -177,6 +177,8 @@ def test_prior_comments_branch_mode_absent_is_empty_not_refusal(tmp_path):
     # axis: branch mode legitimately has no prior-comments file
     session_dir = str(tmp_path / "branch-session")
     os.makedirs(session_dir)
+    with open(os.path.join(session_dir, RR.META_FILE), "w", encoding="utf-8") as fh:
+        json.dump({"mode": "branch"}, fh)
     state = RD.new_state(_cfg(tmp_path))
     assert RD._resolve_prior_comments_path(session_dir, state) == ""
     ph = {"PRIOR_COMMENTS_PATH": "", "RUBRIC_PATH": RD._shipped_rubric_path()}
