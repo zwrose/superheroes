@@ -5587,6 +5587,85 @@ def test_cap_file_tail_empty_file_returns_zero_observed(tmp_path):
     assert observed == 0
 
 
+def test_cap_file_tail_rewrite_failure_preserves_over_cap_authority(tmp_path, monkeypatch):
+    """axis: a failed rewrite must not erase a completed over-cap measurement."""
+    cap = 2048
+    over = cap + 512
+    path = tmp_path / "over.bin"
+    path.write_bytes(b"x" * over)
+    path_str = str(path)
+    real_open = open
+
+    class _FailingWriteWrapper:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._fh.__exit__(*args)
+
+        def write(self, data):
+            raise OSError(28, "No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    def patched_open(file, mode="r", *args, **kwargs):
+        fh = real_open(file, mode, *args, **kwargs)
+        if mode == "wb" and os.fspath(file) == path_str:
+            return _FailingWriteWrapper(fh)
+        return fh
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    truncated, observed = ED._cap_file_tail(path_str, cap)
+    assert truncated is True
+    assert observed == over
+
+
+def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
+    """axis: arm 1 — recorded stdoutBytes from _cap_file_tail survives rewrite failure."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    real_open = open
+
+    class _FailingWriteWrapper:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._fh.__exit__(*args)
+
+        def write(self, data):
+            raise OSError(28, "No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    def patched_open(file, mode="r", *args, **kwargs):
+        if (
+            mode == "wb"
+            and os.fspath(file) == stdout_path
+            and os.path.exists(stdout_path)
+            and os.path.getsize(stdout_path) > ED.MAX_STDOUT_CAPTURE
+        ):
+            fh = real_open(file, mode, *args, **kwargs)
+            return _FailingWriteWrapper(fh)
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    ended, _, _ = _wo2_run_engine(
+        run_dir, "print('x' * 9000)", monkeypatch=monkeypatch)
+    state = {"attempts": {1: {"ended": ended}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
+
+
 def test_complete_marker_mid_body_not_truncated():
     """axis: _stdout_capture_truncated requires marker at capture head, not mid-body."""
     marker = ED._stdout_truncation_marker(9_000_000)

@@ -1951,21 +1951,26 @@ def _cap_file_tail(path, max_bytes):
     """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises.
 
     Returns (truncated, observed): truncated is True when the file exceeded budget and was
-    rewritten; observed is the pre-cap byte count from the bounded read, or None when no
-    authoritative count is available (distinguishable from 0 for an empty capture).
+    rewritten (or rewrite was attempted but failed after measurement); observed is the
+    pre-cap byte count from the bounded read, or None when no authoritative count is
+    available (distinguishable from 0 for an empty capture).
     """
     try:
         with open(path, "rb") as fh:
             capped, truncated, observed = _bounded_stdout_cap_from_file(fh, max_bytes)
-        if capped is None:
-            return False, None
-        if not truncated:
-            return False, observed
-        with open(path, "wb") as fh:
-            fh.write(capped)
-        return True, observed
     except (OSError, MemoryError):
         return False, None
+    if capped is None:
+        return False, None
+    if not truncated:
+        return False, observed
+    try:
+        with open(path, "wb") as fh:
+            fh.write(capped)
+    except (OSError, MemoryError):
+        # axis: a failed rewrite must not erase a completed over-cap measurement.
+        return True, observed
+    return True, observed
 
 
 def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE):
