@@ -187,3 +187,70 @@ FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fak
 ...                                                                      [100%]
 3 passed in 19.21s
 ```
+
+---
+
+## BP33 — the recompile premise is asserted in-band
+
+**Guarded element:** generated child `conftest.py` module-level assertion — axis: **`PYTHONPYCACHEPREFIX` and `PYTHONDONTWRITEBYTECODE` env keys must take effect before the child imports the fixture under test**.
+
+**Neutralization:** delete `env["PYTHONPYCACHEPREFIX"] = pyc_dir` (the exact regression item-1 predicts).
+
+**Raw red** (all three end-to-end detectors):
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______ test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end ______
+...
+>       assert "1 passed" in child.stdout, msg
+E       AssertionError: stdout='' stderr='ImportError while loading conftest ...\nconftest.py:7: in <module>\n    assert sys.pycache_prefix == ... and sys.dont_write_bytecode, "child must not import stale bytecode of the fixture under test"\nE   AssertionError: child must not import stale bytecode of the fixture under test\nE   assert (\'/Users/zwrose/Library/Caches/com.apple.python\' == \'.../pyc\')\n'
+E       assert '1 passed' in ''
+...
+__ test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end ___
+...
+>       assert "1 passed" in child.stdout, msg
+E       AssertionError: stdout='' stderr='ImportError while loading conftest ...\nconftest.py:7: in <module>\n    assert sys.pycache_prefix == ... and sys.dont_write_bytecode, "child must not import stale bytecode of the fixture under test"\nE   AssertionError: child must not import stale bytecode of the fixture under test\n'
+E       assert '1 passed' in ''
+...
+_ test_probe_git_fake_teardown_raises_on_unregistered_helper_value_end_to_end __
+...
+>       assert "1 passed" in child.stdout, msg
+E       AssertionError: stdout='' stderr='ImportError while loading conftest ...\nconftest.py:7: in <module>\n    assert sys.pycache_prefix == ... and sys.dont_write_bytecode, "child must not import stale bytecode of the fixture under test"\nE   AssertionError: child must not import stale bytecode of the fixture under test\n'
+E       assert '1 passed' in ''
+...
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fake_teardown_raises_on_unregistered_helper_value_end_to_end
+3 failed in 1.59s
+```
+
+**Restore:** inverse edit — restored `env["PYTHONPYCACHEPREFIX"] = pyc_dir`.
+
+**Restore receipt (quoted restored lines):**
+
+```python
+    env["PYTHONPYCACHEPREFIX"] = pyc_dir
+```
+
+**Supplementary `git status --porcelain` after restore:**
+
+```
+ M plugins/superheroes/lib/tests/test_engine_dispatch.py
+```
+
+**Raw green** (full capture at `/private/tmp/wo_r5_c_bp33_green.txt` — exceeds 32 KiB due to ambient `PytestWarning` teardown noise):
+
+First lines:
+
+```
+...                                                                      [100%]
+3 passed in 2.68s
+```
+
+Last lines:
+
+```
+<class 'OSError'>: [Errno 66] Directory not empty: '/private/var/folders/.../garbage-...'
+  warnings.warn(
+```

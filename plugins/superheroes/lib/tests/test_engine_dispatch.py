@@ -6114,6 +6114,7 @@ def test_probe_git_fake_flag_flip_bypass_dead(monkeypatch):
 def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source):
     """Run a single child pytest case out-of-process with the real autouse fixture."""
     tests_dir = _HERE
+    pyc_dir = os.path.join(str(tmp_path), "pyc")
     conftest_path = os.path.join(tmp_path, "conftest.py")
     conftest_source = (
         "import sys\n"
@@ -6122,7 +6123,9 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
         "import test_engine_dispatch as TED\n"
         "\n"
         "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
-        % repr(tests_dir)
+        "assert sys.pycache_prefix == %s and sys.dont_write_bytecode, "
+        "\"child must not import stale bytecode of the fixture under test\"\n"
+        % (repr(tests_dir), repr(pyc_dir))
     )
     ast.parse(conftest_source)
     with open(conftest_path, "w", encoding="utf-8") as fh:
@@ -6146,7 +6149,7 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
     with open(module_path, "w", encoding="utf-8") as fh:
         fh.write(module_source)
 
-    # Child inherits store isolation (WORKHORSE_STORE_ROOT, SUPERHEROES_WORKTREES_ROOT, TEST_PILOT_STORE_ROOT) from plugins/superheroes/lib/tests/conftest.py's autouse _isolate_store_root by environment inheritance only — the child's rootdir is tmp_path, so that conftest is never loaded.
+    # Child inherits store isolation (WORKHORSE_STORE_ROOT, SUPERHEROES_WORKTREES_ROOT, TEST_PILOT_STORE_ROOT) from plugins/superheroes/lib/tests/conftest.py's autouse _isolate_store_root by environment inheritance only — the child's rootdir is tmp_path, so that conftest is never loaded; the in-process tempfile.gettempdir pins from _pin_temp_base_to_tmp_path do not reach the child, so a child body must not exercise temp-writing ED paths without pinning them itself.
     env = dict(os.environ)
     for key in list(env):
         if (
@@ -6157,7 +6160,7 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
         ):
             del env[key]
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
-    env["PYTHONPYCACHEPREFIX"] = os.path.join(str(tmp_path), "pyc")
+    env["PYTHONPYCACHEPREFIX"] = pyc_dir
     env["PYTHONDONTWRITEBYTECODE"] = "1"
 
     try:
@@ -6181,9 +6184,19 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
             timeout=120,
         )
     except subprocess.TimeoutExpired as exc:
+        stdout = exc.stdout
+        if stdout is None:
+            stdout = ""
+        elif isinstance(stdout, bytes):
+            stdout = stdout.decode("utf-8", "replace")
+        stderr = exc.stderr
+        if stderr is None:
+            stderr = ""
+        elif isinstance(stderr, bytes):
+            stderr = stderr.decode("utf-8", "replace")
         pytest.fail(
             "child pytest timed out after 120s; stdout=%r stderr=%r"
-            % (exc.stdout, exc.stderr)
+            % (stdout, stderr)
         )
 
 
