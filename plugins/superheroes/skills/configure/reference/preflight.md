@@ -185,8 +185,10 @@ python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
 On a cache miss this probes each configured reviewer vendor's pin-reachable models and writes the
-machine-readable liveness receipt to the project store; **within the TTL it probes nothing and
-reuses the existing receipt** — either way, a `review-code` compose inside the TTL rides it.
+machine-readable liveness receipt to the project store; **on a valid cache hit within the TTL that
+covers every needed cell, it probes nothing and reuses the existing receipt** (a young receipt that
+does not cover newly pin-reachable cells still probes and rewrites) — either way, a `review-code`
+compose inside the TTL rides it.
 **For the receipt's field shape, the command's stdout contract, and where provenance is stamped,
 read the homes rather than any prose restatement: the artifact writer in `lib/liveness_cache.py`,
 the `compose-liveness` command in `lib/preflight_probe.py`, and `lib/seat_map.py`'s compose (which
