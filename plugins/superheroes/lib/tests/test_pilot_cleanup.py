@@ -1256,9 +1256,13 @@ def test_cleanup_effect_receipt_sentinel_budget_decoupled_from_cleanup_timeout(
     # The regression guard for the decoupling the test above relies on (#1146). It reads the
     # budget each invocation was actually given rather than timing anything, so re-coupling the
     # two knobs goes red on a fast machine instead of surfacing as a flake on a loaded one. The
-    # sentinel budget is a marker value, never waited on: plant and probe finish in milliseconds.
-    # The cleanup here SUCCEEDS so the run reaches every instrumentation site — all three probe
+    # cleanup here SUCCEEDS so the run reaches every instrumentation site — all three probe
     # rounds, not just the two a failing cleanup stops short of.
+    #
+    # BOTH budgets are generous, and they differ only so each is traceable to the step it
+    # reached. Routing is what is under test, so nothing here may hinge on a deadline: a budget
+    # tight enough to expire would put this guard back in the class it exists to remove, failing
+    # for machine load while every production call site routed correctly.
     reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
         private_tmp
     )
@@ -1293,7 +1297,7 @@ def test_cleanup_effect_receipt_sentinel_budget_decoupled_from_cleanup_timeout(
         observed_identity="example_dev",
         identity_provenance="observed",
         identity_strength="strong",
-        timeout_seconds=1,
+        timeout_seconds=13,
         sentinel_timeout_seconds=17,
     )
     # Non-vacuity, stated mechanically: a run that stopped early would leave an instrumentation
@@ -1304,7 +1308,7 @@ def test_cleanup_effect_receipt_sentinel_budget_decoupled_from_cleanup_timeout(
     for argv0, budget in budgets:
         by_command.setdefault(argv0, set()).add(budget)
     assert set(by_command) == {plant, probe, cleanup_script}
-    assert by_command[cleanup_script] == {1}, "the cleanup command must carry timeout_seconds"
+    assert by_command[cleanup_script] == {13}, "the cleanup command must carry timeout_seconds"
     assert by_command[plant] == {17}, "the plant step must carry sentinel_timeout_seconds"
     assert by_command[probe] == {17}, "the probe step must carry sentinel_timeout_seconds"
 
