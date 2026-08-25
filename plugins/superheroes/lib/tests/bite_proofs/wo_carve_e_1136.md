@@ -6,22 +6,109 @@
 
 **Before-state (from order):** `test_retired_presence_premise_literals_census[no human]` was red because `lib/tests/bite_proofs/wo_d_1136.md` quotes the allowlisted sentence `no human` in order to prove the allowlist works.
 
-**Neutralization:** none (baseline after implementing `_census_excluded` chokepoint).
+**Neutralization:** `_CENSUS_EXCLUDED_DIRS` collapsed to the empty tuple — the smallest edit that
+removes only the bite-proof-directory exclusion while leaving `_CENSUS_SELF_PATHS` and the
+`_census_excluded` chokepoint itself intact, so the red can come from nothing else:
+
+```diff
+-_CENSUS_EXCLUDED_DIRS = (
+-    os.path.normpath(os.path.join(_PLUGIN_ROOT, "lib/tests/bite_proofs")),
+-)
++_CENSUS_EXCLUDED_DIRS = ()
+```
+
+Applied as a targeted, reversible edit through the host's edit action (never a whole-file rewrite,
+never a shell edit). Whole-file scope so **both** census walks that route through `_census_excluded`
+are observed, not just the one parametrized row.
 
 **Command:**
 ```
-/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest 'plugins/superheroes/lib/tests/test_presence_flag_retired.py::test_retired_presence_premise_literals_census[no human]' -q -p no:randomly -p no:xdist
+/usr/bin/python3 -B -X pycache_prefix=/private/tmp/superheroes-pyc -m pytest plugins/superheroes/lib/tests/test_presence_flag_retired.py -q -p no:randomly -p no:xdist
 ```
 
-**Green run:**
+**Red run** (detector unedited; only the excluded-dirs tuple neutralized):
 ```
-.                                                                        [100%]
-1 passed in 0.29s
+FAILED plugins/superheroes/lib/tests/test_presence_flag_retired.py::test_no_interactive_presence_flag_in_census_trees
+FAILED plugins/superheroes/lib/tests/test_presence_flag_retired.py::test_retired_presence_premise_literals_census[no human]
+2 failed, 19 passed in 1.17s
+```
+`PYTEST_EXIT=1`.
+
+**Red is on the claimed axis, mechanically.** Every hit line both assertions printed pointed inside
+`lib/tests/bite_proofs/`, and **zero** pointed outside it. Measured at commit `23155563` with a
+whitespace-tolerant match, because pytest indents `E` continuation lines by a variable amount:
+
+```
+grep -cE '^E +lib/'                          → 59   # every hit line
+grep -E '^E +lib/' | grep -c  'bite_proofs/' → 59   # inside the guarded directory
+grep -E '^E +lib/' | grep -vc 'bite_proofs/' → 0    # outside it
 ```
 
-**Restore:** n/a (no mutation).
+**The stable claim is the file set, not the count.** Every one of those hits fell in exactly two
+files — `lib/tests/bite_proofs/wo_carve_e_1136.md` and `lib/tests/bite_proofs/wo_d_1136.md` — both
+inside the guarded directory, and no third file anywhere in `_CENSUS_ROOTS` was hit. That is the
+axis BP-E1 claims, and it is what the red demonstrates.
 
-**Restore receipt:** n/a.
+**Why the count is pinned to a commit — this record is inside the directory it guards.** The census
+walks `lib/tests/bite_proofs/`, so *this file's own text* is part of what a neutralized census finds:
+every literal added to this record adds hits, and the raw number moves with each edit to it. That is
+not a defect in the proof, it is the exact condition the exclusion exists to handle — a proof must be
+free to quote the literal it proves (#1136, standing advisor ruling). So the count above is stated
+**against a named commit** rather than as a timeless fact, and the *invariant* — all hits inside the
+guarded directory, none outside — is what holds at any head. A reader can re-derive the number at any
+commit by applying the neutralization above; `git show 23155563` reproduces this one exactly.
+
+A hit line from the sibling record, quoted verbatim (chosen over one from this file because this
+file's own line numbers shift whenever the record is edited):
+```
+E         lib/tests/bite_proofs/wo_d_1136.md:59: ## BP-D2a — `test_retired_presence_premise_literals_census[no human]` (line-shift survives — inverted proof)
+```
+
+**Elision, disclosed:** the other 58 hit lines and both assertions' full tracebacks are elided here
+(~7 KiB) to stay inside the per-element capture bound. They are the same shape as the one quoted,
+each naming a path under `lib/tests/bite_proofs/`. Nothing redacted — the capture contains no
+secrets, tokens, private URLs, or PII.
+
+**Counting note, recorded because this record tripped it.** An earlier draft counted the
+outside-hits with `grep -E '^E   lib/'` — exactly three spaces after `E`. Pytest emits nine, so that
+pattern matched **nothing** and would have reported `0` outside-hits whether or not any existed: the
+number was true but its evidence was vacuous. That is the bite-proof rubric's mode 4 fixture-vacuity
+face — a probe green (here, a reassuring zero) that the fixture could never have produced any other
+way. A later draft then carried counts captured before the record's own final content was in place,
+which the confirming review round caught as stale. Both are fixed above: tolerant patterns, counts
+pinned to a commit, and the load-bearing claim moved to the file set.
+
+**Both guarded directions bite.** The premise-literal census and the INTERACTIVE census are separate
+walks that both route through `_census_excluded`; removing the exclusion reddens **both**, which is
+what BP-E1 claimed and, until this record, had not shown.
+
+**Restore:** the neutralization was undone by the inverse edit — `_CENSUS_EXCLUDED_DIRS` restored to
+the one-entry tuple quoted in the diff above.
+
+**Restore receipt:** post-restore `git status --porcelain` over the worktree returned **0 lines**
+(byte-clean) and `HEAD` was unchanged at `23155563e022b014646dcb76e9a2252d2b5147b4`. No residue;
+nothing could not be reverted.
+
+**Green run** (after restore):
+```
+21 passed in 0.99s
+```
+`PYTEST_EXIT=0`. The pre-mutation baseline over the same command was also `21 passed`
+(`PYTEST_EXIT=0`), so the green brackets the red on both sides.
+
+**Provenance of this record.** BP-E1 originally shipped with `Neutralization: none` — a green-only
+record, vacuous under the bite-proof rubric. PR #1142's completion round produced the missing red
+half as a receipt in that PR's build record and filed copying it into this file as follow-up 3
+(#1148 item 4). The runs above were **re-executed from scratch** for #1148 rather than transcribed.
+
+The probe was run **twice**, and the capture quoted above is the **second**. The first ran at
+commit `d9a5f113`, before this record's own content was final, and independently reproduced PR
+#1142's counts (red `2 failed` / 19 passed, green `21 passed`). Because this record lives inside
+the directory the census walks, finishing the record changed how many literals a neutralized
+census would find, so the whole probe was re-run at commit `23155563` once the content was in
+place and that capture is what is quoted here. The pass/fail shape is identical across both runs;
+only the hit-line count moved (56 → 59), for the reason given above. The confirming review round
+is what caught the first capture being stale against the final record.
 
 ---
 
