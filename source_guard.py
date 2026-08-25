@@ -42,7 +42,7 @@ class ShippedSourceWrite(RuntimeError):
 def watched_paths(repo_root):
     """Absolute realpaths of every tracked non-test .py file. Authoritative: git ls-files."""
     proc = subprocess.run(
-        ["git", "ls-files", "-z", "*.py"],
+        ["git", "ls-files", "-z", "--full-name", "*.py"],
         cwd=repo_root,
         capture_output=True,
         check=False,
@@ -99,24 +99,37 @@ def _apply_baseline(baseline):
 
 def _git_dirty_paths(repo_root):
     proc = subprocess.run(
-        ["git", "status", "--porcelain"],
+        ["git", "-c", "core.quotepath=false", "status", "--porcelain", "-z"],
         cwd=repo_root,
         capture_output=True,
         check=False,
-        text=True,
     )
     if proc.returncode != 0:
         raise RuntimeError(
             "source_guard: git status failed (exit %d): %s"
-            % (proc.returncode, proc.stderr)
+            % (proc.returncode, proc.stderr.decode("utf-8", "replace"))
         )
     dirty = set()
-    for line in proc.stdout.splitlines():
-        if len(line) < 4:
+    entries = proc.stdout.split(b"\0")
+    i = 0
+    while i < len(entries):
+        entry = entries[i]
+        if not entry:
+            i += 1
             continue
-        path = line[3:].strip()
-        if " -> " in path:
-            path = path.split(" -> ", 1)[1]
+        if len(entry) < 3:
+            i += 1
+            continue
+        status = entry[:2]
+        if status[0] == ord("R") or status[1] == ord("R"):
+            i += 1
+            if i >= len(entries) or not entries[i]:
+                break
+            path = entries[i].decode("utf-8", "replace")
+            i += 1
+        else:
+            path = entry[3:].decode("utf-8", "replace")
+            i += 1
         dirty.add(os.path.realpath(os.path.join(repo_root, path)))
     return dirty
 
@@ -166,23 +179,25 @@ def audit_hook(event, args):
 
 
 def _resolve_repo_root(config):
-    env = os.environ.get(REPO_ROOT_ENV)
-    if env:
-        return os.path.realpath(env)
-    return os.path.realpath(str(config.rootpath))
-
-
-def pytest_addoption(parser):
-    parser.addini(
-        "source_guard_loaded",
-        "Marker that source_guard plugin registered",
-        default="yes",
+    candidate = os.environ.get(REPO_ROOT_ENV)
+    if candidate is None:
+        candidate = str(config.rootpath)
+    proc = subprocess.run(
+        ["git", "-C", candidate, "rev-parse", "--show-toplevel"],
+        capture_output=True,
+        check=False,
+        text=True,
     )
+    if proc.returncode != 0:
+        raise RuntimeError(
+            "source_guard: git rev-parse --show-toplevel failed (exit %d): %s"
+            % (proc.returncode, proc.stderr)
+        )
+    return os.path.realpath(proc.stdout.strip())
 
 
 def pytest_configure(config):
     global _REPO_ROOT, _SESSION_START_DIRTY, _AUDIT_HOOK_INSTALLED
-    config._source_guard_active = True
     _REPO_ROOT = _resolve_repo_root(config)
 
     workerinput = getattr(config, "workerinput", None)
@@ -244,6 +259,8 @@ def _check_residue(test_nodeid):
             _CURRENT_SIGNATURES[path] = current_sig
             continue
         changed.append(path)
+        _CURRENT_SIGNATURES[path] = current_sig
+        _BASELINE_HASHES[path] = current_hash
     if changed:
         pytest.fail(
             "source_guard: shipped source mutated by %s: %s"
@@ -256,9 +273,11 @@ def pytest_sessionfinish(session, exitstatus):
         return
     end_dirty = _git_dirty_paths(_REPO_ROOT)
     new_dirty = end_dirty - _SESSION_START_DIRTY
-    if new_dirty:
-        session.exitstatus = 1
-        paths = ", ".join(sorted(new_dirty))
+    watched_dirty = new_dirty & set(_WATCHED_PATHS)
+    if watched_dirty:
+        if session.exitstatus == 0:
+            session.exitstatus = 1
+        paths = ", ".join(sorted(watched_dirty))
         session.config._source_guard_session_failure = (
             "source_guard: session left shipped source dirty: %s" % paths
         )

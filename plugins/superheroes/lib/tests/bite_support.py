@@ -8,8 +8,21 @@ def patched_module(module, edits, name=None):
     `edits` is a sequence of (old, new) pairs, each applied exactly once, in order.
     Raises AssertionError if an `old` target is absent, or occurs more than once.
     """
-    if isinstance(edits, tuple) and len(edits) == 2 and isinstance(edits[0], str):
+    if edits and isinstance(edits[0], str):
         edits = (edits,)
+    normalized = []
+    for item in edits:
+        if (
+            not isinstance(item, (tuple, list))
+            or len(item) != 2
+            or not isinstance(item[0], str)
+            or not isinstance(item[1], str)
+        ):
+            raise AssertionError(
+                "edits must be a sequence of (old, new) string pairs, got %r" % item
+            )
+        normalized.append((item[0], item[1]))
+    edits = normalized
     with open(module.__file__, encoding="utf-8") as fh:
         src = fh.read()
     patched = src

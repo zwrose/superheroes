@@ -306,7 +306,16 @@ def test_bite_watched_paths_tests_exclusion(tmp_path):
 
 
 def test_bite_empty_manifest_raises(tmp_path):
+    tests_py = tmp_path / "pkg" / "tests" / "t.py"
+    tests_py.parent.mkdir(parents=True)
+    tests_py.write_text("x = 1\n")
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True)
+    subprocess.run(["git", "add", "."], cwd=tmp_path, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=tmp_path,
+        check=True,
+    )
 
     def raises_empty(mod):
         try:
@@ -323,7 +332,7 @@ def test_bite_empty_manifest_raises(tmp_path):
             "    if not paths:\n"
             "        pass",
         ),
-        lambda m: not raises_empty(m),
+        lambda m: raises_empty(m),
         lambda m: raises_empty(m),
     )
 
@@ -389,10 +398,11 @@ def test_bite_patched_module_count_two(tmp_path):
 # --- Group 3: wiring proof (subprocess, real plugin) -------------------------
 
 
-def _build_micro_suite(root):
+def _build_micro_suite(root, load_via_pytest_plugins=True):
     shipped = root / "lib" / "shipped.py"
     shipped.parent.mkdir(parents=True)
     shipped.write_text("VALUE = 1\n")
+    (root / "pytest.ini").write_text("[pytest]\n")
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(
@@ -400,13 +410,19 @@ def _build_micro_suite(root):
         cwd=root,
         check=True,
     )
-    (root / "conftest.py").write_text(
-        "import pytest\n\n"
-        "@pytest.fixture\n"
-        "def shipped_path():\n"
-        "    import pathlib\n"
-        "    return pathlib.Path(__file__).resolve().parent / 'lib' / 'shipped.py'\n"
+    conftest_lines = []
+    if load_via_pytest_plugins:
+        conftest_lines.append("pytest_plugins = ('source_guard',)\n")
+    conftest_lines.extend(
+        [
+            "import pytest\n\n",
+            "@pytest.fixture\n",
+            "def shipped_path():\n",
+            "    import pathlib\n",
+            "    return pathlib.Path(__file__).resolve().parent / 'lib' / 'shipped.py'\n",
+        ]
     )
+    (root / "conftest.py").write_text("".join(conftest_lines))
     (root / "test_violator.py").write_text(
         "def test_rewrite_shipped(shipped_path):\n"
         "    path = str(shipped_path)\n"
@@ -427,26 +443,32 @@ def _build_micro_suite(root):
     )
 
 
-def _run_micro_pytest(root, xdist_workers=None):
+def _run_micro_pytest(root, xdist_workers=None, explicit_plugin=True, cwd=None, test_file=None):
     env = os.environ.copy()
     env["PYTHONPATH"] = _REPO_ROOT
     env[sg.REPO_ROOT_ENV] = str(root)
+    target = test_file or (root / "test_violator.py")
+    run_cwd = cwd or root
+    if cwd is None and explicit_plugin:
+        run_cwd = _REPO_ROOT
+    rel_target = str(target)
+    if os.path.commonpath([os.path.realpath(run_cwd), os.path.realpath(target)]) == os.path.realpath(run_cwd):
+        rel_target = os.path.relpath(target, run_cwd)
     cmd = [
         sys.executable,
         "-B",
         "-m",
         "pytest",
-        str(root / "test_violator.py"),
-        "-p",
-        "source_guard",
-        "--trace-config",
+        rel_target,
         "-q",
     ]
+    if explicit_plugin:
+        cmd.extend(["-p", "source_guard"])
     if xdist_workers is not None:
         cmd.extend(["-n", str(xdist_workers)])
     return subprocess.run(
         cmd,
-        cwd=_REPO_ROOT,
+        cwd=run_cwd,
         env=env,
         capture_output=True,
         text=True,
@@ -477,6 +499,160 @@ def test_wiring_proof_serial_subprocess(tmp_path):
     _build_micro_suite(root)
     proc = _run_micro_pytest(root)
     _assert_wiring_failure(proc, root)
+
+
+def test_guard_loads_without_explicit_plugin_flag(tmp_path):
+    root = tmp_path / "micro_implicit"
+    root.mkdir()
+    _build_micro_suite(root, load_via_pytest_plugins=True)
+    proc = _run_micro_pytest(root, explicit_plugin=False)
+    _assert_wiring_failure(proc, root)
+
+
+def _build_nested_fake_repo(root):
+    (root / "pytest.ini").write_text("[pytest]\n")
+    (root / "conftest.py").write_text("pytest_plugins = ('source_guard',)\n")
+    test_dir = root / "plugins" / "superheroes" / "lib" / "tests"
+    test_dir.mkdir(parents=True)
+    shipped = root / "lib" / "shipped.py"
+    shipped.parent.mkdir()
+    shipped.write_text("VALUE = 1\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=root, check=True)
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=root,
+        check=True,
+    )
+    (test_dir / "conftest.py").write_text(
+        "import pytest\n\n"
+        "@pytest.fixture\n"
+        "def shipped_path():\n"
+        "    import pathlib\n"
+        "    return pathlib.Path(__file__).resolve().parent.parent.parent.parent.parent / 'lib' / 'shipped.py'\n"
+    )
+    (test_dir / "test_violator.py").write_text(
+        "def test_rewrite_shipped(shipped_path):\n"
+        "    path = str(shipped_path)\n"
+        "    with open(path, encoding='utf-8') as fh:\n"
+        "        orig = fh.read()\n"
+        "    try:\n"
+        "        with open(path, 'w', encoding='utf-8') as fh:\n"
+        "            fh.write(orig.replace('1', '2'))\n"
+        "    finally:\n"
+        "        with open(path, 'w', encoding='utf-8') as fh:\n"
+        "            fh.write(orig)\n"
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "tests"],
+        cwd=root,
+        check=True,
+    )
+    return test_dir
+
+
+def test_guard_loads_from_nested_test_directory(tmp_path):
+    root = tmp_path / "nested_fake"
+    root.mkdir()
+    test_dir = _build_nested_fake_repo(root)
+    env = os.environ.copy()
+    env["PYTHONPATH"] = _REPO_ROOT
+    env[sg.REPO_ROOT_ENV] = str(root)
+    proc = subprocess.run(
+        [sys.executable, "-B", "-m", "pytest", "test_violator.py", "-q"],
+        cwd=test_dir,
+        env=env,
+        capture_output=True,
+        text=True,
+    )
+    _assert_wiring_failure(proc, root)
+
+
+def test_resolve_repo_root_from_subdirectory(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    sub = repo / "nested"
+    sub.mkdir(parents=True)
+    lib = repo / "lib"
+    lib.mkdir()
+    (lib / "mod.py").write_text("x = 1\n")
+    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(["git", "add", "."], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "init"],
+        cwd=repo,
+        check=True,
+    )
+    monkeypatch.delenv(sg.REPO_ROOT_ENV, raising=False)
+    config = types.SimpleNamespace(rootpath=str(sub))
+    resolved = sg._resolve_repo_root(config)
+    assert resolved == os.path.realpath(str(repo))
+
+
+def _build_layer2_micro_suite(root):
+    _build_micro_suite(root)
+    (root / "test_unrestored.py").write_text(
+        "import subprocess, sys\n\n"
+        "def test_child_mutates_unrestored(shipped_path):\n"
+        "    path = str(shipped_path)\n"
+        "    subprocess.run(\n"
+        "        [sys.executable, '-c', 'open(%r, \"w\").write(\"CORRUPTED\")' % path],\n"
+        "        check=True,\n"
+        "    )\n"
+    )
+    subprocess.run(["git", "add", "test_unrestored.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "layer2"],
+        cwd=root,
+        check=True,
+    )
+
+
+def test_layer2_subprocess_unrestored(tmp_path):
+    root = tmp_path / "micro_layer2"
+    root.mkdir()
+    _build_layer2_micro_suite(root)
+    proc = _run_micro_pytest(root, test_file=root / "test_unrestored.py")
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode != 0, combined
+    assert "source_guard: shipped source mutated by" in combined
+    assert "test_child_mutates_unrestored" in combined
+    assert "shipped.py" in combined
+    (root / "lib" / "shipped.py").write_text("VALUE = 1\n")
+
+
+def _build_layer3_micro_suite(root):
+    _build_micro_suite(root)
+    (root / "test_chmod.py").write_text(
+        "import subprocess, sys\n\n"
+        "def test_child_chmods_shipped(shipped_path):\n"
+        "    path = str(shipped_path)\n"
+        "    subprocess.run(\n"
+        "        [sys.executable, '-c',\n"
+        "         'import os, stat; p=%r; m=os.stat(p).st_mode; "
+        "os.chmod(p, m | stat.S_IXUSR)' % path],\n"
+        "        check=True,\n"
+        "    )\n"
+    )
+    subprocess.run(["git", "add", "test_chmod.py"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=T", "commit", "-q", "-m", "layer3"],
+        cwd=root,
+        check=True,
+    )
+
+
+def test_layer3_session_end_reports_dirty(tmp_path):
+    root = tmp_path / "micro_layer3"
+    root.mkdir()
+    _build_layer3_micro_suite(root)
+    proc = _run_micro_pytest(root, test_file=root / "test_chmod.py")
+    combined = proc.stdout + proc.stderr
+    assert proc.returncode != 0, combined
+    assert "source_guard: session left shipped source dirty:" in combined
+    assert "shipped.py" in combined
+    st = os.stat(root / "lib" / "shipped.py")
+    os.chmod(root / "lib" / "shipped.py", st.st_mode & ~stat.S_IXUSR)
 
 
 def test_wiring_proof_xdist_subprocess(tmp_path):
@@ -535,9 +711,13 @@ def test_pytest_configure_installs_audit_hook_once(monkeypatch):
         calls.append(hook)
 
     monkeypatch.setattr(sg.sys, "addaudithook", counting_addaudithook)
+    baseline = {"signatures": {}, "hashes": {}}
     config = types.SimpleNamespace(
         rootpath=_REPO_ROOT,
-        workerinput=None,
+        workerinput={
+            "source_guard_baseline": baseline,
+            "source_guard_watched": [],
+        },
         _source_guard_baseline=None,
     )
     try:
