@@ -12,6 +12,9 @@ up-to-date project changes nothing (FR-12).
 
 `ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"` is assigned once per bash block below.
 
+Gate write-downs on this path land in `$REVIEW_LAYER_BODY` under `## Setup disclosures` and are
+piped to `core_md.py write-layer --hero review-crew` before the run hands back.
+
 ## 1 — Render the combined view (FR-4) + drift notice (FR-7)
 
 ```bash
@@ -60,20 +63,35 @@ action that owns it, leaving the rest of the calibration untouched:
   re-offered. The combined view renders each hero layer — including guardian — under
   `## Layer: <hero>`.
 - **Sweep orphaned per-project stores** → when the view's `storage health` line reports orphaned
-  or unknown-provenance stores, offer the sweep. Always report first, show the counts and the
-  orphan list, and delete only on the owner's explicit confirm:
+  or unknown-provenance stores:
+
+<!-- decision-point: id=configure-tune-orphan-store-sweep mode=gate kind=owner-gate default="report only — no sweep without current-turn owner authorization" carrier=review-crew-layer -->
+
+  Always run the read-only report first. GATE: write the counts and orphan list into
+  `$REVIEW_LAYER_BODY` under `## Setup disclosures`, pipe to `core_md.py write-layer --hero
+  review-crew`, and hand back — do **not** run `store_sweep.py sweep` on the default path.
 
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   python3 -B "$ROOT_DIR/lib/store_sweep.py" report
-  # show the owner the counts + orphaned paths; on their explicit confirm:
-  python3 -B "$ROOT_DIR/lib/store_sweep.py" sweep
   ```
 
   `sweep` deletes only provenance-orphaned stores (recorded source path gone, no real content) —
   never stores with content or a live source path. `unknown` stores (pre-provenance, no content)
   are kept unless the owner explicitly opts in with `--include-unknown`. Any classification doubt
   reads as real and is kept.
+
+  **Only when the owner authorizes deletion in this turn** — not the default path — run:
+
+  ```bash
+  ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
+  python3 -B "$ROOT_DIR/lib/store_sweep.py" sweep
+  ```
+
+  Follow-up: `/superheroes:configure`.
+
+<!-- /decision-point: id=configure-tune-orphan-store-sweep -->
+
 - **Write the review-discipline section into the project's `CLAUDE.md`** — offered ONLY when
   the storage mode is **in-repo** (out-of-repo mode exists to keep the repo free of superheroes
   traces; there the SessionStart bootstrap note is the sole carrier). Owner-gated like every
@@ -285,6 +303,11 @@ action that owns it, leaving the rest of the calibration untouched:
   first, then merge only the requested overlay document. Pass `null` (or empty stdin) to remove
   the overlay and return to shipped-defaults-only.
 
+<!-- decision-point: id=configure-tune-gate-policy mode=proceed kind=owner-gate default="retain shipped-defaults-only gate policy overlay" carrier=review-crew-layer -->
+
+  PROCEED: retain the shipped-defaults-only overlay unless the owner selects this tune action in
+  this turn, and continue. Follow-up: `/superheroes:configure`.
+
   ```bash
   ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
   printf '%s\n' '{"schema":"gate-policy/1","default":"park","rules":[{"gate":"present-judgment","findingClass":"judgment:important","disposition":"skip"}]}' | \
@@ -303,22 +326,39 @@ action that owns it, leaving the rest of the calibration untouched:
   `action` (`refused`, `deferred`, `behind`) to the owner with its `reason`; the command exits 0
   either way, so check `action`, not exit status.
 
+<!-- /decision-point: id=configure-tune-gate-policy -->
+
 ## 3 — Flip the storage mode (FR-10), always showing what will move
 
-The flip is the only destructive action — always show **exactly what will move** and require an
-explicit confirm before doing anything. First preview, then (on confirm) execute:
+<!-- decision-point: id=configure-tune-storage-flip mode=gate kind=owner-gate default="preview only — no execute without current-turn owner authorization" carrier=review-crew-layer -->
+
+The flip is the only destructive action — always show **exactly what will move**. GATE: run
+preview only, write the exact move list into `$REVIEW_LAYER_BODY` under `## Setup disclosures`,
+pipe to `core_md.py write-layer --hero review-crew`, and hand back — do **not** run `execute` on
+the default path.
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" preview --cwd . --target <in-repo|global>
-# present the calibration + definition documents + work-item records it lists, and the
-# collaborator-visibility note;
-# on the owner's explicit confirm in this turn (invoking configure is not itself the confirm):
+```
+
+Present the calibration + definition documents + work-item records the preview lists, and the
+collaborator-visibility note.
+
+**Only when the owner authorizes the migration in this turn** — invoking configure is not itself
+the authorization — run:
+
+```bash
+ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/mode_migrate.py" execute --cwd . --target <in-repo|global> --owner-authorized true
 ```
 
 Pass `--owner-authorized true` **only** when the owner confirmed the migration in the current turn.
-A run with no such confirmation passes nothing — `execute` reports the blocked result as-is.
+A run with no such authorization passes nothing — `execute` reports the blocked result as-is.
+
+Follow-up: `/superheroes:configure`.
+
+<!-- /decision-point: id=configure-tune-storage-flip -->
 
 - **What moves:** the full calibration (the shared core, every hero layer, the pinned patterns),
   **every definition document**, and **every other work-item record** the preview lists under
