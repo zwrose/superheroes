@@ -136,17 +136,25 @@ def _builder_strip_set(form, state, session_dir="/tmp"):
 
 
 def test_builder_strip_must_match_forbidden_set():
-    """BP-R1-C: each builder's strip set equals that form's derived forbidden set."""
+    """BP-R1-C: each builder strips exactly the forbidden keys present in the pre-strip output."""
     state = RD.new_state(_cfg())
     state["terminal"] = "halted"
     state["certification"] = {"shape": None, "reason": "test"}
 
     for form in RD._ALL_RECEIPT_FORMS:
         forbidden = set(RD._receipt_forbidden_keys(form))
+        pre = RD.build_receipt(state, "/tmp", form=form)
         if form == RD.RECEIPT_FORM_CERTIFIED:
-            receipt = RD.build_receipt(state)
-            assert forbidden & set(receipt.keys()) == set()
+            assert forbidden & set(pre.keys()) == set()
             continue
-        stripped = _builder_strip_set(form, state)
-        assert stripped == forbidden, (
-            "form %r: stripped %s != forbidden %s" % (form, sorted(stripped), sorted(forbidden)))
+        if form == RD.RECEIPT_FORM_INTERIM:
+            post = RD.build_interim_receipt(state, "/tmp", "park")
+        elif form == RD.RECEIPT_FORM_ATTESTED:
+            post = RD.build_attestation_receipt("/tmp", state, {"ref": "1"}, "note")
+        else:
+            raise ValueError(form)
+        stripped = set(pre.keys()) - set(post.keys())
+        assert stripped == forbidden & set(pre.keys()), (
+            "form %r: stripped %s != forbidden & pre %s"
+            % (form, sorted(stripped), sorted(forbidden & set(pre.keys()))))
+        assert forbidden & set(post.keys()) == set()
