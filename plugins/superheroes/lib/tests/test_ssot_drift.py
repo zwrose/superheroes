@@ -416,16 +416,89 @@ def _investigation_floor_operative_clauses_from_home():
         (r"len\(accepted\)\s*>=\s*1", "at-least-one accepted-path threshold"),
         (r"os\.path\.isabs\(entry\)", "absolute-path rejection"),
         (r"not os\.path\.exists\(real\)", "missing-path rejection"),
+        (r"not os\.path\.isfile\(real\)", "regular-file requirement"),
+        (
+            r"real != root_real and not real\.startswith\(root_prefix\)",
+            "repo-confinement check",
+        ),
         (r"generated-artifact", "generated-artifact rejection"),
-        (r"at least one", "at-least-one threshold in docstring"),
+        (r"A spot check, not an audit:", "spot-check audit clause in docstring"),
     )
     missing = [label for pat, label in checks if not re.search(pat, source, re.I)]
     assert not missing, (
         "spot_check_investigated floor could not be parsed — missing: %r" % missing
     )
-    m = re.search(r"at least one[^.\n\"']*", source, re.I)
-    assert m, "spot_check_investigated floor could not be parsed — at-least-one docstring clause"
-    return m.group(0).strip()
+
+
+def _investigation_floor_threshold_token_from_home():
+    """Normalized quantity threshold from spot_check_investigated's docstring.
+
+    Locates the operative clause structurally (introduced by ``A spot check, not an audit:``)
+    rather than by searching for the token under test. The load-bearing agreement with
+    document copies is the quantity threshold (``at least one`` vs ``ideally one``, etc.).
+    """
+    source = _spot_check_investigated_source()
+    m = re.search(
+        r"A spot check, not an audit:\s*([^.]+)\.",
+        source,
+        re.I,
+    )
+    assert m, (
+        "spot_check_investigated floor could not be parsed — spot-check audit clause"
+    )
+    clause = m.group(1).strip()
+    token_m = re.search(
+        r"(?:at\s+least\s+one|ideally\s+one|exactly\s+one)",
+        clause,
+        re.I,
+    )
+    assert token_m, (
+        "spot_check_investigated floor could not be parsed — quantity threshold in docstring"
+    )
+    return token_m.group(0).lower()
+
+
+def _investigation_floor_threshold_token_from_prose(text, label):
+    """Normalized quantity threshold from a document's investigation-floor prose."""
+    token_m = re.search(
+        r"(?:at\s+least\s+one|ideally\s+one|exactly\s+one)",
+        text,
+        re.I,
+    )
+    assert token_m, (
+        "%s: investigation floor threshold could not be parsed from prose" % label
+    )
+    return token_m.group(0).lower()
+
+
+def _assert_investigation_floor_threshold_matches_home(home_token, doc_text, label):
+    """Home↔doc binding: quantity threshold in prose must match spot_check_investigated."""
+    doc_token = _investigation_floor_threshold_token_from_prose(doc_text, label)
+    assert home_token == doc_token, (
+        "investigation floor drift: %s and spot_check_investigated disagree on "
+        "at-least-one surviving-path threshold (home=%r, doc=%r)"
+        % (label, home_token, doc_token)
+    )
+
+
+def _dispatch_mechanics_investigated_threshold_prose(doc):
+    """Operative at-least-one threshold sentence in dispatch-mechanics — scoped pin."""
+    m = re.search(
+        r"`investigated`\s+is present only when at least one claimed path survives "
+        r"spot-checking",
+        doc,
+        re.I,
+    ) or re.search(
+        r"\*\*`investigated`\*\*\s+is present only when at least one claimed path survives "
+        r"spot-checking",
+        doc,
+        re.I,
+    )
+    assert m, (
+        "dispatch-mechanics.md: investigation-floor threshold pin could not be located "
+        "(moved or reformatted?)"
+    )
+    return m.group(0)
 
 
 def _dispatch_mechanics_findings_only_section(doc):
@@ -489,7 +562,8 @@ def test_investigation_floor_prose_matches_spot_check_investigated():
     Copy-holders: skills/workhorse/reference/dispatch-mechanics.md (Findings-only review prompts),
     skills/review-code/reference/auto-fix-loop.md (vacuous-forfeit block).
     """
-    home_at_least_one = _investigation_floor_operative_clauses_from_home()
+    _investigation_floor_operative_clauses_from_home()
+    home_threshold = _investigation_floor_threshold_token_from_home()
 
     dispatch_doc = _read(_DISPATCH_MECHANICS_DOC)
     dispatch_section = _dispatch_mechanics_findings_only_section(dispatch_doc)
@@ -502,6 +576,12 @@ def test_investigation_floor_prose_matches_spot_check_investigated():
     assert re.search(r"repo-relative path to an existing", dispatch_section, re.I), (
         "dispatch-mechanics.md: surviving-path entry requirements drift"
     )
+    dispatch_threshold_prose = _dispatch_mechanics_investigated_threshold_prose(dispatch_doc)
+    _assert_investigation_floor_threshold_matches_home(
+        home_threshold,
+        dispatch_threshold_prose,
+        "dispatch-mechanics.md (investigated threshold)",
+    )
 
     auto_fix_doc = _read(_AUTO_FIX_LOOP_DOC)
     auto_fix_block = _auto_fix_loop_investigation_floor_block(auto_fix_doc)
@@ -511,13 +591,10 @@ def test_investigation_floor_prose_matches_spot_check_investigated():
     assert re.search(r"at least one path", auto_fix_block, re.I), (
         "auto-fix-loop.md: at-least-one surviving-path threshold drift"
     )
-
-    assert re.search(r"at least one", home_at_least_one, re.I), (
-        "spot_check_investigated: at-least-one threshold missing from home floor"
-    )
-    assert re.search(r"at least one path", auto_fix_block, re.I), (
-        "investigation floor drift: auto-fix-loop.md and spot_check_investigated disagree on "
-        "at-least-one surviving-path threshold"
+    _assert_investigation_floor_threshold_matches_home(
+        home_threshold,
+        auto_fix_block,
+        "auto-fix-loop.md (vacuous-forfeit block)",
     )
 
 
