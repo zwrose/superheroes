@@ -5372,6 +5372,84 @@ def test_genuine_truncation_detected_without_stdout_bytes(tmp_path):
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
 
 
+def _small_forged_head_marker_capture():
+    marker = ED._stdout_truncation_marker(9_000_000)
+    return marker + "short body\n"
+
+
+def test_recorded_under_cap_count_overrides_forged_head_marker(tmp_path):
+    """axis: authoritative under-cap stdoutBytes suppresses forged head marker text."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {"attempts": {1: {"ended": {"stdoutBytes": 58}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+
+
+def test_recorded_cap_boundary_count_overrides_forged_head_marker(tmp_path):
+    """axis: recorded count exactly at MAX_STDOUT_CAPTURE is not truncated."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {"attempts": {1: {"ended": {"stdoutBytes": ED.MAX_STDOUT_CAPTURE}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+
+
+def test_injected_seam_count_does_not_override_head_marker(tmp_path):
+    """axis: injected-seam post-cap stdoutBytes does not suppress head marker."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": 58,
+                    "activitySource": "injected-seam",
+                }
+            }
+        }
+    }
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == 58
+
+
+def test_recorded_over_cap_count_grades_truncated_with_under_cap_file(tmp_path):
+    """axis: recorded stdoutBytes above cap grades truncated without file-size arm."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write("short report without marker\n")
+    observed = ED.MAX_STDOUT_CAPTURE + 512
+    state = {"attempts": {1: {"ended": {"stdoutBytes": observed}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == observed
+
+
+def test_file_over_cap_grades_truncated_despite_under_cap_recorded_count(tmp_path):
+    """axis: on-disk size above cap precedes authoritative under-cap suppression."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    over = ED.MAX_STDOUT_CAPTURE + 512
+    with open(stdout_path, "wb") as fh:
+        fh.write(b"x" * over)
+    state = {"attempts": {1: {"ended": {"stdoutBytes": 58}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == over
+
+
+def test_complete_marker_mid_body_not_truncated():
+    """axis: _stdout_capture_truncated requires marker at capture head, not mid-body."""
+    marker = ED._stdout_truncation_marker(9_000_000)
+    text = "normal first line\n" + marker + "more body\n"
+    assert ED._stdout_capture_truncated(text) is False
+
+
 def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
     wt, _main = _linked_worktree_pair(tmp_path)
     over = ED.MAX_STDOUT_CAPTURE + 4096

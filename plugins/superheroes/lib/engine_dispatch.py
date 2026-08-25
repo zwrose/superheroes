@@ -498,7 +498,7 @@ _STDOUT_TRUNCATION_MARKER_RE = re.compile(
 
 
 def _stdout_capture_truncated(text):
-    """True when the runner wrote its truncation marker at the capture head (not engine-forged)."""
+    """True when a well-formed truncation marker appears at the capture head."""
     if not text:
         return False
     return _STDOUT_TRUNCATION_MARKER_RE.match(text) is not None
@@ -2732,6 +2732,11 @@ def _attempt_stdout_truncated(run_dir_real, state, attempt):
         return None
     if size > MAX_STDOUT_CAPTURE:
         return size
+    # axis: authoritative under-cap recorded count outranks marker text;
+    # provenance matters — real spawn records pre-cap bytes (:2239), injected seam
+    # records post-cap len (:2313) and cannot settle suppression.
+    if observed is not None and ended.get("activitySource") != "injected-seam":
+        return None
     text = _read_capped_text(stdout_path)
     if _stdout_capture_truncated(text):
         return observed if observed is not None else size
