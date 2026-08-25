@@ -429,22 +429,45 @@ as builder-dispatched work, in this shape:
 - **Re-review is unchanged** — the fixed surface goes back through the review loop like any other
   fix, and the loop's convergence bar and the third-rework tripwire both still bind.
 
-**Owner authorization is required when the findings are blocking.** The guard's own prescribed
-remedy is owner escalation, so for a **Critical or Important** finding on safety machinery the
-owner's word comes **before** the ordered round, not after it. That authorization is **scoped to the
-findings' own surfaces and nothing wider** — it is permission to fix these defects here, never a
-standing licence to edit safety machinery for the rest of the build. **Non-blocking** findings on the same
-surface are **disclosed residuals** — recorded in the dispositions table, and never auto-fixed either,
-because the guard refuses the fixer at every severity. Folding one into an ordered round is available
-only when that round is already authorized **and** the finding's surface sits inside what the owner
-authorized or the issue already ratified. A non-blocking finding is never the reason a build reaches
-into safety machinery it was not sent to touch.
+**Blocking findings go out on advisor or builder authority.** For a Critical or Important finding on
+safety machinery, the ordered implementer round goes out **on the advisor's or the builder's own
+authority**; **the owner's mandatory touchpoint is the merge click**, not a per-change
+pre-authorization. What that authority costs is **loud disclosure**: **the work order says the round
+touches safety machinery and names the files**, and the PR body says the same where the owner reads
+it. **Non-blocking** findings on the same surface are **disclosed residuals** — recorded in the
+dispositions table, and never auto-fixed either, **because the guard refuses the fixer at every
+severity**. A non-blocking finding is never the reason a build reaches into safety machinery it was
+not sent to touch.
 
-**When authorization is unavailable, park.** A headless or owner-absent build that reaches blocking
-findings on safety machinery **parks with receipts** — what the panel found, that the guard refused
-the fixer, and that the remaining findings need the owner's word. It does not narrow the guard, does
-not type the fix to get moving, and does not hand back claiming convergence it did not reach. A
-builder cannot lift its own park; resumption is the owner's or the advisor's call.
+**The one exception — the owner-authority-gate family.** Three files carry the mechanical
+never-merge floor, and a round touching any of them **still needs the owner's word first, per
+change**, scoped to the findings' own surfaces and nothing wider — never a standing licence:
+
+- `hooks/owner_authority_gate.py` (the PreToolUse gate hook)
+- `lib/owner_authority.py` (its classifier core)
+- `reference/owner-authority-allowlist.md` (its allowlist reference)
+
+This family is the mechanical never-merge floor, so a round that could edit it on its own authority
+could edit away the control that keeps the merge click the owner's.
+
+**Classification fails closed.** Before the round, put each finding's surface in exactly one of three
+classes — ordinary, safety machinery, owner-authority-gate family. **A surface you cannot confidently
+classify is treated as gate family** — a path that does not resolve, a renamed file, a dependency you
+have not checked — **which means it parks**. That fail direction is deliberate: when classification is
+uncertain, the route waits rather than granting authority by mistake.
+
+**When the owner's word is unavailable at the gate family, park.** A headless or owner-absent build
+that reaches blocking findings in the owner-authority-gate family **parks with receipts** — what the
+panel found, that the guard refused the fixer, and that the remaining findings need the owner's word.
+It does not narrow the guard, does not type the fix to get moving, and does not hand back claiming
+convergence it did not reach. A builder cannot lift its own park; resumption is the owner's or the
+advisor's call. **Outside the gate family there is nothing to wait for**: the ordered round goes out
+with its disclosure.
+
+**This is not the runtime self-modification floor.** `escalation-base.md`'s hard floor — *"modifies
+the safety machinery itself at runtime"* — is about **a run altering its own control system
+mid-flight**, and this route leaves it untouched. An ordered implementer edit in a build worktree,
+under a ratified issue or an ordered round, is not that; the two floors **do not overlap**.
 
 **Evidence — the route was executed twice before it was written down.** On #1109, **round 2**'s
 five-seat panel left six Important findings in `engine_adapter.py` / `engine_dispatch.py`, verified
@@ -459,7 +482,9 @@ own surfaces, which is precisely what keeps it different from a licence to edit 
 large — and converged; its build record
 on [PR #1120](https://github.com/zwrose/superheroes/pull/1120) is what asked for the route to be
 written down (*Follow-ups for the advisor*, item 9). Two executions, both successful, neither
-reconstructable from the plugin surfaces at the time.
+reconstructable from the plugin surfaces at the time. The owner pre-authorization this paragraph
+records was the rule **at the time** and is **retired for everything outside the
+owner-authority-gate family** by the 2026-08-25 ruling — historical evidence, not current procedure.
 
 ## Prose-driven review (`--review-only`)
 

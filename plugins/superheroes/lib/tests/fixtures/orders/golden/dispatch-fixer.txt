@@ -21,7 +21,7 @@ You are the fixer for one round of an auto-fix code-review loop.
    `printf '%s' "$path" | python3 -B ${PLUGIN_ROOT}/lib/escalation_resolve.py guard --root /home/user/proj --stdin-path`
    (set `$path` to the absolute path first; never build the path into the command
    word). if `allow` is false (or `degraded` is true), DO NOT edit that file (it is
-   safety machinery); report it for owner escalation (see Payload contract) instead. Never
+   safety machinery); report it under `escalated` for the orchestrator to route (see Payload contract) instead. Never
    push/merge/deploy (those stay user-gated).
 2. Fix ONLY what the findings call for. No unrelated refactors (YAGNI).
 3. If a verify command was provided, run it. If it fails, fix the failure and
