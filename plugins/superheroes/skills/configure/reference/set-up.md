@@ -91,10 +91,10 @@ Set-up still **completes** and the project is usable without them.
 
 <!-- /decision-point: id=configure-setup-optional-heroes -->
 
-<!-- decision-point: id=configure-setup-browser-tool-gap mode=notify kind=ask-user-question default="record the browser-tool gap; do not guide" carrier=test-pilot-layer -->
+<!-- decision-point: id=configure-setup-browser-tool-gap mode=notify kind=ask-user-question default="record the browser-tool gap; do not guide" carrier=run-output -->
 
 When test-pilot would apply but no browser tool is connected, NOTIFY: record the browser-tool gap
-in `## Setup disclosures` for the test-pilot layer and the run continues — do not guide the owner
+in the set-up output and the run continues — do not guide the owner
 to connect one and do not block set-up (UFR-4). Follow-up: `/superheroes:configure`.
 
 <!-- /decision-point: id=configure-setup-browser-tool-gap -->

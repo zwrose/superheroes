@@ -47,6 +47,9 @@ The census enforces:
 - **`carrier`** is a key from the carrier registry in §1c — never free prose. It names the
   intended durable home of the disclosure (a declaration, not a verified delivery guarantee — see
   §1c).
+- For blocks with **`kind=storage-location`**, the block's own fenced bash must contain a lexical
+  `SOURCE=$(… .source` assignment and an uncommented `[ -n "$SOURCE" ]` guard expression — shell
+  text inside the block, not a proof that the value flows from `decide-location`'s output.
 - The prose inside the block must name **`/superheroes:configure`** as the follow-up.
 
 **Mode-specific structure** (enforced inside the block prose, every mode):
@@ -61,10 +64,11 @@ The census enforces:
 
 ## 1b — Forbidden primitives and waiting tokens
 
-Two fixed sets — the census reads these literally (after `*` emphasis is normalized away
-before matching; backticks and underscores are not, because a backtick distinguishes a mention from
-an invocation; underscore-emphasis is a stated limitation — see the census module docstring) and
-cross-line joining for multi-word literals).
+Two fixed sets — primitive and waiting-token matching is **case-insensitive** (the census uses
+`casefold()` on both sides), after `*` emphasis is normalized away and lines are joined for
+multi-word literals; backticks and underscores are **not** normalized (a backtick distinguishes a
+mention from an invocation; underscore-emphasis is a stated limitation — see the census module
+docstring).
 
 **Forbidden outside a decision block** (unless byte-pinned or rubric-excluded per §1d):
 
@@ -105,7 +109,7 @@ a silently-taken provisional default actually costs the owner something reopens 
 | `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | registry key only; no delivery assertion |
 | `review-spec-receipt` | `$SESSION_DIR/receipt.md` | review-spec's own assembly step | registry key only; no delivery assertion |
 | `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | registry key only; no delivery assertion |
-| `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | for `kind=storage-location` blocks only: `test_storage_decision_blocks_capture_source` in `lib/tests/test_decision_point_census.py` requires the block's own fenced bash to assign `SOURCE` from `decide-location`'s `.source` and to cover `$SOURCE` in its usable-value guard — shell text inside the block, not delivery to `meta.json` |
+| `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | registry key only; no delivery assertion |
 | `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | registry key only; no delivery assertion |
 | `run-output` | the run's own report to the owner | the run itself | registry key only; no file writer — use where a decision is reported to the owner in the session, in particular where a **gate hands back before any writer executes** |
 

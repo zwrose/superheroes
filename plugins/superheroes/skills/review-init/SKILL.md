@@ -164,9 +164,13 @@ conventions) belong in its layer `review-crew.md`. Both are written through the 
 never hand-format core.md (CONVENTIONS §2.2). Always pass `--status provisional` on this create path
 (FR-5); `confirmed` is reached only via `/superheroes:configure`:
 
+Fail-closed guard below — not the mechanical-carrier redesign: it refuses to execute a write whose
+piped input is missing, because `write-layer` replaces the entire layer file.
+
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 STATUS=provisional   # always on this create path; confirmed only via /superheroes:configure (FR-5)
+[ -n "$CORE_FACTS_JSON" ] && [ -n "$REVIEW_LAYER_BODY" ] || { echo "assembly produced empty payloads; halting rather than writing an empty layer" >&2; exit 1; }
 # CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a
 # `proposed`/`deferred` action is surfaced, never silently overwritten).
 printf '%s' "$CORE_FACTS_JSON" \
