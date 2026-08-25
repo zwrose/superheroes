@@ -22,7 +22,8 @@ converting a skill surface.
 
 A decision point phrased entirely outside the forbidden-primitive vocabulary below is **not**
 detected. There is no runtime chokepoint for skill prose; this closed-world prohibition list is
-the strongest available construction, and the limitation is disclosed rather than hidden.
+the strongest available construction, and the limitation is disclosed rather than hidden. Carrier
+delivery is not checked at all — by owner ruling 2026-08-25 (`a`-and-stop).
 
 ## 1a — Decision block grammar
 
@@ -43,7 +44,9 @@ The census enforces:
 - **`kind`** is exactly one of `storage-location`, `ask-user-question`, `interview-step`,
   `owner-gate`.
 - **`default`** is a non-empty quoted string in the open tag.
-- **`carrier`** is a key from the carrier registry in §1c — never free prose.
+- **`carrier`** is a key from the carrier registry in §1c — never free prose. It names the
+  intended durable home of the disclosure (a declaration, not a verified delivery guarantee — see
+  §1c).
 - The prose inside the block must name **`/superheroes:configure`** as the follow-up.
 
 **Mode-specific structure** (enforced inside the block prose, every mode):
@@ -88,24 +91,29 @@ cross-line joining for multi-word literals).
 
 ## 1c — Carrier registry
 
-Each `carrier=` value must resolve to a registry key. Proving a writer exists is not enough — the
-payload must demonstrably carry the disclosed fields through the write path named here.
+Each `carrier=` value must resolve to a registry key. The census checks the name; an unknown
+carrier is an error from the block parser.
 
-| key | artifact | writer | transport requirement |
+The `carrier` names the **intended durable home** of the disclosure. It is a **declaration, not a
+verified guarantee**: no test asserts that a disclosure reaches its writer. Owner ruling 2026-08-25
+(`a`-and-stop) declined the mechanical-carrier redesign with a registry trigger — a field case where
+a silently-taken provisional default actually costs the owner something reopens it.
+
+| key | artifact | writer | census assertion |
 | --- | --- | --- | --- |
-| `review-crew-layer` | `## Setup disclosures` in the review-crew layer | `core_md.py write-layer --hero review-crew` | `$REVIEW_LAYER_BODY` must define or receive `## Setup disclosures` (same paragraph or an explicit review-crew-layer reference), and that variable must be what is piped to `write-layer --hero review-crew` |
-| `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | same shape for `$TEST_PILOT_LAYER_BODY` and `write-layer --hero test-pilot` |
-| `review-spec-receipt` | `$SESSION_DIR/receipt.md` | review-spec's own assembly step | the block's receipt disclosure must name mode, source, and provisional status for `receipt.md` assembly — not merely the word `provisional` elsewhere in the file |
-| `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | the block's report disclosure must name mode, source, and provisional status for `report.md` assembly |
-| `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | for `storage-location` blocks: fenced bash must assign `SOURCE` from decide-location `.source`, the usable-value guard must cover `$SOURCE`, and block prose must name `storageMode`, `storageSource`, `storageProvisional`; for gate blocks: prose must name the durable write-down path (`written down`, session record, or `meta.json`) |
-| `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | a `write_policy` call must carry a `disclosures` key and the block prose must name that transport |
+| `review-crew-layer` | `## Setup disclosures` in the review-crew layer | `core_md.py write-layer --hero review-crew` | registry key only; no delivery assertion |
+| `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | registry key only; no delivery assertion |
+| `review-spec-receipt` | `$SESSION_DIR/receipt.md` | review-spec's own assembly step | registry key only; no delivery assertion |
+| `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | registry key only; no delivery assertion |
+| `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | for `kind=storage-location` blocks only: `test_storage_decision_blocks_capture_source` in `lib/tests/test_decision_point_census.py` requires the block's own fenced bash to assign `SOURCE` from `decide-location`'s `.source` and to cover `$SOURCE` in its usable-value guard — shell text inside the block, not delivery to `meta.json` |
+| `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | registry key only; no delivery assertion |
+| `run-output` | the run's own report to the owner | the run itself | registry key only; no file writer — use where a decision is reported to the owner in the session, in particular where a **gate hands back before any writer executes** |
 
-**Known gaps (not fixed in #1144 — other work orders implement them):**
+**Carrier note:**
 
-- **`review-spec-receipt`** — today lives in a `mktemp` `$SESSION_DIR` and is persisted only by
-  an issue post that is conditional on a linked issue and a working `gh`.
-- **`doc-policy-disclosures`** — does not exist yet: `lib/architect_config.py`'s `_migrate`
-  normalization drops every key outside `{schemaVersion, location, visibility, confirmed}`.
+- **`review-spec-receipt`** — lives in a `mktemp` `$SESSION_DIR` and is persisted only by an issue
+  post conditional on a linked issue and a working `gh`; that is a known property of this carrier,
+  not a census gap awaiting another work order.
 
 ## 1d — Structural exemptions — and nothing else
 
