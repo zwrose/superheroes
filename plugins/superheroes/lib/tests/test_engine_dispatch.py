@@ -5448,6 +5448,22 @@ def test_unstamped_unknown_producer_count_does_not_override_head_marker(tmp_path
     assert ED._attempt_stdout_truncated(run_dir, state, 1) == 58
 
 
+def test_stamp_without_recorded_count_does_not_suppress(tmp_path):
+    """axis: provenance stamp alone with no recorded count must not suppress marker read.
+
+    No producer writes this shape today — both the count and the stamp are written
+    under the same ``if pre_cap_stdout_bytes is not None:`` guard in ``_run_engine_files`` —
+    so this row is defense-in-depth against a future producer that stamps without recording,
+    not a reachable production state."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {"attempts": {1: {"ended": {"stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == os.path.getsize(stdout_path)
+
+
 def test_recorded_over_cap_count_grades_truncated_with_under_cap_file(tmp_path):
     """axis: recorded stdoutBytes above cap grades truncated without file-size arm."""
     run_dir = str(tmp_path / "run")
