@@ -12,7 +12,7 @@
 
 | Path                                                | Written by     | Purpose                                                                                     |
 | --------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
-| `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes       |
+| `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes, `interactive` (this run's resolved `$INTERACTIVE`, boolean)       |
 | `$SESSION_DIR/repo/`                                | orchestrator   | `--post`/`--review-only` PR paths only: detached `git worktree` at the PR head SHA          |
 | `$SESSION_DIR/prior-comments.json`                  | orchestrator   | PR-mode only: prior review comments + threads (for author justifications)                   |
 | `$SESSION_DIR/round-<N>/diff.txt`                   | orchestrator   | Round `<N>` unified diff (`git diff <pinned baseRef>...HEAD`). **Never read by the main context.** |
@@ -25,6 +25,7 @@
 | `$SESSION_DIR/round-<N>/triage.json`                | triage agent   | Per-finding `mechanical`/`judgment` classification + POV for every finding (loop only)      |
 | `$SESSION_DIR/round-<N>/resolutions.json`           | orchestrator   | User decisions on `present-set` findings (loop only; read by `circuit_breaker.py`)          |
 | `$SESSION_DIR/round-<N>/fix-batch.json`             | round driver   | Findings handed to the fixer this round — materialized from loop state before fixer emit (loop only) |
+| `$SESSION_DIR/round-1/presentation.md`              | orchestrator   | `--review-only` headless only: the tiered presentation as prose — approved set + undecided `ask-set` |
 | `$SESSION_DIR/round-<N>/review.json`                | orchestrator   | `--post` only: review body + approved comments (pre-resolve)                                |
 | `$SESSION_DIR/round-<N>/review-resolved.json`       | resolve script | `--post` only: comments after line-anchor resolution                                        |
 | `$SESSION_DIR/loop-state.json`                      | round driver   | Auto-fix loop only: driver state (`next`/`submit` protocol)                                 |
@@ -32,6 +33,14 @@
 | `$SESSION_DIR/round-receipt.json`                   | round driver   | Auto-fix loop only: terminal receipt (`validate_receipt` shape)                             |
 
 ## Setup resolution — run these in order
+
+**Resolve `$INTERACTIVE` first, for the whole run.** Two later steps consume it — `decide-location` (below) and the `--review-only` presentation channel (`SKILL.md` § Read-Only Paths) — so it is decided once, here, before anything is dispatched, not re-derived per consumer. Set `INTERACTIVE=true` only when a human is present to answer a question this run; set it to `false` on a headless/non-interactive run (`claude -p`, a spawned subagent, any caller with no one at the other end). **When you cannot tell, set it to `false`** — the consumers fail open in that direction on purpose (a headless-by-mistake run still completes; an interactive-by-mistake headless run stalls on a question nobody sees). It is orchestrator-resolved, not sniffed from a tty: the orchestrator's own calls are never on one.
+
+```bash
+INTERACTIVE=false   # ← promote to `true` ONLY on positive evidence that a human is present to answer this run
+```
+
+**The literal above is `false` on purpose — it is the fail-closed rung, not a placeholder to copy past.** A block copied verbatim into a headless run then behaves correctly; the same block copied verbatim into an interactive run costs that run its questions (`decide-location` takes the provisional, re-askable `global` instead of asking, and `--review-only` writes prose instead of presenting) and nothing more. The reverse default trades a recoverable annoyance for an unrecoverable stall, which is why it is not the one shipped here.
 
 **Resolve the base rubric path once.** The base rubric is bundled at `$ROOT_DIR/rubric/review-base.md`. Capture the rubric path so it can be embedded — **expanded to an absolute path** — into subagent prompts (subagents may not inherit `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}`):
 
@@ -154,7 +163,7 @@ fi
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
   # Decide location: env override > ask (interactive) > global (headless).
-  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
+  # $INTERACTIVE was resolved above, for the whole run — do not re-decide it here.
   LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
   # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
   # If LOC is already in-repo/global → skip record, go straight to create.
@@ -167,7 +176,9 @@ if [ "$LOCATION" = "none" ]; then
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above. Headless runs get a provisional profile from detected defaults.
+When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` and use the answer as `$LOC`. When `$LOCATION` was `none`, run review-init inline (`skills/review-init/SKILL.md`, Steps 1–4) before the re-resolve above — **inheriting this run's already-resolved `$INTERACTIVE`, never reassigning it.** That skill's own bootstrap block opens with `INTERACTIVE=true` for the case where it is the entry point; run inline it is not, and re-running that line would raise the flag a headless run just lowered and hand review-init's interview questions to nobody — the stall this file's resolve-once rule exists to prevent. Its own headless branch (skip the interview, provisional profile from detected defaults) is the one that applies.
+
+**Its interview is not the only question in there.** When the created layer lands **in-repo**, review-init's write step asks whether to commit the new files — and `$LOC` can be `in-repo` on a headless run regardless of the flag, because `decide_mode` honours an env override or a recorded band mode ahead of the interactive/headless split. So `$INTERACTIVE=false` plus a recorded in-repo band mode reaches a commit question with nobody to answer it. **On a headless inline bootstrap that question is skipped too:** write the core + layer, leave them **uncommitted and untracked**, say so in the dispatch summary, and continue. Committing them unasked would be the other failure — a headless review writing to the user's index — so the honest headless answer is to leave the files for a human to stage.
 
 **Read the verify story from core calibration** via `review_code_config.py` — `$CORE`'s `verifyCommand`, else legacy `$PROFILE`'s `## Verify`. Sets `VERIFY_CMD` for the verify gate and fixer:
 
