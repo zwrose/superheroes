@@ -184,22 +184,23 @@ ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
-This probes each configured reviewer vendor's pin-reachable models **once** and writes a
-machine-readable liveness receipt to the project store: `probedAt`, `ttl`, the `needed` per-cell
-configs, and the per-cell `liveness` verdicts. Its **stdout** additionally returns `live` — the
-pessimistic vendor rollup that `review-code` later carries as `liveVendors` and passes to
-`round_driver --vendors` — and the per-cell `liveCells` (`vendor`/`model`/`effort`). **Provenance
-is not a field of either artifact:** it is stamped downstream, where `seat_map compose` records
-`liveCellsSource` on its own receipt — `probed` for cells backed by probe evidence, whether that
-evidence was gathered fresh here or reused from a within-TTL receipt. A `review-code` compose
-within the TTL reuses this receipt. When per-seat
+On a cache miss this probes each configured reviewer vendor's pin-reachable models and writes the
+machine-readable liveness receipt to the project store; **on a valid cache hit within the TTL that
+covers every needed cell, it probes nothing and reuses the existing receipt** (a young receipt that
+does not cover newly pin-reachable cells still probes and rewrites) — either way, a `review-code`
+compose inside the TTL rides it.
+**For the receipt's field shape, the command's stdout contract, and where provenance is stamped,
+read the homes rather than any prose restatement: the artifact writer in `lib/liveness_cache.py`,
+the `compose-liveness` command in `lib/preflight_probe.py`, and `lib/seat_map.py`'s compose (which
+stamps `liveCellsSource` downstream).** This file deliberately restates no field lists: a restated
+shape drifts from the code by construction, and the homes cannot. When per-seat
 review pins are configured (the `--pins` supply the compose accepts, added by #607), pass them
 through so only pin-reachable models are probed. This is the **write side** — the read side lives in
 the `review-code` compose. **Fail-direction unchanged:** a probe failure drops **that cell**
 loudly, not the vendor; the cache only skips re-proving recent liveness, never turns a failure into
-a pass. A vendor may be absent from `liveVendors` while cells remain in `liveCells` — that
-divergence is deliberate. Empty `crossVendorEngines` (all-Claude
-project) → nothing to probe, mark **N/A**.
+a pass. A vendor may be absent from the pessimistic vendor rollup while its cells stay individually
+live — that divergence is deliberate (the homes above define both sides). No cross-vendor engines
+configured (all-Claude project) → nothing to probe, mark **N/A**.
 
 ## C — Test-pilot readiness
 
