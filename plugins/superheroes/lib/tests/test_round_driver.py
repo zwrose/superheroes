@@ -3016,6 +3016,20 @@ def test_prior_comments_unavailable_discloses_on_receipt_and_survives_resume(tmp
     assert _round_channels(resumed_receipt, 1).get("priorCommentsUnavailable") is True
 
 
+def test_prior_comments_unavailable_degraded_prose_on_receipt():
+    """Round-recorded priorCommentsUnavailable must name the round and the missing prior comments."""
+    state = RD.new_state(_cfg(dimensions=["test-reviewer"]))
+    state["rounds"] = {"1": {"priorCommentsUnavailable": True}}
+    receipt = RD.build_receipt(state)
+    prose = "\n".join(_round_disclosures(receipt, 1))
+    assert (
+        "prior-comments-unavailable (round 1): orchestrator did not supply prior-comments.json "
+        "in PR mode — panel ran without prior PR comments; any claim that prior comments were "
+        "considered is not supported for this round"
+        in prose
+    )
+
+
 def test_malformed_order_vendor_gap_in_session_does_not_crash_receipt():
     """Malformed gap row recorded in-session is skipped at render; receipt still produced."""
     state = RD.new_state(_cfg(dimensions=["test-reviewer"]))

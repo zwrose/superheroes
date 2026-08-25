@@ -3547,6 +3547,13 @@ def build_receipt(state, session_dir=None):
                 "record-orphans-ignored (round %s): hand submit folded with durable seat record(s) "
                 "%s still at this slot — records ignored (session already on hand-submit path)"
                 % (rkey, ", ".join(roi)))
+        pcu = rrec.get("priorCommentsUnavailable")
+        if pcu:
+            degraded.append(
+                "prior-comments-unavailable (round %s): orchestrator did not supply "
+                "prior-comments.json in PR mode — panel ran without prior PR comments; any claim "
+                "that prior comments were considered is not supported for this round"
+                % rkey)
         ovg = rrec.get("orderVendorProvenanceGaps")
         if ovg:
             # Provenance-NEUTRAL wording: since the collector spans every read-only phase, a gap
