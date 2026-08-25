@@ -36,6 +36,9 @@ _GIT_ENV_STRIP = frozenset(
 
 _GIT_ISOLATION_FLAGS = ("-c", "init.templateDir=", "-c", "core.hooksPath=/dev/null")
 
+# Historical specimen, quoted verbatim: the pre-#769 guard, kept as the negative
+# control this detector must reject. Its `--post` mention is part of the quotation —
+# the mode was removed in #1121 and this string is not a live reference to it.
 LEGACY_GUARD = """\
 CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ]; then

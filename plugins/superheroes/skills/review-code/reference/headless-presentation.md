@@ -2,7 +2,7 @@
 
 # Headless presentation — `--review-only` with no interactive channel
 
-The `--review-only` tiered presentation in `SKILL.md` § Read-Only Paths is the **interactive**
+The `--review-only` tiered presentation in `SKILL.md` § Read-Only Path is the **interactive**
 form: it resolves its review gate by asking. A run with no one to answer cannot take it — an
 `AskUserQuestion` opened on a headless `claude -p` run never returns, so the review **stalls**
 until its harness kills it, and every artifact the pass already produced is stranded behind a
@@ -12,7 +12,7 @@ reached the presentation, stalled, and had to switch paths.
 
 The disposition is a **degradation, not a refusal**: the run completes, and the presentation
 becomes a durable prose artifact instead of a conversation. `--review-only` is the charter's
-focused vet-escalation instrument and, once `--post` is removed (#1121), the only read-only
+focused vet-escalation instrument and, since `--post` was removed (#1121), the only read-only
 review path — refusing it headless would leave a headless caller with no read-only review at
 all, while the degradation costs only the answers a headless run was never able to give.
 
@@ -83,6 +83,7 @@ exists to remove, one step past the finish line.
 
 ## Scope
 
-This path is `--review-only`'s. `--post` keeps its interactive presentation and its own
-`AskUserQuestion` review-event gate unchanged: posting to GitHub is an outward-facing act, and
-its approval is not a thing a degradation may answer on the owner's behalf.
+This path is `--review-only`'s, and `--review-only` is now the only read-only path — `--post`,
+which posted to GitHub and kept its own `AskUserQuestion` review-event gate, was removed (#1121).
+The degradation still answers nothing on the owner's behalf: it writes the presentation down
+instead of asking, and selects nothing.

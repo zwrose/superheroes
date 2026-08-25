@@ -1,6 +1,6 @@
 ---
 name: review-code
-description: Use when reviewing code changes on a local branch or an open pull request before merging — including when you want the review's findings auto-fixed locally or posted to GitHub.
+description: Use when reviewing code changes on a local branch or an open pull request before merging — including when you want the review's findings auto-fixed locally.
 user-invocable: true
 ---
 
@@ -10,11 +10,9 @@ This skill speaks in host-neutral actions. Resolve them to your runtime's tools 
 
 Run a multi-dimensional code review on either an open pull request or a local branch (vs the default branch), then **autonomously fix what it finds**. The main context is an **orchestrator** — it fetches metadata, dispatches five specialist agents in parallel, compiles their findings, triages each into auto-fixable vs needs-your-judgment, applies fixes via a fixer subagent, and re-reviews — looping until no Critical/Important findings remain or a circuit breaker halts. Subagents do all heavy reading and write structured results to disk; it never loads the full diff or any agent's raw output into its own conversation.
 
-The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the full set of specialists (architecture, code, security, test, premortem) so coverage is uniform across reviews, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — by default — drives an auto-fix loop that commits fixes locally (never pushes). Two read-only behaviors are preserved as flags.
+The skill auto-detects whether you're reviewing a PR or a local branch, always dispatches the full set of specialists (architecture, code, security, test, premortem) so coverage is uniform across reviews, enforces the severity and verification rules in the base rubric at compile time (not just by hope), and — by default — drives an auto-fix loop that commits fixes locally (never pushes). One read-only behavior is preserved as a flag.
 
-There are three top-level paths, chosen at invocation:
-
-- **`--post`** → one review pass, then read-only GitHub posting (push approved findings to GitHub through `resolve_diff_lines.py` so out-of-hunk anchors never trigger 422 errors). Never touches the working tree.
+There are two top-level paths, chosen at invocation:
 - **`--review-only`** → one review pass, then a read-only interactive terminal presentation. No commits. A **headless** run (no interactive channel) takes the prose degradation instead of stalling on a question nobody can answer.
 - **otherwise (default)** → the auto-fix loop: review → triage → fix → re-review, committing locally until clean or halted.
 
@@ -26,14 +24,13 @@ The five specialist agents are bundled plugin agents (`architecture-reviewer`, `
 | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `/superheroes:review-code`                 | **Auto-fix loop (default).** Review → triage → fix → re-review until no Critical/Important findings remain, or a halt condition fires. Commits locally; never pushes. |
 | `/superheroes:review-code --review-only`   | One review pass, interactive tiered presentation, no commits. **Headless** (no interactive channel): the presentation is written as prose to `$SESSION_DIR/round-1/presentation.md` and the run exits cleanly — never a stall.       |
-| `/superheroes:review-code pr <N> --post`   | One review pass, read-only, post inline findings to GitHub. Never touches the tree.                                                                                   |
-| `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`/`--post`.                                                                |
+| `/superheroes:review-code branch` / `pr <N>` | Force branch or PR mode; still runs the auto-fix loop unless combined with `--review-only`.                                                                |
 | `/superheroes:review-code --focus <notes>` | Pass focus notes to every specialist. Combinable with any form.                                                                                                       |
 | `/superheroes:review-code --result-file <path>` | Write the terminal decision (`action`, `round`, `reason`) to `<path>` as JSON on **every** terminal exit (step-5 clean, step-10 all-skipped, step-11/12 HALT, step-14 gate), for a programmatic caller (e.g. Workhorse step 2). Combinable with any form; absent → no file written (backward-compatible). |
 
 **Auto-detection rule.** Run `gh pr list --head "$(git rev-parse --abbrev-ref HEAD)" --json number,headRefOid,headRefName --limit 1`. If the result is non-empty, default to PR mode. Otherwise default to branch mode. If the user passed `branch` explicitly, skip the lookup. If the user passed `pr <N>` explicitly, use `<N>` and don't auto-detect.
 
-**`--post` only applies to PR mode.** If the user passes `--post` without a PR (and auto-detection finds none), stop and tell them — branch mode has nothing to post against.
+**`--post` was removed (#1121) and is not a flag.** It posted a review pass to GitHub as inline comments and had zero recorded invocations. If the user passes `--post`, stop and point them at `--review-only` — the read-only path, whose write scope is stated where that path is defined (§ Read-Only Path → `--review-only`, and the Session Directory and Setup sections it depends on) — rather than silently running the auto-fix loop, which commits.
 
 ## Session Directory
 
@@ -43,7 +40,7 @@ All review artifacts live in a per-invocation temp directory so parallel reviews
 SESSION_DIR=$(mktemp -d /tmp/review-XXXXXXXX)
 ```
 
-Files written during the review. **Per-round artifacts live under `$SESSION_DIR/round-<N>/`** in the auto-fix loop (round 1, 2, …); the read-only paths (`--review-only`, `--post`) run a single pass and write that pass's artifacts under `round-1/` as well. Only `meta.json` lives at the session-dir root.
+Files written during the review. **Per-round artifacts live under `$SESSION_DIR/round-<N>/`** in the auto-fix loop (round 1, 2, …); the read-only path (`--review-only`) runs a single pass and writes that pass's artifacts under `round-1/` as well. Only `meta.json` lives at the session-dir root.
 
 The full artifact table — every path, the component that writes it, and its purpose — is in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/setup.md` § Session artifacts.
 
@@ -57,7 +54,7 @@ Decide mode (auto-detected or explicit, per `## Invocation`). Create the session
 
 **Resolve the run's inputs before dispatching anything.** In order: the base rubric path, the escalation-guard wrapper and repo root, the calibration paths, the plugin and rubric versions, the model tiers, the per-role engine, the panel seat map, then the staleness self-check, the profile bootstrap, the verify story, and the post-bootstrap refresh of the dispatch paths. The exact commands, the variable each one sets, and the tier→model dispatch mapping are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/setup.md` § Setup resolution — read it and run the blocks in the order given.
 
-Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$ESC_WRAPPER`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$AUTHOR_FAMILY`, `$SEAT_PINS`, `$PINS_ARGS`, `$PROBE_MODE`, `$SEAT_MAP`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$VERIFY_MODE`, `$REFUSAL`, `$INTERACTIVE`. A step below that reads one of these without that file having been run is a bug in the step; the shell defaults that do appear (`${VERIFY_CMD:-unverified}`, `${VERIFY_CMD:-none}`) are deliberate value fallbacks for an unset-but-legitimate verify story, not a licence to skip the setup file.
+Everything below depends on the variables that file sets: `$ROOT_DIR`, `$RUBRIC`, `$ESC_WRAPPER`, `$REPO_ROOT`, `$CORE`, `$LAYER`, `$PROFILE`, `$LOCATION`, `$EXISTS`, `$DECISIONS`, `$PLUGIN_VERSION`, `$RUBRIC_VERSION`, `$REVIEWER_MODEL`, `$DEEP_MODEL`, `$MECH_MODEL`, `$SYNTH_MODEL`, `$VERIFIER_MODEL`, `$FIXER_MODEL`, `$EP`, `$REVIEWER_ENGINE`, `$IMPL_ENGINE`, `$CONFIGURED`, `$AUTHOR_FAMILY`, `$SEAT_PINS`, `$PINS_ARGS`, `$SEAT_MAP`, `$DOCTOR_JSON`, `$VERIFY_JSON`, `$VERIFY_CMD`, `$VERIFY_MODE`, `$REFUSAL`, `$INTERACTIVE`. A step below that reads one of these without that file having been run is a bug in the step; the shell defaults that do appear (`${VERIFY_CMD:-unverified}`, `${VERIFY_CMD:-none}`) are deliberate value fallbacks for an unset-but-legitimate verify story, not a licence to skip the setup file.
 
 **PR mode:**
 
@@ -80,11 +77,11 @@ gh api "repos/$REPO/pulls/$PR_NUMBER/comments" \
   --jq '[.[] | {id, in_reply_to_id, path, line, position, body, user: .user.login}]' \
   > "$SESSION_DIR/prior-comments.json"
 
-# Read-only paths ONLY (--post / --review-only): a detached worktree at the PR head
+# Read-only path ONLY (--review-only): a detached worktree at the PR head
 # gives subagents a clean source of truth to verify against. NOT used on the
 # auto-fix path — that path edits and commits on the current branch directly.
 git fetch origin "$PR_BRANCH"
-git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --post / --review-only ONLY
+git worktree add --detach "$SESSION_DIR/repo" "$HEAD_SHA"   # --review-only ONLY
 ```
 
 **Auto-fix branch guard (PR mode, default loop only).** Before entering the loop, the orchestrator must be in one of two accepted states so fix commits land where they belong: **standing on the PR's branch** (name match only — **no** `HEAD` freshness check, so a behind checkout still passes), or **an adopted build** (invoke `review-code pr <N>` — auto-detection matches `--head` by branch name, so a renamed local branch never reaches this guard on a bare invocation) tracking remote `origin` with merge ref `refs/heads/<PR branch>` (read from `branch.<name>.remote` / `branch.<name>.merge`, not `@{upstream}` — spoofable by a local-tracking ref) and `HEAD` exactly `$HEAD_SHA`. The fenced block below is extracted by `plugins/superheroes/lib/tests/test_review_code_branch_guard.py` (first `bash` fence after this paragraph). Adopted path only: the config leg proves tracking **`origin`'s** branch of that name with `HEAD` at the PR head — assuming the PR head lives in `origin` (same as `git fetch origin "$PR_BRANCH"` above); a fork PR whose head name collides with an `origin` branch is not distinguished. The SHA leg refuses a stale adopted copy and does **not** apply to the name path.
@@ -96,11 +93,11 @@ case "$PR_BRANCH" in ""|null) echo "Auto-fix: pr.json has no head branch — ref
 case "$HEAD_SHA"   in ""|null) echo "Auto-fix: pr.json has no head SHA — refusing (fail closed)."; exit 1;; esac
 if [ "$CURRENT_BRANCH" != "$PR_BRANCH" ] && ! { [ -n "$CURRENT_BRANCH" ] && [ "$TRACK_REMOTE" = origin ] && [ "$TRACK_MERGE" = "refs/heads/$PR_BRANCH" ] && [ "$LOCAL_HEAD" = "$HEAD_SHA" ]; }; then
   echo "Auto-fix needs the PR's branch '$PR_BRANCH' (currently on '${CURRENT_BRANCH:-<detached HEAD>}'). An ADOPTED build also qualifies, but only when ALL hold: this branch tracks remote 'origin' (found '${TRACK_REMOTE:-none}') and merge ref 'refs/heads/$PR_BRANCH' (found '${TRACK_MERGE:-none}'), AND HEAD is the PR head '$HEAD_SHA' (found '$LOCAL_HEAD')."
-  echo "Otherwise check out the branch, or re-run with --post (read-only GitHub) or --review-only (read-only terminal)."; exit 1
+  echo "Otherwise check out the branch, or re-run with --review-only (read-only terminal)."; exit 1
 fi
 ```
 
-If the guard fails (detached HEAD, an unrelated branch, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. A **stale** adopted branch — right tracking config, wrong `HEAD` — refuses; the name path has no freshness check. Missing `pr.json` metadata (`$PR_BRANCH` or `$HEAD_SHA` empty or `null`) refuses fail-closed. Tell the user to use `--post` or `--review-only`. The detached `git worktree add --detach` step above is for the `--post`/`--review-only` PR paths ONLY, never for the auto-fix path. The auto-fix loop **never pushes**; an adopted build must push its fix commits itself with an explicit refspec — `git push origin HEAD:$PR_BRANCH` — because a bare `git push` from an adopted branch fails under git's default `push.default=simple` when the local branch name differs from its upstream (`fatal: The upstream branch of your current branch does not match the name of your current branch.`).
+If the guard fails (detached HEAD, an unrelated branch, or you're reviewing someone else's PR), STOP — do not create the detached worktree and do not enter the loop. A **stale** adopted branch — right tracking config, wrong `HEAD` — refuses; the name path has no freshness check. Missing `pr.json` metadata (`$PR_BRANCH` or `$HEAD_SHA` empty or `null`) refuses fail-closed. Tell the user to use `--review-only`. The detached `git worktree add --detach` step above is for the `--review-only` PR path ONLY, never for the auto-fix path. The auto-fix loop **never pushes**; an adopted build must push its fix commits itself with an explicit refspec — `git push origin HEAD:$PR_BRANCH` — because a bare `git push` from an adopted branch fails under git's default `push.default=simple` when the local branch name differs from its upstream (`fatal: The upstream branch of your current branch does not match the name of your current branch.`).
 
 **Branch mode:**
 
@@ -125,7 +122,7 @@ BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || { echo "revie
 
 **The base must RESOLVE TO A COMMIT — validated once at Setup, and every consumer uses the guarded command.** This is the only validation, and it is deliberately not a non-emptiness test: `$BASE_REF` reaching `git diff` as an empty string makes argv `...HEAD`, which git reads as `HEAD...HEAD` — a **zero-line diff at exit 0** the loop would certify clean — and reaching it as the literal string `null` (what `jq -r` prints for an absent key) passes any `[ -n … ]` check while `git diff null...HEAD` exits 128 and *still* leaves an empty `diff.txt`. `git rev-parse --verify --quiet "$BASE_REF^{commit}"` rejects both, plus a deleted branch and a non-commit tag. **Every** producer of `$BASE_REF` — the fetch/pin above, the local fallback, the `meta.json` restore below — routes through it; never add a second, weaker guard beside it, and never let a caller "recover" by substituting a branch name. On every auto-fix `next`, `round_driver.py` independently re-checks in code that the base is a *pinned commit id* and that the pin has not moved mid-session, refusing with `base-not-pinned`, `base-unresolved`, or `base-pin-moved` if not (see `reference/round-driver.md` § Base guard).
 
-**Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--post` review body and the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; in PR mode the driver now refuses a fork whose PR base repository differs from `origin` with `base-repo-mismatch` (full fork *support* — resolving or fetching the base by URL — is still deliberately not built).
+**Never diff a stale base silently.** Any `$BASE_FETCH` other than `fetched` is a **degradation** — name it in the dispatch summary, record it in `meta.json`, and surface it in the `--review-only` presentation *before* any finding is shown. Both modes assume `origin` is the base branch's repository — the same assumption the `git fetch origin "$PR_BRANCH"` above already makes; in PR mode the driver now refuses a fork whose PR base repository differs from `origin` with `base-repo-mismatch` (full fork *support* — resolving or fetching the base by URL — is still deliberately not built).
 
 **Per-round diff — every round, against the pin.** This is the ONLY command that runs per round. Do NOT use `gh pr diff` (rounds 2+ have local fix commits that are not on the remote), and do NOT re-run the setup block above. On fresh state the round-1 artifact passed to the driver is refused in code (`round-diff-unreadable`, `round-diff-empty`, `round-diff-malformed`, `round-diff-required`); rounds 2+ rely on the shell halt above.
 
@@ -136,7 +133,7 @@ git diff "$BASE_REF"...HEAD > "$SESSION_DIR/round-<round>/diff.txt.tmp" && mv "$
 
 **If `$BASE_REF` is not in scope** — a resumed or compacted orchestrator, or a fresh shell — restore the pin from the session record rather than re-deriving it: `BASE_REF=$(jq -r '.baseRef // empty' "$SESSION_DIR/meta.json")`, then **re-run the resolve-to-a-commit check from the setup block** (`BASE_REF=$(git rev-parse --verify --quiet "$BASE_REF^{commit}") || exit 1`) before any diff. Use `// empty`, never a bare `.baseRef`: `jq -r` prints the literal string `null` for an absent key, which is non-empty and would sail past a naive check. Re-running the setup block instead would silently re-pin to a moved `origin/<base>`.
 
-The read-only paths run a single pass and compute the same local diff into `round-1/diff.txt`.
+The read-only path runs a single pass and computes the same local diff into `round-1/diff.txt`.
 
 Then write `meta.json` in both modes:
 
@@ -155,7 +152,7 @@ jq -n --arg mode "$MODE" --arg path "$REVIEW_PATH" --arg repo "$REPO" --arg bran
   || { rm -f "$SESSION_DIR/meta.json.tmp"; echo "review-code: could not write meta.json — halting rather than continuing without the session record (#637)" >&2; exit 1; }
 ```
 
-`REVIEW_PATH` is `loop` (default), `review-only`, or `post`, decided from the flags at invocation. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story. The `interactive` field records this run's resolved `$INTERACTIVE` as a **boolean**, for the same reason: the `--review-only` presentation gate routes an *unknown* channel to the headless degradation, so a cold-resumed interactive run that could not recover the flag would silently lose its tiered questions. A resumed orchestrator restores `$INTERACTIVE` from this field; a field that is **absent or not a boolean** is not a recovered flag — that run's channel is unknown, and unknown takes the degradation.
+`REVIEW_PATH` is `loop` (default) or `review-only`, decided from the flags at invocation. `post` was a third value and was removed with the mode (#1121) — never re-add it: a resumed `post` run has no flow left to continue. It is written to `meta.json` so a cold-resumed orchestrator (after compaction) knows which top-level flow to continue. The `verify` field records the verify command string, or `"unverified"` / `"review-only"`, so a cold-resumed orchestrator recovers the verify story. The `interactive` field records this run's resolved `$INTERACTIVE` as a **boolean**, for the same reason: the `--review-only` presentation gate routes an *unknown* channel to the headless degradation, so a cold-resumed interactive run that could not recover the flag would silently lose its tiered questions. A resumed orchestrator restores `$INTERACTIVE` from this field; a field that is **absent or not a boolean** is not a recovered flag — that run's channel is unknown, and unknown takes the degradation.
 
 Size the round-1 diff for the dispatch summary (after writing it to `round-1/diff.txt` per the command above):
 
@@ -184,7 +181,7 @@ Print this dispatch summary as a plain status message, then dispatch the special
   - `premortem-reviewer` → `findings-premortem.json`
 - **Session directory:** `$SESSION_DIR` (round 1 artifacts under `round-1/`)
 - **Focus notes:** the `--focus` argument, if any
-- **Path:** default → auto-fix loop (`round_driver.py` next/submit until terminal); `--review-only` → one pass + interactive presentation, or the headless prose degradation when `$INTERACTIVE` is false or unknown; `--post` → one pass + post to GitHub
+- **Path:** default → auto-fix loop (`round_driver.py` next/submit until terminal); `--review-only` → one pass + interactive presentation, or the headless prose degradation when `$INTERACTIVE` is false or unknown
 - **What happens after dispatch (default loop):** obey `next`/`submit` — panel/verify/synthesis → fixer → verify gate → delta audits/scoped finder → terminal with certification + receipt. The auto-fix runs on `$IMPL_ENGINE` (FR-15): when it is `codex`/`cursor`, the fix is written by the external engine via `engine_adapter.py` (workspace-write) and committed by the adapter, then the same verify gate runs; when it is `claude`, the fixer subagent runs as today. This standalone path has no run-time `engine_authz.py test-dispatch` preflight (that lives only in the native build leg's `_implWriteAuthorized`); instead it relies on the host classifier's `autoMode.allow` deny to fall open behaviorally — an ungranted external-engine dispatch is denied by the host, the write never happens, and the fix falls open to Claude.
 
 Per-round dispatch is **driver-owned** — round 1 is the full `reviewer-deep` baseline; rounds 2+ are **delta rounds** (fix audits + scoped finder) unless the #174 triggers or an unknown changed surface schedule a full panel. A full `reviewer-deep` confirmation panel is mandatory before certifying exit when economics require it. Obey `round_driver.py` `next`/`submit`; never tier, skip, or exit by eye. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-driver.md`.
@@ -222,14 +219,14 @@ A file-channel seat's findings are read from `$SESSION_DIR/round-<round>/finding
 
 ### 4. Compile + Dedupe (main context)
 
-On the **read-only paths** (`--post`, `--review-only`), the orchestrator compiles in main context — a **prose-driven review** (sanctioned lane; not a shortcut and not available inside the auto-fix loop). It owes a substitute receipt instead of the driver's `round-receipt.json`: the dispositions table plus the durable receipt the workhorse charter requires (`skills/workhorse/SKILL.md` §10 — link review results on the PR). Branch mode has no PR: write both to `$SESSION_DIR/dispositions.md`; when the branch later becomes a PR, that file's content is what the PR body carries. Full contract: `rubric/review-discipline.md` § Prose-driven review.
+On the **read-only path** (`--review-only`), the orchestrator compiles in main context — a **prose-driven review** (sanctioned lane; not a shortcut and not available inside the auto-fix loop). It owes a substitute receipt instead of the driver's `round-receipt.json`: the dispositions table plus the durable receipt the workhorse charter requires (`skills/workhorse/SKILL.md` §10 — link review results on the PR). Branch mode has no PR: write both to `$SESSION_DIR/dispositions.md`; when the branch later becomes a PR, that file's content is what the PR body carries. Full contract: `rubric/review-discipline.md` § Prose-driven review.
 
 On the **auto-fix loop**, compile is driver-owned — obey `next`/`submit` instead of reimplementing compile by hand.
 
 Collect findings (read-only path only) from file-channel seats at `$SESSION_DIR/round-<round>/findings-*.json` and from stdout-channel seats via their folded `dispatch-review` results. Apply, in order:
 
 1. **Citation check.** Drop any finding with `file == null` or `line == null`.
-2. **Diff-scope verification.** Parse `$SESSION_DIR/round-<round>/diff.txt` for `+`/`-` anchor lines (same hunk-walking as `resolve_diff_lines.py`). Drop out-of-scope findings.
+2. **Diff-scope verification.** Parse `$SESSION_DIR/round-<round>/diff.txt` for `+`/`-` anchor lines (same hunk-walking as `diff_scope.py`). Drop out-of-scope findings.
 3. **Reachability pre-check (read-only path only).** For each remaining `severity == "Important"` finding, confirm the edge case is reachable; when in doubt, downgrade to Minor rather than drop.
 4. **Dedupe by `(file, line)`.** Merge same-anchor findings: higher severity wins, dimensions unioned, stable `file::normalized-title` identity, `tradeoff: true` if either input is.
 5. **Nit cap.** After dedupe, keep at most 5 Nits; overflow collapses to one summary entry.
@@ -263,7 +260,7 @@ Order findings: Critical → Important → Minor → Nit, then by file path, the
 
 ## Auto-Fix Loop (default path)
 
-Runs when neither `--post` nor `--review-only` is set, and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is `python3 -B "$ROOT_DIR/lib/round_driver.py" next|submit` — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-driver.md`.
+Runs when `--review-only` is not set and the profile's verify story is not `mode: review-only`. The loop is **driver-owned**: every per-round step is `python3 -B "$ROOT_DIR/lib/round_driver.py" next|submit` — the old `code_loop_plan` plan/record/decide, the manual `circuit_breaker.py` call, and the head-diff step all collapse into obeying `next`. Full contract: `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/round-driver.md`.
 
 **If context was compacted mid-loop**, re-read `$SESSION_DIR/meta.json`, `$SESSION_DIR/loop-state.json`, and `$SESSION_DIR/driver-journal.jsonl`. Resume by calling `next` — a pending step re-emits idempotently.
 
@@ -337,9 +334,9 @@ Print: final verdict, rounds run, commits created, findings fixed by severity, *
 
 **Then, after the summary**, run the three non-blocking end-of-run steps from `## Learning Loop & Staleness Nudge`, in order: (1) the **staleness nudge** (print the doctor `message` only when non-null and `nudge_acked` is false), (2) the **learning-loop proposal** (`decisions.py analyze` → at most one user-gated `AskUserQuestion`, never auto-applied), then (3) the **provisional-profile confirmation** (interactive only — offer to confirm a `status: provisional` profile; skipped when headless, already stable, or already acked). All three are placed after the review output and none blocks.
 
-## Read-Only Paths
+## Read-Only Path
 
-These two paths run a **single review pass** (loop steps 1-3, writing artifacts under `round-1/`) and then diverge. Neither triages, fixes, commits, or loops.
+This path runs a **single review pass** (loop steps 1-3, writing artifacts under `round-1/`) and stops there. It does not triage, fix, commit, or loop.
 
 ### `--review-only`
 
@@ -367,18 +364,6 @@ Open with the verdict banner and the one-line summary. If the `ask-set` is empty
 The approved set = `auto-include` ∪ the findings approved from the `ask-set`. After the last batch, summarize how many of each severity were approved, then print a terminal report grouped by severity. Lead with the verdict label in bold. For each approved finding: severity tag, `file:line`, title, body, and the orchestrator POV line. End with the count summary (e.g. `"3 Critical, 5 Important, 2 Minor approved"`). Save nothing else to disk — `compiled.json` already has the full record.
 
 **Record decisions (learning loop):** as you resolve the `ask-set` findings, append one `decisions.py` record per decision to the resolved decisions store (`$DECISIONS`) (**Approve**/**Modify**/**Downgrade** → `fix`; **Skip** → `skip`), per `## Learning Loop & Staleness Nudge`. Then, after the terminal report, run the three non-blocking end-of-run steps (staleness nudge, then learning-loop proposal, then provisional-profile confirmation) from that section, in order.
-
-### `--post`
-
-After the single pass (PR mode only), post approved findings to GitHub. No triage, no fix, no loop, no commits to the tree. Run the interactive tiered presentation above (including its **review gate**) to select which findings to post: `recommendation == Fix` findings are auto-selected for posting, and only `Skip`/`Defer` findings are presented for your call. The orchestrator POV is shown to **you** during selection, but is **not** included in the posted comment body (the public comment stays the finding + suggestion). Then ask the user the review event type via `AskUserQuestion`:
-
-- **COMMENT** — findings without approval/rejection
-- **REQUEST_CHANGES** — blocks merge until resolved
-- **APPROVE** — approve with comments
-
-Build the review JSON, run `resolve_diff_lines.py` to validate anchors, post via `gh api`, and verify the post landed — the exact commands and error-handling are in `${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}/skills/review-code/reference/auto-fix-loop.md` under `## --post API Commands`. Surface `MOVED:`/`DROPPED:` lines from the script's stderr to the user before posting. Report the review URL (`html_url` from the verification call) to the user.
-
-**Record decisions + end-of-run steps (learning loop):** as you resolve the `ask-set` during selection, append one `decisions.py` record per decision to the resolved decisions store (`$DECISIONS`) (a finding selected for posting → `fix`; a **Skip**/**Drop** → `skip`), per `## Learning Loop & Staleness Nudge`. Then, after reporting the review URL, run the three non-blocking end-of-run steps (staleness nudge, then learning-loop proposal, then provisional-profile confirmation) from that section, in order. (On the `--post` path the staleness check ran with `--root "$SESSION_DIR/repo"`.)
 
 ## The verify command
 

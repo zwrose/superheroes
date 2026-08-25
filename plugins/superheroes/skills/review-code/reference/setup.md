@@ -13,7 +13,7 @@
 | Path                                                | Written by     | Purpose                                                                                     |
 | --------------------------------------------------- | -------------- | ------------------------------------------------------------------------------------------- |
 | `$SESSION_DIR/meta.json`                            | orchestrator   | Mode, PR number (if any), repo, branch, head SHA, pinned base commit + base branch + fetch state, `repoRoot` (checkout path), verify story, focus notes, `interactive` (this run's resolved `$INTERACTIVE`, boolean)       |
-| `$SESSION_DIR/repo/`                                | orchestrator   | `--post`/`--review-only` PR paths only: detached `git worktree` at the PR head SHA          |
+| `$SESSION_DIR/repo/`                                | orchestrator   | `--review-only` PR path only: detached `git worktree` at the PR head SHA                    |
 | `$SESSION_DIR/prior-comments.json`                  | orchestrator   | PR-mode only: prior review comments + threads (for author justifications)                   |
 | `$SESSION_DIR/round-<N>/diff.txt`                   | orchestrator   | Round `<N>` unified diff (`git diff <pinned baseRef>...HEAD`). **Never read by the main context.** |
 | `$SESSION_DIR/round-<N>/findings-architecture.json` | arch agent     | Architecture-reviewer findings array                                                        |
@@ -26,15 +26,13 @@
 | `$SESSION_DIR/round-<N>/resolutions.json`           | orchestrator   | User decisions on `present-set` findings (loop only; read by `circuit_breaker.py`)          |
 | `$SESSION_DIR/round-<N>/fix-batch.json`             | round driver   | Findings handed to the fixer this round — materialized from loop state before fixer emit (loop only) |
 | `$SESSION_DIR/round-1/presentation.md`              | orchestrator   | `--review-only` headless only: the tiered presentation as prose — approved set + undecided `ask-set` |
-| `$SESSION_DIR/round-<N>/review.json`                | orchestrator   | `--post` only: review body + approved comments (pre-resolve)                                |
-| `$SESSION_DIR/round-<N>/review-resolved.json`       | resolve script | `--post` only: comments after line-anchor resolution                                        |
 | `$SESSION_DIR/loop-state.json`                      | round driver   | Auto-fix loop only: driver state (`next`/`submit` protocol)                                 |
 | `$SESSION_DIR/driver-journal.jsonl`                 | round driver   | Auto-fix loop only: `scriptRan` journal (one line per `next`/`submit`)                      |
 | `$SESSION_DIR/round-receipt.json`                   | round driver   | Auto-fix loop only: terminal receipt (`validate_receipt` shape)                             |
 
 ## Setup resolution — run these in order
 
-**Resolve `$INTERACTIVE` first, for the whole run.** Two later steps consume it — `decide-location` (below) and the `--review-only` presentation channel (`SKILL.md` § Read-Only Paths) — so it is decided once, here, before anything is dispatched, not re-derived per consumer. Set `INTERACTIVE=true` only when a human is present to answer a question this run; set it to `false` on a headless/non-interactive run (`claude -p`, a spawned subagent, any caller with no one at the other end). **When you cannot tell, set it to `false`** — the consumers fail open in that direction on purpose (a headless-by-mistake run still completes; an interactive-by-mistake headless run stalls on a question nobody sees). It is orchestrator-resolved, not sniffed from a tty: the orchestrator's own calls are never on one.
+**Resolve `$INTERACTIVE` first, for the whole run.** Two later steps consume it — `decide-location` (below) and the `--review-only` presentation channel (`SKILL.md` § Read-Only Path) — so it is decided once, here, before anything is dispatched, not re-derived per consumer. Set `INTERACTIVE=true` only when a human is present to answer a question this run; set it to `false` on a headless/non-interactive run (`claude -p`, a spawned subagent, any caller with no one at the other end). **When you cannot tell, set it to `false`** — the consumers fail open in that direction on purpose (a headless-by-mistake run still completes; an interactive-by-mistake headless run stalls on a question nobody sees). It is orchestrator-resolved, not sniffed from a tty: the orchestrator's own calls are never on one.
 
 ```bash
 INTERACTIVE=false   # ← promote to `true` ONLY on positive evidence that a human is present to answer this run
@@ -127,35 +125,33 @@ AUTHOR_FAMILY=$(python3 -B -c "import sys;sys.path.insert(0,sys.argv[1]+'/lib');
 SEAT_PINS=$(echo "$EP" | jq -c 'if (.seatPins // {}) == {} then empty else .seatPins end')  # owner per-seat pins (#607); empty/absent → omit --pins
 PINS_ARGS=()
 [ -n "$SEAT_PINS" ] && PINS_ARGS=(--pins "$SEAT_PINS")
-# Leg 1 (#610): panel-dispatching paths probe live vendors on a cache miss; the --post path never
-# re-probes — it reuses a fresh short-TTL liveness receipt or falls open to Claude (disclosed).
-PROBE_MODE=probe   # on the --post path ONLY, set PROBE_MODE=cache-only
-SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --probe-mode "$PROBE_MODE" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
+# Leg 1 (#610): compose probes live vendors on a cache miss and rides a within-TTL receipt
+# otherwise. Every review-code path dispatches a panel, so there is no receipt-only mode to
+# select: seat_map's `cache-only` probe mode lost its last caller when --post was removed
+# (#1121) and was reaped in #1138.
+SEAT_MAP=$(python3 -B "$ROOT_DIR/lib/seat_map.py" compose --configured-engines "$CONFIGURED" --author-family "$AUTHOR_FAMILY" --narrative-family anthropic --pr-number "${PR_NUMBER:-}" --head-sha "$(git rev-parse HEAD 2>/dev/null)" "${PINS_ARGS[@]}" --repo-root "$REPO_ROOT" || echo '{"seats":{},"degradations":[{"constraint":"compose-failed","reason":"seat_map compose failed — every seat falls open to Claude"}]}')
 ```
 
 The compose receipt always carries `pluginVersionSkew` — `{"status", "detail", "inspectedRoot"}`
 with `status` one of `checked-clean`, `checked-degraded`, or `not-checked` — so a receipt
 distinguishes "checked, clean" from "never checked"; only `checked-degraded` appends a disclosed
 `plugin-version-skew` record to `degradations` (detection only, never blocks). The skew
-comparison reads the repository root resolved at Setup (`$REPO_ROOT`), not ambient cwd. On the
-`--post` path the compose step runs before the detached PR-head worktree at `$SESSION_DIR/repo`
-is created, so the comparison describes the operator's checkout rather than the PR head;
+comparison reads the repository root resolved at Setup (`$REPO_ROOT`), not ambient cwd, and
 `pluginVersionSkew.inspectedRoot` names which tree was actually compared.
 
 When dispatching specialists, map each panel seat's **tier** to a model — `reviewer-deep` → `model: $DEEP_MODEL`, `reviewer` → `model: $REVIEWER_MODEL` (the auto-fix loop's per-round schedule is driver-owned; see `round-driver.md`). Triage subagents use `model: $MECH_MODEL`; the fixer uses `model: $FIXER_MODEL` (the `code-fixer` tier, #510). An empty value means "inherit the session model" — omit the `model` arg in that case.
 
-**Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. The root depends on the path: `--post` reads the PR-head worktree (`--root "$SESSION_DIR/repo"`), while branch/default paths read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
+**Staleness self-check (first action).** Before the profile bootstrap and before dispatching anything, run the deterministic staleness/degraded self-check. It soft-fails (always exit 0) and **must never block the review** on drift — it only produces a non-blocking nudge surfaced at end of run. Read the working tree (default root, `.`). Run it only when a profile already resolved (`$EXISTS` is `true`) — a MISSING profile (`$LOCATION` is `none`) routes to the profile bootstrap below (which runs review-init/bootstrap), not to staleness:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$EXISTS" = "true" ]; then
-  # --post path: --root "$SESSION_DIR/repo" (PR-head worktree). branch/default: omit --root (working tree).
   DOCTOR_JSON=$(python3 -B "$ROOT_DIR/lib/repo_doctor.py" \
-    "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION" ${DOCTOR_ROOT_ARG})
+    "$PROFILE" "$PLUGIN_VERSION" "$RUBRIC_VERSION")
 fi
 ```
 
-(`DOCTOR_ROOT_ARG` is `--root "$SESSION_DIR/repo"` on `--post` once the worktree exists; empty otherwise.) Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superheroes:configure` and continue. Retain `message`, `signal_hash`, `nudge_acked` for the end-of-run staleness nudge. Do NOT act on `drift` here.
+Capture `DOCTOR_JSON`; on `readable: false`, tell the user to re-run `/superheroes:configure` and continue. Retain `message`, `signal_hash`, `nudge_acked` for the end-of-run staleness nudge. Do NOT act on `drift` here.
 
 **Profile bootstrap (run before dispatching anything).** The review engine reads its per-project calibration (threat model, verify command, scope, focus hints, canonical patterns) from the resolved profile. If nothing resolved (`$LOCATION` is `none`), decide where to store it, create it, then write it:
 

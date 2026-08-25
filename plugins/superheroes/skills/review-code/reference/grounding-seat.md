@@ -31,7 +31,7 @@ prose: the seat's only lawful source for it is the staged body inside the view.
 
 ## Where it runs
 
-On the **read-only paths** (`--post`, `--review-only`), inside `## Compile + Dedupe`
+On the **read-only path** (`--review-only`), inside `## Compile + Dedupe`
 (SKILL.md §4 step 8). Sequence: **stage → check → dispatch → fold → attest → retained
 inline check**.
 

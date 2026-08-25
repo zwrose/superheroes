@@ -185,9 +185,14 @@ python3 -B "$ROOT_DIR/lib/preflight_probe.py" compose-liveness --cwd .
 ```
 
 This probes each configured reviewer vendor's pin-reachable models **once** and writes a
-machine-readable receipt to the project store — per-cell `liveCells` (`vendor`/`model`/`effort`,
-`probed`, `synthesized`, or `unprobed` provenance) plus the `liveVendors` audit rollup (`review-code` passes the
-latter to `round_driver --vendors`); a `review-code` compose within the TTL reuses it. When per-seat
+machine-readable liveness receipt to the project store: `probedAt`, `ttl`, the `needed` per-cell
+configs, and the per-cell `liveness` verdicts. Its **stdout** additionally returns `live` — the
+pessimistic vendor rollup that `review-code` later carries as `liveVendors` and passes to
+`round_driver --vendors` — and the per-cell `liveCells` (`vendor`/`model`/`effort`). **Provenance
+is not a field of either artifact:** it is stamped downstream, where `seat_map compose` records
+`liveCellsSource` on its own receipt — `probed` for cells backed by probe evidence, whether that
+evidence was gathered fresh here or reused from a within-TTL receipt. A `review-code` compose
+within the TTL reuses this receipt. When per-seat
 review pins are configured (the `--pins` supply the compose accepts, added by #607), pass them
 through so only pin-reachable models are probed. This is the **write side** — the read side lives in
 the `review-code` compose. **Fail-direction unchanged:** a probe failure drops **that cell**

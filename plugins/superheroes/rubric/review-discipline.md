@@ -446,9 +446,9 @@ on [PR #1120](https://github.com/zwrose/superheroes/pull/1120) is what asked for
 written down (*Follow-ups for the advisor*, item 9). Two executions, both successful, neither
 reconstructable from the plugin surfaces at the time.
 
-## Prose-driven review (`--post`, `--review-only`)
+## Prose-driven review (`--review-only`)
 
-A **prose-driven review** is a sanctioned lane on the read-only paths — not a shortcut, not a
+A **prose-driven review** is a sanctioned lane on the read-only path — not a shortcut, not a
 degradation, and **not** something the auto-fix loop may do. The orchestrator compiles findings in
 main context (`SKILL.md` § Compile + Dedupe) instead of obeying the driver's fold, but it still owes
 a **named substitute receipt** standing in for `round-receipt.json` and the driver journal:

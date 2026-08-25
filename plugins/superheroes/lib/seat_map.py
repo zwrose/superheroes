@@ -42,7 +42,12 @@ MAKER_EXCLUDED_SEATS = frozenset(PANEL_ROSTER)
 # one is a violation, never an excused degradation (#670 review).
 UNPROVEN_LIVENESS_CONSTRAINTS = frozenset({
     "live-vendors",           # build() synthesized ["claude"] when handed no live vendors
-    "preflight-cache-only",   # --post / receipt-only path: vendors were never probed
+    # No live producer since the cache-only receipt-only path was reaped (#1138) — RETAINED
+    # deliberately: this set is read against seat maps supplied from outside this process
+    # (`round_driver` persists and re-reads `seatMap`), so a map written by an older plugin
+    # version can still carry the constraint. Dropping the member would make that stale map
+    # read as PROVEN liveness — a fall-open, not a cleanup.
+    "preflight-cache-only",   # legacy receipt: vendors were never probed
     "compose-failed",         # compose blew up and every seat fell open to Claude
 })
 DEFAULT_TIER_BY_SEAT = {s: "reviewer-deep" for s in LENS_SEATS}
@@ -1004,14 +1009,6 @@ def build_parser():
         default=None,
         help="JSON dict of seat pins passed to build()",
     )
-    cc.add_argument(
-        c,
-        "--probe-mode",
-        contract="choices:probe,cache-only",
-        default="probe",
-        choices=("probe", "cache-only"),
-        help="probe live vendors or reuse cache only",
-    )
     return ap
 
 
@@ -1043,7 +1040,7 @@ def main(argv):
 
         live_cells = None
         live_cells_source = None
-        if args.live_vendors is not None and args.probe_mode != "cache-only":
+        if args.live_vendors is not None:
             live = [v for v in args.live_vendors.split(",") if v]
             liveness_pin_scoped = False
             live_cells_source = "synthesized"
@@ -1059,7 +1056,6 @@ def main(argv):
                 preflight_probe.live_vendors_for_composition(
                     configured,
                     needed_override=needed_override,
-                    probe_mode=args.probe_mode,
                     cache_path=cache_path,
                     now=now,
                 )
