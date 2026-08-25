@@ -61,12 +61,13 @@ names; never write an empty array). Record the chosen order in
 `## Setup disclosures`. Continue. Follow-up: `/superheroes:configure`.
 <!-- /decision-point: id=tp-init-browser-tools -->
 
-<!-- decision-point: id=tp-init-browser-gate mode=gate kind=owner-gate default="hand back; no browser tool connected" carrier=test-pilot-layer -->
-When **no** browser MCP is connected, GATE: write the remediation (install
-chrome-devtools MCP, Playwright plugin, or Claude in Chrome extension) into
-`## Setup disclosures`, record that no browser tool is connected, leave
-`browserTools` **absent** (not an empty array), and **hand back** — do not
-continue init or drive browser tooling. Follow-up: `/superheroes:configure`.
+<!-- decision-point: id=tp-init-browser-gate mode=gate kind=owner-gate default="hand back; no browser tool connected" carrier=run-output -->
+When **no** browser MCP is connected, GATE: write the remediation down in the
+run output (install chrome-devtools MCP, Playwright plugin, or Claude in Chrome
+extension), record that no browser tool is connected, leave `browserTools`
+**absent** (not an empty array), and **hand back** — do not continue init or
+drive browser tooling. **No layer is written on this path** — init stops here
+before Step 6's writer runs. Follow-up: `/superheroes:configure`.
 <!-- /decision-point: id=tp-init-browser-gate -->
 
 ## Step 4 — Decide location
@@ -236,11 +237,10 @@ has answered every one of its no-default fields. Do not scaffold it during init.
 
 ## Step 7 — Reconcile mode
 
-<!-- decision-point: id=tp-init-reconcile-drift mode=gate kind=owner-gate default="hand back; apply nothing" carrier=test-pilot-layer -->
-Re-run detection, then DIFF against the existing profile. GATE: write the drift diff (changed
-dev command, new env vars, vanished scripts, and any other detected deltas) into
-`## Setup disclosures` of the test-pilot layer and **hand back** — apply **no** profile changes
-on this init path. Hand-edits in the profile are preserved because nothing is written. Never
-regenerate from scratch over an existing profile. Follow-up: `/superheroes:configure` to apply,
-edit, or skip changes.
+<!-- decision-point: id=tp-init-reconcile-drift mode=gate kind=owner-gate default="hand back; apply nothing" carrier=run-output -->
+Re-run detection, then DIFF against the existing profile. GATE: write the drift diff down in the
+run output (changed dev command, new env vars, vanished scripts, and any other detected deltas)
+and **hand back** — apply **no** profile changes and write **no** layer on this init path.
+Hand-edits in the profile are preserved because nothing is written. Never regenerate from scratch
+over an existing profile. Follow-up: `/superheroes:configure` to apply, edit, or skip changes.
 <!-- /decision-point: id=tp-init-reconcile-drift -->
