@@ -1948,16 +1948,24 @@ def _bounded_stdout_cap_from_file(fh, max_bytes):
 
 # Injected-seam sentinel; tests call this directly.
 def _cap_file_tail(path, max_bytes):
-    """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises."""
+    """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises.
+
+    Returns (truncated, observed): truncated is True when the file exceeded budget and was
+    rewritten; observed is the pre-cap byte count from the bounded read, or None when no
+    authoritative count is available (distinguishable from 0 for an empty capture).
+    """
     try:
         with open(path, "rb") as fh:
-            capped, truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes)
-        if capped is None or not truncated:
-            return
+            capped, truncated, observed = _bounded_stdout_cap_from_file(fh, max_bytes)
+        if capped is None:
+            return False, None
+        if not truncated:
+            return False, observed
         with open(path, "wb") as fh:
             fh.write(capped)
+        return True, observed
     except (OSError, MemoryError):
-        pass
+        return False, None
 
 
 def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE):
@@ -2211,16 +2219,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         stdout_path, stderr_path, prev_stdout, prev_stderr,
         last_activity_at, activity_stream,
     )
-    try:
-        pre_cap_stdout_bytes = os.path.getsize(stdout_path)
-    except OSError:
-        pre_cap_stdout_bytes = None
-    try:
-        pre_cap_stderr_bytes = os.path.getsize(stderr_path)
-    except OSError:
-        pre_cap_stderr_bytes = None
-    _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
-    _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
+    _, stdout_observed = _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE)
+    _, stderr_observed = _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE)
     returncode = proc.returncode
     elapsed = time.monotonic() - start
     ended_record = {
@@ -2235,12 +2235,12 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
     }
     if prompt_bytes is not None:
         ended_record["promptBytes"] = prompt_bytes
-    if pre_cap_stdout_bytes is not None:
-        ended_record["stdoutBytes"] = pre_cap_stdout_bytes
-        # Measured before _cap_file_tail — authoritative for truncation grading.
+    if stdout_observed is not None:
+        ended_record["stdoutBytes"] = stdout_observed
+        # axis: measured by _cap_file_tail at capping time — authoritative for truncation grading.
         ended_record["stdoutBytesPreCap"] = True
-    if pre_cap_stderr_bytes is not None:
-        ended_record["stderrBytes"] = pre_cap_stderr_bytes
+    if stderr_observed is not None:
+        ended_record["stderrBytes"] = stderr_observed
     if last_activity_at is not None:
         ended_record["lastActivityAt"] = last_activity_at
         ended_record["silenceSeconds"] = silence_seconds
@@ -2736,7 +2736,7 @@ def _attempt_stdout_truncated(run_dir_real, state, attempt):
         return size
     # axis: authoritative under-cap recorded count outranks marker text;
     # authority is asserted by the producer via stdoutBytesPreCap (_run_engine_files
-    # only — measured before _cap_file_tail); unstamped records (_execute_injected_attempt
+    # only — measured by _cap_file_tail); unstamped records (_execute_injected_attempt
     # or any future producer) fall through to the marker read.
     if observed is not None and ended.get("stdoutBytesPreCap") is True:
         return None
