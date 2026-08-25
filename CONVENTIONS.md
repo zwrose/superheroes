@@ -728,8 +728,9 @@ needed cell (unchanged from today); this is the **audit vendor pool** that `revi
 panel preflight never probed — and **`liveCells`**, the per-cell verdicts that are the **seating**
 currency (a panel seat may take a cell only if that exact cell probed live). A vendor can therefore
 be absent from `liveVendors` while some of its cells remain in `liveCells`, and that divergence is
-correct, not a bug. `liveCells` records provenance (`probed`, `synthesized`, or `unprobed`); only
-`probed` counts as verification evidence. `unprobed` — cells no probe of any kind covered — has
+correct, not a bug. `liveCells` is the cell list itself (`[vendor, model, effort]` entries);
+provenance is the separate top-level **`liveCellsSource`** field (`probed`, `synthesized`, or
+`unprobed`), and only `probed` counts as verification evidence. `unprobed` — cells no probe of any kind covered — has
 had **no live producer since #1138** reaped the receipt-only path; it stays in the vocabulary
 because seat maps are persisted and re-read, so a map written by an older plugin version must keep
 reading as unusable evidence rather than falling open. Claude is never probed and is live by construction — a stated exception,
