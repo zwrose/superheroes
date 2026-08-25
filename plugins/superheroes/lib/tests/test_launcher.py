@@ -1111,6 +1111,26 @@ def test_compose_cli_effort_flag_reaches_the_resolver(tmp_path):
     assert bad["reason"] == "effort-not-registry-known"
 
 
+def test_opus_policy_effort_is_gated_by_the_registry_too(tmp_path, monkeypatch):
+  # axis: the policy default goes through the same registry gate as an explicit --effort,
+  # so a registry that stopped accepting `medium` refuses before spawn instead of falling open
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(L.model_registry, "effort_enum", lambda vendor: ("low", "high"))
+    result = L.compose_launch(repo, 656, _valid_premise(repo))
+    assert result["ok"] is False
+    assert result["reason"] == "effort-not-registry-known"
+
+
+def test_non_opus_tier_resolves_without_consulting_the_effort_enum(tmp_path, monkeypatch):
+  # axis: the inherit case pins no value, so a narrowed enum cannot refuse a sonnet launch
+    repo = _init_repo(tmp_path / "repo")
+    monkeypatch.setattr(L.model_registry, "effort_enum", lambda vendor: ())
+    result = L.compose_launch(repo, 656, _valid_premise(repo), model="sonnet")
+    assert result["ok"] is True
+    assert result["effort"] is None
+    assert result["effortSource"] == "inherited"
+
+
 def test_compose_unknown_effort_refuses(tmp_path):
   # axis: the effort vocabulary comes from the registry, not from the caller
     repo = _init_repo(tmp_path / "repo")

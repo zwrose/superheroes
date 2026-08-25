@@ -417,12 +417,17 @@ def _resolve_effort(effort, tier):
     point reads as "leave the ambient CLAUDE_EFFORT alone" — the ruling names Opus 5 only.
     """
     if effort is not None:
-        if effort not in model_registry.effort_enum("claude"):
-            return _fail("effort-not-registry-known")
-        return {"ok": True, "effort": effort, "source": "explicit"}
-    if tier == OPUS_TIER:
-        return {"ok": True, "effort": OPUS_DEFAULT_EFFORT, "source": "opus-policy"}
-    return {"ok": True, "effort": None, "source": "inherited"}
+        resolved, source = effort, "explicit"
+    elif tier == OPUS_TIER:
+        resolved, source = OPUS_DEFAULT_EFFORT, "opus-policy"
+    else:
+        return {"ok": True, "effort": None, "source": "inherited"}
+    # One gate for BOTH branches, deliberately: the policy default is no more exempt from the
+    # registry than a caller's --effort. Were `medium` ever dropped from the claude enum, an
+    # opus launch must refuse before spawn rather than spawn at an effort the vendor rejects.
+    if resolved not in model_registry.effort_enum("claude"):
+        return _fail("effort-not-registry-known")
+    return {"ok": True, "effort": resolved, "source": source}
 
 
 def _parse_iso8601(value):
