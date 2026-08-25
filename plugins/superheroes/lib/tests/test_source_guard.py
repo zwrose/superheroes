@@ -485,6 +485,49 @@ def test_pytest_configure_installs_audit_hook_once():
     assert len(calls) == 1
 
 
+def test_session_finish_resets_configured_for_next_session(throwaway_guard_state):
+    state = throwaway_guard_state
+    first_config = _workerinput_config(
+        {"signatures": {"/a.py": (1, 2, 3, 4)}, "hashes": {"/a.py": "hash1"}},
+        ["/a.py"],
+    )
+    assert state.configure(first_config) is True
+    assert state.watched == frozenset({"/a.py"})
+    worker_session = types.SimpleNamespace(
+        config=types.SimpleNamespace(
+            workerinput={
+                "source_guard_baseline": {},
+                "source_guard_watched": [],
+            }
+        ),
+        exitstatus=0,
+    )
+    state.session_finish(worker_session)
+    assert state.configured is False
+    second_config = _workerinput_config(
+        {"signatures": {"/b.py": (5, 6, 7, 8)}, "hashes": {"/b.py": "hash2"}},
+        ["/b.py"],
+    )
+    assert state.configure(second_config) is True
+    assert state.watched == frozenset({"/b.py"})
+    assert state.baseline_hashes == {"/b.py": "hash2"}
+
+
+def test_configure_still_idempotent_within_session(throwaway_guard_state):
+    state = throwaway_guard_state
+    first_config = _workerinput_config(
+        {"signatures": {"/a.py": (1, 2, 3, 4)}, "hashes": {"/a.py": "hash1"}},
+        ["/a.py"],
+    )
+    assert state.configure(first_config) is True
+    watched_before = set(state.watched)
+    hashes_before = dict(state.baseline_hashes)
+    empty_config = _workerinput_config({"signatures": {}, "hashes": {}}, [])
+    assert state.configure(empty_config) is False
+    assert state.watched == frozenset(watched_before)
+    assert state.baseline_hashes == hashes_before
+
+
 def test_live_guard_survives_empty_worker_reconfigure():
     watched_before = len(sg._LIVE.watched)
     baseline_before = len(sg._LIVE.baseline_hashes)
@@ -1075,6 +1118,91 @@ def test_wiring_defects_good_then_empty_overwrite(tmp_path):
     assert "conftest.py pytest_plugins does not include source_guard" in defects
 
 
+def test_wiring_defects_del_after_good_assignment(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "del_plugins",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            "pytest_plugins = ('source_guard',)\n"
+            "del pytest_plugins\n"
+        ),
+    )
+    defects = sg.wiring_defects(str(root))
+    assert "conftest.py pytest_plugins does not include source_guard" in defects
+
+
+def test_wiring_defects_clear_after_good_assignment(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "clear_plugins",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            'pytest_plugins = ["source_guard"]\n'
+            "pytest_plugins.clear()\n"
+        ),
+    )
+    defects = sg.wiring_defects(str(root))
+    assert "conftest.py pytest_plugins does not include source_guard" in defects
+
+
+def test_wiring_defects_nested_later_mention_not_a_defect(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "nested_later_mention",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            "pytest_plugins = ('source_guard',)\n"
+            "if False:\n"
+            "    del pytest_plugins\n"
+        ),
+    )
+    assert sg.wiring_defects(str(root)) == []
+
+
+def test_wiring_defects_pytest_ini_invalid_utf8(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "bad_utf8_ini",
+        conftest='pytest_plugins = ("source_guard",)\n',
+    )
+    (root / "pytest.ini").write_bytes(b"[pytest]\n\xff\xfe\n")
+    defects = sg.wiring_defects(str(root))
+    assert "pytest.ini could not be read or parsed" in defects
+
+
+def test_wiring_defects_conftest_nul_byte(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "nul_conftest",
+        pytest_ini="[pytest]\n",
+    )
+    (root / "conftest.py").write_bytes(
+        b"pytest_plugins = ('source_guard',)\n\x00\n"
+    )
+    defects = sg.wiring_defects(str(root))
+    assert "conftest.py could not be read or parsed" in defects
+
+
+def test_wiring_defects_unreadable_conftest(tmp_path):
+    if os.geteuid() == 0:
+        pytest.skip("chmod 000 is not enforced when running as root")
+    root = _write_wiring_root(
+        tmp_path,
+        "unreadable_conftest",
+        pytest_ini="[pytest]\n",
+        conftest='pytest_plugins = ("source_guard",)\n',
+    )
+    conftest_path = root / "conftest.py"
+    original_mode = conftest_path.stat().st_mode
+    try:
+        conftest_path.chmod(0)
+        defects = sg.wiring_defects(str(root))
+    finally:
+        conftest_path.chmod(original_mode)
+    assert "conftest.py could not be read or parsed" in defects
+
+
 def _build_real_wiring_micro_suite(root):
     _copy_real_root_wiring(root)
     shipped = root / "lib" / "shipped.py"
@@ -1173,9 +1301,9 @@ def test_bite_wiring_defects_last_assignment_wins(tmp_path):
     _bite_red_green(
         "last_assignment_wins",
         (
-            "                            last_plugins_assign = node",
-            "                            if last_plugins_assign is None:\n"
-            "                                last_plugins_assign = node",
+            "                            plugins_mentions.append(node)",
+            "                            if not plugins_mentions:\n"
+            "                                plugins_mentions.append(node)",
         ),
         lambda m: detects_overwrite(m),
         lambda m: detects_overwrite(m),
@@ -1230,5 +1358,114 @@ def test_bite_wiring_defects_pytest_ini_section(tmp_path):
         ),
         lambda m: detects_missing_section(m),
         lambda m: detects_missing_section(m),
+    )
+
+
+def test_bite_session_finish_resets_configured(throwaway_guard_state):
+    def reconfigures_after_finish(mod):
+        state = mod.GuardState(lambda hook: None)
+        first_config = types.SimpleNamespace(
+            rootpath=_REPO_ROOT,
+            workerinput={
+                "source_guard_baseline": {
+                    "signatures": {"/a.py": (1, 2, 3, 4)},
+                    "hashes": {"/a.py": "hash1"},
+                },
+                "source_guard_watched": ["/a.py"],
+            },
+        )
+        assert state.configure(first_config) is True
+        worker_session = types.SimpleNamespace(
+            config=types.SimpleNamespace(
+                workerinput={
+                    "source_guard_baseline": {},
+                    "source_guard_watched": [],
+                }
+            ),
+            exitstatus=0,
+        )
+        state.session_finish(worker_session)
+        second_config = types.SimpleNamespace(
+            rootpath=_REPO_ROOT,
+            workerinput={
+                "source_guard_baseline": {
+                    "signatures": {"/b.py": (5, 6, 7, 8)},
+                    "hashes": {"/b.py": "hash2"},
+                },
+                "source_guard_watched": ["/b.py"],
+            },
+        )
+        return state.configure(second_config) is True and state.watched == frozenset(
+            {"/b.py"}
+        )
+
+    _bite_red_green(
+        "session_finish_reset",
+        (
+            "    def session_finish(self, session):\n"
+            "        self.configured = False",
+            "    def session_finish(self, session):\n"
+            "        pass  # configured reset neutralized",
+        ),
+        lambda m: reconfigures_after_finish(m),
+        lambda m: reconfigures_after_finish(m),
+    )
+
+
+def test_bite_wiring_defects_last_mention_must_be_assignment(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "bite_e17",
+        pytest_ini="[pytest]\n",
+        conftest=(
+            "pytest_plugins = ('source_guard',)\n"
+            "del pytest_plugins\n"
+        ),
+    )
+    target = "conftest.py pytest_plugins does not include source_guard"
+
+    def detects_del(mod):
+        return target in mod.wiring_defects(str(root))
+
+    _bite_red_green(
+        "last_mention_assignment",
+        (
+            "                elif isinstance(node, ast.Delete):",
+            "                elif False and isinstance(node, ast.Delete):",
+        ),
+        lambda m: detects_del(m),
+        lambda m: detects_del(m),
+    )
+
+
+def test_bite_wiring_defects_malformed_file_handling(tmp_path):
+    root = _write_wiring_root(
+        tmp_path,
+        "bite_e18",
+        conftest='pytest_plugins = ("source_guard",)\n',
+    )
+    (root / "pytest.ini").write_bytes(b"[pytest]\n\xff\xfe\n")
+    target = "pytest.ini could not be read or parsed"
+
+    def detects_bad_utf8(mod):
+        try:
+            return target in mod.wiring_defects(str(root))
+        except (UnicodeDecodeError, OSError, ValueError):
+            return False
+
+    _bite_red_green(
+        "malformed_file_handling",
+        (
+            "            with open(pytest_ini_path, encoding=\"utf-8\") as fh:\n"
+            "                parser.read_file(fh)\n"
+            "        except (configparser.Error, OSError, UnicodeDecodeError, ValueError):\n"
+            "            defects.append(\"pytest.ini could not be read or parsed\")",
+            "            with open(pytest_ini_path, encoding=\"utf-8\") as fh:\n"
+            "                parser.read_file(fh)\n"
+            "        except configparser.Error:\n"
+            "            defects.append(\"pytest.ini could not be read or parsed\")",
+        ),
+        lambda m: detects_bad_utf8(m),
+        lambda m: detects_bad_utf8(m),
     )
 

@@ -42,8 +42,8 @@ def wiring_defects(root):
         try:
             with open(pytest_ini_path, encoding="utf-8") as fh:
                 parser.read_file(fh)
-        except configparser.Error:
-            defects.append("pytest.ini could not be parsed")
+        except (configparser.Error, OSError, UnicodeDecodeError, ValueError):
+            defects.append("pytest.ini could not be read or parsed")
         else:
             if not parser.has_section("pytest"):
                 defects.append("pytest.ini has no [pytest] section")
@@ -56,59 +56,85 @@ def wiring_defects(root):
             with open(conftest_path, encoding="utf-8") as fh:
                 conftest_source = fh.read()
             tree = ast.parse(conftest_source, filename=conftest_path)
-        except (OSError, SyntaxError, UnicodeDecodeError):
-            defects.append(
-                "conftest.py has no effective module-level pytest_plugins assignment"
-            )
+        except (configparser.Error, OSError, UnicodeDecodeError, ValueError):
+            defects.append("conftest.py could not be read or parsed")
         else:
-            last_plugins_assign = None
+            plugins_mentions = []
             for node in tree.body:
                 if isinstance(node, ast.Assign):
                     for target in node.targets:
                         if isinstance(target, ast.Name) and target.id == "pytest_plugins":
-                            last_plugins_assign = node
+                            plugins_mentions.append(node)
+                            break
                 elif isinstance(node, ast.AnnAssign):
                     if (
                         isinstance(node.target, ast.Name)
                         and node.target.id == "pytest_plugins"
                     ):
-                        last_plugins_assign = node
+                        plugins_mentions.append(node)
+                elif isinstance(node, ast.Delete):
+                    if any(
+                        isinstance(target, ast.Name)
+                        and target.id == "pytest_plugins"
+                        for target in node.targets
+                    ):
+                        plugins_mentions.append(node)
+                elif isinstance(node, ast.Expr):
+                    if _expr_mentions_pytest_plugins(node.value):
+                        plugins_mentions.append(node)
 
-            if last_plugins_assign is None:
+            if not plugins_mentions:
                 defects.append(
                     "conftest.py has no effective module-level pytest_plugins assignment"
                 )
             else:
-                if isinstance(last_plugins_assign, ast.Assign):
-                    value_node = last_plugins_assign.value
-                else:
-                    value_node = last_plugins_assign.value
-                try:
-                    value = ast.literal_eval(value_node)
-                except (ValueError, SyntaxError):
+                last_mention = plugins_mentions[-1]
+                if not _plugins_assign_includes_source_guard(last_mention):
                     defects.append(
                         "conftest.py pytest_plugins does not include source_guard"
                     )
-                else:
-                    if isinstance(value, str):
-                        plugins = (value,)
-                    elif isinstance(value, (list, tuple)):
-                        plugins = value
-                    else:
-                        defects.append(
-                            "conftest.py pytest_plugins does not include source_guard"
-                        )
-                        plugins = None
-                    if plugins is not None and "source_guard" not in plugins:
-                        defects.append(
-                            "conftest.py pytest_plugins does not include source_guard"
-                        )
 
     source_guard_path = os.path.join(root, "source_guard.py")
     if not os.path.isfile(source_guard_path):
         defects.append("source_guard.py is missing at the repository root")
 
     return sorted(defects)
+
+
+def _expr_mentions_pytest_plugins(node):
+    for child in ast.walk(node):
+        if isinstance(child, ast.Name) and child.id == "pytest_plugins":
+            return True
+    return False
+
+
+def _plugins_assign_includes_source_guard(node):
+    if isinstance(node, ast.Assign):
+        targets = node.targets
+        value_node = node.value
+    elif isinstance(node, ast.AnnAssign):
+        targets = [node.target]
+        value_node = node.value
+    else:
+        return False
+    if not any(
+        isinstance(target, ast.Name) and target.id == "pytest_plugins"
+        for target in targets
+    ):
+        return False
+    if value_node is None:
+        return False
+    try:
+        value = ast.literal_eval(value_node)
+    except (ValueError, SyntaxError):
+        return False
+    if isinstance(value, str):
+        plugins = (value,)
+    elif isinstance(value, (list, tuple)):
+        plugins = value
+    else:
+        return False
+    return "source_guard" in plugins
 
 
 def watched_paths(repo_root):
@@ -342,6 +368,7 @@ class GuardState:
         node.workerinput["source_guard_watched"] = sorted(self.watched)
 
     def session_finish(self, session):
+        self.configured = False
         if getattr(session.config, "workerinput", None) is not None:
             return
         end_dirty = _git_dirty_paths(self.repo_root)
