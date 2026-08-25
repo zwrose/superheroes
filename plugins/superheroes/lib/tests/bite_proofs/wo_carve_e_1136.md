@@ -35,15 +35,36 @@ FAILED plugins/superheroes/lib/tests/test_presence_flag_retired.py::test_retired
 `PYTEST_EXIT=1`.
 
 **Red is on the claimed axis, mechanically.** Every hit line the two assertions printed pointed
-inside `lib/tests/bite_proofs/` — **58 of 58**, with **0** hits outside that directory (counted over
-the capture: `grep -cE '^E .*bite_proofs/'` → 58; `grep -E '^E   lib/' | grep -vc 'bite_proofs/'`
-→ 0). So the red came from the exclusion being gone, not from unrelated drift. First two hit lines,
-verbatim:
+inside `lib/tests/bite_proofs/` — **56 of 56**, with **0** hits outside that directory. Counted over
+the capture with a whitespace-tolerant match, because pytest indents `E` continuation lines by a
+variable amount:
+
+```
+grep -cE '^E +lib/'                        → 56   # every hit line
+grep -E '^E +lib/' | grep -c  'bite_proofs/' → 56   # inside the guarded directory
+grep -E '^E +lib/' | grep -vc 'bite_proofs/' → 0    # outside it
+```
+
+So the red came from the exclusion being gone, not from unrelated drift.
+
+*Two further capture lines mention `bite_proofs/` without being hit lines — the two assertions'
+`assert not [...]` summary lines, which re-quote the first hit of each list. A broader
+`grep -cE '^E .*bite_proofs/'` therefore returns **58**; the hit-line count is **56**.*
+
+**Counting note, recorded because this record tripped it.** An earlier draft of this paragraph
+counted the outside-hits with `grep -E '^E   lib/'` — exactly three spaces after `E`. Pytest emits
+nine, so that pattern matched **nothing** and would have reported `0` outside-hits whether or not
+any existed: the number was true but its evidence was vacuous. That is `rubric/bite-proof.md`
+mode 4's fixture-vacuity face — a probe green (here, a reassuring zero) that the fixture could
+never have produced any other way. Caught by the confirming review round on this build. The
+patterns above are the corrected, tolerant ones.
+
+First two hit lines, verbatim:
 ```
 E         lib/tests/bite_proofs/wo_carve_e_1136.md:5: **Guarded element:** `_census_excluded` / `_CENSUS_EXCLUDED_DIRS` - axis: files under `lib/tests/bite_proofs/` must not be read by premise or INTERACTIVE content censuses; a proof must be free to quote the literal it proves.
 E         lib/tests/bite_proofs/wo_carve_e_1136.md:84: **Guarded element:** INTERACTIVE census over `_CENSUS_ROOTS` - axis: `lib/` files outside `bite_proofs/` must still be policed for retired presence flags.
 ```
-**Elision, disclosed:** the remaining 56 hit lines and both assertions' full tracebacks are
+**Elision, disclosed:** the remaining 54 hit lines and both assertions' full tracebacks are
 elided here (~6 KiB) to stay inside the per-element capture bound; they are the same shape as the
 two quoted, each naming a `lib/tests/bite_proofs/` path. Nothing redacted — the capture contains no
 secrets, tokens, private URLs, or PII.
