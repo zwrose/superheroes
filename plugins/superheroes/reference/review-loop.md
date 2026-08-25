@@ -27,7 +27,9 @@ If the user declines or ignores it, record the dismissal (see "Recording a dismi
 
 ### Learning-loop proposal (end of run)
 
-After the staleness nudge, analyze the decision store for a repeated signal:
+**Not run.** The learning loop learns from decisions a human made; a gate nobody answered produced
+none, and applying a calibration edit unasked would be the worse failure. Keep the analyze snippet
+below for reference when an owner runs configure interactively; do not invoke it at end of run here:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
@@ -35,24 +37,10 @@ python3 -B "$ROOT_DIR/lib/decisions.py" \
   analyze "$DECISIONS" --nudge-ack <comma-separated profile nudge-ack hashes>
 ```
 
-Pass the profile's current `nudge-ack` map keys (read from the resolved profile (`$PROFILE`)'s provenance block) as the comma-separated `--nudge-ack` list so an already-dismissed proposal does not re-fire. If the result's `proposal` is non-null, present it via **ONE** `AskUserQuestion` (lead with `proposal.text`; the proposal names a `target` of `profile` or `CLAUDE.md`):
-- **Apply to `<target>`** — apply the proposed calibration/convention edit to the named target.
-- **Edit then apply** — open a free-text edit, then apply the edited version.
-- **Dismiss** — do not apply; record the dismissal using `proposal.signal_hash` (see below).
+### Provisional-profile confirmation (end of run)
 
-**Apply ONLY on explicit choice** (**Apply** / **Edit then apply**) — never automatically. If `proposal` is null, do nothing.
-
-### Provisional-profile confirmation (interactive only, end of run)
-
-If the loaded profile's `status:` is `provisional` AND this run is interactive (a human is present to answer) AND the provisional-confirm signal is not already in the profile's `nudge-ack`, offer ONE non-blocking `AskUserQuestion` after the review output:
-
-> This project's review profile was auto-generated (provisional) and hasn't been confirmed. Confirm it now?
-
-- **Confirm (mark stable)** — flip the profile's provenance `status: provisional` → `status: stable` in the resolved profile (`$PROFILE`) (bump `updated:`). Nothing else changes.
-- **Refresh via configure** — point the user at `/superheroes:configure` and do not change the profile now.
-- **Keep provisional** — record a dismissal using the constant provisional-confirm signal hash so this does not re-ask until the profile changes.
-
-Skip this entirely when the run is **headless/non-interactive**, when `status:` is already `stable`, or when the provisional-confirm signal is already acknowledged.
+**Not run** — same reason as the learning-loop proposal above; confirming a provisional profile
+unasked would apply a calibration edit nobody authorized. `/superheroes:configure` is the follow-up.
 
 ### Recording a dismissal (shared)
 

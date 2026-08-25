@@ -78,11 +78,11 @@ storage location and mint the path before writing:
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
-  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
-  # If LOC is "ask" → present the in-repo-vs-global AskUserQuestion, set LOC to the owner's pick,
-  # then record it band-wide (FR-3) and create.
-  # If LOC is already in-repo/global → skip the record and go straight to create.
+  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location)
+  LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+  PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
+  # When PROVISIONAL is "true": disclose in the run output the location taken, that it is provisional,
+  # and that /superheroes:configure changes it (triad part 2).
   REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
   if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
     echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
@@ -91,34 +91,28 @@ if [ "$LOCATION" = "none" ]; then
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global
-`AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as
-`$LOC`. The minted `$PROFILE` is the path Step 4 writes to.
+**Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
+`global` (`ask` no longer exists). **Default:** the returned `.mode` (recorded when configured,
+else the lib's provisional default). **Disclosure:** when `.provisional` is `true`, state in the
+run output which location was taken, that it is provisional, and that `/superheroes:configure`
+confirms or changes it. **Follow-up:** `/superheroes:configure`. The minted `$PROFILE` is the path
+Step 4 writes to.
 
-## Step 3 — Create: CLAUDE.md-aware interview (full, inline, tight)
+## Step 3 — Create: detection + defaults (no interview)
 
-Ask only what detection + `CLAUDE.md` did not answer. Use `AskUserQuestion`.
-Typical questions (skip any already answered):
+Do not interview. Build the profile from Step 1 detection + `CLAUDE.md` + named provisional
+defaults. Write `status: provisional` always on this path — the interview branch that produced
+`status: confirmed` is retired; only `/superheroes:configure` confirms a profile with a real verify
+story. State in the run output which fields were defaulted rather than answered.
 
-1. **Threat model** — `single-user` / `multi-tenant` / `public`. (If `CLAUDE.md`
-   already states the deployment/threat context, infer it and skip.)
-2. **Verify command** — confirm the detected candidate. If **none was detected**,
-   offer three options and record the choice:
-   - *Set one up* — propose a `check` command for the user to add to their build
-     config (e.g. `tsc --noEmit && eslint . && vitest run`); do NOT edit their
-     config yourself. Record the proposed command once they add it.
-   - *Unverified* — write `mode: unverified` (auto-fix will commit without gating).
-   - *Review-only* — write `mode: review-only` (no auto-fix).
-3. **Scope exclusions** — anything explicitly out of scope (e.g. accessibility for
-   a non-UI or internal tool). Default to none.
+Defaults when detection + `CLAUDE.md` did not answer:
 
-If **no `CLAUDE.md` exists**, offer: (a) generate a starter `CLAUDE.md`, (b) inline
-a minimal conventions block into the profile, or (c) run code-reviewer
-correctness-only. Record the choice in `## Conventions`.
+1. **Threat model** — `strict` (provisional default when unknown).
+2. **Verify command** — if none was detected, `mode: review-only` (provisional default).
+3. **Scope exclusions** — none (provisional default).
 
-**Headless / non-interactive** (no human to answer, e.g. an automated run): skip
-the interview, write a `status: provisional` profile from detected defaults with
-the **strict** threat model, and note in the body it was auto-generated.
+If **no `CLAUDE.md` exists**, record a minimal conventions pointer in `## Conventions` (point at
+`CLAUDE.md` once the owner adds one); do not generate or commit `CLAUDE.md` here.
 
 ## Step 4 — Create: seed canonical patterns, assemble core + layer bodies
 
@@ -140,24 +134,25 @@ file; clobbering it breaks dispatch):
 - `$REVIEW_LAYER_BODY` — markdown body for `core_md.py write-layer`: `## Scope exclusions`,
   `## Focus hints`, `## Conventions` (hero-owned sections only; no provenance block).
 
-Proceed to Step 4b to write both files. Only when the layer path is in-repo (under
-`./.claude/superheroes/`) `AskUserQuestion` whether to commit (`git add` the new core + layer);
-a global-store profile lives outside the working tree and is not committed.
+Proceed to Step 4b to write both files. When the layer path is in-repo (under
+`./.claude/superheroes/`), **do not commit** — write the files and leave them **uncommitted and
+untracked**. State that in the run output; the owner commits via git or confirms via
+`/superheroes:configure`.
 
-`status` is `confirmed` when the interview was completed interactively with a real verify story;
-`provisional` for headless/greenfield/defaulted profiles.
+`status` is always `provisional` on this create path; `confirmed` is reached only through
+`/superheroes:configure` after a real verify story.
 
 ### Step 4b — Write the shared brain (core.md) + the review-crew layer
 
 The shared facts (stack, verify command, threat model, canonical patterns) belong in
 the band-wide `core.md`; review-crew's own sections (scope exclusions, focus hints,
 conventions) belong in its layer `review-crew.md`. Both are written through the lib —
-never hand-format core.md (CONVENTIONS §2.2). Set `--status confirmed` on an interactive
-run, `--status provisional` on a headless one (FR-5):
+never hand-format core.md (CONVENTIONS §2.2). Always pass `--status provisional` on this create path
+(FR-5); `confirmed` is reached only via `/superheroes:configure`:
 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
-STATUS=confirmed   # use `provisional` on a headless/non-interactive run (FR-5)
+STATUS=provisional   # always on this create path; confirmed only via /superheroes:configure (FR-5)
 # CREATE: shared facts → core.md (lock-guarded, reuse-not-clobber FR-6/FR-7; a
 # `proposed`/`deferred` action is surfaced, never silently overwritten).
 printf '%s' "$CORE_FACTS_JSON" \
@@ -212,15 +207,17 @@ nudge (already surfaced in Step 2). See CONVENTIONS §2.1 (layout) and §2.2 (fo
    state — **preserve it verbatim** across the reconcile (do not reset acks the
    user has already dismissed). Add the `nudge-ack:` field (empty `{}`) only if an
    older profile predates it.
-6. Show the user a **diff** of proposed changes and `AskUserQuestion` to apply,
-   edit, or skip. Preserve all hand-edits below the provenance block unless the
-   user approves a change.
-7. Write the profile; bump `updated:` and refresh `signals` + `rubric-version` +
+6. **Do not apply by default.** Write the proposed-changes **diff** into the run output as
+   disclosure (the conservative default — this path can overwrite user calibration). Point the
+   owner at `/superheroes:configure` to apply, edit, or skip. Preserve all hand-edits below the
+   provenance block unless the owner approves a change through configure.
+7. Write the profile only when the owner applies via `/superheroes:configure`; on this init path
+   without an explicit apply, **do not write** the reconciled profile — the diff disclosure is the
+   hand-back. When configure applies: bump `updated:` and refresh `signals` + `rubric-version` +
    `plugin` (set `rubric-version` to the engine's current value, clearing any
    drift detected in step 4). **Preserve the `nudge-ack` map** (carry the existing
-   acks forward unchanged). Flip `status` `provisional → confirmed` when the reconcile
-   was completed interactively with a real verify story (the same predicate step 4b uses for
-   `confirmed` vs `provisional`).
+   acks forward unchanged). `status` stays `provisional` until `/superheroes:configure` confirms
+   with a real verify story.
 
 ## Common mistakes
 

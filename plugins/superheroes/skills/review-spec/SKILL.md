@@ -52,8 +52,7 @@ significant unhappy path, or leaking implementation** — not to propose a techn
 | `/superheroes:review-spec <work-item>` | Review `docs/superheroes/<work-item>/spec.md`.                          |
 | `/superheroes:review-spec <path>` | Review the spec doc at `<path>` (relative to repo root or absolute).         |
 
-If no spec doc is found and no argument was passed, ask the user via `AskUserQuestion` before
-continuing — there is nothing to review otherwise.
+If no spec doc is found and no argument was passed, **hand back** — state what was looked for, where, and what to pass (`/superheroes:review-spec <work-item>` or `<path>`). Do not invent a path.
 
 ## Session Directory
 
@@ -126,10 +125,11 @@ Capture the JSON in `DOCTOR_JSON`. On `readable: false`, tell the user "profile 
 ```bash
 ROOT_DIR="${CLAUDE_PLUGIN_ROOT:-${PLUGIN_ROOT}}"
 if [ "$LOCATION" = "none" ]; then
-  INTERACTIVE=true   # the orchestrator sets this to false on a headless/non-interactive run (no human to answer), so decide-location returns "global" deterministically instead of "ask"
-  LOC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location --interactive "$INTERACTIVE")
-  # If LOC is "ask" → AskUserQuestion, set LOC to owner's pick, then record band-wide (FR-3).
-  # If LOC is already in-repo/global → skip record, go straight to create.
+  DEC=$(python3 -B "$ROOT_DIR/lib/review_store.py" decide-location)
+  LOC=$(printf '%s' "$DEC" | jq -r '.mode')            # "in-repo" | "global" — never "ask"
+  PROVISIONAL=$(printf '%s' "$DEC" | jq -r '.provisional')   # "true" | "false"
+  # When PROVISIONAL is "true": disclose in the run output the location taken, that it is provisional,
+  # and that /superheroes:configure changes it (triad part 2).
   REC=$(python3 -B "$ROOT_DIR/lib/mode_reconcile.py" reconcile --mode "$LOC" 2>/dev/null) || REC=""
   if [ -z "$REC" ] || printf '%s' "$REC" | jq -e '.written == false' >/dev/null 2>&1; then
     echo "note: couldn't record the band storage mode this run — you'll be asked again next time."
@@ -139,9 +139,9 @@ if [ "$LOCATION" = "none" ]; then
 fi
 ```
 
-When `decide-location` returns `ask`, present the in-repo-vs-global `AskUserQuestion` (per the spec's *Halt-and-ask init flow*) and use the answer as `$LOC`.
+**Storage location.** `decide-location` JSON: `.mode` is `in-repo`|`global` (`ask` gone). When `.provisional` is `true`, disclose location taken, that it is provisional, and `/superheroes:configure` follow-up.
 
-When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → interview → seed canonical patterns → write the profile to `$PROFILE`), then continue. Headless / non-interactive runs get a provisional, strict-threat-model profile from detected defaults. (Staleness, reconcile, and learning-loop steps are out of scope here.)
+When `$LOCATION` is `none`, run review-init's create procedure inline (`plugins/superheroes/skills/review-init/SKILL.md`, Steps 1–4: detect → defaults → seed canonical patterns → write the profile to `$PROFILE`), then continue. (Staleness, reconcile, and learning-loop steps are out of scope here.)
 
 **Locate the target spec doc.** Resolve by work-item slug, explicit path, or most-recent:
 
@@ -156,7 +156,7 @@ else
 fi
 ```
 
-If `$SPEC_PATH` is empty or the file doesn't exist, use `AskUserQuestion` to ask for a work-item or path. Do not invent one.
+If `$SPEC_PATH` is empty or the file doesn't exist, **hand back** per Invocation (do not invent one).
 
 **Derive the work-item and note whether this is a spec definition-doc** (review-spec never grants `passed`; the work-item labels the report and scopes the step-6 stale-approval reset):
 
@@ -400,9 +400,9 @@ Each round:
 6. **Auto-revise.** For each effective finding where `recommendation == Fix` AND `classification == mechanical`, edit the spec at `$SPEC_PATH` directly (EARS rephrasing, adding a missing acceptance criterion, removing leaked tech, splitting a compound requirement). Make these edits without asking. Keep the owner's voice; never invent a behavior the owner didn't state.
 7. **Interventions — escalate only owner-weighable blockers (per `escalation-base.md`).** For each
    **Critical/Important** effective finding, route its disposition with the shared rubric (modes
-   PROCEED/NOTIFY/GATE). **GATE** (one consolidated `AskUserQuestion`) only the blockers whose
-   skip-or-fix is genuinely the owner's call — a product/scope/risk trade-off. For the rest,
-   **verify and proceed**, recording the disposition so `loop_state` still sees it:
+   PROCEED/NOTIFY/GATE). **GATE** — durable write-down + hand-back, not a widget: one consolidated
+   disclosure for blockers whose skip-or-fix is the owner's call. For the rest, **verify and proceed**,
+   recording the disposition so `loop_state` still sees it:
    - **Fix, one right answer per the project's conventions** → auto-revise `$SPEC_PATH` (a step-6
      auto-revise).
    - **Verifiably-safe skip / believed false-positive** → record a **skip** (add the identity to the
