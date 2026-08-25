@@ -93,12 +93,12 @@ payload must demonstrably carry the disclosed fields through the write path name
 
 | key | artifact | writer | transport requirement |
 | --- | --- | --- | --- |
-| `review-crew-layer` | `## Setup disclosures` in the review-crew layer | `core_md.py write-layer --hero review-crew` | the site's `$REVIEW_LAYER_BODY` must contain `## Setup disclosures`, and that variable must be the stdin piped to `write-layer` |
-| `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | same shape, for the test-pilot layer body variable |
-| `review-spec-receipt` | `$SESSION_DIR/receipt.md` | review-spec's own assembly step | the assembly sentence must name the disclosed fields, **and** an unconditional persistence path must exist |
-| `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | the report assembly must name the disclosed fields |
-| `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | the shell block must capture `$SOURCE` **and** the encode must name `storageMode`, `storageSource`, `storageProvisional` |
-| `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | the field must survive `architect_config`'s normalization |
+| `review-crew-layer` | `## Setup disclosures` in the review-crew layer | `core_md.py write-layer --hero review-crew` | `$REVIEW_LAYER_BODY` must define or receive `## Setup disclosures` (same paragraph or an explicit review-crew-layer reference), and that variable must be what is piped to `write-layer --hero review-crew` |
+| `test-pilot-layer` | `## Setup disclosures` in the test-pilot layer | `core_md.py write-layer --hero test-pilot` | same shape for `$TEST_PILOT_LAYER_BODY` and `write-layer --hero test-pilot` |
+| `review-spec-receipt` | `$SESSION_DIR/receipt.md` | review-spec's own assembly step | the block's receipt disclosure must name mode, source, and provisional status for `receipt.md` assembly — not merely the word `provisional` elsewhere in the file |
+| `audit-report` | `$SESSION_DIR/report.md` | audit-debt's report write | the block's report disclosure must name mode, source, and provisional status for `report.md` assembly |
+| `review-code-meta` | `$SESSION_DIR/meta.json` | review-code setup's meta encode | for `storage-location` blocks: fenced bash must assign `SOURCE` from decide-location `.source`, the usable-value guard must cover `$SOURCE`, and block prose must name `storageMode`, `storageSource`, `storageProvisional`; for gate blocks: prose must name the durable write-down path (`written down`, session record, or `meta.json`) |
+| `doc-policy-disclosures` | the `disclosures` field of `doc-policy.json` | `architect_config.write_policy` | a `write_policy` call must carry a `disclosures` key and the block prose must name that transport |
 
 **Known gaps (not fixed in #1144 — other work orders implement them):**
 

@@ -370,6 +370,74 @@ def _collect_all_blocks(skills_root=None):
     return all_blocks, errors
 
 
+_FENCED_BASH_RE = re.compile(r"```(?:bash|sh)\s*\n(.*?)```", re.DOTALL | re.IGNORECASE)
+_SOURCE_CAPTURE_RE = re.compile(r"SOURCE\s*=\s*\$\([^)]*\.source", re.IGNORECASE)
+_SOURCE_GUARD_RE = re.compile(r'\[\s*-n\s+"\$SOURCE"\s*\]')
+_WRITE_POLICY_DISCLOSURES_RE = re.compile(
+    r"write_policy\s*\([\s\S]*?['\"]disclosures['\"]\s*:",
+    re.DOTALL,
+)
+
+
+def _fenced_bash_blocks(text):
+    return [m.group(1) for m in _FENCED_BASH_RE.finditer(text)]
+
+
+def _paragraphs_containing_var_and_section(file_text, var_name, section):
+    needle_var = f"${var_name}"
+    for para in re.split(r"\n\n+", file_text):
+        if needle_var in para and section in para:
+            return True
+    return False
+
+
+def _layer_disclosure_reaches_body(file_text, var_name, layer_label):
+    if _paragraphs_containing_var_and_section(file_text, var_name, "## Setup disclosures"):
+        return True
+    label_cf = layer_label.casefold()
+    for para in re.split(r"\n\n+", file_text):
+        if "## Setup disclosures" in para and label_cf in para.casefold():
+            return True
+    return False
+
+
+def _var_piped_to_write_layer(file_text, var_name, hero):
+    escaped = re.escape(var_name)
+    h = re.escape(hero)
+    bash_pat = re.compile(
+        rf'"\${escaped}"\s*\\?\s*\n\s*\|[^\n]*write-layer[^\n]*--hero\s+{h}\b',
+        re.IGNORECASE,
+    )
+    prose_pat = re.compile(
+        rf'(?:pipe\s+`\${escaped}`|`?\${escaped}`?[\s\S]{{0,200}}?pipe[d]?\s+(?:to\s+)?)'
+        rf'[\s\S]{{0,200}}?write-layer[^\n`]{{0,120}}--hero\s+{h}\b',
+        re.IGNORECASE,
+    )
+    return bool(bash_pat.search(file_text) or prose_pat.search(file_text))
+
+
+def _disclosure_names_storage_fields(prose, artifact_marker):
+    if artifact_marker not in prose:
+        return False
+    artifact_cf = artifact_marker.casefold()
+    for line in prose.splitlines():
+        lower = line.casefold()
+        if artifact_cf not in lower:
+            continue
+        marker = "**disclosure.**"
+        if marker not in lower:
+            continue
+        clause = lower.split(marker, 1)[1]
+        if artifact_cf not in clause:
+            continue
+        return (
+            "mode" in clause
+            and "source" in clause
+            and "provisional" in clause
+        )
+    return False
+
+
 def _mode_structure_violations(block):
     prose_cf = block["prose"].casefold()
     rel = block["rel"]
@@ -393,42 +461,93 @@ def _mode_structure_violations(block):
 def _transport_violations(block, file_text):
     carrier = block["carrier"]
     prose = block["prose"]
-    file_cf = file_text.casefold()
     rel = block["rel"]
     line = block["open_line"]
     hits = []
 
     if carrier == "review-crew-layer":
-        if "## Setup disclosures" not in file_text:
-            hits.append(f"{rel}:{line}: review-crew-layer requires ## Setup disclosures in file")
-        if "$REVIEW_LAYER_BODY" not in file_text:
-            hits.append(f"{rel}:{line}: review-crew-layer requires $REVIEW_LAYER_BODY")
-        if "write-layer --hero review-crew" not in file_text:
-            hits.append(f"{rel}:{line}: review-crew-layer requires write-layer --hero review-crew")
+        if not _layer_disclosure_reaches_body(
+            file_text, "REVIEW_LAYER_BODY", "review-crew layer"
+        ):
+            hits.append(
+                f"{rel}:{line}: review-crew-layer requires ## Setup disclosures "
+                "within $REVIEW_LAYER_BODY definition"
+            )
+        if not _var_piped_to_write_layer(file_text, "REVIEW_LAYER_BODY", "review-crew"):
+            hits.append(
+                f"{rel}:{line}: review-crew-layer requires $REVIEW_LAYER_BODY "
+                "piped to write-layer --hero review-crew"
+            )
     elif carrier == "test-pilot-layer":
-        if "## Setup disclosures" not in file_text:
-            hits.append(f"{rel}:{line}: test-pilot-layer requires ## Setup disclosures in file")
-        if "write-layer --hero test-pilot" not in file_text:
-            hits.append(f"{rel}:{line}: test-pilot-layer requires write-layer --hero test-pilot")
+        if not _layer_disclosure_reaches_body(
+            file_text, "TEST_PILOT_LAYER_BODY", "test-pilot layer"
+        ):
+            hits.append(
+                f"{rel}:{line}: test-pilot-layer requires ## Setup disclosures "
+                "within $TEST_PILOT_LAYER_BODY definition"
+            )
+        if not _var_piped_to_write_layer(file_text, "TEST_PILOT_LAYER_BODY", "test-pilot"):
+            hits.append(
+                f"{rel}:{line}: test-pilot-layer requires $TEST_PILOT_LAYER_BODY "
+                "piped to write-layer --hero test-pilot"
+            )
     elif carrier == "review-spec-receipt":
-        if "receipt.md" not in file_text:
-            hits.append(f"{rel}:{line}: review-spec-receipt requires receipt.md path")
-        if "provisional" not in file_cf:
-            hits.append(f"{rel}:{line}: review-spec-receipt assembly must name provisional status")
+        if not _disclosure_names_storage_fields(prose, "receipt.md"):
+            hits.append(
+                f"{rel}:{line}: review-spec-receipt assembly must name mode, source, "
+                "and provisional in receipt.md disclosure"
+            )
     elif carrier == "audit-report":
-        if "report.md" not in file_text:
-            hits.append(f"{rel}:{line}: audit-report requires report.md path")
-        if "provisional" not in file_cf:
-            hits.append(f"{rel}:{line}: audit-report assembly must name disclosed fields")
+        if not _disclosure_names_storage_fields(prose, "report.md"):
+            hits.append(
+                f"{rel}:{line}: audit-report assembly must name mode, source, "
+                "and provisional in report.md disclosure"
+            )
     elif carrier == "review-code-meta":
-        if "$SOURCE" not in file_text:
-            hits.append(f"{rel}:{line}: review-code-meta requires $SOURCE capture")
-        for field in ("storageMode", "storageSource", "storageProvisional"):
-            if field not in file_text:
-                hits.append(f"{rel}:{line}: review-code-meta encode must name {field}")
+        if block["kind"] == "storage-location":
+            bash_blocks = _fenced_bash_blocks(prose)
+            if not bash_blocks:
+                hits.append(
+                    f"{rel}:{line}: review-code-meta storage block requires fenced bash"
+                )
+            else:
+                if not any(_SOURCE_CAPTURE_RE.search(b) for b in bash_blocks):
+                    hits.append(
+                        f"{rel}:{line}: review-code-meta requires SOURCE assignment "
+                        "from decide-location .source in block bash"
+                    )
+                if not any(_SOURCE_GUARD_RE.search(b) for b in bash_blocks):
+                    hits.append(
+                        f"{rel}:{line}: review-code-meta usable-value guard must cover $SOURCE"
+                    )
+            for field in ("storageMode", "storageSource", "storageProvisional"):
+                if field not in prose:
+                    hits.append(
+                        f"{rel}:{line}: review-code-meta encode must name {field} in block prose"
+                    )
+        else:
+            prose_cf = prose.casefold()
+            if (
+                "written down" not in prose_cf
+                and "session record" not in prose_cf
+                and "meta.json" not in prose_cf
+            ):
+                hits.append(
+                    f"{rel}:{line}: review-code-meta gate block must name durable "
+                    "session record or meta.json write path"
+                )
     elif carrier == "doc-policy-disclosures":
-        if "disclosures" not in file_cf:
-            hits.append(f"{rel}:{line}: doc-policy-disclosures requires disclosures field")
+        if not _WRITE_POLICY_DISCLOSURES_RE.search(file_text):
+            hits.append(
+                f"{rel}:{line}: doc-policy-disclosures requires write_policy call "
+                "with disclosures field"
+            )
+        prose_cf = prose.casefold()
+        if "write_policy" not in prose_cf or "disclosures" not in prose_cf:
+            hits.append(
+                f"{rel}:{line}: doc-policy-disclosures block must name write_policy "
+                "disclosures transport"
+            )
     if "/superheroes:configure" not in prose:
         hits.append(f"{rel}:{line}: block prose must name /superheroes:configure")
     return hits
@@ -621,7 +740,7 @@ def test_fixture_waiting_token_in_block_fails(tmp_path, monkeypatch):
     assert hits, "waiting-token fixture must be detected inside block"
 
 
-# axis: review-crew-layer transport — bite-proof element for carrier transport check.
+# axis: review-crew-layer transport — bite-proof element for carrier transport check (structural).
 def test_fixture_missing_transport_fails(tmp_path, monkeypatch):
     """#1144 bite-proof: carrier without transport requirements must fail."""
     monkeypatch.setattr(
