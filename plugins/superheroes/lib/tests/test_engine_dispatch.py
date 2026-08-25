@@ -5600,9 +5600,10 @@ def test_cap_file_tail_over_budget_returns_truncated_and_observed(tmp_path):
     over = cap + 512
     path = tmp_path / "over.bin"
     path.write_bytes(b"x" * over)
-    truncated, observed = ED._cap_file_tail(str(path), cap, ED.CAP_STREAM_STDOUT)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(str(path), cap, ED.CAP_STREAM_STDOUT)
     assert truncated is True
     assert observed == over
+    assert rewrite_failed is False
 
 
 def test_cap_file_tail_under_budget_returns_not_truncated_and_observed(tmp_path):
@@ -5611,26 +5612,29 @@ def test_cap_file_tail_under_budget_returns_not_truncated_and_observed(tmp_path)
     under = cap - 64
     path = tmp_path / "under.bin"
     path.write_bytes(b"y" * under)
-    truncated, observed = ED._cap_file_tail(str(path), cap, ED.CAP_STREAM_STDOUT)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(str(path), cap, ED.CAP_STREAM_STDOUT)
     assert truncated is False
     assert observed == under
+    assert rewrite_failed is False
 
 
 def test_cap_file_tail_missing_path_returns_no_authority(tmp_path):
     """axis: unreadable/missing path returns (False, None) — no authoritative count."""
     path = tmp_path / "missing.bin"
-    truncated, observed = ED._cap_file_tail(str(path), 2048, ED.CAP_STREAM_STDOUT)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(str(path), 2048, ED.CAP_STREAM_STDOUT)
     assert truncated is False
     assert observed is None
+    assert rewrite_failed is False
 
 
 def test_cap_file_tail_empty_file_returns_zero_observed(tmp_path):
     """axis: empty file returns (False, 0), not (False, None)."""
     path = tmp_path / "empty.bin"
     path.write_bytes(b"")
-    truncated, observed = ED._cap_file_tail(str(path), 2048, ED.CAP_STREAM_STDOUT)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(str(path), 2048, ED.CAP_STREAM_STDOUT)
     assert truncated is False
     assert observed == 0
+    assert rewrite_failed is False
 
 
 def test_cap_file_tail_rewrite_failure_preserves_over_cap_authority(tmp_path, monkeypatch):
@@ -5641,6 +5645,7 @@ def test_cap_file_tail_rewrite_failure_preserves_over_cap_authority(tmp_path, mo
     path.write_bytes(b"x" * over)
     path_str = str(path)
     real_open = open
+    write_attempted = False
 
     class _FailingWriteWrapper:
         def __init__(self, fh):
@@ -5659,15 +5664,20 @@ def test_cap_file_tail_rewrite_failure_preserves_over_cap_authority(tmp_path, mo
             return getattr(self._fh, name)
 
     def patched_open(file, mode="r", *args, **kwargs):
+        nonlocal write_attempted
         fh = real_open(file, mode, *args, **kwargs)
         if mode == "wb" and os.fspath(file) == path_str:
+            write_attempted = True
             return _FailingWriteWrapper(fh)
         return fh
 
     monkeypatch.setattr("builtins.open", patched_open)
-    truncated, observed = ED._cap_file_tail(path_str, cap, ED.CAP_STREAM_STDOUT)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(path_str, cap, ED.CAP_STREAM_STDOUT)
     assert truncated is True
     assert observed == over
+    assert rewrite_failed is True
+    assert write_attempted is True
+    assert os.path.getsize(path_str) == 0
 
 
 def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
@@ -5677,6 +5687,7 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
     monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
     stdout_path = os.path.join(run_dir, "attempt-1.stdout")
     real_open = open
+    write_attempted = False
 
     class _FailingWriteWrapper:
         def __init__(self, fh):
@@ -5695,12 +5706,14 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
             return getattr(self._fh, name)
 
     def patched_open(file, mode="r", *args, **kwargs):
+        nonlocal write_attempted
         if (
             mode == "wb"
             and os.fspath(file) == stdout_path
             and os.path.exists(stdout_path)
             and os.path.getsize(stdout_path) > ED.MAX_STDOUT_CAPTURE
         ):
+            write_attempted = True
             fh = real_open(file, mode, *args, **kwargs)
             return _FailingWriteWrapper(fh)
         return real_open(file, mode, *args, **kwargs)
@@ -5709,7 +5722,69 @@ def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
     ended, _, _ = _wo2_run_engine(
         run_dir, "print('x' * 9000)", monkeypatch=monkeypatch)
     state = {"attempts": {1: {"ended": ended}}}
-    assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
+    assert write_attempted is True
+    assert os.path.getsize(stdout_path) == 0
+    assert ended["stdoutBytes"] == 9001
+    assert ended["stdoutBytesPreCap"] is True
+    assert ended["stdoutCapRewriteFailed"] is True
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == 9001
+
+
+def test_cap_file_tail_rewrite_failure_signal_distinct_from_clean_cap(tmp_path):
+    """axis: _cap_file_tail rewrite_failed distinguishes failed rewrite from clean cap."""
+    cap = 2048
+    over = cap + 512
+    path = tmp_path / "over.bin"
+    path.write_bytes(b"x" * over)
+    truncated, observed, rewrite_failed = ED._cap_file_tail(
+        str(path), cap, ED.CAP_STREAM_STDOUT,
+    )
+    assert truncated is True
+    assert observed == over
+    assert rewrite_failed is False
+
+
+def test_ledger_attempt_records_carries_stdout_cap_rewrite_failed(tmp_path):
+    """axis: durable ledger row carries stdoutCapRewriteFailed from attempt-ended."""
+    run_dir = str(tmp_path / "run")
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "exit": 0,
+                    "stdoutBytes": 9001,
+                    "stdoutBytesPreCap": True,
+                    "stdoutCapRewriteFailed": True,
+                }
+            }
+        }
+    }
+    records = ED._ledger_attempt_records(state, run_dir)
+    assert records[0]["stdoutCapRewriteFailed"] is True
+
+
+def test_stdout_capped_forfeit_disclosure_rewrite_failure_names_rewrite_problem(tmp_path):
+    """axis: disclosure names rewrite failure when stdoutCapRewriteFailed is stamped."""
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": 9001,
+                    "stdoutBytesPreCap": True,
+                    "stdoutCapRewriteFailed": True,
+                }
+            }
+        }
+    }
+    terminal = ED._stdout_capped_forfeit(
+        "cursor", 9001, run_dir_real=str(tmp_path), state=state, attempts=1,
+    )
+    disclosure = terminal["disclosure"]
+    assert "could not be rewritten" in disclosure
+    assert "disk or filesystem problem" in disclosure
+    assert "truncated at the" not in disclosure
+    assert "attempt 1" in disclosure
+    assert "retry was refused" in disclosure
 
 
 def test_complete_marker_mid_body_not_truncated():
@@ -5976,7 +6051,7 @@ def test_bounded_stdout_cap_read_never_exceeds_budget(tmp_path, monkeypatch):
     marker = ED._stdout_truncation_marker(over).encode("utf-8")
     byte_budget = cap + len(marker)
 
-    ED._read_capped_text(str(path), cap, ED.CAP_STREAM_STDOUT)
+    ED._read_capped_text(str(path), ED.CAP_STREAM_STDOUT, cap)
 
     assert read_sizes, "expected at least one read"
     assert max(read_sizes) <= byte_budget
@@ -6004,14 +6079,14 @@ def test_stdout_cap_marker_parity_over_and_under_budget(tmp_path):
     under = tmp_path / "under.bin"
     under.write_bytes(b"u" * (cap - 64))
     under_before = under.read_bytes()
-    ED._read_capped_text(str(under), cap, ED.CAP_STREAM_STDOUT)
+    ED._read_capped_text(str(under), ED.CAP_STREAM_STDOUT, cap)
     assert under.read_bytes() == under_before
-    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX not in ED._read_capped_text(str(under), cap, ED.CAP_STREAM_STDOUT)
+    assert ED.STDOUT_TRUNCATION_MARKER_PREFIX not in ED._read_capped_text(str(under), ED.CAP_STREAM_STDOUT, cap)
 
     over = cap + 1024
     over_path = tmp_path / "over.bin"
     over_path.write_bytes(b"v" * over)
-    text = ED._read_capped_text(str(over_path), cap, ED.CAP_STREAM_STDOUT)
+    text = ED._read_capped_text(str(over_path), ED.CAP_STREAM_STDOUT, cap)
     assert ED.STDOUT_TRUNCATION_MARKER_PREFIX in text
     assert len(text.encode("utf-8")) <= cap
     assert text.endswith("v" * min(1024, cap))
@@ -6103,7 +6178,7 @@ def test_bytes_with_stdout_cap_clamps_marker_to_budget():
     max_bytes = 10
     data = b"x" * 100
     capped, truncated = ED._bytes_with_stdout_cap(
-        data, max_bytes, len(data), ED.CAP_STREAM_STDOUT,
+        data, max_bytes, ED.CAP_STREAM_STDOUT, len(data),
     )
     assert truncated is True
     assert len(capped) <= max_bytes
@@ -6115,7 +6190,7 @@ def test_cap_arithmetic_single_home_byte_identical(tmp_path):
     over = cap + 2048
     data = b"z" * over
     memory_capped, mem_truncated = ED._bytes_with_stdout_cap(
-        data, cap, over, ED.CAP_STREAM_STDOUT,
+        data, cap, ED.CAP_STREAM_STDOUT, over,
     )
     path = tmp_path / "parity.bin"
     path.write_bytes(data)
@@ -6129,7 +6204,7 @@ def test_cap_arithmetic_single_home_byte_identical(tmp_path):
     small_cap = 10
     small_data = b"z" * 100
     mem_small, mem_small_trunc = ED._bytes_with_stdout_cap(
-        small_data, small_cap, len(small_data), ED.CAP_STREAM_STDOUT,
+        small_data, small_cap, ED.CAP_STREAM_STDOUT, len(small_data),
     )
     small_path = tmp_path / "parity-small.bin"
     small_path.write_bytes(small_data)

@@ -532,29 +532,32 @@ def _stdout_capture_truncated(text):
     return _STDOUT_TRUNCATION_MARKER_RE.match(text) is not None
 
 
-def _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes=None, *, _return_budget=False):
+def _cap_content_budget(max_bytes, stream, observed_bytes):
+    """Bytes available for tail content after reserving space for the truncation marker."""
+    marker = _truncation_marker(stream, observed_bytes).encode("utf-8")
+    return max(0, max_bytes - len(marker))
+
+
+def _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes=None):
     """One home for keep-last-N-bytes + truncation-marker + clamp arithmetic."""
     if observed_bytes is None:
         observed_bytes = len(data)
     if observed_bytes <= max_bytes and len(data) <= max_bytes:
-        if _return_budget:
-            return data, False, 0
         return data, False
     marker = _truncation_marker(stream, observed_bytes).encode("utf-8")
-    content_budget = max(0, max_bytes - len(marker))
+    content_budget = _cap_content_budget(max_bytes, stream, observed_bytes)
     tail = data[-content_budget:] if content_budget else b""
     capped = marker + tail
     if len(capped) > max_bytes:
         capped = capped[:max_bytes]
-    if _return_budget:
-        return capped, True, content_budget
     return capped, True
 
 
-def _bytes_with_stdout_cap(data, max_bytes, observed_bytes=None, stream=None):
-    """Keep the last max_bytes of stream content, prefixing a truncation marker when capped."""
-    if stream is None:
-        raise ValueError("cap stream is required")
+def _bytes_with_stdout_cap(data, max_bytes, stream, observed_bytes=None):
+    """Keep the last max_bytes of stream content, prefixing a truncation marker when capped.
+
+    Never raises on I/O (OSError / MemoryError); a missing stream is a TypeError at the call site.
+    """
     return _cap_bytes_with_truncation_marker(data, max_bytes, stream, observed_bytes)
 
 
@@ -1630,7 +1633,7 @@ def _ledger_attempt_records(state, run_dir_real, *, thin=False):
             "exit", "timedOut", "signal", "signalSource", "refusal", "at",
             "wallSeconds", "capSeconds", "stdoutBytes", "stderrBytes",
             "silenceSeconds", "lastActivityAt", "activityStream",
-            "dispatchPath", "promptBytes",
+            "dispatchPath", "promptBytes", "stdoutCapRewriteFailed",
         ):
             if key in ended:
                 rec[key] = ended[key]
@@ -1955,7 +1958,10 @@ def _cleanup(proc, pgid):
 
 
 def _bounded_stdout_cap_from_file(fh, max_bytes, stream):
-    """Read at most max_bytes (+ marker) from fh without loading an oversized file. Never raises."""
+    """Read at most max_bytes (+ marker) from fh without loading an oversized file.
+
+    Never raises on I/O (OSError / MemoryError).
+    """
     try:
         fh.seek(0, os.SEEK_END)
         observed = fh.tell()
@@ -1964,9 +1970,7 @@ def _bounded_stdout_cap_from_file(fh, max_bytes, stream):
         if observed <= max_bytes:
             fh.seek(0)
             return fh.read(observed), False, observed
-        _probe, _truncated, content_budget = _cap_bytes_with_truncation_marker(
-            b"", max_bytes, stream, observed, _return_budget=True,
-        )
+        content_budget = _cap_content_budget(max_bytes, stream, observed)
         if content_budget > 0:
             fh.seek(-content_budget, os.SEEK_END)
             tail = fh.read(content_budget)
@@ -1982,35 +1986,39 @@ def _bounded_stdout_cap_from_file(fh, max_bytes, stream):
 
 # Injected-seam sentinel; tests call this directly.
 def _cap_file_tail(path, max_bytes, stream):
-    """Keep only the last max_bytes of a file (result JSON is at the tail). Never raises.
+    """Keep only the last max_bytes of a file (result JSON is at the tail).
 
-    Returns (truncated, observed): truncated is True when the file exceeded budget and was
-    rewritten (or rewrite was attempted but failed after measurement); observed is the
-    pre-cap byte count from the bounded read, or None when no authoritative count is
-    available (distinguishable from 0 for an empty capture).
+    Never raises on I/O (OSError / MemoryError).
+
+    Returns (truncated, observed, rewrite_failed): truncated is True when the file exceeded
+    budget and was rewritten (or rewrite was attempted but failed after measurement);
+    observed is the pre-cap byte count from the bounded read, or None when no authoritative
+    count is available (distinguishable from 0 for an empty capture); rewrite_failed is True
+    only when a capped rewrite was attempted and the write failed.
     """
     try:
         with open(path, "rb") as fh:
             capped, truncated, observed = _bounded_stdout_cap_from_file(fh, max_bytes, stream)
     except (OSError, MemoryError):
-        return False, None
+        return False, None, False
     if capped is None:
-        return False, None
+        return False, None, False
     if not truncated:
-        return False, observed
+        return False, observed, False
     try:
         with open(path, "wb") as fh:
             fh.write(capped)
     except (OSError, MemoryError):
         # axis: a failed rewrite must not erase a completed over-cap measurement.
-        return True, observed
-    return True, observed
+        return True, observed, True
+    return True, observed, False
 
 
-def _read_capped_text(path, max_bytes=MAX_STDOUT_CAPTURE, stream=None):
-    """Read at most the last max_bytes of a text file. Never raises."""
-    if stream is None:
-        raise ValueError("cap stream is required")
+def _read_capped_text(path, stream, max_bytes=MAX_STDOUT_CAPTURE):
+    """Read at most the last max_bytes of a text file.
+
+    Never raises on I/O (OSError / MemoryError); a missing stream is a TypeError at the call site.
+    """
     try:
         with open(path, "rb") as fh:
             capped, _truncated, _observed = _bounded_stdout_cap_from_file(fh, max_bytes, stream)
@@ -2058,7 +2066,7 @@ def _run_engine(argv, prompt_bytes, timeout, progress_cb, cwd):
                 sink.extend(chunk)
                 if total_observed > cap or len(sink) > cap:
                     capped, _truncated = _bytes_with_stdout_cap(
-                        bytes(sink), cap, total_observed, cap_stream,
+                        bytes(sink), cap, cap_stream, total_observed,
                     )
                     sink.clear()
                     sink.extend(capped)
@@ -2268,8 +2276,12 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         stdout_path, stderr_path, prev_stdout, prev_stderr,
         last_activity_at, activity_stream,
     )
-    _, stdout_observed = _cap_file_tail(stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT)
-    _, stderr_observed = _cap_file_tail(stderr_path, MAX_STDERR_CAPTURE, CAP_STREAM_STDERR)
+    _, stdout_observed, stdout_rewrite_failed = _cap_file_tail(
+        stdout_path, MAX_STDOUT_CAPTURE, CAP_STREAM_STDOUT,
+    )
+    _, stderr_observed, _stderr_rewrite_failed = _cap_file_tail(
+        stderr_path, MAX_STDERR_CAPTURE, CAP_STREAM_STDERR,
+    )
     returncode = proc.returncode
     elapsed = time.monotonic() - start
     ended_record = {
@@ -2288,6 +2300,8 @@ def _run_engine_files(run_dir_real, attempt, argv, cwd, prompt_path, stdout_path
         ended_record["stdoutBytes"] = stdout_observed
         # axis: measured by _cap_file_tail at capping time — authoritative for truncation grading.
         ended_record["stdoutBytesPreCap"] = True
+    if stdout_rewrite_failed:
+        ended_record["stdoutCapRewriteFailed"] = True
     if stderr_observed is not None:
         ended_record["stderrBytes"] = stderr_observed
     if last_activity_at is not None:
@@ -2788,7 +2802,7 @@ def _attempt_stdout_truncated(run_dir_real, state, attempt):
     # only — measured by _cap_file_tail); unstamped records (_execute_injected_attempt
     # or any future producer) fall through to the marker read.
     if observed is not None and ended.get("stdoutBytesPreCap") is True:
-        text = _read_capped_text(stdout_path)
+        text = _read_capped_text(stdout_path, CAP_STREAM_STDOUT)
         if _stdout_capture_truncated(text):
             _journal_append(run_dir_real, {
                 "kind": "stdout-marker-overruled",
@@ -2806,12 +2820,36 @@ def _attempt_stdout_truncated(run_dir_real, state, attempt):
 
 def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=None, attempts=1):
     observed_int = int(observed_bytes)
+    rewrite_failed = False
+    if state is not None:
+        slot = (state.get("attempts") or {}).get(attempts) or {}
+        ended = slot.get("ended") or {}
+        if ended.get("stdoutCapRewriteFailed") is True:
+            rewrite_failed = True
     if attempts < MAX_ATTEMPTS:
         reason_clause = (
             "the retry was refused because the gradeable tail was lost. "
         )
     else:
         reason_clause = "the attempt budget was exhausted. "
+    if rewrite_failed:
+        truncation_clause = (
+            "%s attempt %d stdout capture could not be rewritten to the capped tail "
+            "(a disk or filesystem problem — the capture on disk is not the capped tail "
+            "it would normally be); "
+            % (engine, int(attempts))
+        )
+    else:
+        truncation_clause = (
+            "%s attempt %d report was truncated at the %d-byte stdout capture cap; "
+            % (engine, int(attempts), observed_int)
+        )
+    disclosure = (
+        truncation_clause
+        + reason_clause
+        + "The work may nevertheless be complete on disk — inspect the worktree "
+        "and reconstruct from the diff rather than re-running the order."
+    )
     terminal = {
         "ok": False,
         "terminal": True,
@@ -2819,13 +2857,7 @@ def _stdout_capped_forfeit(engine, observed_bytes, *, run_dir_real=None, state=N
         "detail": "%s:%d" % (ITEM_DETAIL_STDOUT_CAPPED, observed_int),
         "attempts": attempts,
         "forfeited": True,
-        "disclosure": (
-            "%s attempt %d report was truncated at the %d-byte stdout capture cap; "
-            "%s"
-            "The work may nevertheless be complete on disk — inspect the worktree "
-            "and reconstruct from the diff rather than re-running the order."
-            % (engine, int(attempts), observed_int, reason_clause)
-        ),
+        "disclosure": disclosure,
     }
     return _finalize_write_forfeit_terminal(terminal, engine, run_dir_real, state, attempts)
 
