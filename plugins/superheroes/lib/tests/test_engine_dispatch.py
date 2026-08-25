@@ -5402,6 +5402,277 @@ def test_genuine_truncation_detected_without_stdout_bytes(tmp_path):
     assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
 
 
+def _small_forged_head_marker_capture():
+    marker = ED._stdout_truncation_marker(9_000_000)
+    return marker + "short body\n"
+
+
+def test_recorded_under_cap_count_overrides_forged_head_marker(tmp_path):
+    """axis: authoritative under-cap stdoutBytes suppresses forged head marker text."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {"attempts": {1: {"ended": {"stdoutBytes": 58, "stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+
+
+def test_recorded_cap_boundary_count_overrides_forged_head_marker(tmp_path):
+    """axis: recorded count exactly at MAX_STDOUT_CAPTURE is not truncated."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": ED.MAX_STDOUT_CAPTURE,
+                    "stdoutBytesPreCap": True,
+                }
+            }
+        }
+    }
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is None
+
+
+def test_injected_seam_count_does_not_override_head_marker(tmp_path):
+    """axis: unstamped seam stdoutBytes is not authoritative — marker read decides."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": 58,
+                    "activitySource": "injected-seam",
+                }
+            }
+        }
+    }
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == 58
+
+
+def test_unstamped_unknown_producer_count_does_not_override_head_marker(tmp_path):
+    """axis: unstamped stdoutBytes from an unrecognized producer is not authoritative."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {
+        "attempts": {
+            1: {
+                "ended": {
+                    "stdoutBytes": 58,
+                    "activitySource": "some-future-producer",
+                }
+            }
+        }
+    }
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == 58
+
+
+def test_stamp_without_recorded_count_does_not_suppress(tmp_path):
+    """axis: provenance stamp alone with no recorded count must not suppress marker read.
+
+    No producer writes this shape today — both the count and the stamp are written
+    under the same ``if pre_cap_stdout_bytes is not None:`` guard in ``_run_engine_files`` —
+    so this row is defense-in-depth against a future producer that stamps without recording,
+    not a reachable production state."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write(_small_forged_head_marker_capture())
+    state = {"attempts": {1: {"ended": {"stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == os.path.getsize(stdout_path)
+
+
+def test_recorded_over_cap_count_grades_truncated_with_under_cap_file(tmp_path):
+    """axis: recorded stdoutBytes above cap grades truncated without file-size arm."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    with open(stdout_path, "w", encoding="utf-8") as fh:
+        fh.write("short report without marker\n")
+    observed = ED.MAX_STDOUT_CAPTURE + 512
+    state = {"attempts": {1: {"ended": {"stdoutBytes": observed}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == observed
+
+
+def test_file_over_cap_grades_truncated_despite_under_cap_recorded_count(tmp_path):
+    """axis: on-disk size above cap precedes authoritative under-cap suppression."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir, exist_ok=True)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    over = ED.MAX_STDOUT_CAPTURE + 512
+    with open(stdout_path, "wb") as fh:
+        fh.write(b"x" * over)
+    state = {"attempts": {1: {"ended": {"stdoutBytes": 58, "stdoutBytesPreCap": True}}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) == over
+
+
+def test_run_engine_files_stamps_stdout_bytes_pre_cap(tmp_path):
+    """axis: _run_engine_files stamps stdoutBytesPreCap on the attempt-ended record."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    ended, stdout_path, _ = _wo2_run_engine(run_dir, "print('hello stdout')")
+    assert ended["stdoutBytesPreCap"] is True
+    assert ended["stdoutBytes"] == os.path.getsize(stdout_path)
+
+
+def test_straggler_write_during_cap_window_grades_truncated(tmp_path, monkeypatch):
+    """axis: stdoutBytes from _cap_file_tail capping measurement, not a stale pre-cap getsize."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    real_cap = ED._cap_file_tail
+
+    def straggler_cap(path, max_bytes):
+        if path == stdout_path:
+            with open(path, "ab") as fh:
+                fh.write(b"x" * (max_bytes + 512))
+        return real_cap(path, max_bytes)
+
+    monkeypatch.setattr(ED, "_cap_file_tail", straggler_cap)
+    ended, _, _ = _wo2_run_engine(
+        run_dir, "print('hello stdout')", monkeypatch=monkeypatch)
+    state = {"attempts": {1: {"ended": ended}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
+
+
+def test_cap_file_tail_over_budget_returns_truncated_and_observed(tmp_path):
+    """axis: over-budget file returns (True, observed) with observed > cap."""
+    cap = 2048
+    over = cap + 512
+    path = tmp_path / "over.bin"
+    path.write_bytes(b"x" * over)
+    truncated, observed = ED._cap_file_tail(str(path), cap)
+    assert truncated is True
+    assert observed == over
+
+
+def test_cap_file_tail_under_budget_returns_not_truncated_and_observed(tmp_path):
+    """axis: under-budget file returns (False, observed) with observed == file size."""
+    cap = 2048
+    under = cap - 64
+    path = tmp_path / "under.bin"
+    path.write_bytes(b"y" * under)
+    truncated, observed = ED._cap_file_tail(str(path), cap)
+    assert truncated is False
+    assert observed == under
+
+
+def test_cap_file_tail_missing_path_returns_no_authority(tmp_path):
+    """axis: unreadable/missing path returns (False, None) — no authoritative count."""
+    path = tmp_path / "missing.bin"
+    truncated, observed = ED._cap_file_tail(str(path), 2048)
+    assert truncated is False
+    assert observed is None
+
+
+def test_cap_file_tail_empty_file_returns_zero_observed(tmp_path):
+    """axis: empty file returns (False, 0), not (False, None)."""
+    path = tmp_path / "empty.bin"
+    path.write_bytes(b"")
+    truncated, observed = ED._cap_file_tail(str(path), 2048)
+    assert truncated is False
+    assert observed == 0
+
+
+def test_cap_file_tail_rewrite_failure_preserves_over_cap_authority(tmp_path, monkeypatch):
+    """axis: a failed rewrite must not erase a completed over-cap measurement."""
+    cap = 2048
+    over = cap + 512
+    path = tmp_path / "over.bin"
+    path.write_bytes(b"x" * over)
+    path_str = str(path)
+    real_open = open
+
+    class _FailingWriteWrapper:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._fh.__exit__(*args)
+
+        def write(self, data):
+            raise OSError(28, "No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    def patched_open(file, mode="r", *args, **kwargs):
+        fh = real_open(file, mode, *args, **kwargs)
+        if mode == "wb" and os.fspath(file) == path_str:
+            return _FailingWriteWrapper(fh)
+        return fh
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    truncated, observed = ED._cap_file_tail(path_str, cap)
+    assert truncated is True
+    assert observed == over
+
+
+def test_rewrite_failure_capture_grades_truncated(tmp_path, monkeypatch):
+    """axis: arm 1 — recorded stdoutBytes from _cap_file_tail survives rewrite failure."""
+    run_dir = str(tmp_path / "run")
+    os.makedirs(run_dir)
+    monkeypatch.setattr(ED, "MAX_STDOUT_CAPTURE", 8192)
+    stdout_path = os.path.join(run_dir, "attempt-1.stdout")
+    real_open = open
+
+    class _FailingWriteWrapper:
+        def __init__(self, fh):
+            self._fh = fh
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return self._fh.__exit__(*args)
+
+        def write(self, data):
+            raise OSError(28, "No space left on device")
+
+        def __getattr__(self, name):
+            return getattr(self._fh, name)
+
+    def patched_open(file, mode="r", *args, **kwargs):
+        if (
+            mode == "wb"
+            and os.fspath(file) == stdout_path
+            and os.path.exists(stdout_path)
+            and os.path.getsize(stdout_path) > ED.MAX_STDOUT_CAPTURE
+        ):
+            fh = real_open(file, mode, *args, **kwargs)
+            return _FailingWriteWrapper(fh)
+        return real_open(file, mode, *args, **kwargs)
+
+    monkeypatch.setattr("builtins.open", patched_open)
+    ended, _, _ = _wo2_run_engine(
+        run_dir, "print('x' * 9000)", monkeypatch=monkeypatch)
+    state = {"attempts": {1: {"ended": ended}}}
+    assert ED._attempt_stdout_truncated(run_dir, state, 1) is not None
+
+
+def test_complete_marker_mid_body_not_truncated():
+    """axis: _stdout_capture_truncated requires marker at capture head, not mid-body."""
+    marker = ED._stdout_truncation_marker(9_000_000)
+    text = "normal first line\n" + marker + "more body\n"
+    assert ED._stdout_capture_truncated(text) is False
+
+
 def test_truncated_attempt1_stdout_capped_forfeit_not_dirtied(tmp_path):
     wt, _main = _linked_worktree_pair(tmp_path)
     over = ED.MAX_STDOUT_CAPTURE + 4096
