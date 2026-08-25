@@ -136,7 +136,7 @@ fi
 ```
 
 **Storage location.** `decide-location` JSON: `.mode` (`in-repo`|`global`; `ask` gone), `.source`
-(e.g. `recorded`, `default`, `env`), `.provisional` (`true` when not owner-recorded). **Default:**
+(`env` — `REVIEW_CREW_STORAGE` override this run, never recorded; `registry` — owner-recorded; `backfilled` — inferred then recorded; `provisional` — lib default, re-taken next run), `.provisional` (`true` when not owner-recorded). **Default:**
 returned `.mode`. Bootstrap blocks never record — unrecorded modes re-taken next run.
 **Disclosure.** Write into `$SESSION_DIR/receipt.md` (assembled in §6): mode, source, provisional
 status, and `/superheroes:configure` follow-up; when `.provisional` is `true`, note it is a

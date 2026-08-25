@@ -88,8 +88,11 @@ fi
 ```
 
 **Storage location (`decide-location`).** `decide-location` returns JSON: `.mode` is `in-repo` or
-`global` (`ask` no longer exists); `.source` is where the decision came from (e.g. `recorded`,
-`default`, `env`); `.provisional` is `true` when the mode was not owner-recorded. **Default:**
+`global` (`ask` no longer exists); `.source` is where the decision came from: `env` (environment
+override `REVIEW_CREW_STORAGE` for this run only; never recorded), `registry` (a mode the owner
+recorded; authoritative), `backfilled` (a mode inferred from consistent existing evidence and then
+recorded), `provisional` (nothing recorded and no consistent evidence; the lib's default, re-taken
+next run); `.provisional` is `true` when the mode was not owner-recorded. **Default:**
 the returned `.mode` (recorded when configured, else the lib's provisional default). Bootstrap
 blocks never record — an unrecorded mode is re-taken next run. **Disclosure.** Write into the
 **review-crew layer body** (`$REVIEW_LAYER_BODY`, written through `core_md.py write-layer` in Step
