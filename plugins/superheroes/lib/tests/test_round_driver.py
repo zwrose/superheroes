@@ -2849,6 +2849,8 @@ _ALL_CHANNELS = {
         "reason": "plugin-version-skew: seeded resume fixture skew",
         "inspectedRoot": "/tmp/repo",
     }],
+    "verifyPasses": [{"CONFIRMED": 1, "PLAUSIBLE": 0, "REFUTED": 0, "drops": 0,
+                      "downgrades": 0, "unverified": 0, "ambiguous": 0}],
 }
 
 
@@ -3144,12 +3146,12 @@ def _fn_node(tree, ast_mod, name):
 def test_panel_round_channels_are_all_accounted_for():
     """CENSUS (#720) — closes the set by construction, not by listing sites.
 
-    Every per-round key `_fold_panel` records is enumerated FROM THE SOURCE with `ast` and must have
-    exactly one module-level home: `RESUMABLE_DISCLOSURE_CHANNELS` (the channels `build_receipt`
-    emits and a `recordsPath` resume restores) or `UNRESTORED_PANEL_ROUND_KEYS` (the deliberate
-    not-restored list, each with its reason in the source). A NEW `_record_round` channel that ships
-    without a resume path fails HERE — instead of silently under-disclosing every resumed run's
-    terminal receipt, which is the defect this test exists to prevent recurring.
+    Every per-round key `_fold_panel` or `_fold_verifiers` records is enumerated FROM THE SOURCE
+    with `ast` and must have exactly one module-level home: `RESUMABLE_DISCLOSURE_CHANNELS` (the
+    channels `build_receipt` emits and a `recordsPath` resume restores) or `UNRESTORED_PANEL_ROUND_KEYS`
+    (the deliberate not-restored list, each with its reason in the source). A NEW `_record_round`
+    channel that ships without a resume path fails HERE — instead of silently under-disclosing every
+    resumed run's terminal receipt, which is the defect this test exists to prevent recurring.
     """
     tree, ast_mod = _round_driver_ast()
     fold = _fn_node(tree, ast_mod, "_fold_panel")
@@ -3165,9 +3167,29 @@ def test_panel_round_channels_are_all_accounted_for():
         recorded.add(key.value)
     assert len(recorded) >= 9, "the census enumerated %d keys — the parse looks inert" % len(recorded)
 
+    fold_verifiers = _fn_node(tree, ast_mod, "_fold_verifiers")
+    verifier_recorded = set()
+    verifier_appended = set()
+    for node in ast_mod.walk(fold_verifiers):
+        if not (isinstance(node, ast_mod.Call) and isinstance(node.func, ast_mod.Name)):
+            continue
+        if node.func.id == "_record_round":
+            assert len(node.args) >= 2, "_record_round must be called with (state, key, value)"
+            key = node.args[1]
+            assert isinstance(key, ast_mod.Constant) and isinstance(key.value, str), (
+                "a _record_round key must be a string LITERAL so the census can enumerate it")
+            verifier_recorded.add(key.value)
+        elif node.func.id == "_record_round_append":
+            assert len(node.args) >= 2, "_record_round_append must be called with (state, key, value)"
+            key = node.args[1]
+            assert isinstance(key, ast_mod.Constant) and isinstance(key.value, str), (
+                "a _record_round_append key must be a string LITERAL so the census can enumerate it")
+            verifier_appended.add(key.value)
+
     fold_provenance = set(RD.FOLD_PROVENANCE_DISCLOSURE_CHANNELS)
     submit_disclosure = set(RD.SUBMIT_DISCLOSURE_CHANNELS)
     order_emission = set(RD.ORDER_EMISSION_DISCLOSURE_CHANNELS)
+    verifier_fold = set(RD.VERIFIER_FOLD_DISCLOSURE_CHANNELS)
     restorable = set(RD.RESUMABLE_DISCLOSURE_CHANNELS)
     unrestored = set(RD.UNRESTORED_PANEL_ROUND_KEYS)
     assert fold_provenance <= restorable, (
@@ -3179,14 +3201,19 @@ def test_panel_round_channels_are_all_accounted_for():
     assert order_emission <= restorable, (
         "order-emission disclosure channels must be restorable: %s"
         % sorted(order_emission - restorable))
+    assert verifier_fold <= restorable, (
+        "verifier-fold disclosure channels must be restorable: %s"
+        % sorted(verifier_fold - restorable))
     assert not (restorable & unrestored), \
         "a channel cannot be both restorable and not-restored: %s" % sorted(restorable & unrestored)
     accounted = restorable | unrestored
-    assert recorded | fold_provenance | submit_disclosure | order_emission == accounted, (
+    all_recorded = (recorded | fold_provenance | submit_disclosure | order_emission
+                    | verifier_recorded | verifier_appended | verifier_fold)
+    assert all_recorded == accounted, (
         "every per-round disclosure channel needs exactly one home — unaccounted (no resume path): %s; "
         "stale (named but no longer recorded): %s"
-        % (sorted((recorded | fold_provenance | submit_disclosure | order_emission) - accounted),
-           sorted(accounted - (recorded | fold_provenance | submit_disclosure | order_emission))))
+        % (sorted(all_recorded - accounted),
+           sorted(accounted - all_recorded)))
 
 
 def test_disclosure_channels_have_one_home_read_by_receipt_and_resume():
