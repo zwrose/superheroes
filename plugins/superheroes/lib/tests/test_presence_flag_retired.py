@@ -53,6 +53,66 @@ _BOOTSTRAP_SURFACES = [
     "skills/test-pilot-init/SKILL.md",
 ]
 
+# Line that reads `.provisional` from decide-location JSON — must not satisfy disclosure.
+_PROVISIONAL_READ_LINE = re.compile(
+    r"^[^\n]*PROVISIONAL=\$\([^\n]*jq[^\n]*['\"]\.provisional['\"][^\n]*\)[^\n]*$",
+    re.MULTILINE,
+)
+
+# Disclosure semantics within the bounded bootstrap window (line-local connectives only).
+_DISCLOSURE_TAKEN_PATTERNS = [
+    re.compile(r"location was taken", re.IGNORECASE),
+    re.compile(r"location taken", re.IGNORECASE),
+    re.compile(r"which location was taken", re.IGNORECASE),
+    re.compile(r"disclose[^\n]*location[^\n]*taken", re.IGNORECASE),
+]
+
+
+def _bootstrap_disclosure_window(text):
+    """Fenced bash block around decide-location plus following prose until the next heading."""
+    dl_idx = text.find("decide-location")
+    if dl_idx < 0:
+        return None
+    search_start = max(0, dl_idx - 4000)
+    region = text[search_start:dl_idx]
+    bash_open = region.rfind("```bash")
+    if bash_open < 0:
+        bash_open = region.rfind("```")
+    if bash_open < 0:
+        return None
+    window_start = search_start + bash_open
+    bash_close = text.find("```", dl_idx)
+    if bash_close < 0:
+        return None
+    window_end = bash_close + 3
+    prose_lines = []
+    started = False
+    for line in text[window_end:].splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("```") or re.match(r"^#{1,6}\s", stripped):
+            break
+        if not stripped:
+            if started:
+                break
+            continue
+        started = True
+        prose_lines.append(line)
+    return text[window_start:window_end] + "".join(prose_lines)
+
+
+def _without_provisional_read(window):
+    return _PROVISIONAL_READ_LINE.sub("", window)
+
+
+def _disclosure_semantics_in_window(window):
+    """Triad parts 2+3: value taken, provisional, and /superheroes:configure follow-up."""
+    cleaned = _without_provisional_read(window)
+    if not re.search(r"provisional", cleaned, re.IGNORECASE):
+        return False
+    if "/superheroes:configure" not in cleaned:
+        return False
+    return any(pat.search(cleaned) for pat in _DISCLOSURE_TAKEN_PATTERNS)
+
 
 def _read_plugin_rel(rel):
     path = os.path.join(_PLUGIN_ROOT, rel)
@@ -167,28 +227,12 @@ def test_bootstrap_surface_reads_provisional_and_discloses(surface_rel):
         "%s does not read `.provisional` from decide-location JSON — provisional defaults cannot "
         "be disclosed mechanically (#1136)" % surface_rel
     )
-    disclosure = (
-        re.search(
-            r"\*\*Disclosure:\*\*.*provisional",
-            text,
-            re.IGNORECASE | re.DOTALL,
-        )
-        or re.search(
-            r"When\s+[`\$]?(?:\.provisional|PROVISIONAL).*provisional",
-            text,
-            re.IGNORECASE | re.DOTALL,
-        )
-        or re.search(
-            r"provisional.*dispatch summary|dispatch summary.*provisional",
-            text,
-            re.IGNORECASE | re.DOTALL,
-        )
+    window = _bootstrap_disclosure_window(text)
+    assert window is not None, (
+        "%s has no fenced bootstrap block around decide-location — if bootstrap moved, "
+        "re-point this detector (#1136)" % surface_rel
     )
-    assert disclosure, (
-        "%s has no disclosure language keyed to provisional storage — a default would be taken "
-        "silently (#1136)" % surface_rel
-    )
-    assert "/superheroes:configure" in text, (
-        "%s does not name /superheroes:configure as the follow-up for provisional storage — "
-        "the triad's follow-up pointer is missing (#1136)" % surface_rel
+    assert _disclosure_semantics_in_window(window), (
+        "%s has no disclosure language keyed to provisional storage in the bootstrap window — "
+        "a default would be taken silently (#1136)" % surface_rel
     )
