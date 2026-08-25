@@ -217,9 +217,11 @@ def _rebind_in_flight(cwd, root=None):
         return False
 
 
-def resolve(cwd, root=None):
+def resolve(cwd, root=None, *, persist_backfill=True):
     """The shared band-wide mode resolver. Never blocks, never hits the network.
-    Raises UnknownSchemaVersion on a newer record (fail-closed)."""
+    Raises UnknownSchemaVersion on a newer record (fail-closed). When
+    persist_backfill is False, consistent hero evidence is reported but never
+    written — preview paths must not mutate calibration state."""
     rec = read_registry(cwd, root)
     if rec is not None:
         return {"mode": rec["storageMode"], "authoritative": True,
@@ -230,6 +232,9 @@ def resolve(cwd, root=None):
             # defer the backfill WRITE (not the read) while a rebind is mid-flight — no fork
             return {"mode": verdict, "authoritative": False,
                     "source": "provisional", "evidence": verdict}
+        if not persist_backfill:
+            return {"mode": verdict, "authoritative": False,
+                    "source": "evidence", "evidence": verdict}
         remote_hash = store_core.derive_identifiers(cwd)["remote_hash"]
         wrote = write_registry(cwd, verdict, remote_hash, root)  # best-effort (skips on lock contention/wedged store)
         if wrote is None:

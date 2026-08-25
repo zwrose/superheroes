@@ -183,6 +183,59 @@ def test_preview_enumerates_without_owner_authorization_and_execute_stays_blocke
     assert "FR-14" in execute_out.get("reason", "")
 
 
+# --------------------------------------------------------------------------- WO-A #1136 read-only preview + execute authorization
+
+
+def test_preview_leaves_absent_registry_absent(tmp_path, monkeypatch):
+    # axis: preview path must not create the project store or write registry.json.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    store_dir = mr.project_store_dir(str(tmp_path), root)
+    reg_path = mr.registry_path(str(tmp_path), root)
+    assert not os.path.isdir(store_dir)
+    assert not os.path.isfile(reg_path)
+    m = mm.enumerate_flip(str(tmp_path), mr.GLOBAL, root=root)
+    pv = mm.preview(m)
+    assert pv["target"] == mr.GLOBAL
+    assert not os.path.isdir(store_dir)
+    assert not os.path.isfile(reg_path)
+
+
+def test_preview_migration_cannot_be_executed(tmp_path, monkeypatch):
+    # axis: a preview Migration is unauthorized and execute must refuse without moving files.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    ddir = os.path.join(str(tmp_path), "docs", "superheroes", "wi")
+    os.makedirs(ddir, exist_ok=True)
+    spec_src = os.path.join(ddir, "spec.md")
+    sc.atomic_write(spec_src, "spec\n")
+    core_src = os.path.join(str(tmp_path), ".claude", "superheroes", "core.md")
+    m = mm.enumerate_flip(str(tmp_path), mr.GLOBAL, root=root)
+    res = mm.execute(m, root=root)
+    assert res["status"] == "blocked"
+    assert "authorization" in res.get("reason", "").lower()
+    assert os.path.isfile(spec_src)
+    assert os.path.isfile(core_src)
+
+
+def test_plan_authorized_migration_still_executes(tmp_path):
+    # axis: plan()'s authorized Migration still executes — positive control for execute gate.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    root = str(tmp_path / "store")
+    mr.write_registry(str(tmp_path), mr.IN_REPO, "rk", root=root)
+    _seed_in_repo_calibration(tmp_path)
+    m = mm.plan(str(tmp_path), mr.GLOBAL, root=root, owner_authorized=True)
+    assert m.owner_authorized is True
+    res = mm.execute(m, root=root)
+    assert res["status"] == "done"
+    assert mr.resolve(str(tmp_path), root=root)["mode"] == mr.GLOBAL
+
+
 # --------------------------------------------------------------------------- A4 preview
 
 

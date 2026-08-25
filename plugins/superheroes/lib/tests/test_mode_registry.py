@@ -591,3 +591,21 @@ def test_resolve_artifact_prefers_recorded_mode_when_both_exist(tmp_path):
     in_repo = tmp_path / "in.txt"; in_repo.write_text("old")
     glob = tmp_path / "g.txt"; glob.write_text("new")
     assert mr.resolve_artifact(str(tmp_path), str(in_repo), str(glob), root=root) == str(glob)
+
+
+def test_persist_backfill_false_does_not_write_and_default_still_does(tmp_path, monkeypatch):
+    # axis: persist_backfill=False reports evidence without writing; default still backfills.
+    _init_repo(tmp_path, "git@github.com:o/r.git")
+    (tmp_path / ".claude").mkdir()
+    (tmp_path / ".claude" / "review-profile.md").write_text("x")
+    root = str(tmp_path / "store")
+    monkeypatch.setattr(mr, "_hero_global_root", lambda n: str(tmp_path / ("g_" + n)))
+    store_dir = mr.project_store_dir(str(tmp_path), root)
+    r = mr.resolve(str(tmp_path), root=root, persist_backfill=False)
+    assert r["mode"] == mr.IN_REPO and r["authoritative"] is False and r["source"] == "evidence"
+    assert not os.path.isdir(store_dir)
+    assert mr.read_registry(str(tmp_path), root=root) is None
+    r2 = mr.resolve(str(tmp_path), root=root)
+    assert r2["mode"] == mr.IN_REPO and r2["authoritative"] is True and r2["source"] == "backfilled"
+    assert os.path.isdir(store_dir)
+    assert mr.read_registry(str(tmp_path), root=root)["storageMode"] == mr.IN_REPO

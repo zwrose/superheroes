@@ -50,7 +50,7 @@ class Migration:
     state) is deliberately NOT in `files` for a flip (FR-10)."""
 
     def __init__(self, *, kind="flip", target=None, files=None, cwd=None, root=None,
-                 remote_key=None, blocked=False, reason=""):
+                 remote_key=None, blocked=False, reason="", owner_authorized=False):
         self.kind = kind
         self.target = target
         self.files = files or []
@@ -59,6 +59,7 @@ class Migration:
         self.remote_key = remote_key
         self.blocked = blocked
         self.reason = reason
+        self.owner_authorized = owner_authorized
 
 
 # --------------------------------------------------------------------------- paths
@@ -167,7 +168,7 @@ def _enumerate(src_cal_dir, dst_cal_dir, src_docs_base, dst_docs_base):
 def enumerate_flip(cwd, target_mode, *, root=None):
     """Enumerate a flip to target_mode. Read-only — no owner authorization required (FR-10 preview).
     Records cwd/root/remote_key on the Migration so execute()/recover() need no extra params."""
-    current = mode_registry.resolve(cwd, root)["mode"]
+    current = mode_registry.resolve(cwd, root, persist_backfill=False)["mode"]
     in_cal, gl_cal = _in_repo_cal_dir(cwd), _global_cal_dir(cwd, root)
     in_docs, gl_docs = _in_repo_docs_base(cwd), _global_docs_base(cwd, root)
     if current == mode_registry.IN_REPO:
@@ -176,7 +177,8 @@ def enumerate_flip(cwd, target_mode, *, root=None):
         files = _enumerate(gl_cal, in_cal, gl_docs, in_docs)
     remote_key = store_core.derive_identifiers(cwd)["remote_hash"]
     return Migration(kind="flip", target=target_mode, files=files,
-                     cwd=cwd, root=root, remote_key=remote_key)
+                     cwd=cwd, root=root, remote_key=remote_key,
+                     owner_authorized=False)
 
 
 def plan(cwd, target_mode, *, root=None, owner_authorized):
@@ -185,8 +187,11 @@ def plan(cwd, target_mode, *, root=None, owner_authorized):
     if not owner_authorized:
         return Migration(blocked=True,
                          reason="storage migration requires owner authorization (FR-14)",
-                         cwd=cwd, root=root, target=target_mode)
-    return enumerate_flip(cwd, target_mode, root=root)
+                         cwd=cwd, root=root, target=target_mode,
+                         owner_authorized=False)
+    m = enumerate_flip(cwd, target_mode, root=root)
+    m.owner_authorized = True
+    return m
 
 
 def _is_calibration(path):
@@ -233,6 +238,9 @@ def execute(migration, *, root=None):
     registry write fails (UFR-6). Returns {"status": "done"|"blocked"|"busy"}."""
     if migration.blocked:
         return {"status": "blocked", "reason": migration.reason}
+    if migration.owner_authorized is not True:
+        return {"status": "blocked",
+                "reason": "storage migration requires owner authorization (FR-14)"}
     cwd = migration.cwd
     root = root if root is not None else migration.root
     if mode_registry.ensure_project_store(cwd, root) is None:
