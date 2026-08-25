@@ -34,6 +34,13 @@ WORKTREES_ROOT_ENV = "SUPERHEROES_WORKTREES_ROOT"
 WORKTREES_DIR_NAME = ".superheroes-worktrees"
 CONFIG_DIR_ENV = "CLAUDE_CONFIG_DIR"
 _DEFAULT_CONFIG_DIR_NAME = ".claude"
+EFFORT_ENV = "CLAUDE_EFFORT"
+# Owner ruling 2026-08-25 (in-channel, walk-3 sitting): every use of Opus 5 runs at effort
+# `medium` — "opus 5 works better at medium overall". The launcher pins it at the spawn point
+# so a builder can never run at whatever effort the launching session happened to carry;
+# builders inherited `high` from an advisor session for a full arc before anyone noticed.
+OPUS_TIER = "opus"
+OPUS_DEFAULT_EFFORT = "medium"
 
 STANDING_EXCLUSIONS = {"releasePRsExcluded": True, "forcePush": "never"}
 
@@ -399,6 +406,23 @@ def _resolve_model(model, repo_root):
             "reason": "model-not-registry-known:%s" % tier,
         },
     }
+
+
+def _resolve_effort(effort, tier):
+    """Resolve the child's reasoning effort + where it came from. Never raises.
+
+    Three outcomes, and the third is the one that matters: an explicit `--effort` is the
+    deliberate exception (a flag, not an env accident); a resolved `opus` tier is pinned to
+    `medium` by the owner ruling above; every other tier resolves to None, which the spawn
+    point reads as "leave the ambient CLAUDE_EFFORT alone" — the ruling names Opus 5 only.
+    """
+    if effort is not None:
+        if effort not in model_registry.effort_enum("claude"):
+            return _fail("effort-not-registry-known")
+        return {"ok": True, "effort": effort, "source": "explicit"}
+    if tier == OPUS_TIER:
+        return {"ok": True, "effort": OPUS_DEFAULT_EFFORT, "source": "opus-policy"}
+    return {"ok": True, "effort": None, "source": "inherited"}
 
 
 def _parse_iso8601(value):
@@ -877,7 +901,7 @@ def validate_premise(premise, repo_root, preflight_checks=None, env=None, issue=
     }
 
 
-def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
+def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None, effort=None):
     """Compose prompt and argv. Never raises."""
     loader = doctrine_loader or launch_doctrine.load
     doctrine = loader()
@@ -899,6 +923,9 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
 
     token = model_result["token"]
     resolution = model_result["resolution"]
+    effort_result = _resolve_effort(effort, token)
+    if not effort_result["ok"]:
+        return effort_result
     session_id = str(uuid.uuid4())
     # The same argv is reused if launch_build retries, so the session id is reused
     # too. That is safe because the only retrying path is spawn-oserror, where
@@ -917,6 +944,10 @@ def compose_launch(repo_root, issue, premise, model=None, doctrine_loader=None):
             "source": resolution["source"],
             "reason": resolution["reason"],
         },
+        # None means "inherit" — the spawn point leaves CLAUDE_EFFORT untouched. The source
+        # is always a word, so the ledger records WHY a lane ran at the effort it ran at.
+        "effort": effort_result["effort"],
+        "effortSource": effort_result["source"],
         "doctrine": doctrine,
     }
 
@@ -1007,12 +1038,14 @@ def _spawn_attempt(
     generation=None,
     cwd=None,
     evidence=None,
+    effort=None,
 ):
     """Spawn one attempt in the build worktree; return dict with ok, proc, reason.
 
     Every spawn this launcher makes passes through here, so the own-worktree invariant is
     asserted here rather than at each caller: a child whose cwd is the primary checkout is
-    refused, never spawned.
+    refused, never spawned. The resolved effort is pinned here for the same reason — this
+    is the one place a builder child is born, so a pinned effort cannot be routed around.
     """
     spawn = spawn_fn or _default_spawn
     if not isinstance(cwd, str) or not cwd.strip():
@@ -1029,6 +1062,11 @@ def _spawn_attempt(
     if resolved["ok"]:
         child_env[hb.HEARTBEAT_ROOT_ENV] = resolved["root"]
     child_env["BASH_MAX_TIMEOUT_MS"] = str(bash_max_timeout_ms)
+    # Assignment, not defaulting: the launching session's ambient CLAUDE_EFFORT is already in
+    # `child_env` via `_scrub_env`, so a pinned effort must overwrite it or the accident this
+    # closes survives. A None effort is the inherit case and deliberately touches nothing.
+    if effort is not None:
+        child_env[EFFORT_ENV] = effort
     try:
         out_fh = open(log_path, "ab")
     except OSError:
@@ -1119,6 +1157,7 @@ def launch_build(
     slot=None,
     generation=None,
     boundary=None,
+    effort=None,
 ):
     """Full launch flow: preflight, premise, compose, reserve, spawn, settle/retry."""
     settle_seconds = _SETTLE_SECONDS if settle_seconds is None else settle_seconds
@@ -1191,10 +1230,13 @@ def launch_build(
 
     compose_result = compose_launch(
         repo_root, issue, premise_result["premise"], model=model, doctrine_loader=doctrine_loader,
+        effort=effort,
     )
     if not compose_result["ok"]:
         stage = "compose" if compose_result["reason"] != "model-not-registry-known" else "model"
         if compose_result["reason"] == "model-default-unavailable":
+            stage = "model"
+        if compose_result["reason"] == "effort-not-registry-known":
             stage = "model"
         reason = compose_result["reason"]
         reserve_result = _try_reserve_for_refusal(
@@ -1283,6 +1325,10 @@ def launch_build(
         "model": compose_result["model"],
         "modelSource": resolution["source"],
         "modelReason": model_reason if model_reason is not None else "",
+        # Effort provenance sits beside the model's: "" is the inherit case, which is exactly
+        # what a reader needs to tell an unpinned lane from one pinned to the same value.
+        "effort": compose_result["effort"] or "",
+        "effortSource": compose_result["effortSource"],
         "worktree": worktree_path,
         "sessionId": compose_result["sessionId"],
     }
@@ -1396,6 +1442,7 @@ def launch_build(
             generation=generation,
             cwd=worktree_path,
             evidence=overlap_evidence,
+            effort=compose_result["effort"],
         )
         if spawn_result.get("refused"):
             return _post_reserve_fail(spawn_result["reason"])
@@ -1499,6 +1546,8 @@ def launch_build(
                 "attempt": attempt,
                 "model": compose_result["model"],
                 "modelResolution": compose_result["modelResolution"],
+                "effort": compose_result["effort"],
+                "effortSource": compose_result["effortSource"],
                 "worktree": worktree_path,
                 "warnings": warnings,
             }
@@ -1541,6 +1590,8 @@ def _try_reserve_for_refusal(
     model_token = ""
     model_source = ""
     model_reason = ""
+    effort_token = ""
+    effort_source = ""
     if compose_result and compose_result.get("ok"):
         argv = compose_result.get("argv") or []
         model_token = compose_result.get("model") or ""
@@ -1548,6 +1599,8 @@ def _try_reserve_for_refusal(
         model_source = resolution.get("source", "")
         reason = resolution.get("reason")
         model_reason = reason if reason is not None else ""
+        effort_token = compose_result.get("effort") or ""
+        effort_source = compose_result.get("effortSource") or ""
     reserved = {
         "event": "reserved",
         "launchId": launch_id,
@@ -1564,6 +1617,8 @@ def _try_reserve_for_refusal(
         "model": model_token,
         "modelSource": model_source,
         "modelReason": model_reason,
+        "effort": effort_token,
+        "effortSource": effort_source,
     }
     if slot is not None:
         reserved["slot"] = slot
@@ -1627,6 +1682,7 @@ def _cli_compose(args):
         return premise_result
     return compose_launch(
         args.repo_root, args.issue, premise_result["premise"], model=args.model,
+        effort=args.effort,
     )
 
 
@@ -1665,6 +1721,7 @@ def _cli_launch(args):
         slot=args.slot,
         generation=args.generation,
         boundary=boundary,
+        effort=args.effort,
     )
 
 
@@ -1710,6 +1767,7 @@ def main(argv=None):
     comp.add_argument("--issue", type=int, required=True)
     comp.add_argument("--premise", required=True)
     comp.add_argument("--model", default=None)
+    comp.add_argument("--effort", default=None)
     comp.set_defaults(func=_cli_compose)
 
     la = sub.add_parser("launch")
@@ -1719,6 +1777,7 @@ def main(argv=None):
     la.add_argument("--checks", required=True)
     la.add_argument("--log-dir", required=True)
     la.add_argument("--model", default=None)
+    la.add_argument("--effort", default=None)
     la.add_argument("--slot", default=None)
     la.add_argument("--generation", type=int, default=None)
     la.add_argument("--boundary", default=None)
