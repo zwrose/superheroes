@@ -10,10 +10,15 @@ reintroducing the retired pre-authorization rule must go red.
 - the clause roster is **hand-maintained**;
 - the pin grades the **doctrine text and the gate's wiring**, never whether any build actually
   obeyed the route;
-- clause matching is substring-based, so a clause could be present inside prose that negates it.
+- clause matching is substring-based, so a clause could be present inside prose that negates it;
+- leg 6 pins **direct** imports of one file, not a transitive closure (the closure reaches 21
+  modules and would churn), so a fall-open introduced two hops away is not covered.
 """
+import json
 import os
 import re
+
+import escalation as ESC
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PLUGIN = os.path.abspath(os.path.join(HERE, "..", ".."))
@@ -57,6 +62,18 @@ _POINTER_CLAUSES = (
     "rubric/review-discipline.md",
     "do not retry the fixer, and never narrow the guard",
 )
+
+_FAMILY_MARKER = "**The one exception — the owner-authority-gate family.**"
+_PINNED_FAMILY_ROSTER = frozenset({
+    "hooks/owner_authority_gate.py",
+    "lib/owner_authority.py",
+    "reference/owner-authority-allowlist.md",
+})
+_HOOKS_JSON = "hooks/hooks.json"
+_OWNER_AUTHORITY_GATE = "hooks/owner_authority_gate.py"
+_OWNER_AUTHORITY = "lib/owner_authority.py"
+_ALLOWLIST_REF = "reference/owner-authority-allowlist.md"
+_IMPORT_RE = re.compile(r"^\s*(?:from\s+(\w+)\s+import|import\s+(\w+))")
 
 
 def _read(rel):
@@ -153,4 +170,116 @@ def test_copyholder_pointer_states_the_new_shape():
     for clause in _POINTER_CLAUSES:
         assert clause in paragraph, (
             f"{_COPY_HOLDER} (pointer paragraph): missing clause: {clause!r}"
+        )
+
+
+def _extract_doctrine_family_paths():
+    text = _read(_HOME)
+    marker_idx = text.find(_FAMILY_MARKER)
+    assert marker_idx != -1, (
+        f"{_HOME}: family marker {_FAMILY_MARKER!r} not found"
+    )
+    rest = text[marker_idx + len(_FAMILY_MARKER):]
+    bullet_re = re.compile(r"^- `([^`]+)`")
+    paths = set()
+    for line in rest.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            if paths:
+                break
+            continue
+        match = bullet_re.match(stripped)
+        if match:
+            paths.add(match.group(1))
+            continue
+        if paths:
+            break
+    return paths
+
+
+def _direct_lib_local_imports(rel_py):
+    text = _read(rel_py)
+    found = set()
+    for line in text.splitlines():
+        match = _IMPORT_RE.match(line)
+        if not match:
+            continue
+        module = match.group(1) or match.group(2)
+        lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
+        if os.path.isfile(lib_path):
+            found.add(module)
+    return found
+
+
+def test_doctrine_family_list_matches_pinned_roster():
+    extracted = _extract_doctrine_family_paths()
+    assert extracted, (
+        f"{_HOME}: doctrine family extractor yielded empty set — "
+        "vacuous pass if compared to pinned roster"
+    )
+    assert extracted == _PINNED_FAMILY_ROSTER, (
+        f"{_HOME}: doctrine family list {sorted(extracted)!r} "
+        f"!= pinned roster {sorted(_PINNED_FAMILY_ROSTER)!r}"
+    )
+    for rel in sorted(_PINNED_FAMILY_ROSTER):
+        path = os.path.join(PLUGIN, rel)
+        assert os.path.isfile(path), (
+            f"pinned family member does not resolve under plugin root: {rel!r}"
+        )
+
+
+def test_gate_wiring_edges_hold():
+    hooks_text = _read(_HOOKS_JSON)
+    try:
+        hooks_data = json.loads(hooks_text)
+    except json.JSONDecodeError as exc:
+        raise AssertionError(
+            f"{_HOOKS_JSON}: unparseable JSON — {exc}"
+        ) from exc
+    pre_tool_use = hooks_data.get("hooks", {}).get("PreToolUse", [])
+    registration_found = False
+    for entry in pre_tool_use:
+        for hook in entry.get("hooks", []):
+            command = hook.get("command", "")
+            if "hooks/owner_authority_gate.py" in command:
+                registration_found = True
+                break
+        if registration_found:
+            break
+    assert registration_found, (
+        f"{_HOOKS_JSON}: PreToolUse hook command must reference "
+        "hooks/owner_authority_gate.py"
+    )
+
+    gate_text = _read(_OWNER_AUTHORITY_GATE)
+    assert re.search(r"\bimport owner_authority\b", gate_text), (
+        f"{_OWNER_AUTHORITY_GATE}: must import owner_authority (hook→classifier edge)"
+    )
+
+    classifier_text = _read(_OWNER_AUTHORITY)
+    assert "reference/owner-authority-allowlist.md" in classifier_text, (
+        f"{_OWNER_AUTHORITY}: must cite reference/owner-authority-allowlist.md "
+        "(classifier→allowlist edge)"
+    )
+
+
+def test_classifier_direct_dependencies_are_classified():
+    # mode_registry is a gate-critical dependency (its read decides calibration_state), it is
+    # not in SAFETY_MACHINERY, and whether it should join is an advisor decision recorded as a
+    # follow-up on PR #1154 — not something this pin decides.
+    direct = _direct_lib_local_imports(_OWNER_AUTHORITY)
+    expected = {"mode_registry"}
+    assert direct == expected, (
+        f"{_OWNER_AUTHORITY}: direct lib-local imports {sorted(direct)!r} "
+        f"!= expected {sorted(expected)!r}"
+    )
+
+
+def test_every_family_member_is_refused_to_the_fixer():
+    band_roots = [PLUGIN]
+    for rel in sorted(_PINNED_FAMILY_ROSTER):
+        abs_path = os.path.join(PLUGIN, rel)
+        assert ESC.is_safety_machinery(abs_path, band_roots) is True, (
+            f"family member {rel!r} must be refused to the fixer "
+            f"(is_safety_machinery({abs_path!r}, {band_roots!r}))"
         )
