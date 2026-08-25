@@ -142,6 +142,7 @@ SAFETY_MACHINERY = (
     "owner_authority.py",     # owner-authority gate core (merge/release/publish refusals)
     "worktree_guard_gate.py", # PreToolUse hook wrapper that invokes worktree_guard
     "owner_authority_gate.py",# PreToolUse hook wrapper that invokes owner_authority
+    "owner-authority-allowlist.md",  # named owner-authority-gate-family member — fixer must refuse or the carve-out is decorative on this member
 )
 
 
