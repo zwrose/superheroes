@@ -448,10 +448,10 @@ change**, scoped to the findings' own surfaces and nothing wider — never a sta
 - `reference/owner-authority-allowlist.md` (its allowlist reference)
 
 **The family is not the whole gate.** The three files above need the owner's word per change; other
-components the gate's verdict depends on — `hooks/hooks.json` and `lib/mode_registry.py` — are safety
-machinery, so the fixer refuses them, but an ordered round touching them needs **no** owner
-pre-authorization. `hooks/hooks.json` is deliberately not a family member: it registers many hooks,
-and making it one would extend owner pre-authorization to every unrelated hook change.
+components the gate's verdict depends on — `hooks/hooks.json` and `lib/mode_registry.py` — the guard
+in `lib/escalation.py`'s `SAFETY_MACHINERY` refuses, but an ordered round touching them needs **no**
+owner pre-authorization. `hooks/hooks.json` is deliberately not a family member: it registers many
+hooks, and making it one would extend owner pre-authorization to every unrelated hook change.
 
 This family is the mechanical never-merge floor, so a round that could edit it on its own authority
 could edit away the control that keeps the merge click the owner's.
@@ -459,8 +459,9 @@ could edit away the control that keeps the merge click the owner's.
 **Classification fails closed.** Before the round, put each finding's surface in exactly one of three
 classes — ordinary, safety machinery, owner-authority-gate family. **A surface you cannot confidently
 classify is treated as gate family** — a path that does not resolve, a renamed file, a dependency you
-have not checked — **which means it parks**. That fail direction is deliberate: when classification is
-uncertain, the route waits rather than granting authority by mistake.
+have not checked — **which means it needs the owner's word first — and parks when that word is unavailable**.
+That fail direction is deliberate: when classification is uncertain, the route waits rather than granting
+authority by mistake.
 
 **When the owner's word is unavailable at the gate family, park.** A headless or owner-absent build
 that reaches blocking findings in the owner-authority-gate family **parks with receipts** — what the

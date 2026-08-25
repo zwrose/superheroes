@@ -14,6 +14,7 @@ reintroducing the retired pre-authorization rule must go red.
 - leg 6 pins **direct** imports of one file, not a transitive closure (the closure reaches 21
   modules and would churn), so a fall-open introduced two hops away is not covered.
 """
+import ast
 import json
 import os
 import re
@@ -47,7 +48,7 @@ _CARVEOUT_CLAUSES = (
     "still needs the owner's word first, per change",
     "**Classification fails closed.**",
     "A surface you cannot confidently classify is treated as gate family",
-    "which means it parks",
+    "which means it needs the owner's word first — and parks when that word is unavailable",
     "because the guard refuses the fixer at every severity",
     "**When the owner's word is unavailable at the gate family, park.**",
     "Outside the gate family there is nothing to wait for",
@@ -73,7 +74,25 @@ _HOOKS_JSON = "hooks/hooks.json"
 _OWNER_AUTHORITY_GATE = "hooks/owner_authority_gate.py"
 _OWNER_AUTHORITY = "lib/owner_authority.py"
 _ALLOWLIST_REF = "reference/owner-authority-allowlist.md"
-_IMPORT_RE = re.compile(r"^\s*(?:from\s+(\w+)\s+import(?:\s+[\w, ]+)?|import\s+([\w,\s]+))")
+
+# Fixer routing target — template, golden fixture, and embedded prompt must move together.
+_FIXER_ROUTING_TARGETS = (
+    (
+        "rubric/orders/dispatch-fixer.md",
+        "report it for orchestrator escalation (see Payload contract) instead",
+        "report it for owner escalation (see Payload contract) instead",
+    ),
+    (
+        "lib/tests/fixtures/orders/golden/dispatch-fixer.txt",
+        "report it for orchestrator escalation (see Payload contract) instead",
+        "report it for owner escalation (see Payload contract) instead",
+    ),
+    (
+        "skills/review-code/reference/auto-fix-loop.md",
+        'report it under "escalated" for the orchestrator to route instead',
+        'report it under "escalated" for the owner instead',
+    ),
+)
 
 
 def _read(rel):
@@ -139,8 +158,8 @@ def _pointer_paragraph_text():
 
 
 def test_retired_preauthorization_rule_is_absent():
-    home_text = _read(_HOME)
-    copy_text = _read(_COPY_HOLDER)
+    home_text = _collapse_whitespace(_read(_HOME))
+    copy_text = _collapse_whitespace(_read(_COPY_HOLDER))
     for substring in _RETIRED_BOTH_FILES:
         if substring in home_text:
             raise AssertionError(
@@ -199,19 +218,32 @@ def _extract_doctrine_family_paths():
 
 def _direct_lib_local_imports(rel_py):
     text = _read(rel_py)
+    try:
+        tree = ast.parse(text, filename=rel_py)
+    except SyntaxError as exc:
+        raise AssertionError(
+            f"{rel_py}: unparseable Python — {exc}"
+        ) from exc
     found = set()
-    for line in text.splitlines():
-        match = _IMPORT_RE.match(line)
-        if not match:
-            continue
-        if match.group(1):
-            modules = [match.group(1)]
-        else:
-            modules = [part.strip() for part in match.group(2).split(",") if part.strip()]
-        for module in modules:
-            lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
-            if os.path.isfile(lib_path):
-                found.add(module)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name.split(".")[0]
+                lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
+                if os.path.isfile(lib_path):
+                    found.add(module)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level == 0 and node.module is not None:
+                module = node.module.split(".")[0]
+                lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
+                if os.path.isfile(lib_path):
+                    found.add(module)
+            elif node.level > 0:
+                for alias in node.names:
+                    module = alias.name
+                    lib_path = os.path.join(PLUGIN, "lib", f"{module}.py")
+                    if os.path.isfile(lib_path):
+                        found.add(module)
     return found
 
 
@@ -261,8 +293,8 @@ def test_gate_wiring_edges_hold():
     )
 
     classifier_text = _read(_OWNER_AUTHORITY)
-    assert "reference/owner-authority-allowlist.md" in classifier_text, (
-        f"{_OWNER_AUTHORITY}: must cite reference/owner-authority-allowlist.md "
+    assert _ALLOWLIST_REF in classifier_text, (
+        f"{_OWNER_AUTHORITY}: must cite {_ALLOWLIST_REF} "
         "(classifier→allowlist edge)"
     )
 
@@ -286,6 +318,17 @@ def test_every_family_member_is_refused_to_the_fixer():
         assert ESC.is_safety_machinery(abs_path, band_roots) is True, (
             f"family member {rel!r} must be refused to the fixer "
             f"(is_safety_machinery({abs_path!r}, {band_roots!r}))"
+        )
+
+
+def test_fixer_routing_target_is_pinned():
+    for rel, present, absent in _FIXER_ROUTING_TARGETS:
+        text = _read(rel)
+        assert present in text, (
+            f"{rel}: fixer routing target must include current wording: {present!r}"
+        )
+        assert absent not in text, (
+            f"{rel}: retired fixer routing wording must be absent: {absent!r}"
         )
 
 
