@@ -135,3 +135,55 @@ E       assert 0 != 0
 .                                                                        [100%]
 1 passed in 1.34s
 ```
+
+---
+
+## BP29–BP32 re-proof after WO-R5-B
+
+**Guarded element:** `test_engine_dispatch.py:_probe_git_fake_route_registry` teardown aggregator — axis: **any arm that appended to `teardown_errors` causes fixture teardown to fail** (G1).
+
+**Neutralization:** line 5994 `if teardown_errors:` → `if False and teardown_errors:` (the `raise AssertionError("\n".join(teardown_errors))` body left intact).
+
+**Raw red** (all three end-to-end detectors; full capture at `/private/tmp/wo_r5_b_g1_red.txt` — exceeds 32 KiB due to ambient `PytestWarning` teardown noise):
+
+First lines:
+
+```
+FFF                                                                      [100%]
+=================================== FAILURES ===================================
+______ test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end ______
+...
+>       assert child.returncode != 0, msg
+E       assert 0 != 0
+```
+
+Last lines (failure summary):
+
+```
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fake_teardown_raises_on_undeclared_route_end_to_end
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end
+FAILED plugins/superheroes/lib/tests/test_engine_dispatch.py::test_probe_git_fake_teardown_raises_on_unregistered_helper_value_end_to_end
+3 failed in 19.66s
+```
+
+**Restore:** inverse edit — `if False and teardown_errors:` restored to `if teardown_errors:`.
+
+**Restore receipt (quoted restored lines):**
+
+```python
+    if teardown_errors:
+        raise AssertionError("\n".join(teardown_errors))
+```
+
+**Supplementary `git status --porcelain` after restore:**
+
+```
+ M plugins/superheroes/lib/tests/test_engine_dispatch.py
+```
+
+**Raw green** (full capture at `/private/tmp/wo_r5_b_g1_green.txt`):
+
+```
+...                                                                      [100%]
+3 passed in 19.21s
+```

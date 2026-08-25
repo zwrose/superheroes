@@ -6115,60 +6115,76 @@ def _run_probe_guard_selftest_child(tmp_path, child_test_name, child_body_source
     """Run a single child pytest case out-of-process with the real autouse fixture."""
     tests_dir = _HERE
     conftest_path = os.path.join(tmp_path, "conftest.py")
+    conftest_source = (
+        "import sys\n"
+        "sys.path.insert(0, %s)\n"
+        "\n"
+        "import test_engine_dispatch as TED\n"
+        "\n"
+        "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
+        % repr(tests_dir)
+    )
+    ast.parse(conftest_source)
     with open(conftest_path, "w", encoding="utf-8") as fh:
-        fh.write(
-            "import sys\n"
-            "sys.path.insert(0, %s)\n"
-            "\n"
-            "import test_engine_dispatch as TED\n"
-            "\n"
-            "_probe_git_fake_route_registry = TED._probe_git_fake_route_registry\n"
-            % repr(tests_dir)
-        )
+        fh.write(conftest_source)
 
     module_name = "test_probe_guard_child"
     body_lines = child_body_source.strip("\n").splitlines()
     indented_body = "".join("    " + line + "\n" for line in body_lines)
+    module_source = (
+        "import sys\n"
+        "sys.path.insert(0, %s)\n"
+        "\n"
+        "import test_engine_dispatch as TED\n"
+        "\n"
+        "def %s(tmp_path, monkeypatch):\n"
+        "%s"
+        % (repr(tests_dir), child_test_name, indented_body)
+    )
+    ast.parse(module_source)
     module_path = os.path.join(tmp_path, module_name + ".py")
     with open(module_path, "w", encoding="utf-8") as fh:
-        fh.write(
-            "import sys\n"
-            "sys.path.insert(0, %s)\n"
-            "\n"
-            "import test_engine_dispatch as TED\n"
-            "\n"
-            "def %s(tmp_path, monkeypatch):\n"
-            "%s"
-            % (repr(tests_dir), child_test_name, indented_body)
-        )
+        fh.write(module_source)
 
+    # Child inherits store isolation (WORKHORSE_STORE_ROOT, SUPERHEROES_WORKTREES_ROOT, TEST_PILOT_STORE_ROOT) from plugins/superheroes/lib/tests/conftest.py's autouse _isolate_store_root by environment inheritance only — the child's rootdir is tmp_path, so that conftest is never loaded.
     env = dict(os.environ)
     for key in list(env):
         if (
             key == "PYTEST_ADDOPTS"
             or key == "PYTEST_CURRENT_TEST"
             or key.startswith("PYTEST_XDIST")
+            or key == "PYTEST_PLUGINS"
         ):
             del env[key]
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    env["PYTHONPYCACHEPREFIX"] = os.path.join(str(tmp_path), "pyc")
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
 
-    return subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-            "--color=no",
-            "%s.py::%s" % (module_name, child_test_name),
-        ],
-        cwd=tmp_path,
-        capture_output=True,
-        text=True,
-        env=env,
-        timeout=120,
-    )
+    try:
+        return subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "--color=no",
+                "--basetemp",
+                os.path.join(str(tmp_path), "child-basetemp"),
+                "%s.py::%s" % (module_name, child_test_name),
+            ],
+            cwd=tmp_path,
+            capture_output=True,
+            text=True,
+            env=env,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired as exc:
+        pytest.fail(
+            "child pytest timed out after 120s; stdout=%r stderr=%r"
+            % (exc.stdout, exc.stderr)
+        )
 
 
 # Accepted residuals, not closed by these detectors:
@@ -6211,6 +6227,10 @@ def test_probe_git_fake_teardown_raises_on_declared_route_mismatch_end_to_end(
     Does not prove: (1) an install that is never called is invisible;
     (2) a re-entrant call on a different route is never observed.
     """
+    declared = PROBE_GIT_FAKE_ROUTES[
+        "test_worktree_entry_set_fail_closed_on_timeout_and_nonzero_exit"
+    ]
+    assert ("_git_scrubbed_bytes", "worktree") not in declared, declared
     child_body = """
 def fake_scrubbed_bytes(cwd_real, *args, timeout=None, **kwargs):
     return b""
