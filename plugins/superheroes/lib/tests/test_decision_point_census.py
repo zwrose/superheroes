@@ -4,6 +4,10 @@ Mechanical receipt for the invariant that every skill-surface site taking a defa
 for an answer is wrapped in a declared decision block, and owner-decision primitives are
 forbidden outside such blocks (see reference/decision-points.md).
 
+Disclosed residual: underscore-emphasis (`_..._`) is not normalized before matching — one file,
+one occurrence on this tree vs 48 files for `**` — so stripping `_` would buy almost nothing and
+risk mangling `snake_case` identifiers such as `review_store.py`.
+
 Deliberately out of scope:
 - Converting skill surfaces — other work orders; this census is expected to go red until they land.
 - skills/architect-discovery/** — rubric-excluded per escalation-base.md § Scope (elicitation).
@@ -125,8 +129,13 @@ def _census_excluded(path):
 
 
 def _normalize_match_text(text):
-    """E1: strip markdown emphasis before literal matching."""
-    return text.replace("*", "").replace("_", "").replace("`", "")
+    """E1: normalize markdown * emphasis before literal matching (length-preserving: * -> space)."""
+    return text.replace("*", " ")
+
+
+def _match_search_text(norm_text):
+    """Join lines for cross-line literals; length-preserving (newline -> space)."""
+    return norm_text.replace("\n", " ")
 
 
 def _walk_skills_files(skills_root=None):
@@ -180,15 +189,6 @@ def _offset_to_line(starts, offset):
         else:
             hi = mid - 1
     return hi + 1
-
-
-def _search_segments(text):
-    """Yield (line_no, segment_text) for per-line and E2 joined pairs."""
-    lines = text.splitlines()
-    for idx, line in enumerate(lines):
-        yield idx + 1, line
-        if idx + 1 < len(lines):
-            yield idx + 1, line + " " + lines[idx + 1]
 
 
 def _parse_decision_blocks(text, rel):
@@ -294,18 +294,19 @@ def _line_in_block(line_no, blocks):
     return False
 
 
-def _hit_on_pinned_line(lines, line_no, segment, idx, norm_segment, norm_primitive):
-    """True when the matched substring lies entirely on byte-pinned line text."""
+def _hit_on_pinned_offset(norm_text, offset, primitive, lines):
+    """True when the match at offset is exempted by a byte-pinned line."""
+    line_starts = _line_starts(norm_text)
+    norm_primitive = _normalize_match_text(primitive)
+    plen = len(norm_primitive)
+    line_no = _offset_to_line(line_starts, offset)
     if line_no > len(lines):
         return False
-    if segment == lines[line_no - 1]:
+    line_end = line_starts[line_no] if line_no < len(line_starts) else len(norm_text)
+    if offset + plen <= line_end:
         return _is_byte_pinned(lines[line_no - 1].strip())
-    if line_no < len(lines) and segment == lines[line_no - 1] + " " + lines[line_no]:
-        first = _normalize_match_text(lines[line_no - 1])
-        if idx < len(first.casefold()):
-            return _is_byte_pinned(lines[line_no - 1].strip())
-        return _is_byte_pinned(lines[line_no].strip())
-    return False
+    # Match spans past the starting line — exempt only when the start line is pinned.
+    return _is_byte_pinned(lines[line_no - 1].strip())
 
 
 def _scan_forbidden_violations(skills_root=None):
@@ -325,23 +326,27 @@ def _scan_forbidden_violations(skills_root=None):
             continue
         lines = text.splitlines()
         blocks, _ = _parse_decision_blocks(text, rel)
-        for line_no, segment in _search_segments(text):
-            norm_segment = _normalize_match_text(segment)
-            for primitive in _FORBIDDEN_PRIMITIVES:
-                norm_primitive = _normalize_match_text(primitive)
-                start = 0
-                while True:
-                    idx = norm_segment.casefold().find(norm_primitive.casefold(), start)
-                    if idx < 0:
-                        break
-                    if _hit_on_pinned_line(
-                        lines, line_no, segment, idx, norm_segment, norm_primitive
-                    ):
-                        start = idx + max(len(norm_primitive), 1)
-                        continue
-                    if not _line_in_block(line_no, blocks):
-                        violations.append(f"{rel}:{line_no}: {primitive}")
+        norm_text = _normalize_match_text(text)
+        search_text = _match_search_text(norm_text)
+        line_starts = _line_starts(norm_text)
+        seen = set()
+        for primitive in _FORBIDDEN_PRIMITIVES:
+            norm_primitive = _normalize_match_text(primitive)
+            start = 0
+            while True:
+                idx = search_text.casefold().find(norm_primitive.casefold(), start)
+                if idx < 0:
+                    break
+                line_no = _offset_to_line(line_starts, idx)
+                if _hit_on_pinned_offset(norm_text, idx, primitive, lines):
                     start = idx + max(len(norm_primitive), 1)
+                    continue
+                if not _line_in_block(line_no, blocks):
+                    key = (rel, line_no, primitive)
+                    if key not in seen:
+                        seen.add(key)
+                        violations.append(f"{rel}:{line_no}: {primitive}")
+                start = idx + max(len(norm_primitive), 1)
     return violations, file_count
 
 
@@ -685,3 +690,60 @@ def test_fixture_unwrapped_primitive_fails_prohibition(tmp_path, monkeypatch):
     )
     violations, _ = _scan_forbidden_violations(str(tmp_path / "skills"))
     assert violations, "unwrapped decide-location) must violate prohibition"
+
+
+# axis: disclosure mention must not false-positive — bite-proof element for normalization.
+def test_fixture_disclosure_mention_no_violation(tmp_path, monkeypatch):
+    """#1144 bite-proof: disclosure prose mentioning decide-location must not violate."""
+    monkeypatch.setattr(
+        "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
+    )
+    skills = tmp_path / "skills" / "demo"
+    skills.mkdir(parents=True)
+    content = (
+        "**Storage location (`decide-location`).** `decide-location` returns JSON: "
+        "`.mode` is `in-repo` or `global`.\n"
+    )
+    (skills / "SKILL.md").write_text(content, encoding="utf-8")
+    violations, file_count = _scan_forbidden_violations(str(tmp_path / "skills"))
+    assert file_count == 1
+    assert not violations, (
+        "disclosure mention of decide-location must not violate prohibition"
+    )
+
+
+# axis: real invocation must still violate — bite-proof complement for normalization.
+def test_fixture_real_invocation_violates(tmp_path, monkeypatch):
+    """#1144 bite-proof: bare decide-location) invocation must violate."""
+    monkeypatch.setattr(
+        "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
+    )
+    skills = tmp_path / "skills" / "demo"
+    skills.mkdir(parents=True)
+    (skills / "SKILL.md").write_text(
+        'DEC=$(python3 store.py decide-location) || exit 1\n', encoding="utf-8"
+    )
+    violations, _ = _scan_forbidden_violations(str(tmp_path / "skills"))
+    assert any("decide-location)" in v for v in violations), (
+        "bare decide-location) invocation must violate prohibition"
+    )
+
+
+# axis: multi-line literal attributed to match-start line — bite-proof element for offset search.
+def test_fixture_multiline_literal_start_line(tmp_path, monkeypatch):
+    """#1144 bite-proof: cross-line primitive attributed to line where match starts."""
+    monkeypatch.setattr(
+        "test_decision_point_census._SKILLS_ROOT", str(tmp_path / "skills")
+    )
+    skills = tmp_path / "skills" / "demo"
+    skills.mkdir(parents=True)
+    content = (
+        "Present drift to the user and apply\n"
+        "only what they approve. Hand-edits preserved.\n"
+    )
+    (skills / "SKILL.md").write_text(content, encoding="utf-8")
+    violations, _ = _scan_forbidden_violations(str(tmp_path / "skills"))
+    assert len(violations) == 1, f"expected single hit, got {violations!r}"
+    assert violations[0].endswith(":2: only what they approve"), (
+        f"expected hit on line 2, got {violations[0]!r}"
+    )

@@ -58,7 +58,9 @@ The census enforces:
 
 ## 1b — Forbidden primitives and waiting tokens
 
-Two fixed sets — the census reads these literally (after markdown-emphasis normalization and
+Two fixed sets — the census reads these literally (after `*` emphasis is normalized away
+before matching; backticks and underscores are not, because a backtick distinguishes a mention from
+an invocation; underscore-emphasis is a stated limitation — see the census module docstring) and
 cross-line joining for multi-word literals).
 
 **Forbidden outside a decision block** (unless byte-pinned or rubric-excluded per §1d):
