@@ -336,7 +336,8 @@ nothing. The detector is grep-grounded and has no authority to drop a finding or
 > likewise recognised for synthesis judges and fix auditors. A **`ruling`** payload is recognised only
 > when the object carries `id`, `reason`, and a `ruling` drawn from `audits.AUDIT_RULINGS`, and
 > validates against the `P_AUDITS` contract; the terminal result then carries the scrubbed ruling
-> record with `id` and `reason` mirrored beside it — **one per-id ruling per dispatch**. What does not
+> record under **`ruling`**, with `id` and `reason` **nested inside that record and not mirrored at
+> top level** — **one per-id ruling per dispatch**. What does not
 > travel through this verb is the round-driver's `dispatch-audits` **phase submission**: its seat
 > payloads land on the per-target artifact path the order names, and the `collectionManifest`
 > provenance is built out-of-band from the orchestrator's own dispatch records, so the batch submit
