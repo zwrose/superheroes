@@ -1081,6 +1081,36 @@ def test_non_opus_tier_without_ambient_effort_sets_nothing(tmp_path, monkeypatch
     _reap(result)
 
 
+def test_compose_cli_effort_flag_reaches_the_resolver(tmp_path):
+  # axis: --effort is wired through the real parser, not just the function signature
+    repo = _init_repo(tmp_path / "repo")
+    premise_path = tmp_path / "premise.json"
+    _write_json(premise_path, _valid_premise(repo))
+    base = [
+        sys.executable, _MOD, "compose",
+        "--repo-root", repo, "--issue", "656", "--premise", str(premise_path),
+    ]
+    default = json.loads(subprocess.run(
+        base, capture_output=True, text=True, check=False,
+    ).stdout)
+    assert default["ok"] is True
+    assert default["effort"] == "medium"
+    assert default["effortSource"] == "opus-policy"
+
+    pinned = json.loads(subprocess.run(
+        base + ["--effort", "low"], capture_output=True, text=True, check=False,
+    ).stdout)
+    assert pinned["ok"] is True
+    assert pinned["effort"] == "low"
+    assert pinned["effortSource"] == "explicit"
+
+    bad = json.loads(subprocess.run(
+        base + ["--effort", "turbo"], capture_output=True, text=True, check=False,
+    ).stdout)
+    assert bad["ok"] is False
+    assert bad["reason"] == "effort-not-registry-known"
+
+
 def test_compose_unknown_effort_refuses(tmp_path):
   # axis: the effort vocabulary comes from the registry, not from the caller
     repo = _init_repo(tmp_path / "repo")
@@ -3481,6 +3511,7 @@ def test_cli_launch_boundary_happy_path_forwards(tmp_path, monkeypatch):
         premise=str(premise_path),
         log_dir=str(log_dir),
         model=None,
+        effort=None,
         slot="slot-a",
         generation=1,
         boundary=str(boundary_path),
