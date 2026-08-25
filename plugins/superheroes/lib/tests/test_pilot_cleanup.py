@@ -1250,16 +1250,22 @@ def test_cleanup_effect_receipt_fails_cleanup_timeout(private_tmp):
 def test_cleanup_effect_receipt_sentinel_budget_decoupled_from_cleanup_timeout(
     private_tmp, monkeypatch
 ):
+    # axis: which budget bounds which step — the instrumentation (plant, probe) vs the subject
+    # (the declared cleanup command). Not how long any of them took.
+    #
     # The regression guard for the decoupling the test above relies on (#1146). It reads the
     # budget each invocation was actually given rather than timing anything, so re-coupling the
     # two knobs goes red on a fast machine instead of surfacing as a flake on a loaded one. The
     # sentinel budget is a marker value, never waited on: plant and probe finish in milliseconds.
-    timeout_cleanup = "#!/bin/sh\n/bin/sleep 5\nexit 0\n"
+    # The cleanup here SUCCEEDS so the run reaches every instrumentation site — all three probe
+    # rounds, not just the two a failing cleanup stops short of.
     reach_root, run_cwd, bin_dir, store_dir, cleanup_repo, journal_path = _harness_layout(
         private_tmp
     )
     plant, probe = _write_scripts(bin_dir)
-    cleanup_script = _write_cleanup_script(cleanup_repo, "cleanup.sh", timeout_cleanup)
+    cleanup_script = _write_cleanup_script(
+        cleanup_repo, "cleanup.sh", _cleanup_correct_script()
+    )
 
     budgets = []
     real_run_bounded = pc.run_bounded
@@ -1290,11 +1296,13 @@ def test_cleanup_effect_receipt_sentinel_budget_decoupled_from_cleanup_timeout(
         timeout_seconds=1,
         sentinel_timeout_seconds=17,
     )
-    assert receipt["reason"] == pc.REASON_CLEANUP_COMMAND_FAILED
+    # Non-vacuity, stated mechanically: a run that stopped early would leave an instrumentation
+    # site unexercised, and the budget assertions below would then be true of nothing.
+    assert receipt["result"] == pc.RESULT_PASS
+    assert set(receipt["observations"]) == {"preplant", "postplant", "postcleanup"}
     by_command = {}
     for argv0, budget in budgets:
         by_command.setdefault(argv0, set()).add(budget)
-    # Every step ran, so an assertion below cannot pass by never having been exercised.
     assert set(by_command) == {plant, probe, cleanup_script}
     assert by_command[cleanup_script] == {1}, "the cleanup command must carry timeout_seconds"
     assert by_command[plant] == {17}, "the plant step must carry sentinel_timeout_seconds"
