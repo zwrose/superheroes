@@ -3302,6 +3302,8 @@ def _compose_stall_fix_batch(state, breaker):
 def _route_stall_self_recovery(state, config, batch, refusal, breaker):
     """Terminal routing for stall self-recovery — exhaustive over batch/refusal (#1107)."""
     if batch:
+        if _route_judgment_blockers(state, batch):
+            return
         state["_fixBatch"] = batch
         state["step"] = P_FIXER
     elif refusal == REFUSAL_UNRESOLVABLE_OPEN_SET:
