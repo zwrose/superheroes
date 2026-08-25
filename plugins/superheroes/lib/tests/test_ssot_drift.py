@@ -226,6 +226,136 @@ def _plugin_version_skew_statuses_from_home():
     return set(version_skew.STATUSES)
 
 
+_PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER = frozenset({
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")),
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "LEDGERS.md")),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/setup.md")),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/round-driver.md")),
+})
+
+_PLUGIN_VERSION_SKEW_APPEND_RULE_DOCS = (
+    os.path.normpath(os.path.join(PLUGIN, "..", "..", "CONVENTIONS.md")),
+    os.path.normpath(os.path.join(PLUGIN, "skills/review-code/reference/setup.md")),
+)
+
+
+def _repo_markdown_files():
+    root = os.path.normpath(os.path.join(PLUGIN, "..", ".."))
+    for dirpath, dirnames, filenames in os.walk(root):
+        if ".git" in dirnames:
+            dirnames.remove(".git")
+        for name in filenames:
+            if name.endswith(".md"):
+                yield os.path.join(dirpath, name)
+
+
+def _semantics_files_mentioned_on_line(line, semantics_files):
+    return [entry for entry in semantics_files if entry in line]
+
+
+def test_plugin_version_skew_watch_set_doc_census():
+    """§11: any doc line naming two+ SEMANTICS_FILES must name all of them."""
+    import version_skew
+
+    semantics_files = tuple(version_skew.SEMANTICS_FILES)
+    violations = []
+    for path in _repo_markdown_files():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            for lineno, line in enumerate(fh, start=1):
+                mentioned = _semantics_files_mentioned_on_line(line, semantics_files)
+                if len(mentioned) < 2:
+                    continue
+                missing = sorted(set(semantics_files) - set(mentioned))
+                if missing:
+                    rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+                    violations.append((rel, lineno, missing))
+    assert not violations, (
+        "watch-set restatement missing SEMANTICS_FILES entries — "
+        "file, line, missing: %r" % violations
+    )
+
+
+def test_plugin_version_skew_status_token_copy_register_census():
+    """§11: every .md carrying a STATUSES token must be in the copy register."""
+    import version_skew
+
+    home = _plugin_version_skew_statuses_from_home()
+    unregistered = []
+    for path in _repo_markdown_files():
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+        if not any(token in text for token in home):
+            continue
+        norm = os.path.normpath(path)
+        if norm not in _PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            unregistered.append(rel)
+    assert not unregistered, (
+        "unregistered plugin-version-skew status-token copy — add to "
+        "_PLUGIN_VERSION_SKEW_STATUS_TOKEN_COPY_REGISTER: %r" % sorted(unregistered)
+    )
+
+
+def test_plugin_version_skew_append_rule_phrase_pin():
+    """§11: append-rule prose is generated from version_skew.APPENDS_DEGRADATION."""
+    import version_skew
+
+    appends = version_skew.APPENDS_DEGRADATION
+    assert len(appends) == 1, (
+        "APPENDS_DEGRADATION changed (%r) — update the doc phrasing contract in this test"
+        % sorted(appends)
+    )
+    status = next(iter(appends))
+    required_phrase = "only `%s` appends" % status
+    missing = []
+    for path in _PLUGIN_VERSION_SKEW_APPEND_RULE_DOCS:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        if required_phrase not in text:
+            rel = os.path.relpath(path, os.path.join(PLUGIN, "..", ".."))
+            missing.append(rel)
+    assert not missing, (
+        "append-rule phrase %r missing from: %r" % (required_phrase, missing)
+    )
+
+
+def _plugin_python_sources_excluding_tests():
+    paths = []
+    for dirpath, dirnames, filenames in os.walk(PLUGIN):
+        if os.path.basename(dirpath) == "tests" or "tests" in dirpath.split(os.sep):
+            continue
+        dirnames[:] = [d for d in dirnames if d != "__pycache__" and d != "tests"]
+        for name in filenames:
+            if name.endswith(".py"):
+                paths.append(os.path.join(dirpath, name))
+    return paths
+
+
+def test_plugin_version_skew_chokepoint_census():
+    """§11: only version_skew.py may reference STATUS_CHECKED_DEGRADED or checked-degraded."""
+    import version_skew
+
+    home = os.path.join(PLUGIN, "lib", "version_skew.py")
+    violations = []
+    for path in _plugin_python_sources_excluding_tests():
+        if os.path.normpath(path) == os.path.normpath(home):
+            continue
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+        rel = os.path.relpath(path, PLUGIN)
+        if "STATUS_CHECKED_DEGRADED" in text:
+            violations.append((rel, "STATUS_CHECKED_DEGRADED"))
+        if '"checked-degraded"' in text or "'checked-degraded'" in text:
+            violations.append((rel, "checked-degraded literal"))
+    assert not violations, (
+        "plugin-version-skew chokepoint violation outside version_skew.py: %r" % violations
+    )
+    seat_map_text = _read("lib/seat_map.py")
+    assert "appends_degradation(" in seat_map_text, (
+        "seat_map.py must call version_skew.appends_degradation("
+    )
+
+
 def test_plugin_version_skew_status_vocabulary_in_docs():
     """§11: setup.md and CONVENTIONS.md restate version_skew.STATUSES."""
     import version_skew
